@@ -36,7 +36,7 @@ export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) 
     pollTimer = setInterval(async () => {
       if (!active) return
       try {
-        const res = await fetch(`/api/video/${videoId}/status`)
+        const res = await fetch(`/api/video/${videoId}/status`, { credentials: 'include' })
         if (res.status === 401 || res.status === 403) {
           onStatusChange?.('AUTH_ERROR')
           stop()
@@ -67,7 +67,9 @@ export function useVideoStatusSse(videoId, { onStatusChange, onTerminal } = {}) 
 
   function connect() {
     if (!active) return
-    eventSource = new EventSource(`/api/video/${videoId}/events`)
+    // withCredentials like the booking/messaging streams, so the auth cookie is sent if the API is
+    // ever served from a different origin than the SPA.
+    eventSource = new EventSource(`/api/video/${videoId}/events`, { withCredentials: true })
     stopPolling() // SSE connected — stop polling fallback
 
     eventSource.addEventListener('status', (event) => {

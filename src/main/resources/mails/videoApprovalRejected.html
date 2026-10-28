@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.video.approval.rejected.title}">Your Video Was Not Approved</title>
+</head>
+<body>
+    <h2 th:text="#{email.video.approval.rejected.title}">Your Video Was Not Approved</h2>
+    <p>Your parent did not approve your video, so it will not be published.</p>
+    <p><a th:href="${map.videosUrl}" href="#">Go to my videos</a></p>
+</body>
+</html>

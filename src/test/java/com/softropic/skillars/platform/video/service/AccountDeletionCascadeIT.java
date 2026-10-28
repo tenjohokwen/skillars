@@ -87,6 +87,26 @@ class AccountDeletionCascadeIT extends BaseVideoIT {
             .isEqualTo("CANCELLED");
     }
 
+    /**
+     * B5 regression: linkedPlayerIds are PlayerProfile ids — the same id space as the children's video
+     * owner_id. The listener used to look each one up as a main."user" id and cascade on that user's
+     * id instead, so a parent's erasure purged none of the children's videos.
+     */
+    @Test
+    void onAccountDeleted_parentWithLinkedChildren_childVideosPurgedByProfileId() {
+        long childProfileId = 987_654_321L; // no main."user" row with this id is needed (or wanted)
+        Video child1 = seedVideo(String.valueOf(childProfileId), "asset-child-1");
+        Video child2 = seedVideo(String.valueOf(childProfileId), "asset-child-2");
+
+        listener.onAccountDeleted(new AccountDeletionRequestedEvent(
+            "parent-" + java.util.UUID.randomUUID(), AccountRole.PARENT, List.of(childProfileId)));
+
+        assertThat(videoRepository.findById(child1.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.PURGED);
+        assertThat(videoRepository.findById(child2.getId()).orElseThrow().getOperationalState())
+            .isEqualTo(OperationalState.PURGED);
+    }
+
     @Test
     void onAccountDeleted_playerOwner_videosPurged() {
         String playerOwnerId = "55";  // Long as string

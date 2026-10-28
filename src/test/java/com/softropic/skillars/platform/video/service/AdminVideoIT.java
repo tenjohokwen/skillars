@@ -6,7 +6,6 @@ import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
 import com.softropic.skillars.platform.video.BaseVideoIT;
 import com.softropic.skillars.platform.video.contract.*;
 import com.softropic.skillars.platform.video.contract.exception.TerminalStateViolationException;
-import com.softropic.skillars.platform.video.contract.exception.VideoProviderException;
 import com.softropic.skillars.platform.video.repo.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -41,6 +40,11 @@ class AdminVideoIT extends BaseVideoIT {
 
     @BeforeEach
     void setUp() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("DELETE FROM main.video_deletion_outbox");
+            jdbcTemplate.update("DELETE FROM main.video_deletion_log");
+            return null;
+        });
         moderationScanRepository.deleteAll();
         incidentRepository.deleteAll();
         playbackTokenRepository.deleteAll();
@@ -68,42 +72,54 @@ class AdminVideoIT extends BaseVideoIT {
                 .isInstanceOf(TerminalStateViolationException.class);
     }
 
+    /**
+     * B5: an admin delete gets the same bookkeeping as a user delete — PURGED, committed storage bytes
+     * decremented from the owner's quota, an ADMIN_DELETION deletion-log row (V182 admits the value),
+     * and a deletion-outbox row (whose processor honours the DrillVideoRef ref-count) instead of an
+     * inline Bunny delete. A still-PENDING upload session is expired.
+     */
     @Test
-    void deleteVideo_readyVideo_marksDeletedReleasesQuotaForPendingSession() {
+    void deleteVideo_readyVideo_purgesDecrementsQuotaLogsAndDefersAssetDeletionToOutbox() {
         Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE, "asset-admin-delete");
+        video.setStorageBytes(40_000L);
+        video = videoRepository.save(video);
         UploadSession pendingSession = seedPendingSession(video, UUID.randomUUID().toString());
-        doNothing().when(videoProviderAdapter).deleteAsset("asset-admin-delete");
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO main.video_quotas (user_id, storage_used_bytes, bandwidth_used_bytes, bandwidth_period_start) "
+                + "VALUES ('owner-admin-it', 100000, 0, now()) "
+                + "ON CONFLICT (user_id) DO UPDATE SET storage_used_bytes = 100000"));
 
         adminVideoService.deleteVideo(video.getId());
 
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getOperationalState())
-                .isEqualTo(OperationalState.DELETED);
+                .isEqualTo(OperationalState.PURGED);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT storage_used_bytes FROM main.video_quotas WHERE user_id = 'owner-admin-it'", Long.class))
+                .isEqualTo(60_000L);
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT triggered_by FROM main.video_deletion_log WHERE video_id = ?", String.class, video.getId()))
+                .containsExactly("ADMIN_DELETION");
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT bunny_video_id FROM main.video_deletion_outbox WHERE video_id = ? AND triggered_by = 'ADMIN_DELETION'",
+                String.class, video.getId()))
+                .containsExactly("asset-admin-delete");
+        verify(videoProviderAdapter, never()).deleteAsset(any());
         UploadSession refreshed = uploadSessionRepository.findById(pendingSession.getId()).orElseThrow();
         assertThat(refreshed.getStatus()).isEqualTo(UploadSessionStatus.EXPIRED);
     }
 
     @Test
-    void deleteVideo_processingVideo_noPendingSession_marksDeleted() {
+    void deleteVideo_processingVideo_noPendingSession_purges_andRepeatIsIdempotent() {
         Video video = seedVideo(OperationalState.PROCESSING, AccessState.ACTIVE, "asset-admin-del-no-sess");
-        doNothing().when(videoProviderAdapter).deleteAsset("asset-admin-del-no-sess");
 
+        adminVideoService.deleteVideo(video.getId());
         adminVideoService.deleteVideo(video.getId());
 
         assertThat(videoRepository.findById(video.getId()).orElseThrow().getOperationalState())
-                .isEqualTo(OperationalState.DELETED);
-    }
-
-    @Test
-    void deleteVideo_providerThrows_videoNotDeleted() {
-        Video video = seedVideo(OperationalState.READY, AccessState.ACTIVE, "asset-admin-del-fail");
-        doThrow(new VideoProviderException("deleteAsset", new RuntimeException("provider down")))
-                .when(videoProviderAdapter).deleteAsset("asset-admin-del-fail");
-
-        assertThatThrownBy(() -> adminVideoService.deleteVideo(video.getId()))
-                .isInstanceOf(VideoProviderException.class);
-
-        assertThat(videoRepository.findById(video.getId()).orElseThrow().getOperationalState())
-                .isEqualTo(OperationalState.READY);
+                .isEqualTo(OperationalState.PURGED);
+        assertThat(jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM main.video_deletion_log WHERE video_id = ?", Long.class, video.getId()))
+                .isEqualTo(1L);
     }
 
     @Test

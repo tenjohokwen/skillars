@@ -87,7 +87,9 @@
         (<code>NotificationCategory.optOutable()</code>) — today that is <code>BOOKING_REMINDER</code>,
         <code>SESSION_PACK_EXPIRY_WARNING</code> and <code>PERFORMANCE_REPORT_SHARED</code>. Booking,
         session-pack, moderation, account/security and system mail is transactional and always sent; a
-        <code>PUT</code> to turn one of those off is a 400.</li>
+        <code>PUT</code> to turn one of those off is a 400. The video minor-safety approval notices
+        (<code>VIDEO_APPROVAL_REQUESTED</code> to the parent, <code>VIDEO_APPROVAL_APPROVED</code>/<code>_REJECTED</code>
+        to the player) are <code>MODERATION</code>: a parent can never opt out of being asked to approve a child's video.</li>
       <li>Opt-out is enforced at <strong>send time</strong> (<code>MailService</code> →
         <code>NotificationPreferenceService.emailDecision</code>), not at enqueue time, so an opt-out made while
         a reminder is already sitting in the outbox or the retry queue still takes effect. The in-app inbox row
@@ -123,8 +125,8 @@
       <tbody>
         <tr><td><code>api</code></td><td><code>NotificationResource</code> (current user's inbox + email preferences), <code>UnsubscribeResource</code> (public one-click unsubscribe), <code>AlertRuleAdminResource</code> (alert-rule CRUD), <code>SesCutoverPreflightResource</code> (admin SES readiness probe, only when <code>app.email.transport=ses</code>).</td></tr>
         <tr><td><code>config</code></td><td><code>ThymeleafConfiguration</code> (email template engine), <code>AsyncConfig</code> (<code>sendMailPool</code> and <code>moderationTaskExecutor</code> executors), <code>ComponentConfig</code> (<code>MailManager</code> bean, <code>RetryTemplate</code>, Resilience4j circuit-breaker customizer).</td></tr>
-        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (41 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
-        <tr><td><code>infrastructure</code></td><td><code>EmailRetryScheduler</code> and <code>infrastructure.listener</code>: the four email listeners (<code>AccountChange</code>, <code>Booking</code>, <code>SessionPack</code>, <code>VideoModeration</code><code>EmailListener</code>), <code>InAppEnvelopeListener</code> (inbox rows for direct-<code>Envelope</code> producers) and <code>NotificationUserErasedListener</code> (GDPR cleanup).</td></tr>
+        <tr><td><code>contract</code></td><td>Public API surface: <code>Envelope</code>/<code>Recipient</code>, the <code>EmailTemplate</code> enum (44 constants) exposing <code>subjectKey()</code>, <code>deliveryDeadline()</code> and <code>circuitBreakerName()</code>, <code>EmailDeliveryStatus</code>, <code>AlertFiredEvent</code>, <code>NotificationCategory</code>, and the notification-centre DTOs (<code>NotificationDto</code>, <code>UnreadCountDto</code>, <code>NotificationPreferenceDto</code>, <code>UpdateNotificationPreferenceRequest</code>, <code>UnsubscribeResultDto</code>).</td></tr>
+        <tr><td><code>infrastructure</code></td><td><code>EmailRetryScheduler</code> and <code>infrastructure.listener</code>: the five email listeners (<code>AccountChange</code>, <code>Booking</code>, <code>SessionPack</code>, <code>VideoModeration</code>, <code>VideoOwner</code><code>EmailListener</code>), <code>InAppEnvelopeListener</code> (inbox rows for direct-<code>Envelope</code> producers) and <code>NotificationUserErasedListener</code> (GDPR cleanup).</td></tr>
         <tr><td><code>repo</code></td><td>JPA: <code>AlertRule</code>, <code>EnvelopeEntity</code>/<code>RecipientEntity</code>, <code>UserNotification</code> (+ <code>UserNotificationRepository</code>). Plain JDBC: <code>UserNotificationWriter</code> (the one inbox INSERT), <code>NotificationEmailPreferenceRepository</code> (upsert/read of opt-outs), <code>NotificationRecipientLookup</code> (email address → <code>main."user"</code> id + coach flag).</td></tr>
         <tr><td><code>service</code></td><td>Send pipeline (<code>MailManager</code> → <code>MailService</code> → <code>EmailContentRenderer</code>), outbox producer/consumer (<code>NotificationOutboxSupport</code>, <code>NotificationEmailOutboxHandler</code>), notification centre (<code>NotificationCatalog</code>, <code>InAppNotificationService</code>, <code>NotificationPreferenceService</code>, <code>UnsubscribeTokenService</code>, <code>JdbcSavepoints</code>, <code>InAppNotificationRetentionScheduler</code>), alerting (<code>AlertEvaluationService</code>, <code>AlertRuleCache</code>, <code>AlertNotificationListener</code>), <code>MailMetrics</code>, <code>EnvelopeMapper</code>, <code>ResendEmailService</code>.</td></tr>
       </tbody>
@@ -135,7 +137,7 @@
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>AlertRule</code></td><td><code>main.alert_rule</code></td><td>Admin-defined threshold rule: metric name, threshold ratio, window, channel (LOG/EMAIL), enabled flag, description. Audited (<code>main.alert_rule_aud</code>).</td></tr>
-        <tr><td><code>EnvelopeEntity</code></td><td><code>main.envelope_entity</code></td><td>Durable record of one send: recipients (element collection <code>envelope_entity_recipients</code>, each with a <code>delivered</code> flag since <code>V140</code>), template, JSON <code>data</code>, deadline, attempts, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>send_id</code>. Polled by <code>EmailRetryScheduler</code>. <code>email_template</code> has a CHECK constraint listing every enum value (last widened by <code>V168</code> for <code>SES_CUTOVER_PREFLIGHT</code>).</td></tr>
+        <tr><td><code>EnvelopeEntity</code></td><td><code>main.envelope_entity</code></td><td>Durable record of one send: recipients (element collection <code>envelope_entity_recipients</code>, each with a <code>delivered</code> flag since <code>V140</code>), template, JSON <code>data</code>, deadline, attempts, <code>EmailDeliveryStatus</code>, error text, retry flag, unique <code>send_id</code>. Polled by <code>EmailRetryScheduler</code>. <code>email_template</code> has a CHECK constraint listing every enum value (last widened by <code>V182</code> for the three <code>VIDEO_APPROVAL_*</code> templates; before that <code>V168</code> for <code>SES_CUTOVER_PREFLIGHT</code>).</td></tr>
         <tr><td><code>RecipientEntity</code></td><td>embedded</td><td>Persisted copy of <code>Recipient</code> (title, name, email, langKey, gender) + <code>delivered</code>, so a retry never re-sends to a recipient already reached.</td></tr>
         <tr><td><code>UserNotification</code></td><td><code>main.user_notifications</code> (<code>V175</code>)</td><td>One inbox row: <code>recipient_user_id</code> (a <code>main."user"</code> id, FK <code>ON DELETE CASCADE</code>), <code>category</code>, <code>type</code> (= <code>EmailTemplate</code> name; the frontend renders <code>notifications.types.&lt;type&gt;</code>), <code>params</code> jsonb (whitelisted strings only), <code>deep_link</code>, <code>source_send_id</code>, <code>created_at</code>, <code>read_at</code>. Unique partial index <code>uq_un_recipient_send_id</code> on <code>(recipient_user_id, source_send_id)</code> dedupes a double hook; <code>idx_un_recipient_unread</code> serves the badge.</td></tr>
         <tr><td>— (JDBC only)</td><td><code>main.notification_email_preferences</code> (<code>V175</code>)</td><td>Sparse opt-out rows, PK <code>(user_id, category)</code>, <code>email_enabled</code>. No row = email enabled. Written only by an atomic <code>INSERT ... ON CONFLICT DO UPDATE</code>.</td></tr>
@@ -166,14 +168,16 @@
     <ul>
       <li><strong>Outbox shape</strong> (<code>@TransactionalEventListener(BEFORE_COMMIT)</code> +
         <code>NotificationOutboxSupport.enqueueEmail</code>; inbox row written by <code>enqueueEmail</code>):
-        <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code> (this module);
+        <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code>, <code>VideoOwnerEmailListener</code> (this module —
+        its owner-flagged handler is an <code>@EventListener</code> that opens its own <code>TransactionTemplate</code>
+        transaction, because the async moderation pipeline publishes with none);
         <code>Coach</code>/<code>Parent</code>/<code>PlayerRegistrationEmailListener</code>
         (<code>platform.security</code>). <code>SessionPackExpiryNotifier</code> (payment) publishes the event that
         <code>SessionPackEmailListener</code> turns into an enqueue.</li>
       <li><strong>Direct-publish shape</strong> (<code>new Envelope(...)</code> + <code>publishEvent</code>, sent by
         <code>MailManager.sendEmailFromTemplate</code> <code>AFTER_COMMIT</code>; inbox row written by
         <code>InAppEnvelopeListener</code> <code>BEFORE_COMMIT</code> on the same event):
-        <code>AccountChangeEmailListener</code>, <code>VideoModerationEmailListener</code> (this module);
+        <code>AccountChangeEmailListener</code>, <code>VideoModerationEmailListener.onAdminAlert</code> (this module);
         <code>AccountManagementFacade</code>, <code>EmailRegistrationStrategy</code>, <code>SendMailListener</code>
         (<code>platform.security</code>); <code>ReportGenerationService</code> (<code>platform.development</code>).
         Each hardcodes its own deadline rather than reading <code>deliveryDeadline()</code>.
@@ -234,7 +238,9 @@
     <span class="tag">SessionPackExpiredEvent</span>
     <span class="tag">PackPausedEvent</span> (classes in booking, published by payment)
     <span class="tag">VideoModerationAdminAlertEvent</span>
-    <span class="tag">VideoModerationOwnerNotificationEvent</span> (video)
+    <span class="tag">VideoModerationOwnerNotificationEvent</span>
+    <span class="tag">VideoApprovalParentNotificationEvent</span>
+    <span class="tag">VideoApprovalOwnerNotificationEvent</span> (video — recipient email resolved by the publisher)
     <p>Internally: <code>Envelope</code> (published by direct-publish producers; consumed <code>BEFORE_COMMIT</code> by
       <code>InAppEnvelopeListener</code> and <code>AFTER_COMMIT</code> by <code>MailManager</code>) and
       <code>AlertFiredEvent</code> (<code>AlertEvaluationService</code> → <code>AlertNotificationListener</code>).</p>
@@ -474,7 +480,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>90b8cb80</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

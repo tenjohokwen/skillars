@@ -58,6 +58,7 @@ class ModerationOrchestrationServiceTest {
     @Mock AgePolicyService agePolicyService;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock VideoApprovalService videoApprovalService;
+    @Mock VideoOwnerAccountResolver videoOwnerAccountResolver;
 
     @InjectMocks
     ModerationOrchestrationService service;
@@ -119,6 +120,26 @@ class ModerationOrchestrationServiceTest {
         verify(videoIntelClient, never()).detectExplicitContent(any());
     }
 
+    /**
+     * B5: when AccountSuspensionEventListener cannot resolve the owner to an account it throws (it
+     * used to log and return), and the pipeline raises an urgent "suspension FAILED" admin alert.
+     */
+    @Test
+    void arachnidMatch_ownerUnresolvable_raisesSuspensionFailedAlert() {
+        when(featureToggleService.isEnabled(AppFeature.ARACHNID_ENABLED)).thenReturn(true);
+        when(arachnidClient.scan(any())).thenReturn(new ArachnidScanResult(true, "CHILD_SEXUAL_EXPLOITATION"));
+        lenient().doThrow(new IllegalStateException("user not found"))
+            .when(publisher).publishEvent(org.mockito.ArgumentMatchers.isA(AccountSuspensionRequestedEvent.class));
+
+        service.onVideoUploaded(new VideoUploadedEvent(videoId, ownerId));
+
+        ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher, atLeastOnce()).publishEvent(eventCaptor.capture());
+        assertThat(eventCaptor.getAllValues())
+            .anyMatch(e -> e instanceof VideoModerationAdminAlertEvent a && a.urgent()
+                && a.subject().contains("suspension FAILED"));
+    }
+
     @Test
     void arachnidException_failClosed_adminAlert_videStaysScanning() {
         when(featureToggleService.isEnabled(AppFeature.ARACHNID_ENABLED)).thenReturn(true);
@@ -143,6 +164,8 @@ class ModerationOrchestrationServiceTest {
         when(arachnidClient.scan(any())).thenReturn(new ArachnidScanResult(false, null));
         when(videoIntelClient.detectExplicitContent(any()))
             .thenReturn(new VideoIntelScanResult(true, 0.92, "explicit content detected"));
+        when(videoOwnerAccountResolver.resolveNotificationRecipient(ownerId)).thenReturn(java.util.Optional.of(
+            new VideoOwnerAccountResolver.OwnerAccount(4242L, "player@example.com", "de")));
 
         service.onVideoUploaded(new VideoUploadedEvent(videoId, ownerId));
 
@@ -151,7 +174,8 @@ class ModerationOrchestrationServiceTest {
         ArgumentCaptor<Object> eventCaptor = ArgumentCaptor.forClass(Object.class);
         verify(publisher, atLeastOnce()).publishEvent(eventCaptor.capture());
         assertThat(eventCaptor.getAllValues())
-            .anyMatch(e -> e instanceof VideoModerationOwnerNotificationEvent n && n.ownerId().equals(ownerId));
+            .anyMatch(e -> e instanceof VideoModerationOwnerNotificationEvent n && n.ownerId().equals(ownerId)
+                && "player@example.com".equals(n.recipientEmail()) && "de".equals(n.recipientLangKey()));
         verify(videoProviderAdapter, never()).triggerTranscoding(any());
     }
 

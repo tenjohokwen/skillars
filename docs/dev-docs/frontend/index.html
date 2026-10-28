@@ -258,14 +258,15 @@ flowchart TD
     <h3 id="server-sent-events">Server-Sent Events</h3>
     <p>
       SSE uses the native <code>EventSource</code>, not axios, so none of the interceptors run on it (no
-      loading-bar tick, no <code>rint</code> refresh, no 401 teardown). Each stream implements its own
+      loading-bar tick, no <code>rint</code> refresh, no 401 teardown). All three streams open the
+      <code>EventSource</code> with <code>{ withCredentials: true }</code>, matching axios. Each stream implements its own
       backoff/fallback:
     </p>
     <table>
       <tr><th>Stream</th><th>Opened by</th><th>Events / fallback</th></tr>
       <tr><td><code>/api/messaging/conversations/{id}/events</code></td><td><code>messaging.api.js</code> <code>subscribeToEvents</code>, from <code>messaging.store</code> <code>connectSse</code></td><td><code>NEW_MESSAGE</code>, <code>MESSAGE_BLOCKED</code>. The backend emitter is per <em>user</em> (<code>MessagingEmitterRegistry</code>), so events are routed by the payload's <code>conversationId</code>. Exponential reconnect (1&nbsp;s, 2&nbsp;s), then from the 3rd failure an interval poll of messages.</td></tr>
       <tr><td><code>/api/bookings/{id}/events</code></td><td><code>useBookingSse</code> (<code>booking.store.js</code>), and directly in <code>CoachCommandCenterPage.vue</code></td><td><code>status</code>, <code>heartbeat</code> (reconnects). Closes on a terminal status. Backoff 1&ndash;30&nbsp;s; after 3 errors switches to a recursive-<code>setTimeout</code> poll (2&nbsp;s floor, 30&nbsp;s cap).</td></tr>
-      <tr><td><code>/api/video/{id}/events</code></td><td><code>video.store.js</code></td><td><code>status</code> until a terminal processing state; polls while disconnected.</td></tr>
+      <tr><td><code>/api/video/{id}/events</code></td><td><code>video.store.js</code></td><td><code>status</code> until a terminal processing state; polls <code>/api/video/{id}/status</code> (<code>fetch</code>, <code>credentials: 'include'</code>) while disconnected. Owner-only on the server (<code>VideoAccessGuard.isCurrentUserOwner</code>).</td></tr>
     </table>
     <p>
       <strong>Notifications are not pushed.</strong> <code>NotificationBell.vue</code> refreshes
@@ -418,7 +419,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>90b8cb80</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

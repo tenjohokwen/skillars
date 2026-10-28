@@ -539,9 +539,13 @@ class GdprErasureIT extends AbstractIntegrationTest {
 
     // ── skillars-deferred-91 AC13: the account-deletion video cascade runs with a transaction ──────
 
+    // B5: moved from PLAYER_ID to the SELF_PLAYER fixture, mirroring deferred-127's move above. Player
+    // videos are owned by the PlayerProfile id (Story 6.6), and the erasure now publishes that id to the
+    // cascade. Seeding owner_id = PLAYER_ID (a main.user id) matched the old, buggy event payload, not
+    // anything production writes — a real player's videos were never purged.
     @Test
     void erase_playerUser_videoCascade_purgesVideos_resetsQuota_cancelsPendingApprovals() {
-        String ownerId = String.valueOf(PLAYER_ID);
+        String ownerId = String.valueOf(SELF_PLAYER_PROFILE_ID);
         UUID videoId = UUID.randomUUID();
         UUID approvalId = UUID.randomUUID();
         transactionTemplate.execute(status -> {
@@ -557,11 +561,11 @@ class GdprErasureIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO main.video_approval_requests (id, video_id, player_id, parent_id, status, created_at) "
                     + "VALUES (?, ?, ?, ?, 'PENDING', ?)",
-                approvalId, videoId, PLAYER_ID, PARENT_ID, Timestamp.from(Instant.now()));
+                approvalId, videoId, SELF_PLAYER_PROFILE_ID, PARENT_ID, Timestamp.from(Instant.now()));
             return null;
         });
 
-        String cookies = loginAndGetCookies(PLAYER_EMAIL);
+        String cookies = loginAndGetCookies(SELF_PLAYER_EMAIL);
         httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
 

@@ -14,6 +14,8 @@ import com.softropic.skillars.platform.video.repo.VideoDeletionOutbox;
 import com.softropic.skillars.platform.video.repo.VideoDeletionOutboxRepository;
 import com.softropic.skillars.platform.video.repo.VideoQuotaRepository;
 import com.softropic.skillars.platform.video.repo.VideoRepository;
+import com.softropic.skillars.platform.video.repo.UploadSessionRepository;
+import com.softropic.skillars.platform.video.contract.UploadSessionStatus;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,6 +48,7 @@ public class VideoDeletionService {
     private final ConfigService configService;
     private final ApplicationEventPublisher publisher;
     private final VideoAccessGuard videoAccessGuard;
+    private final UploadSessionRepository uploadSessionRepository;
 
     // cascadeDeleteForAccount below is deliberately NOT @Transactional at the method level, but its
     // per-video deleteVideo(...) call needs its OWN transaction each iteration — a same-class call
@@ -149,6 +152,42 @@ public class VideoDeletionService {
             log.info("[DELETION_CONCURRENT videoId={}] Concurrent delete detected — idempotent 204", videoId);
             // Already deleted by concurrent request — treat as idempotent
         }
+    }
+
+    /**
+     * Admin-initiated deletion (admin console). Same bookkeeping as a user delete — storage quota
+     * decremented for committed bytes, a {@code video_deletion_log} row, and a deletion-outbox row whose
+     * processor honours the {@code DrillVideoRef} ref-count (a drill demo shared by other sessions keeps
+     * its Bunny asset) — plus the admin-only extra of expiring a still-PENDING upload session. The old
+     * bespoke admin path did none of the first three and deleted the Bunny asset synchronously.
+     *
+     * <p>Concurrency: {@link #deleteVideo} flips the {@code @Version}ed {@code Video} row, so a racing
+     * user/cascade/admin delete (or any other concurrent state change) of the same video makes this
+     * transaction fail at commit with an optimistic-lock failure and roll back — the quota decrement
+     * and log/outbox rows included — instead of double-decrementing. The caller decides whether that
+     * loser was a no-op (video now PURGED) or must be retried.
+     *
+     * @return {@code true} if this call purged the video, {@code false} if it was already purged
+     */
+    @Transactional
+    public boolean deleteByAdmin(UUID videoId) {
+        Video video = videoRepository.findById(videoId)
+            .orElseThrow(() -> new VideoNotFoundException(videoId));
+        if (video.getOperationalState() == OperationalState.PURGED) {
+            log.info("[DELETION_IDEMPOTENT videoId={}] Admin delete of an already-PURGED video — no-op", videoId);
+            return false;
+        }
+        if (configService.getBoolean("platform.video.approvalCancellation.enabled", true)) {
+            approvalRequestRepository.cancelAllPendingForVideo(videoId);
+        }
+        uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
+            .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
+            .ifPresent(s -> {
+                s.setStatus(UploadSessionStatus.EXPIRED);
+                uploadSessionRepository.save(s);
+            });
+        deleteVideo(videoId, LifecycleTrigger.ADMIN_DELETION, false);
+        return true;
     }
 
     /**

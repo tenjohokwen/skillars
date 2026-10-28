@@ -293,7 +293,7 @@ sequenceDiagram
       <p><strong>player_skill_stats and radar baselines are append-only / write-once.</strong> <code>PlayerSkillStat</code> rows are never updated after a session completes — even if a drill's metadata changes later, historical SLU must not be retroactively recalculated. Baselines in <code>player_radar_baselines</code> use <code>INSERT ... ON CONFLICT DO NOTHING</code> specifically so the very first composite score is frozen forever as the improvement reference point. The only legitimate deletes are the <code>deleteAllByPlayerId</code> GDPR Article 17 erasure paths used by <code>GdprErasureService</code>.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Tier gate vs. relationship check: the comments say one thing, the code does another.</strong> In <code>RadarAssessmentService.submitAssessment</code>/<code>getMyEntries</code> and <code>ReportGenerationService.generateReport</code>, the coach-player relationship check runs <em>first</em>, and only then the subscription-tier <code>FeatureGatedException</code>. The inline comment "Tier gate first" in <code>RadarAssessmentService</code> is stale. No existence leak results, because a missing player and a missing relationship both produce the same 403. But a Scout coach with no relationship gets a plain 403, not the feature-gate error. If you add a new tier-gated endpoint, make sure "unknown player" and "no relationship" still collapse into one response.</p>
+      <p><strong>Relationship check first, tier gate second.</strong> In <code>RadarAssessmentService.submitAssessment</code>/<code>getMyEntries</code> and <code>ReportGenerationService.generateReport</code>, the coach-player relationship check runs <em>first</em>, and only then the subscription-tier <code>FeatureGatedException</code> (the old "Tier gate first" comment in <code>RadarAssessmentService</code> was corrected in B5). No existence leak results, because a missing player and a missing relationship both produce the same 403. But a Scout coach with no relationship gets a plain 403, not the feature-gate error. If you add a new tier-gated endpoint, make sure "unknown player" and "no relationship" still collapse into one response.</p>
     </div>
     <div class="callout">
       <p><strong>player_id is a BIGINT (TSID), not a UUID — despite what some historical specs say.</strong> Several entities carry an explicit comment noting this (e.g. <code>PlayerSkillStat.playerId</code>: "TSID Long — NOT UUID despite epics spec"). Coach and report IDs, by contrast, are UUIDs. Mixing these up is a common source of type errors when adding new queries.</p>
@@ -329,7 +329,7 @@ sequenceDiagram
       <div class="card"><h4><a href="../index.html">Home</a></h4><p>Back to the documentation index.</p></div>
     </div>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>90b8cb80</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

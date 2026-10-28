@@ -766,11 +766,20 @@ public class GdprErasureService {
                     .map(PlayerProfile::getId)
                     .collect(Collectors.toList());
             } else {
-                eventUserId = String.valueOf(userId);
+                // Player videos are owned by the PlayerProfile id (Story 6.6), not the user id — the
+                // cascade matches videos.owner_id, so the user id purged nothing. The profile row is
+                // anonymised, not deleted, by the erasure above, so it still resolves here.
+                // No profile → the player can own no videos (upload requires one); publish nothing
+                // rather than cascade on the user id, which is a different id space.
+                eventUserId = playerProfileRepository.findByUserId(userId)
+                    .map(pp -> String.valueOf(pp.getId()))
+                    .orElse(null);
                 accountRole = AccountRole.PLAYER;
                 linkedPlayerIds = List.of();
             }
-            eventPublisher.publishEvent(new AccountDeletionRequestedEvent(eventUserId, accountRole, linkedPlayerIds));
+            if (eventUserId != null) {
+                eventPublisher.publishEvent(new AccountDeletionRequestedEvent(eventUserId, accountRole, linkedPlayerIds));
+            }
         }
 
         log.info("[GDPR_ERASURE_COMPLETED] requestId={} userId={} role={}", requestId, userId, role);

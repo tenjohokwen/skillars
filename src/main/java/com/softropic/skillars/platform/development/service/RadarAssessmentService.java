@@ -48,7 +48,9 @@ public class RadarAssessmentService {
         coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachUserId, playerId);
         UUID coachId = coachProfileService.getCoachIdByUserId(coachUserId);
 
-        // Tier gate first — prevents Scout coaches from probing player existence via 404 vs 403 difference
+        // Tier gate runs AFTER the relationship check above (same order as ReportGenerationService):
+        // a coach with no relationship to playerId is refused there before any tier lookup, so a Scout
+        // coach still cannot probe player existence through a 404-vs-403 difference here.
         CoachSubscriptionTier tier = coachProfileService.getCoachSubscriptionTier(coachId);
         if (!RADAR_ALLOWED_TIERS.contains(tier)) {
             throw new FeatureGatedException("skills_radar", "INSTRUCTOR");

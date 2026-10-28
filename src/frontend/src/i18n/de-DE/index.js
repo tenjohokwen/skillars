@@ -2510,6 +2510,9 @@ export default {
       PACK_PAUSED: 'Ihr Paket bei {coachDisplayName} wurde pausiert.',
       PERFORMANCE_REPORT_SHARED: '{coachName} hat einen Leistungsbericht für {playerName} geteilt.',
       VIDEO_MODERATION_OWNER_FLAGGED: 'Eines Ihrer Videos wurde zur Überprüfung markiert.',
+      VIDEO_APPROVAL_REQUESTED: 'Ein Video von {playerName} wartet auf Ihre Freigabe.',
+      VIDEO_APPROVAL_APPROVED: 'Ihr Elternteil hat Ihr Video freigegeben.',
+      VIDEO_APPROVAL_REJECTED: 'Ihr Elternteil hat Ihr Video nicht freigegeben.',
       COACH_VISIBILITY_REDUCED: 'Ihre Sichtbarkeit im Marktplatz wurde reduziert.',
     },
     preferences: {

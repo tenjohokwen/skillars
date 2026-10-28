@@ -33,7 +33,7 @@ public final class NotificationCatalog {
         "coachDisplayName", "coachName", "playerName", "parentName",
         "requestedStartTime", "originalStartTime", "proposedStartTime", "newStartTime",
         "canonicalTimezone", "creditsRemaining", "expiresAt", "newExpiresAt",
-        "requestedCount", "acceptedCount", "reportDate", "reminderType");
+        "requestedCount", "acceptedCount", "reportDate", "reminderType", "videoType");
 
     private NotificationCatalog() {
     }
@@ -99,6 +99,11 @@ public final class NotificationCatalog {
 
             // ── Moderation: safety notice about the user's own upload ──
             case VIDEO_MODERATION_OWNER_FLAGGED -> inApp(NotificationCategory.MODERATION, DASHBOARD, "/player/videos");
+            // Minor-safety approval gate: the parent must act, so never opt-out-able (MODERATION).
+            case VIDEO_APPROVAL_REQUESTED -> inApp(NotificationCategory.MODERATION, null, "/parent/approvals");
+            // Recipient is the player whose video the parent decided on.
+            case VIDEO_APPROVAL_APPROVED, VIDEO_APPROVAL_REJECTED ->
+                inApp(NotificationCategory.MODERATION, null, "/player/videos");
 
             // No producer sends this template today; classified so it is never accidentally opt-out-able.
             case COACH_VISIBILITY_REDUCED -> inApp(NotificationCategory.BOOKING, "/coach/reliability", DASHBOARD);

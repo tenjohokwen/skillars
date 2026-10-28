@@ -54,9 +54,10 @@ public class AccountSuspensionEventListener {
         // Scalar id only — an entity loaded here would be returned, stale, by the locked query below.
         Long userId = resolveAccountId(ownerId);
         if (userId == null) {
-            log.error("CRITICAL: Cannot suspend account — user not found: ownerId={} videoId={}",
-                      ownerId, event.videoId());
-            return;
+            // Throw, not just log: ModerationOrchestrationService catches this and raises an urgent
+            // "CSAM match — account suspension FAILED" admin alert, so a human acts on it.
+            throw new IllegalStateException("CRITICAL: Cannot suspend account — user not found: ownerId="
+                + ownerId + " videoId=" + event.videoId());
         }
 
         // Row lock first, so the status check and the writes below act on committed, locked state
@@ -64,9 +65,8 @@ public class AccountSuspensionEventListener {
         User user = lockRetryer.withBoundedRetry("AccountSuspensionEventListener.suspend",
             () -> userRepository.findByIdForUpdate(userId)).orElse(null);
         if (user == null) {
-            log.error("CRITICAL: Cannot suspend account — user vanished: userId={} videoId={}",
-                      userId, event.videoId());
-            return;
+            throw new IllegalStateException("CRITICAL: Cannot suspend account — user vanished: userId="
+                + userId + " videoId=" + event.videoId());
         }
 
         boolean alreadySuspended = user.getVerificationStatus() == SkillarsVerificationStatus.SUSPENDED

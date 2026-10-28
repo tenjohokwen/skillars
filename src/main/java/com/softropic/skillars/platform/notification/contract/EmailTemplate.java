@@ -63,6 +63,14 @@ public enum EmailTemplate {
     PLAYER_NO_SHOW("email.booking.player_no_show.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),
     /**
+     * Minor-safety gate: a child's video is held until the parent approves it. A 7-day deadline (not
+     * the 1-day default) because a notice that expires in the outbox during an outage leaves the
+     * video HIDDEN with nobody told — the parent is the only person who can release it.
+     */
+    VIDEO_APPROVAL_REQUESTED("email.video.approval.requested.title", Duration.ofDays(7), "emailService"),
+    VIDEO_APPROVAL_APPROVED("email.video.approval.approved.title"),
+    VIDEO_APPROVAL_REJECTED("email.video.approval.rejected.title"),
+    /**
      * skillars-deferred-114 AC5: the SES cutover preflight endpoint's probe email — a one-line
      * "this is a test" body, not a user-facing template. Isolated circuit breaker name
      * ({@code "sesPreflightService"}, not the shared {@code "emailService"}): a preflight tool must

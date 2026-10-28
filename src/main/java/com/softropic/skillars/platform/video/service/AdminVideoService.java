@@ -13,6 +13,7 @@ import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -36,6 +37,7 @@ public class AdminVideoService {
     private final QuotaProvider quotaProvider;
     private final TransactionTemplate transactionTemplate;
     private final VideoModerationScanRepository moderationScanRepository;
+    private final VideoDeletionService videoDeletionService;
 
     static final int REVIEW_QUEUE_PAGE_SIZE = 20;
     private static final String SCAN_OUTCOME_FLAGGED = "FLAGGED";
@@ -98,43 +100,40 @@ public class AdminVideoService {
         }
     }
 
+    /**
+     * Admin delete. Routed through {@link VideoDeletionService#deleteByAdmin} so it gets the same
+     * bookkeeping as every other delete: PURGED state, storage-quota decrement for committed bytes, a
+     * {@code video_deletion_log} row, and an outbox row whose processor deletes the Bunny asset only when
+     * no other drill still references it ({@code DrillVideoRef} ref-count). The previous bespoke path
+     * set DELETED, deleted the Bunny asset inline with no ref-count check (taking a shared drill demo
+     * away from every other session using it), never decremented {@code storage_used_bytes} for a READY
+     * video and wrote no deletion log.
+     */
     @Observed(name = "video.admin.deleteVideo")
     public void deleteVideo(UUID videoId) {
         MDC.put("operation", "admin.deleteVideo");
         MDC.put("videoId", videoId.toString());
         try {
-            Video video = videoRepository.findById(videoId)
-                    .orElseThrow(() -> new VideoNotFoundException(videoId));
-
-            // Provider call outside @Transactional — if this throws VideoProviderException (502), no DB change occurs
-            if (video.getProviderAssetId() != null) {
-                videoProviderAdapter.deleteAsset(video.getProviderAssetId());
+            // Phase 1 (one transaction): cancel pending approvals, expire a PENDING upload session, purge.
+            try {
+                videoDeletionService.deleteByAdmin(videoId);
+            } catch (ObjectOptimisticLockingFailureException e) {
+                // Lost a race on the Video row. If the winner purged it, this delete is a no-op;
+                // anything else (e.g. transcoding finished concurrently) is a real conflict — surface it.
+                boolean purged = videoRepository.findById(videoId)
+                        .map(v -> v.getOperationalState() == OperationalState.PURGED)
+                        .orElse(true);
+                if (!purged) {
+                    throw e;
+                }
+                log.info("[DELETION_CONCURRENT videoId={}] Admin delete raced another delete — idempotent", videoId);
             }
 
-            // Phase 1 (atomic): set DELETED + mark any PENDING session EXPIRED. No quotaProvider call
-            // inside this transaction, so a release() failure can no longer roll back the
-            // DELETED/EXPIRED writes.
-            transactionTemplate.execute(status -> {
-                Video v = videoRepository.findById(videoId)
-                        .orElseThrow(() -> new VideoNotFoundException(videoId));
-                v.setOperationalState(OperationalState.DELETED);
-                videoRepository.save(v);
-
-                uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
-                        .filter(s -> s.getStatus() == UploadSessionStatus.PENDING)
-                        .ifPresent(s -> {
-                            s.setStatus(UploadSessionStatus.EXPIRED);
-                            uploadSessionRepository.save(s);
-                        });
-                return null;
-            });
-
-            // Phase 2: release quota OUTSIDE any transaction — same pattern as VideoService.failTranscoding.
-            // Deferred-64 AC5: looked up via the SAME repository method Phase 1 already calls, but
-            // without Phase 1's PENDING filter, so a session Phase 1 already flipped to EXPIRED on an
-            // earlier call is still found here. Gated on quotaReleasedAt == null so a repeat call for
-            // an already-DELETED video is retry-safe: it re-attempts the release exactly when it
-            // previously failed or was never attempted, and never re-releases a session already marked.
+            // Phase 2: release an ACTIVE (never-committed) quota reservation OUTSIDE any transaction —
+            // same pattern as VideoService.failTranscoding. release() only flips ACTIVE→RELEASED, so for
+            // a committed (READY) video it is a no-op and the committed bytes were decremented in Phase 1.
+            // Deferred-64 AC5: no PENDING filter here (Phase 1 may already have flipped it to EXPIRED),
+            // gated on quotaReleasedAt == null so a repeat call retries exactly a failed release.
             UploadSession session = uploadSessionRepository.findFirstByVideoIdOrderByCreatedAtDesc(videoId)
                     .orElse(null);
             if (session != null && session.getReservationHandle() != null && session.getQuotaReleasedAt() == null) {
@@ -147,8 +146,6 @@ public class AdminVideoService {
                         videoId, session.getReservationHandle(), ex);
                     throw ex;
                 }
-            } else if (session != null && session.getReservationHandle() == null) {
-                log.warn("No reservation handle found for videoId={} during admin delete — quota not released", videoId);
             }
 
             log.info("Admin deleted video {}", videoId);
@@ -194,7 +191,10 @@ public class AdminVideoService {
             Video video = videoRepository.findById(videoId)
                     .orElseThrow(() -> new VideoNotFoundException(videoId));
 
-            if (video.getOperationalState() == OperationalState.DELETED) {
+            // PURGED too: every delete (admin included) now ends in PURGED, and the deletion outbox
+            // removes the Bunny asset — reconciling would try PURGED→FAILED on a "missing" asset.
+            if (video.getOperationalState() == OperationalState.DELETED
+                    || video.getOperationalState() == OperationalState.PURGED) {
                 return new ReconcileResponse(video.getId(), video.getOperationalState(), video.getAccessState(), null);
             }
 

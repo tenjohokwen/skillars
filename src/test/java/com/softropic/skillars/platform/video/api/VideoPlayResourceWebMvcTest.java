@@ -98,7 +98,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false)))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt-token", "https://cdn.example.com/asset/playlist.m3u8?token=abc", Instant.now().plusSeconds(7200)));
 
@@ -115,7 +115,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), anyBoolean()))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), anyBoolean(), anyBoolean()))
             .thenThrow(new PlaybackDeniedException(VIDEO_ID, OWNER));
 
         mockMvc.perform(get("/api/video/{id}/play", VIDEO_ID))
@@ -151,7 +151,7 @@ class VideoPlayResourceWebMvcTest {
         when(securityUtil.getCurrentUserName()).thenReturn("parent-99");
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
         when(videoAccessGuard.isParentOf(eq("parent-99"), eq("42"), eq(VIDEO_ID))).thenReturn(true);
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("parent-99"), nullable(String.class), eq(true)))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("parent-99"), nullable(String.class), eq(true), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/asset/playlist.m3u8?token=abc", Instant.now().plusSeconds(7200)));
 
@@ -165,7 +165,30 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false)))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false), anyBoolean()))
+            .thenReturn(new PlaybackAuthorizationResponse(
+                "jwt", "https://cdn.example.com/asset/playlist.m3u8?token=x",
+                Instant.now().plusSeconds(7200), "https://cdn.example.com/asset/original?token=y"));
+
+        mockMvc.perform(get("/api/video/{id}/play", VIDEO_ID))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.downloadUrl").value(containsString("/original")));
+    }
+
+    /**
+     * B5 regression: the download URL is owner-only, and ownership comes from
+     * VideoAccessGuard.isCurrentUserOwner (user id → coach profile / PlayerProfile), not from comparing
+     * the username to the video's ownerId — that comparison never matched, so no owner ever got one.
+     */
+    @Test
+    @WithMockUser(username = OWNER)
+    void play_passesGuardOwnershipToPlaybackService() throws Exception {
+        stubGuardAllow();
+        Video video = ownerVideo();
+        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(videoAccessGuard.isCurrentUserOwner(video)).thenReturn(true);
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), nullable(String.class), eq(false), eq(true)))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/asset/playlist.m3u8?token=x",
                 Instant.now().plusSeconds(7200), "https://cdn.example.com/asset/original?token=y"));
@@ -181,7 +204,7 @@ class VideoPlayResourceWebMvcTest {
         stubGuardAllow();
         when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), eq("5.6.7.8"), eq(false)))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq(OWNER), eq("5.6.7.8"), eq(false), anyBoolean()))
             .thenReturn(new PlaybackAuthorizationResponse(
                 "jwt", "https://cdn.example.com/playlist.m3u8?token=x&clientIp=5.6.7.8",
                 Instant.now().plusSeconds(7200)));
@@ -199,7 +222,7 @@ class VideoPlayResourceWebMvcTest {
         when(videoAccessGuard.isParentOf(any(), any(), eq(VIDEO_ID))).thenReturn(false);
         when(securityUtil.getCurrentUserName()).thenReturn("coach@example.com");
         when(videoService.findById(VIDEO_ID)).thenReturn(ownerVideo());
-        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("coach@example.com"), nullable(String.class), eq(false)))
+        when(playbackService.authorizePlayback(eq(VIDEO_ID), eq("coach@example.com"), nullable(String.class), eq(false), anyBoolean()))
             .thenThrow(new PlaybackDeniedException(VIDEO_ID, "coach@example.com"));
 
         mockMvc.perform(get("/api/video/{id}/play", VIDEO_ID))

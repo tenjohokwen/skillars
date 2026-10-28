@@ -39,7 +39,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(VideoEventResource.class)
-@Import(VideoSseWebMvcTest.TestSecurityConfig.class)
+// The REAL VideoAccessGuard owns the owner check VideoEventResource now delegates to (B5).
+@Import({VideoSseWebMvcTest.TestSecurityConfig.class, VideoAccessGuard.class})
 class VideoSseWebMvcTest {
 
     @TestConfiguration
@@ -65,9 +66,23 @@ class VideoSseWebMvcTest {
     @MockitoBean VideoMetrics videoMetrics;
     @MockitoBean JwtSecretService jwtSecretService;
     @MockitoBean com.softropic.skillars.platform.security.repo.PlayerProfileRepository playerProfileRepository;
+    @MockitoBean com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository parentPlayerLinkRepository;
+    @MockitoBean com.softropic.skillars.platform.booking.repo.BookingRepository bookingRepository;
+    @MockitoBean com.softropic.skillars.platform.marketplace.service.CoachProfileService coachProfileService;
+    @MockitoBean com.softropic.skillars.platform.config.service.ConfigService configService;
+    @MockitoBean VideoAccessCache videoAccessCache;
 
     private static final UUID VIDEO_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final String OWNER = "owner@example.com";
+    private static final Long COACH_USER_ID = 7L;
+    private static final UUID COACH_ID = UUID.fromString("22222222-2222-2222-2222-222222222222");
+
+    @org.junit.jupiter.api.BeforeEach
+    void currentUserIsCoach() {
+        // The caller is a coach whose profile id is COACH_ID; coach video ownerIds are that UUID.
+        org.mockito.Mockito.lenient().when(securityUtil.getCurrentCoachUserId()).thenReturn(COACH_USER_ID);
+        org.mockito.Mockito.lenient().when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+    }
 
     @Test
     @WithAnonymousUser
@@ -79,9 +94,8 @@ class VideoSseWebMvcTest {
     @Test
     @WithMockUser(username = OWNER)
     void subscribeToEvents_nonOwner_returns403() throws Exception {
-        Video video = videoWithOwner("other-owner@example.com");
+        Video video = videoWithOwner(UUID.randomUUID().toString());
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
-        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
 
         mockMvc.perform(get("/api/video/{id}/events", VIDEO_ID))
             .andExpect(status().isForbidden());
@@ -90,9 +104,8 @@ class VideoSseWebMvcTest {
     @Test
     @WithMockUser(username = OWNER)
     void subscribeToEvents_owner_startsAsyncSseStream() throws Exception {
-        Video video = videoWithOwner(OWNER);
+        Video video = videoWithOwner(COACH_ID.toString());
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
-        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoSseService.subscribe(VIDEO_ID, OperationalState.SCANNING.name()))
             .thenReturn(new SseEmitter(5000L));
 
@@ -107,10 +120,9 @@ class VideoSseWebMvcTest {
     @Test
     @WithMockUser(username = OWNER)
     void subscribeToEvents_passesCurrentStateToSseService() throws Exception {
-        Video video = videoWithOwner(OWNER);
+        Video video = videoWithOwner(COACH_ID.toString());
         video.setOperationalState(OperationalState.TRANSCODING);
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
-        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
         when(videoSseService.subscribe(VIDEO_ID, OperationalState.TRANSCODING.name()))
             .thenReturn(new SseEmitter(5000L));
 
@@ -127,9 +139,8 @@ class VideoSseWebMvcTest {
     @Test
     @WithMockUser(username = OWNER)
     void getStatus_owner_returnsVideoStatusResponseRecord() throws Exception {
-        Video video = videoWithOwner(OWNER);
+        Video video = videoWithOwner(COACH_ID.toString());
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
-        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
 
         mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
             .andExpect(status().isOk())
@@ -142,7 +153,6 @@ class VideoSseWebMvcTest {
     @WithMockUser(username = OWNER)
     void getStatus_videoNotFound_returns404() throws Exception {
         when(videoService.findById(VIDEO_ID)).thenThrow(new VideoNotFoundException(VIDEO_ID));
-        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
 
         mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
             .andExpect(status().isNotFound());
@@ -155,10 +165,9 @@ class VideoSseWebMvcTest {
     @Test
     @WithMockUser(username = OWNER)
     void getStatus_purgedVideo_displayStateIsDeleted() throws Exception {
-        Video video = videoWithOwner(OWNER);
+        Video video = videoWithOwner(COACH_ID.toString());
         video.setOperationalState(OperationalState.PURGED);
         when(videoService.findById(VIDEO_ID)).thenReturn(video);
-        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
 
         mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
             .andExpect(status().isOk())
@@ -194,6 +203,31 @@ class VideoSseWebMvcTest {
         when(securityUtil.getCurrentUser()).thenReturn(principal);
         when(videoService.findById(VIDEO_ID)).thenReturn(videoWithOwner(String.valueOf(profileId)));
         when(playerProfileRepository.existsByIdAndUserId(profileId, userId)).thenReturn(false);
+
+        mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
+            .andExpect(status().isForbidden());
+    }
+
+    /**
+     * B5 regression: a coach video's ownerId is the coach-profile UUID; the old local owner check
+     * compared it to the username (an email), so a coach got 403 on their own upload's status.
+     */
+    @Test
+    @WithMockUser(username = OWNER)
+    void getStatus_coachOwnsVideoViaCoachProfile_returns200_notComparedToUsername() throws Exception {
+        when(securityUtil.getCurrentUserName()).thenReturn(COACH_ID.toString());
+        when(videoService.findById(VIDEO_ID)).thenReturn(videoWithOwner(COACH_ID.toString()));
+
+        mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
+            .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(username = OWNER)
+    void getStatus_coachVideoWhoseOwnerIdEqualsUsername_isStillForbidden() throws Exception {
+        // The username is never an owner id; a video whose owner_id happened to equal it is not "owned".
+        when(securityUtil.getCurrentUserName()).thenReturn(OWNER);
+        when(videoService.findById(VIDEO_ID)).thenReturn(videoWithOwner(OWNER));
 
         mockMvc.perform(get("/api/video/{id}/status", VIDEO_ID))
             .andExpect(status().isForbidden());
