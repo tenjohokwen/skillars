@@ -48,6 +48,13 @@
           </q-item-section>
 
           <q-item-section side>
+            <!-- FR-ADM-004 / FR-TSC-003: one appeal per strike, within 14 days of it. -->
+            <AppealAction
+              subject-type="RELIABILITY_STRIKE"
+              :subject-id="strike.strikeId"
+              :enforced-at="strike.issuedAt || null"
+              class="q-mb-xs"
+            />
             <q-chip
               v-if="strike.acknowledged"
               color="positive"
@@ -78,6 +85,7 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { getProfileBuilderStatus } from 'src/api/marketplace.api'
+import AppealAction from 'src/components/common/AppealAction.vue'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()

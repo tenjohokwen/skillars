@@ -90,6 +90,23 @@
 
         <!-- Reviews -->
         <div class="glass-card q-pa-md q-mb-md">
+          <!-- Review sort (ReviewResource: sort=newest|highest|lowest). -->
+          <div v-if="reviewsTotalElements > 1" class="row justify-end q-mb-sm">
+            <q-select
+              :model-value="reviewSort"
+              :options="reviewSortOptions"
+              :label="t('reviews.sortLabel')"
+              emit-value
+              map-options
+              dense
+              outlined
+              options-dense
+              style="min-width: 180px"
+              data-testid="review-sort-select"
+              :loading="reviewsSorting"
+              @update:model-value="changeReviewSort"
+            />
+          </div>
           <div
             v-if="reviewsTotalElements === 0"
             class="text-body2"
@@ -135,6 +152,7 @@
               dense
               :label="t('reviews.loadMore')"
               :loading="reviewsLoadingMore"
+              :disable="reviewsSorting"
               @click="loadMoreReviews"
             />
           </template>
@@ -171,6 +189,12 @@
               class="text-caption text-negative q-mb-sm"
             >
               {{ t('reviews.blocked') }}
+              <!-- FR-ADM-004: a moderation block is an appealable enforcement action. -->
+              <AppealAction
+                subject-type="REVIEW_BLOCK"
+                :subject-id="myReview.reviewId"
+                :enforced-at="myReview.lastModifiedAt || null"
+              />
             </div>
             <q-btn flat dense :label="t('reviews.editReview')" @click="openEditReview" />
           </template>
@@ -435,6 +459,7 @@ import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicato
 import CapabilityBadgeSet from 'src/components/marketplace/CapabilityBadgeSet.vue'
 import SessionPackPricingDisplay from 'src/components/marketplace/SessionPackPricingDisplay.vue'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
+import AppealAction from 'src/components/common/AppealAction.vue'
 import ReviewFlagAction from 'src/components/marketplace/ReviewFlagAction.vue'
 
 const route = useRoute()
@@ -671,12 +696,50 @@ function applyReviewPage(res, page) {
   reviewsCurrentPage.value = res.page
 }
 
+const reviewSort = ref('newest')
+const reviewSortOptions = computed(() => [
+  { label: t('reviews.sortNewest'), value: 'newest' },
+  { label: t('reviews.sortHighest'), value: 'highest' },
+  { label: t('reviews.sortLowest'), value: 'lowest' },
+])
+// Bumped on every fetch: a response that arrives after a newer fetch started (e.g. a slow "load
+// more" under the old sort, or two quick sort changes) is discarded instead of being appended to /
+// replacing the list for the sort the user now has selected.
+let reviewsFetchToken = 0
+
 async function fetchReviews(page = 0) {
+  const token = ++reviewsFetchToken
   try {
-    applyReviewPage(await listCoachReviews(coachId, page), page)
+    const res = await listCoachReviews(coachId, page, reviewSort.value)
+    if (token !== reviewsFetchToken) return false
+    applyReviewPage(res, page)
+    return true
   } catch (err) {
+    if (token !== reviewsFetchToken) return false
     console.error('Failed to load reviews', err)
     $q.notify({ type: 'negative', message: t('common.errorGeneric') })
+    return false
+  }
+}
+
+const reviewsSorting = ref(false)
+
+async function changeReviewSort(sort) {
+  if (sort === reviewSort.value) return
+  const previousSort = reviewSort.value
+  reviewSort.value = sort
+  // A new ordering restarts paging from the first page; "load more" is disabled meanwhile so it
+  // cannot request page N+1 of the new ordering on top of the old ordering's list.
+  const token = reviewsFetchToken + 1
+  reviewsSorting.value = true
+  try {
+    const ok = await fetchReviews(0)
+    // A failed re-sort leaves the old ordering's list on screen: put the select back to match it,
+    // or the next "load more" would append the new ordering's page N+1 to the old list. Only when
+    // no newer fetch has started since (that one owns the list now).
+    if (!ok && token === reviewsFetchToken) reviewSort.value = previousSort
+  } finally {
+    reviewsSorting.value = false
   }
 }
 

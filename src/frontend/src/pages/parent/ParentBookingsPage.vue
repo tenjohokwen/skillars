@@ -130,6 +130,24 @@
             class="q-mt-xs self-start"
           />
 
+          <!-- Coach no-show report (FR: parent/self-booking-player). Mirrors
+               BookingService.recordNoShowCoach for visibility only: the NO_SHOW_COACH transition
+               exists only from UPCOMING, and the backend refuses a report before the scheduled
+               start (BookingError.NO_SHOW_TOO_EARLY). The server stays authoritative. -->
+          <q-btn
+            v-if="(authStore.isParent || authStore.isPlayer) && canReportCoachNoShow(booking)"
+            flat
+            dense
+            size="sm"
+            color="negative"
+            icon="person_off"
+            data-testid="no-show-coach-btn"
+            :label="t('cancellation.noShowCoachAction')"
+            :loading="noShowCoachId === booking.id"
+            @click="openNoShowCoachDialog(booking)"
+            class="q-mt-xs self-start"
+          />
+
           <!-- Player/parent session-prep request (skillars-deferred-155 AC7).
                skillars-deferred-155 code review: the read-only display is deliberately NOT nested
                inside the editable-status gate below. Only the *edit affordance* is status-gated;
@@ -290,11 +308,34 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <!-- Coach no-show confirmation dialog -->
+    <q-dialog v-model="noShowCoachDialogOpen">
+      <q-card data-testid="no-show-coach-dialog" style="min-width: 320px; max-width: 480px">
+        <q-card-section>
+          <div class="text-h6">{{ t('cancellation.noShowCoachConfirmTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          {{ t('cancellation.noShowCoachConfirmBody') }}
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="negative"
+            data-testid="no-show-coach-confirm-btn"
+            :label="t('cancellation.noShowCoachAction')"
+            :loading="noShowCoachId !== null"
+            @click="submitNoShowCoach"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
@@ -402,6 +443,62 @@ const playerRequestDialogOpen = ref(false)
 const playerRequestBookingId = ref(null)
 const playerRequestText = ref('')
 const savingPlayerRequestId = ref(null)
+
+// Coach no-show (see the template comment). A ticking clock so a session whose start passes while
+// the page is open gains the action without a reload.
+const nowMs = ref(Date.now())
+const nowTimer = setInterval(() => {
+  nowMs.value = Date.now()
+}, 60 * 1000)
+onBeforeUnmount(() => clearInterval(nowTimer))
+
+function canReportCoachNoShow(booking) {
+  if (booking.status !== 'UPCOMING') return false
+  const start = new Date(booking.requestedStartTime).getTime()
+  // Unparseable start: fail closed (hide) rather than offer an action the server would refuse.
+  return !Number.isNaN(start) && start <= nowMs.value
+}
+
+const noShowCoachDialogOpen = ref(false)
+const noShowCoachBookingId = ref(null)
+const noShowCoachId = ref(null)
+
+function openNoShowCoachDialog(booking) {
+  noShowCoachBookingId.value = booking.id
+  noShowCoachDialogOpen.value = true
+}
+
+async function submitNoShowCoach() {
+  if (noShowCoachId.value !== null) return
+  noShowCoachId.value = noShowCoachBookingId.value
+  try {
+    await bookingStore.handleRecordNoShowCoach(noShowCoachBookingId.value)
+    noShowCoachDialogOpen.value = false
+    $q.notify({ message: t('cancellation.noShowCoachSuccess'), type: 'positive' })
+  } catch (err) {
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    noShowCoachDialogOpen.value = false
+    // Same error-key → copy mapping as CoachCommandCenterPage's player no-show report.
+    const messages = {
+      MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
+      'booking.noShowTooEarly': 'booking.errors.noShowTooEarly',
+      'booking.alreadyCompleted': 'cancellation.alreadyCompleted',
+      'booking.invalidTransition': 'cancellation.invalidTransition',
+    }
+    $q.notify({
+      message: t(messages[errorKey] || 'cancellation.noShowCoachFailed'),
+      type: 'negative',
+    })
+    // The row may have moved on (e.g. the coach started the session) — show its real state.
+    try {
+      await bookingStore.loadParentBookings()
+    } catch {
+      /* keep the current list */
+    }
+  } finally {
+    noShowCoachId.value = null
+  }
+}
 
 function openCancelDialog(booking) {
   cancelBookingId.value = booking.id

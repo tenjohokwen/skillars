@@ -504,13 +504,13 @@ class GdprErasureServiceTest {
                 eq("ERASURE"), eq("FAILED"), any(Instant.class), eq(GdprErasureService.MAX_ERASURE_RETRY_ATTEMPTS), any()))
             .thenReturn(stickyPage);
         // Always has a concurrent PENDING/PROCESSING row for this user — persistently dedup-skipped.
-        when(gdprRequestRepository.existsByUserIdAndRequestTypeAndStatusIn(
+        when(gdprRequestRepository.existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
                 eq(USER_ID), eq("ERASURE"), eq(List.of("PENDING", "PROCESSING"))))
             .thenReturn(true);
 
         service.retryFailedErasures();
 
-        verify(gdprRequestRepository, times(1)).existsByUserIdAndRequestTypeAndStatusIn(
+        verify(gdprRequestRepository, times(1)).existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
             eq(USER_ID), eq("ERASURE"), eq(List.of("PENDING", "PROCESSING")));
         verify(gdprRequestRepository, never()).save(any(GdprRequest.class));
     }
@@ -523,7 +523,7 @@ class GdprErasureServiceTest {
 
         service.retryFailedErasures();
 
-        verify(gdprRequestRepository, never()).existsByUserIdAndRequestTypeAndStatusIn(
+        verify(gdprRequestRepository, never()).existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
             anyLong(), anyString(), any());
     }
 

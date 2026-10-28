@@ -11,4 +11,6 @@ public record DisputeResponse(
     String status,
     String resolution,
     String resolutionNote,
-    Instant createdAt) {}
+    Instant createdAt,
+    // The appeal window (FR-ADM-004, 14 days) runs from the resolution.
+    Instant resolvedAt) {}

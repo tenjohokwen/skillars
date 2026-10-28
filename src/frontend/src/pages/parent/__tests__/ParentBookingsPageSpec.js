@@ -382,3 +382,89 @@ describe('ParentBookingsPage.vue — Message coach entry point (feat/messaging-c
     },
   )
 })
+
+// A13: "Coach didn't show" — mirrors BookingService.recordNoShowCoach (UPCOMING only, not before
+// the scheduled start) for visibility; the backend stays authoritative.
+describe('ParentBookingsPage.vue — coach no-show report (A13)', () => {
+  const PAST = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+  const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString()
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.restoreAllMocks()
+    notifySpy.mockReset()
+  })
+
+  it('shows the action for an UPCOMING booking whose start has passed', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: {
+        parentBookings: [{ ...BOOKING_1H, status: 'UPCOMING', requestedStartTime: PAST }],
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(true)
+  })
+
+  it.each([
+    ['UPCOMING', FUTURE],
+    ['CONFIRMED', PAST],
+    ['IN_PROGRESS', PAST],
+    ['COMPLETED', PAST],
+  ])('hides the action for a %s booking starting at %s', async (status, start) => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [{ ...BOOKING_1H, status, requestedStartTime: start }] },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(false)
+  })
+
+  it('fails closed (hidden) on an unparseable start time', async () => {
+    const { wrapper } = mountPage({ auth: { role: 'PARENT' }, booking: { parentBookings: [] } })
+    await flushPromises()
+    expect(
+      wrapper.vm.canReportCoachNoShow({ status: 'UPCOMING', requestedStartTime: 'not-a-date' }),
+    ).toBe(false)
+  })
+
+  it('confirming calls the store and notifies success', async () => {
+    const booking = { ...BOOKING_1H, status: 'UPCOMING', requestedStartTime: PAST }
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [booking] },
+    })
+    await flushPromises()
+    bookingStore.handleRecordNoShowCoach.mockResolvedValue()
+
+    wrapper.vm.openNoShowCoachDialog(booking)
+    expect(wrapper.vm.noShowCoachDialogOpen).toBe(true)
+    await wrapper.vm.submitNoShowCoach()
+
+    expect(bookingStore.handleRecordNoShowCoach).toHaveBeenCalledWith(42)
+    expect(wrapper.vm.noShowCoachDialogOpen).toBe(false)
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'positive', message: 'cancellation.noShowCoachSuccess' }),
+    )
+  })
+
+  it('a too-early rejection maps to its copy and reloads the list', async () => {
+    const booking = { ...BOOKING_1H, status: 'UPCOMING', requestedStartTime: PAST }
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [booking] },
+    })
+    await flushPromises()
+    bookingStore.handleRecordNoShowCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'booking.noShowTooEarly' } } },
+    })
+
+    wrapper.vm.openNoShowCoachDialog(booking)
+    await wrapper.vm.submitNoShowCoach()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'booking.errors.noShowTooEarly' }),
+    )
+    expect(bookingStore.loadParentBookings).toHaveBeenCalled()
+  })
+})

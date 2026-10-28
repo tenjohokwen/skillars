@@ -407,7 +407,7 @@ public class CoachProfileService {
             specialties, ageGroups,
             pricing != null ? pricing.getPerSessionPrice() : null,
             pricing != null ? pricing.getSessionDurationMinutes() : null,
-            "EUR", sessionPacks, windows, profile.getPhotoUrl());
+            "EUR", sessionPacks, windows, profile.getPhotoUrl(), profile.getStatusChangedAt());
     }
 
     /**

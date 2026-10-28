@@ -214,7 +214,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'start-conversation error: messagingErrorI18nKey maps a backend code to messaging.errors.*',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:190',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:214',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {
@@ -232,6 +232,58 @@ const DYNAMIC_KEY_CALL_SITES = [
   {
     at: 'src/components/video/VideoPlayDialog.vue:28',
     reason: 't() on errorKey, set only from the fixed video.player.* keys in errorKeyFor()',
+  },
+  {
+    at: 'src/components/common/AppealAction.vue:13',
+    reason: 'appeal status chip keyed by the AppealStatus enum (OPEN/UPHELD/OVERTURNED)',
+  },
+  {
+    at: 'src/components/common/AppealAction.vue:35',
+    reason: 'appeal dialog subtitle keyed by the AppealSubjectType enum prop',
+  },
+  {
+    at: 'src/components/common/AppealAction.vue:147',
+    reason:
+      't on a lookup-table value mapping a backend error message to a real appeals.errors.* key, with a literal fallback',
+  },
+  {
+    at: 'src/components/profile/PrivacyDataSection.vue:125',
+    reason:
+      't on each entry of consequenceKeys, a computed list of literal privacy.consequence* keys',
+  },
+  {
+    at: 'src/components/profile/PrivacyDataSection.vue:308',
+    reason: 't on errorMessageKey(), which maps a backend error to a literal privacy.errors.* key',
+  },
+  {
+    at: 'src/components/profile/PrivacyDataSection.vue:349',
+    reason: 't on errorMessageKey(), the erasure-dialog twin of the call above',
+  },
+  {
+    at: 'src/pages/admin/AdminAppealsPage.vue:36',
+    reason: 'queue cell keyed by the AppealSubjectType enum',
+  },
+  {
+    at: 'src/pages/admin/AdminAppealsPage.vue:44',
+    reason: 'queue cell keyed by the AppealStatus enum',
+  },
+  {
+    at: 'src/pages/admin/AdminAppealsPage.vue:97',
+    reason: 'detail line keyed by the AppealSubjectType enum',
+  },
+  {
+    at: 'src/pages/admin/AdminAppealsPage.vue:106',
+    reason: 'detail line keyed by the AppealStatus enum',
+  },
+  {
+    at: 'src/pages/admin/AdminAppealsPage.vue:333',
+    reason:
+      'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
+  },
+  {
+    at: 'src/pages/parent/ParentBookingsPage.vue:489',
+    reason:
+      't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
 ]
 

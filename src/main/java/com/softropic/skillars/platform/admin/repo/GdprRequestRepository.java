@@ -13,7 +13,16 @@ import java.util.UUID;
 
 public interface GdprRequestRepository extends JpaRepository<GdprRequest, UUID> {
 
-    boolean existsByUserIdAndRequestTypeAndStatusIn(Long userId, String requestType, List<String> statuses);
+    // V172 scope-aware variants: a self-scoped request (playerId NULL) and a child-scoped request
+    // (playerId set) are independent — each backed by its own partial unique index.
+    boolean existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
+        Long userId, String requestType, List<String> statuses);
+
+    boolean existsByPlayerIdAndRequestTypeAndStatusIn(Long playerId, String requestType, List<String> statuses);
+
+    List<GdprRequest> findTop20ByUserIdAndPlayerIdIsNullOrderByCreatedAtDesc(Long userId);
+
+    List<GdprRequest> findTop20ByUserIdAndPlayerIdOrderByCreatedAtDesc(Long userId, Long playerId);
 
     Page<GdprRequest> findByRequestTypeAndStatus(String requestType, String status, Pageable pageable);
 

@@ -876,6 +876,10 @@ export default {
     },
   },
   reviews: {
+    sortLabel: 'Bewertungen sortieren',
+    sortNewest: 'Neueste zuerst',
+    sortHighest: 'Beste zuerst',
+    sortLowest: 'Schlechteste zuerst',
     writeReview: 'Bewertung schreiben',
     editReview: 'Bewertung bearbeiten',
     yourReview: 'Ihre Bewertung',
@@ -1456,6 +1460,51 @@ export default {
     },
   },
   admin: {
+    appeals: {
+      title: 'Einsprüche',
+      subtitle: 'Nutzer, die eine Maßnahme anfechten. Entscheidungen sind endgültig.',
+      loadError: 'Die Einspruchsliste konnte nicht geladen werden.',
+      emptyState: 'Keine Einsprüche in diesem Status.',
+      colSubject: 'Gegenstand',
+      colAppellant: 'Einspruchsführer',
+      colEnforcedAt: 'Verhängt',
+      colCreatedAt: 'Eingereicht',
+      colStatus: 'Status',
+      colActions: 'Aktionen',
+      view: 'Ansehen',
+      detailTitle: 'Einspruch',
+      detailLoadError: 'Dieser Einspruch konnte nicht geladen werden.',
+      reasonLabel: 'Begründung des Einspruchsführers',
+      subjectLabel: 'Angefochtener Eintrag',
+      subjectGone: 'Der angefochtene Eintrag existiert nicht mehr.',
+      decisionLabel: 'Entscheidung',
+      decisionNoteLabel: 'Begründung der Entscheidung (für den Einspruchsführer sichtbar)',
+      overturnHint:
+        'Eine Stattgabe hebt die Maßnahme nach Möglichkeit auf: Verwarnung gelöscht, Sperre aufgehoben, Bewertung veröffentlicht. Eine Streitfallentscheidung wird nicht automatisch rückgängig gemacht — nimm Korrekturen manuell vor.',
+      uphold: 'Ablehnen',
+      overturn: 'Stattgeben',
+      upholdSuccess: 'Einspruch abgelehnt — die Maßnahme bleibt bestehen.',
+      overturnSuccess: 'Einspruch stattgegeben.',
+      alreadyDecided: 'Ein anderer Administrator hat diesen Einspruch bereits entschieden.',
+      decideFailed: 'Die Entscheidung konnte nicht gespeichert werden. Bitte versuche es erneut.',
+      reversalApplied: 'Die Maßnahme wurde aufgehoben.',
+      reversalNotApplied:
+        'Nichts wurde automatisch aufgehoben (nicht mehr wirksam oder Streitfallentscheidung).',
+      subjectField: {
+        strikeReason: 'Grund der Verwarnung',
+        bookingId: 'Buchung',
+        coachId: 'Coach-ID',
+        coachName: 'Coach',
+        coachStatus: 'Coach-Status',
+        reviewRating: 'Bewertung',
+        reviewBody: 'Bewertungstext',
+        reviewStatus: 'Bewertungsstatus',
+        disputeReason: 'Grund des Streitfalls',
+        disputeStatus: 'Status des Streitfalls',
+        disputeResolution: 'Lösung',
+        disputeResolutionNote: 'Lösungsnotiz',
+      },
+    },
     health: {
       title: 'Systemzustand',
       subtitle: 'Infrastrukturstatus in Echtzeit',
@@ -1737,6 +1786,12 @@ export default {
     notFound: 'Die angeforderte Ressource wurde nicht gefunden',
   },
   cancellation: {
+    noShowCoachAction: 'Coach nicht erschienen',
+    noShowCoachConfirmTitle: 'Nichterscheinen des Coaches melden',
+    noShowCoachConfirmBody:
+      'Bestätige, dass der Coach zu dieser Sitzung nicht erschienen ist. Die Sitzung wird erstattet und der Coach erhält eine Zuverlässigkeitsverwarnung. Dies kann nicht rückgängig gemacht werden.',
+    noShowCoachFailed:
+      'Das Nichterscheinen konnte nicht gemeldet werden. Bitte versuche es erneut.',
     title: 'Sitzung stornieren',
     selectReason: 'Stornierungsgrund auswählen',
     confirmCancel: 'Stornierung bestätigen',
@@ -1948,6 +2003,7 @@ export default {
     },
   },
   profile: {
+    sectionPrivacy: 'Datenschutz & Daten',
     subtitle: 'Verwalten Sie Ihre Kontodaten und Einstellungen.',
     sectionAccount: 'Konto',
     sectionPersonal: 'Persönliche Daten',
@@ -2089,8 +2145,104 @@ export default {
     metricLast30Days: 'Letzte 30 Tage',
     metricAverageMs: 'Durchschnitt (ms)',
   },
+  privacy: {
+    exportTitle: 'Meine Daten exportieren',
+    exportHint:
+      'Lade eine Kopie der personenbezogenen Daten herunter, die wir über dich speichern (Profil, Buchungen, Nachrichten, Bewertungen, Zahlungen). Das Archiv wird im Hintergrund erstellt.',
+    exportHintChild:
+      'Lade eine Kopie der Daten herunter, die wir über {name} speichern: Profil, Buchungen und Entwicklungsverlauf.',
+    requestExport: 'Export anfordern',
+    exportRequested: 'Export angefordert. Das Archiv wird erstellt.',
+    exportProcessing: 'Archiv wird erstellt…',
+    exportStillProcessing:
+      'Das dauert länger als üblich. Schau in ein paar Minuten wieder vorbei und klicke auf Aktualisieren.',
+    exportReady: 'Das Archiv ist bereit. Der Download-Link läuft am {date} ab.',
+    download: 'Archiv herunterladen',
+    exportExpired:
+      'Der letzte Download-Link ist abgelaufen. Fordere einen neuen Export an, um die Daten erneut herunterzuladen.',
+    exportFailed: 'Der letzte Export konnte nicht erstellt werden. Bitte fordere ihn erneut an.',
+    loadError: 'Deine Datenanfragen konnten nicht geladen werden.',
+    refresh: 'Aktualisieren',
+    erasureTitle: 'Mein Konto löschen',
+    erasureTitleChild: 'Daten dieses Kindes löschen',
+    erasureHint: 'Dein Konto und deine personenbezogenen Daten endgültig löschen.',
+    erasureHintChild:
+      'Das Profil und die Entwicklungsdaten von {name} endgültig löschen. Dein eigenes Konto bleibt bestehen.',
+    erasureAction: 'Mein Konto löschen',
+    erasureActionChild: 'Daten des Kindes löschen',
+    erasureDialogTitle: 'Konto löschen?',
+    erasureDialogTitleChild: 'Daten von {name} löschen?',
+    erasureConsequencesIntro: 'Das passiert dabei:',
+    consequenceAccount:
+      'Dein Konto wird anonymisiert und gesperrt, und du wirst auf allen Geräten abgemeldet.',
+    consequenceMessages: 'Deine Nachrichten und Bewertungen werden gelöscht oder anonymisiert.',
+    consequenceDevelopment:
+      'Entwicklungsdaten (Verlauf, Bewertungen, Berichte) für dich und alle von dir verwalteten Kinder werden gelöscht.',
+    consequenceCredits:
+      'Verbleibende Guthaben und Sitzungspakete können nicht mehr genutzt werden. Zahlungsbelege, die wir gesetzlich aufbewahren müssen, bleiben erhalten.',
+    consequenceBlocked:
+      'Ein Coach kann sein Konto nicht löschen, solange Buchungsanfragen offen oder angenommen sind.',
+    consequenceChildProfile:
+      'Der Name des Kindes wird entfernt und das Profil verschwindet aus deinem Konto.',
+    consequenceChildDevelopment:
+      'Verlauf, Einschätzungen, Leistungsberichte und Hausaufgaben werden gelöscht.',
+    consequenceChildBookings:
+      'Vergangene Buchungen bleiben in deinem Zahlungsverlauf, ohne die Sitzungsnotizen des Kindes.',
+    consequenceChildBlocked:
+      'Nicht möglich, solange das Kind eine anstehende, laufende oder strittige Buchung hat.',
+    consequenceIrreversible: 'Dies kann nicht rückgängig gemacht werden.',
+    confirmWord: 'LÖSCHEN',
+    confirmPrompt: 'Gib {word} ein, um zu bestätigen.',
+    confirmLabel: 'Bestätigung',
+    erasureConfirm: 'Endgültig löschen',
+    erasureDone: 'Dein Konto wurde gelöscht. Du wirst jetzt abgemeldet.',
+    erasureChildDone: 'Die Daten des Kindes wurden gelöscht.',
+    childButtonTooltip: 'Datenschutz & Daten',
+    childDialogTitle: 'Datenschutz & Daten — {name}',
+    childSectionTitle: 'Datenschutz & Daten',
+    errors: {
+      alreadyPending: 'Eine Anfrage dieser Art wird bereits bearbeitet.',
+      exportInProgress:
+        'Ein Export wird noch erstellt. Warte, bis er fertig ist, bevor du löschst.',
+      activeBookings:
+        'Du hast noch offene oder angenommene Buchungsanfragen. Kläre diese, bevor du dein Konto löschst.',
+      activeBookingsChild:
+        'Dieses Kind hat noch eine aktive Buchung. Storniere oder beende sie zuerst.',
+      playerAlreadyErased: 'Die Daten dieses Kindes wurden bereits gelöscht.',
+      notAllowed: 'Dazu bist du nicht berechtigt.',
+      generic: 'Etwas ist schiefgelaufen. Bitte versuche es erneut.',
+    },
+  },
+  appeals: {
+    action: 'Einspruch',
+    dialogTitle: 'Einspruch gegen diese Entscheidung',
+    dialogExplanation:
+      'Du kannst einmal innerhalb von 14 Tagen Einspruch einlegen. Ein Administrator prüft ihn; seine Entscheidung ist endgültig.',
+    reasonLabel: 'Warum sollte diese Entscheidung aufgehoben werden?',
+    submit: 'Einspruch einreichen',
+    submitSuccess: 'Einspruch eingereicht. Wir informieren dich über die Entscheidung.',
+    errors: {
+      alreadyAppealed: 'Gegen diese Entscheidung wurde bereits Einspruch eingelegt.',
+      windowExpired: 'Die 14-tägige Einspruchsfrist ist abgelaufen.',
+      notEnforced: 'Diese Entscheidung ist nicht mehr wirksam, daher gibt es nichts anzufechten.',
+      subjectNotFound: 'Dieser Eintrag wurde nicht gefunden.',
+      generic: 'Der Einspruch konnte nicht eingereicht werden. Bitte versuche es erneut.',
+    },
+    status: {
+      OPEN: 'Einspruch offen',
+      UPHELD: 'Einspruch abgelehnt',
+      OVERTURNED: 'Einspruch stattgegeben',
+    },
+    subject: {
+      RELIABILITY_STRIKE: 'Zuverlässigkeitsverwarnung',
+      COACH_SUSPENSION: 'Kontosperrung',
+      REVIEW_BLOCK: 'Blockierte Bewertung',
+      DISPUTE_RESOLUTION: 'Streitfallentscheidung',
+    },
+  },
   nav: {
     coachVideos: 'Meine Videos',
+    appeals: 'Einsprüche',
     sectionMain: 'Allgemein',
     menu: 'Menü',
     tagline: 'Analyseplattform',

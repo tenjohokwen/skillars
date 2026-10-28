@@ -276,6 +276,8 @@ public class GdprErasureService {
     // the coach-erasure scrub overwrites it with this placeholder rather than nulling it — same
     // convention as the "Deleted"/"User" writes on main.user above. Well inside the column's 500 chars.
     private static final String ERASED_REPORT_NEXT_STEPS = "[Removed — coach account erased]";
+    // Parent-requested child erasure (V172): the placeholder a scrubbed child profile's name becomes.
+    static final String ERASED_PLAYER_NAME = "Erased player";
 
     // skillars-deferred-136 AC2: retryFailedErasures's own sweep sizing — mirrors
     // EmailRetryScheduler.MAX_RETRY_ATTEMPTS's shape, not its value. GDPR erasure failures are
@@ -756,6 +758,99 @@ public class GdprErasureService {
     }
 
     /**
+     * Parent-requested erasure of ONE parent-owned (shadow) child profile (V172 {@code player_id}
+     * scope). Same outer shape as {@link #erase}: the connection-pool pre-check and the dedicated GDPR
+     * pool routing both apply to {@link #eraseChildTransactional}'s own REQUIRES_NEW acquisition.
+     */
+    public void eraseChild(UUID requestId, Long parentUserId, Long playerId) {
+        assertConnectionPoolNotSaturated(requestId, "eraseChild");
+        RoutingDataSourceContext.set(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY);
+        try {
+            self.eraseChildTransactional(requestId, parentUserId, playerId);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    /**
+     * What a child erasure erases — exactly the per-child hook the PARENT branch already runs for each
+     * child ({@link #deletePlayerDevelopmentData}: timeline, SLU, radar, performance reports + their
+     * blobs, homework completions, the child's {@code session_completion_data} recap and the free text
+     * on its bookings), plus, because the parent account (and so the profile row) survives here, the
+     * profile's own identity ({@code scrubProfileIdentity}: name, date-of-birth precision), committed
+     * atomically with the {@code developmentDataErasedAt} tombstone that also hides the profile from
+     * the parent's child list. Deliberately NOT touched: the booking rows themselves and any payment /
+     * credit ledger rows (the parent's financial record), messages (authored by the parent or coach,
+     * never by a shadow child, which has no account) and videos (owned by an uploader account, not
+     * linked to a player profile).
+     *
+     * <p>Failure handling mirrors the PLAYER branch: a contended/timed-out scrub is alerted and the
+     * request is written FAILED so {@link #retryFailedErasures} re-drives it (scope-aware — see there).
+     * Ownership is re-checked here, against the row about to be erased, not only at request time.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void eraseChildTransactional(UUID requestId, Long parentUserId, Long playerId) {
+        GdprRequest request = gdprRequestRepository.findById(requestId)
+            .orElseThrow(() -> new RuntimeException("GdprRequest not found: " + requestId));
+        request.setStatus("PROCESSING");
+        gdprRequestRepository.save(request);
+
+        boolean skipped = false;
+        PlayerProfile child = playerProfileRepository.findById(playerId).orElse(null);
+        if (child == null) {
+            log.warn("[GDPR_CHILD_ERASURE] playerId={} not found — nothing to erase, requestId={}",
+                playerId, requestId);
+        } else if (child.getParentId() == null || !child.getParentId().equals(parentUserId)) {
+            // Ownership changed between request and processing (should be impossible — a profile's
+            // parent_id is never reassigned — but never erase a profile the requester does not own).
+            throw new IllegalStateException("GDPR child erasure requestId=" + requestId
+                + ": playerId=" + playerId + " is not owned by parentUserId=" + parentUserId);
+        } else {
+            long lockTimeoutSeconds = configService.getBoundedLong(
+                ConfigBounds.GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS.key(), 5L, 2L, 120L);
+            // Detach BEFORE the inner REQUIRES_NEW transaction locks and rewrites the same row: this
+            // outer persistence context must not hold (and later flush) a stale pre-scrub snapshot.
+            entityManager.detach(child);
+            try {
+                deletePlayerDevelopmentData(playerId, lockTimeoutSeconds, true);
+            } catch (ResourceNotFoundException e) {
+                log.warn("[GDPR_CHILD_ERASURE] playerId={} vanished before its lock could be acquired — "
+                    + "treating as already erased, requestId={}", playerId, requestId);
+                raiseErasureAlert(requestId, CHILD_VANISHED);
+            } catch (DeleteStatementLockTimeoutException | PessimisticLockingFailureException e) {
+                String reason = e instanceof DeleteStatementLockTimeoutException
+                    ? CHILD_DELETE_LOCK_TIMEOUT : CHILD_CONTENDED;
+                log.warn("[GDPR_CHILD_ERASURE] playerId={} erasure skipped (reason={}), requestId={}",
+                    playerId, reason, requestId);
+                raiseErasureAlert(requestId, reason);
+                skipped = true;
+            } catch (CumulativeLockBudgetExhaustedException e) {
+                log.warn("[GDPR_CHILD_ERASURE] playerId={} exceeded its cumulative lock-wait budget, "
+                    + "requestId={}", playerId, requestId, e);
+                raiseErasureAlert(requestId, CHILD_CUMULATIVE_LOCK_BUDGET_EXCEEDED);
+                skipped = true;
+            } catch (BookingSchemaLockException e) {
+                String reason = e.contended ? CHILD_BOOKING_CONTENDED : CHILD_BOOKING_LOCK_TIMEOUT;
+                log.warn("[GDPR_CHILD_ERASURE] playerId={} booking.* anonymisation failed (reason={}), "
+                    + "requestId={}", playerId, reason, requestId, e);
+                raiseErasureAlert(requestId, reason);
+                skipped = true;
+            }
+        }
+
+        blobDeletionOutboxSupport.requestDrainAfterCommit();
+
+        request.setStatus(skipped ? "FAILED" : "COMPLETED");
+        request.setCompletedAt(Instant.now());
+        if (skipped) {
+            request.setFailedAt(Instant.now());
+        }
+        gdprRequestRepository.save(request);
+        log.info("[GDPR_CHILD_ERASURE_COMPLETED] requestId={} parentUserId={} playerId={} skipped={}",
+            requestId, parentUserId, playerId, skipped);
+    }
+
+    /**
      * skillars-deferred-133 AC1: the alert below runs unconditionally, regardless of whether {@link
      * #markFailedStatusUpdate} found a row to update — {@code eraseTransactional}'s own {@code
      * orElseThrow(() -> new RuntimeException("GdprRequest not found: " + requestId))} fires exactly when
@@ -877,17 +972,28 @@ public class GdprErasureService {
                 }
                 sawUnconsideredCandidate = true;
                 Long userId = candidate.getUserId();
+                // V172: a child-scoped row (playerId set) must be re-driven as a CHILD erasure — userId
+                // is the parent there, and erase(requestId, userId) would erase the parent's account.
+                Long playerId = candidate.getPlayerId();
                 // story review: the try now wraps the dedup check and the retry-count increment too,
                 // not just erase() — an exception from either previously propagated out of this whole
                 // sweep, aborting every remaining candidate instead of just this one.
                 try {
-                    if (gdprRequestRepository.existsByUserIdAndRequestTypeAndStatusIn(
-                            userId, "ERASURE", List.of("PENDING", "PROCESSING"))) {
+                    boolean activeDuplicate = playerId != null
+                        ? gdprRequestRepository.existsByPlayerIdAndRequestTypeAndStatusIn(
+                            playerId, "ERASURE", List.of("PENDING", "PROCESSING"))
+                        : gdprRequestRepository.existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
+                            userId, "ERASURE", List.of("PENDING", "PROCESSING"));
+                    if (activeDuplicate) {
                         skippedDedup++;
                         continue;
                     }
                     self.incrementRetryCount(requestId);
-                    erase(requestId, userId);
+                    if (playerId != null) {
+                        eraseChild(requestId, userId, playerId);
+                    } else {
+                        erase(requestId, userId);
+                    }
                     redriven++;
                 } catch (Exception e) {
                     markFailed(requestId);
@@ -1404,6 +1510,18 @@ public class GdprErasureService {
      * for how the two possible failure causes reaching either call site are distinguished.
      */
     private void deletePlayerDevelopmentData(Long playerId, long lockTimeoutSeconds) {
+        deletePlayerDevelopmentData(playerId, lockTimeoutSeconds, false);
+    }
+
+    /**
+     * @param scrubProfileIdentity {@code true} only for a parent-requested erasure of a single child
+     *     profile ({@link #eraseChildTransactional}): the profile row itself survives (bookings and the
+     *     parent's financial history still reference it), so its identifying fields are scrubbed in the
+     *     SAME inner transaction as the tombstone — atomically, so a profile can never read as erased
+     *     (hidden from the parent's child list) while still carrying the child's name. {@code false}
+     *     keeps the PLAYER/PARENT branches' pre-existing behaviour unchanged.
+     */
+    private void deletePlayerDevelopmentData(Long playerId, long lockTimeoutSeconds, boolean scrubProfileIdentity) {
         // skillars-deferred-132 AC1 Fix 4: this method's own REQUIRES_NEW acquisition (via
         // requiresNewTemplate below) is the second of the two acquisitions this fix bounds — see
         // erase()'s own Javadoc for the shared mechanism and the tradeoffs it accepts.
@@ -1412,7 +1530,7 @@ public class GdprErasureService {
         // method's own REQUIRES_NEW acquisition.
         RoutingDataSourceContext.set(DataSourceConfig.GDPR_ERASURE_DATASOURCE_KEY);
         try {
-            deletePlayerDevelopmentDataInDedicatedPool(playerId, lockTimeoutSeconds);
+            deletePlayerDevelopmentDataInDedicatedPool(playerId, lockTimeoutSeconds, scrubProfileIdentity);
         } finally {
             RoutingDataSourceContext.clear();
         }
@@ -1440,7 +1558,8 @@ public class GdprErasureService {
      * hold unchanged: a bailed-out child is retried from scratch on the next re-drive, exactly like a
      * single-statement {@link DeleteStatementLockTimeoutException} trip already causes today.
      */
-    private void deletePlayerDevelopmentDataInDedicatedPool(Long playerId, long lockTimeoutSeconds) {
+    private void deletePlayerDevelopmentDataInDedicatedPool(Long playerId, long lockTimeoutSeconds,
+                                                            boolean scrubProfileIdentity) {
         requiresNewTemplate.executeWithoutResult(status -> {
             var playerProfile = lockRetryer.withBoundedRetry("GdprErasureService.deletePlayerDevelopmentData",
                 () -> playerProfileRepository.findByIdForUpdate(playerId)
@@ -1563,6 +1682,17 @@ public class GdprErasureService {
                 // is currently in effect (group 4's if M > 0, else group 3's) — this statement cannot
                 // itself contend an external lock (the transaction already holds player_profiles
                 // exclusively), so which value is in effect is immaterial to its own outcome.
+                if (scrubProfileIdentity) {
+                    // Parent-requested child erasure: name replaced; date of birth coarsened to
+                    // 31 Dec of the birth year rather than nulled (NOT NULL) or reset to EPOCH (which
+                    // would read as an adult to AgePolicyService.isMinor) — the latest date in the
+                    // year can only make the profile read the same age or younger, never older.
+                    playerProfile.setName(ERASED_PLAYER_NAME);
+                    if (playerProfile.getDateOfBirth() != null) {
+                        playerProfile.setDateOfBirth(
+                            LocalDate.of(playerProfile.getDateOfBirth().getYear(), 12, 31));
+                    }
+                }
                 playerProfile.setDevelopmentDataErasedAt(Instant.now());
                 playerProfileRepository.save(playerProfile);
                 // (code review 2026-09-23): without this, the tombstone UPDATE above is only flushed

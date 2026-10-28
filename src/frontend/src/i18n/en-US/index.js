@@ -448,6 +448,10 @@ export default {
     },
   },
   reviews: {
+    sortLabel: 'Sort reviews',
+    sortNewest: 'Newest first',
+    sortHighest: 'Highest rated',
+    sortLowest: 'Lowest rated',
     writeReview: 'Write a review',
     editReview: 'Edit your review',
     yourReview: 'Your review',
@@ -808,6 +812,7 @@ export default {
     close: 'Close',
   },
   profile: {
+    sectionPrivacy: 'Privacy & data',
     subtitle: 'Manage your account details and preferences.',
     sectionAccount: 'Account',
     sectionPersonal: 'Personal Info',
@@ -1150,6 +1155,51 @@ export default {
     },
   },
   admin: {
+    appeals: {
+      title: 'Appeals',
+      subtitle: 'Users contesting an enforcement action. Decisions are final.',
+      loadError: 'Could not load the appeals queue.',
+      emptyState: 'No appeals in this state.',
+      colSubject: 'Subject',
+      colAppellant: 'Appellant',
+      colEnforcedAt: 'Enforced',
+      colCreatedAt: 'Submitted',
+      colStatus: 'Status',
+      colActions: 'Actions',
+      view: 'View',
+      detailTitle: 'Appeal',
+      detailLoadError: 'Could not load this appeal.',
+      reasonLabel: "Appellant's reason",
+      subjectLabel: 'Appealed record',
+      subjectGone: 'The appealed record no longer exists.',
+      decisionLabel: 'Decision',
+      decisionNoteLabel: 'Decision note (shown to the appellant)',
+      overturnHint:
+        'Overturning reverses the action where possible: a strike is deleted, a suspension lifted, a review published. A dispute decision is not reversed automatically — apply any correction manually.',
+      uphold: 'Uphold',
+      overturn: 'Overturn',
+      upholdSuccess: 'Appeal rejected — the action stands.',
+      overturnSuccess: 'Appeal accepted.',
+      alreadyDecided: 'Another administrator has already decided this appeal.',
+      decideFailed: 'Could not record the decision. Please try again.',
+      reversalApplied: 'The enforcement action was reversed.',
+      reversalNotApplied:
+        'Nothing was reversed automatically (no longer in effect, or a dispute decision).',
+      subjectField: {
+        strikeReason: 'Strike reason',
+        bookingId: 'Booking',
+        coachId: 'Coach ID',
+        coachName: 'Coach',
+        coachStatus: 'Coach status',
+        reviewRating: 'Rating',
+        reviewBody: 'Review',
+        reviewStatus: 'Review status',
+        disputeReason: 'Dispute reason',
+        disputeStatus: 'Dispute status',
+        disputeResolution: 'Resolution',
+        disputeResolutionNote: 'Resolution note',
+      },
+    },
     health: {
       title: 'System Health',
       subtitle: 'Real-time infrastructure status',
@@ -1910,6 +1960,11 @@ export default {
     receipt: 'Receipt',
   },
   cancellation: {
+    noShowCoachAction: "Coach didn't show",
+    noShowCoachConfirmTitle: 'Report coach no-show',
+    noShowCoachConfirmBody:
+      'Confirm that the coach did not turn up for this session. The session is refunded and the coach receives a reliability strike. This cannot be undone.',
+    noShowCoachFailed: 'Unable to report the no-show. Please try again.',
     title: 'Cancel Session',
     selectReason: 'Select cancellation reason',
     confirmCancel: 'Confirm Cancellation',
@@ -2075,8 +2130,102 @@ export default {
     metricLast30Days: 'Last 30 days',
     metricAverageMs: 'Average ms',
   },
+  privacy: {
+    exportTitle: 'Export my data',
+    exportHint:
+      'Download a copy of the personal data we hold about you (profile, bookings, messages, reviews, payments). The archive is prepared in the background.',
+    exportHintChild:
+      'Download a copy of the data we hold about {name}: profile, bookings and development record.',
+    requestExport: 'Request export',
+    exportRequested: 'Export requested. We are preparing the archive.',
+    exportProcessing: 'Preparing the archive…',
+    exportStillProcessing:
+      'This is taking longer than usual. Check back in a few minutes and use Refresh.',
+    exportReady: 'The archive is ready. The download link expires on {date}.',
+    download: 'Download archive',
+    exportExpired:
+      'The last download link has expired. Request a new export to download the data again.',
+    exportFailed: 'The last export could not be prepared. Please request it again.',
+    loadError: 'Could not load your data requests.',
+    refresh: 'Refresh',
+    erasureTitle: 'Delete my account',
+    erasureTitleChild: "Delete this child's data",
+    erasureHint: 'Permanently delete your account and personal data.',
+    erasureHintChild:
+      "Permanently delete {name}'s profile and development data. Your own account is not affected.",
+    erasureAction: 'Delete my account',
+    erasureActionChild: "Delete child's data",
+    erasureDialogTitle: 'Delete your account?',
+    erasureDialogTitleChild: "Delete {name}'s data?",
+    erasureConsequencesIntro: 'This is what will happen:',
+    consequenceAccount:
+      'Your account is anonymised and locked, and you are signed out on every device.',
+    consequenceMessages: 'Your messages and reviews are deleted or anonymised.',
+    consequenceDevelopment:
+      'Development records (timeline, assessments, reports) for you and any children you manage are deleted.',
+    consequenceCredits:
+      'Remaining credits and session packs can no longer be used. Payment records we must keep by law are retained.',
+    consequenceBlocked:
+      'A coach cannot delete their account while booking requests are still pending or accepted.',
+    consequenceChildProfile:
+      "The child's name is removed and the profile disappears from your account.",
+    consequenceChildDevelopment:
+      'Their timeline, assessments, performance reports and homework are deleted.',
+    consequenceChildBookings:
+      "Past bookings stay in your payment history, without the child's session notes.",
+    consequenceChildBlocked:
+      'Not possible while the child has an upcoming, in-progress or disputed booking.',
+    consequenceIrreversible: 'This cannot be undone.',
+    confirmWord: 'DELETE',
+    confirmPrompt: 'Type {word} to confirm.',
+    confirmLabel: 'Confirmation',
+    erasureConfirm: 'Delete permanently',
+    erasureDone: 'Your account has been deleted. You will now be signed out.',
+    erasureChildDone: "The child's data has been deleted.",
+    childButtonTooltip: 'Privacy & data',
+    childDialogTitle: 'Privacy & data — {name}',
+    childSectionTitle: 'Privacy & data',
+    errors: {
+      alreadyPending: 'A request of this type is already being processed.',
+      exportInProgress: 'An export is still being prepared. Wait for it to finish before deleting.',
+      activeBookings:
+        'You still have pending or accepted booking requests. Resolve them before deleting your account.',
+      activeBookingsChild: 'This child still has an active booking. Cancel or complete it first.',
+      playerAlreadyErased: "This child's data has already been deleted.",
+      notAllowed: 'You are not allowed to do this.',
+      generic: 'Something went wrong. Please try again.',
+    },
+  },
+  appeals: {
+    action: 'Appeal',
+    dialogTitle: 'Appeal this decision',
+    dialogExplanation:
+      'You can appeal once, within 14 days. An administrator reviews your appeal and their decision is final.',
+    reasonLabel: 'Why should this decision be reversed?',
+    submit: 'Submit appeal',
+    submitSuccess: 'Appeal submitted. We will notify you of the decision.',
+    errors: {
+      alreadyAppealed: 'This decision has already been appealed.',
+      windowExpired: 'The 14-day appeal window has closed.',
+      notEnforced: 'This decision is no longer in effect, so there is nothing to appeal.',
+      subjectNotFound: 'This record could not be found.',
+      generic: 'Could not submit the appeal. Please try again.',
+    },
+    status: {
+      OPEN: 'Appeal pending',
+      UPHELD: 'Appeal rejected',
+      OVERTURNED: 'Appeal accepted',
+    },
+    subject: {
+      RELIABILITY_STRIKE: 'Reliability strike',
+      COACH_SUSPENSION: 'Account suspension',
+      REVIEW_BLOCK: 'Blocked review',
+      DISPUTE_RESOLUTION: 'Dispute decision',
+    },
+  },
   nav: {
     coachVideos: 'My videos',
+    appeals: 'Appeals',
     sectionMain: 'Main',
     menu: 'Menu',
     tagline: 'Analytics Platform',

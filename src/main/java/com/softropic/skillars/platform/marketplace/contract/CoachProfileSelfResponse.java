@@ -28,5 +28,8 @@ public record CoachProfileSelfResponse(
     String currency,
     List<SessionPackDto> sessionPacks,
     List<CoachAvailabilityWindowDto> availabilityWindows,
-    String photoUrl
+    String photoUrl,
+    // When {@code status} last changed — for a SUSPENDED coach, when the suspension (an appealable
+    // enforcement action, FR-ADM-004) took effect; the 14-day appeal window is measured from it.
+    java.time.Instant statusChangedAt
 ) {}

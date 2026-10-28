@@ -101,12 +101,24 @@
         </q-item-section>
       </q-item>
     </q-list>
+
+    <!-- D11 / FR-TSC-007: the parent exercises this child's export/erasure rights (a parent-owned
+         child has no account of its own). Keyed by child so switching children remounts it. -->
+    <div class="glass-card q-pa-md q-mt-lg" data-testid="child-hub-privacy">
+      <div class="text-label q-mb-md">{{ t('privacy.childSectionTitle') }}</div>
+      <PrivacyDataSection
+        :key="playerId"
+        :player-id="playerId"
+        :player-name="childName || ''"
+        @erased="onChildErased"
+      />
+    </div>
   </q-page>
 </template>
 
 <script setup>
 import { computed, onMounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import { useAuthStore } from 'src/stores/auth.store'
@@ -115,9 +127,11 @@ import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import TimezoneNotice from 'src/components/booking/TimezoneNotice.vue'
 import { parentChildLinks } from 'src/utils/parentChildLinks'
+import PrivacyDataSection from 'src/components/profile/PrivacyDataSection.vue'
 
 const { t, locale } = useI18n()
 const route = useRoute()
+const router = useRouter()
 const bookingStore = useBookingStore()
 const authStore = useAuthStore()
 const playerStore = usePlayerStore()
@@ -154,6 +168,12 @@ function loadForPlayer(id) {
 }
 
 onMounted(() => loadForPlayer(playerId.value))
+
+// An erased child disappears from the parent's child list (ShadowAccountService filters the
+// erasure tombstone), so this hub no longer has a child to show — go back to the dashboard.
+function onChildErased() {
+  router.replace('/parent/dashboard')
+}
 
 // Previously this page watched playerStore.activePlayerId and reloaded THAT child's data while the
 // URL still named the original child. The route param is now the single source of truth: the

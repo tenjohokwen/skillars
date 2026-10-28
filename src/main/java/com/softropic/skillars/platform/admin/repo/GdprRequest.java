@@ -27,6 +27,12 @@ public class GdprRequest {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
+    // V172: when set, the request is scoped to this parent-owned (shadow) child profile and userId is
+    // the requesting PARENT. NULL means the request is about the requester's own account (the original
+    // and still most common meaning).
+    @Column(name = "player_id")
+    private Long playerId;
+
     @Column(name = "request_type", nullable = false, length = 10)
     private String requestType;
 
@@ -60,5 +66,10 @@ public class GdprRequest {
         this.userId = userId;
         this.requestType = requestType;
         this.status = status;
+    }
+
+    public GdprRequest(Long userId, Long playerId, String requestType, String status) {
+        this(userId, requestType, status);
+        this.playerId = playerId;
     }
 }

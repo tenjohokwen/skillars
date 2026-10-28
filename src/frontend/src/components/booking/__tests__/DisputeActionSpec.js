@@ -20,6 +20,7 @@ vi.mock('quasar', async (importOriginal) => {
 
 import { raiseDispute, getDispute } from 'src/api/disputes.api'
 import DisputeAction from 'src/components/booking/DisputeAction.vue'
+import AppealAction from 'src/components/common/AppealAction.vue'
 
 const mounted = []
 async function mountAction(bookingId = 'booking-1') {
@@ -215,5 +216,33 @@ describe('DisputeAction.vue (skillars-deferred-165 AC2)', () => {
     await wrapper.vm.openStatusDialog()
 
     expect(wrapper.find('[data-testid="dispute-status-error"]').exists()).toBe(true)
+  })
+  // FR-ADM-004 / UX Journey 5: a resolved or dismissed dispute can be appealed by its raiser.
+  it.each([
+    ['RESOLVED', true],
+    ['DISMISSED', true],
+    ['OPEN', false],
+  ])('a %s dispute shows the appeal action: %s', async (status, shown) => {
+    sessionStorage.setItem('dispute:user-1:booking-5', 'dispute-xyz')
+    getDispute.mockResolvedValue({
+      disputeId: 'dispute-xyz',
+      reason: 'SESSION_QUALITY',
+      status,
+      resolvedAt: shown ? '2026-10-20T10:00:00Z' : null,
+    })
+    const wrapper = await mountAction('booking-5')
+
+    await wrapper.vm.openStatusDialog()
+    await flushPromises()
+
+    const appeal = wrapper.findComponent(AppealAction)
+    expect(appeal.exists()).toBe(shown)
+    if (shown) {
+      expect(appeal.props()).toMatchObject({
+        subjectType: 'DISPUTE_RESOLUTION',
+        subjectId: 'dispute-xyz',
+        enforcedAt: '2026-10-20T10:00:00Z',
+      })
+    }
   })
 })

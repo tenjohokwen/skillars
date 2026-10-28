@@ -48,7 +48,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>Two duplicate {@code GdprRequest} rows for the same user, processed concurrently, was the
  *       first candidate considered and ruled out: {@code GdprRequestService.requestErasure} guards
  *       against a second {@code PENDING}/{@code PROCESSING} {@code ERASURE} request for the same
- *       {@code userId} ({@code existsByUserIdAndRequestTypeAndStatusIn}), so two DIFFERENT
+ *       {@code userId} ({@code existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn}), so two DIFFERENT
  *       {@code requestId}s can never collide on the same {@code admin_alerts} unique-index slot
  *       anyway — this scenario would not have exercised the bug even if reachable.</li>
  *   <li>{@code eraseParentChildren}'s own loop over a PARENT's children (the other caller of {@code

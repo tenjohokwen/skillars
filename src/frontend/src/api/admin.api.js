@@ -123,4 +123,18 @@ export const adminApi = {
   unlockUserLogin(userId) {
     return api.post(`/api/admin/users/${userId}/unlock-login`)
   },
+
+  // FR-ADM-004 appeals queue (AdminAppealResource). status: OPEN | UPHELD | OVERTURNED.
+  getAppealQueue(status = 'OPEN', page = 0) {
+    return api.get('/api/admin/appeals/queue', { params: { status, page } })
+  },
+
+  getAppealDetail(appealId) {
+    return api.get(`/api/admin/appeals/${appealId}`)
+  },
+
+  // payload: { outcome: 'UPHELD' | 'OVERTURNED', note }
+  decideAppeal(appealId, payload) {
+    return api.post(`/api/admin/appeals/${appealId}/decide`, payload)
+  },
 }

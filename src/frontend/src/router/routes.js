@@ -417,6 +417,11 @@ const routes = [
             component: () => import('pages/admin/AdminUsersPage.vue'),
             meta: { requiresAuth: true, roles: ['ADMIN'] },
           },
+          {
+            path: 'appeals',
+            component: () => import('pages/admin/AdminAppealsPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
         ],
       },
     ],
