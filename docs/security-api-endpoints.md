@@ -182,7 +182,8 @@ Server-side behaviour that clients observe as `401`s:
 - **Admin suspension** (`POST /api/admin/users/{id}/suspend`) locks the account, invalidates every
   JWT and revokes every refresh token.
 - **Safety suspension.** When a video upload matches the CSAM scan, `AccountSuspensionEventListener`
-  sets `verification_status = SUSPENDED`, locks the account, invalidates every JWT and revokes every
+  resolves the uploader's account from the video owner id (coach profile → its user; player profile
+  → its own user, or the parent for a managed minor) and sets `verification_status = SUSPENDED`, locks the account, invalidates every JWT and revokes every
   refresh token. Login and refresh are refused with `security.accLocked`. The admin console's
   "reactivate" refuses such an account with `409 admin.users.safetyHold`.
 - **Refresh-token reuse** (theft detection, see `/api/auth/refresh`) revokes every session.

@@ -81,6 +81,15 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("select u.id from User u where u.email = :email")
     Optional<Long> findIdByEmail(@Param("email") String email);
 
+    /**
+     * The account behind a coach profile, for a video owner id (coach uploads store the
+     * CoachProfile UUID as {@code Video.ownerId}). Scalar and native so the security module does not
+     * load a marketplace entity.
+     */
+    @Query(value = "select cp.user_id from marketplace.coach_profiles cp where cp.id = :coachProfileId",
+           nativeQuery = true)
+    Optional<Long> findUserIdByCoachProfileId(@Param("coachProfileId") java.util.UUID coachProfileId);
+
     @Override
     void delete(final User user);
 

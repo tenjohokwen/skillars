@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -15,6 +16,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.UUID;
 
 // Uses @EventListener (not @TransactionalEventListener) because the event is published outside
 // an active TX from ModerationOrchestrationService. @Transactional on the handler gives the
@@ -26,6 +28,7 @@ public class AccountSuspensionEventListener {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PlayerProfileRepository playerProfileRepository;
     private final PessimisticLockRetryer lockRetryer;
 
     /**
@@ -49,9 +52,7 @@ public class AccountSuspensionEventListener {
         log.error("Processing account suspension: ownerId={} triggeredByVideoId={}", ownerId, event.videoId());
 
         // Scalar id only — an entity loaded here would be returned, stale, by the locked query below.
-        Long userId = userRepository.findIdByLogin(ownerId)
-            .or(() -> userRepository.findIdByEmail(ownerId))
-            .orElse(null);
+        Long userId = resolveAccountId(ownerId);
         if (userId == null) {
             log.error("CRITICAL: Cannot suspend account — user not found: ownerId={} videoId={}",
                       ownerId, event.videoId());
@@ -85,5 +86,44 @@ public class AccountSuspensionEventListener {
         log.error("Account suspended: ownerId={} userId={} triggeredByVideoId={} verificationStatus=SUSPENDED "
                   + "locked=true sessionsRevoked=true alreadySuspended={}",
                   ownerId, userId, event.videoId(), alreadySuspended);
+    }
+
+    /**
+     * Maps the event's {@code ownerId} — a {@code Video.ownerId} — to the account to suspend:
+     * <ul>
+     *   <li>a UUID is a CoachProfile id (coach uploads and drill videos) → {@code coach_profiles.user_id};</li>
+     *   <li>a number is a PlayerProfile id (player HOMEWORK uploads) → {@code PlayerProfile.userId}, or,
+     *       for a parent-managed minor profile with no login of its own, {@code PlayerProfile.parentId}.
+     *       Today only a self-registered player can upload (VideoResource resolves the uploader's OWN
+     *       profile via userId), so the parent branch is defensive: if a minor's profile ever owns a
+     *       CSAM-matched video, the parent account is the only one that controls that profile, so it
+     *       is the one that must lose access;</li>
+     *   <li>anything else falls back to login / email (no current publisher passes one).</li>
+     * </ul>
+     */
+    private Long resolveAccountId(String ownerId) {
+        if (ownerId == null || ownerId.isBlank()) {
+            return null;
+        }
+        UUID coachProfileId = parseUuid(ownerId);
+        if (coachProfileId != null) {
+            return userRepository.findUserIdByCoachProfileId(coachProfileId).orElse(null);
+        }
+        if (ownerId.chars().allMatch(Character::isDigit)) {
+            return playerProfileRepository.findById(Long.parseLong(ownerId))
+                .map(p -> p.getUserId() != null ? p.getUserId() : p.getParentId())
+                .orElse(null);
+        }
+        return userRepository.findIdByLogin(ownerId)
+            .or(() -> userRepository.findIdByEmail(ownerId))
+            .orElse(null);
+    }
+
+    private static UUID parseUuid(String value) {
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 }

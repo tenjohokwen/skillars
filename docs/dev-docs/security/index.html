@@ -225,7 +225,7 @@
     </ul>
     <p>Defined here but published elsewhere and (partly) consumed here:</p>
     <ul>
-      <li><code>AccountSuspensionRequestedEvent</code> — published by video's <code>ModerationOrchestrationService</code> (CSAM hit); <code>AccountSuspensionEventListener</code>, in a <code>REQUIRES_NEW</code> transaction under the user row lock, sets <code>verificationStatus = SUSPENDED</code>, locks the account, clears persistent tokens, stamps <code>securitySessionInvalidatedAt</code> and revokes every refresh token.</li>
+      <li><code>AccountSuspensionRequestedEvent</code> — published by video's <code>ModerationOrchestrationService</code> (CSAM hit); <code>AccountSuspensionEventListener</code> resolves the event's <code>ownerId</code> (a <code>Video.ownerId</code>: a CoachProfile UUID &rarr; <code>coach_profiles.user_id</code>; a PlayerProfile id &rarr; its <code>userId</code>, or <code>parentId</code> for a managed minor; otherwise login/email), then, in a <code>REQUIRES_NEW</code> transaction under the user row lock, sets <code>verificationStatus = SUSPENDED</code>, locks the account, clears persistent tokens, stamps <code>securitySessionInvalidatedAt</code> and revokes every refresh token.</li>
       <li><code>UserErasedEvent</code> — published by admin's <code>GdprErasureService</code>; <code>UserErasedEventListener</code> (<code>AFTER_COMMIT</code>) re-asserts <code>activated=false, locked=true</code> and clears persistent tokens if erasure somehow left them. Also consumed by notification.</li>
       <li><code>AccountDeletionRequestedEvent</code> — published by <code>GdprErasureService</code>, consumed by video's <code>AccountDeletionCascadeListener</code>.</li>
     </ul>

@@ -77,6 +77,8 @@ class AuthResourceIT extends AbstractIntegrationTest {
     private static final long LOCKED_USER_ID      = 9000000004L;
     private static final long DISABLED_USER_ID    = 9000000005L;
     private static final long ERASED_USER_ID      = 9000000006L;
+    private static final long CSAM_SELF_PLAYER_PROFILE_ID  = 9000000101L;
+    private static final long CSAM_MINOR_PLAYER_PROFILE_ID = 9000000102L;
 
     @Autowired
     private JdbcTemplate jdbcTemplate;
@@ -156,6 +158,9 @@ class AuthResourceIT extends AbstractIntegrationTest {
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.login_attempts");
+            jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id IN (?, ?)",
+                CSAM_SELF_PLAYER_PROFILE_ID, CSAM_MINOR_PLAYER_PROFILE_ID);
+            jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE user_id = ?", COACH_USER_ID);
             jdbcTemplate.execute("DELETE FROM main.user_authority");
             jdbcTemplate.execute("DELETE FROM main.\"user\"");
             jdbcTemplate.execute("DELETE FROM main.authority WHERE id IN ("
@@ -817,22 +822,67 @@ class AuthResourceIT extends AbstractIntegrationTest {
     // --- fix/security-session-revocation ------------------------------------------------------
 
     @Test
-    void csamSuspension_revokesEverySessionAndBlocksRefreshAndLogin() {
-        // AccountSuspensionEventListener used to set verification_status = SUSPENDED and nothing
-        // else: the open session kept refreshing and login was only refused while
-        // phone-otp-required happened to be true. It must now behave like an admin suspension.
+    void csamSuspension_ofACoachUpload_resolvesTheCoachProfileIdAndRevokesEverySession() {
+        // Video.ownerId for a coach upload is the CoachProfile UUID (VideoResource /
+        // DrillUploadService). The listener used to look that string up as a login/email and so
+        // never found anyone: every real CSAM match ended in "user not found".
+        UUID coachProfileId = UUID.randomUUID();
+        commitWrite("INSERT INTO marketplace.coach_profiles "
+            + "(id, user_id, display_name, bio, city, languages, canonical_timezone, status) "
+            + "VALUES (?, ?, 'CSAM Coach', 'Bio', 'Berlin', ARRAY['English']::varchar[], 'Europe/Berlin', 'ACTIVE')",
+            coachProfileId, COACH_USER_ID);
+
+        assertCsamSuspensionRevokesSessions(coachProfileId.toString(), COACH_EMAIL, COACH_USER_ID);
+    }
+
+    @Test
+    void csamSuspension_ofAPlayerUpload_resolvesThePlayerProfileIdToItsOwnAccount() {
+        // Player HOMEWORK uploads store the uploader's own PlayerProfile id (self-registered,
+        // user_id set) as Video.ownerId.
+        commitWrite("INSERT INTO main.player_profiles (id, name, date_of_birth, position, age_tier, "
+            + "user_id, independent_account_allowed, created_at, created_by) VALUES "
+            + "(?, 'CSAM Player', '1990-01-01', 'MIDFIELDER', 'ADULT', ?, true, now(), 'system')",
+            CSAM_SELF_PLAYER_PROFILE_ID, PARENT_USER_ID);
+
+        assertCsamSuspensionRevokesSessions(String.valueOf(CSAM_SELF_PLAYER_PROFILE_ID), PARENT_EMAIL, PARENT_USER_ID);
+    }
+
+    @Test
+    void csamSuspension_ofAManagedMinorProfile_suspendsTheParentAccount() {
+        // A parent-managed minor has no login of its own (user_id NULL); the parent is the only
+        // account controlling that profile, so it is the one suspended.
+        commitWrite("INSERT INTO main.player_profiles (id, name, date_of_birth, position, age_tier, "
+            + "parent_id, independent_account_allowed, created_at, created_by) VALUES "
+            + "(?, 'CSAM Minor', ?, 'MIDFIELDER', 'AGE_10_12', ?, false, now(), 'system')",
+            CSAM_MINOR_PLAYER_PROFILE_ID, java.sql.Date.valueOf(java.time.LocalDate.now().minusYears(11)),
+            PARENT_USER_ID);
+
+        assertCsamSuspensionRevokesSessions(String.valueOf(CSAM_MINOR_PLAYER_PROFILE_ID), PARENT_EMAIL, PARENT_USER_ID);
+    }
+
+    @Test
+    void csamSuspension_byLogin_stillResolves() {
+        assertCsamSuspensionRevokesSessions(COACH_EMAIL, COACH_EMAIL, COACH_USER_ID);
+    }
+
+    /**
+     * Logs {@code email} in, publishes the CSAM suspension for {@code ownerId}, then asserts the
+     * account is SUSPENDED + locked, every JWT is invalidated, every refresh token is revoked, and
+     * neither refresh nor login works any more.
+     */
+    private void assertCsamSuspensionRevokesSessions(String ownerId, String email, long userId) {
         configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "false");
         ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
-            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class);
+            Map.of("email", email, "password", TEST_PASSWORD), clientHeaders(), Map.class);
         String rtknCookie = extractCookieValue(loginResponse, "rtkn");
         assertThat(rtknCookie).isNotNull();
 
-        eventPublisher.publishEvent(new AccountSuspensionRequestedEvent(COACH_EMAIL, UUID.randomUUID()));
+        eventPublisher.publishEvent(new AccountSuspensionRequestedEvent(ownerId, UUID.randomUUID()));
 
         Map<String, Object> row = jdbcTemplate.queryForMap(
             "SELECT verification_status, locked, security_session_invalidated_at FROM main.\"user\" WHERE id = ?",
-            COACH_USER_ID);
+            userId);
         assertThat(row.get("verification_status")).isEqualTo("SUSPENDED");
         assertThat(row.get("locked")).isEqualTo(true);
         assertThat(row.get("security_session_invalidated_at"))
@@ -840,7 +890,7 @@ class AuthResourceIT extends AbstractIntegrationTest {
             .isNotNull();
         long liveTokens = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM main.refresh_tokens WHERE used = false AND user_id = ?",
-            Long.class, COACH_USER_ID);
+            Long.class, userId);
         assertThat(liveTokens).isZero();
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
@@ -851,7 +901,7 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
-            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class))
+            Map.of("email", email, "password", TEST_PASSWORD), clientHeaders(), Map.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
                 HttpClientErrorException ex = (HttpClientErrorException) e;
