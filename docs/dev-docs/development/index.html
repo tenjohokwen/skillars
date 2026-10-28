@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Development</h1>
     <p class="subtitle">Turns raw session activity and coach assessments into a longitudinal picture of a player's skill growth — training volume (SLU), coach-judged ability (Skills Radar), neglect detection, and shareable reports.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>Skillars sells two different signals about a young player's progress, and the <code>development</code> module is where they are produced, reconciled, and surfaced. The module answers two distinct questions for Coaches and Parents: <em>"how much has this player trained on each skill?"</em> (an automatic, objective volume metric) and <em>"how good has this player gotten at each skill, according to the people who watched them?"</em> (a subjective, coach-entered rating). The two are deliberately kept as separate systems that are only correlated for the top subscription tier — mixing them by default would misleadingly imply that more training time equals more skill.</p>
     <ul>
       <li><strong>Coaches</strong> get a ranked "my players" roster, a Session Prep Card per upcoming booking, and per-player tools: Skills Radar assessments, weekly SLU exposure/trend/target dashboards, branded PDF performance reports and (Academy tier only) a SLU-vs-Radar correlation engine.</li>
@@ -55,8 +68,8 @@
     <p><strong>Neglected-skill detection</strong> is a weekly scheduled job (Monday 06:00 UTC, ShedLock-protected) that compares each player's <em>actual</em> SLU for the just-completed ISO week against the <em>highest</em> weekly SLU target any of their coaches has set for that skill. Players with fewer than <code>development.neglectedSkill.warmupSessionCount</code> SLU sessions are skipped. If actual SLU falls more than <code>slu.neglected.threshold</code> (a configurable fraction, validated to be in the open interval (0,1)) below that target, the skill is flagged as neglected (an open row in <code>neglected_skill_flags</code>); if it later recovers, the flag is auto-resolved. This is purely a training-volume signal — it says nothing about ability, and is one of the inputs the <code>session</code> module's drill-suggestion logic reads to recommend catch-up drills.</p>
     <p>Skills Radar submission and PDF report generation are gated by coach subscription tier. <code>SCOUT</code> cannot use either; <code>INSTRUCTOR</code>/<code>ACADEMY</code> can; branding and the SLU/Radar correlation engine are <code>ACADEMY</code>-only. The gate throws <code>FeatureGatedException</code>. In the current code it runs <em>after</em> the coach-player relationship check (see Conventions &amp; Gotchas).</p>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -68,7 +81,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <thead><tr><th>Entity</th><th>Table</th><th>Notes</th></tr></thead>
       <tbody>
@@ -89,7 +102,7 @@
       </tbody>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -121,7 +134,7 @@
       </tbody>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
@@ -149,7 +162,7 @@
       </tbody>
     </table>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <table>
       <thead><tr><th>Event</th><th>Published by</th><th>Consumed by</th></tr></thead>
       <tbody>
@@ -164,9 +177,9 @@
     <p>The timeline enum also has <code>MILESTONE_REACHED</code>, <code>VIDEO_UPLOADED</code>, <code>PAYMENT_RECEIVED</code> and <code>REVIEW_LEFT</code>, but nothing produces them (Epic 12 decision D4). They exist only so a later story can add a producer without a migration.</p>
     <p>Dependencies on other layers: <code>infrastructure.security</code> (<code>SecurityConstants</code>) for role constants; <code>platform.security.service.SecurityUtil</code> and <code>platform.security.repo.PlayerProfileRepository</code> for current-user/ownership checks; <code>platform.marketplace.service.CoachProfileService</code> / <code>PlayerProfileService</code> for coach/player identity and subscription tier; <code>platform.session.repo.Session</code>/<code>Drill</code> and <code>platform.booking.repo.BookingRepository</code> for the SLU trigger and coach-player relationship check; <code>platform.filestorage.service.FileStorageService</code> for storing/signing PDF report bytes (per the module convention, <code>infrastructure.blobstore</code> is never touched directly); <code>platform.config.service.ConfigService</code> for tunable SLU/neglect thresholds; <code>platform.notification.contract.Envelope</code>/<code>EmailTemplate</code> for parent notifications.</p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Coach submits a Skills Radar assessment</h3>
+    <h3 id="coach-submits-a-skills-radar-assessment">Coach submits a Skills Radar assessment</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach
@@ -194,7 +207,7 @@ sequenceDiagram
     </pre>
     <p>The relationship check runs first, and "no such player" is indistinguishable from "no relationship" (both 403). Only a coach who has a relationship with the player gets as far as the tier gate's <code>FeatureGatedException</code>. Once entries are saved, the API returns immediately — the composite recalculation and timeline write both happen asynchronously after the transaction commits, so a slow chart recompute never blocks the coach's request. If this is the very first composite ever computed for that player/skill, it becomes the permanent baseline used later to measure improvement.</p>
 
-    <h3>Session completes → SLU is recorded → neglect is (eventually) detected</h3>
+    <h3 id="session-completes-slu-is-recorded-neglect-is-eventually">Session completes → SLU is recorded → neglect is (eventually) detected</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booking as booking module
@@ -238,7 +251,7 @@ sequenceDiagram
     </pre>
     <p>SLU calculation is triggered only by attended bookings whose session plan actually has committed drill blocks — no-shows and empty "Quick Complete" sessions contribute nothing. The weekly snapshot table exists purely so the neglected-skill job and the exposure dashboard never need to sum the full <code>player_skill_stats</code> history. Detection always evaluates the <em>previous</em> completed ISO week (since the cron fires just after that week ends) and compares against the highest target set by any of the player's coaches, so one coach's target can flag a skill even if a different coach is the one training it.</p>
 
-    <h3>Coach generates a performance report for a parent</h3>
+    <h3 id="coach-generates-a-performance-report-for-a-parent">Coach generates a performance report for a parent</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach
@@ -275,7 +288,7 @@ sequenceDiagram
     </pre>
     <p>The PDF is built synchronously inside the request transaction. The upload to storage is not: it happens after commit on the dedicated <code>reportExecutor</code> pool, so the S3 round trip never holds the request's DB connection. A 204 therefore means "report queued", not "report available". <code>listReports</code> only returns READY rows, so a PENDING_UPLOAD or UPLOAD_FAILED report is never handed out as a signed URL to a missing file. A coach caller sees only their own reports (unless they are also the player's parent or self-owner); parents and players see every coach's reports. Academy-tier coaches get their saved branding (logo + colour) embedded; everyone else gets the default Skillars header. The parent email is scheduled 48 hours out, and failures to send it are only logged.</p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>player_skill_stats and radar baselines are append-only / write-once.</strong> <code>PlayerSkillStat</code> rows are never updated after a session completes — even if a drill's metadata changes later, historical SLU must not be retroactively recalculated. Baselines in <code>player_radar_baselines</code> use <code>INSERT ... ON CONFLICT DO NOTHING</code> specifically so the very first composite score is frozen forever as the improvement reference point. The only legitimate deletes are the <code>deleteAllByPlayerId</code> GDPR Article 17 erasure paths used by <code>GdprErasureService</code>.</p>
     </div>
@@ -303,7 +316,7 @@ sequenceDiagram
       <p><strong>Timeline metadata is an allowlist.</strong> <code>TimelineQueryService</code> exposes, per event type, only the keys it lists (<code>drills</code> for <code>SESSION_COMPLETED</code>/<code>HOMEWORK_ASSIGNED</code>, <code>skillCodes</code> for <code>RADAR_ASSESSMENT</code>, <code>coachName</code>/<code>reportId</code> on <code>PERFORMANCE_REPORT</code> to player/parent only); only the authoring coach sees the full map. A new metadata key is invisible to everyone else by default &mdash; add it to the allowlist deliberately.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <div class="card-grid">
       <div class="card"><h4><a href="../booking/index.html">Booking</a></h4><p>Publishes <code>BookingCompletedEvent</code> (the trigger for SLU calculation and the SESSION_COMPLETED timeline entry) and <code>SessionRecapUpdatedEvent</code>. It also backs the coach-player relationship check and the access-window clocks (<code>BookingRepository</code>), and supplies recap text and the QUICK plan snapshot through <code>session_completion_data</code>.</p></div>
       <div class="card"><h4><a href="../session/index.html">Session</a></h4><p>Session/Drill data (blocks, drill metadata, skill weighting) feeds the SLU formula. Session's <code>DrillSuggestionService</code> reads neglected-skill flags to recommend catch-up drills. <code>HomeworkAssignedEvent</code> feeds the timeline, and <code>CoachHomeworkQueryService</code> reuses this module's coach-access guard.</p></div>
@@ -315,9 +328,12 @@ sequenceDiagram
       <div class="card"><h4><a href="../admin/index.html">Admin</a></h4><p><code>GdprErasureService</code> calls this module's repositories directly to erase all development data (radar, SLU, snapshot markers, timeline, reports) for a player on request, and scrubs coach-authored recap metadata from timelines on coach erasure. <code>GdprExportService</code> reads them for the player data export.</p></div>
       <div class="card"><h4><a href="../index.html">Home</a></h4><p>Back to the documentation index.</p></div>
     </div>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

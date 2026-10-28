@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Marketplace</h1>
     <p class="subtitle">Coach discovery (search/filter and the public profile), the multi-step profile builder coaches use to become bookable, and the coach's own profile/gallery management.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Marketplace answers the first question every Parent or Player has: <em>"which coach should I book?"</em>
       It is the public storefront of Skillars — a searchable, filterable directory of coach profiles (city,
@@ -91,9 +104,9 @@
         badge lists for every coach.</li>
     </ul>
 
-    <h2>Technical Overview</h2>
+    <h2 id="technical-overview">Technical Overview</h2>
 
-    <h3>Package layout</h3>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
       <tr><td><code>marketplace.api</code></td><td><code>CoachMarketplaceResource</code> (public search/profile + own tier) and <code>ProfileBuilderResource</code> (wizard, own profile, photo delete, gallery, timezone list).</td></tr>
@@ -103,7 +116,7 @@
       <tr><td><code>marketplace.config</code></td><td>Empty <code>MarketplaceConfig</code> placeholder.</td></tr>
     </table>
 
-    <h3>Key entities &amp; DB tables</h3>
+    <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
     <table>
       <tr><th>Entity</th><th>Table (schema <code>marketplace</code>)</th><th>Notes</th></tr>
       <tr><td><code>CoachProfile</code></td><td><code>coach_profiles</code></td><td>Root aggregate, unique on <code>user_id</code>. Display name, bio, city/district, <code>languages</code> (<code>varchar[]</code>), <code>canonical_timezone</code>, <code>photo_url</code> (a storage <em>key</em>), <code>status</code> (<code>DRAFT, ACTIVE, REDUCED, PENDING_REVIEW, SUSPENDED, DEACTIVATED</code>), <code>status_changed_at</code>, <code>verification_tier</code> (<code>updatable = false</code>), denormalized <code>average_rating</code>/<code>review_count</code>, <code>recap_data_erased_at</code> (V166 coach-erasure tombstone). No <code>@Version</code>/<code>@DynamicUpdate</code>.</td></tr>
@@ -117,7 +130,7 @@
       <tr><td><code>CoachReliabilityStrike</code></td><td><code>coach_reliability_strikes</code></td><td>Issued by <code>payment.ReliabilityStrikeService</code>, deleted by <code>admin.AdminCoachEnforcementService</code>; marketplace only counts the last 90 days for cards and profiles.</td></tr>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code>, paginates in the DB, applies the language filter post-fetch (native <code>ANY(languages)</code> query), batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
@@ -130,7 +143,7 @@
       <tr><td><code>PlayerProfileService</code></td><td>Read-only player/parent lookups over <code>security</code> repositories (parent id, player name(s)/age, parent email/name), used by <code>development</code>, <code>messaging</code> and <code>video</code>.</td></tr>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr>
       <tr><td>GET</td><td><code>/api/marketplace/coaches</code></td><td>Search by <code>city</code> (required), <code>district</code>, <code>language</code>, <code>minPrice</code>/<code>maxPrice</code>, <code>ageGroup</code>, <code>skill</code>, <code>minRating</code>, <code>sortBy</code> (<code>displayName</code> default, <code>rating</code>, <code>price</code>), <code>page</code>, <code>size</code> (1–50, default 20).</td><td>Permit all</td></tr>
@@ -152,7 +165,7 @@
       <code>pages/coach/CoachProfileBuilderPage.vue</code>, and <code>pages/ProfilePage.vue</code> (edit dialogs incl.
       <code>components/profile/EditCoachGalleryDialog.vue</code>); API client <code>src/frontend/src/api/marketplace.api.js</code>.</p>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <p>Marketplace publishes no domain events. It consumes one: <code>filestorage.event.StorageObjectConfirmedEvent</code>
       (synchronous <code>@EventListener</code>, inside the confirm transaction) in
       <code>CoachProfilePhotoEventListener</code>. Profile <code>status</code> is changed from outside the module by
@@ -174,9 +187,9 @@
       mostly <code>CoachProfileService</code>/<code>CoachProfileRepository</code>.</p>
     </div>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Browsing / searching coaches</h3>
+    <h3 id="browsing-searching-coaches">Browsing / searching coaches</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Parent as Parent/Player (browser)
@@ -208,7 +221,7 @@ sequenceDiagram
       on why language-filtered paging is approximate.
     </p>
 
-    <h3>Viewing a single coach's public profile</h3>
+    <h3 id="viewing-a-single-coach-s-public-profile">Viewing a single coach's public profile</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Parent as Parent/Player
@@ -236,7 +249,7 @@ sequenceDiagram
       cycle; the controller stitches reviews in.
     </p>
 
-    <h3>Coach builds and publishes a profile</h3>
+    <h3 id="coach-builds-and-publishes-a-profile">Coach builds and publishes a profile</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach as Coach (ROLE_COACH)
@@ -269,7 +282,7 @@ sequenceDiagram
       <code>CoachProfilePhotoEventListener</code> also sets it when the upload is confirmed.
     </p>
 
-    <h3>Coach adds a gallery image</h3>
+    <h3 id="coach-adds-a-gallery-image">Coach adds a gallery image</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach as Coach (ROLE_COACH)
@@ -294,7 +307,7 @@ sequenceDiagram
       <code>coach_gallery/*</code> blobs (<code>admin.GdprErasureService</code>).
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong><code>CoachProfileRepository.findByIdForUpdate</code> is the platform's per-coach serialization
       point.</strong> It is <code>PESSIMISTIC_WRITE</code> with <code>jakarta.persistence.lock.timeout = 0</code>, i.e.
@@ -352,7 +365,7 @@ sequenceDiagram
       feature-gate "minimum tier" lookup iterates <code>values()</code> in order.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../reviews/index.html">Reviews</a> — supplies the review list on the public profile and writes the rating aggregate back onto <code>CoachProfile</code>.</li>
       <li><a href="../booking/index.html">Booking</a> — reads profiles, pricing, availability and the profile timezone; locks the profile row to serialise per-coach booking writes.</li>
@@ -364,9 +377,12 @@ sequenceDiagram
       <li><a href="../config/index.html">Config</a> — the capability-badge activity-window setting.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

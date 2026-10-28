@@ -345,7 +345,7 @@ counterparts). Email verification alone is enough to log in — you can ignore t
 
 ### Steps
 
-1. Register at `/#/coach/register`, `/#/parent/register`, or `/#/player/register`
+1. Register at `/#/coach-register`, `/#/parent-register`, or `/#/player-register`
    (player self-registration is 18+ only; minors are created by a parent as
    shadow accounts).
 

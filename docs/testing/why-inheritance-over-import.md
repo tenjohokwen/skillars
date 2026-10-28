@@ -1,7 +1,7 @@
 # Why inheritance, not `@Import(TestConfig.class)`
 
 > **Status:** design rationale for `skillars-deferred-19`. The measurements are real (commit `21ef489`);
-> the base-class architecture is the target state, not yet in the tree. See [readme.md](readme.md).
+> the base-class architecture it argues for has since landed (`AbstractIntegrationTest`). See [readme.md](readme.md).
 
 For most of this project's life, an integration test began with a hand-copied header:
 

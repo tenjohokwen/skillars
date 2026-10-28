@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Session</h1>
     <p class="subtitle">Owns coaching content and curriculum authoring — drill libraries (curated and coach-authored), session-plan blocks, reusable templates, and player homework — as distinct from booking's scheduling and calendar concerns.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       The <code>session</code> module is where a coach designs <em>what actually happens</em> during a training
       session, independent of <em>when</em> it happens. It answers questions like: which drills will we run, in what
@@ -105,8 +118,8 @@
         <code>getActivePackId</code>).</p>
     </div>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -118,7 +131,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <thead><tr><th>Entity</th><th>Table (schema <code>session</code>)</th><th>Notes</th></tr></thead>
       <tbody>
@@ -132,7 +145,7 @@
       </tbody>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -149,7 +162,7 @@
       </tbody>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
@@ -185,7 +198,7 @@
       <code>pages/coach/CoachPlayerDetailPage.vue</code> (<code>components/development/CoachHomeworkCard.vue</code>),
       <code>pages/player/PlayerLockerRoomPage.vue</code>; API client <code>src/frontend/src/api/session.api.js</code>.</p>
 
-    <h3>Domain events</h3>
+    <h3 id="domain-events">Domain events</h3>
     <table>
       <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
       <tbody>
@@ -197,7 +210,7 @@
       </tbody>
     </table>
 
-    <h3>Dependencies</h3>
+    <h3 id="dependencies">Dependencies</h3>
     <ul>
       <li><strong>infrastructure</strong> — <code>exception.ResourceNotFoundException</code>; <code>persistence.PessimisticLockRetryer</code> (drill row locks); <code>sanitizer.ContactDetailSanitizer</code> (drill free text); <code>security.SecurityConstants</code>; <code>video.VideoProviderAdapter</code>/<code>SignedPlaybackUrl</code>/<code>PlaybackTokenClaims</code>; <code>message.ErrorDto</code>.</li>
       <li><strong>booking</strong> — <code>BookingQueryService</code> (<code>getBookingSnapshot</code>, <code>findCoachBookings</code>), <code>BookingStateMachine</code>, <code>BookingStatus</code>; consumes <code>BookingCompletedEvent</code> and <code>BookingStatusChangedEvent</code>.</li>
@@ -216,9 +229,9 @@
       (<code>GdprErasureService</code>). Changing <code>SessionBlockData</code>, <code>DrillMetadata</code> or
       <code>DrillUsagePolicy</code> ripples into all of them.</p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>1. Coach builds a session plan for a booking</h3>
+    <h3 id="1-coach-builds-a-session-plan-for-a-booking">1. Coach builds a session plan for a booking</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach
@@ -253,7 +266,7 @@ sequenceDiagram
       status.
     </p>
 
-    <h3>2. Coach authors / deletes a private drill</h3>
+    <h3 id="2-coach-authors-deletes-a-private-drill">2. Coach authors / deletes a private drill</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach
@@ -287,7 +300,7 @@ sequenceDiagram
       ref-count/physical-deletion path.
     </p>
 
-    <h3>3. Coach uploads a demo video for a private drill</h3>
+    <h3 id="3-coach-uploads-a-demo-video-for-a-private-drill">3. Coach uploads a demo video for a private drill</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach
@@ -317,7 +330,7 @@ sequenceDiagram
       bytes go straight from the client to the provider (TUS); <code>session</code> never handles them.
     </p>
 
-    <h3>4. Coach deploys a template onto a booking</h3>
+    <h3 id="4-coach-deploys-a-template-onto-a-booking">4. Coach deploys a template onto a booking</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Coach
@@ -347,7 +360,7 @@ sequenceDiagram
       re-deploy another coach's private drill forever.
     </p>
 
-    <h3>5. Booking completes, homework is assigned, parent/player completes it</h3>
+    <h3 id="5-booking-completes-homework-is-assigned-parent-player">5. Booking completes, homework is assigned, parent/player completes it</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booking as Booking Module
@@ -385,7 +398,7 @@ sequenceDiagram
       transaction.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout">
       <p><strong>Two independent feature gates.</strong> <code>feature.sessionBuilder.enabled.&lt;TIER&gt;</code>
         and <code>feature.drillVideoUpload.enabled.&lt;TIER&gt;</code> (tiers <code>SCOUT</code>,
@@ -443,7 +456,7 @@ sequenceDiagram
         the message, not just the code, when debugging.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../booking/index.html">Booking</a> — owns scheduling and the booking lifecycle; plans hang off a booking, homework is chosen at wrap-up and triggered by completion, and booking reads plan blocks/drills directly.</li>
       <li><a href="../payment/index.html">Payment</a> — owns session packs; read-only source of Locker Room visibility and homework pack provenance.</li>
@@ -455,9 +468,12 @@ sequenceDiagram
       <li><a href="../config/index.html">Config</a> — feature-flag values for Session Builder and drill video upload.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

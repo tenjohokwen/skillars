@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Database &amp; Migrations</h1>
     <p class="subtitle">How Postgres is carved up per module, how schema changes are applied, and the handful of rules that will bite you the first time you add a migration.</p>
 
-    <h2>Shape of the Database</h2>
+    <h2 id="shape-of-the-database">Shape of the Database</h2>
     <p>
       One Postgres database (Postgres 17 in both <code>docker-compose.yml</code> and the test container), split
       into <strong>nine schemas</strong> — a <code>main</code> schema for cross-cutting and identity tables,
@@ -76,7 +89,7 @@
       <code>SubscriptionTierReconciliationScheduler</code>).
     </p>
 
-    <h2>Migrations: Flyway</h2>
+    <h2 id="migrations-flyway">Migrations: Flyway</h2>
     <table>
       <tr><th>Setting</th><th>Value</th><th>Consequence</th></tr>
       <tr><td><code>spring.flyway.enabled</code></td><td><code>true</code></td><td>Migrations run automatically at startup.</td></tr>
@@ -103,7 +116,7 @@
       migration.</p>
     </div>
 
-    <h3>The V138 rebaseline</h3>
+    <h3 id="the-v138-rebaseline">The V138 rebaseline</h3>
     <p>
       Migrations live in <code>src/main/resources/db/migration/</code> and are named
       <code>V&lt;n&gt;__snake_case_description.sql</code>. The whole pre-production history
@@ -128,7 +141,7 @@
       build problem.</p>
     </div>
 
-    <h3>Migration conventions (enforced from V140 on)</h3>
+    <h3 id="migration-conventions-enforced-from-v140-on">Migration conventions (enforced from V140 on)</h3>
     <p>
       Every migration above <code>V139</code> must be online-safe for a rolling deploy. The authority is
       <code>docs/deployment/migration-conventions.md</code>; the mechanical subset is enforced by
@@ -162,7 +175,7 @@
       justification expires with the first production deploy.
     </p>
 
-    <h3>Recent migrations worth knowing (V140–V175)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V175)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -185,7 +198,7 @@
       </tbody>
     </table>
 
-    <h2>Auditing: Hibernate Envers</h2>
+    <h2 id="auditing-hibernate-envers">Auditing: Hibernate Envers</h2>
     <p>
       Six entity classes carry <code>@Audited</code> — <code>User</code>, <code>Authority</code>,
       <code>SecKey</code>, <code>Secret</code>, <code>PersistentToken</code>, and
@@ -199,7 +212,7 @@
       the template. Separate from Envers, <code>main.audit_log</code> is the security audit trail (<code>platform.security.audit</code>: <code>AuditLog</code>, written by <code>TrailService</code>).
     </p>
 
-    <h2>Entity Conventions</h2>
+    <h2 id="entity-conventions">Entity Conventions</h2>
     <p>
       Most entities extend <code>infrastructure.persistence.BaseEntity</code> or
       <code>AbstractAuditingEntity</code>. See <a href="../infrastructure/index.html">Infrastructure</a> for
@@ -223,7 +236,7 @@
         transaction does not commit — see the test notes below.</li>
     </ul>
 
-    <h2>Locking Conventions</h2>
+    <h2 id="locking-conventions">Locking Conventions</h2>
     <p>
       Rows that more than one request can mutate concurrently (bookings, batches, reschedule requests, pack
       purchases, player and coach profiles, drills, videos, reviews) are locked with
@@ -249,9 +262,9 @@
       the lock into the outer transaction.</p>
     </div>
 
-    <h2>Patterns Worth Knowing</h2>
+    <h2 id="patterns-worth-knowing">Patterns Worth Knowing</h2>
 
-    <h3>Constraints as the last line of defence</h3>
+    <h3 id="constraints-as-the-last-line-of-defence">Constraints as the last line of defence</h3>
     <p>
       Several invariants are enforced in the database rather than only in application code, because more than
       one code path writes the same table. The worked example is
@@ -270,7 +283,7 @@
       the client gets a meaningful error code instead of a generic 500.</p>
     </div>
 
-    <h3>Enum columns carry CHECK constraints</h3>
+    <h3 id="enum-columns-carry-check-constraints">Enum columns carry CHECK constraints</h3>
     <p>
       Enums persisted as <code>@Enumerated(EnumType.STRING)</code> are frequently backed by a
       <code>CHECK (col = ANY (ARRAY[...]))</code>. JPA will happily write a value the CHECK rejects, so adding an
@@ -282,7 +295,7 @@
       grow fast — is <code>V175</code>'s.
     </p>
 
-    <h3>Seeding runtime config</h3>
+    <h3 id="seeding-runtime-config">Seeding runtime config</h3>
     <p>
       Tunables live in <code>main.platform_config</code> and are read through
       <a href="../config/index.html">config</a>'s <code>ConfigService</code>. The baseline set is in
@@ -292,7 +305,7 @@
       instances.
     </p>
 
-    <h3>Partial indexes for "not yet processed" scans</h3>
+    <h3 id="partial-indexes-for-not-yet-processed-scans">Partial indexes for "not yet processed" scans</h3>
     <p>
       Scheduled jobs that repeatedly scan for unprocessed rows are backed by partial indexes rather than full
       ones — e.g. <code>idx_session_pack_purchases_expiry_notify ON (expires_at) WHERE expired_notified_at IS
@@ -302,7 +315,7 @@
       <code>StatusScopedPartialIndexConventionIT</code> enforces this across the live schema.
     </p>
 
-    <h3>GDPR tombstones</h3>
+    <h3 id="gdpr-tombstones">GDPR tombstones</h3>
     <p>
       Erasure scrubs rather than deletes some rows and leaves a sticky timestamp —
       <code>player_profiles.development_data_erased_at</code> (<code>V151</code>),
@@ -312,7 +325,7 @@
       a concurrent writer could re-insert it, add the same guard.
     </p>
 
-    <h2>Test Database</h2>
+    <h2 id="test-database">Test Database</h2>
     <ul>
       <li><strong>One Postgres per test JVM.</strong> <code>config.SharedContainers</code> holds JVM-static
         Testcontainers (<code>postgres:17-alpine</code>, Redis, SeaweedFS) — never Spring beans — shared by every
@@ -335,7 +348,7 @@
         <code>PessimisticLockRetryerCallSiteAuditTest</code>.</li>
     </ul>
 
-    <h2>Gotchas</h2>
+    <h2 id="gotchas">Gotchas</h2>
     <div class="callout warn">
       <p><strong>A finite <code>jakarta.persistence.lock.timeout</code> is a no-op on this Postgres/Hibernate combination.</strong>
       Hibernate's <code>PostgreSQLDialect</code> only special-cases <code>0</code> (<code>NOWAIT</code>) and
@@ -377,7 +390,7 @@
       make sure it is covered there — and be aware the delete is unconditional.</p>
     </div>
 
-    <h2>Related</h2>
+    <h2 id="related">Related</h2>
     <ul>
       <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>BaseEntity</code>, <code>AbstractAuditingEntity</code>, <code>DbSchemaChecker</code>, <code>PessimisticLockRetryer</code>, TSID generation.</li>
       <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> — <code>main.shedlock</code> and the jobs that read the config keys seeded by migrations.</li>
@@ -388,9 +401,12 @@
       <li><a href="../../deployment/backup-restore.md">docs/deployment/backup-restore.md</a> — backup and restore procedure.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

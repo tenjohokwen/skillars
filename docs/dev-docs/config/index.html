@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Config</h1>
     <p class="subtitle">The database-backed key/value store admins use to tune business thresholds, quotas, and per-tier gates without a deploy &mdash; with range validation on write and a fail-fast check at boot.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       The <code>config</code> module is Skillars' single "knobs and dials" table: a flat list of typed key/value rows
       (<code>main.platform_config</code>) that other modules read at runtime instead of hardcoding a number or a
@@ -80,8 +93,8 @@
       range-checked, and a bad stored value for a critical key blocks startup outside the <code>dev</code> profile.
     </p>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
       <tr><td><code>api</code></td><td><code>ConfigResource</code> &mdash; the only HTTP entry point, three admin-only endpoints under <code>/api/config</code>.</td></tr>
@@ -91,7 +104,7 @@
       <tr><td><code>repo</code></td><td><code>PlatformConfig</code> JPA entity and <code>PlatformConfigRepository</code> (one derived finder: <code>findByKey</code>).</td></tr>
     </table>
 
-    <h3>Key entities &amp; tables</h3>
+    <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
       <tr><td><code>PlatformConfig</code> (extends <code>BaseEntity</code>)</td><td><code>main.platform_config</code></td>
@@ -101,7 +114,7 @@
         Not to be confused with <code>admin.config.PlatformConfig</code>, an unrelated Spring <code>@Configuration</code>.</td></tr>
     </table>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Class</th><th>Responsibility</th></tr>
       <tr><td><code>ConfigService</code></td><td>Caches the whole table and serves typed reads:
@@ -132,7 +145,7 @@
       <tr><td><code>ConfigMapper</code></td><td>MapStruct mapper, <code>PlatformConfig</code> &rarr; <code>ConfigValueResponse</code>.</td></tr>
     </table>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
       <tr><td>GET</td><td><code>/api/config/values</code></td><td>Admin editor list: every stored row plus every unseeded <code>HAS_CODE_DEFAULT</code> key, each with its <code>ConfigBounds</code> range, sorted by key. Reads the table directly, not the cache.</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
@@ -141,7 +154,7 @@
     </table>
     <p>There is no delete endpoint, and keys outside <code>HAS_CODE_DEFAULT</code> can only be added by a migration.</p>
 
-    <h3>Value types</h3>
+    <h3 id="value-types">Value types</h3>
     <p><code>ConfigValueType</code> has exactly two members:</p>
     <ul>
       <li><code>STRING</code> &mdash; free text, including booleans (<code>"true"</code>/<code>"false"</code>) and decimals like the commission rate <code>"0.08"</code>.</li>
@@ -149,7 +162,7 @@
     </ul>
     <p><code>value_type</code> is descriptive metadata (and a DB CHECK) &mdash; the typed getters do not branch on it; the method you call decides how the string is parsed.</p>
 
-    <h3>Boundary vs. <code>infrastructure.feature</code></h3>
+    <h3 id="boundary-vs-infrastructure-feature">Boundary vs. <code>infrastructure.feature</code></h3>
     <p>
       Skillars has a second, unrelated toggle mechanism: <code>infrastructure.feature.FeatureToggleService</code>
       (implemented by <code>PropertiesFeatureToggleService</code>), gating a small fixed enum of coarse,
@@ -162,9 +175,9 @@
       such as thread-pool sizes stay in <code>application.yaml</code> because they cannot change at runtime.
     </p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Admin updates a config value</h3>
+    <h3 id="admin-updates-a-config-value">Admin updates a config value</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant A as Admin (AdminConfigPage)
@@ -201,7 +214,7 @@ sequenceDiagram
       have no effect".
     </p>
 
-    <h3>Cache load and refresh</h3>
+    <h3 id="cache-load-and-refresh">Cache load and refresh</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Boot as Spring context
@@ -237,7 +250,7 @@ sequenceDiagram
       is not lost.
     </p>
 
-    <h3>Startup validation</h3>
+    <h3 id="startup-validation">Startup validation</h3>
     <p>
       On <code>ApplicationReadyEvent</code>, <code>ConfigStartupAssertion</code> validates every
       <code>ConfigBounds.ALL</code> key against the raw stored value. Absent/blank is fine for a
@@ -250,7 +263,7 @@ sequenceDiagram
       <code>ApplicationReadyEvent</code> can tick once against the clamped value before the refusal.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Cache staleness is per-node, not cluster-wide.</strong> A <code>PUT</code> invalidates only the node
       that served it, and there is no fleet-wide broadcast. Other nodes (and every node after a direct DB edit) lag by
@@ -293,7 +306,7 @@ sequenceDiagram
       belong in <code>platform_config</code>. See the Boundary section above.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../security/index.html">Security</a> &mdash; age-policy cutoffs (<code>security.age-policy.*</code>).</li>
       <li><a href="../booking/index.html">Booking</a> &mdash; reminder intervals, pack pause, batch size, quick-complete/stuck-completion timeouts, recap edit window, session duration.</li>
@@ -306,9 +319,12 @@ sequenceDiagram
       <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>BaseEntity</code>, <code>AppSetupException</code>, the rate-limit bucket TTL reader (<code>infrastructure.security</code>), and the distinct <code>infrastructure.feature</code> toggles.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

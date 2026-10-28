@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Notification</h1>
     <p class="subtitle">The platform's user-notification engine: it turns domain events from every other module into templated, retried, and auditable emails, mirrors user-facing ones into an in-app inbox, enforces per-category email opt-out with one-click unsubscribe, and runs a DB-configurable operational alerting system.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars is a multi-sided marketplace (Players/Parents, Coaches, Admins), and almost every meaningful
       state change — a booking request, a declined reschedule, a session pack about to expire, a flagged
@@ -103,8 +116,8 @@
         flag is enabled but <code>platform.admin_alert_email</code> is blank, the application refuses to start.</li>
     </ul>
 
-    <h2>Technical Overview</h2>
-    <h3>Package layout</h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="package-layout">Package layout</h3>
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -117,7 +130,7 @@
       </tbody>
     </table>
 
-    <h3>Key entities &amp; DB tables</h3>
+    <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
     <table>
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
@@ -130,7 +143,7 @@
     </table>
     <p>Neither V175 table has a CHECK on <code>category</code>/<code>type</code> — deliberately, so a new template does not need an enum-widening migration for the inbox (contrast <code>envelope_entity</code>, which does).</p>
 
-    <h3>Key services</h3>
+    <h3 id="key-services">Key services</h3>
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
@@ -149,7 +162,7 @@
       </tbody>
     </table>
 
-    <h3>Producer census (all shapes, all modules)</h3>
+    <h3 id="producer-census-all-shapes-all-modules">Producer census (all shapes, all modules)</h3>
     <ul>
       <li><strong>Outbox shape</strong> (<code>@TransactionalEventListener(BEFORE_COMMIT)</code> +
         <code>NotificationOutboxSupport.enqueueEmail</code>; inbox row written by <code>enqueueEmail</code>):
@@ -173,7 +186,7 @@
     </ul>
     <p>Every path converges on <code>MailManager.sendEmailSync</code> → <code>MailService</code> → <code>OutboundEmailSender</code>.</p>
 
-    <h3>REST endpoints</h3>
+    <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth/Role</th></tr></thead>
       <tbody>
@@ -197,7 +210,7 @@
       <code>src/frontend/src/pages/UnsubscribePage.vue</code> (<code>#/unsubscribe?token=</code>, click-to-confirm);
       state in <code>stores/notification.store.js</code>, type texts in <code>utils/notificationText.js</code> + i18n.</p>
 
-    <h3>Domain events consumed</h3>
+    <h3 id="domain-events-consumed">Domain events consumed</h3>
     <span class="tag">AccountChangeEvent</span> (security)
     <span class="tag">UserErasedEvent</span> (security — GDPR cleanup)
     <span class="tag">BookingRequestedEvent</span>
@@ -226,7 +239,7 @@
       <code>InAppEnvelopeListener</code> and <code>AFTER_COMMIT</code> by <code>MailManager</code>) and
       <code>AlertFiredEvent</code> (<code>AlertEvaluationService</code> → <code>AlertNotificationListener</code>).</p>
 
-    <h3>How email actually leaves the building</h3>
+    <h3 id="how-email-actually-leaves-the-building">How email actually leaves the building</h3>
     <p>This module never constructs a <code>SesV2Client</code> or <code>JavaMailSender</code>. <code>MailService</code>
       calls the <code>OutboundEmailSender</code> port in <code>infrastructure.email</code>; exactly one implementation is
       active, chosen by <code>app.email.transport</code> through each bean's own <code>@ConditionalOnProperty</code>:</p>
@@ -248,9 +261,9 @@
       (unsubscribe/deep-link URLs), <code>platform.config.service.ConfigService</code>
       (<code>platform.admin_alert_email</code>), and <a href="../outbox/index.html">platform.outbox</a>.</p>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
 
-    <h3>Booking confirmed → inbox row + templated email</h3>
+    <h3 id="booking-confirmed-inbox-row-templated-email">Booking confirmed → inbox row + templated email</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Booking as booking module
@@ -284,7 +297,7 @@ sequenceDiagram
       handler reads the persisted <code>EnvelopeEntity</code> to decide whether to let the outbox retry.
     </p>
 
-    <h3>Opt-out-able email: preference check and one-click unsubscribe</h3>
+    <h3 id="opt-out-able-email-preference-check-and-one-click">Opt-out-able email: preference check and one-click unsubscribe</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Mail as MailService
@@ -317,7 +330,7 @@ sequenceDiagram
       is safe on an unknown preference.
     </p>
 
-    <h3>Admin configures an EMAIL alert rule, which later fires</h3>
+    <h3 id="admin-configures-an-email-alert-rule-which-later-fires">Admin configures an EMAIL alert rule, which later fires</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Admin
@@ -345,7 +358,7 @@ sequenceDiagram
       still always returns <code>-1.0</code> (skipped), so no rule fires today.
     </p>
 
-    <h3>Failed send → durable retry</h3>
+    <h3 id="failed-send-durable-retry">Failed send → durable retry</h3>
     <pre class="mermaid">
 sequenceDiagram
   participant Manager as MailManager
@@ -374,7 +387,7 @@ sequenceDiagram
       advisory lock and per-recipient delivered flags, which is what stops them double-sending.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Adding a new email type touches six places.</strong> (1) an <code>EmailTemplate</code> constant
       (subject key, optionally deadline + breaker name); (2) a <code>NotificationCatalog</code> case — the switch is
@@ -439,7 +452,7 @@ sequenceDiagram
       <code>acceptedCount</code>); the inbox param whitelister tolerates that.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../outbox/index.html">Outbox</a> — the generic transactional outbox that carries
         <code>NOTIFICATION_EMAIL</code> rows (and the video moderation admin alert) to this module.</li>
@@ -460,9 +473,12 @@ sequenceDiagram
         <code>InAppNotificationRetentionScheduler</code>, <code>AlertEvaluationService</code>, <code>AlertRuleCache</code>.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

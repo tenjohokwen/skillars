@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Scheduled Jobs</h1>
     <p class="subtitle">Every recurring background job in the application, what it recovers or cleans up, and the multi-instance safety rules you must follow when adding another one.</p>
 
-    <h2>Why This Page Exists</h2>
+    <h2 id="why-this-page-exists">Why This Page Exists</h2>
     <p>
       A large amount of Skillars' correctness does not happen in a request thread. Bookings that nobody
       actions expire on a timer; a booking stranded mid-payment is swept back out; a coach who abandons the
@@ -62,7 +75,7 @@
       exactly that on the current master.
     </p>
 
-    <h2>How Scheduling Is Wired</h2>
+    <h2 id="how-scheduling-is-wired">How Scheduling Is Wired</h2>
     <table>
       <tr><th>Concern</th><th>Where</th><th>Notes</th></tr>
       <tr><td>Enabling <code>@Scheduled</code></td><td><code>infrastructure.config.SchedulingConfig</code></td><td><code>@EnableScheduling</code> behind <code>@ConditionalOnProperty("app.scheduling.enabled", matchIfMissing = true)</code>. On everywhere except the test profile.</td></tr>
@@ -99,7 +112,7 @@
       second instance could start work against uncommitted state.</p>
     </div>
 
-    <h2>The Job Catalogue</h2>
+    <h2 id="the-job-catalogue">The Job Catalogue</h2>
     <p>
       <span class="tag">🔒</span> = ShedLock-guarded; the value after it is <code>lockAtMostFor</code>.
       <em>(cfg)</em> = schedule bound to a property placeholder (key shown, default in brackets). Classes are
@@ -107,7 +120,7 @@
       instance — the list after the tables explains why each is safe.
     </p>
 
-    <h3>Recovery sweepers <small>— the ones that unstick data</small></h3>
+    <h3 id="recovery-sweepers-the-ones-that-unstick-data">Recovery sweepers <small>— the ones that unstick data</small></h3>
     <table>
       <thead><tr><th>Job</th><th>Schedule</th><th>What it recovers</th></tr></thead>
       <tbody>
@@ -125,14 +138,14 @@
       </tbody>
     </table>
 
-    <h3>Outbox / queue drainers</h3>
+    <h3 id="outbox-queue-drainers">Outbox / queue drainers</h3>
     <table>
       <thead><tr><th>Job</th><th>Schedule</th><th>Drains</th></tr></thead>
       <tbody>
         <tr><td><code>outbox.OutboxService.sweep</code> 🔒 PT10M</td><td>(cfg) <code>app.outbox.sweep-ms</code> [5 min]</td><td>Safety net for the transactional outbox (refunds, emails, SLU deltas). The primary drain is the <code>@Async("outboxDrainPool")</code> AFTER_COMMIT listener; this sweep catches what it missed and logs <code>[OUTBOX_STUCK]</code> at ERROR when rows have ≥10 attempts. Correctness relies on <code>PESSIMISTIC_WRITE</code> + <code>SKIP LOCKED</code> claims, not the lock. <code>lockAtLeastFor</code> = <code>app.outbox.lock-at-least</code> [PT1M].</td></tr>
         <tr><td><code>filestorage.OutboxPollerScheduler.pollAndProcess</code> 🔒 PT10M</td><td>(cfg) <code>app.storage.poller.fixed-delay-ms</code> [5s]</td><td>Cross-region blob replication jobs.</td></tr>
         <tr><td><code>filestorage.DeletionSchedulerService.processDeletions</code> 🔒 PT5M</td><td>(cfg) <code>app.storage.poller.fixed-delay-ms</code> [5s]</td><td>Scheduled blob deletions past their retention hold. Shares the poller's delay key.</td></tr>
-        <tr><td><code>video.VideoDeletionOutboxProcessor.process</code> 🔒 PT15M</td><td>(cfg) <code>platform.video.deletion.outbox_poll_delay_ms</code> [60s]</td><td>Physical video deletions. Resets rows stuck <code>CLAIMED</code> beyond its stale-claim window (strictly shorter than the lock — see its Javadoc).</td></tr>
+        <tr><td><code>video.VideoDeletionOutboxProcessor.process</code> 🔒 PT15M</td><td>(cfg) <code>platform.video.deletion.outbox_poll_delay_ms</code> [60s]</td><td>Physical video deletions. Resets rows stuck <code>CLAIMED</code> beyond its stale-claim window (the lock must stay strictly shorter than that window — see its Javadoc).</td></tr>
         <tr><td><code>development.RadarCompositeDlqProcessor.process</code> 🔒 PT10M</td><td>(cfg) <code>platform.development.radar_composite_dlq.poll_delay_ms</code> [60s]</td><td>Replays radar-composite recalculations that failed after the original <code>@Async</code> listener. Same claim/backoff shape as the video deletion outbox; terminal writes are guarded on <code>status = 'CLAIMED' AND claimed_at = :claimedAt</code>, runs bounded to 8 min.</td></tr>
         <tr><td><code>video.WebhookEventProcessorScheduler.processPending</code></td><td>(cfg) <code>app.video.webhook.processor-delay-ms</code> [5s]</td><td>Pending provider webhook events; also publishes queue-depth metrics. Unguarded: <code>FOR UPDATE SKIP LOCKED</code>.</td></tr>
         <tr><td><code>video.VideoSubscriptionLifecycleListener.processOutbox</code> 🔒 PT1H</td><td>every 60s</td><td>Subscription-lifecycle outbox gating video features by tier.</td></tr>
@@ -140,7 +153,7 @@
       </tbody>
     </table>
 
-    <h3>Lifecycle &amp; billing</h3>
+    <h3 id="lifecycle-billing">Lifecycle &amp; billing</h3>
     <table>
       <thead><tr><th>Job</th><th>Schedule</th><th>Does</th></tr></thead>
       <tbody>
@@ -157,7 +170,7 @@
       </tbody>
     </table>
 
-    <h3>Retention &amp; cleanup</h3>
+    <h3 id="retention-cleanup">Retention &amp; cleanup</h3>
     <table>
       <thead><tr><th>Job</th><th>Schedule</th><th>Deletes</th></tr></thead>
       <tbody>
@@ -170,7 +183,7 @@
       </tbody>
     </table>
 
-    <h3>Caches &amp; keep-alives <small>— per-instance by design, all unguarded</small></h3>
+    <h3 id="caches-keep-alives-per-instance-by-design-all-unguarded">Caches &amp; keep-alives <small>— per-instance by design, all unguarded</small></h3>
     <table>
       <thead><tr><th>Job</th><th>Schedule</th><th>Refreshes</th></tr></thead>
       <tbody>
@@ -182,7 +195,7 @@
       </tbody>
     </table>
 
-    <h3>Totals by module</h3>
+    <h3 id="totals-by-module">Totals by module</h3>
     <table>
       <thead><tr><th>Module</th><th><code>@Scheduled</code></th><th>🔒</th></tr></thead>
       <tbody>
@@ -202,7 +215,7 @@
       </tbody>
     </table>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
 
     <div class="callout warn">
       <p><strong>9 of the 40 jobs are unguarded, and each has a reason.</strong> Five are per-instance by
@@ -228,9 +241,9 @@
     </div>
 
     <div class="callout warn">
-      <p><strong>A stale-claim window must be strictly shorter than <code>lockAtMostFor</code>.</strong> For
+      <p><strong><code>lockAtMostFor</code> must be strictly shorter than the stale-claim window</strong> (10&nbsp;min lock vs 15&nbsp;min window in <code>RadarCompositeDlqProcessor</code>, 15 vs 20 in <code>VideoDeletionOutboxProcessor</code>). For
       claim-based drainers (<code>VideoDeletionOutboxProcessor</code>, <code>RadarCompositeDlqProcessor</code>),
-      if the stale-claim reset fires at the same instant the lock expires, the next instance resets and re-claims
+      if the lock could expire before a claim counts as stale, the next instance would reset and re-claim
       rows the still-running instance is processing. Both classes also bound a run's wall-clock time below the
       lock (e.g. 8 min under <code>PT10M</code>) and hand unprocessed rows straight back to <code>PENDING</code>.
       Read their Javadoc before changing either number.</p>
@@ -269,7 +282,7 @@
       scheduler from the outside.</p>
     </div>
 
-    <h2>Adding a New Job</h2>
+    <h2 id="adding-a-new-job">Adding a New Job</h2>
     <ol>
       <li>Put the <code>@Scheduled</code> method on a <code>@Component</code>, not on a service that also
         serves request threads — it keeps the job's transaction boundaries independent. The newer jobs use a
@@ -287,7 +300,7 @@
         use <code>AbstractIntegrationTest.releaseSchedulerLock(name)</code> between invocations.</li>
     </ol>
 
-    <h2>Related</h2>
+    <h2 id="related">Related</h2>
     <ul>
       <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>SchedulingConfig</code>, <code>ShedLockConfig</code>, and the async executor wiring.</li>
       <li><a href="../database/index.html">Database &amp; Migrations</a> — the <code>main.shedlock</code> table and the config keys several jobs read.</li>
@@ -297,9 +310,12 @@
       <li><a href="../config/index.html">Config</a> — the runtime keys most of these jobs read, and the 300s cache that gates how fast a change lands.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>

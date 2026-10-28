@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cookbook — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
+    <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Cookbook</div>
+    <h1>Cookbook: "How do I add…"</h1>
+    <p class="subtitle">One checklist per common change: every file that must move, a recent commit or class to copy, and the guard test that fails your PR if you miss a step.</p>
+
+    <div class="callout">
+      <p><strong>How to read this.</strong> Paths are relative to the repo root; <code>…/</code> abbreviates
+      <code>src/main/java/com/softropic/skillars/</code> and <code>test…/</code> abbreviates
+      <code>src/test/java/com/softropic/skillars/</code>. Line numbers are as of master <code>e8239b0e</code>.
+      Every guard named here is described, with its error message and how to run it alone, on
+      <a href="../ci-guards/index.html">CI Guards</a>. The module pages hold the "why"; this page is the "where".</p>
+    </div>
+
+    <h2 id="contents">Contents</h2>
+    <ol>
+      <li><a href="#rest">A REST endpoint</a></li>
+      <li><a href="#migration">A Flyway migration</a></li>
+      <li><a href="#entity">A JPA entity / table</a></li>
+      <li><a href="#rowlock">A row lock on a hot row</a></li>
+      <li><a href="#job">A scheduled job</a></li>
+      <li><a href="#event">A domain event + listener</a></li>
+      <li><a href="#outbox">An outbox message type</a></li>
+      <li><a href="#email">An email type / notification</a></li>
+      <li><a href="#config">A platform_config key</a></li>
+      <li><a href="#gate">A feature / tier gate</a></li>
+      <li><a href="#it">An integration test</a></li>
+      <li><a href="#fepage">A frontend page</a></li>
+      <li><a href="#adminpage">An admin page</a></li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="rest">1. A REST endpoint</h2>
+    <p><strong>Copy:</strong> <code>…/platform/notification/api/NotificationResource.java</code> and
+      <code>test…/platform/notification/api/UnsubscribeResourceWebMvcTest.java</code> (commit <code>e350d169</code>).</p>
+    <ol>
+      <li><strong>Controller</strong> in <code>platform/&lt;module&gt;/api/</code>, named <code>*Resource</code>,
+        <code>@RestController</code> + <code>@RequestMapping("/api/&lt;module&gt;/…")</code>. Everything under
+        <code>/api/**</code> already requires authentication (<code>AppEndpoints.SECURED_API</code>); there is no
+        per-path URL rule to add for a secured endpoint.</li>
+      <li><strong>Authorize every method</strong> with <code>@PreAuthorize</code> using the constants in
+        <code>…/infrastructure/security/SecurityConstants.java:33-46</code> (<code>HAS_COACH_ROLE</code>,
+        <code>HAS_ADMIN_ROLE</code>, <code>HAS_PARENT_OR_PLAYER_ROLE</code>, <code>IS_AUTHENTICATED</code>, …).
+        Role alone is not ownership:
+        <ul>
+          <li>a <code>playerId</code> path/body parameter → <code>@PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")</code>
+            (<code>…/platform/security/service/PlayerOwnershipGuard.java</code>; parent of the child or the self-registered
+            player). Coach-or-owner variants combine it with <code>hasRole('ROLE_COACH') or …</code>.</li>
+          <li>a coach acting on a player → <code>CoachPlayerAuthorizationService.requireCoachPlayerRelationship(…)</code> in the service
+            (see <code>RadarAssessmentService</code>).</li>
+          <li>a "my own" resource → take no user id from the client at all; resolve it with
+            <code>SecurityUtil.requireCurrentUserId()</code> and scope every query by it (as <code>NotificationResource</code> does).</li>
+        </ul></li>
+      <li><strong>Public (unauthenticated) endpoint?</strong> Add the exact path to
+        <code>AppEndpoints.PUBLIC_ENDPOINTS</code> (<code>…/platform/security/config/AppEndpoints.java:30</code>), consumed by
+        <code>SecurityConfiguration.configureRequestMatching</code> (line 212). Use an exact path, or a
+        <code>/</code>-preceded trailing <code>/**</code> — never <code>foo**</code>. Guard: <code>AppEndpointsConventionTest</code>.
+        Also add <code>@PreAuthorize(SecurityConstants.IS_PERMIT_ALL)</code> on the method and document what authenticates the
+        call instead (signature, HMAC token).</li>
+      <li><strong>DTOs</strong> live in <code>platform/&lt;module&gt;/contract/</code> as records with
+        <code>jakarta.validation</code> annotations; take them as <code>@Valid @RequestBody</code>.
+        A failure becomes a 400 via <code>ApiAdvice.methodArgumentNotValidExceptionHandler</code>. A custom
+        <code>message = "{some.key}"</code> must exist in <code>src/main/resources/i18n/messages.properties</code>
+        (guard: <code>MessageCodeBaseBundleCompletenessTest</code>).</li>
+      <li><strong>Errors.</strong> Throw a domain exception, not <code>IllegalStateException</code> (that maps to 500 by design).
+        Mapping lives in <code>…/platform/security/api/ApiAdvice.java</code> plus per-module advices
+        (<code>BookingApiAdvice</code>, <code>PaymentApiAdvice</code>, <code>SessionApiAdvice</code>, <code>ReviewApiAdvice</code>,
+        <code>MessagingApiAdvice</code>, <code>VideoApiAdvice</code>). The response body is
+        <code>ErrorDto(helpCode, ErrorMsg(errorKey, message))</code>; the frontend looks <code>errorKey</code> up as an i18n key.
+        If you add a unique/check constraint a user can trip, add it to <code>CONSTRAINT_MAPPINGS</code> (line 136) and, for a
+        retryable race, <code>CONFLICT_CONSTRAINTS</code> (line 163) — otherwise it surfaces as a generic 400.</li>
+      <li><strong>Message keys</strong> for new error keys go in all four backend bundles
+        (<code>messages.properties</code>, <code>_en</code>, <code>_de</code>, <code>_fr</code>; guard: <code>MessageBundleParityTest</code>)
+        and, if the SPA shows them, in the three frontend locales.</li>
+      <li><strong>Tests.</strong> Security/routing shape → a slice named <code>*WebMvcTest</code> (never <code>*IT</code>). Copy
+        <code>UnsubscribeResourceWebMvcTest</code>'s nested <code>TestSecurityConfig</code> and its mock set: the slice loads every
+        <code>@RestControllerAdvice</code> and filter, which pull in <code>VideoMetrics</code> and <code>JwtSecretService</code>.
+        Behaviour against a real DB → an <code>*IT</code> extending <code>AbstractIntegrationTest</code> (<a href="#it">recipe 11</a>).
+        Guard: <code>IntegrationTestConventionTest.noSliceTestIsNamedIT</code>.</li>
+      <li><strong>Frontend</strong>: add the call to the module's <code>src/frontend/src/api/&lt;module&gt;.api.js</code>
+        (<a href="#fepage">recipe 12</a>).</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="migration">2. A Flyway migration</h2>
+    <p><strong>Copy:</strong> <code>V173__drills_private_uniqueness_active_only.sql</code> (index swap, commit <code>fd2b8822</code>) or
+      <code>V172__gdpr_player_scope_and_appeals.sql</code> (new table + guarded drop, commit <code>1f273c37</code>). Full rules:
+      <a href="../database/index.html">Database</a> and <code>docs/deployment/migration-conventions.md</code>.</p>
+    <ol>
+      <li><strong>Name</strong> <code>src/main/resources/db/migration/V&lt;next&gt;__&lt;schema&gt;_&lt;table&gt;_&lt;what&gt;.sql</code>.
+        Check the highest number on <em>master</em> right before you push (currently <code>V175</code>; <code>V174</code> is unused) —
+        two open PRs picking the same number is the usual collision. Never edit a migration that has run anywhere.</li>
+      <li><strong>Header comment</strong> explaining why, and any "same-release exception" you are taking.</li>
+      <li><strong>Schema</strong>: put the table in its owning module's schema (<code>booking</code>, <code>payment</code>,
+        <code>admin</code>, …), not <code>main</code>. Cross-module references are plain id columns, no FK.</li>
+      <li><strong><code>SET LOCAL lock_timeout = '5s';</code></strong> before the first lock-taking statement (plain
+        <code>SET</code> is rejected — it leaks into later migrations in the same run).</li>
+      <li><strong>Indexes</strong>: plain <code>CREATE INDEX IF NOT EXISTS</code> preceded by
+        <code>-- migration-lint: allow-blocking-index &lt;reason&gt;</code>. <code>CREATE INDEX CONCURRENTLY</code> does not work
+        in this Flyway runner (it self-deadlocks), so don't reach for it.</li>
+      <li><strong>Constraints</strong> on a growing table: <code>ADD CONSTRAINT … NOT VALID</code>, validate later; on a small or new
+        table <code>-- migration-lint: allow-validating-constraint &lt;reason&gt;</code>. Enum columns need a hand-written
+        <code>CHECK</code> (Hibernate no longer generates them); a status-scoped partial index uses a whitelist
+        (<code>status IN (…)</code>), never <code>&lt;&gt;</code>/<code>NOT IN</code>.</li>
+      <li><strong>Drops</strong>: <code>IF EXISTS</code> + <code>-- migration-lint: drop-prepared-in: V&lt;n&gt;</code> naming the earlier
+        release that removed the last reader; no reference to the dropped name may remain in <code>src/main</code>.</li>
+      <li><strong>Data changes</strong>: <code>UPDATE</code>/<code>DELETE</code> need a bounding <code>WHERE</code> (or
+        <code>-- migration-lint: allow-full-table-dml &lt;reason&gt;</code>); big backfills go in an
+        <code>executeInTransaction=false</code> sidecar (<code>V&lt;n&gt;__x.sql.conf</code>).</li>
+      <li><strong>If the change touches something mapped</strong>: a named constraint users can trip →
+        <code>ApiAdvice</code> mapping; an enum value → CHECK widening shipped a release before the first write.</li>
+      <li>After deleting or renaming a migration locally, <code>mvn clean</code> (stale files stay on the classpath).</li>
+    </ol>
+    <p><strong>Guards:</strong> <code>MigrationConventionLintTest</code> (unit phase, all of the above),
+      <code>StatusScopedPartialIndexConventionIT</code>, <code>SchemaAssumptionsTest</code> (only one <code>EXCLUDE</code> constraint may
+      exist), and — for <code>main.envelope_entity</code> — <code>EnvelopeEntitySchemaIT</code>.</p>
+
+    <!-- ===================================================================== -->
+    <h2 id="entity">3. A JPA entity / table</h2>
+    <p><strong>Copy:</strong> <code>…/platform/admin/repo/Appeal.java</code> + the <code>admin.appeals</code> block of
+      <code>V172</code> (commit <code>1f273c37</code>).</p>
+    <ol>
+      <li><strong>Migration first</strong> (<a href="#migration">recipe 2</a>). <code>ddl-auto</code> is <code>none</code>: Flyway is
+        the only source of schema. Include every column the entity maps — for <code>AbstractAuditingEntity</code> subclasses that
+        means <code>created_by</code>/<code>created_date</code>/<code>last_modified_by</code>/<code>last_modified_date</code>,
+        <code>status</code>, <code>request_id</code>, <code>session_id</code>. Use <code>timestamptz</code> for <code>Instant</code>.</li>
+      <li><strong>Entity</strong> in <code>platform/&lt;module&gt;/repo/</code> with <code>@Table(schema = "&lt;module&gt;", name = "…")</code>
+        — without <code>schema</code> it lands in <code>main</code>. Ids: <code>BaseEntity</code>'s TSID <code>Long</code>, or
+        <code>@GeneratedValue(strategy = GenerationType.UUID)</code> with a <code>uuid DEFAULT gen_random_uuid()</code> column
+        (as <code>Appeal</code>). Enums: <code>@Enumerated(EnumType.STRING)</code> + a CHECK in the migration.</li>
+      <li><strong><code>@Version</code>?</strong> Add it (column <code>version integer DEFAULT 0 NOT NULL</code>, as
+        <code>booking.bookings</code>) when request threads read-modify-<code>save()</code> the same row concurrently. Skip it, with a
+        Javadoc saying why, when every state transition is a single conditional <code>UPDATE … WHERE status = 'OPEN'</code>
+        (<code>Appeal</code>'s reasoning). If a <code>@Version</code> table also gets a <code>@Modifying</code> bulk
+        <code>UPDATE</code>, it must <code>SET … version = version + 1</code> (JPQL alias form is fine — see
+        <code>VideoRepository.resetLifecycleLockedAt</code>) or be listed in the test's <code>ALLOWED_WITHOUT_BUMP</code>.
+        Guard: <code>NativeModifyingVersionAuditTest</code>.</li>
+      <li><strong>Repository</strong> next to the entity. Concurrently-mutated rows need a lock finder (<a href="#rowlock">recipe 4</a>).</li>
+      <li><strong>Envers?</strong> Only six entities are <code>@Audited</code>; a new one needs its <code>*_aud</code> table by hand
+        (<code>V148</code>'s <code>user_authority_aud</code> is the template).</li>
+      <li><strong>User content?</strong> Make it reachable from <code>admin.service.GdprErasureService</code> (and export), and if a
+        concurrent writer could re-insert after erasure, add a tombstone check after the writer's row lock
+        (see <code>DevelopmentDataErasureGuard</code>).</li>
+      <li><strong>Test fixtures</strong> must seed every <code>NOT NULL</code> column; the database is truncated before every IT method.</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="rowlock">4. A row lock on a hot row</h2>
+    <p><strong>Copy:</strong> <code>UserRepository.findByIdForUpdate</code> (<code>…/platform/security/repo/UserRepository.java:176-179</code>)
+      and its caller <code>AdminUserService.lockAndLoad</code> (<code>…/platform/admin/service/AdminUserService.java:261-265</code>), commit
+      <code>91a34b43</code>. Background: <a href="../database/index.html">Database → Locking Conventions</a>.</p>
+    <ol>
+      <li><strong>Finder</strong>: a JPQL query with <code>@Lock(LockModeType.PESSIMISTIC_WRITE)</code> and
+        <code>@QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))</code> (= <code>FOR UPDATE NOWAIT</code>).
+        Not a native <code>FOR UPDATE NOWAIT</code>: that failure marks the transaction rollback-only and every contended call
+        ends in <code>UnexpectedRollbackException</code>. Not a finite timeout either — on this Postgres/Hibernate pair it is
+        silently ignored and the query blocks forever.</li>
+      <li><strong>Wrap the call</strong> in <code>lockRetryer.withBoundedRetry("&lt;lockName&gt;", () -&gt; repo.findByIdForUpdate(id).orElseThrow(…))</code>
+        (<code>…/infrastructure/persistence/PessimisticLockRetryer.java:150</code>), inside a <code>@Transactional</code> method.</li>
+      <li><strong>Only reads inside the lambda</strong> (lock, <code>orElseThrow</code>, optionally <code>entityManager.refresh</code>). The
+        supplier can run several times; every <code>save</code>/<code>delete</code>/<code>publishEvent</code>/<code>enqueue</code>/
+        <code>send</code> goes after <code>withBoundedRetry</code> returns — the row lock is held until commit anyway.</li>
+      <li><strong>Bump the pin</strong>: <code>EXPECTED_CALL_SITE_COUNT</code> in
+        <code>test…/infrastructure/persistence/PessimisticLockRetryerCallSiteAuditTest.java:149</code> (50 today) and add a line to its
+        Javadoc history saying which method you added.</li>
+      <li><strong>New repository type?</strong> Add it to <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> (same file, line 243) so the
+        "unwrapped NOWAIT call" check covers it.</li>
+      <li><strong>Inner <code>REQUIRES_NEW</code>?</strong> Don't NOWAIT-lock a row the outer transaction already wrote — Postgres
+        <code>55P03</code> every time, surfacing as a 409 the retryer cannot fix.</li>
+    </ol>
+    <p><strong>Guard:</strong> <code>PessimisticLockRetryerCallSiteAuditTest</code> (count + write-in-lambda + unwrapped-NOWAIT checks).</p>
+
+    <!-- ===================================================================== -->
+    <h2 id="job">5. A scheduled job</h2>
+    <p><strong>Copy:</strong> <code>…/platform/admin/service/GdprErasureRetryScheduler.java</code> (thin scheduler delegating to a service,
+      commit <code>a7d2b91b</code>); for a claim-based drainer, <code>RadarCompositeDlqProcessor</code>. Catalogue and rules:
+      <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>, <code>docs/deployment/scheduler-lock-tuning.md</code>.</p>
+    <ol>
+      <li><strong>A thin <code>@Component</code></strong> whose <code>@Scheduled</code> method calls a service method, so ITs can call the
+        service directly.</li>
+      <li><strong>Schedule from a property</strong>: <code>fixedDelayString = "${platform.&lt;module&gt;.&lt;job&gt;.poll_delay_ms:60000}"</code>
+        or a cron. Check the staggered daily slots on the Scheduled Jobs page before picking a cron hour.</li>
+      <li><strong><code>@SchedulerLock(name = "ClassName_method", lockAtMostFor = …, lockAtLeastFor = …)</code></strong> unless the job
+        only touches per-node state or claims rows with <code>SKIP LOCKED</code>. <code>lockAtMostFor</code> ≈ 2× the expected run;
+        <code>lockAtLeastFor</code> ≤ <code>lockAtMostFor</code> (<code>ConfigStartupAssertion</code> checks this at boot and refuses
+        to start outside <code>dev</code>). A short-delay drainer makes <code>lockAtLeastFor</code> a property too.</li>
+      <li><strong>Claim-based drainers</strong> (<code>claimed_at</code> + stale-claim reset): bound the run's wall clock
+        (<code>MAX_RUN_DURATION</code>) <em>below</em> <code>lockAtMostFor</code>, and keep <code>lockAtMostFor</code> strictly
+        <em>below</em> <code>STALE_CLAIM_WINDOW</code> with a real buffer — <code>RadarCompositeDlqProcessor</code>: 8 min / PT10M / 15 min;
+        <code>VideoDeletionOutboxProcessor</code>: 12 min / 15 min / 20 min. Otherwise the next instance resets and re-claims rows the
+        running one still holds. Pin the ordering in a unit test (see
+        <code>VideoDeletionOutboxProcessorSchedulerLockTest.runtimeBudget_staysStrictlyInsideLockAndStaleWindow</code>).</li>
+      <li><strong>Runtime tunables</strong> (batch size, windows) are <code>platform_config</code> keys → <a href="#config">recipe 9</a>.
+        Bound the batch; drain the rest next tick. One transaction per item if one failure shouldn't abort the run; never hold a
+        transaction across Stripe/Bunny/Gemini calls.</li>
+      <li><strong>Don't add a method-level <code>@Transactional</code></strong> on the scheduled method — use per-item
+        <code>TransactionTemplate</code> (guard: <code>SchedulerLockTransactionOrderingIT</code> for the three schedulers it covers).</li>
+      <li><strong>Document it</strong>: add a row to <a href="../scheduled-jobs/index.html">Scheduled Jobs</a> (and its totals).</li>
+      <li><strong>Test</strong>: schedulers don't fire under the test profile. Call the method through the Spring proxy and call
+        <code>releaseSchedulerLock("ClassName_method")</code> (<code>test…/config/AbstractIntegrationTest.java:211</code>) between runs.</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="event">6. A domain event + listener</h2>
+    <p><strong>Copy:</strong> producer side <code>…/platform/booking/contract/BookingStatusChangedEvent.java</code>; listener side
+      <code>…/platform/payment/service/RefundEnqueueListener.java</code> (<code>BEFORE_COMMIT</code>) and
+      <code>…/platform/payment/service/CancellationRefundService.java:34-35</code> (<code>AFTER_COMMIT</code> +
+      <code>REQUIRES_NEW</code>).</p>
+    <ol>
+      <li><strong>Declare the event in the producer's <code>contract</code> package</strong>
+        (<code>platform/&lt;module&gt;/contract/</code> or <code>contract/event/</code>). Both <code>ApplicationEvent</code> subclasses and
+        plain records are in use. Carry ids and immutable facts, not entities. Consumers import only <code>contract</code>.</li>
+      <li><strong>Publish</strong> with <code>ApplicationEventPublisher.publishEvent(…)</code> inside the business transaction.</li>
+      <li><strong>Pick the phase</strong>:
+        <ul>
+          <li><code>@TransactionalEventListener(phase = BEFORE_COMMIT)</code> — the work must be atomic with the producer (it joins
+            the transaction; a throw rolls the business change back). Use this to <em>enqueue</em> durable side effects.</li>
+          <li><code>@TransactionalEventListener(phase = AFTER_COMMIT)</code> — best-effort follow-up that may be lost on a crash. There is
+            no ambient transaction: if it writes, add <code>@Transactional(propagation = REQUIRES_NEW)</code>; if it is slow, add
+            <code>@Async("&lt;pool&gt;")</code> with an explicit pool name.</li>
+          <li>Plain <code>@EventListener</code> — runs synchronously at publish time, inside the publisher's transaction.</li>
+        </ul></li>
+      <li><strong>Must survive a crash?</strong> (email, refund, payout, S3 delete, external call) → don't do it in an
+        <code>AFTER_COMMIT</code> listener; enqueue an outbox row from <code>BEFORE_COMMIT</code> (<a href="#outbox">recipe 7</a>).</li>
+      <li><strong>Test</strong>: assert publication with the shared <code>RecordedEvents</code> bean (declared in
+        <code>test…/config/TestConfig.java</code>), never a per-class capture <code>@TestConfiguration</code> (forks a context).</li>
+    </ol>
+    <p><strong>Guards:</strong> <code>AsyncExecutorQualifierTest</code> (bare or unknown <code>@Async</code>),
+      <code>EmailListenerAnnotationCoverageTest</code> (an <code>on*(Event)</code> method on the email listeners without a listener
+      annotation).</p>
+
+    <!-- ===================================================================== -->
+    <h2 id="outbox">7. An outbox message type</h2>
+    <p><strong>Copy:</strong> <code>…/platform/video/service/ModerationOutboxSupport.java</code> +
+      <code>ModerationRetryOutboxHandler.java</code> (commit <code>90121602</code>). Design: <a href="../outbox/index.html">Outbox</a>.</p>
+    <ol>
+      <li><strong><code>*OutboxSupport</code></strong> in the owning module: a <code>public static final String …_AGGREGATE_TYPE</code>,
+        a payload <code>record</code>, and an enqueue method annotated <code>@Transactional(propagation = Propagation.MANDATORY)</code>
+        that calls <code>outboxService.enqueue(type, json)</code> then <code>outboxService.requestDrainAfterCommit()</code>.
+        Use <code>enqueue(type, json, notBefore)</code> for a delayed row.</li>
+      <li><strong>Call it inside the business transaction</strong> — from the service or a <code>BEFORE_COMMIT</code> listener, never
+        <code>AFTER_COMMIT</code>.</li>
+      <li><strong>Handler</strong>: a <code>@Component</code> implementing <code>…/platform/outbox/contract/OutboxMessageHandler</code>
+        (<code>aggregateType()</code> + <code>handle(String payload)</code>). Two handlers with the same type fail startup.</li>
+      <li><strong>Idempotent <code>handle()</code></strong>: anchor on a DB state check and/or a remote idempotency key (delivery is
+        at-least-once). Throw only for retryable failures; turn a permanently impossible row into a logged no-op.</li>
+      <li><strong>Payload is a cross-version contract</strong>: add fields as nullable; don't delete a handler while rows of its type
+        remain.</li>
+      <li><strong>No migration</strong> — <code>aggregate_type</code> has no CHECK.</li>
+      <li><strong>Test</strong>: an <code>*IT</code> next to <code>test…/platform/outbox/ModerationOutboxIT.java</code>; the test profile drains
+        synchronously (<code>app.outbox.drain-async: false</code>), so assert right after the call.</li>
+      <li>Add a row to the "Who uses it" table on the <a href="../outbox/index.html">Outbox</a> page.</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="email">8. An email type / notification</h2>
+    <p><strong>Copy:</strong> <code>SES_CUTOVER_PREFLIGHT</code> (email + CHECK migration <code>V168</code>, commit <code>4317b019</code>) and
+      <code>BOOKING_REMINDER</code> (in-app + opt-out footer). Background: <a href="../notification/index.html">Notification</a>.</p>
+    <ol>
+      <li><strong><code>EmailTemplate</code> constant</strong> — <code>…/platform/notification/contract/EmailTemplate.java</code>: subject key,
+        optionally a delivery deadline and breaker name.</li>
+      <li><strong>Subject key</strong> in all four <code>src/main/resources/i18n/messages*.properties</code>
+        (guards: <code>EmailTemplateSubjectKeyParityTest</code>, <code>MessageBundleParityTest</code>).</li>
+      <li><strong>Thymeleaf template</strong> <code>src/main/resources/mails/&lt;lowerCamelCase&gt;.html</code>. If the category is
+        opt-out-able, include <code>&lt;div th:replace="~{fragments/unsubscribeFooter :: footer}"&gt;&lt;/div&gt;</code>
+        (see <code>bookingReminder.html:11</code>).</li>
+      <li><strong>CHECK migration</strong> widening <code>main.envelope_entity.envelope_entity_email_template_check</code> — drop and re-add
+        with the new value (copy <code>V168</code>). Guard: <code>EnvelopeEntitySchemaIT</code>. Without it the first real insert fails;
+        unit tests and <code>TestMailManager</code> never write an envelope, so nothing else notices.</li>
+      <li><strong><code>NotificationCatalog</code></strong> case (<code>…/platform/notification/service/NotificationCatalog.java:66</code>):
+        the switch is exhaustive, so a missing case is a compile error. Choose <code>emailOnly(category)</code> or
+        <code>inApp(category, coachLink, parentLink)</code>; add any new display params to <code>PARAM_WHITELIST</code> (line 32).</li>
+      <li><strong>Category / opt-out</strong>: map it to an existing <code>NotificationCategory</code> (only <code>REMINDER</code> and
+        <code>DEVELOPMENT</code> are opt-out-able). A <em>new</em> opt-out-able category needs the enum constant, a <code>LABELS</code>
+        entry in <code>src/frontend/src/components/notification/NotificationPreferencesSection.vue:43</code> and
+        <code>notifications.preferences.&lt;category&gt;.label/description</code> in the three frontend locales.</li>
+      <li><strong>In-app text</strong>: <code>notifications.types.&lt;TEMPLATE&gt;</code> in <code>src/frontend/src/i18n/{en-US,de-DE,fr-FR}/index.js</code>
+        (looked up dynamically by <code>src/frontend/src/utils/notificationText.js:30</code>; forget it in all three locales and no test
+        fails — the inbox just shows <code>notifications.typeFallback</code>).</li>
+      <li><strong>Producer</strong>: enqueue via <code>NotificationOutboxSupport.enqueueEmail(…)</code> (<code>MANDATORY</code>) from a
+        <code>BEFORE_COMMIT</code> listener. A new handler on <code>BookingEmailListener</code>/<code>SessionPackEmailListener</code>
+        means bumping the pinned counts in <code>EmailListenerAnnotationCoverageTest</code> (20 / 3) and
+        <code>EmailDataRoundTripContractTest</code> ("all 23 on*(Event) handlers"). Put only <code>String</code>s (or lists of them) in the
+        data map — an <code>Instant</code> or <code>BigDecimal</code> changes type through the outbox JSON.</li>
+      <li>Links into the SPA: build with <code>FrontendLinkBuilder</code> (hash routes), never concatenate.</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="config">9. A platform_config key</h2>
+    <p><strong>Copy:</strong> <code>reviews.minSessionAgeDays</code> — seeded by
+      <code>V156__reviews_eligibility_config_rework.sql</code> (commit <code>f789ce5b</code>), bounded by
+      <code>ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS</code>, read in <code>ReviewSubmissionService</code>. Background:
+      <a href="../config/index.html">Config</a>.</p>
+    <ol>
+      <li><strong>Seed</strong> in a migration: <code>INSERT INTO main.platform_config (key, value, value_type, description) VALUES (…) ON CONFLICT (key) DO NOTHING;</code>
+        — no <code>id</code> column (it is an identity; guard: <code>MigrationConventionLintTest</code> <code>PLATFORM_CONFIG_EXPLICIT_ID</code>).
+        Skip the seed only if the call site has a code default and the key goes in <code>HAS_CODE_DEFAULT</code>.</li>
+      <li><strong>Bound it</strong> (any numeric key): a <code>BoundedKey(key, min, max, failFast, note, defaultValue)</code> constant in
+        <code>…/platform/config/service/ConfigBounds.java</code> (record at line 80), added to <code>ALL</code> (line 458), and to
+        <code>HAS_CODE_DEFAULT</code> (line 432) if the call site has a default. Without it the admin <code>PUT</code> accepts any string and
+        <code>ConfigStartupAssertion</code> never checks the key. <code>failFast = true</code> blocks production boot on a bad value — only for
+        keys whose misconfiguration loses data or halts a core flow.</li>
+      <li><strong>Read it</strong> with the getter matching the failure mode: <code>getBoundedLong/Int(key, default, min, max)</code> (WARN +
+        default), <code>getBoundedLong(key, min, max)</code> (missing throws, out-of-range clamps), <code>getBoolean(key, default)</code>.
+        Pass the same <code>[min, max]</code> as <code>ConfigBounds</code> — the two are not linked by code.</li>
+      <li><strong>Per-tier / per-video-type key?</strong> Templated keys are generated from enum segments in <code>ConfigBounds</code>;
+        a new <code>CoachSubscriptionTier</code>/<code>VideoType</code> constant needs its segment there (guard:
+        <code>ConfigBoundsEnumCoverageTest</code>).</li>
+      <li><strong>Cross-key invariant?</strong> Validate the partner from the database, not the cache, in <code>ConfigService</code> and
+        mirror it in <code>ConfigStartupAssertion</code>.</li>
+      <li>Remember the 300 s per-node cache: an edit is not visible on other instances immediately.</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="gate">10. A feature / tier gate</h2>
+    <p><strong>Copy:</strong> <code>DrillLibraryService.checkSessionBuilderGate</code>
+      (<code>…/platform/session/service/DrillLibraryService.java:399-405</code>) for a config-driven gate;
+      <code>RadarAssessmentService</code> (hard-coded <code>RADAR_ALLOWED_TIERS</code>) for a fixed one.</p>
+    <ol>
+      <li><strong>Choose the mechanism.</strong> Operator-tunable per tier → seed
+        <code>feature.&lt;name&gt;.enabled.&lt;TIER&gt;</code> for every <code>CoachSubscriptionTier</code> (<code>SCOUT</code>,
+        <code>INSTRUCTOR</code>, <code>ACADEMY</code>; see <code>feature.sessionBuilder.enabled.*</code> in <code>V139</code>) and read it
+        with <code>configService.getBoolean(…)</code>. Fixed by product rule → an <code>EnumSet</code> of allowed tiers.
+        (<code>infrastructure.feature.FeatureToggleService</code>/<code>AppFeature</code> are application-level property toggles, not tier
+        gates.)</li>
+      <li><strong>Resolve the tier</strong> with <code>coachProfileService.getCoachSubscriptionTier(coachId)</code>.</li>
+      <li><strong>Gate before anything that leaks existence</strong> (a 403 before a 404 — see the comment in
+        <code>RadarAssessmentService</code>).</li>
+      <li><strong>Throw <code>FeatureGatedException(featureKey, requiredTier)</code></strong>
+        (<code>…/platform/security/contract/exception/</code>); <code>ApiAdvice.featureGatedHandler</code> maps it to 403 with
+        <code>errorKey = security.featureGated</code>. Pass <code>null</code> as the tier only if no tier grants it.</li>
+      <li><strong>Read-side mirror</strong>: if a GET returns data a downgraded coach should no longer see, gate it too (see
+        <code>ReportGenerationService.getBranding</code>'s comment).</li>
+      <li><strong>Frontend</strong>: branch on <code>err.response.data.errorMsg.errorKey === 'security.featureGated'</code> and render
+        <code>src/frontend/src/components/common/FeatureGateOverlay.vue</code> (<code>DrillDetailPanel.vue</code> handles the error key at
+        line 564 and renders the overlay; <code>sessionBuilder.store.js:153</code> turns it into an <code>isGated</code> flag).</li>
+      <li><strong>Player-side quota</strong> (video) lives in <code>video.quota.&lt;tier&gt;.*</code> keys — see
+        <a href="../video/index.html">Video</a>.</li>
+    </ol>
+
+    <!-- ===================================================================== -->
+    <h2 id="it">11. An integration test</h2>
+    <p><strong>Copy:</strong> <code>test…/platform/notification/api/NotificationCenterIT.java</code> (commit <code>e350d169</code>). Read
+      <code>docs/testing/readme.md</code> and <code>docs/testing/why-inheritance-over-import.md</code> once.</p>
+    <ol>
+      <li><strong>Name it <code>*IT</code> and <code>extends AbstractIntegrationTest</code></strong> (or a family base:
+        <code>BaseVideoIT</code>, <code>BasePaymentIT</code>, <code>BaseSessionIT</code>, <code>BaseStorageIT</code>). Declare none of
+        <code>@SpringBootTest</code>, <code>@ActiveProfiles</code>, <code>@Import(TestConfig.class)</code>.</li>
+      <li><strong>Every context-key change forks a Spring context</strong>: a <code>@MockitoBean</code>/<code>@MockitoSpyBean</code> field
+        (type <em>and field name</em> count), <code>@TestPropertySource</code>, <code>@DynamicPropertySource</code>, class-level
+        <code>@Import</code>, nested <code>@TestConfiguration</code>. Prefer the base's inherited spies
+        (<code>paymentGateway</code>, <code>coachProfileRepository</code>, …) or copy a peer's mock set with identical field names
+        (e.g. <code>videoProviderAdapter</code> + <code>fileStorageService</code>, shared by 25 classes). If you really need a fork, bump
+        <code>EXPECTED_DISTINCT_CONTEXT_KEYS</code> (<code>test…/config/IntegrationTestConventionTest.java:109</code>, 14 today) or
+        <code>EXPECTED_TEST_PROPERTY_SOURCE_COUNT</code> (line 89) with a <code>// context-fork:</code> reason — and remember the CI ceiling
+        is 17 contexts total.</li>
+      <li><strong>Seed your own data</strong>; every table is empty at the start of every method. Use an id range from the fixture id
+        registry in <code>docs/testing/test-data-isolation.md</code>. No teardown.</li>
+      <li><strong>Wrap fixture writes in <code>transactionTemplate.execute(…)</code></strong> — Hikari runs with
+        <code>auto-commit: false</code>, so a bare <code>jdbcTemplate.update</code> in the test body never commits.</li>
+      <li><strong>Booking fixtures</strong>: derive end from start (<code>Instant start = …; Instant end = start.plus(…)</code>); two
+        separate <code>Instant.now()</code> calls can violate <code>chk_bkg_end_after_start</code> on fast CI runners.</li>
+      <li><strong>Events</strong>: autowire <code>RecordedEvents</code>. <strong>Schedulers</strong>: call directly +
+        <code>releaseSchedulerLock(name)</code>. <strong>Outbox</strong>: drains synchronously. <strong>HTTP</strong>: <code>MockMvc</code>
+        (<code>@AutoConfigureMockMvc</code> is on the base) or <code>httpTestClient</code>.</li>
+      <li><strong>Run one</strong>: <code>mvn -o verify -DskipFrontend -Dit.test=MyIT</code>. If you touched mocks/annotations, also run
+        <code>mvn -o test -DskipFrontend -Dtest=IntegrationTestConventionTest</code> — it prints every context configuration when the
+        count is off.</li>
+    </ol>
+    <p><strong>Guards:</strong> <code>IntegrationTestConventionTest</code> (unit phase), the CI context-count gate
+      (<code>.github/scripts/assert-context-count.sh</code>), the container sampler.</p>
+
+    <!-- ===================================================================== -->
+    <h2 id="fepage">12. A frontend page</h2>
+    <p><strong>Copy:</strong> <code>src/frontend/src/pages/NotificationsPage.vue</code> +
+      <code>src/frontend/src/pages/__tests__/NotificationsPageSpec.js</code> (commit <code>e350d169</code>). Background:
+      <a href="../frontend/index.html">Frontend</a>.</p>
+    <ol>
+      <li><strong>Page</strong> in <code>src/frontend/src/pages/&lt;area&gt;/</code>, <code>&lt;script setup&gt;</code>,
+        <code>const { t } = useI18n()</code>.</li>
+      <li><strong>Route</strong> in <code>src/frontend/src/router/routes.js</code> with a lazy <code>component: () =&gt; import(…)</code> and
+        <code>meta</code>: <code>requiresAuth: true</code> plus one of <code>requiresCoach: true</code>, <code>role: 'PARENT'</code>,
+        <code>role: 'PLAYER'</code>, or <code>roles: [...]</code> for dual-role pages. The guard is
+        <code>src/frontend/src/router/index.js:40-100</code>; a public page has no <code>meta</code> (see <code>unsubscribe</code>).</li>
+      <li><strong>Drawer entry</strong> in <code>src/frontend/src/layouts/MainLayout.vue</code> inside the role's
+        <code>&lt;template v-if="authStore.isCoach|isParent|isPlayer|isAdmin"&gt;</code> block (lines 156 / 293 / 372 / 459). A route
+        without a drawer entry is unreachable — this has happened several times.</li>
+      <li><strong>API method</strong> in <code>src/frontend/src/api/&lt;module&gt;.api.js</code> using
+        <code>import { api } from 'src/boot/axios'</code>. The response interceptor already unwraps <code>response.data</code>.</li>
+      <li><strong>Store</strong> (only if state is shared across components): setup-style <code>defineStore('id', () =&gt; { … })</code>
+        in <code>src/frontend/src/stores/</code>.</li>
+      <li><strong>i18n</strong>: every key in <strong>all three</strong> of <code>src/frontend/src/i18n/{en-US,de-DE,fr-FR}/index.js</code>,
+        including <code>nav.*</code> for the drawer label. No bare user-visible strings in templates or <code>q-*</code>
+        <code>label</code>/<code>hint</code>/<code>placeholder</code> props (ESLint <code>vue/no-bare-strings-in-template</code>).
+        A dynamic key (<code>t(`x.${v}`)</code>) must be added to <code>DYNAMIC_KEY_CALL_SITES</code> in
+        <code>src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js</code> as <code>'src/…File.vue:&lt;line&gt;'</code> with a
+        reason — and if you shift lines above an existing listed call, update its line number. Don't wrap a <code>t(</code> call across
+        lines.</li>
+      <li><strong>Spec</strong> in a sibling <code>__tests__/&lt;Page&gt;Spec.js</code>: <code>vi.mock</code> the api module, define a local
+        <code>async function mountPage()</code> that mounts and <code>await flushPromises()</code>, opt into Pinia with
+        <code>createTestingPinia()</code>. Specs assert raw keys (the test i18n catalogue is empty). Build dates from fixed instants — CI
+        also runs the suite under <code>TZ=America/New_York</code>.</li>
+      <li><strong>Before pushing</strong>, from <code>src/frontend</code>:
+        <code>npx prettier --write "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>,
+        <code>NODE_ENV=production npx eslint .</code>, <code>npx vitest run</code>. In a new worktree, copy
+        <code>src/frontend/.quasar</code> in first or Vitest resolves the main checkout's code.</li>
+    </ol>
+    <p><strong>Guards:</strong> Prettier and ESLint (<code>frontend-quality</code> job), <code>localeKeyParitySpec</code>,
+      <code>i18nTemplateKeyResolutionSpec</code>, <code>routerGuardSpec</code> (frontend-unit-tests workflow — see
+      <a href="../ci-guards/index.html">CI Guards</a> for why that one is not a required check).</p>
+
+    <!-- ===================================================================== -->
+    <h2 id="adminpage">13. An admin page</h2>
+    <p><strong>Copy:</strong> <code>src/frontend/src/pages/admin/AdminDisputesPage.vue</code> +
+      <code>src/frontend/src/pages/admin/__tests__/AdminDisputesPageSpec.js</code>; backend
+      <code>…/platform/admin/api/AdminDisputeResource.java</code>. Commit <code>afb977a7</code> added five admin pages in one go and is a good
+      diff to read.</p>
+    <ol>
+      <li><strong>Backend</strong>: a <code>*Resource</code> under <code>/api/admin/…</code> in <code>platform/admin/api/</code>, every method
+        <code>@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)</code> (admits <code>ROLE_ADMIN</code> and <code>ROLE_LTD_ADMIN</code>).
+        Queues are paged.</li>
+      <li><strong>Audit mutating actions</strong>: add a constant to <code>…/platform/admin/contract/AdminActionType.java</code>
+        <em>and</em> a migration widening <code>admin_action_log</code>'s <code>action_type</code> CHECK (copy <code>V171</code>) — the
+        CHECK rejects the insert otherwise.</li>
+      <li><strong>Backend tests</strong>: an <code>*IT</code> in <code>test…/platform/admin/api/</code> (e.g. <code>AdminDisputeQueueIT</code>),
+        including a non-admin → 403 case.</li>
+      <li><strong>API</strong>: add methods to <code>adminApi</code> in <code>src/frontend/src/api/admin.api.js</code>.</li>
+      <li><strong>Route</strong>: a child of the <code>path: 'admin'</code> block in <code>routes.js</code> (line 410) with
+        <code>meta: { requiresAuth: true, roles: ['ADMIN'] }</code>.</li>
+      <li><strong>Drawer</strong>: a <code>&lt;q-item clickable to="/admin/…"&gt;</code> in the <code>authStore.isAdmin</code> block of
+        <code>MainLayout.vue</code> (from line 459), label <code>$t('nav.admin&lt;X&gt;')</code>.</li>
+      <li><strong>Page</strong>: <code>q-table</code> + <code>q-pagination</code> + detail <code>q-dialog</code>, a
+        <code>loadError</code> banner, <code>useQuasar().notify</code> on actions, keys under <code>admin.&lt;x&gt;.*</code> in three locales.
+        Enum-valued cells use dynamic keys → register them in <code>DYNAMIC_KEY_CALL_SITES</code> (AdminDisputesPage's lines 27/30/81/84/95
+        are listed there).</li>
+      <li><strong>Spec</strong>: mock <code>src/api/admin.api</code> and <code>useQuasar</code> (for <code>notify</code>), stub
+        <code>QDialog</code> to render its slot, mock the api methods to resolve already-unwrapped bodies.</li>
+    </ol>
+
+    <h2 id="related">Related</h2>
+    <ul>
+      <li><a href="../ci-guards/index.html">CI Guards</a> — every guard named above, its error message and how to run it alone.</li>
+      <li><a href="../database/index.html">Database &amp; Migrations</a>, <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>,
+        <a href="../outbox/index.html">Outbox</a>, <a href="../notification/index.html">Notification</a>,
+        <a href="../config/index.html">Config</a>, <a href="../frontend/index.html">Frontend</a>.</li>
+      <li><a href="../../testing/readme.md">docs/testing/</a> — integration-test rules in depth.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

@@ -10,7 +10,20 @@
 <div class="layout">
   <aside class="sidebar">
     <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <div class="search" role="search">
+      <input type="search" id="docs-search" class="search-input" placeholder="Search the docs  ( / )" autocomplete="off" spellcheck="false" role="combobox" aria-label="Search the docs" aria-autocomplete="list" aria-controls="docs-search-results" aria-expanded="false">
+      <ul id="docs-search-results" class="search-results" role="listbox" aria-label="Search results" hidden></ul>
+    </div>
     <nav>
+      <h4>Onboarding</h4>
+      <ul>
+        <li><a href="../getting-started/index.html">Your First Day</a></li>
+        <li><a href="../glossary/index.html">Glossary</a></li>
+        <li><a href="../walkthrough/index.html">Anatomy of a Request</a></li>
+        <li><a href="../cookbook/index.html">Cookbook: How Do I Add…</a></li>
+        <li><a href="../ci-guards/index.html">CI Guards</a></li>
+        <li><a href="../decisions/index.html">Why It’s Built This Way</a></li>
+      </ul>
       <h4>Platform Modules</h4>
       <ul>
         <li><a href="../marketplace/index.html">Marketplace</a></li>
@@ -43,7 +56,7 @@
     <h1>Monitoring</h1>
     <p class="subtitle">A single fail-fast startup guard plus the operational logging/observability surface every other module relies on to be debuggable in production.</p>
 
-    <h2>Business Overview</h2>
+    <h2 id="business-overview">Business Overview</h2>
     <p>
       Skillars coaches, parents, and players book live, time-boxed activity: a session slot, a video review window, a
       payment that has to clear before a booking is confirmed. None of that tolerates silent failure. A payment
@@ -54,8 +67,8 @@
       LGTM stack. Almost all of that is configured in <code>infrastructure</code> and resource files, not in this package.
     </p>
 
-    <h2>Technical Overview</h2>
-    <h3><code>TlsStartupAssertion</code></h3>
+    <h2 id="technical-overview">Technical Overview</h2>
+    <h3 id="tlsstartupassertion"><code>TlsStartupAssertion</code></h3>
     <p>
       <code>TlsStartupAssertion</code> (<code>platform.monitoring</code>) is a Spring
       <code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>. It hooks <code>ApplicationReadyEvent</code>
@@ -88,7 +101,7 @@
       so the JVM exits non-zero instead of carrying on to serve traffic.
     </p>
 
-    <h3>Structured logging</h3>
+    <h3 id="structured-logging">Structured logging</h3>
     <p>
       <code>src/main/resources/config/logback-spring.xml</code> configures a <code>ConsoleAppender</code> named
       <code>JSON</code>, using <code>logstash-logback-encoder</code>'s <code>LoggingEventCompositeJsonEncoder</code>.
@@ -105,7 +118,7 @@
       same JSON layout as the console appender.
     </p>
 
-    <h3>Access logs</h3>
+    <h3 id="access-logs">Access logs</h3>
     <p>
       Tomcat access logs are routed through SLF4J by <code>infrastructure.web.Slf4jAccessLogValve</code>, not written
       to a file. This means they inherit both root appenders and can be queried in Loki like any other log line:
@@ -121,7 +134,7 @@
       environment.
     </p>
 
-    <h3>Actuator, metrics and tracing</h3>
+    <h3 id="actuator-metrics-and-tracing">Actuator, metrics and tracing</h3>
     <table>
       <tr><th>Concern</th><th>Configuration (<code>application.yaml</code> unless noted)</th></tr>
       <tr><td>Management server</td><td><code>management.server.port: 8367</code>, base path <code>/manage</code>; exposed: <code>health</code>, <code>info</code>, <code>env</code>, <code>metrics</code>, <code>prometheus</code>.</td></tr>
@@ -133,7 +146,7 @@
       <tr><td>In-app alerting</td><td>Not in this package: notification's <code>AlertEvaluationService</code> evaluates DB-configured alert rules against in-memory Micrometer counters on a schedule and publishes <code>AlertFiredEvent</code>. The admin <code>HealthDashboardPage.vue</code> reads <code>/manage/health</code>.</td></tr>
     </table>
 
-    <h3>The LGTM stack</h3>
+    <h3 id="the-lgtm-stack">The LGTM stack</h3>
     <p>
       Skillars documents a full LGTM (Loki, Grafana, Tempo, Prometheus) observability stack for the whole application:
       structured logs for exact error context, Prometheus metrics for rate/volume health signals, Tempo traces for
@@ -149,7 +162,7 @@
       <li><a href="../../deployment/local/deployment.md">docs/deployment/local/deployment.md</a> — running the stack locally alongside the app.</li>
     </ul>
 
-    <h2>Key Flows</h2>
+    <h2 id="key-flows">Key Flows</h2>
     <pre class="mermaid">
 flowchart TD
   A[ApplicationReadyEvent fires] --> B{dev profile active?}
@@ -169,7 +182,7 @@ flowchart TD
       tripwire for a future provider config that disables certificate checks outside <code>dev</code>.
     </p>
 
-    <h2>Conventions &amp; Gotchas</h2>
+    <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Whether logs reach Loki depends on profile and environment.</strong> <code>loki.enabled</code> is
       <code>${LOKI_ENABLED:false}</code> in <code>application.yaml</code>, and <code>application-prod.yaml</code>
@@ -203,7 +216,7 @@ flowchart TD
       on 8367 and is unauthenticated (<code>PUBLIC_MGMT_ENDPOINTS</code>). Keep port 8367 off the public ingress.</p>
     </div>
 
-    <h2>Related Modules</h2>
+    <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; supplies <code>AppSetupException</code> (thrown by <code>TlsStartupAssertion</code>), <code>ObservabilityConfig</code>, the access-log valve/configs, and the SES/SMTP health indicators.</li>
       <li><a href="../config/index.html">Config</a> &mdash; <code>ConfigStartupAssertion</code>, the sibling fail-fast <code>ApplicationReadyEvent</code> check for required platform config.</li>
@@ -211,9 +224,12 @@ flowchart TD
       <li><a href="../security/index.html">Security</a> &mdash; <code>AppEndpoints.PUBLIC_MGMT_ENDPOINTS</code> decides which actuator endpoints are unauthenticated.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
+
+    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
+<script src="../assets/search-index.js"></script>
 <script src="../assets/docs.js"></script>
 </body>
 </html>
