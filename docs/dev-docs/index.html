@@ -22,6 +22,7 @@
         <li><a href="messaging/index.html">Messaging</a></li>
         <li><a href="reviews/index.html">Reviews</a></li>
         <li><a href="notification/index.html">Notification</a></li>
+        <li><a href="outbox/index.html">Outbox</a></li>
         <li><a href="admin/index.html">Admin</a></li>
         <li><a href="security/index.html">Security</a></li>
         <li><a href="filestorage/index.html">Filestorage</a></li>
@@ -33,37 +34,38 @@
         <li><a href="infrastructure/index.html">Infrastructure</a></li>
         <li><a href="scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
   <main class="content">
     <div class="breadcrumb">Home</div>
     <h1>Skillars — Developer Documentation</h1>
-    <p class="subtitle">Everything a new engineer needs to understand what Skillars is, how the backend is organized, and where to go deeper.</p>
+    <p class="subtitle">Everything a new engineer needs to understand what Skillars is, how the backend and frontend are organized, and where to go deeper.</p>
 
     <h2>Business Overview</h2>
-    <p>Skillars is a youth sports skill-development and coaching marketplace. It connects <strong>Coaches</strong> with <strong>Players</strong> — many of whom are minors — for one-on-one and small-group training. Because a large share of players are minors, the product is built around a <strong>Parent</strong> account that supervises, consents on behalf of, and pays for a child's participation, with special handling for messaging, GDPR data rights, and content moderation. <strong>Admins</strong> run trust-and-safety, finance, and support operations behind the scenes.</p>
+    <p>Skillars is a youth sports skill-development and coaching marketplace. It connects <strong>Coaches</strong> with <strong>Players</strong> — many of whom are minors — for one-on-one and small-group training. Because a large share of players are minors, the product is built around a <strong>Parent</strong> account that supervises, consents on behalf of, and pays for a child's participation, with special handling for messaging, GDPR data rights, and content moderation. Adult players can also self-register and book for themselves. <strong>Admins</strong> run trust-and-safety, finance, and support operations behind the scenes.</p>
     <p>The core loop a family goes through looks like this:</p>
     <div class="card-grid">
-      <div class="card"><h4>1. Discover</h4><p>Parents/players search the <a href="marketplace/index.html">marketplace</a> for a coach by city, specialty, and age group.</p></div>
-      <div class="card"><h4>2. Book</h4><p>They <a href="booking/index.html">book</a> a session or session pack against the coach's published availability.</p></div>
-      <div class="card"><h4>3. Pay</h4><p><a href="payment/index.html">Payment</a> is captured via credit wallet, session pack, or subscription, with Stripe handling coach payouts.</p></div>
-      <div class="card"><h4>4. Train</h4><p>Coaches plan <a href="session/index.html">session content</a> (drills, homework) and may run a live session with <a href="video/index.html">video</a> review.</p></div>
-      <div class="card"><h4>5. Track</h4><p><a href="development/index.html">Player development</a> is tracked over time via Skills Radar assessments and training-volume metrics.</p></div>
-      <div class="card"><h4>6. Review</h4><p>After the session, families leave a <a href="reviews/index.html">review</a> that feeds back into the coach's marketplace ranking.</p></div>
+      <div class="card"><h4>1. Discover</h4><p>Parents/players search the <a href="marketplace/index.html">marketplace</a> for a coach by city, specialty, language, rating, and age group.</p></div>
+      <div class="card"><h4>2. Book</h4><p>They <a href="booking/index.html">book</a> a single session or a batch of sessions against the coach's published availability.</p></div>
+      <div class="card"><h4>3. Pay</h4><p><a href="payment/index.html">Payment</a> is taken from the credit wallet, a session pack, or a card charge on the platform account. Coaches are paid out via Stripe Connect only after the session completes and a hold period passes.</p></div>
+      <div class="card"><h4>4. Train</h4><p>Coaches plan <a href="session/index.html">session content</a> (drills, templates, homework), deliver live or quick-complete, and share <a href="video/index.html">video</a> for review.</p></div>
+      <div class="card"><h4>5. Track</h4><p><a href="development/index.html">Player development</a> is tracked over time via Skills Radar assessments, training volume (SLU), the development timeline, and PDF reports.</p></div>
+      <div class="card"><h4>6. Review</h4><p>After the session, families leave a <a href="reviews/index.html">review</a> that feeds the coach's rating aggregate and marketplace ranking.</p></div>
     </div>
-    <p>One module exists purely to keep the lights on: <a href="admin/index.html">admin</a> — moderation queue, coach enforcement, dispute resolution, and GDPR export/erasure.</p>
+    <p>Keeping everyone informed: <a href="notification/index.html">notification</a> sends templated email and writes the in-app notification inbox, honouring per-category email opt-outs. Keeping the lights on: <a href="admin/index.html">admin</a> — moderation queue, account and coach enforcement, disputes, appeals, stuck-booking force-complete, and GDPR export/erasure (self and child).</p>
     <div class="callout">
-      <p><strong>There is no multi-tenancy.</strong> A <code>tenant</code> module used to exist — a B2B API-key integration layer for external partners, not per-club data partitioning — and it was <strong>removed entirely</strong> in commit <code>a170e69</code>. No <code>tenant_id</code> column, <code>TenantContext</code>, <code>/v1/**</code> API-key filter chain, or <code>ROLE_TENANT</code> principal remains anywhere in the codebase. If you find a reference to any of those, it is stale — please delete it.</p>
+      <p><strong>There is no multi-tenancy.</strong> A <code>tenant</code> module (a B2B API-key integration layer, not per-club data partitioning) was removed entirely in commit <code>a170e69</code>. No <code>tenant_id</code> column, <code>TenantContext</code>, or <code>ROLE_TENANT</code> principal remains. If you find a reference to any of those, it is stale — please delete it.</p>
     </div>
 
     <h2>Technical Overview</h2>
-    <p>The backend is a single Spring Boot application (Java), package root <code>com.softropic.skillars</code>, organized as domain modules under <code>com.softropic.skillars.platform.&lt;module&gt;</code>. A cross-cutting <code>com.softropic.skillars.infrastructure.*</code> layer provides shared technical primitives (object storage, security helpers, persistence utilities, feature flags, thread pools, email, sanitization, external provider clients) that platform modules build on rather than reimplement. The frontend is Vue&nbsp;3 (Quasar). Data lives in Postgres, with Redis for caching/session state.</p>
+    <p>The backend is a single Spring Boot application (Java 17), package root <code>com.softropic.skillars</code>, organized as domain modules under <code>com.softropic.skillars.platform.&lt;module&gt;</code> (each with <code>api</code> / <code>service</code> / <code>repo</code> / <code>contract</code> / <code>config</code> subpackages). A cross-cutting <code>com.softropic.skillars.infrastructure.*</code> layer provides shared technical primitives (blob storage, email transport, provider clients, routing DataSource, lock retry, rate limiting, exceptions, validation) that platform modules build on rather than reimplement. Side effects that must survive a crash (emails, refunds, payouts, blob deletion, moderation retries) go through the transactional <a href="outbox/index.html">outbox</a>. The <a href="frontend/index.html">frontend</a> is a Vue&nbsp;3 + Quasar hash-routed SPA under <code>src/frontend</code>. Data lives in Postgres (Flyway-managed, see <a href="database/index.html">Database</a>).</p>
 
     <h3>Layered architecture</h3>
     <pre class="mermaid">
 flowchart TB
-    FE["Vue 3 / Quasar Frontend"]
+    FE["Vue 3 / Quasar SPA (src/frontend)"]
     subgraph PLATFORM["Platform Modules (com.softropic.skillars.platform.*)"]
       direction LR
       MKT[marketplace]
@@ -80,104 +82,133 @@ flowchart TB
       FS[filestorage]
       CFG[config]
       MON[monitoring]
+      OBX[outbox]
     end
-    INFRA["Infrastructure Layer (com.softropic.skillars.infrastructure.*)<br/>blobstore · security · persistence · feature · ses · sanitizer · threadpool · client · exception"]
-    EXT["External Services<br/>Postgres · Redis · Stripe · S3 · SES/SMTP · Gemini · BunnyCDN"]
+    INFRA["Infrastructure Layer (com.softropic.skillars.infrastructure.*)<br/>blobstore · email/ses · persistence · security · feature · sanitizer · threadpool · gemini · video · videointel · web · exception · validation"]
+    EXT["External Services<br/>Postgres · Stripe · S3 · SES/SMTP · Gemini · Google Video Intelligence · Bunny.net"]
 
-    FE --> PLATFORM
+    FE -- "REST + SSE" --> PLATFORM
     PLATFORM --> INFRA
     INFRA --> EXT
     </pre>
-    <p>New engineers most often get confused by two boundaries: <strong>booking vs. session</strong> (booking owns scheduling/calendar/credits; session owns training content — drills, plans, homework) and <strong>filestorage vs. infrastructure.blobstore</strong> (filestorage is the only module allowed to call blobstore directly — everyone else goes through filestorage's API). Both are explained in depth on their respective pages.</p>
+    <p>New engineers most often get confused by two boundaries: <strong>booking vs. session</strong> (booking owns scheduling/calendar/lifecycle; session owns training content — drills, plans, templates, homework) and <strong>filestorage vs. infrastructure.blobstore</strong> (filestorage is the gateway for files — other modules go through its API rather than calling blobstore). Both are explained in depth on their respective pages.</p>
 
-    <h3>Core business flow &amp; module dependencies</h3>
+    <h3>Module dependencies</h3>
+    <p>An arrow <code>A --&gt; B</code> means <em>A imports from B</em> (compile-time dependency, derived from <code>import</code> statements). <code>security</code> and <code>config</code> are imported by almost every module and are left out to keep the diagram readable; see each module's page for its full list.</p>
     <pre class="mermaid">
 flowchart LR
-    MKT[marketplace] --> BOOK[booking]
-    BOOK --> PAY[payment]
+    ADM[admin] --> BOOK[booking]
+    ADM --> PAY[payment]
+    ADM --> REV[reviews]
+    ADM --> MSG[messaging]
+    ADM --> DEV[development]
+    ADM --> MKT[marketplace]
+    ADM --> FS[filestorage]
+    BOOK --> MKT
+    BOOK --> PAY
     BOOK --> SESS[session]
-    BOOK --> VID[video]
-    SESS --> VID
-    BOOK --> DEV[development]
-    BOOK --> REV[reviews]
-    BOOK --> NOTIF[notification]
-    PAY --> NOTIF
-    VID --> NOTIF
+    SESS --> BOOK
+    SESS --> DEV
+    SESS --> VID[video]
+    SESS --> MKT
+    DEV --> BOOK
+    DEV --> SESS
+    DEV --> MKT
+    DEV --> NOTIF[notification]
+    PAY --> BOOK
+    PAY --> MKT
+    VID --> BOOK
+    VID --> PAY
+    VID --> SESS
+    VID --> MKT
+    MSG --> BOOK
+    MSG --> MKT
+    REV --> BOOK
     REV --> MKT
-    MSG[messaging] --> BOOK
-    ADM[admin] --> PAY
-    ADM --> REV
-    ADM --> MSG
-    ADM --> BOOK
-    SEC[security] -.underpins.-> MKT
-    SEC -.underpins.-> BOOK
-    SEC -.underpins.-> PAY
-    SEC -.underpins.-> MSG
-    FS[filestorage] -.files.-> MKT
-    FS -.files.-> ADM
-    FS -.files.-> DEV
-    CFG[config] -.tunables.-> BOOK
-    CFG -.tunables.-> PAY
-    CFG -.tunables.-> VID
+    MKT --> REV
+    MKT --> FS
+    NOTIF --> BOOK
+    NOTIF --> VID
+    SEC[security] --> NOTIF
+    SEC --> FS
+    PAY --> OBX[outbox]
+    NOTIF --> OBX
+    DEV --> OBX
+    VID --> OBX
+    FS --> OBX
     </pre>
-    <p>This is a curated view of the busiest edges (see each module's own page for its full, code-verified dependency list) — <code>security</code>, <code>config</code>, and <code>infrastructure</code> are consumed by nearly every module and are drawn selectively above to keep the diagram readable.</p>
+    <p>Several edges are two-way (booking ↔ session, booking ↔ payment, video ↔ payment, marketplace ↔ reviews). Most reverse edges are a port interface declared in one module's <code>contract</code> package and implemented in the other (e.g. booking's <code>BookingDisputeLookup</code> is implemented by admin; video's <code>ModerationAdminAlertSender</code> by notification), or a Spring event listener.</p>
 
     <h3>Module index</h3>
     <table>
       <thead><tr><th>Module</th><th>What it owns</th></tr></thead>
       <tbody>
-        <tr><td><a href="marketplace/index.html">marketplace</a></td><td>City-scoped coach discovery/search plus the coach profile-builder wizard.</td></tr>
-        <tr><td><a href="booking/index.html">booking</a></td><td>Coach availability, session/pack booking, cancellation/reschedule, live delivery, and completion.</td></tr>
-        <tr><td><a href="session/index.html">session</a></td><td>Coach-authored training content — drill library, session-plan blocks, templates, homework.</td></tr>
-        <tr><td><a href="video/index.html">video</a></td><td>Video upload, three-layer moderation with minor-safety gate, transcoding, and signed playback.</td></tr>
-        <tr><td><a href="development/index.html">development</a></td><td>Longitudinal player skill tracking — Skills Radar assessments, training-volume (SLU), neglected-skill detection, reports.</td></tr>
-        <tr><td><a href="payment/index.html">payment</a></td><td>Stripe onboarding/payouts, credit wallet, subscriptions, session-pack payments, reliability strikes.</td></tr>
-        <tr><td><a href="messaging/index.html">messaging</a></td><td>Booking-gated, age-tiered in-app conversations with AI content moderation.</td></tr>
-        <tr><td><a href="reviews/index.html">reviews</a></td><td>Post-session ratings/reviews with AI + community moderation, feeding marketplace ranking.</td></tr>
-        <tr><td><a href="notification/index.html">notification</a></td><td>Event-driven templated email delivery plus an admin-configurable operational alert-rule system.</td></tr>
-        <tr><td><a href="admin/index.html">admin</a></td><td>Trust-and-safety moderation queue, coach enforcement, dispute resolution, GDPR requests.</td></tr>
-        <tr><td><a href="security/index.html">security</a></td><td>Identity/auth, four registration &amp; verification pipelines, profile self-service, age-tiered policy.</td></tr>
-        <tr><td><a href="filestorage/index.html">filestorage</a></td><td>The platform's single gateway for file upload/download/delete via presigned S3 URLs.</td></tr>
-        <tr><td><a href="config/index.html">config</a></td><td>DB-backed, admin-managed runtime config values (feature gates, quotas, thresholds).</td></tr>
-        <tr><td><a href="monitoring/index.html">monitoring</a></td><td>Fail-fast TLS startup assertion; anchors the app's logging/observability story.</td></tr>
-        <tr><td><a href="infrastructure/index.html">infrastructure</a></td><td><em>Cross-cutting.</em> Shared technical primitives every platform module builds on.</td></tr>
+        <tr><td><a href="marketplace/index.html">marketplace</a></td><td>Coach discovery (city-scoped search, public profile), the 5-step profile builder and publish, coach self-service profile/photo/gallery, <code>CoachProfile</code> as the per-coach lock, and shared player/parent lookups.</td></tr>
+        <tr><td><a href="booking/index.html">booking</a></td><td>Coach availability and blackouts, single and batch booking requests, slot exclusivity, cancellation/no-show/reschedule, live delivery, wrap-up and recap lifecycle, session-prep notes, and the reminder/expiry/completion schedulers.</td></tr>
+        <tr><td><a href="session/index.html">session</a></td><td>Coaching content: platform and coach-authored private drill libraries, session plans and templates per confirmed booking, drill-usage ownership policy, homework assignment and completion.</td></tr>
+        <tr><td><a href="video/index.html">video</a></td><td>Video upload/retry, per-tier quota, three-layer moderation with minor-safety parental approval, Bunny transcoding, signed playback, subscription-driven block/archive/purge lifecycle, and the admin review queue.</td></tr>
+        <tr><td><a href="development/index.html">development</a></td><td>Player development tracking — SLU training volume, Skills Radar assessments, neglected-skill detection, timeline, coach roster and session-prep cards, PDF performance reports.</td></tr>
+        <tr><td><a href="payment/index.html">payment</a></td><td>Card charges on the platform account and completion-gated Stripe Connect payouts, credit wallet and refunds, subscriptions, session packs, coach/payer/admin finance reporting, reliability strikes.</td></tr>
+        <tr><td><a href="messaging/index.html">messaging</a></td><td>Booking-gated, age-tiered coach/parent/player conversations with synchronous Gemini moderation, report/block, parental oversight, SSE live push, and nightly retention.</td></tr>
+        <tr><td><a href="reviews/index.html">reviews</a></td><td>Post-session ratings and reviews with eligibility pre-check, async Gemini moderation, community flag auto-hold, one-time coach reply, admin queue/appeals, and the coach rating aggregate.</td></tr>
+        <tr><td><a href="notification/index.html">notification</a></td><td>Templated, durable email delivery (log/SMTP/SES transports) plus the in-app notification centre — inbox, per-category email opt-out, one-click unsubscribe — admin alert rules, and the SES cutover preflight.</td></tr>
+        <tr><td><a href="outbox/index.html">outbox</a></td><td>Generic transactional outbox (<code>main.outbox_messages</code>): side effects enqueued atomically with the business transaction, drained after commit plus a 5-minute ShedLock sweep, with per-row transactions and backoff.</td></tr>
+        <tr><td><a href="admin/index.html">admin</a></td><td>Back-office trust &amp; safety: moderation queue, account and coach enforcement (suspension, strikes, verification tier), disputes, appeals, stuck-booking force-complete, and GDPR self/child export and erasure with daily retry.</td></tr>
+        <tr><td><a href="security/index.html">security</a></td><td>Identity &amp; auth (SPA JWT/refresh-rotation login plus a still-wired legacy <code>/authenticate</code>→<code>/otp</code> path), per-role registration pipelines, shadow player profiles, age-tier policy, and the account-lock/session-revocation primitives.</td></tr>
+        <tr><td><a href="filestorage/index.html">filestorage</a></td><td>Gateway for files: presigned S3 upload/confirm/download (quota, validation, soft-delete retention), server-side store/sign helpers, and outbox-driven blob deletion.</td></tr>
+        <tr><td><a href="config/index.html">config</a></td><td>DB-backed <code>platform_config</code> store with a per-node cache, an admin list/edit API with range validation (<code>ConfigBounds</code>), and a fail-fast startup check.</td></tr>
+        <tr><td><a href="monitoring/index.html">monitoring</a></td><td>A startup TLS assertion (currently vestigial); anchors the logging, access-log, actuator/metrics/tracing and LGTM story.</td></tr>
+        <tr><td><a href="infrastructure/index.html">infrastructure</a></td><td><em>Cross-cutting.</em> Blob storage, email transport port, provider clients, routing DataSource with isolated pools, NOWAIT lock retry, executor shutdown budgets, rate limiting, frontend link builder, exceptions/validation.</td></tr>
+        <tr><td><a href="scheduled-jobs/index.html">scheduled jobs</a></td><td><em>Cross-cutting.</em> All 40 <code>@Scheduled</code> methods (31 ShedLock-guarded) — what each recovers, schedule/config keys, multi-instance rules.</td></tr>
+        <tr><td><a href="database/index.html">database</a></td><td><em>Cross-cutting.</em> Postgres schemas, Flyway from the V138 squashed baseline to V175, migration lint rules, locking conventions, test-database behaviour.</td></tr>
+        <tr><td><a href="frontend/index.html">frontend</a></td><td><em>Cross-cutting.</em> The Vue 3 + Quasar hash-routed SPA serving all four personas: router and role guards, Pinia stores, axios/session layer, SSE, i18n, design system, Vitest.</td></tr>
       </tbody>
     </table>
 
     <h2>Getting Started</h2>
     <div class="card-grid">
-      <div class="card"><h4>Run it locally</h4><p><a href="../deployment/local-deployment.md">docs/deployment/local-deployment.md</a> — Docker Compose stack, env vars, and the local Grafana/Prometheus observability setup.</p></div>
-      <div class="card"><h4>Observability</h4><p><a href="../lgtm-observability.md">docs/lgtm-observability.md</a> — how to query the Loki/Grafana/Tempo/Prometheus stack. The authoritative <strong>alert inventory and response actions</strong> live in <a href="../deployment/monitoring.md">docs/deployment/monitoring.md</a>, not here. Note: Loki log shipping is on under Docker Compose but off by Spring Boot's own default outside it, see <a href="monitoring/index.html">Monitoring</a>.</p></div>
-      <div class="card"><h4>Security API reference</h4><p><a href="../security-api-endpoints.md">docs/security-api-endpoints.md</a> — endpoint-level reference for the auth/registration surface documented in <a href="security/index.html">Security</a>.</p></div>
-      <div class="card"><h4>Session refresh mechanism</h4><p><a href="../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> — the sliding-window keep-alive that extends an active session in place. Note this is <em>not</em> refresh-token rotation: that is <code>POST /api/auth/refresh</code>, a different endpoint the doc explicitly distinguishes.</p></div>
+      <div class="card"><h4>Run it locally</h4><p><a href="../deployment/local/deployment.md">docs/deployment/local/deployment.md</a> — Docker Compose stack, env vars, seed accounts, and the local observability setup.</p></div>
+      <div class="card"><h4>Observability</h4><p><a href="../lgtm-observability.md">docs/lgtm-observability.md</a> — how to query the Loki/Grafana/Tempo/Prometheus stack. The authoritative <strong>alert inventory and response actions</strong> live in <a href="../deployment/monitoring.md">docs/deployment/monitoring.md</a>. Loki shipping defaults to off (<code>${LOKI_ENABLED:false}</code> in <code>application.yaml</code>) and is enabled in prod; see <a href="monitoring/index.html">Monitoring</a>.</p></div>
+      <div class="card"><h4>Security API reference</h4><p><a href="../security-api-endpoints.md">docs/security-api-endpoints.md</a> covers only the <em>legacy</em> <code>/v1/account</code> + <code>/authenticate</code>/<code>/otp</code> surface. For the current <code>/api/auth/*</code> and registration endpoints use <a href="security/index.html">Security</a>.</p></div>
+      <div class="card"><h4>Session refresh mechanism</h4><p><a href="../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> — the sliding-window keep-alive that extends an active session in place. This is <em>not</em> refresh-token rotation (<code>POST /api/auth/refresh</code>), which the doc explicitly distinguishes.</p></div>
       <div class="card"><h4>Time handling conventions</h4><p><a href="../handling-time.md">docs/handling-time.md</a> — how the codebase handles timezones/dates.</p></div>
-      <div class="card"><h4>Frontend integration</h4><p><a href="../frontend-integration-guide.md">docs/frontend-integration-guide.md</a> and <a href="../frontend-implementation-spec.md">docs/frontend-implementation-spec.md</a>.</p></div>
-      <div class="card"><h4>Writing integration tests</h4><p><a href="../testing/readme.md">docs/testing/</a> — why tests extend <code>AbstractIntegrationTest</code> instead of copying <code>@Import(TestConfig.class)</code>, how the shared Testcontainers instances work, and the per-test database reset. <strong>Read before adding an <code>*IT</code> class.</strong></p></div>
+      <div class="card"><h4>Frontend</h4><p>Start at <a href="frontend/index.html">Frontend</a>. The older <a href="../frontend-integration-guide.md">frontend-integration-guide.md</a> and <a href="../frontend-implementation-spec.md">frontend-implementation-spec.md</a> are historical design docs and partly out of date.</p></div>
+      <div class="card"><h4>Writing integration tests</h4><p><a href="../testing/readme.md">docs/testing/</a> — why tests extend <code>AbstractIntegrationTest</code>, how the shared Testcontainers instances work, and the per-test database reset. <strong>Read before adding an <code>*IT</code> class.</strong> The number of Spring test contexts is pinned by a convention test.</p></div>
     </div>
 
     <h2>Conventions &amp; Gotchas (platform-wide)</h2>
     <div class="callout warn">
-      <p><strong>Never call <code>infrastructure.blobstore</code> directly.</strong> Only <code>filestorage</code> is allowed to. Every other module that needs to store or retrieve a file must go through <code>filestorage</code>'s own API. See <a href="filestorage/index.html">Filestorage</a> and <a href="infrastructure/index.html">Infrastructure</a>.</p>
+      <p><strong>Never call <code>infrastructure.blobstore</code> directly from a feature module.</strong> Go through <code>filestorage</code>'s API; only its <code>contract</code> exception types (e.g. <code>StorageObjectNotFoundException</code>) may be referenced elsewhere. Video is separate again: it stores media in Bunny.net via <code>infrastructure.video</code>. See <a href="filestorage/index.html">Filestorage</a> and <a href="infrastructure/index.html">Infrastructure</a>.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Dev writes email to disk instead of sending it.</strong> Since <code>ses-1.5</code>, the <code>dev</code>
-      profile runs <code>app.email.transport=log</code> — registration/verification/OTP mail included. If "I registered
-      but got no email" locally, that is expected: open the newest file in <code>target/mails</code> (names are random
-      UUIDs; grep the folder for the recipient) to find the OTP code or verification link; the verification token is
-      also always written to the database as a fallback. (<code>uat</code> still sends over SMTP.) See <a href="notification/index.html">Notification</a> and
-      <a href="infrastructure/index.html">Infrastructure</a> for the transport switch.</p>
-    </div>
-    <div class="callout">
-      <p><strong>booking vs. session</strong> — <code>booking</code> owns scheduling/calendar; <code>session</code> owns training content (drill library, plans, templates, homework). They meet only at a read-only booking snapshot and a completion event.</p>
+      <p><strong>Dev writes email to disk instead of sending it.</strong> The <code>dev</code> profile runs <code>app.email.transport=log</code> — registration/verification/OTP mail included. If "I registered but got no email" locally, open the newest file in <code>target/mails</code> (names are random UUIDs; grep the folder for the recipient) to find the OTP code or verification link. <code>uat</code> sends over SMTP and prod over SES. See <a href="notification/index.html">Notification</a>.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Session-pack credits live in <code>payment</code>, not <code>booking</code>.</strong> Booking used to own a parallel <code>SessionPackService</code>/<code>session_packs_purchased</code> system; it was deleted (migration <code>V89</code>). <code>payment.service.PackSessionService</code> and <code>payment.repo.SessionPackPurchase</code> are now the only credit system. Booking still <em>declares</em> the pack lifecycle events in <code>booking.contract</code> — payment publishes them. See <a href="payment/index.html">Payment</a>.</p>
+      <p><strong>Durable side effects go through the outbox, not <code>@TransactionalEventListener(AFTER_COMMIT)</code>.</strong> Emails, refunds, coach payouts, blob deletion and several retries are enqueued in the business transaction (typically from a <code>BEFORE_COMMIT</code> listener calling a <code>MANDATORY</code> enqueue) and drained afterwards. Handlers must be idempotent. See <a href="outbox/index.html">Outbox</a>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Row locks are NOWAIT + retry.</strong> Hot rows (coach profile, booking, wallet, drill, review…) are locked with <code>findByIdForUpdate</code> using NOWAIT and wrapped in <code>PessimisticLockRetryer</code>. Never write inside the retried lambda; <code>PessimisticLockRetryerCallSiteAuditTest</code> pins the number of call sites, so adding one means updating it. See <a href="database/index.html">Database</a>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Mind the ID spaces.</strong> <code>Booking.playerId</code> is a <code>PlayerProfile</code> primary key, not a <code>User</code> id; resolve the human via <code>PlayerProfile.userId</code> / <code>parentId</code>. A child's GDPR request carries the parent's <code>user_id</code> plus a <code>player_id</code> scope.</p>
     </div>
     <div class="callout">
-      <p><strong>Background work is centrally catalogued.</strong> 30 <code>@Scheduled</code> methods run across 9 modules, but only 9 of them are ShedLock-guarded — the rest run concurrently on every instance. Rather than hunting for them per module, start at <a href="scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
+      <p><strong>booking vs. session</strong> — <code>booking</code> owns scheduling and the booking lifecycle; <code>session</code> owns training content. They are coupled in both directions: booking reads session's drill/session repositories and <code>DrillUsagePolicy</code>; session listens to <code>BookingStatusChangedEvent</code> and uses <code>BookingQueryService</code> for the template-deploy picker.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Session-pack credits live in <code>payment</code>, not <code>booking</code>.</strong> Booking's old parallel <code>SessionPackService</code>/<code>session_packs_purchased</code> system is gone. <code>payment.service.PackSessionService</code> and <code>payment.repo.SessionPackPurchase</code> are the only credit system; booking still <em>declares</em> pack lifecycle events in <code>booking.contract</code>, which payment publishes.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Migrations were rebaselined.</strong> V02–V137 were squashed into <code>V138</code> (schema) and <code>V139</code> (seed data); new migrations continue from there (currently up to V175). Old migration numbers cited in commits or comments exist only in git history. See <a href="database/index.html">Database</a>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Background work is centrally catalogued.</strong> 40 <code>@Scheduled</code> methods run across 11 platform modules plus infrastructure; 31 are ShedLock-guarded and the other 9 are safe per instance by design (per-node state or <code>SKIP LOCKED</code> claims). Start at <a href="scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Email links are hash-routed.</strong> The frontend uses hash-mode routing, so backend links into the app must be built with <code>FrontendLinkBuilder</code> (<code>&lt;frontendUrl&gt;/#/...</code>), never by string concatenation.</p>
     </div>
 
-    <footer class="page-footer">Skillars developer documentation — generated for onboarding.</footer>
+    <footer class="page-footer">Skillars developer documentation — generated for onboarding; last refreshed against master <code>afb977a7</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="assets/mermaid.min.js"></script>

@@ -20,8 +20,9 @@
         <li><a href="../development/index.html">Development</a></li>
         <li><a href="../payment/index.html">Payment</a></li>
         <li><a href="../messaging/index.html">Messaging</a></li>
-        <li><a href="../reviews/index.html" class="active">Reviews</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
         <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
         <li><a href="../admin/index.html">Admin</a></li>
         <li><a href="../security/index.html">Security</a></li>
         <li><a href="../filestorage/index.html">Filestorage</a></li>
@@ -33,6 +34,7 @@
         <li><a href="../infrastructure/index.html">Infrastructure</a></li>
         <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
         <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
       </ul>
     </nav>
   </aside>
@@ -43,118 +45,144 @@
 
     <h2>Business Overview</h2>
     <p>
-      The <code>reviews</code> module is how Skillars builds trust in the coach marketplace: after a session, the
-      Player or Parent who booked it can leave a 1&ndash;5 star rating and an optional written review for the coach.
-      Those reviews feed <code>marketplace</code>'s coach profile (average rating + review count) and give the coach
-      a way to respond publicly once. Because reviews are user-generated content visible to strangers &mdash; and the
-      platform serves minors &mdash; nothing goes live unmoderated: every non-blank review body is screened by an AI
-      content check before it is shown, and any live review can be flagged by other users and escalated to a human
-      admin queue.
+      The <code>reviews</code> module is how Skillars builds trust in the coach marketplace. After a session, the
+      Player or Parent behind it can leave a 1&ndash;5 star rating and an optional written review for the coach.
+      Reviews feed <code>marketplace</code>'s coach profile (average rating and review count, plus the first page of
+      reviews embedded in the public profile DTO), and the coach can reply publicly once. Reviews are user-generated
+      content visible to strangers, and the platform serves minors, so nothing goes live unmoderated. Every non-blank
+      body is screened by an AI content check before it is shown, any live review can be flagged and escalated to a
+      human admin queue, and a blocked review can be appealed.
     </p>
     <p>Key business rules found in the code:</p>
     <ul>
-      <li><strong>Only Players and Parents can author reviews</strong> (<code>AuthorRole</code> has just
-        <code>PARENT</code>/<code>PLAYER</code>) &mdash; coaches cannot review themselves or other coaches. The
-        submit-review endpoint itself only requires "authenticated" at the security layer; the actual role
-        restriction happens inside <code>ReviewSubmissionService</code> via <code>AuthorRole.valueOf(...)</code>,
-        which rejects anything else with <code>AUTHOR_ROLE_NOT_ALLOWED</code>.</li>
-      <li><strong>You must have a completed session with the coach that has had time to settle.</strong>
-        <code>checkEligibility</code> calls into <code>booking</code> to confirm a completed booking exists that is
-        OLDER than a config-driven maturity floor (<code>reviews.minSessionAgeDays</code>, default 7 days) &mdash; a
-        lower bound, not a window: there is no upper bound, so a session from months ago still qualifies for a first
-        review (skillars-deferred-145). The author must also be the player themselves or that player's linked parent
-        (resolved via <code>PlayerProfile.userId</code>/<code>parentId</code>, not <code>Booking.playerId</code>), and
-        no dispute the author themselves raised against the coach may currently be open
-        (<code>admin.disputes</code>, status not <code>RESOLVED</code>/<code>DISMISSED</code>) &mdash; a coach-raised
-        dispute does not block the author's own review.</li>
-      <li><strong>One review per author/coach pair, ever.</strong> Enforced both in application logic
-        (<code>existsByAuthorIdAndCoachId</code>) and by a DB unique constraint (caught as
-        <code>ALREADY_SUBMITTED</code>). An existing review can be <em>updated</em> instead of re-submitted, subject
-        to a configurable rolling cooldown since the author's own last edit
-        (<code>reviews.updateCooldownDays</code>, default 30 days, <code>UPDATE_TOO_SOON</code>) <em>and</em> a fresh
-        qualifying session completed since that last edit &mdash; re-editing isn't just time-gated, it has to be
-        backed by genuinely new training activity.</li>
-      <li><strong>Rating scale is 1&ndash;5</strong>, body is optional and capped at 1000 characters
-        (<code>SubmitReviewRequest</code>).</li>
-      <li><strong>Nothing is public until moderated.</strong> Every new/updated review starts <code>PENDING</code>.
-        A blank body is auto-<code>APPROVED</code> immediately (nothing to screen); a non-blank body is sent to
-        Gemini for a safety verdict, landing on <code>APPROVED</code>, <code>BLOCKED</code>, or
-        <code>UNDER_REVIEW</code> (held for a human admin).</li>
-      <li><strong>Community flagging can pull a live review back out of public view.</strong> Any authenticated user
-        other than the review's author or the reviewed coach can flag a review; once open flags on an
-        <code>APPROVED</code> review reach a threshold (<code>reviews.autoHoldFlagThreshold</code>, default 3), it
-        auto-transitions to <code>UNDER_REVIEW</code> and disappears from the public list and the rating average
+      <li><strong>Only Players and Parents can author reviews.</strong> <code>POST /api/reviews/coaches/{coachId}</code>
+        and the eligibility pre-check are gated by <code>HAS_PARENT_OR_PLAYER_ROLE</code> at the API boundary.
+        <code>ReviewSubmissionService</code> also runs <code>AuthorRole.valueOf(...)</code> (only <code>PARENT</code>/<code>PLAYER</code>)
+        as defense in depth, which rejects anything else with <code>AUTHOR_ROLE_NOT_ALLOWED</code>.</li>
+      <li><strong>You need a completed session with the coach that has had time to settle.</strong>
+        <code>evaluateEligibility</code> calls <code>BookingRepository.findQualifyingCompletedBookings</code>, which
+        returns <code>COMPLETED</code> bookings with <code>updatedAt</code> at least <code>reviews.minSessionAgeDays</code>
+        old (default 7, bounded 1&ndash;358). This is a lower bound only, with no upper bound: a session from months ago
+        still qualifies (skillars-deferred-145). The author must be the player (<code>PlayerProfile.userId</code>) or that
+        player's linked parent (<code>PlayerProfile.parentId</code>). Ownership is a JOIN on the <em>current</em>
+        PlayerProfile, never <code>Booking.playerId</code> compared against a user id. Finally, no dispute that the
+        <em>author</em> raised against the coach may be open (<code>DisputeRepository.existsActiveDisputeByAuthor</code>,
+        status not RESOLVED/DISMISSED). A coach-raised dispute does not block the review.</li>
+      <li><strong>One review per author/coach pair, ever.</strong> This is checked in code
+        (<code>existsByAuthorIdAndCoachId</code>) and by the unique constraint <code>uq_coach_reviews_author_coach</code>
+        (translated to <code>ALREADY_SUBMITTED</code>). An existing review can be <em>updated</em> instead, subject to a
+        rolling cooldown since <code>lastModifiedAt</code> (<code>reviews.updateCooldownDays</code>, default 30, bounded
+        1&ndash;365, <code>UPDATE_TOO_SOON</code>) <em>and</em> a new qualifying session completed after the author's own
+        last edit. An edit has to be backed by new training activity.</li>
+      <li><strong>Rating is 1&ndash;5</strong> (DB CHECK <code>coach_reviews_rating_check</code>). The body is optional and up
+        to 1000 characters (<code>SubmitReviewRequest</code>). A coach response is 1&ndash;500 characters.</li>
+      <li><strong>Nothing is public until moderated.</strong> Every new or updated review starts <code>PENDING</code>.
+        A blank body is auto-<code>APPROVED</code> (nothing to screen). A non-blank body goes to Gemini and ends up
+        <code>APPROVED</code>, <code>BLOCKED</code> or <code>UNDER_REVIEW</code> (held for a human, with a
+        <code>heldReason</code>). A review that is <code>UNDER_REVIEW</code> or <code>BLOCKED</code> cannot be edited by its author
+        (<code>EDIT_NOT_PERMITTED</code>).</li>
+      <li><strong>Community flagging can pull a live review out of public view.</strong> Any authenticated user other
+        than the author or the reviewed coach can flag a review once. When open flags on an <code>APPROVED</code> review
+        reach <code>reviews.autoHoldFlagThreshold</code> (default 3, bounded 1&ndash;1000), the review moves to
+        <code>UNDER_REVIEW</code> (<code>FLAG_THRESHOLD</code>) and leaves the public list and the rating average
         until an admin resolves it.</li>
-      <li><strong>A coach may respond exactly once</strong>, and only to a review that is currently
-        <code>APPROVED</code>. Editing the underlying review (by the author) wipes any existing coach response and
-        re-queues the review for moderation.</li>
+      <li><strong>A coach may respond exactly once</strong>, and only to an <code>APPROVED</code> review. If the author
+        edits the review, any coach response is wiped and the review goes back into moderation.</li>
+      <li><strong>A blocked review can be appealed.</strong> <code>admin.AppealService</code> handles subject type
+        <code>REVIEW_BLOCK</code>. Upholding the appeal calls <code>AdminReviewService.approveReview</code>, but only if the
+        review is still <code>BLOCKED</code> under the lock.</li>
     </ul>
+    <p>
+      Frontend: <code>src/frontend/src/pages/marketplace/CoachPublicProfilePage.vue</code> (public list with the
+      newest/highest/lowest sort, eligibility-gated "Write a review", flag action in
+      <code>components/marketplace/ReviewFlagAction.vue</code>), <code>pages/coach/CoachReviewsPage.vue</code> (the coach's own
+      reviews and one-time response), and <code>components/admin/ReviewModerationPanel.vue</code> inside
+      <code>pages/admin/AdminModerationPage.vue</code> (admin queue). Blocked-review appeals go through
+      <code>pages/admin/AdminAppealsPage.vue</code>.
+    </p>
 
     <h2>Technical Overview</h2>
     <h3>Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
-      <tr><td><code>api</code></td><td><code>ReviewResource</code> (all player/parent/coach-facing REST endpoints under <code>/api/reviews</code>) and <code>ReviewApiAdvice</code>, a module-scoped <code>@RestControllerAdvice</code> that maps <code>OperationNotAllowedException</code>/<code>ReviewErrorCode</code> to the correct HTTP status and turns bean-validation failures on the review/response body into <code>reviews.bodyTooLong</code>/<code>reviews.responseTooLong</code>/<code>reviews.validationError</code>.</td></tr>
-      <tr><td><code>contract</code></td><td>The module's public surface: request/response records (<code>SubmitReviewRequest</code>, <code>ReviewFlagRequest</code>, <code>CoachResponseRequest</code>, <code>BlockReviewRequest</code>, DTOs and paged list responses), enums (<code>AuthorRole</code>, <code>ReviewModerationStatus</code>, <code>HeldReason</code>, <code>ReviewFlagReason</code>), <code>ReviewErrorCode</code>, and the three domain events (<code>ReviewSubmittedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>ReviewModerationResolvedEvent</code>). <code>AdminReviewQueueEntryDto</code>/<code>ReviewFlagDto</code>/<code>BlockReviewRequest</code> exist here specifically so the <code>admin</code> module can consume this module's shapes without reaching into <code>repo</code>.</td></tr>
-      <tr><td><code>repo</code></td><td>JPA entities <code>CoachReview</code> and <code>ReviewFlag</code> plus their Spring Data repositories, including the native/aggregate queries used for rating computation and GDPR erasure.</td></tr>
-      <tr><td><code>service</code></td><td>All business logic: <code>ReviewSubmissionService</code> (submit/update/coach-response + eligibility), <code>ReviewModerationService</code> (async AI moderation), <code>ReviewFlagService</code> (community flagging + auto-hold), <code>ReviewQueryService</code> (read-only listings), <code>CoachRatingService</code> (rating aggregate recompute, shared with <code>admin</code>).</td></tr>
+      <tr><td><code>api</code></td><td><code>ReviewResource</code> (all player, parent and coach endpoints under <code>/api/reviews</code>) and <code>ReviewApiAdvice</code>, a <code>@RestControllerAdvice</code> scoped to this package <em>and</em> <code>admin.api.AdminReviewResource</code>. It maps <code>OperationNotAllowedException</code>/<code>ReviewErrorCode</code> to HTTP status and turns bean-validation failures into <code>reviews.bodyTooLong</code>/<code>reviews.responseTooLong</code>/<code>reviews.validationError</code>.</td></tr>
+      <tr><td><code>contract</code></td><td>Request and response records (<code>SubmitReviewRequest</code>, <code>ReviewFlagRequest</code>, <code>CoachResponseRequest</code>, <code>BlockReviewRequest</code>, <code>ReviewEligibilityDto</code>, DTOs and paged list responses), enums (<code>AuthorRole</code>, <code>ReviewModerationStatus</code>, <code>HeldReason</code>, <code>ReviewFlagReason</code>), <code>ReviewErrorCode</code>, and three events (<code>ReviewSubmittedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>ReviewModerationResolvedEvent</code>). <code>AdminReviewQueueEntryDto</code>/<code>ReviewFlagDto</code>/<code>BlockReviewRequest</code> live here so <code>admin</code> can use this module's shapes.</td></tr>
+      <tr><td><code>repo</code></td><td>JPA entities <code>CoachReview</code> and <code>ReviewFlag</code> with their repositories, including the locked reads, the aggregate query and the GDPR delete/anonymise queries.</td></tr>
+      <tr><td><code>service</code></td><td><code>ReviewSubmissionService</code> (submit, update, coach response, eligibility), <code>ReviewModerationService</code> (async AI moderation), <code>ReviewFlagService</code> (flagging and auto-hold), <code>ReviewQueryService</code> (read-only listings), and <code>CoachRatingService</code> (aggregate recompute, shared with <code>admin</code>). No scheduled jobs.</td></tr>
     </table>
 
     <h3>Key entities &amp; tables</h3>
+    <p>Schema <code>reviews</code>, baseline <code>V138__baseline_schema.sql</code>. Later migrations: <code>V156__reviews_eligibility_config_rework.sql</code> (drops <code>reviews.submissionWindowDays</code>, seeds <code>reviews.minSessionAgeDays</code>=7 and <code>reviews.updateCooldownDays</code>=30) and <code>V157__coach_reviews_author_last_edited_at.sql</code> (adds and backfills <code>author_last_edited_at</code>). <code>reviews.autoHoldFlagThreshold</code> is seeded in <code>V139</code>.</p>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
-      <tr><td><code>CoachReview</code></td><td><code>reviews.coach_reviews</code></td><td>One row per author/coach pair. Carries <code>rating</code> (1&ndash;5), optional <code>body</code> (max 1000 chars), <code>moderationStatus</code> (<code>PENDING</code>/<code>APPROVED</code>/<code>BLOCKED</code>/<code>UNDER_REVIEW</code>), <code>heldReason</code> (<code>GEMINI_UNCERTAIN</code>/<code>GEMINI_FAILURE</code>/<code>FLAG_THRESHOLD</code>/<code>MANUAL</code>) set only while held, and a single <code>coachResponseBody</code>/<code>coachResponseAt</code> pair for the coach's one-time reply.</td></tr>
-      <tr><td><code>ReviewFlag</code></td><td><code>reviews.review_flags</code></td><td>One row per (review, flagger). Carries a <code>reason</code> enum, free-text <code>details</code>, and a nullable <code>resolvedAt</code> &mdash; open flags have <code>resolvedAt == null</code> and are what drives the auto-hold threshold and the admin queue's flag count.</td></tr>
+      <tr><td><code>CoachReview</code></td><td><code>reviews.coach_reviews</code></td><td>UUID PK <code>review_id</code>, one row per author/coach. Fields: <code>author_id</code> (user id; <code>0</code> after GDPR anonymisation), <code>author_role</code>, <code>rating</code>, optional <code>body</code> (≤1000), <code>moderation_status</code> (PENDING/APPROVED/BLOCKED/UNDER_REVIEW), and <code>held_reason</code> (GEMINI_UNCERTAIN/GEMINI_FAILURE/FLAG_THRESHOLD/MANUAL; set only while held, cleared by admin; nothing writes MANUAL today). Also a single <code>coach_response_body</code> (≤500) and <code>coach_response_at</code> pair, <code>last_modified_at</code> (written by the author <em>and</em> by moderation), <code>author_last_edited_at</code> (author writes only), and <code>moderation_epoch</code> (bumped on every edit; see gotchas).</td></tr>
+      <tr><td><code>ReviewFlag</code></td><td><code>reviews.review_flags</code></td><td>One row per (review, flagger), enforced by the unique <em>index</em> <code>review_flags_unique_flagger</code>. <code>reason</code> is a <code>ReviewFlagReason</code> (FAKE_REVIEW, OFFENSIVE_CONTENT, CONFLICT_OF_INTEREST, OTHER), with <code>details</code> (≤500) and a nullable <code>resolved_at</code>. Open flags (<code>resolved_at IS NULL</code>) drive the auto-hold threshold.</td></tr>
+      <tr><td><em>(admin)</em> <code>ReviewModerationLog</code></td><td><code>reviews.review_moderation_log</code></td><td>The entity lives in <code>admin.repo</code> even though the table is in this schema. It records one row per admin approve/block (<code>action</code> CHECK APPROVED/BLOCKED, plus an optional <code>reason</code>).</td></tr>
     </table>
 
     <h3>Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>ReviewSubmissionService</code></td><td>Validates coach existence and booking-eligibility (maturity floor, parent/self identity, active-dispute gate), enforces one-review-per-pair and the configurable rolling edit cooldown, persists <code>PENDING</code> reviews/edits, publishes <code>ReviewSubmittedEvent</code>, and handles the coach's one-time response (locked via <code>findByIdForUpdate</code> pessimistic write).</td></tr>
-      <tr><td><code>ReviewModerationService</code></td><td>Listens for <code>ReviewSubmittedEvent</code> <em>after commit</em>, calls <code>infrastructure.gemini.GeminiClient</code> with the review body wrapped in a delimiter-fenced prompt, maps the verdict to a moderation status in a brand-new <code>REQUIRES_NEW</code> transaction, and triggers <code>CoachRatingService.recompute</code> when a review becomes <code>APPROVED</code> or <code>BLOCKED</code>. The write is guarded so a late AI verdict can never overwrite a decision already recorded — see gotchas.</td></tr>
-      <tr><td><code>ReviewFlagService</code></td><td>Validates a flag isn't self-directed (by the author or by the reviewed coach), de-dupes per flagger (DB unique index as backstop), auto-escalates an <code>APPROVED</code> review to <code>UNDER_REVIEW</code> once open flags cross a config threshold, and publishes <code>ReviewFlaggedEvent</code>.</td></tr>
-      <tr><td><code>ReviewQueryService</code></td><td>Read-only listings: public paginated approved reviews (sortable newest/highest/lowest), a coach's view of <em>all</em> their own reviews regardless of status, and a single author's own review for a given coach.</td></tr>
-      <tr><td><code>CoachRatingService</code></td><td>Single source of truth for recomputing a coach's average rating and review count from <code>APPROVED</code> reviews (one atomic count+avg query to avoid a TOCTOU race) and pushing it onto the coach's marketplace profile. Called by this module and directly by <code>admin</code>'s moderation actions.</td></tr>
+      <tr><td><code>ReviewSubmissionService</code></td><td>Checks the coach exists and runs eligibility (maturity floor, parent/self ownership, active-dispute gate). Enforces one review per pair and the edit cooldown, saves <code>PENDING</code> reviews and edits, and publishes <code>ReviewSubmittedEvent</code> carrying the <code>moderationEpoch</code>. Also handles the one-time coach response. <code>submitReview</code> runs <code>REQUIRES_NEW</code> so that a caught duplicate-key violation can never surface as <code>UnexpectedRollbackException</code>. <code>checkWriteEligibility</code> backs the read-only pre-check endpoint.</td></tr>
+      <tr><td><code>ReviewModerationService</code></td><td>Listens for <code>ReviewSubmittedEvent</code> <em>after commit</em> and calls <code>GeminiClient</code> outside any transaction. The body is truncated to <code>platform.reviews.moderation.gemini.max-input-chars</code> (2000) and delimiter-fenced, and the prompt is <code>platform.reviews.moderation.gemini.prompt-template</code>. The verdict is written in a new <code>REQUIRES_NEW</code> transaction, guarded by epoch and status. It calls <code>CoachRatingService.recompute</code> on <code>APPROVED</code>/<code>BLOCKED</code>.</td></tr>
+      <tr><td><code>ReviewFlagService</code></td><td>Runs <code>REQUIRES_NEW</code>. Rejects self-flags (author or reviewed coach) and duplicates (unique index as backstop), all before taking the row lock. It then locks the review, inserts the flag, auto-holds an <code>APPROVED</code> review at the threshold (recomputing the aggregate), and publishes <code>ReviewFlaggedEvent</code>.</td></tr>
+      <tr><td><code>ReviewQueryService</code></td><td>Read-only, page size 10. Public list of <code>APPROVED</code> reviews (<code>sort=newest|highest|lowest</code>), the coach's own reviews in any status (newest <code>lastModifiedAt</code> first), the author's own review for one coach, and <code>getFirstPageForCoach</code>, which <code>marketplace.CoachMarketplaceResource</code> embeds in <code>CoachProfileDto.reviews</code>.</td></tr>
+      <tr><td><code>CoachRatingService</code></td><td>The only writer of a coach's rating aggregate. One <code>COUNT+AVG</code> query over <code>APPROVED</code> rows, average rounded to one decimal, then <code>CoachProfileRepository.updateRatingAggregate</code>. Called by this module and by <code>admin.AdminReviewService</code>.</td></tr>
     </table>
 
     <h3>REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
-      <tr><td>GET</td><td><code>/api/reviews/coaches/me</code></td><td>Coach lists all of their own reviews, any moderation status</td><td>ROLE_COACH</td></tr>
-      <tr><td>GET</td><td><code>/api/reviews/coaches/{coachId}</code></td><td>Public paginated list of a coach's <code>APPROVED</code> reviews (<code>sort=newest|highest|lowest</code>)</td><td>Public</td></tr>
-      <tr><td>POST</td><td><code>/api/reviews/coaches/{coachId}</code></td><td>Submit a new review for a coach</td><td>Authenticated (Player/Parent by business rule)</td></tr>
-      <tr><td>PATCH</td><td><code>/api/reviews/{reviewId}</code></td><td>Update the caller's own review (re-queues for moderation)</td><td>Authenticated, author only</td></tr>
-      <tr><td>GET</td><td><code>/api/reviews/me/coaches/{coachId}</code></td><td>Caller's own review for one coach, any status</td><td>Authenticated</td></tr>
-      <tr><td>POST</td><td><code>/api/reviews/{reviewId}/flag</code></td><td>Flag a review for moderation</td><td>Authenticated (not author, not the reviewed coach)</td></tr>
-      <tr><td>POST</td><td><code>/api/reviews/{reviewId}/response</code></td><td>Coach posts their one-time response to an approved review</td><td>ROLE_COACH, must own the review's coach profile</td></tr>
-      <tr><td>GET</td><td><code>/api/admin/reviews/queue?status=UNDER_REVIEW</code></td><td>Admin: paginated moderation queue (<code>AdminReviewResource</code>, in <code>admin</code>)</td><td>ROLE_ADMIN</td></tr>
-      <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/approve</code></td><td>Admin approves a held review, resolves its flags</td><td>ROLE_ADMIN</td></tr>
-      <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/block</code></td><td>Admin permanently blocks a review from public view</td><td>ROLE_ADMIN</td></tr>
+      <tr><td>GET</td><td><code>/api/reviews/coaches/me</code></td><td>The coach's own reviews in any moderation status, <code>?page</code></td><td><code>HAS_COACH_ROLE</code></td></tr>
+      <tr><td>GET</td><td><code>/api/reviews/coaches/{coachId}</code></td><td>Public paged list of a coach's <code>APPROVED</code> reviews. <code>?page</code> (size 10), <code>?sort=newest|highest|lowest</code>; an unknown value falls back to newest.</td><td>Public (<code>IS_PERMIT_ALL</code>)</td></tr>
+      <tr><td>GET</td><td><code>/api/reviews/coaches/{coachId}/eligibility</code></td><td>Pre-check for the "Write a review" button. Returns <code>{eligible, reasonCode}</code>, where <code>reasonCode</code> is <code>reviews.noQualifyingSession</code>, <code>reviews.activeDispute</code> or null. Answers the <em>write</em> question only (it does not check whether you already have a review).</td><td><code>HAS_PARENT_OR_PLAYER_ROLE</code></td></tr>
+      <tr><td>POST</td><td><code>/api/reviews/coaches/{coachId}</code></td><td>Submit a new review. Returns <code>201 {reviewId}</code>.</td><td><code>HAS_PARENT_OR_PLAYER_ROLE</code></td></tr>
+      <tr><td>PATCH</td><td><code>/api/reviews/{reviewId}</code></td><td>Update your own review (moves it back into moderation and clears the coach response). Returns <code>204</code>.</td><td>Authenticated, author only (otherwise <code>403 authorMismatch</code>)</td></tr>
+      <tr><td>GET</td><td><code>/api/reviews/me/coaches/{coachId}</code></td><td>Your own review for one coach, any status (<code>403 reviewNotFound</code> if there is none)</td><td>Authenticated</td></tr>
+      <tr><td>POST</td><td><code>/api/reviews/{reviewId}/flag</code></td><td>Flag a review (<code>{reason, details}</code>). Returns <code>201 {flagId}</code>.</td><td>Authenticated (not the author, not the reviewed coach)</td></tr>
+      <tr><td>POST</td><td><code>/api/reviews/{reviewId}/response</code></td><td>The coach's one-time response to an approved review. Returns <code>204</code>.</td><td><code>HAS_COACH_ROLE</code>, must own the review's coach profile</td></tr>
+      <tr><td>GET</td><td><code>/api/admin/reviews/queue</code></td><td>Admin queue (<code>AdminReviewResource</code>, in <code>admin</code>). Only <code>status=UNDER_REVIEW</code> is accepted (anything else returns 400). Page size 20, oldest <code>lastModifiedAt</code> first, with flags, <code>heldReason</code> and coach name per row.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
+      <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/approve</code></td><td>Approve the review (from any status except APPROVED), resolve its open flags, recompute the aggregate</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
+      <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/block</code></td><td>Block the review (<code>{reason}</code>, 1&ndash;500 characters) and resolve its open flags. Recomputes the aggregate only if the review was APPROVED.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
+    </table>
+
+    <h3>Error mapping (<code>ReviewApiAdvice</code>)</h3>
+    <table>
+      <tr><th>HTTP</th><th>Codes</th></tr>
+      <tr><td>409</td><td><code>alreadySubmitted</code>, <code>responseAlreadySubmitted</code>, <code>alreadyFlagged</code>, <code>alreadyApproved</code>, <code>alreadyBlocked</code></td></tr>
+      <tr><td>400</td><td><code>bodyTooLong</code>, <code>responseTooLong</code>, <code>validationError</code></td></tr>
+      <tr><td>500</td><td><code>coachProfileMissing</code> (deliberately; see gotchas)</td></tr>
+      <tr><td>403</td><td>Everything else, including <code>noQualifyingSession</code>, <code>activeDispute</code>, <code>updateTooSoon</code>, <code>editNotPermitted</code>, <code>reviewNotApproved</code>, <code>coachMismatch</code>, <code>authorMismatch</code>, <code>authorRoleNotAllowed</code>, <code>cannotFlagOwnReview</code>, <code>cannotFlagOwnCoachedReview</code>, <code>reviewNotFound</code>, <code>invalidFlagger</code></td></tr>
+      <tr><td>404</td><td><code>ResourceNotFoundException</code> (unknown coach, or a review deleted under the lock), handled by the global advice</td></tr>
+      <tr><td>409 (global)</td><td>Lock contention after <code>PessimisticLockRetryer</code> runs out of retries</td></tr>
     </table>
 
     <h3>Domain events</h3>
     <ul>
-      <li><strong>Published:</strong> <code>ReviewSubmittedEvent</code> (new review or edit saved &mdash; drives async AI moderation), <code>ReviewFlaggedEvent</code> (consumed by <code>admin</code>'s <code>AdminAlertEventListener</code> to raise an <code>AdminAlert</code>, deduped so a review only ever has one OPEN flag alert), <code>ReviewModerationResolvedEvent</code> (published by <code>admin</code>'s <code>AdminReviewService</code> on approve/block &mdash; no listener currently consumes it in this codebase; it appears to be reserved for future notification wiring).</li>
-      <li><strong>Consumed:</strong> <code>ReviewModerationService</code> consumes its own module's <code>ReviewSubmittedEvent</code> via <code>@TransactionalEventListener(phase = AFTER_COMMIT)</code>.</li>
+      <li><strong><code>ReviewSubmittedEvent</code></strong> <code>(reviewId, coachId, authorId, rating, body, moderationEpoch)</code>: published by
+        <code>submitReview</code>/<code>updateReview</code> and consumed by this module's <code>ReviewModerationService</code>
+        through <code>@TransactionalEventListener(AFTER_COMMIT)</code>.</li>
+      <li><strong><code>ReviewFlaggedEvent</code></strong> <code>(reviewId, coachId, totalFlagCount, autoHeld)</code>: consumed by
+        <code>admin.AdminAlertEventListener.onReviewFlagged</code>, which raises a <code>REVIEW_FLAG</code> alert, deduplicated so a
+        review only ever has one OPEN flag alert.</li>
+      <li><strong><code>ReviewModerationResolvedEvent</code></strong> <code>(reviewId, coachId, previousStatus, newStatus)</code>:
+        published by <code>admin.AdminReviewService</code> on approve and block. <strong>Nothing listens to it</strong>, not even the
+        new notification centre, so neither the author nor the coach is told about a moderation outcome.</li>
     </ul>
     <p>
-      Dependencies on other modules/infrastructure, based on actual imports: <strong>booking</strong>
-      (<code>BookingRepository.existsRecentCompletedBookingByAuthor</code> for submission eligibility),
-      <strong>marketplace</strong> (<code>CoachProfileRepository</code> for existence checks, coach display name, and
-      the rating-aggregate write; <code>CoachProfileService</code> in <code>ReviewResource</code> to resolve a
-      coach's own id from their user id), <strong>config</strong> (<code>ConfigService</code> for the submission
-      window and auto-hold flag threshold), <strong>messaging</strong> (reuses its
-      <code>contract.ModerationVerdict</code> enum for the Gemini verdict &mdash; a small but real coupling),
-      <strong>security</strong> (<code>Principal</code>/<code>SecurityUtil</code> for caller identity,
-      <code>OperationNotAllowedException</code> for business-rule failures), and cross-cutting
-      <strong>infrastructure.gemini</strong> (<code>GeminiClient</code> for AI content moderation) and
-      <strong>infrastructure.exception</strong> (<code>ResourceNotFoundException</code>). The <strong>admin</strong>
-      module depends the other way: it reaches directly into this module's <code>repo</code>/<code>service</code>
-      classes for moderation (<code>AdminReviewService</code>) and for GDPR export/erasure
-      (<code>GdprExportService</code> dumps <code>findAllByAuthorId</code> into the user's data export;
-      <code>GdprErasureService</code> calls <code>deleteNonApprovedByAuthorId</code> and
-      <code>anonymiseApprovedReviews</code> to scrub a deleted user's identity from reviews that are still publicly
-      visible).
+      Outbound dependencies: <strong>booking</strong> (<code>BookingRepository.findQualifyingCompletedBookings</code>),
+      <strong>admin</strong> (<code>DisputeRepository.existsActiveDisputeByAuthor</code>, which is a reviews → admin repo
+      edge), <strong>security</strong> (<code>PlayerProfileRepository</code> for ownership, <code>Principal</code>/<code>SecurityUtil</code>,
+      <code>OperationNotAllowedException</code>), <strong>marketplace</strong> (<code>CoachProfileRepository</code> for
+      existence and the aggregate write, <code>CoachProfileService.getCoachIdByUserId</code> in <code>ReviewResource</code>),
+      <strong>config</strong> (<code>ConfigService</code> + <code>ConfigBounds.REVIEWS_*</code>), <strong>messaging</strong>
+      (reuses <code>contract.ModerationVerdict</code>), and <strong>infrastructure</strong> (<code>gemini.GeminiClient</code>,
+      <code>PessimisticLockRetryer</code>, <code>ResourceNotFoundException</code>). Inbound: <strong>admin</strong> reaches
+      into this module's <code>repo</code>/<code>service</code> for moderation (<code>AdminReviewService</code>), the
+      cross-domain queue (<code>AdminQueueService</code>), appeals (<code>AppealService</code>), GDPR export
+      (<code>findAllByAuthorId</code> into <code>reviews.json</code>) and erasure (<code>deleteNonApprovedByAuthorId</code> +
+      <code>anonymiseApprovedReviews</code>). <strong>marketplace</strong> embeds the first page of reviews in the public coach
+      profile.
     </p>
 
     <h2>Key Flows</h2>
@@ -170,40 +198,43 @@ sequenceDiagram
   participant G as GeminiClient
   participant CRS as CoachRatingService
 
+  U->>RR: GET /api/reviews/coaches/{coachId}/eligibility
+  RR-->>U: {eligible, reasonCode}
   U->>RR: POST /api/reviews/coaches/{coachId} {rating, body}
-  RR->>RS: submitReview(coachId, authorId, role, rating, body)
-  RS->>RS: checkEligibility (recent completed booking within window)
+  RR->>RS: submitReview(coachId, authorId, role, rating, body) [REQUIRES_NEW]
+  RS->>RS: evaluateEligibility (matured COMPLETED booking, parent/self, no author dispute)
   RS->>DB: existsByAuthorIdAndCoachId?
   alt already reviewed
     RS-->>RR: 409 reviews.alreadySubmitted
   end
-  RS->>DB: save CoachReview (status=PENDING)
+  RS->>DB: saveAndFlush CoachReview (PENDING, epoch=0)
   RS-->>RR: 201 Created {reviewId}
-  RR-->>U: 201 Created
-  RS->>RM: publish ReviewSubmittedEvent (AFTER_COMMIT)
+  RS->>RM: ReviewSubmittedEvent (delivered AFTER_COMMIT)
 
-  Note over RM: fires only after the submit TX commits
+  Note over RM: Gemini call outside any transaction
   alt body is blank
-    RM->>DB: status=APPROVED
+    RM->>RM: verdict = APPROVED
   else body present
-    RM->>G: evaluate(promptTemplate + review body)
-    G-->>RM: SAFE / UNSAFE / UNCERTAIN (or exception)
-    RM->>DB: status=APPROVED / BLOCKED / UNDER_REVIEW(heldReason)
+    RM->>G: evaluate(promptTemplate + fenced body)
+    G-->>RM: SAFE / UNSAFE / UNCERTAIN (exception = UNCERTAIN, GEMINI_FAILURE)
   end
-  alt status is APPROVED or BLOCKED
-    RM->>CRS: recompute(coachId)
-    CRS->>DB: COUNT+AVG rating where APPROVED
-    CRS->>DB: update coach's marketplace rating aggregate
+  RM->>DB: REQUIRES_NEW: findByIdForUpdateNoWait (bounded retry)
+  alt epoch changed or status no longer PENDING
+    RM->>RM: discard stale verdict
+  else
+    RM->>DB: status = APPROVED / BLOCKED / UNDER_REVIEW(heldReason)
+    opt APPROVED or BLOCKED
+      RM->>CRS: recompute(coachId)
+    end
   end
     </pre>
     <p>
-      The submission itself is synchronous and fast &mdash; the caller gets a 201 the moment eligibility and
-      uniqueness checks pass, with the review sitting <code>PENDING</code>. The AI moderation step is deliberately
-      decoupled onto a post-commit event so a slow or failing Gemini call never blocks the HTTP response, and it
-      runs in a brand-new <code>REQUIRES_NEW</code> transaction because the original request's entity manager/thread
-      is gone by the time <code>AFTER_COMMIT</code> fires. Only a non-blank body is actually sent to Gemini; a
-      rating-only review skips AI moderation entirely and goes live immediately. The coach's rating aggregate is
-      only ever recomputed on an <code>APPROVED</code>/<code>BLOCKED</code> transition, never on every write.
+      Submission is synchronous and fast. The caller gets a 201 once the eligibility and uniqueness checks pass, with
+      the review in <code>PENDING</code>. AI moderation runs from a post-commit event so a slow or failing Gemini call
+      never blocks the response. It uses a fresh <code>REQUIRES_NEW</code> transaction because the AFTER_COMMIT thread
+      still has the original, now-finished EntityManager bound. A rating-only review skips Gemini but still goes through
+      the same listener to reach <code>APPROVED</code>. The rating aggregate is recomputed only on an
+      <code>APPROVED</code>/<code>BLOCKED</code> transition, never on every write.
     </p>
 
     <h3>Community flag escalates a review, admin resolves it</h3>
@@ -219,37 +250,37 @@ sequenceDiagram
   participant AS as AdminReviewService
 
   U->>RR: POST /api/reviews/{reviewId}/flag {reason, details}
-  RR->>RFS: flag(reviewId, flaggedBy, reason, details)
-  RFS->>RFS: reject if flaggedBy is the author or the reviewed coach
-  RFS->>DB: save ReviewFlag (unique per flagger, unique index as backstop)
+  RR->>RFS: flag(reviewId, flaggedBy, reason, details) [REQUIRES_NEW]
+  RFS->>DB: unlocked projection (authorId, coachId)
+  RFS->>RFS: reject author / reviewed coach / duplicate flagger
+  RFS->>DB: findByIdForUpdateNoWait(reviewId) (bounded retry)
+  RFS->>DB: saveAndFlush ReviewFlag (unique index backstop)
   RFS->>DB: countByReviewIdAndResolvedAtIsNull
-  alt openFlagCount >= autoHoldFlagThreshold and status==APPROVED
+  alt openFlags at or above autoHoldFlagThreshold and status is APPROVED
     RFS->>DB: status=UNDER_REVIEW, heldReason=FLAG_THRESHOLD
-    RFS->>DB: CoachRatingService.recompute (drops out of public aggregate)
+    RFS->>DB: CoachRatingService.recompute
   end
-  RFS->>AL: publish ReviewFlaggedEvent
-
-  AL->>DB: insert AdminAlert(REVIEW_FLAG) unless one already OPEN
+  RFS->>AL: ReviewFlaggedEvent
+  AL->>DB: insert AdminAlert(REVIEW_FLAG) unless one is already OPEN
 
   A->>AR: GET /api/admin/reviews/queue?status=UNDER_REVIEW
   AR->>AS: getUnderReviewQueue(page)
-  AS-->>A: reviews + flag details + heldReason + coach name
-
-  A->>AR: POST /api/admin/reviews/{reviewId}/approve  (or /block)
-  AR->>AS: approveReview / blockReview(reviewId, adminId)
-  AS->>DB: status=APPROVED|BLOCKED, resolve all open flags
-  AS->>DB: CoachRatingService.recompute (if it affects the public aggregate)
-  AS->>DB: save ReviewModerationLog(action, adminId, reason)
-  AS->>AS: publish ReviewModerationResolvedEvent
+  AS-->>A: reviews + flags + heldReason + coach name
+  A->>AR: POST /api/admin/reviews/{reviewId}/approve (or /block {reason})
+  AR->>AS: approveReview / blockReview
+  AS->>DB: findByIdForUpdateNoWait, status=APPROVED|BLOCKED, heldReason=null
+  AS->>DB: resolveAllOpenFlags (WARN if any were open)
+  AS->>DB: recompute (always on approve, on block only if it was APPROVED)
+  AS->>DB: save ReviewModerationLog
+  AS->>AS: publish ReviewModerationResolvedEvent (no listener)
     </pre>
     <p>
-      A single flag never hides anything by itself &mdash; only crossing the configured threshold on a currently
-      <code>APPROVED</code> review triggers the auto-hold, and it is one-way from the flagger's perspective (no
-      unflag endpoint). Approving/blocking always resolves every open flag on that review via
-      <code>resolveAllOpenFlags</code>, so a review can't stay stuck in the queue after a decision. Blocking only
-      triggers a rating recompute if the review was previously <code>APPROVED</code> (i.e. it was actually
-      contributing to the public average); blocking a review that was still <code>PENDING</code>/<code>UNDER_REVIEW</code>
-      doesn't need one.
+      A single flag never hides anything on its own. Only crossing the threshold on a currently <code>APPROVED</code> review
+      triggers the auto-hold, and there is no unflag endpoint. Flags may also be cast on PENDING, UNDER_REVIEW or BLOCKED
+      reviews. They accumulate but cannot trigger anything, and admin approve/block resolves them all via
+      <code>resolveAllOpenFlags</code>. Approve works from any non-APPROVED status, including <code>PENDING</code>, which
+      is the only way to rescue a review whose moderation write was lost (see gotchas). The admin queue only
+      <em>lists</em> <code>UNDER_REVIEW</code> rows, though.
     </p>
 
     <h3>Coach responds once to an approved review</h3>
@@ -264,7 +295,7 @@ sequenceDiagram
   C->>RR: POST /api/reviews/{reviewId}/response {body}
   RR->>CPS: getCoachIdByUserId(userId)
   RR->>RS: submitCoachResponse(reviewId, coachId, body)
-  RS->>DB: findByIdForUpdate(reviewId) (pessimistic write lock)
+  RS->>DB: findByIdForUpdateNoWait(reviewId) via PessimisticLockRetryer
   alt review.coachId != coachId
     RS-->>RR: 403 reviews.coachMismatch
   end
@@ -278,114 +309,104 @@ sequenceDiagram
   RS-->>RR: 204 No Content
     </pre>
     <p>
-      The pessimistic write lock on the review row prevents a race between two concurrent response attempts (or a
-      response landing while an admin is mid-approve/block). Once set, a coach response can only be cleared by the
-      review's author editing their review, which wipes both <code>coachResponseBody</code> and
-      <code>coachResponseAt</code> and re-queues the review for moderation as if it were new.
+      The row lock stops two concurrent responses, or a response arriving mid-approve/block. A coach response is
+      <strong>not moderated</strong>: it goes live immediately on an approved review. It can only be cleared by the
+      author editing the review.
     </p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>AI-moderation failures never surface as an HTTP error &mdash; the review just goes silent.</strong>
-      <code>ReviewModerationService.handleReviewSubmitted</code> catches and swallows every exception from its
-      <code>REQUIRES_NEW</code> transaction (see the code comment referencing "Epic 10"): if the status write fails
-      after Gemini already returned a verdict, the review is left <code>PENDING</code> forever with no retry. This
-      is only resolvable today via the admin queue's manual intervention, or a DB fix &mdash; there's no automated
-      recovery path yet. Note the swallow also absorbs a lock-acquisition failure on the read described below,
-      which leaves the review <code>PENDING</code> rather than mis-resolved — the safe direction.</p>
+      <p><strong>Every locked read of <code>coach_reviews</code> is NOWAIT + bounded retry.</strong> Six call sites
+      (<code>ReviewFlagService.flag</code>, <code>ReviewSubmissionService.updateReview</code>/<code>submitCoachResponse</code>,
+      <code>AdminReviewService.approveReview</code>/<code>blockReview</code>, <code>ReviewModerationService.handleReviewSubmitted</code>)
+      plus <code>AppealService.reverseReviewBlock</code> use <code>CoachReviewRepository.findByIdForUpdateNoWait</code>
+      (lock timeout 0) wrapped in <code>PessimisticLockRetryer.withBoundedRetry</code> (skillars-deferred-135). The blocking
+      <code>findByIdForUpdate</code> is kept but has no callers. When a call site has already loaded the entity unlocked
+      (<code>updateReview</code>), it must <code>entityManager.refresh(locked, PESSIMISTIC_WRITE)</code> and check
+      status, cooldown <em>and</em> eligibility again on the fresh instance. <code>flag()</code> avoids that by reading an
+      unlocked scalar projection (<code>findAuthorAndCoachIdByReviewId</code>), so the locked read is the first entity load.</p>
     </div>
     <div class="callout warn">
-      <p><strong>The AI verdict must lose to any decision already recorded.</strong> The Gemini call runs
-      <em>outside</em> any transaction and can take seconds — ample room for an admin to resolve the review
-      meanwhile. So the write-back reads with <code>findByIdForUpdate</code> and then refuses to write unless the
-      row is still <code>PENDING</code>. <code>PENDING</code> is the whole guard:
-      <code>ReviewSubmissionService.submitReview</code>/<code>updateReview</code> are the only publishers of
-      <code>ReviewSubmittedEvent</code> and both set <code>PENDING</code> immediately before publishing, so it is
-      the only status this delivery may claim. Everything else wins — admin approve/block, and
-      <code>ReviewFlagService</code>'s auto-hold at the flag threshold. It also makes a duplicate event delivery
-      idempotent for free.</p>
-      <p>Two subtleties if you touch this: because <code>REQUIRES_NEW</code> suspends the AFTER_COMMIT thread's
-      stale <code>EntityManager</code>, the locked query is the transaction's first read of the row and returns
-      fresh DB state — so it needs no <code>entityManager.refresh()</code> (contrast
-      <code>BookingService.createBookingRequest</code>, where an earlier <code>findById</code> forces one). And
-      <code>recompute</code> now sits <em>inside</em> the guarded branch, so a skipped write no longer recomputes
-      the coach's aggregate.</p>
+      <p><strong>The AI verdict must lose to any decision already recorded, and to any newer edit.</strong> The Gemini
+      call can take seconds, so the write-back re-reads under the lock and has two guards. First,
+      <code>moderationEpoch</code> must still equal the epoch captured in the event: <code>updateReview</code> increments it on every
+      edit, so a late verdict for an older text is dropped even though the row is PENDING again. Second, the status must still be
+      <code>PENDING</code>. Admin approve/block, the flag auto-hold and duplicate deliveries all win.
+      <code>recompute</code> sits inside the guarded branch, so a skipped write never recomputes.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>A failed moderation write leaves the review stuck in <code>PENDING</code>, and the admin queue will not show it.</strong>
+      <code>handleReviewSubmitted</code> catches every exception from its <code>REQUIRES_NEW</code> block, including
+      lock-retry exhaustion. Unlike messaging, there is no sweeper, and <code>GET /api/admin/reviews/queue</code> rejects any
+      status other than <code>UNDER_REVIEW</code>. The review is invisible to the public and to the queue until someone
+      calls <code>POST /api/admin/reviews/{id}/approve</code> or <code>/block</code> by id (both accept PENDING) or fixes the
+      DB. Separately, a Gemini <em>failure</em> is not stuck: it becomes <code>UNDER_REVIEW/GEMINI_FAILURE</code> and does reach the queue.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>The update cooldown and the "new session" bound use two different timestamps, on purpose.</strong>
+      <code>UPDATE_TOO_SOON</code> checks <code>lastModifiedAt</code>, which three non-author writers also touch
+      (<code>AdminReviewService.approveReview</code>/<code>blockReview</code>, <code>ReviewFlagService</code>'s auto-hold), so a
+      moderation action also delays the next edit. The eligibility re-check's "new session since last edit" bound uses
+      <code>author_last_edited_at</code>, which only <code>submitReview</code>/<code>updateReview</code> write (V157), so a
+      moderation action cannot void a qualifying session the author already earned.</p>
     </div>
     <div class="callout">
-      <p><strong><code>ReviewApiAdvice</code> also handles <code>admin.api.AdminReviewResource</code>.</strong>
-      Its <code>@RestControllerAdvice</code> combines <code>basePackages</code> with
-      <code>assignableTypes</code> (OR semantics), because <code>AdminReviewResource</code> lives in
-      <code>platform.admin.api</code> but raises review-domain errors and needs review-shaped responses. The class
-      is referenced fully-qualified rather than imported, to avoid an import-level
-      <code>reviews.api → admin.api</code> dependency. Consequence worth knowing: this routes <em>every</em>
-      exception from <code>AdminReviewResource</code> here, including bean-validation failures on
-      <code>/block</code>.</p>
+      <p><strong>Maturity is measured on <code>Booking.updatedAt</code>, not the session time.</strong>
+      <code>findQualifyingCompletedBookings</code> filters <code>b.updatedAt &lt;= now - minSessionAgeDays</code>. Any later write
+      to a COMPLETED booking row, such as an admin force-complete, a dispute side effect or a recap update, restarts the
+      7-day clock. The query is capped at 50 distinct player ids, and hitting the cap logs a WARN.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>ReviewApiAdvice</code> also handles <code>admin.api.AdminReviewResource</code>.</strong> It combines
+      <code>basePackages</code> with <code>assignableTypes</code> (OR semantics). The class is referenced fully-qualified to
+      avoid an import-level <code>reviews.api → admin.api</code> edge. As a result, <em>every</em> exception from
+      <code>AdminReviewResource</code> lands here, including bean-validation failures on <code>/block</code>.</p>
     </div>
     <div class="callout">
       <p><strong><code>COACH_PROFILE_MISSING</code> is deliberately a 500, not a 409.</strong> An orphaned
-      <code>coach_profiles</code> reference is a data-integrity failure the caller neither caused nor can fix by
-      retrying — unlike <code>ALREADY_BLOCKED</code>, which is a genuine conflict. Filing it as 4xx would bury it
-      in the "user error" bucket that 5xx-keyed alerting never looks at. It should be unreachable in production
-      (<code>GdprErasureService</code> anonymises coach profiles rather than deleting them), so if it ever fires it
-      should page. Keep the branch explicit: the advice's fallback is <strong>403</strong>, so a newly added
-      <code>ReviewErrorCode</code> that nobody lists silently becomes <code>FORBIDDEN</code> instead of reaching
-      any 5xx.</p>
-    </div>
-    <div class="callout warn">
-      <p><strong>The update cooldown and the "new session" bound anchor on two different timestamps, on
-      purpose.</strong> <code>updateReview</code> throws <code>UPDATE_TOO_SOON</code> when
-      <code>lastModifiedAt.isAfter(now - reviews.updateCooldownDays days)</code> &mdash; and
-      <code>lastModifiedAt</code> has three non-author writers (<code>AdminReviewService.approveReview</code>/
-      <code>blockReview</code>, <code>ReviewFlagService</code>'s auto-hold), so a moderation action legitimately
-      delays the next edit too. The <em>eligibility</em> re-check's "new session since last edit" bound deliberately
-      does <strong>not</strong> share that column &mdash; it anchors on a dedicated
-      <code>author_last_edited_at</code>, written only from <code>updateReview</code> itself
-      (skillars-deferred-145 code review, D1), so a moderation action can delay your next edit without silently
-      voiding a qualifying session you already earned.</p>
+      <code>coach_profiles</code> reference is a data-integrity failure the caller can neither cause nor fix. It should be
+      unreachable, because <code>GdprErasureService</code> anonymises coach profiles rather than deleting them, so if it fires
+      it should page. Keep the branch explicit: the advice falls back to <strong>403</strong>, so an unlisted new
+      <code>ReviewErrorCode</code> silently becomes FORBIDDEN.</p>
     </div>
     <div class="callout">
-      <p><strong>Rating math lives in exactly one place.</strong> <code>CoachRatingService.recompute</code> is the
-      only code path allowed to write a coach's aggregate rating/count onto their marketplace profile, and it uses a
-      single combined COUNT+AVG query specifically to avoid a TOCTOU race between two separate reads. Both this
-      module and <code>admin</code>'s moderation actions call it directly after any status change that could affect
-      the <code>APPROVED</code> set &mdash; never update the aggregate ad hoc elsewhere.</p>
+      <p><strong>Public sort is by <code>lastModifiedAt</code>, with deterministic tie-breaks.</strong> "newest" means
+      <code>lastModifiedAt DESC, reviewId ASC</code>. "highest" and "lowest" sort by rating, then
+      <code>lastModifiedAt DESC</code>, then <code>reviewId ASC</code>. Rating alone has many ties on a 1&ndash;5 scale, and OFFSET
+      paging over a non-total order repeats or skips rows between "load more" pages. Because a moderation action also bumps
+      <code>lastModifiedAt</code>, an admin approval moves an old review to the top of "newest".</p>
     </div>
     <div class="callout">
-      <p><strong>Role enforcement for submission is business logic, not a security annotation.</strong>
-      <code>POST /api/reviews/coaches/{coachId}</code> only requires <code>IS_AUTHENTICATED</code>; the actual
-      "only Players/Parents" rule is enforced inside <code>ReviewSubmissionService</code> via
-      <code>AuthorRole.valueOf(role)</code>, which throws <code>AUTHOR_ROLE_NOT_ALLOWED</code> for anything else
-      (e.g. a coach calling their own endpoint). Don't assume the <code>@PreAuthorize</code> annotation tells you
-      the full authorization story for this endpoint.</p>
+      <p><strong>Rating math lives in exactly one place.</strong> <code>CoachRatingService.recompute</code> is the only code that
+      writes a coach's aggregate. It uses one combined COUNT+AVG query to avoid a TOCTOU race. Call it after any status
+      change that can affect the <code>APPROVED</code> set, and never update the aggregate anywhere else.</p>
     </div>
     <div class="callout">
       <p><strong>GDPR erasure treats <code>APPROVED</code> reviews differently from everything else.</strong>
-      When a user is erased, <code>admin</code>'s <code>GdprErasureService</code> deletes all of that author's
-      non-approved reviews outright but only <em>anonymises</em> their approved ones (sets <code>author_id = 0</code>
-      via a native update, since a live review is still useful social proof for the coach). If you add a new
-      reviews field containing PII, it needs to be scrubbed in that same erasure path.</p>
+      <code>GdprErasureService</code> deletes all of the author's non-approved reviews but only <em>anonymises</em>
+      approved ones (native update to <code>author_id = 0</code>), because a live review is still useful social proof. Public
+      DTOs never expose author identity, only <code>authorRole</code>. If you add a review field that holds PII, scrub it in
+      that same erasure path.</p>
     </div>
 
     <h2>Related Modules</h2>
     <ul>
-      <li><a href="../booking/index.html">Booking</a> &mdash; supplies the "did this person actually have a
-        completed session with this coach recently" check that gates review submission.</li>
-      <li><a href="../marketplace/index.html">Marketplace</a> &mdash; owns the <code>CoachProfile</code> that
-        receives the recomputed rating aggregate, and resolves a logged-in coach's own coach id for the
-        self-service endpoints.</li>
-      <li><a href="../admin/index.html">Admin</a> &mdash; hosts <code>AdminReviewResource</code>/<code>AdminReviewService</code>
-        for the moderation queue (approve/block), listens for <code>ReviewFlaggedEvent</code> to raise alerts, and
-        reaches into this module's repositories directly for GDPR export/erasure.</li>
-      <li><a href="../config/index.html">Config</a> &mdash; provides the tunable submission window and
-        auto-hold flag threshold via <code>ConfigService</code>.</li>
-      <li><a href="../messaging/index.html">Messaging</a> &mdash; this module reuses its
-        <code>ModerationVerdict</code> enum for the Gemini safety verdict.</li>
-      <li><a href="../security/index.html">Security</a> &mdash; supplies the authenticated
-        <code>Principal</code>/<code>SecurityUtil</code> identity resolution and the shared
-        <code>OperationNotAllowedException</code> business-error type.</li>
-      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>infrastructure.gemini.GeminiClient</code>
-        performs the AI content-safety check; <code>infrastructure.exception.ResourceNotFoundException</code> backs
-        not-found errors.</li>
+      <li><a href="../booking/index.html">Booking</a> &mdash; <code>findQualifyingCompletedBookings</code> provides the
+        "matured completed session with this coach" check that gates submission and edits.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a> &mdash; owns the <code>CoachProfile</code> that receives the
+        recomputed aggregate, resolves a coach's own id, and embeds the first review page in the public profile.</li>
+      <li><a href="../admin/index.html">Admin</a> &mdash; <code>AdminReviewResource</code>/<code>AdminReviewService</code> (queue,
+        approve, block, <code>ReviewModerationLog</code>), <code>AppealService</code> (<code>REVIEW_BLOCK</code> appeals),
+        <code>AdminAlertEventListener</code> (<code>ReviewFlaggedEvent</code>), <code>DisputeRepository</code> (eligibility
+        gate), and GDPR export and erasure.</li>
+      <li><a href="../config/index.html">Config</a> &mdash; <code>reviews.minSessionAgeDays</code>,
+        <code>reviews.updateCooldownDays</code> and <code>reviews.autoHoldFlagThreshold</code> through <code>ConfigService</code> and
+        <code>ConfigBounds</code>.</li>
+      <li><a href="../messaging/index.html">Messaging</a> &mdash; this module reuses its <code>ModerationVerdict</code> enum.</li>
+      <li><a href="../security/index.html">Security</a> &mdash; <code>PlayerProfileRepository</code> for parent/self ownership,
+        the <code>Principal</code>/<code>SecurityUtil</code> identity, and <code>OperationNotAllowedException</code>.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>infrastructure.gemini.GeminiClient</code>,
+        <code>PessimisticLockRetryer</code>, and <code>ResourceNotFoundException</code>.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
   </main>

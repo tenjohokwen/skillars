@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontend — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Frontend</div>
+    <h1>Frontend</h1>
+    <p class="subtitle">The Vue&nbsp;3 + Quasar&nbsp;2 single-page app in <code>src/frontend</code> &mdash; one hash-routed SPA serving all four personas (Player, Parent, Coach, Admin), built into the Spring Boot jar.</p>
+
+    <h2>Why / What It Is</h2>
+    <p>
+      Every Skillars persona uses the same SPA. There is no separate admin app and no server-side rendering: the
+      Quasar build (<code>quasar build</code> &rarr; <code>src/frontend/dist/spa</code>) is copied into
+      <code>target/classes/static</code> by <code>maven-resources-plugin</code> at <code>process-resources</code>
+      and served by Spring Boot from the same origin as the API. Same-origin matters: authentication is entirely
+      cookie-based (an HttpOnly JWT cookie plus a few JS-readable companion cookies), so the SPA never handles a
+      bearer token, and <code>EventSource</code> streams carry the session cookie automatically.
+    </p>
+    <p>
+      The app is organised by persona: a single route table (<code>src/router/routes.js</code>) with
+      <code>meta</code>-driven role guards, one layout (<code>MainLayout.vue</code>) whose drawer renders a different
+      nav block per role, and pages grouped under <code>src/pages/{auth,coach,parent,player,admin,marketplace,messaging}</code>.
+      Each backend module has a matching thin API file in <code>src/api/</code> and (usually) a Pinia store in
+      <code>src/stores/</code>.
+    </p>
+
+    <h2>Technical Overview</h2>
+
+    <h3>Build &amp; tooling</h3>
+    <table>
+      <tr><th>Concern</th><th>What is used</th></tr>
+      <tr><td>Framework</td><td>Vue <code>^3.5</code>, Quasar <code>^2.16</code> via Quasar CLI (<code>@quasar/app-vite ^2.4</code>, Vite under the hood). Composition API / <code>&lt;script setup&gt;</code>, plain JavaScript (no TypeScript; <code>jsconfig.json</code> only).</td></tr>
+      <tr><td>State / routing / i18n</td><td>Pinia <code>^3</code>, vue-router <code>^4</code>, vue-i18n <code>^11</code> (composition mode, <code>legacy: false</code>), <code>@intlify/unplugin-vue-i18n</code> Vite plugin.</td></tr>
+      <tr><td>Other runtime deps</td><td><code>axios</code>, <code>echarts</code> + <code>vue-echarts</code> (charts/radar), <code>@stripe/stripe-js</code>, <code>tus-js-client</code> (resumable video uploads), <code>vuedraggable</code> (session builder), <code>@rajesh896/broprint.js</code> (browser fingerprint cookie).</td></tr>
+      <tr><td>Config</td><td><code>quasar.config.js</code>: boot files <code>['theme', 'i18n', 'axios']</code> (in that order), <code>css: ['app.scss']</code>, <code>vueRouterMode: 'hash'</code>, Quasar plugins <code>Notify</code> + <code>Dialog</code>, <code>vite-plugin-checker</code> running ESLint on dev builds.</td></tr>
+      <tr><td>Dev server</td><td><code>npm run dev</code> (<code>quasar dev</code>). The <code>devServer.proxy</code> forwards <code>/api</code>, <code>/api/v1</code>, <code>/v1/api</code>, <code>/v1/account</code>, <code>/v1/admin</code>, <code>/authenticate</code>, <code>/refresh</code> to the backend on <code>localhost:9990</code> and <code>/manage</code> to <code>localhost:8367</code> (actuator). A new top-level backend path prefix needs a proxy entry or <code>quasar dev</code> serves <code>index.html</code> for it.</td></tr>
+      <tr><td>Maven integration</td><td><code>frontend-maven-plugin</code> installs Node <code>v22.16.0</code> (<code>&lt;node.version&gt;</code> in <code>pom.xml</code>), runs <code>npm install --legacy-peer-deps</code>, <code>npm install -g @quasar/cli</code>, <code>npx quasar build</code>, and <code>npm test</code> (a deliberate no-op). <code>-DskipFrontend</code> skips all of it &mdash; the resulting jar has <strong>no UI</strong>.</td></tr>
+    </table>
+
+    <h4><code>package.json</code> scripts</h4>
+    <table>
+      <tr><th>Script</th><th>Does</th></tr>
+      <tr><td><code>dev</code> / <code>build</code></td><td><code>quasar dev</code> / <code>quasar build</code></td></tr>
+      <tr><td><code>lint</code></td><td>ESLint (flat config <code>eslint.config.js</code>) over <code>src*/**/*.{js,cjs,mjs,vue}</code></td></tr>
+      <tr><td><code>format</code></td><td><code>prettier --write</code> (config in <code>.prettierrc.json</code>)</td></tr>
+      <tr><td><code>test:unit</code> / <code>test:unit:watch</code> / <code>test:unit:ci</code></td><td><code>vitest run</code> / <code>vitest</code> / <code>vitest run --coverage</code></td></tr>
+      <tr><td><code>test</code></td><td>No-op stub (<code>echo ... &amp;&amp; exit 0</code>) &mdash; it exists only so Maven's <code>npm test</code> execution succeeds. <code>mvn verify</code> never runs Vitest.</td></tr>
+      <tr><td><code>postinstall</code></td><td><code>quasar prepare</code> &mdash; regenerates <code>.quasar/</code> (including <code>.quasar/tsconfig.json</code>, which the Vitest alias resolution depends on).</td></tr>
+    </table>
+
+    <h3>Directory layout (<code>src/frontend/src</code>)</h3>
+    <table>
+      <tr><th>Path</th><th>Contents</th></tr>
+      <tr><td><code>App.vue</code></td><td>Root: <code>GlobalLoadingBar</code>, <code>SessionWarningDialog</code>, <code>&lt;router-view&gt;</code>; registers the <code>session:expired</code> window listener and starts session monitoring.</td></tr>
+      <tr><td><code>boot/</code></td><td><code>theme.js</code> (applies persisted dark/light theme before first render), <code>i18n.js</code> (the <code>createI18n</code> instance + <code>getCurrentLocale()</code>), <code>axios.js</code> (the shared <code>api</code> instance, interceptors, loading counter, fingerprint cookie).</td></tr>
+      <tr><td><code>router/</code></td><td><code>routes.js</code> (route table), <code>index.js</code> (global <code>beforeEach</code> guard), <code>roleRoutes.js</code> (per-role landing route, single source of truth), <code>safeRedirect.js</code> (<code>isSafeRedirect</code> for <code>?redirect=</code>).</td></tr>
+      <tr><td><code>layouts/MainLayout.vue</code></td><td>The only layout: header (parent child switcher, language menu, theme toggle, <code>NotificationBell</code>, logout) and the role-specific drawer.</td></tr>
+      <tr><td><code>pages/</code></td><td>Route components: <code>auth/</code> (21 &mdash; login, OTP, password reset, activation, the three registration/verification flows), <code>coach/</code> (16), <code>parent/</code> (13), <code>admin/</code> (11), <code>player/</code> (3), <code>marketplace/</code> (2), <code>messaging/</code> (1), plus shared top-level pages (<code>DashboardPage</code>, <code>ProfilePage</code>, <code>NotificationsPage</code>, <code>UnsubscribePage</code>, <code>VideoManagementPage</code>, <code>ErrorNotFound</code>).</td></tr>
+      <tr><td><code>components/</code></td><td>Grouped by domain (<code>admin</code>, <code>availability</code>, <code>booking</code>, <code>common</code>, <code>development</code>, <code>marketplace</code>, <code>notification</code>, <code>payment</code>, <code>profile</code>, <code>profileBuilder</code>, <code>session</code>, <code>video</code>). <code>common/</code> holds <code>GlobalLoadingBar</code>, <code>SessionWarningDialog</code>, <code>FeatureGateOverlay</code>, <code>AppealAction</code>.</td></tr>
+      <tr><td><code>api/</code></td><td>One <code>*.api.js</code> per backend area (21 files: <code>account</code>, <code>admin</code>, <code>appeals</code>, <code>auth</code>, <code>booking</code>, <code>coachRegistration</code>, <code>development</code>, <code>disputes</code>, <code>gdpr</code>, <code>homework</code>, <code>marketplace</code>, <code>messaging</code>, <code>notification</code>, <code>parentRegistration</code>, <code>payment</code>, <code>playerProfile</code>, <code>playerRegistration</code>, <code>profile</code>, <code>reviews</code>, <code>session</code>, <code>video</code>) and an <code>index.js</code> that re-exports only <code>authApi</code>/<code>accountApi</code>/<code>sessionApi</code>.</td></tr>
+      <tr><td><code>stores/</code></td><td>Pinia setup-stores (see below). <code>stores/index.js</code> creates the Pinia instance; <code>example-store.js</code> is the unused Quasar scaffold.</td></tr>
+      <tr><td><code>composables/</code></td><td><code>useErrorHandler</code>, <code>useLoading</code>, <code>useSession</code>, <code>useStartConversation</code>, <code>useContactDetector</code>, <code>useDrillVideoPlayback</code>.</td></tr>
+      <tr><td><code>plugins/sessionManager.js</code></td><td>Client-side session-expiry monitor (reads the <code>rint</code> cookie; warning dialog; <code>refreshSession()</code>).</td></tr>
+      <tr><td><code>utils/</code></td><td>Pure helpers: <code>errorHandler.js</code> (<code>parseApiError</code>), <code>sessionCookies.js</code>, <code>sessionRedirect.js</code> (<code>pushLoginOrHardNavigate</code>), <code>parentChildLinks.js</code>, <code>timelineLinks.js</code>, <code>notificationText.js</code> (<code>safeDeepLink</code>), <code>messagingErrors.js</code>, <code>adminFormat.js</code>, etc.</td></tr>
+      <tr><td><code>i18n/</code></td><td><code>en-US/</code>, <code>fr-FR/</code>, <code>de-DE/</code> (one large <code>index.js</code> each, ~2.7k lines) + <code>__tests__/</code>.</td></tr>
+      <tr><td><code>css/</code></td><td>Design system SCSS (see below).</td></tr>
+    </table>
+    <p>Tests live in sibling <code>__tests__/</code> folders (<code>*Spec.js</code>, 105 files today); shared test setup is in <code>src/frontend/test/vitest/</code>.</p>
+
+    <h3>Layers</h3>
+    <pre class="mermaid">
+flowchart TD
+  subgraph Browser["SPA (hash-routed, same origin as API)"]
+    R["router/index.js beforeEach<br/>(meta.requiresAuth / requiresGuest / requiresCoach / role / roles)"]
+    L["MainLayout.vue<br/>(role-specific drawer, NotificationBell)"]
+    P["pages/* and components/*"]
+    C["composables/*<br/>(useErrorHandler, useSession, useLoading ...)"]
+    S["stores/* (Pinia)<br/>auth, booking, messaging, notification ..."]
+    A["api/*.api.js<br/>(thin endpoint wrappers)"]
+    X["boot/axios.js 'api' instance<br/>interceptors: Accept-Language, loading counter,<br/>rint refresh, 401 teardown"]
+    SM["plugins/sessionManager.js<br/>(rint countdown, warning dialog)"]
+    ES["EventSource<br/>(booking / messaging / video SSE)"]
+  end
+  BE["Spring Boot backend<br/>/api/**, /authenticate, /otp, /refresh"]
+
+  R --> L --> P
+  P --> C
+  P --> S
+  C --> S
+  S --> A
+  P --> A
+  A --> X
+  X --> SM
+  S --> ES
+  X -->|"HTTP + cookies (potc JWT, skp, user, rint)"| BE
+  ES -->|"text/event-stream"| BE
+    </pre>
+    <p>
+      Pages call API modules either directly or through a store; there is no repository/service layer in between.
+      All HTTP goes through the single <code>api</code> axios instance exported by <code>boot/axios.js</code> &mdash;
+      never a bare <code>axios</code> import &mdash; because the interceptors carry session tracking and the
+      401 teardown. SSE streams are the one exception (native <code>EventSource</code>, see below).
+    </p>
+
+    <h3>Router &amp; route guards</h3>
+    <p>
+      <code>quasar.config.js</code> sets <code>vueRouterMode: 'hash'</code>, so every SPA URL is
+      <code>https://host/#/path</code>. All routes are children of <code>/</code> (<code>MainLayout.vue</code>);
+      <code>''</code> redirects to <code>/login</code>; a tagged catch-all <code>/:catchAll(.*)*</code>
+      (<code>meta: { notFound: true }</code>) renders <code>ErrorNotFound.vue</code>. Numeric route params are
+      constrained with <code>(\\d+)</code> (e.g. <code>parent/players/:playerId(\\d+)/videos</code>).
+    </p>
+    <table>
+      <tr><th>Route meta</th><th>Guard behaviour (<code>router/index.js</code>)</th></tr>
+      <tr><td><code>requiresAuth</code></td><td>Not authenticated &rarr; <code>/login?redirect=&lt;fullPath&gt;</code>.</td></tr>
+      <tr><td><code>requiresGuest</code></td><td>Authenticated &rarr; <code>routeForRole(role)</code>. Used by every login/registration/verification page.</td></tr>
+      <tr><td><code>requiresCoach</code></td><td>Authenticated non-coach &rarr; own landing route.</td></tr>
+      <tr><td><code>role: 'PARENT' | 'PLAYER'</code></td><td>Single-role gate (older routes; <code>role: 'COACH'</code> appears on <code>coach/revenue</code> and <code>coach/bookings/:bookingId/receipt</code> but the guard only evaluates PARENT/PLAYER for <code>meta.role</code> &mdash; those two COACH routes are only protected by <code>requiresAuth</code> client-side; the backend still enforces the role).</td></tr>
+      <tr><td><code>roles: [...]</code></td><td>Additive multi-role gate (UAT.5 AC4 onward): caller's role must be in the union of <code>meta.roles</code> across matched records. Used for dual-role PARENT/PLAYER routes and all <code>/admin/*</code> routes (<code>['ADMIN']</code>).</td></tr>
+      <tr><td><em>(special)</em></td><td>Entering <code>/coach/command-center</code> as a coach loads <code>profileBuilder.store</code> status and redirects to <code>/coach/profile-builder</code> if the profile is incomplete.</td></tr>
+    </table>
+    <p>
+      Authentication state on navigation comes from <code>authStore.hydrateFromCookie()</code>, run once on the first
+      navigation: it parses the non-HttpOnly <code>skp</code> cookie (URL-encoded JSON <code>{"id":"&lt;Long as string&gt;","role":"COACH"}</code>).
+      The guard does not call the backend &mdash; it trusts the cookie for <em>routing only</em>; every API call is
+      authorised server-side by the JWT.
+    </p>
+
+    <h4>Landing routes &mdash; <code>router/roleRoutes.js</code></h4>
+    <p>
+      <code>ROLE_ROUTES</code> is the single definition (used by the guard and <code>LoginPage.vue</code>):
+      COACH &rarr; <code>/coach/command-center</code>, PARENT &rarr; <code>/parent/dashboard</code>,
+      PLAYER &rarr; <code>/player/home</code>, ADMIN &rarr; <code>/admin/health-dashboard</code>; anything else
+      &rarr; <code>/dashboard</code>. <code>/player/home</code> is not a real page: <code>PlayerHomeRedirectPage.vue</code>
+      resolves the caller's own player-profile id and redirects to <code>/player/locker-room/:playerId</code>.
+      <code>routeForRole</code> uses <code>Object.hasOwn</code> so a forged <code>skp</code> role like
+      <code>constructor</code> falls through to the default.
+    </p>
+
+    <h4>Route tree per role</h4>
+    <table>
+      <tr><th>Role</th><th>Routes (all under <code>/#/</code>)</th></tr>
+      <tr><td>Guest / public</td><td><code>login</code>, <code>register</code>, <code>otp</code>, <code>forgot-password</code>, <code>reset-password</code>, <code>activate</code>; registration flows <code>coach-register</code>, <code>parent-register</code>, <code>player-register</code> with <code>{coach,parent,player}/{email-pending,verify-email,verify-phone}</code>; no-meta public pages <code>marketplace</code>, <code>coaches/:coachId</code>, <code>unsubscribe</code> (signed-token landing page for email opt-out links).</td></tr>
+      <tr><td>COACH</td><td><code>coach/command-center</code>, <code>coach/profile-builder</code>, <code>coach/availability</code>, <code>coach/booking-requests</code>, <code>coach/players</code>, <code>coach/players/:playerId</code>, <code>coach/drills</code>, <code>coach/session-builder/:bookingId</code>, <code>coach/session-templates</code>, <code>coach/videos</code> (shared <code>VideoManagementPage.vue</code>), <code>coach/revenue</code>, <code>coach/bookings/:bookingId/receipt</code>, <code>coach/session-pack-tiers</code>, <code>coach/payment-settings</code>, <code>coach/subscription</code>, <code>coach/reviews</code>, <code>coach/reliability</code>.</td></tr>
+      <tr><td>PARENT</td><td><code>parent/dashboard</code>, <code>parent/create-player</code> (auth only), <code>parent/approvals</code> (canonical &mdash; notification deep links target it), <code>parent/credit-wallet</code>, per-child <code>parent/players/:playerId/{sessions,videos,development}</code> (<code>sessions</code> = the per-child hub <code>ParentPlayerPortalPage.vue</code>).</td></tr>
+      <tr><td>PARENT + PLAYER (<code>roles</code>)</td><td><code>parent/bookings</code>, <code>parent/coaches/:coachId/request-booking</code>, <code>parent/coaches/:coachId/purchase-sessions</code>, <code>parent/players/:playerId/packs</code>, <code>parent/player/:playerId/subscription</code>, <code>parent/credit-statement</code>, <code>parent/bookings/:bookingId/receipt</code>, <code>player/locker-room/:playerId</code>. The <code>parent/</code> prefix is historical; pages gate parent-only buttons on <code>authStore.isParent</code>.</td></tr>
+      <tr><td>PLAYER</td><td><code>player/home</code> (redirect), <code>player/dashboard</code> (nav destination, not the landing route), <code>player/development/:playerId</code>, <code>player/videos</code>, <code>player/profile-builder</code> (auth only).</td></tr>
+      <tr><td>ADMIN (<code>/admin/*</code>, <code>roles: ['ADMIN']</code>)</td><td><code>health-dashboard</code>, <code>disputes</code>, <code>moderation</code>, <code>coaches</code> (enforcement), <code>users</code>, <code>appeals</code>, <code>gdpr</code>, <code>finance</code>, <code>bookings</code> (stuck-booking force-complete), <code>videos</code> (review queue), <code>config</code> (platform_config editor).</td></tr>
+      <tr><td>Any authenticated</td><td><code>dashboard</code>, <code>profile</code>, <code>notifications</code>, <code>messaging</code>.</td></tr>
+    </table>
+
+    <h4>Role navigation &mdash; <code>MainLayout.vue</code></h4>
+    <p>
+      The drawer renders one <code>&lt;template v-if="authStore.isCoach|isParent|isPlayer|isAdmin"&gt;</code> block
+      per role; <code>/dashboard</code> is shown only to admins or role-less users, <code>/profile</code> to everyone.
+      Parents additionally get a "My players" list built from <code>playerStore.players</code> via
+      <code>parentChildLinks(id)</code>, plus <code>ParentChildSwitcher</code> in the header. For a PLAYER the layout
+      resolves the caller's own player-profile id (<code>selfPlayerId</code>) and only then renders the locker-room,
+      packs and development links (<code>lockerRoomRoute</code>/<code>packsRoute</code>/<code>developmentRoute</code>
+      are <code>null</code> until resolved). Both resolutions are driven by <code>watch(() =&gt; authStore.isPlayer / isParent)</code>,
+      not <code>onMounted</code>, because the layout never remounts across a client-side login.
+      <strong>Adding a page means adding a route <em>and</em> a drawer entry</strong> &mdash; several pages were
+      historically unreachable because only one of the two was done.
+    </p>
+
+    <h3>Pinia stores</h3>
+    <p>All stores are setup-style (<code>defineStore('id', () =&gt; { ... })</code>).</p>
+    <table>
+      <tr><th>Store</th><th>Holds</th></tr>
+      <tr><td><code>auth.store.js</code></td><td><code>userId</code>, <code>role</code>, <code>displayName</code>, <code>coachTier</code>; getters <code>isAuthenticated</code> (= <code>!!userId</code>), <code>isCoach/isParent/isPlayer/isAdmin</code>; <code>setUser(loginResponse)</code>, <code>hydrateFromCookie()</code>, <code>logout()</code> (clears <code>skp</code> + state synchronously <em>before</em> <code>POST /api/auth/logout</code> so guards never see a half-logged-out user), <code>fetchCoachTier()</code>, browser-timezone notice flag.</td></tr>
+      <tr><td><code>playerStore.js</code></td><td>Parent's linked players and the self-player id for a PLAYER caller (reset on session expiry).</td></tr>
+      <tr><td><code>booking.store.js</code></td><td>Bookings plus <code>useBookingSse(bookingId)</code> (status stream with polling fallback).</td></tr>
+      <tr><td><code>messaging.store.js</code></td><td>Conversations, messages, the conversation SSE connection.</td></tr>
+      <tr><td><code>notification.store.js</code></td><td>Inbox page, <code>unreadCount</code>, optimistic <code>markRead</code>/<code>markAllRead</code>, email preferences.</td></tr>
+      <tr><td><code>video.store.js</code></td><td>Uploads (tus) and the per-video processing SSE.</td></tr>
+      <tr><td>others</td><td><code>appeal</code>, <code>development</code>, <code>homework</code>, <code>marketplace</code>, <code>payment</code>, <code>profileBuilder</code>, <code>session</code>, <code>sessionBuilder</code>, <code>sessionTemplate</code>.</td></tr>
+    </table>
+
+    <h3>API layer &amp; auth</h3>
+    <p>
+      <code>boot/axios.js</code> creates <code>api = axios.create({ baseURL: '', withCredentials: true })</code>. API
+      modules are thin: either an exported object (<code>authApi</code>, <code>sessionApi</code>,
+      <code>notificationApi</code>) or named functions (<code>messaging.api.js</code>), each returning
+      <code>api.get/post/...</code>. <strong>The response interceptor unwraps to <code>response.data</code></strong>, so
+      callers receive the body directly, not an axios response.
+    </p>
+    <table>
+      <tr><th>Interceptor</th><th>Behaviour</th></tr>
+      <tr><td>Request</td><td>Increments the pending-request counter (drives <code>useLoading</code> &rarr; <code>GlobalLoadingBar</code>); sets <code>Accept-Language</code> to the current vue-i18n locale (backend error messages/emails localise from it); calls <code>recordActivity()</code> except for <code>GET /refresh</code>.</td></tr>
+      <tr><td>Response (success)</td><td>Decrements counter; <code>refreshExpiryState()</code> (every authenticated response rewrites the <code>rint</code> cookie &mdash; the JWT's new absolute expiry in epoch ms); returns <code>response.data</code>.</td></tr>
+      <tr><td>Response (error)</td><td>On 401 with <code>errorMsg.errorKey</code> <code>security.sessionExpired</code> or <code>security.unauthorized</code>: stops session monitoring, clears <code>user</code>/<code>skp</code> cookies and navigates to <code>/login</code> via <code>pushLoginOrHardNavigate(router, { expired })</code> &mdash; <code>expired</code> is true only for <code>sessionExpired</code>. 403/5xx/network errors are only logged. The original error is <strong>always re-thrown</strong> for the component to handle.</td></tr>
+    </table>
+    <p><strong>Login / session flow.</strong></p>
+    <ul>
+      <li><code>LoginPage.vue</code> calls <code>authApi.skillarsLogin</code> &rarr; <code>POST /api/auth/login</code> (<code>AuthResource</code>). The backend sets the HttpOnly JWT cookie (<code>potc</code>), <code>skp</code>, <code>user</code> (display name, or the <code>__blank__</code> sentinel) and <code>rint</code>; the JSON <code>LoginResponse</code> goes to <code>authStore.setUser</code>. Redirect target: <code>?redirect=</code> if <code>isSafeRedirect</code> passes, else <code>routeForRole(role)</code>. 403 = account not verified, 429 = rate-limited. OTP second factor posts to <code>/otp</code> (<code>OtpPage.vue</code>).</li>
+      <li>There is no client-side token refresh loop. The JWT is sliding: <code>JWTAuthorizationFilter</code> extends it on each authenticated request and rewrites <code>rint</code>. <code>plugins/sessionManager.js</code> ticks every 30&nbsp;s against <code>rint</code>, shows <code>SessionWarningDialog</code> 5 minutes before expiry, and "Continue session" calls <code>sessionApi.refresh()</code> &rarr; <code>GET /refresh</code> (TTL extension only, empty 200). <code>POST /api/auth/refresh</code> (full token rotation) exists in <code>auth.api.js</code> as <code>skillarsRefresh</code> but has no caller. If <code>rint</code> runs out, <code>tick()</code> dispatches <code>window</code> event <code>session:expired</code>; <code>App.vue</code> tears down state and redirects. Details: <a href="../../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a>.</li>
+      <li><code>boot/axios.js</code> also sets a one-year <code>fcookie</code> browser-fingerprint cookie on boot (fraud signal; distinct from the backend's <code>bcookie</code>).</li>
+    </ul>
+    <p>
+      <strong>Error handling.</strong> Backend errors are an <code>ErrorDto</code> (<code>helpCode</code>,
+      <code>errorMsg.{errorKey,message}</code>, <code>fieldErrors[]</code>). <code>utils/errorHandler.js</code>'s
+      <code>parseApiError</code> normalises it; <code>useErrorHandler()</code> exposes reactive
+      <code>errorMessage</code> (a status-based fallback key such as <code>security.sessionExpired</code> when the
+      backend sent no message of its own; otherwise the translated <code>errorKey</code> if the catalogue has it, else
+      the raw server message), <code>fieldErrors</code>, <code>helpCode</code>, <code>setError</code>/<code>clearError</code>.
+      Pages show <code>errorMessage</code> in a <code>q-banner</code> or via <code>$q.notify</code>.
+    </p>
+
+    <h3>Server-Sent Events</h3>
+    <p>
+      SSE uses the native <code>EventSource</code>, not axios, so none of the interceptors run on it (no
+      loading-bar tick, no <code>rint</code> refresh, no 401 teardown). Each stream implements its own
+      backoff/fallback:
+    </p>
+    <table>
+      <tr><th>Stream</th><th>Opened by</th><th>Events / fallback</th></tr>
+      <tr><td><code>/api/messaging/conversations/{id}/events</code></td><td><code>messaging.api.js</code> <code>subscribeToEvents</code>, from <code>messaging.store</code> <code>connectSse</code></td><td><code>NEW_MESSAGE</code>, <code>MESSAGE_BLOCKED</code>. The backend emitter is per <em>user</em> (<code>MessagingEmitterRegistry</code>), so events are routed by the payload's <code>conversationId</code>. Exponential reconnect (1&nbsp;s, 2&nbsp;s), then from the 3rd failure an interval poll of messages.</td></tr>
+      <tr><td><code>/api/bookings/{id}/events</code></td><td><code>useBookingSse</code> (<code>booking.store.js</code>), and directly in <code>CoachCommandCenterPage.vue</code></td><td><code>status</code>, <code>heartbeat</code> (reconnects). Closes on a terminal status. Backoff 1&ndash;30&nbsp;s; after 3 errors switches to a recursive-<code>setTimeout</code> poll (2&nbsp;s floor, 30&nbsp;s cap).</td></tr>
+      <tr><td><code>/api/video/{id}/events</code></td><td><code>video.store.js</code></td><td><code>status</code> until a terminal processing state; polls while disconnected.</td></tr>
+    </table>
+    <p>
+      <strong>Notifications are not pushed.</strong> <code>NotificationBell.vue</code> refreshes
+      <code>GET</code> unread-count on mount, on every <code>route.path</code> change and on window
+      <code>focus</code>; there is deliberately no user-level push channel. Notification deep links go through
+      <code>safeDeepLink</code> (app-relative paths only) before <code>router.push</code>.
+    </p>
+
+    <h3>i18n</h3>
+    <ul>
+      <li>Three locales: <code>en-US</code> (default), <code>fr-FR</code>, <code>de-DE</code> (<code>src/i18n/index.js</code>). Fallback for every locale is <code>en-US</code>. The language menu in <code>MainLayout.vue</code> persists the choice in <code>localStorage['locale']</code> and clears any backend <code>lang</code> cookie so <code>Accept-Language</code> wins again.</li>
+      <li>Keys are nested by domain namespace, e.g. <code>auth.*</code>, <code>coach.*</code>, <code>parent.*</code>, <code>player.*</code>, <code>admin.*</code>, <code>booking.*</code>, <code>messaging.*</code>, <code>notifications.*</code>, <code>nav.*</code>, <code>common.*</code>, <code>error.*</code>, <code>security.*</code>, <code>validation.*</code>. Backend <code>errorKey</code> values (<code>security.sessionExpired</code>, <code>error.notFound</code>, ...) are looked up directly as i18n keys, so backend error keys and frontend catalogue keys share one namespace.</li>
+      <li>Use <code>const { t } = useI18n()</code> in <code>&lt;script setup&gt;</code> and <code>$t</code> in templates. Every new key must be added to <strong>all three</strong> locale files.</li>
+      <li><code>i18n/__tests__/localeKeyParitySpec.js</code> fails if the three catalogues' key sets differ.</li>
+      <li><code>i18n/__tests__/i18nTemplateKeyResolutionSpec.js</code> statically scans every <code>.vue</code> and <code>.js</code> under <code>src/</code> for <code>$t(</code>/<code>$te(</code>/<code>t(</code>/<code>i18n.global.t(</code> calls and asserts each literal key exists in en-US. Calls whose key is dynamic (template literal, concatenation, variable) must be listed in its <code>DYNAMIC_KEY_CALL_SITES</code> array, keyed by <code>'src/...File.vue:&lt;line&gt;'</code> with a reason (56 entries today). Because entries are <code>file:line</code>, <strong>any edit that shifts lines above a dynamic-key call breaks this spec</strong> &mdash; update the line numbers in the same change.</li>
+    </ul>
+
+    <h3>Design system</h3>
+    <p>
+      Dark-first glassmorphism with a light theme. <code>css/app.scss</code> imports, in order:
+      <code>tokens/colors</code> (CSS custom properties), <code>typography</code>, <code>animations</code>
+      (incl. <code>prefers-reduced-motion</code>), <code>glass</code> (<code>.glass-card</code> and surfaces),
+      <code>layouts</code> (<code>.app-bg</code>, <code>.app-page</code>, grids), <code>components</code> (Quasar overrides).
+      <code>tokens/_colors.scss</code> defines dark values on <code>:root</code> and overrides on
+      <code>:root[data-theme="light"]</code> (<code>--bg-*</code>, <code>--surface-glass*</code>, <code>--border-*</code>,
+      <code>--accent-*</code>, <code>--text-*</code>, component tokens); <code>tokens/_typography.scss</code> holds the
+      <code>clamp()</code> font scale. <code>boot/theme.js</code> applies the persisted theme
+      (<code>localStorage['skillars-theme']</code>) before first render; <code>toggleTheme()</code> flips the
+      <code>data-theme</code> attribute and returns the new state. To add a colour, define it in both
+      <code>:root</code> blocks and use <code>var(--token)</code> &mdash; never hard-code hex in a component.
+    </p>
+
+    <h3>Testing</h3>
+    <ul>
+      <li>Vitest 4 + <code>@vue/test-utils</code> + <code>happy-dom</code>, config in <code>vitest.config.mjs</code> (<code>globals: false</code> &mdash; import <code>describe/it/expect/vi</code> explicitly; <code>testTimeout: 10000</code>). Specs: <code>src/**/__tests__/**/*.{js,mjs}</code> and <code>src/**/*.{spec,test}.{js,mjs}</code>.</li>
+      <li><code>test/vitest/setup-file.js</code> installs the Quasar plugin, a real <code>createI18n</code> with an <strong>empty</strong> en-US catalogue (so <code>t('key')</code> renders the key), and a global <code>$t</code> mock that echoes keys. Specs therefore assert raw keys &mdash; which is why the two i18n specs above exist. Pinia is not global: specs opt in with <code>createTestingPinia()</code>.</li>
+      <li>Page specs define a local <code>async function mountPage(...)</code> (there is no shared helper): build a router with <code>createMemoryHistory()</code> and stub sibling routes, <code>router.push</code> + <code>await router.isReady()</code>, <code>mount(Page, { global: { plugins: [router, createTestingPinia(...)] } })</code>, <code>await flushPromises()</code>, and unmount in <code>afterEach</code>. API modules are mocked with <code>vi.mock('src/api/...')</code>.</li>
+      <li>Aliases (<code>src/</code>, <code>components/</code>, <code>stores/</code>, ...) resolve through <code>vite-tsconfig-paths</code> reading <code>.quasar/tsconfig.json</code>; <code>#q-app/wrappers</code> has a hand-maintained alias to the runtime <code>@quasar/app-vite/wrappers</code>.</li>
+      <li><strong>CI.</strong> <code>.github/workflows/frontend-unit-tests.yml</code> runs <code>npm run test:unit:ci</code> on a matrix of <code>TZ=UTC</code> and <code>TZ=America/New_York</code> (catches DST/local-time bugs &mdash; build test dates from fixed instants). It fires on PRs whose diff touches <code>src/frontend/**</code> (<code>.github/scripts/detect-frontend-changes.sh</code>), on the <code>frontend-tests</code> label, or on manual dispatch. It is <em>not</em> a required check. See <a href="../../testing/frontend-unit-tests.md">docs/testing/frontend-unit-tests.md</a>.</li>
+      <li><strong>Prettier + ESLint gate.</strong> The composite action <code>.github/actions/frontend-quality/action.yml</code> (used by both <code>ci.yml</code> and <code>pr-build.yml</code>) runs <code>npx prettier --check "**/*.{js,vue,scss,json}"</code> and ESLint. In <code>ci.yml</code> the image build has <code>needs: [test, frontend-quality]</code>, so an unformatted file blocks build-and-push. Run <code>npm run format</code> before pushing.</li>
+    </ul>
+
+    <h2>Key Flows</h2>
+
+    <h3>Navigating to a protected route</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant U as User
+  participant R as router.beforeEach
+  participant AS as authStore
+  participant P as Page
+  participant API as api (boot/axios.js)
+  participant BE as Backend
+
+  U->>R: /#/parent/bookings
+  R->>AS: hydrateFromCookie() (first navigation only, reads skp)
+  alt not authenticated
+    R-->>U: /login?redirect=/parent/bookings
+  else role not in meta.roles
+    R-->>U: routeForRole(role)
+  else allowed
+    R->>P: render
+    P->>API: GET /api/... (cookies sent)
+    API->>BE: request + Accept-Language
+    BE-->>API: 200 + Set-Cookie rint
+    API->>API: refreshExpiryState()
+    API-->>P: response.data
+  end
+    </pre>
+
+    <h3>Session expiry</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant SM as sessionManager
+  participant D as SessionWarningDialog
+  participant App as App.vue
+  participant SR as sessionRedirect.js
+
+  loop every 30s
+    SM->>SM: tick() against rint cookie
+  end
+  SM->>D: showWarning (at 5 min left)
+  alt user clicks Continue
+    D->>SM: refreshSession() -> GET /refresh
+    SM->>SM: new rint, warning cleared
+  else time runs out
+    SM->>App: window 'session:expired'
+    App->>App: clear user cookie, authStore.logout(), reset playerStore
+    App->>SR: pushLoginOrHardNavigate(router, expired true)
+    SR-->>App: /#/login?redirect=...&amp;expired=true
+  end
+    </pre>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Hash routing leaks into the backend.</strong> Every link to the SPA must contain <code>/#/</code>.
+      Emails and notifications built on the server use <code>infrastructure.web.FrontendLinkBuilder</code>
+      (<code>route("parent/bookings")</code> &rarr; <code>${app.frontend-url}/#/parent/bookings</code>); a link
+      without the hash 404s or lands on the SPA root. Likewise, never do <code>window.location.href = '/login'</code>
+      in the SPA &mdash; use <code>router.push</code> or <code>pushLoginOrHardNavigate</code>. Renaming a route path
+      can break existing email links and notification deep links (e.g. <code>parent/approvals</code> is canonical).</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Git worktrees need <code>src/frontend/.quasar</code>.</strong> It is gitignored and generated by
+      <code>quasar prepare</code> (npm <code>postinstall</code>). In a fresh worktree with a symlinked
+      <code>node_modules</code> and no <code>.quasar</code>, Vitest's alias resolution falls through to the main
+      checkout, so <strong>tests silently run against the main checkout's <code>src/</code></strong> and pass or fail
+      for the wrong code. Copy it in: <code>cp -R &lt;main&gt;/src/frontend/.quasar &lt;worktree&gt;/src/frontend/</code>.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>A symlinked <code>node_modules</code> is not ignored.</strong> <code>.gitignore</code>'s
+      <code>node_modules/</code> and <code>src/frontend/node_modules/</code> patterns (trailing slash) match
+      directories only, not a symlink of that name. Don't <code>git add -A</code> in a worktree that symlinks it.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Ids are strings.</strong> Ids are TSID longs larger than <code>Number.MAX_SAFE_INTEGER</code>; the
+      backend serialises them as strings (including in <code>skp</code>). Keep them as strings &mdash; never
+      <code>Number(id)</code> or <code>parseInt</code> &mdash; and compare with string equality (the messaging store's
+      <code>sameId</code>). Also: <code>Booking.playerId</code> and the <code>:playerId</code> route params are
+      <em>player-profile</em> ids, not user ids.</p>
+    </div>
+    <div class="callout">
+      <p><strong>The router guard is UX, not security.</strong> It trusts the JS-readable <code>skp</code> cookie.
+      Every backend endpoint must enforce its own role/ownership check; a route's <code>meta</code> only decides where
+      the user lands. Prefer <code>meta.roles</code> for new routes &mdash; it is the only form that is evaluated
+      for every role (a <code>meta.role: 'COACH'</code> is ignored by the guard).</p>
+    </div>
+    <div class="callout">
+      <p><strong>Shared pages, role-aware.</strong> <code>VideoManagementPage.vue</code> serves both
+      <code>coach/videos</code> and <code>player/videos</code>; dual-role <code>parent/*</code> pages hide
+      parent-only actions behind <code>authStore.isParent</code>. When adding a mutating button to a dual-role page,
+      check which roles can see it.</p>
+    </div>
+    <div class="callout">
+      <p><strong><code>?redirect=</code> is validated twice.</strong> <code>isSafeRedirect</code> requires an
+      app-relative path that resolves to a real route (not the <code>notFound</code> catch-all). Hash mode is what
+      actually prevents off-origin redirects; if you ever switch to history mode, harden the shape check first.</p>
+    </div>
+
+    <h2>Related Docs</h2>
+    <ul>
+      <li><a href="../security/index.html">Security</a> &mdash; JWT cookie, <code>skp</code>/<code>rint</code>/<code>user</code> cookies, <code>/authenticate</code>, <code>/otp</code>, <code>/refresh</code>, <code>/api/auth/*</code>.</li>
+      <li><a href="../messaging/index.html">Messaging</a>, <a href="../booking/index.html">Booking</a>, <a href="../video/index.html">Video</a> &mdash; the backends of the three SSE streams.</li>
+      <li><a href="../notification/index.html">Notification</a> &mdash; in-app inbox, email preferences and the unsubscribe token behind <code>NotificationsPage.vue</code> / <code>UnsubscribePage.vue</code>.</li>
+      <li><a href="../config/index.html">Config</a> &mdash; the store edited by <code>pages/admin/AdminConfigPage.vue</code>.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> &mdash; <code>FrontendLinkBuilder</code> and <code>ErrorDto</code>/<code>ApplicationException</code>.</li>
+      <li><a href="../../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a> &mdash; the <code>rint</code> absolute-expiry contract in depth.</li>
+      <li><a href="../../testing/frontend-unit-tests.md">docs/testing/frontend-unit-tests.md</a> &mdash; how to run and write Vitest specs.</li>
+      <li><a href="../../frontend-integration-guide.md">docs/frontend-integration-guide.md</a> and <a href="../../frontend-implementation-spec.md">docs/frontend-implementation-spec.md</a> &mdash; original Story 1.x design documents for the auth/session cross-cutting layer (last updated 2026-09-02). Useful history, but partly stale: they describe composables (<code>useAuth</code>, <code>useApi</code>) that were never built and a cookie table without <code>skp</code>. Trust this page and the code where they differ.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>

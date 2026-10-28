@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Outbox — Skillars Dev Docs</title>
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <a class="brand" href="../index.html">Skillars Dev Docs<small>Engineering onboarding</small></a>
+    <nav>
+      <h4>Platform Modules</h4>
+      <ul>
+        <li><a href="../marketplace/index.html">Marketplace</a></li>
+        <li><a href="../booking/index.html">Booking</a></li>
+        <li><a href="../session/index.html">Session</a></li>
+        <li><a href="../video/index.html">Video</a></li>
+        <li><a href="../development/index.html">Development</a></li>
+        <li><a href="../payment/index.html">Payment</a></li>
+        <li><a href="../messaging/index.html">Messaging</a></li>
+        <li><a href="../reviews/index.html">Reviews</a></li>
+        <li><a href="../notification/index.html">Notification</a></li>
+        <li><a href="../outbox/index.html">Outbox</a></li>
+        <li><a href="../admin/index.html">Admin</a></li>
+        <li><a href="../security/index.html">Security</a></li>
+        <li><a href="../filestorage/index.html">Filestorage</a></li>
+        <li><a href="../config/index.html">Config</a></li>
+        <li><a href="../monitoring/index.html">Monitoring</a></li>
+      </ul>
+      <h4>Cross-Cutting</h4>
+      <ul>
+        <li><a href="../infrastructure/index.html">Infrastructure</a></li>
+        <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a></li>
+        <li><a href="../database/index.html">Database &amp; Migrations</a></li>
+        <li><a href="../frontend/index.html">Frontend (Vue / Quasar)</a></li>
+      </ul>
+    </nav>
+  </aside>
+  <main class="content">
+    <div class="breadcrumb"><a href="../index.html">Home</a> / Outbox</div>
+    <h1>Outbox</h1>
+    <p class="subtitle">The generic transactional outbox: a single <code>main.outbox_messages</code> table that lets any module commit "do this side effect later" atomically with its business change, then drains it off the request path with per-row transactions, exponential backoff, and no row ever dropped.</p>
+
+    <h2>Business Overview</h2>
+    <p>
+      Many Skillars operations promise a side effect that can't run inside the database transaction: a Stripe refund
+      or coach payout transfer, a transactional email, an S3 object deletion after GDPR erasure, an operator alert. If
+      the side effect runs after commit and the JVM dies (or the remote service is down), the promise is silently lost;
+      if it runs before commit and the transaction rolls back, it happened for nothing. The outbox solves this the
+      standard way: the producer writes an <em>intent row</em> in the same transaction as the business change, and a
+      drainer executes the intent after commit, retrying until it succeeds.
+    </p>
+    <p>
+      <code>platform.outbox</code> (introduced by <code>skillars-deferred-91</code>, extracted from deferred-90's bespoke
+      blob-deletion queue) is deliberately domain-agnostic: it knows nothing about refunds or emails. Each domain
+      registers an <code>OutboxMessageHandler</code> for its own <code>aggregate_type</code>. There is no REST API and no
+      UI — it's pure infrastructure. Business guarantee it gives: <strong>once a business transaction has committed, its
+      outbox operations will eventually run at least once</strong>; rows that keep failing are retried forever and
+      reported as <code>[OUTBOX_STUCK]</code> for a human.
+    </p>
+
+    <h2>Technical Overview</h2>
+    <h3>Package layout</h3>
+    <table>
+      <thead><tr><th>Package</th><th>Classes</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>contract</code></td><td><code>OutboxMessageHandler</code>, <code>event.OutboxDrainRequestedEvent</code></td><td>The handler SPI (<code>aggregateType()</code> + idempotent <code>handle(String payload)</code>) and the marker event that triggers a post-commit drain.</td></tr>
+        <tr><td><code>repo</code></td><td><code>OutboxMessage</code>, <code>OutboxMessageRepository</code></td><td>The entity and the <code>claimNextDue</code> SKIP LOCKED claim query + stuck-row count.</td></tr>
+        <tr><td><code>service</code></td><td><code>OutboxService</code>, <code>OutboxChunkProcessor</code>, <code>OutboxRowProcessor</code></td><td>Enqueue API, drain loop + scheduled sweep, chunking, and the per-row claim/handle/delete and failure-bookkeeping transactions.</td></tr>
+        <tr><td><code>config</code></td><td><code>OutboxConfig</code></td><td>The <code>outboxDrainPool</code> executor (async in every profile except test, where it is a <code>SyncTaskExecutor</code>).</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Table: <code>main.outbox_messages</code></h3>
+    <p>Defined in <code>V138__baseline_schema.sql</code> (the deferred-112 rebaseline that folded in the original
+      deferred-91 migration and the later <code>next_attempt_at</code> column, originally <code>V126</code>). Mapped by <code>OutboxMessage</code>.</p>
+    <table>
+      <thead><tr><th>Column</th><th>Type</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>id</code></td><td><code>bigint</code> identity, PK</td><td>Also the FIFO tie-breaker in the claim order.</td></tr>
+        <tr><td><code>aggregate_type</code></td><td><code>text NOT NULL</code></td><td>Discriminator selecting the handler (no CHECK — new types need no migration).</td></tr>
+        <tr><td><code>payload</code></td><td><code>jsonb NOT NULL</code></td><td>Handler-defined JSON written at enqueue time.</td></tr>
+        <tr><td><code>attempts</code></td><td><code>integer</code> default 0</td><td>Failed handle attempts so far.</td></tr>
+        <tr><td><code>last_error</code></td><td><code>text</code></td><td><code>String.valueOf(cause)</code>, truncated to 1000 chars.</td></tr>
+        <tr><td><code>created_at</code></td><td><code>timestamptz</code> default now()</td><td>Enqueue time.</td></tr>
+        <tr><td><code>next_attempt_at</code></td><td><code>timestamptz</code> default now()</td><td>Earliest claim time: now for fresh rows, a future <code>notBefore</code> for delayed rows, or now + backoff after a failure.</td></tr>
+      </tbody>
+    </table>
+    <p>Index <code>idx_outbox_claim (next_attempt_at, attempts, id)</code> serves the claim query. Successfully handled
+      rows are <strong>deleted</strong>; the table only ever holds pending or failing work, so a non-empty table at rest
+      means something is backing off.</p>
+
+    <h3>Key classes</h3>
+    <table>
+      <thead><tr><th>Class</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><code>OutboxService</code></td><td><code>enqueue(type, payload)</code> / <code>enqueue(type, payload, notBefore)</code> — plain <code>save</code>, must run inside the producer's transaction. <code>requestDrainAfterCommit()</code> publishes <code>OutboxDrainRequestedEvent</code>, de-duplicated per transaction via a <code>TransactionSynchronizationManager</code> resource key so N enqueues in one transaction trigger one drain. <code>onOutboxDrainRequested</code> is <code>@Async("outboxDrainPool")</code> + <code>@TransactionalEventListener(AFTER_COMMIT)</code>. <code>sweep()</code> is the scheduled safety net. <code>drain()</code> loops chunks (max 200) and never lets an exception escape (an <code>afterCommit</code> throw would turn an already-committed request into a 500).</td></tr>
+        <tr><td><code>OutboxChunkProcessor</code></td><td>Not transactional. Calls <code>OutboxRowProcessor.claimAndHandle()</code> up to <code>CHUNK_SIZE = 25</code> times; on <code>OutboxRowFailure</code> calls <code>recordFailure</code>. Exists as a separate bean so the <code>REQUIRES_NEW</code> on the row processor goes through the Spring proxy.</td></tr>
+        <tr><td><code>OutboxRowProcessor</code></td><td><code>claimAndHandle()</code> (<code>REQUIRES_NEW</code>): claims <em>one</em> due row with <code>FOR UPDATE SKIP LOCKED</code>, dispatches to the handler map (built from all <code>OutboxMessageHandler</code> beans at startup; duplicate <code>aggregateType</code> fails startup via <code>Collectors.toMap</code>), deletes the row on success, or throws <code>OutboxRowFailure</code> so the whole transaction — including any DB writes the handler made — rolls back. <code>recordFailure()</code> (<code>REQUIRES_NEW</code>, a clean second transaction): <code>attempts++</code>, <code>last_error</code>, <code>next_attempt_at = now + backoff</code>.</td></tr>
+        <tr><td><code>OutboxMessageRepository</code></td><td><code>claimNextDue(now, pageable)</code>: <code>WHERE nextAttemptAt &lt;= :now ORDER BY attempts ASC, id ASC</code> with <code>PESSIMISTIC_WRITE</code> + lock timeout <code>-2</code> (Hibernate's SKIP LOCKED). <code>countByAttemptsGreaterThanEqual</code> for the stuck alarm.</td></tr>
+        <tr><td><code>OutboxConfig</code></td><td><code>outboxDrainPool</code>: core 1, max 2, queue 50, <code>DiscardPolicy</code> (a rejected drain is harmless — the sweep picks the rows up; <code>CallerRunsPolicy</code> would put draining back on the request thread), MDC decorator, graceful shutdown of <code>ExecutorShutdown.OUTBOX_DRAIN_SECONDS</code> (10 s). With <code>app.outbox.drain-async=false</code> (test profile only) it is a <code>SyncTaskExecutor</code>.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Retry, backoff and locking</h3>
+    <ul>
+      <li><strong>Backoff</strong> (<code>OutboxRowProcessor.backoffFor</code>): 30 s after the first failure, doubling per attempt
+        (30 s, 1 m, 2 m, 4 m, …) capped at 1 h. Deterministic, no jitter — SKIP LOCKED already spreads pods.</li>
+      <li><strong>No retry limit, no dead-letter.</strong> A row is retried forever. At <code>attempts &gt;= 10</code>
+        (<code>STUCK_ATTEMPTS_THRESHOLD</code>) every sweep logs <code>[OUTBOX_STUCK]</code> at ERROR with the count.
+        Handlers convert permanently-impossible work into a logged no-op instead of throwing, to avoid immortal poison rows.</li>
+      <li><strong>Concurrency</strong> is guaranteed by the row lock, not by ShedLock: the async post-commit drains (on any
+        pod) and the sweep can all run at once, and SKIP LOCKED makes each skip rows another claimer holds.</li>
+      <li><strong>Sweep</strong>: <code>@Scheduled(fixedDelayString = "${app.outbox.sweep-ms:300000}")</code> (5 min) with
+        <code>@SchedulerLock(name = "OutboxService_sweep", lockAtMostFor = "PT10M", lockAtLeastFor = "${app.outbox.lock-at-least:PT1M}")</code>.
+        The lock only stops pods sweeping in lockstep; correctness doesn't depend on it
+        (see <code>docs/deployment/scheduler-lock-tuning.md</code>). Disabled under the test profile via
+        <code>app.scheduling.enabled=false</code>.</li>
+      <li><strong>Drain stop conditions</strong>: a chunk claimed nothing, a chunk processed zero rows (all failures — they
+        now have a future <code>next_attempt_at</code>), or 200 chunks.</li>
+    </ul>
+
+    <h3>Who uses it</h3>
+    <table>
+      <thead><tr><th><code>aggregate_type</code></th><th>Producer (enqueue side)</th><th>Handler</th><th>Idempotency</th></tr></thead>
+      <tbody>
+        <tr><td><code>NOTIFICATION_EMAIL</code></td><td><code>notification.NotificationOutboxSupport.enqueueEmail</code> (<code>MANDATORY</code>), called <code>BEFORE_COMMIT</code> by <code>BookingEmailListener</code>, <code>SessionPackEmailListener</code> and the three security registration listeners</td><td><code>NotificationEmailOutboxHandler</code></td><td>Re-drive may resend; <code>MailManager</code>'s per-recipient delivered flags + sendId advisory lock limit it. Throws only on <code>FAILED</code>+retryable.</td></tr>
+        <tr><td><code>CREDIT_WALLET_REFUND</code></td><td><code>payment.RefundOutboxSupport.enqueueBookingRefund</code> (<code>MANDATORY</code>) from <code>RefundEnqueueListener</code> (<code>BEFORE_COMMIT</code>)</td><td><code>CreditWalletRefundOutboxHandler</code></td><td>No-op if a <code>BOOKING_REFUND</code> ledger row exists; <code>uq_pcl_booking_refund</code> backstop.</td></tr>
+        <tr><td><code>COACH_PAYOUT_TRANSFER</code></td><td><code>payment.CoachPayoutOutboxSupport.enqueuePayout</code> (<code>MANDATORY</code>) from <code>CoachPayoutEnqueueListener</code> (<code>BEFORE_COMMIT</code>), with <code>notBefore = release_after</code> (payout hold window)</td><td><code>CoachPayoutTransferHandler</code></td><td>Proceeds only if <code>coach_payouts</code> row is <code>PENDING_RELEASE</code> and past <code>release_after</code>; Stripe idempotency key.</td></tr>
+        <tr><td><code>COACH_PAYOUT_REVERSAL</code></td><td><code>CoachPayoutOutboxSupport.enqueueReversal</code> from <code>admin.DisputeService</code> (dispute upheld after release)</td><td><code>CoachPayoutReversalHandler</code></td><td>Only if row is <code>RELEASED</code>; deterministic <code>reversal-{stripeTransferId}</code> key.</td></tr>
+        <tr><td><code>SLU_SNAPSHOT_WRITE</code></td><td><code>development.SluSnapshotOutboxSupport</code> (<code>REQUIRES_NEW</code> — called from a <code>@Recover</code> on <code>sluRetryExecutor</code>, no ambient transaction) via <code>SnapshotPersistenceRetrier</code></td><td><code>SluSnapshotOutboxHandler</code></td><td><code>V119</code> applied-marker gates every delta.</td></tr>
+        <tr><td><code>BLOB_DELETION</code></td><td><code>filestorage.BlobDeletionOutboxSupport</code> from <code>admin.GdprErasureService</code> (one row per distinct key)</td><td><code>BlobDeletionOutboxHandler</code></td><td>S3 <code>DeleteObject</code> is idempotent.</td></tr>
+        <tr><td><code>VIDEO_MODERATION_RETRY</code></td><td><code>video.ModerationOutboxSupport.enqueueRetry</code> (<code>MANDATORY</code>) from <code>ModerationSlaMonitorService</code></td><td><code>ModerationRetryOutboxHandler</code></td><td>No-op unless the video is still <code>SCANNING</code>.</td></tr>
+        <tr><td><code>VIDEO_MODERATION_ADMIN_ALERT</code></td><td><code>ModerationOutboxSupport.enqueueAdminAlert</code> from <code>ModerationSlaMonitorService</code></td><td><code>ModerationAdminAlertOutboxHandler</code> → <code>ModerationAdminAlertSender</code> (notification's <code>VideoModerationEmailListener.sendAdminAlertSync</code>)</td><td>Unconditional; a duplicate operator email is the accepted side.</td></tr>
+      </tbody>
+    </table>
+    <p>Eight handlers and eight aggregate types, owned by notification, payment, development, filestorage and video; producers additionally live in security (registration emails) and admin (dispute reversals, GDPR blob deletion). Check the startup log line
+      <code>[OUTBOX] registered N handler(s): [...]</code> to see what a running instance knows.</p>
+
+    <h2>Key Flows</h2>
+    <h3>Enqueue in the business transaction → post-commit drain</h3>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Biz as Business service (@Transactional)
+  participant L as BEFORE_COMMIT listener
+  participant S as *OutboxSupport (MANDATORY)
+  participant O as OutboxService
+  participant DB as main.outbox_messages
+  participant Pool as outboxDrainPool
+  participant C as OutboxChunkProcessor
+  participant R as OutboxRowProcessor
+  participant H as OutboxMessageHandler
+
+  Biz->>L: domain event
+  L->>S: enqueueX(...)
+  S->>O: enqueue(type, json)
+  O->>DB: INSERT (same transaction)
+  S->>O: requestDrainAfterCommit()
+  O-->>O: publish OutboxDrainRequestedEvent (once per tx)
+  Note over Biz,DB: COMMIT: business rows + outbox row together
+  O->>Pool: onOutboxDrainRequested [AFTER_COMMIT, @Async]
+  loop up to 200 chunks of 25
+    C->>R: claimAndHandle() [REQUIRES_NEW]
+    R->>DB: SELECT ... next_attempt_at &lt;= now ORDER BY attempts, id LIMIT 1 FOR UPDATE SKIP LOCKED
+    R->>H: handle(payload)
+    alt success
+      R->>DB: DELETE row, COMMIT
+    else throws
+      R-->>C: OutboxRowFailure (tx rolled back)
+      C->>R: recordFailure(id, cause) [REQUIRES_NEW]
+      R->>DB: attempts++, last_error, next_attempt_at = now + backoff
+    end
+  end
+    </pre>
+    <p>
+      If the JVM dies between commit and drain, or the pool discards the drain task, nothing is lost: the 5-minute
+      <code>sweep()</code> runs the same <code>drain()</code>. If the business transaction rolls back, the outbox row
+      never existed and the <code>AFTER_COMMIT</code> listener never fires.
+    </p>
+
+    <h3>Why two transactions per row</h3>
+    <p>
+      The handler runs <em>inside</em> the claim transaction, so a handler's own <code>@Transactional</code> (REQUIRED)
+      collaborators — <code>CreditWalletService.writeLedgerEntry</code>, <code>SnapshotBatchWriter.writeAllDeltas</code>,
+      the payout status updates — join it and commit atomically with the row's deletion. But on PostgreSQL a failed
+      statement aborts the whole transaction, so failure bookkeeping can't be written there: it goes in a second, clean
+      <code>REQUIRES_NEW</code> after the first has rolled back. The original deferred-91 design dispatched a chunk of 25
+      in one transaction; one constraint violation rolled back all 25 and the <code>attempts</code> counter never moved.
+    </p>
+
+    <h2>Conventions &amp; Gotchas</h2>
+    <div class="callout warn">
+      <p><strong>Enqueue inside the business transaction, from a <code>BEFORE_COMMIT</code> listener or the service itself
+      — never <code>AFTER_COMMIT</code>.</strong> Make your <code>*OutboxSupport</code> method
+      <code>@Transactional(propagation = MANDATORY)</code> so a caller without a transaction fails loudly instead of
+      opening its own (the non-atomic window deferred-92 closed). The one exception is a producer with genuinely no
+      ambient transaction (<code>SluSnapshotOutboxSupport</code>, <code>REQUIRES_NEW</code>). Remember a
+      <code>MANDATORY</code> method that throws marks the shared transaction rollback-only even if the listener
+      catches — an enqueue failure always fails the business operation, which is the point.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong><code>handle()</code> must be idempotent.</strong> Delivery is at-least-once: a handler that succeeded
+      remotely but whose delete then failed (or whose pod died before commit) is re-driven. Anchor on a DB state
+      check and/or a remote idempotency key. And throw only for failures a retry could fix — a permanently impossible
+      row that throws is an immortal poison row that trips <code>[OUTBOX_STUCK]</code> forever.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>The claim transaction (row lock + a pooled connection) is held for the whole handler call</strong>,
+      including its network I/O (Stripe, SES/SMTP, S3). Keep handlers short. <code>NotificationEmailOutboxHandler</code>
+      additionally opens <code>MailManager.sendEmailSync</code>'s own <code>REQUIRES_NEW</code>, so an email drain uses
+      two connections at once. The pool is 1–2 threads, so this is bounded, but don't raise it casually.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Always call <code>requestDrainAfterCommit()</code> after enqueuing</strong> — otherwise the row waits up to
+      5 minutes for the sweep. Rows enqueued with a future <code>notBefore</code> (coach payouts) are not due when the
+      post-commit drain fires, so they are <em>always</em> executed by a later sweep, up to <code>app.outbox.sweep-ms</code>
+      after <code>release_after</code>. Calling <code>requestDrainAfterCommit()</code> with no transaction active publishes
+      an event the <code>AFTER_COMMIT</code> listener ignores (no <code>fallbackExecution</code>) — again, only the sweep
+      will pick the row up.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Unknown <code>aggregate_type</code> is retried, not dropped.</strong> During a rolling deploy an old pod can
+      claim a row whose handler only exists in the new build; it fails with "no OutboxMessageHandler registered",
+      backs off, and is processed once a new pod claims it. Removing a handler while rows of its type remain leaves
+      them stuck forever — drain or migrate them first. Payload JSON is a cross-version contract for the same reason:
+      add fields as nullable (see <code>NotificationEmailPayload.deadline</code>/<code>firstname</code>).</p>
+    </div>
+    <div class="callout">
+      <p><strong>No ordering guarantee.</strong> Claim order is <code>attempts ASC, id ASC</code> across all types, with
+      several concurrent claimers; a failing row sinks below fresh work. Don't build a handler that assumes it sees
+      rows of one aggregate in enqueue order.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Tests:</strong> <code>application-test.yaml</code> sets <code>app.outbox.drain-async: false</code> (drain runs
+      synchronously on the committing thread, so ITs can assert right after the call) and
+      <code>app.scheduling.enabled: false</code> (no sweep — call <code>OutboxService.drain()</code> directly). The async
+      hand-off itself is covered only by <code>OutboxServiceAsyncWiringTest</code>. Module ITs:
+      <code>ModerationOutboxIT</code>, <code>NotificationEmailOutboxAtomicityIT</code>, <code>RefundOutboxIT</code>,
+      <code>SluSnapshotOutboxIT</code> under <code>src/test/java/.../platform/outbox/</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Not every "outbox" in the codebase is this one.</strong> These are separate, module-private queues with their
+      own tables and pollers: <code>main.outbox_replication_jobs</code> (<code>filestorage.OutboxPollerScheduler</code>,
+      cross-region replication), <code>main.video_deletion_outbox</code> (<code>video.VideoDeletionOutboxProcessor</code>),
+      <code>main.video_webhook_events</code> (<code>video.WebhookEventOutboxService</code>, webhook dedupe), and
+      <code>main.envelope_entity</code> (<code>notification.EmailRetryScheduler</code>, email retry). The old bespoke
+      <code>PendingBlobDeletion</code> queue no longer exists — it moved onto this outbox as <code>BLOB_DELETION</code>
+      (deferred-100). Likewise <code>app.email.log.dump-dir</code> was renamed from <code>outbox-dir</code> to avoid the
+      name clash.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Operating it.</strong> Search logs for <code>[OUTBOX_STUCK]</code>, <code>[OUTBOX_RETRY]</code>,
+      <code>[OUTBOX_DRAIN_FAILED]</code> and <code>[OUTBOX_DRAIN]</code>. A stuck row is inspected with
+      <code>SELECT id, aggregate_type, attempts, last_error, next_attempt_at FROM main.outbox_messages ORDER BY attempts DESC</code>;
+      setting <code>next_attempt_at = now()</code> forces it into the next drain. Deleting a row abandons a committed
+      promise (a refund, an email) — only do it after doing the work by hand.</p>
+    </div>
+
+    <h2>Related Modules</h2>
+    <ul>
+      <li><a href="../notification/index.html">Notification</a> — <code>NOTIFICATION_EMAIL</code> producer and handler; the
+        sender behind the moderation admin alert.</li>
+      <li><a href="../payment/index.html">Payment</a> — credit-wallet refunds and completion-gated coach payout transfers/reversals.</li>
+      <li><a href="../development/index.html">Development</a> — SLU weekly-snapshot write re-drives.</li>
+      <li><a href="../filestorage/index.html">Filestorage</a> — post-commit S3 key deletion (GDPR erasure).</li>
+      <li><a href="../video/index.html">Video</a> — moderation retry and permanent-failure admin alert.</li>
+      <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a> — <code>OutboxService.sweep</code>.</li>
+      <li><a href="../infrastructure/index.html">Infrastructure</a> — <code>ExecutorShutdown</code>, <code>MdcDecorator</code>, <code>SchedulingConfig</code>, ShedLock.</li>
+      <li><a href="../index.html">Home</a></li>
+    </ul>
+  </main>
+</div>
+<script src="../assets/mermaid.min.js"></script>
+<script src="../assets/docs.js"></script>
+</body>
+</html>
