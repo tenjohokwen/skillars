@@ -17,6 +17,13 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
+    public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount,
+                                   String idempotencyKey) {
+        // Deterministic per attempt key, like a Stripe idempotent replay.
+        return "pi_stub_" + idempotencyKey;
+    }
+
+    @Override
     public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount) {
         return "pi_batch_stub_" + batchId;
     }

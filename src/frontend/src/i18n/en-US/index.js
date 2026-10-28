@@ -2218,6 +2218,8 @@ export default {
         'This session pack expired on {date}. Contact your coach if an extension is possible.',
       exhausted: 'Your session pack is now fully used',
       packCoachMismatch: 'This session pack is for a different coach.',
+      packPlayerMismatch: 'This session pack belongs to a different player.',
+      packPaused: 'This session pack is paused. Book again once the pause ends.',
       packExpired: 'This session pack has expired.',
       packExhausted: 'This session pack has no remaining sessions.',
       extendSuccess: 'Your session pack has been extended to {date}',

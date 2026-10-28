@@ -24,8 +24,8 @@ import java.util.UUID;
  * atomically with the cancellation. Only the notification / re-drive is deferred, not the decision.
  *
  * <p>Scope: only the {@code writeLedgerEntry("BOOKING_REFUND", …)} calls are routed here. Pack
- * session restores ({@code packSessionService.restoreSession}) stay inline — a different
- * idempotency concern, out of scope for AC2.
+ * session restores have their own outbox type and per-booking marker ({@link PackRestoreOutboxSupport},
+ * fix/payment-session-pack-integrity).
  */
 @Slf4j
 @Component

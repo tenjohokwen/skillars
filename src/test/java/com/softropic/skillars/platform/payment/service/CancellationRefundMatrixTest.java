@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
-import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -34,8 +33,6 @@ import static org.mockito.Mockito.when;
 @ExtendWith(MockitoExtension.class)
 class CancellationRefundMatrixTest {
 
-    @Mock RefundOutboxSupport refundOutboxSupport;
-    @Mock PackSessionService packSessionService;
     @Mock CoachCancellationHistoryRepository cancellationHistoryRepository;
     @Mock ReliabilityStrikeService reliabilityStrikeService;
     @Mock ConfigService configService;
@@ -46,52 +43,6 @@ class CancellationRefundMatrixTest {
     private static final UUID COACH_ID = UUID.randomUUID();
     private static final UUID BOOKING_ID = UUID.randomUUID();
     private static final BigDecimal SESSION_PRICE = new BigDecimal("50.00");
-
-    // --- Parent cancel > 24h, credit-based ---
-    @Test
-    void parentCancel_gt24h_creditBased_writesRefund() {
-        BookingCancelledByParentEvent event = parentEvent(null, 25);
-
-        service.onBookingCancelledByParent(event);
-
-        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies pack/history
-        verify(packSessionService, never()).restoreSession(any());
-    }
-
-    // --- Parent cancel > 24h, pack-based ---
-    @Test
-    void parentCancel_gt24h_packBased_restoresSession_noCredit() {
-        UUID packId = UUID.randomUUID();
-        BookingCancelledByParentEvent event = parentEvent(packId, 25);
-
-        service.onBookingCancelledByParent(event);
-
-        verify(packSessionService).restoreSession(packId);
-        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
-    }
-
-    // --- Parent cancel <= 24h, credit-based ---
-    @Test
-    void parentCancel_lte24h_creditBased_noCreditNoRestore() {
-        BookingCancelledByParentEvent event = parentEvent(null, 24);
-
-        service.onBookingCancelledByParent(event);
-
-        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
-        verify(packSessionService, never()).restoreSession(any());
-    }
-
-    // --- Parent cancel <= 24h, pack-based ---
-    @Test
-    void parentCancel_lte24h_packBased_noRestoreNoCredit() {
-        UUID packId = UUID.randomUUID();
-        BookingCancelledByParentEvent event = parentEvent(packId, 0);
-
-        service.onBookingCancelledByParent(event);
-
-        verify(packSessionService, never()).restoreSession(any());
-        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
-    }
 
     // --- Coach cancel excused (MUTUAL_AGREEMENT), credit-based ---
     @Test
@@ -185,17 +136,8 @@ class CancellationRefundMatrixTest {
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
     }
 
-    // --- Coach cancel, pack not expired ---
-    @Test
-    void coachCancel_packNotExpired_restoresSession_noCredit() {
-        UUID packId = UUID.randomUUID();
-        BookingCancelledByCoachEvent event = coachEvent(packId, "MUTUAL_AGREEMENT", false);
-
-        service.onBookingCancelledByCoach(event);
-
-        verify(packSessionService).restoreSession(packId);
-        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
-    }
+    // Pack restores and refunds are enqueued by RefundEnqueueListener (fix/payment-session-pack-integrity) —
+    // see RefundEnqueueListenerTest. This class covers only cancellation history and strikes.
 
     // --- C6: coach cancels an ACCEPTED pack booking: the session was never deducted ---
     @Test
@@ -207,21 +149,8 @@ class CancellationRefundMatrixTest {
 
         service.onBookingCancelledByCoach(event);
 
-        verify(packSessionService, never()).restoreSession(any());
         verify(cancellationHistoryRepository).save(any());
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
-    }
-
-    // --- Coach cancel, pack expired ---
-    @Test
-    void coachCancel_packExpired_writesRefund_noRestore() {
-        UUID packId = UUID.randomUUID();
-        BookingCancelledByCoachEvent event = coachEvent(packId, "MUTUAL_AGREEMENT", true);
-
-        service.onBookingCancelledByCoach(event);
-
-        // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies pack/restore
-        verify(packSessionService, never()).restoreSession(any());
     }
 
     // --- Coach no-show, credit-based ---
@@ -243,9 +172,7 @@ class CancellationRefundMatrixTest {
 
         service.onCoachNoShow(event);
 
-        verify(packSessionService).restoreSession(packId);
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
-        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
     // --- Coach no-show, pack expired ---
@@ -258,15 +185,6 @@ class CancellationRefundMatrixTest {
 
         // Refund enqueue is now a BEFORE_COMMIT listener (RefundEnqueueListener); this test verifies strike
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
-    }
-
-    private BookingCancelledByParentEvent parentEvent(UUID packId, long hours) {
-        return new BookingCancelledByParentEvent(
-            this, BOOKING_ID, PARENT_ID, COACH_ID,
-            packId, hours, hours > 24,
-            SESSION_PRICE, "parent@test.com", "coach@test.com",
-            Instant.now(), "UTC"
-        );
     }
 
     private BookingCancelledByCoachEvent coachEvent(UUID packId, String reason, boolean packExpired) {

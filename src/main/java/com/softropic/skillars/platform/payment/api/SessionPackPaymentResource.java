@@ -36,6 +36,7 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -65,10 +66,14 @@ public class SessionPackPaymentResource {
     @PostMapping("/session-packs/purchase")
     @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<SessionPackPurchaseResponse> purchaseSessionPack(
-            @Valid @RequestBody PurchaseSessionPackRequest request) {
+            @Valid @RequestBody PurchaseSessionPackRequest request,
+            // fix/payment-session-pack-integrity: one key per purchase attempt, so a double-submit dedupes
+            // to the same charge and pack. Optional — the service generates one when absent.
+            @RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey) {
         Long parentId = securityUtil.getCurrentCoachUserId();
         SessionPackPurchaseResponse response = sessionPackPaymentService.purchasePack(
-            parentId, request.packTierId(), request.playerId(), request.paymentMethodId());
+            parentId, request.packTierId(), request.playerId(), request.paymentMethodId(),
+            idempotencyKey == null || idempotencyKey.isBlank() ? null : idempotencyKey.strip());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

@@ -34,6 +34,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -113,7 +115,7 @@ class SessionPackPaymentServiceTest {
         when(stripeCustomerRepository.findById(selfPlayerUserId)).thenReturn(Optional.empty());
         when(paymentGateway.createStripeCustomer(selfPlayerUserId)).thenReturn("cus_test");
         when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(paymentGateway.chargeAndCapture(TIER_ID, selfPlayerUserId, COACH_ID, tier.getTotalPrice()))
+        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
             .thenReturn("pi_test");
         when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
@@ -122,7 +124,7 @@ class SessionPackPaymentServiceTest {
 
         assertThat(response).isNotNull();
         assertThat(response.remainingSessions()).isEqualTo(tier.getSessionCount());
-        verify(paymentGateway).chargeAndCapture(TIER_ID, selfPlayerUserId, COACH_ID, tier.getTotalPrice());
+        verify(paymentGateway).chargeAndCapture(eq(TIER_ID), eq(selfPlayerUserId), eq(COACH_ID), eq(tier.getTotalPrice()), anyString());
     }
 
     /** Deferred-81 AC4: someone else calling with a self-registered player's id must still be refused. */
@@ -150,7 +152,7 @@ class SessionPackPaymentServiceTest {
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
         when(paymentGateway.createStripeCustomer(PARENT_ID)).thenReturn("cus_test");
         when(stripeCustomerRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(paymentGateway.chargeAndCapture(TIER_ID, PARENT_ID, COACH_ID, tier.getTotalPrice()))
+        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
             .thenReturn("pi_test");
     }
 
@@ -203,6 +205,121 @@ class SessionPackPaymentServiceTest {
 
         verify(paymentGateway).refund("pi_test", tier.getTotalPrice(), "refund-pi_test");
         verify(refundReconciliationService, never()).recordRefundFailure(any(), any(), any(), any(), any());
+    }
+
+    // ── fix/payment-session-pack-integrity: per-attempt idempotency, one pack per charge ─────────────────
+
+    @Test
+    void purchasePack_clientAttemptKey_isTheStripeKey_scopedByPayer() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "attempt-0001");
+
+        verify(paymentGateway).chargeAndCapture(TIER_ID, PARENT_ID, COACH_ID, tier.getTotalPrice(),
+            "pack-" + PARENT_ID + "-attempt-0001");
+    }
+
+    @Test
+    void purchasePack_noAttemptKey_everyPurchaseGetsItsOwnStripeKey() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test");
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test");
+
+        org.mockito.ArgumentCaptor<String> keys = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(paymentGateway, org.mockito.Mockito.times(2)).chargeAndCapture(
+            eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), keys.capture());
+        assertThat(keys.getAllValues()).allMatch(k -> k.startsWith("pack-" + PARENT_ID + "-")).doesNotHaveDuplicates();
+    }
+
+    @Test
+    void purchasePack_replayedCharge_returnsTheExistingPack_createsNoSecond() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        SessionPackPurchase existing = existingPurchase();
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.of(existing));
+
+        SessionPackPurchaseResponse response =
+            sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "attempt-0001");
+
+        assertThat(response.purchaseId()).isEqualTo(existing.getPurchaseId());
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_replayedKeyForADifferentPlayer_conflict_noPack() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        SessionPackPurchase existing = existingPurchase();
+        existing.setPlayerId(PLAYER_ID + 1);
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.of(existing));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "attempt-0001"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.idempotencyKeyReused");
+        verify(sessionPackPurchaseRepository, never()).save(any());
+    }
+
+    /** A concurrent delivery of the same attempt won the insert: its pack holds this charge — never refund it. */
+    @Test
+    void purchasePack_insertLosesToAConcurrentSameAttempt_returnsTheWinner_noRefund() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        SessionPackPurchase winner = existingPurchase();
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test"))
+            .thenReturn(Optional.empty(), Optional.of(winner));
+        when(sessionPackPurchaseRepository.save(any()))
+            .thenThrow(new org.springframework.dao.DataIntegrityViolationException("uq_spp_stripe_payment_intent_id"));
+
+        SessionPackPurchaseResponse response =
+            sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "attempt-0001");
+
+        assertThat(response.purchaseId()).isEqualTo(winner.getPurchaseId());
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_insertFailsAndIntentLookupFails_noBlindRefund_reconciliationRecorded() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test"))
+            .thenReturn(Optional.empty())
+            .thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new RuntimeException("db write failed"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "attempt-0001"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.lifecycleFailure");
+        verify(paymentGateway, never()).refund(any(), any(), any());
+        verify(refundReconciliationService).recordRefundFailure(eq("pi_test"), eq(tier.getTotalPrice()),
+            eq(PARENT_ID), eq(TIER_ID), startsWith("pack record failed and intent lookup failed"));
+    }
+
+    @Test
+    void purchasePack_malformedAttemptKey_badRequest_noCharge() {
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", "bad key!"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.invalidIdempotencyKey");
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+    }
+
+    private SessionPackPurchase existingPurchase() {
+        SessionPackPurchase p = new SessionPackPurchase();
+        p.setPurchaseId(UUID.randomUUID());
+        p.setParentId(PARENT_ID);
+        p.setPlayerId(PLAYER_ID);
+        p.setCoachId(COACH_ID);
+        p.setPackTierId(TIER_ID);
+        p.setRemainingSessions(5);
+        p.setPricePerSession(new BigDecimal("20.00"));
+        p.setExpiresAt(Instant.now().plus(60, ChronoUnit.DAYS));
+        p.setStripePaymentIntentId("pi_test");
+        return p;
     }
 
     private SessionPackTier makeActiveTier() {

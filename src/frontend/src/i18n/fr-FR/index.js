@@ -1929,6 +1929,8 @@ export default {
         'Ce pack de séances a expiré le {date}. Contactez votre coach si une prolongation est possible.',
       exhausted: 'Votre pack de séances est maintenant entièrement utilisé',
       packCoachMismatch: 'Ce pack de séances est pour un autre coach.',
+      packPlayerMismatch: 'Ce pack de séances appartient à un autre joueur.',
+      packPaused: 'Ce pack de séances est en pause. Réservez à nouveau à la fin de la pause.',
       packExpired: 'Ce pack de séances a expiré.',
       packExhausted: "Ce pack de séances n'a plus de séances restantes.",
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",

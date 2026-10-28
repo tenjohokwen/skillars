@@ -19,7 +19,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PackCancellationRefundIT extends BasePaymentIT {
 
-    @Autowired CancellationRefundService cancellationRefundService;
     @Autowired ApplicationEventPublisher eventPublisher;
 
     private static final long PARENT_ID    = 80001L;
@@ -70,6 +69,7 @@ class PackCancellationRefundIT extends BasePaymentIT {
     void cleanPackData() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM payment.coach_cancellation_history");
+            jdbcTemplate.execute("DELETE FROM main.outbox_messages WHERE aggregate_type = 'PACK_SESSION_RESTORE'");
             // parent_credit_ledger is append-only (V79 triggers); bypass for test cleanup only
             jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
             jdbcTemplate.execute("DELETE FROM payment.parent_credit_ledger WHERE parent_id = " + PARENT_ID);
@@ -85,7 +85,12 @@ class PackCancellationRefundIT extends BasePaymentIT {
         int remainingBefore = getRemainingSessions();
         BookingCancelledByCoachEvent event = coachEvent(packId, "MUTUAL_AGREEMENT", false);
 
-        cancellationRefundService.onBookingCancelledByCoach(event);
+        // fix/payment-session-pack-integrity: the restore is enqueued BEFORE_COMMIT, so it needs a real
+        // transaction (the test profile drains the outbox synchronously after commit).
+        transactionTemplate.execute(status -> {
+            eventPublisher.publishEvent(event);
+            return null;
+        });
 
         int remainingAfter = getRemainingSessions();
         assertThat(remainingAfter).isEqualTo(remainingBefore + 1);

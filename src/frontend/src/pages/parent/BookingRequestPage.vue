@@ -598,6 +598,10 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packCoachMismatch') })
     } else if (errorKey === 'payment.packExhausted') {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packExhausted') })
+    } else if (errorKey === 'payment.packPlayerMismatch') {
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packPlayerMismatch') })
+    } else if (errorKey === 'payment.packPaused') {
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packPaused') })
     } else if (errorKey === 'booking.startTimeInPast') {
       $q.notify({ type: 'negative', message: t('booking.errors.startTimeInPast') })
     } else if (errorKey === 'booking.invalidTimeRange') {

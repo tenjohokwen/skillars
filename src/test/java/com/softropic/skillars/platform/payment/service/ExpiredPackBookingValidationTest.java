@@ -117,6 +117,7 @@ class ExpiredPackBookingValidationTest {
         // ownership and never reaches the branch under test.
         SessionPackPurchase expiredPack = new SessionPackPurchase();
         expiredPack.setParentId(PARENT_ID);
+        expiredPack.setPlayerId(PLAYER_ID);
         expiredPack.setExpiresAt(Instant.now().minus(1, ChronoUnit.DAYS));
         when(sessionPackPurchaseRepository.findById(EXPIRED_PACK_ID)).thenReturn(Optional.of(expiredPack));
 
@@ -168,6 +169,7 @@ class ExpiredPackBookingValidationTest {
         SessionPackPurchase validPack = new SessionPackPurchase();
         validPack.setExpiresAt(Instant.now().plus(30, ChronoUnit.DAYS));
         validPack.setParentId(PARENT_ID);   // must match requesting parent
+        validPack.setPlayerId(PLAYER_ID);
         validPack.setCoachId(COACH_ID);      // must match requested coach
         validPack.setRemainingSessions(5);   // must be > 0
         when(sessionPackPurchaseRepository.findById(validPackId)).thenReturn(Optional.of(validPack));
@@ -222,6 +224,7 @@ class ExpiredPackBookingValidationTest {
         SessionPackPurchase pack = new SessionPackPurchase();
         pack.setExpiresAt(Instant.now().plus(30, ChronoUnit.DAYS));
         pack.setParentId(PARENT_ID);
+        pack.setPlayerId(PLAYER_ID);
         pack.setCoachId(UUID.randomUUID());  // wrong coach
         pack.setRemainingSessions(5);
         when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
@@ -246,6 +249,7 @@ class ExpiredPackBookingValidationTest {
         SessionPackPurchase pack = new SessionPackPurchase();
         pack.setExpiresAt(Instant.now().plus(30, ChronoUnit.DAYS));
         pack.setParentId(PARENT_ID);
+        pack.setPlayerId(PLAYER_ID);
         pack.setCoachId(COACH_ID);
         pack.setRemainingSessions(0);   // exhausted
         when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
@@ -257,6 +261,43 @@ class ExpiredPackBookingValidationTest {
             () -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.packExhausted");
+    }
+
+    /** fix/payment-session-pack-integrity: one child's pack must not pay for a sibling's session. */
+    @Test
+    void createBookingRequest_packBelongsToASibling_throwsPackPlayerMismatch() {
+        assertPackRejected(pack -> pack.setPlayerId(PLAYER_ID + 1), "payment.packPlayerMismatch");
+    }
+
+    /** fix/payment-session-pack-integrity: a paused pack cannot be booked against — the pause extends its expiry. */
+    @Test
+    void createBookingRequest_packCurrentlyPaused_throwsPackPaused() {
+        assertPackRejected(pack -> pack.setPausedUntil(Instant.now().plus(10, ChronoUnit.DAYS)), "payment.packPaused");
+    }
+
+    private void assertPackRejected(java.util.function.Consumer<SessionPackPurchase> tweak, String errorKey) {
+        LocalDate tomorrow = LocalDate.now(ZoneOffset.UTC).plusDays(1);
+        Instant start = tomorrow.atTime(LocalTime.of(10, 0)).toInstant(ZoneOffset.UTC);
+        Instant end = tomorrow.atTime(LocalTime.of(11, 0)).toInstant(ZoneOffset.UTC);
+        setupCommonMocks(tomorrow.getDayOfWeek());
+
+        UUID packId = UUID.randomUUID();
+        SessionPackPurchase pack = new SessionPackPurchase();
+        pack.setExpiresAt(Instant.now().plus(30, ChronoUnit.DAYS));
+        pack.setParentId(PARENT_ID);
+        pack.setPlayerId(PLAYER_ID);
+        pack.setCoachId(COACH_ID);
+        pack.setRemainingSessions(5);
+        tweak.accept(pack);
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+
+        CreateBookingRequest req = new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, start, end, null, packId, null);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining(errorKey);
     }
 
     private void setupCommonMocks(DayOfWeek dow) {
