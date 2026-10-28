@@ -198,6 +198,103 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
         assertThat(bookingCount).isEqualTo(2);
     }
 
+    // ---- fix/booking-integrity (B2): createBatch aligned with single create ----
+
+    /** The client-supplied totalAmount is ignored; the total is 2 sessions x the coach's 50.00. */
+    @Test
+    void createBatch_clientSuppliedTotal_isReplacedByServerComputedTotal() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/batches",
+            HttpMethod.POST, twoSlotBatchBody("0.01"), authenticatedHeaders(parentCookies), Map.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        java.math.BigDecimal total = jdbcTemplate.queryForObject(
+            "SELECT total_amount FROM booking.booking_batches WHERE id = ?::uuid",
+            java.math.BigDecimal.class, response.getBody().get("batchId"));
+        assertThat(total).isEqualByComparingTo("100.00");
+    }
+
+    /** Request-time overlap check against the coach's existing bookings, REQUESTED ones included. */
+    @Test
+    void createBatch_slotOverlapsAnExistingRequestedBooking_returns403SlotUnavailableAndWritesNothing() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
+                "status, canonical_timezone, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', 'Europe/Berlin', 0, now(), now())",
+                UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
+                Timestamp.from(slotBase.plus(2, ChronoUnit.HOURS)), Timestamp.from(slotBase.plus(3, ChronoUnit.HOURS)));
+            return null;
+        });
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/batches",
+            HttpMethod.POST, twoSlotBatchBody("0"), authenticatedHeaders(parentCookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("booking.slotUnavailable");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.booking_batches WHERE parent_id = ?", Integer.class, PARENT_ID))
+            .isZero();
+    }
+
+    /** An erased (hidden) child cannot be booked through the batch endpoint. */
+    @Test
+    void createBatch_erasedChild_returns403PlayerNotBookable() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "UPDATE main.player_profiles SET development_data_erased_at = now() WHERE id = ?", PLAYER_ID);
+            return null;
+        });
+        assertBatchRejectedAsPlayerNotBookable();
+    }
+
+    /** A child whose erasure request is still in flight cannot be booked either. */
+    @Test
+    void createBatch_childErasurePending_returns403PlayerNotBookable() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO admin.gdpr_requests (user_id, player_id, request_type, status) " +
+                "VALUES (?, ?, 'ERASURE', 'PENDING')", PARENT_ID, PLAYER_ID);
+            return null;
+        });
+        assertBatchRejectedAsPlayerNotBookable();
+    }
+
+    private void assertBatchRejectedAsPlayerNotBookable() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/batches",
+            HttpMethod.POST, twoSlotBatchBody("0"), authenticatedHeaders(parentCookies), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+                assertThat(ex.getResponseBodyAsString()).contains("booking.playerNotBookable");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.bookings WHERE player_id = ?", Integer.class, PLAYER_ID))
+            .isZero();
+    }
+
+    private Map<String, Object> twoSlotBatchBody(String totalAmount) {
+        return Map.of(
+            "coachId", coachProfileId.toString(),
+            "playerId", PLAYER_ID,
+            "totalAmount", new java.math.BigDecimal(totalAmount),
+            "slots", List.of(
+                Map.of("requestedStartTime", slotBase.toString(),
+                       "requestedEndTime", slotBase.plus(1, ChronoUnit.HOURS).toString()),
+                Map.of("requestedStartTime", slotBase.plus(2, ChronoUnit.HOURS).toString(),
+                       "requestedEndTime", slotBase.plus(3, ChronoUnit.HOURS).toString())));
+    }
+
     @Test
     void createBatch_unauthenticated_returns401() {
         Instant base = Instant.now().plus(3, ChronoUnit.DAYS);

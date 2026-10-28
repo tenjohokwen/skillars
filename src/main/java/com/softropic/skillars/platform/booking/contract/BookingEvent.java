@@ -10,6 +10,8 @@ public enum BookingEvent {
     CANCEL_PARENT,
     CANCEL_COACH,
     CANCEL_DUE_TO_PAUSE,
+    /** Admin cancellation of a REQUESTED booking (coach suspension). REQUESTED to CANCELLED. */
+    CANCEL_ADMIN,
     START,
     PAUSE,
     RESUME,

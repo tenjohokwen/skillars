@@ -74,8 +74,8 @@
         as defense in depth, which rejects anything else with <code>AUTHOR_ROLE_NOT_ALLOWED</code>.</li>
       <li><strong>You need a completed session with the coach that has had time to settle.</strong>
         <code>evaluateEligibility</code> calls <code>BookingRepository.findQualifyingCompletedBookings</code>, which
-        returns <code>COMPLETED</code> bookings with <code>updatedAt</code> at least <code>reviews.minSessionAgeDays</code>
-        old (default 7, bounded 1&ndash;358). This is a lower bound only, with no upper bound: a session from months ago
+        returns <code>COMPLETED</code> bookings that became <code>COMPLETED</code> at least <code>reviews.minSessionAgeDays</code>
+        ago (default 7, bounded 1&ndash;358). This is a lower bound only, with no upper bound: a session from months ago
         still qualifies (skillars-deferred-145). The author must be the player (<code>PlayerProfile.userId</code>) or that
         player's linked parent (<code>PlayerProfile.parentId</code>). Ownership is a JOIN on the <em>current</em>
         PlayerProfile, never <code>Booking.playerId</code> compared against a user id. Finally, no dispute that the
@@ -364,10 +364,11 @@ sequenceDiagram
       moderation action cannot void a qualifying session the author already earned.</p>
     </div>
     <div class="callout">
-      <p><strong>Maturity is measured on <code>Booking.updatedAt</code>, not the session time.</strong>
-      <code>findQualifyingCompletedBookings</code> filters <code>b.updatedAt &lt;= now - minSessionAgeDays</code>. Any later write
-      to a COMPLETED booking row, such as an admin force-complete, a dispute side effect or a recap update, restarts the
-      7-day clock. The query is capped at 50 distinct player ids, and hitting the cap logs a WARN.</p>
+      <p><strong>Maturity is measured from when the booking became <code>COMPLETED</code>, not the session time.</strong>
+      <code>findQualifyingCompletedBookings</code> filters <code>COALESCE(b.statusChangedAt, b.updatedAt) &lt;= now - minSessionAgeDays</code>.
+      <code>statusChangedAt</code> (V178) only moves when the status value changes, so a later recap edit or GDPR note anonymisation no
+      longer restarts the clock. V178 backfilled already-settled rows from their <code>updatedAt</code> at deploy time; a still-NULL value falls back to <code>updatedAt</code>. The query is capped at
+      50 distinct player ids, and hitting the cap logs a WARN.</p>
     </div>
     <div class="callout">
       <p><strong><code>ReviewApiAdvice</code> also handles <code>admin.api.AdminReviewResource</code>.</strong> It combines
@@ -423,7 +424,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

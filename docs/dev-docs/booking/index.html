@@ -98,7 +98,8 @@
       <li><strong>Availability-gated booking:</strong> every create/reschedule/duplicate path requires the slot to sit inside one of the coach's <code>marketplace.CoachAvailabilityWindow</code>s (interpreted in the coach <em>profile's</em> <code>canonicalTimezone</code>; <code>booking.slotOutsideAvailability</code>), not overlap a <code>CoachAvailabilityBlock</code> (<code>booking.slotBlockedByCoach</code>), and not cross local midnight (<code>booking.sessionCrossesMidnight</code>). Shared helpers: <code>BookingService.requireSlotWithinAvailabilityWindow</code> and <code>isSlotBlocked</code>.</li>
       <li><strong>Exact session length:</strong> <code>end - start</code> must equal <code>SessionDurationResolver.resolve(coachId)</code> (coach's <code>CoachPricing.sessionDurationMinutes</code>, else config <code>booking.session.defaultDurationMinutes</code>, default 60, bounded 15–240); a reschedule must keep the booking's original length (<code>booking.invalidSessionDuration</code>).</li>
       <li><strong>Stale-view guard:</strong> create, batch-create and reschedule accept an optional <code>availabilitySignature</code>; if the coach's windows changed since the client loaded the calendar, the request fails with <code>booking.availabilityChanged</code> (<code>AvailabilityService.computeAvailabilitySignature</code>).</li>
-      <li><strong>Coach must be booking-ready:</strong> single-request creation requires coach status <code>ACTIVE</code>/<code>REDUCED</code>/<code>PENDING_REVIEW</code> (re-checked under the coach row lock) and <code>paymentGateway.isCoachPaymentReady</code> (else 422 <code>payment.coachStripeNotConfigured</code> via <code>BookingApiAdvice</code>). Every accept path rejects a <code>SUSPENDED</code> coach.</li>
+      <li><strong>Coach must be booking-ready:</strong> single and batch creation both require coach status <code>ACTIVE</code>/<code>REDUCED</code>/<code>PENDING_REVIEW</code> (<code>BookingService.requireBookableCoachStatus</code>, re-checked under the coach row lock) and <code>paymentGateway.isCoachPaymentReady</code> (<code>requireCoachPaymentReady</code>, else 422 <code>payment.coachStripeNotConfigured</code> via <code>BookingApiAdvice</code>). Every accept path rejects a <code>SUSPENDED</code> coach.</li>
+      <li><strong>Erased players cannot be booked:</strong> single create, batch create and duplicate-next-week reject a player whose <code>developmentDataErasedAt</code> is set or who has a child-scoped <code>ERASURE</code> request in <code>PENDING</code>/<code>PROCESSING</code>/<code>FAILED</code> (<code>booking.playerNotBookable</code>). The authoritative check (<code>BookingService.requirePlayerBookableUnderLock</code>) runs under the <code>player_profiles</code> row lock, which <code>GdprRequestService.requestChildErasure</code> also takes before its live-booking check, so a booking and a child-erasure request cannot both succeed. Lock order: coach row, then player row.</li>
       <li><strong>No overlapping active bookings per coach</strong> — app-layer check under a coach-row lock on every write path plus a DB exclusion constraint; see <a href="#slot-exclusivity">Slot exclusivity</a>.</li>
       <li><strong>Parent cancellation refund (binary):</strong> <code>cancelBookingAsParent</code> sets <code>refundEligible = true</code> only if payment was captured (status was <code>CONFIRMED</code>/<code>UPCOMING</code>) <em>and</em> either the session is more than 24h away <em>or</em> its start time has already passed (Deferred-64 AC4). Cancelling a <code>PAYMENT_PENDING</code> booking whose <code>BookingPayment</code> is <code>CAPTURE_PENDING</code> is refused with 409 <code>booking.paymentInProgress</code>. Coach cancellation and coach no-show are always full refunds; player no-show forfeits fully. The money moves in <code>payment</code>, not here.</li>
       <li><strong>Completed is final for cancellation:</strong> cancel/no-show on a <code>COMPLETED</code> booking fails fast with <code>booking.alreadyCompleted</code> (<code>rejectIfPostCompletion</code>) — post-completion problems go through admin disputes.</li>
@@ -126,8 +127,8 @@
     <h3 id="key-entities-tables">Key entities &amp; tables</h3>
     <table>
       <tr><th>Entity</th><th>Table (schema <code>booking</code>)</th><th>Purpose</th></tr>
-      <tr><td><code>Booking</code></td><td><code>bookings</code></td><td>The core aggregate. Optimistic-locked (<code>@Version</code>). <code>parentId</code> = booker's user id; <code>playerId</code> = a <code>PlayerProfile</code> PK (not a user id); <code>coachId</code> = <code>CoachProfile</code> UUID. Also carries <code>canonicalTimezone</code> (coach profile zone at creation, UTC fallback), write-once <code>notes</code>, <code>playerRequest</code> (V163), <code>coachPlanNote</code> (V164, <code>@JsonIgnore</code>), <code>cancelReason</code>, <code>batchId</code>, <code>sessionPackPurchaseId</code>, <code>primary/secondaryReminderSentAt</code>, and <code>liveStartedAt</code> (V167, set by <code>startSession</code>; distinguishes a LIVE from a QUICK wrap-up to resume). Indexed by <code>idx_bkg_coach_status_time</code>; guarded by the <code>excl_bkg_coach_slot_overlap</code> exclusion constraint.</td></tr>
-      <tr><td><code>BookingBatch</code></td><td><code>booking_batches</code></td><td>Groups bookings requested together in one submission: <code>requestedCount</code>, <code>totalAmount</code> (client-supplied), rolled-up <code>status</code>.</td></tr>
+      <tr><td><code>Booking</code></td><td><code>bookings</code></td><td>The core aggregate. Optimistic-locked (<code>@Version</code>). <code>parentId</code> = booker's user id; <code>playerId</code> = a <code>PlayerProfile</code> PK (not a user id); <code>coachId</code> = <code>CoachProfile</code> UUID. Also carries <code>canonicalTimezone</code> (coach profile zone at creation, UTC fallback), write-once <code>notes</code>, <code>playerRequest</code> (V163), <code>coachPlanNote</code> (V164, <code>@JsonIgnore</code>), <code>cancelReason</code>, <code>batchId</code>, <code>sessionPackPurchaseId</code>, <code>primary/secondaryReminderSentAt</code>, <code>liveStartedAt</code> (V167, set by <code>startSession</code>; distinguishes a LIVE from a QUICK wrap-up to resume), and <code>statusChangedAt</code> (V178, stamped by <code>setStatus</code> whenever the value changes; read via <code>getStatusAnchor()</code>, which falls back to <code>updatedAt</code> while NULL; V178 backfilled terminal rows from <code>updatedAt</code>, non-terminal rows are stamped on their next transition). Indexed by <code>idx_bkg_coach_status_time</code>; guarded by the <code>excl_bkg_coach_slot_overlap</code> exclusion constraint.</td></tr>
+      <tr><td><code>BookingBatch</code></td><td><code>booking_batches</code></td><td>Groups bookings requested together in one submission: <code>requestedCount</code>, <code>totalAmount</code> (computed server-side as <code>coach_pricing.per_session_price</code> &times; sessions, zero without a pricing row; the request's <code>totalAmount</code> is ignored), rolled-up <code>status</code>.</td></tr>
       <tr><td><code>BookingRescheduleRequest</code></td><td><code>booking_reschedule_requests</code></td><td>A <code>PENDING</code>/<code>ACCEPTED</code>/<code>DECLINED</code> proposal to move a booking; <code>proposedBy</code> = <code>PARENT</code> | <code>COACH</code>.</td></tr>
       <tr><td><code>CoachAvailabilityBlock</code></td><td><code>coach_availability_blocks</code></td><td>One-off blackout period. Recurring weekly windows live in <code>marketplace.CoachAvailabilityWindow</code>, not here.</td></tr>
       <tr><td><code>SessionCompletionData</code></td><td><code>session_completion_data</code></td><td>One row per booking (UNIQUE <code>booking_id</code>): attendance, effort/focus/technique ratings, <code>homeworkDrillIds</code> (JSON), <code>completionMode</code> (<code>LIVE</code>/<code>QUICK</code>), recap <code>whatWeDid</code>/<code>whatsNext</code> (V159) and <code>whatWentWell</code> (V165), and <code>planBlocksSnapshot</code> (V170 — the session plan's blocks frozen at QUICK wrap-up time, <code>"[]"</code> when there was no plan). The DB column <code>voice_note_text</code> still exists but the entity field was removed (step 1 of a three-release column drop).</td></tr>
@@ -242,8 +243,7 @@
       <tr><td><code>SessionPackExpiryWarningEvent</code></td><td><code>payment.SessionPackExpiryNotifier</code></td></tr>
     </table>
     <p><code>PackPausedEvent</code>, <code>SessionPackExpiredEvent</code> and <code>SessionPackExpiryWarningEvent</code> are consumed by
-    <code>notification.SessionPackEmailListener</code>; <code>SessionPackExhaustedEvent</code> currently has no listener.
-    <code>CoachReliabilityStrikeQueuedEvent</code> is declared but neither published nor consumed anywhere — dead code.</p>
+    <code>notification.SessionPackEmailListener</code>; <code>SessionPackExhaustedEvent</code> currently has no listener.</p>
 
     <h3 id="dependencies-on-other-modules">Dependencies on other modules</h3>
     <p>From the module's actual imports:</p>
@@ -299,7 +299,7 @@ sequenceDiagram
     <h3 id="slot-exclusivity">Slot exclusivity (double-booking prevention)</h3>
     <ul>
       <li><strong>App-layer check under a per-coach lock.</strong> Every write path that creates or moves an active slot —
-      <code>createBookingRequest</code>, <code>acceptBooking</code>, <code>BookingBatchService.createBatch</code> and its
+      <code>createBookingRequest</code>, <code>acceptBooking</code>, <code>BookingBatchService.createBatch</code> (every slot, via <code>requireNoOverlappingBooking</code>) and its
       per-booking accept, <code>RescheduleService</code> (propose and accept), <code>BookingDuplicationService</code>, and
       <code>AvailabilityService</code>'s window/block writes — takes
       <code>coachProfileRepository.findByIdForUpdate(coachId)</code> before reading windows or running
@@ -325,10 +325,9 @@ sequenceDiagram
       <code>AdminCoachEnforcementService.suspendCoach</code>, which takes the same row lock.</p>
     </div>
     <div class="callout warn">
-      <p><strong><code>REQUESTED</code> rows may overlap.</strong> The DB constraint deliberately ignores
-      <code>REQUESTED</code>, and <code>createBatch</code> only checks its slots against each other, not against the coach's
-      existing bookings — so a batch can land requests on top of an existing request or booking. They collide (cleanly, as a
-      per-booking failure in the accept-all result) only when the coach accepts.</p>
+      <p><strong>The DB constraint ignores <code>REQUESTED</code>.</strong> Only the app-layer check stops a new request from
+      landing on top of an existing request: single and batch create both run it (against <code>ACTIVE_SLOT_STATUSES</code>,
+      <code>REQUESTED</code> included) under the coach lock. A new create path must do the same.</p>
     </div>
     <p>
       Updating a recurring window returns a non-blocking <code>AvailabilityWindowResponse.hasConflict</code>
@@ -466,15 +465,18 @@ sequenceDiagram
       <p><strong>Status changes go through <code>BookingService.transition()</code>.</strong> It locks the booking row
       (<code>findByIdForUpdate</code>, NO_WAIT + retry, then refresh), validates the actor against <code>EVENT_ROLES</code>,
       validates the transition with <code>BookingStateMachine</code>, saves, and publishes <code>BookingStatusChangedEvent</code>.
-      Don't call <code>booking.setStatus(...)</code> directly. Known exception: <code>admin.AdminCoachEnforcementService.suspendCoach</code>
-      sets <code>REQUESTED</code> bookings straight to <code>CANCELLED</code> (cancel reason <code>COACH_SUSPENDED_BY_ADMIN</code>),
-      bypassing the state machine and emitting no <code>BookingStatusChangedEvent</code> (so SSE clients and batch roll-up don't see it).</p>
+      Don't call <code>booking.setStatus(...)</code> directly. Coach suspension uses
+      <code>BookingService.cancelRequestedBookingAsAdmin</code> (event <code>CANCEL_ADMIN</code>, ADMIN actor,
+      <code>REQUESTED → CANCELLED</code>, cancel reason <code>COACH_SUSPENDED_BY_ADMIN</code>); it skips, rather than throws on, a
+      booking that has already left <code>REQUESTED</code>, because a throw would roll back the whole suspension.</p>
     </div>
     <div class="callout warn">
       <p><strong><code>DISPUTED</code>, <code>REFUND_PENDING</code> and <code>REFUNDED</code> are unreachable today.</strong> The state
       machine defines <code>DISPUTE</code>/<code>SETTLE_REFUND</code>/<code>SETTLE_COMPLETE</code>/<code>REFUND_PROCESSED</code>, but no code
       fires them. Disputes live in <code>admin</code> (<code>DisputeService</code>) and never touch booking status; their effect on
-      booking is only the recap lock via <code>BookingDisputeLookup</code>.</p>
+      booking is only the recap lock via <code>BookingDisputeLookup</code>. The enum values and DB states are kept on purpose.
+      Note also: <code>CANCEL_COACH</code>/<code>CANCEL_PARENT</code> from <code>PAUSED</code> can only be fired by the coach or the
+      parent; there is no admin or system path out of <code>PAUSED</code>.</p>
     </div>
     <div class="callout warn">
       <p><strong>ID spaces.</strong> <code>Booking.playerId</code> is a <code>PlayerProfile</code> PK, not a user id;
@@ -491,7 +493,7 @@ sequenceDiagram
     </div>
     <div class="callout">
       <p><strong>Reminders are "queued", not "sent".</strong> <code>BookingEmailListener.onBookingReminder</code> is
-      <code>BEFORE_COMMIT</code>, so <code>primaryReminderSentAt</code>/<code>secondaryReminderSentAt</code> mean an outbox row was
+      <code>BEFORE_COMMIT</code> and filters out a null or blank parent/coach address per recipient, so <code>primaryReminderSentAt</code>/<code>secondaryReminderSentAt</code> mean an outbox row was
       durably written; delivery is the outbox drain's job. Booking reminders are in the <code>REMINDER</code> notification category
       (opt-out-able per user since the notification centre, and also shown in-app) and the template carries the one-click unsubscribe
       footer.</p>
@@ -548,7 +550,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

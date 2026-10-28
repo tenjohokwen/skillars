@@ -86,6 +86,8 @@ class ExpiredPackBookingValidationTest {
     // makes that a passthrough here, which is fine — the real bounded-wait/retry behaviour is proven
     // against a live database in BookingServiceConcurrencyIT.
     @Mock PessimisticLockRetryer lockRetryer;
+    // B2: createBookingRequest checks the player-erasure tombstone under the player row lock.
+    @Mock com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard developmentDataErasureGuard;
 
     @InjectMocks BookingService bookingService;
 

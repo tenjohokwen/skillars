@@ -19,7 +19,9 @@ public class BookingStateMachine {
         t.put(BookingStatus.REQUESTED, Map.of(
             BookingEvent.ACCEPT,              BookingStatus.ACCEPTED,
             BookingEvent.DECLINE,             BookingStatus.DECLINED,
-            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED,
+            // Coach suspension (AdminCoachEnforcementService.suspendCoach) — ADMIN actor only.
+            BookingEvent.CANCEL_ADMIN,        BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.ACCEPTED, Map.of(
             BookingEvent.INITIATE_PAYMENT,    BookingStatus.PAYMENT_PENDING,
@@ -56,8 +58,10 @@ public class BookingStateMachine {
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
             BookingEvent.DISPUTE,          BookingStatus.DISPUTED
         ));
-        // CANCEL_COACH/CANCEL_PARENT from PAUSED (not IN_PROGRESS) are the admin/system cancellation path —
-        // a live session cannot be cancelled mid-flight, but a paused one can be administratively terminated.
+        // CANCEL_COACH/CANCEL_PARENT from PAUSED (not IN_PROGRESS): a live session cannot be cancelled
+        // mid-flight, but a paused one can be called off. Only the coach (CANCEL_COACH) or the parent
+        // (CANCEL_PARENT) can fire these — BookingService.EVENT_ROLES grants neither to ADMIN or SYSTEM,
+        // so there is no admin/system path out of PAUSED.
         t.put(BookingStatus.PAUSED, Map.of(
             BookingEvent.RESUME,           BookingStatus.IN_PROGRESS,
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,

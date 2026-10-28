@@ -286,15 +286,18 @@ sequenceDiagram
   Enforce-->>Admin: status, tier, strikes, cancellation history
   Admin->>Enforce: POST /api/admin/coaches/{coachId}/suspend
   Enforce->>Enforce: findByIdForUpdate (bounded retry), no-op if already SUSPENDED
-  Enforce->>Booking: findByCoachIdAndStatus(REQUESTED), set CANCELLED
+  Enforce->>Booking: findByCoachIdAndStatus(REQUESTED)
+  Enforce->>Booking: cancelRequestedBookingAsAdmin per booking (CANCEL_ADMIN, publishes BookingStatusChangedEvent)
   Enforce-->>Payment: BookingCancelledByAdminEvent (per booking)
   Enforce->>Enforce: CoachSuspendedEvent (+ notification event if notifyCoach)
   Enforce->>Alerts: AdminActionLog(COACH_SUSPEND)
     </pre>
     <p>
       Suspension is not just a status flip: every <code>REQUESTED</code> booking for the coach is cancelled
-      (<code>COACH_SUSPENDED_BY_ADMIN</code>) and a <code>BookingCancelledByAdminEvent</code> per booking lets
-      payment refund the parent. The coach-profile row lock matters: the booking accept paths re-check SUSPENDED
+      (<code>COACH_SUSPENDED_BY_ADMIN</code>) through the booking state machine
+      (<code>BookingService.cancelRequestedBookingAsAdmin</code>, so the batch roll-up, SSE and session-plan listeners
+      see a <code>BookingStatusChangedEvent</code>; a booking that already left <code>REQUESTED</code> is skipped) and a
+      <code>BookingCancelledByAdminEvent</code> per cancelled booking lets payment refund the parent. The coach-profile row lock matters: the booking accept paths re-check SUSPENDED
       under the same lock, so a suspension cannot slip in between their check and write. <code>reinstateCoach</code>
       runs <code>CoachProfileService.validateReadyForActivation</code> first and falls back to <code>DRAFT</code> if
       the profile is incomplete, ensures a SCOUT <code>coach_subscriptions</code> row exists, and then re-checks the
@@ -355,7 +358,9 @@ sequenceDiagram
     <p>
       Eligible reasons are <code>COACH_NO_SHOW</code>, <code>SESSION_QUALITY</code>, <code>SAFETY_CONCERN</code>,
       <code>UNAUTHORISED_CHARGE</code>, <code>OTHER</code>; eligible booking statuses are <code>COMPLETED</code>,
-      <code>CANCELLED*</code> and <code>NO_SHOW_*</code>. Ownership resolves the player through
+      <code>CANCELLED*</code> and <code>NO_SHOW_*</code>. The submission window is measured from
+      <code>Booking.getStatusAnchor()</code> (when the booking reached that status, V178 <code>status_changed_at</code>;
+      <code>updated_at</code> only while that is NULL), so a later unrelated write to the booking cannot reopen it. Ownership resolves the player through
       <code>PlayerProfile.userId</code> (<code>Booking.playerId</code> is a profile id) and the coach through
       <code>CoachProfile.userId</code>. Credit is computed only from a <code>CAPTURED</code>
       <code>BookingPayment</code> (credit debited + Stripe charged); otherwise <code>FULL_CREDIT</code> issues nothing
@@ -416,7 +421,10 @@ sequenceDiagram
       Self erasure is refused while a self-scoped export or erasure is active, or while a coach has
       <code>REQUESTED</code>/<code>ACCEPTED</code> bookings. Child erasure is refused while the child has any live
       booking (<code>GdprRequestService.CHILD_ERASURE_BLOCKING_BOOKING_STATUSES</code>), an active export, or is
-      already erased (<code>developmentDataErasedAt</code> set). Self erasure anonymises the user
+      already erased (<code>developmentDataErasedAt</code> set). The child check and the request insert run under the
+      child's <code>player_profiles</code> row lock, which every booking-creation path also takes before refusing a child
+      with an in-flight (<code>PENDING</code>/<code>PROCESSING</code>/<code>FAILED</code>) erasure request
+      (<code>booking.playerNotBookable</code>), so a new booking and a child-erasure request cannot both succeed. Self erasure anonymises the user
       (<code>deleted.&lt;id&gt;@erased.io</code>), hard-deletes messages, deletes or anonymises reviews (APPROVED ones
       are anonymised so ratings survive), revokes refresh tokens and deletes prior export blobs; a COACH additionally
       has profile free text, gallery media, recap narrative (session completion data, timeline metadata, performance

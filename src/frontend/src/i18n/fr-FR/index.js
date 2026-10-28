@@ -2351,6 +2351,7 @@ export default {
     },
     errors: {
       coachUnavailable: "Ce coach n'est actuellement pas disponible.",
+      playerNotBookable: 'Ce joueur ne peut plus être réservé.',
       slotUnavailable: "Ce créneau horaire n'est plus disponible.",
       startTimeInPast: 'Cet horaire est déjà passé. Veuillez choisir un créneau ultérieur.',
       invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',

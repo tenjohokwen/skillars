@@ -77,6 +77,8 @@ class BookingBatchServiceTest {
     @Mock TransactionStatus transactionStatus;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock EntityManager entityManager;
+    // B2: createBatch computes the batch total server-side from the coach's pricing.
+    @Mock com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository coachPricingRepository;
 
     @InjectMocks BookingBatchService service;
 
@@ -424,6 +426,143 @@ class BookingBatchServiceTest {
         player.setParentId(PARENT_ID);
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
+    }
+
+    // ---- B2: createBatch aligned with BookingService.createBookingRequest ----
+
+    @Test
+    void createBatch_clientSuppliedTotal_isIgnoredAndComputedFromCoachPricing() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        com.softropic.skillars.platform.marketplace.repo.CoachPricing pricing =
+            new com.softropic.skillars.platform.marketplace.repo.CoachPricing();
+        pricing.setPerSessionPrice(new BigDecimal("50.00"));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
+        when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        CreateBatchRequest base = buildRequest(3);
+        CreateBatchRequest tampered = new CreateBatchRequest(base.coachId(), base.playerId(), base.slots(),
+            new BigDecimal("0.01"), null);
+        service.createBatch(PARENT_ID, tampered);
+
+        org.mockito.ArgumentCaptor<BookingBatch> saved = org.mockito.ArgumentCaptor.forClass(BookingBatch.class);
+        verify(batchRepository).save(saved.capture());
+        assertThat(saved.getValue().getTotalAmount()).isEqualByComparingTo("150.00");
+    }
+
+    @Test
+    void createBatch_coachWithoutPricingRow_totalIsZero_likeTheSettlementPath() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        service.createBatch(PARENT_ID, new CreateBatchRequest(COACH_ID, PLAYER_ID, buildRequest(2).slots(), null, null));
+
+        org.mockito.ArgumentCaptor<BookingBatch> saved = org.mockito.ArgumentCaptor.forClass(BookingBatch.class);
+        verify(batchRepository).save(saved.capture());
+        assertThat(saved.getValue().getTotalAmount()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void createBatch_reducedCoach_isAcceptedLikeTheSinglePath() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        CoachProfile reduced = buildActiveCoach();
+        reduced.setStatus(CoachProfileStatus.REDUCED);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(reduced));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(reduced));
+        when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        assertThat(service.createBatch(PARENT_ID, buildRequest(1)).bookingCount()).isEqualTo(1);
+    }
+
+    @Test
+    void createBatch_draftCoach_isRejected() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        CoachProfile draft = buildActiveCoach();
+        draft.setStatus(CoachProfileStatus.DRAFT);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(draft));
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
+        verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void createBatch_coachNotStripeReady_isRejectedBeforeAnyWrite() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                "payment.coachStripeNotConfigured"))
+            .when(bookingService).requireCoachPaymentReady(COACH_ID);
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class);
+        verify(coachProfileRepository, never()).findByIdForUpdate(any());
+        verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void createBatch_slotOverlapsAnExistingBooking_isRejectedUnderTheCoachLock() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        CreateBatchRequest req = buildRequest(2);
+        BatchSlot second = req.slots().get(1);
+        lenient().doThrow(new OperationNotAllowedException("overlap", java.util.Map.of(), BookingError.SLOT_UNAVAILABLE))
+            .when(bookingService).requireNoOverlappingBooking(COACH_ID, second.requestedStartTime(),
+                second.requestedEndTime());
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_UNAVAILABLE));
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(coachProfileRepository, bookingService);
+        order.verify(coachProfileRepository).findByIdForUpdate(COACH_ID);
+        order.verify(bookingService, times(2)).requireNoOverlappingBooking(eq(COACH_ID), any(), any());
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
+    }
+
+    @Test
+    void createBatch_erasedPlayer_isRejected() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        player.setDevelopmentDataErasedAt(Instant.now());
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PLAYER_NOT_BOOKABLE));
+        verify(batchRepository, never()).save(any());
+    }
+
+    @Test
+    void createBatch_playerErasureInFlight_isRejectedUnderTheLock() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        doThrow(new OperationNotAllowedException("gone", java.util.Map.of(), BookingError.PLAYER_NOT_BOOKABLE))
+            .when(bookingService).requirePlayerBookableUnderLock(PLAYER_ID, "BookingBatchService.createBatch");
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(1)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PLAYER_NOT_BOOKABLE));
+        verify(batchRepository, never()).save(any());
     }
 
     @Test

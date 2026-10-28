@@ -39,6 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
@@ -215,7 +216,10 @@ public class BookingEmailListener {
             data.put("newStartTime", formatInstantInZone(event.getNewStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
 
-            for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
+            // Stream.of, not List.of: List.of throws NullPointerException on a null element, so a
+            // coach with no email (or a null parent email) used to abort BOTH recipients' emails
+            // here, swallowed by the catch below (B2). Null/blank addresses are filtered per element.
+            for (String email : Stream.of(event.getParentEmail(), event.getCoachEmail())
                     .filter(e -> e != null && !e.isBlank()).toList()) {
                 Recipient recipient = new Recipient();
                 recipient.setEmail(email);
@@ -581,7 +585,10 @@ public class BookingEmailListener {
             data.put("canonicalTimezone", event.getCanonicalTimezone());
             data.put("reminderType", event.getReminderType());
 
-            for (String email : List.of(event.getParentEmail(), event.getCoachEmail()).stream()
+            // Stream.of, not List.of: List.of throws NullPointerException on a null element, so a
+            // coach with no email (or a null parent email) used to abort BOTH recipients' emails
+            // here, swallowed by the catch below (B2). Null/blank addresses are filtered per element.
+            for (String email : Stream.of(event.getParentEmail(), event.getCoachEmail())
                     .filter(e -> e != null && !e.isBlank()).toList()) {
                 Recipient recipient = new Recipient();
                 recipient.setEmail(email);

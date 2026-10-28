@@ -106,6 +106,8 @@ class BookingServiceTest {
     @Mock private EntityManager entityManager;
     @Mock private PessimisticLockRetryer lockRetryer;
     @Mock private com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer;
+    // B2: createBookingRequest re-checks the erasure tombstone under the player row lock.
+    @Mock private com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard developmentDataErasureGuard;
 
     @Spy
     private BookingStateMachine bookingStateMachine = new BookingStateMachine();
@@ -158,6 +160,94 @@ class BookingServiceTest {
         assertThat(response).isNotNull();
         verify(bookingRepository).save(any(Booking.class));
         verify(eventPublisher).publishEvent(any(BookingRequestedEvent.class));
+        // B2: the authoritative erasure re-check ran under the player row lock.
+        verify(developmentDataErasureGuard).isErasedUnderLock(PLAYER_ID, "BookingService.createBookingRequest");
+        verify(bookingRepository).existsInFlightChildErasureRequest(PLAYER_ID);
+    }
+
+    // ---- B2: erased / erasure-pending players cannot be booked ----
+
+    @Test
+    void createBookingRequest_playerAlreadyErased_isRejectedBeforeAnyLock() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        player.setDevelopmentDataErasedAt(Instant.now().minusSeconds(60));
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PLAYER_NOT_BOOKABLE));
+        verify(coachProfileRepository, never()).findByIdForUpdate(any());
+        verify(bookingRepository, never()).save(any());
+    }
+
+    @Test
+    void createBookingRequest_playerErasedUnderLock_isRejected() {
+        stubCreatePathUpToPlayerLock();
+        when(developmentDataErasureGuard.isErasedUnderLock(PLAYER_ID, "BookingService.createBookingRequest"))
+            .thenReturn(true);
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PLAYER_NOT_BOOKABLE));
+        verify(bookingRepository, never()).save(any());
+    }
+
+    @Test
+    void createBookingRequest_childErasureRequestInFlight_isRejected() {
+        stubCreatePathUpToPlayerLock();
+        when(bookingRepository.existsInFlightChildErasureRequest(PLAYER_ID)).thenReturn(true);
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PLAYER_NOT_BOOKABLE));
+        verify(bookingRepository, never()).save(any());
+    }
+
+    private void stubCreatePathUpToPlayerLock() {
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+    }
+
+    // ---- B2: admin cancellation of REQUESTED bookings goes through the state machine ----
+
+    @Test
+    void cancelRequestedBookingAsAdmin_requestedBooking_transitionsToCancelledAndPublishesStatusChange() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        boolean cancelled = bookingService.cancelRequestedBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN");
+
+        assertThat(cancelled).isTrue();
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED");
+        assertThat(booking.getCancelReason()).isEqualTo("COACH_SUSPENDED_BY_ADMIN");
+        org.mockito.ArgumentCaptor<org.springframework.context.ApplicationEvent> events =
+            org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
+        verify(eventPublisher).publishEvent(events.capture());
+        assertThat(events.getValue()).isInstanceOfSatisfying(
+            com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent.class,
+            e -> assertThat(e.newStatus()).isEqualTo("CANCELLED"));
+    }
+
+    @Test
+    void cancelRequestedBookingAsAdmin_bookingAlreadyLeftRequested_isSkippedWithoutThrowing() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "DECLINED");
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        boolean cancelled = bookingService.cancelRequestedBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN");
+
+        assertThat(cancelled).isFalse();
+        assertThat(booking.getStatus()).isEqualTo("DECLINED");
+        verify(bookingRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     // skillars-deferred-156 AC2: notes previously reached both the DB write AND the coach's

@@ -1936,6 +1936,7 @@ export default {
     },
     errors: {
       coachUnavailable: 'This coach is currently unavailable.',
+      playerNotBookable: 'This player can no longer be booked.',
       slotUnavailable: 'This time slot is no longer available.',
       startTimeInPast: 'That time has already passed. Pick a later slot.',
       invalidTimeRange: 'The session end time must be after its start time.',

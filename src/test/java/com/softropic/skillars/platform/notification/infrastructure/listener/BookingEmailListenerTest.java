@@ -143,6 +143,36 @@ class BookingEmailListenerTest {
         assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
     }
 
+    /**
+     * B2 regression: a NULL coach email (not just a blank one) used to throw inside List.of, and the
+     * catch swallowed it — so the parent's reminder was silently lost too.
+     */
+    @Test
+    void onBookingReminder_nullCoachEmail_stillSendsParentReminder() {
+        BookingReminderEvent event = BookingReminderEvent.builder()
+                .source(this).bookingId(UUID.randomUUID()).parentEmail("parent@example.com").coachEmail(null)
+                .coachDisplayName("Coach").requestedStartTime(Instant.now()).canonicalTimezone("UTC")
+                .reminderType("PRIMARY")
+                .build();
+
+        listener.onBookingReminder(event);
+
+        verify(notificationOutboxSupport, times(1)).enqueueEmail(
+            any(EmailTemplate.class), recipientCaptor.capture(), anyMap(), anyString());
+        assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
+    }
+
+    /** B2: the same List.of null trap existed in onRescheduleAccepted. */
+    @Test
+    void onRescheduleAccepted_nullCoachEmail_stillSendsParentEmail() {
+        listener.onRescheduleAccepted(new com.softropic.skillars.platform.booking.contract.RescheduleAcceptedEvent(
+            this, UUID.randomUUID(), "parent@example.com", null, "Coach", Instant.now(), "UTC"));
+
+        verify(notificationOutboxSupport, times(1)).enqueueEmail(
+            any(EmailTemplate.class), recipientCaptor.capture(), anyMap(), anyString());
+        assertThat(recipientCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
+    }
+
     @Test
     void onRescheduleRequestedByCoach_blankParentEmail_skipsEnvelope() {
         RescheduleRequestedByCoachEvent event = new RescheduleRequestedByCoachEvent(
