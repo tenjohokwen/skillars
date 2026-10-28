@@ -1445,7 +1445,7 @@ public class SubscriptionService {
     }
 
     // fix/payment-subscription-entitlements: incomplete/unpaid/paused are persisted as non-entitled
-    // statuses (V194 widened the CHECKs); incomplete_expired/canceled are handled as deletions upstream.
+    // statuses (V197 widened the CHECKs); incomplete_expired/canceled are handled as deletions upstream.
     private String normalizeStripeStatus(String stripeStatus) {
         if (stripeStatus == null) return null;
         return switch (stripeStatus) {

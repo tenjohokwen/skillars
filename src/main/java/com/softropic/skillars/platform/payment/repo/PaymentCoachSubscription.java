@@ -61,12 +61,12 @@ public class PaymentCoachSubscription {
     private Instant pastDueSince;
 
     // fix/payment-subscription-entitlements: `created` of the newest Stripe event applied to this row;
-    // older out-of-order subscription/invoice events are ignored (V194).
+    // older out-of-order subscription/invoice events are ignored (V197).
     @Column(name = "last_stripe_event_at")
     private Instant lastStripeEventAt;
 
     // fix/payment-subscription-entitlements: optimistic-lock backstop behind the persist paths'
-    // re-read-under-lock (V194).
+    // re-read-under-lock (V197).
     @Version
     @Column(name = "version", nullable = false)
     private long version;
