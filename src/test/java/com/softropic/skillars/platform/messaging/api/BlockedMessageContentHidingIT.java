@@ -143,6 +143,61 @@ class BlockedMessageContentHidingIT extends AbstractIntegrationTest {
         assertThat(msg.get("deliveredAt")).isNull();
     }
 
+    /**
+     * fix/content-consistency-and-lost-updates: a message still PENDING moderation (verdict not
+     * landed yet, or never — up to MessageModerationSweeper's grace window) must not reach the
+     * recipient with its content. Only the sender sees their own pending text.
+     */
+    @Test
+    void pendingMessage_contentVisibleToSenderOnly() {
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        Long conversationId = ensureConversation(coachCookies);
+
+        long messageId = 9_830_000_777L;
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO messaging.messages (id, conversation_id, sender_id, sender_role, content, "
+                    + "moderation_status, created_at) VALUES (?, ?, ?, 'COACH', 'not yet moderated', 'PENDING', ?)",
+                messageId, conversationId, COACH_USER_ID, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        Map<?, ?> asSender = findMessage(coachCookies, conversationId, messageId);
+        assertThat(asSender.get("moderationStatus")).isEqualTo("PENDING");
+        assertThat(asSender.get("content")).isEqualTo("not yet moderated");
+
+        Map<?, ?> asRecipient = findMessage(parentCookies, conversationId, messageId);
+        assertThat(asRecipient.get("moderationStatus")).isEqualTo("PENDING");
+        assertThat(asRecipient.get("content")).isNull();
+
+        // The recipient has not read what they cannot see: their last-read mark stays below the
+        // PENDING message, so it counts as unread once approved. The sender's mark is unaffected.
+        Timestamp parentRead = jdbcTemplate.queryForObject(
+            "SELECT parent_last_read_at FROM messaging.conversations WHERE id = ?", Timestamp.class, conversationId);
+        Timestamp coachRead = jdbcTemplate.queryForObject(
+            "SELECT coach_last_read_at FROM messaging.conversations WHERE id = ?", Timestamp.class, conversationId);
+        Timestamp pendingAt = jdbcTemplate.queryForObject(
+            "SELECT created_at FROM messaging.messages WHERE id = ?", Timestamp.class, messageId);
+        assertThat(parentRead).isBefore(pendingAt);
+        assertThat(coachRead).isAfterOrEqualTo(pendingAt);
+    }
+
+    private Map<?, ?> findMessage(String cookies, Long conversationId, long messageId) {
+        ResponseEntity<Map> getResp = httpTestClient.makeHttpRequest(
+            baseUrl() + MESSAGING_BASE + "/conversations/" + conversationId + "/messages",
+            HttpMethod.GET,
+            null,
+            authenticatedHeaders(cookies),
+            Map.class);
+        assertThat(getResp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<?, ?>> messages = (List<Map<?, ?>>) getResp.getBody().get("content");
+        return messages.stream()
+            .filter(m -> toLong(m.get("messageId")) == messageId)
+            .findFirst()
+            .orElseThrow();
+    }
+
     private Long ensureConversation(String cookies) {
         ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
             baseUrl() + MESSAGING_BASE + "/conversations",

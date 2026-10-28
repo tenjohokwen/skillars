@@ -60,11 +60,11 @@
     <p>
       A large amount of Skillars' correctness does not happen in a request thread. Bookings that nobody
       actions expire on a timer; a booking stranded mid-payment is swept back out; a coach who abandons the
-      wrap-up wizard has the session force-completed; a message whose moderation verdict never landed is
+      wrap-up wizard has the session force-completed; a message or review whose moderation verdict never landed is
       escalated to a human; packs forfeit at expiry; outboxes drain; failed GDPR erasures are retried; local
-      subscriptions are reconciled against Stripe. There are <strong>40 <code>@Scheduled</code> methods in
-      39 classes across 11 platform modules plus <code>infrastructure</code></strong>, and
-      <strong>31 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
+      subscriptions are reconciled against Stripe. There are <strong>41 <code>@Scheduled</code> methods in
+      40 classes across 12 platform modules plus <code>infrastructure</code></strong>, and
+      <strong>32 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
       crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
       "why is this record stuck".
     </p>
@@ -93,7 +93,7 @@
       long-lived Spring contexts: a job with a 5-minute delay never fires in a context that lives 90 seconds,
       and that accidental protection disappeared. Worse, the per-test reset backdates every ShedLock row,
       making every guarded job eligible on every test method.</p>
-      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 22 of the 40
+      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 23 of the 41
       <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder. Meanwhile
       <code>@EnableSchedulerLock</code> stays unconditional because tests invoke scheduled methods directly
       through the Spring proxy, so the lock advisor must still apply — that is the behaviour
@@ -126,6 +126,7 @@
       <tbody>
         <tr><td><code>payment.PaymentPendingSweeper.sweepStrandedPayments</code> 🔒 PT30M</td><td>every 15 min</td><td>Bookings stranded in <code>PAYMENT_PENDING</code> when the AFTER_COMMIT settlement listener never completed. <strong>Pack-funded only</strong> — see <a href="../payment/index.html">Payment</a> for why the Stripe path is deliberately excluded.</td></tr>
         <tr><td><code>messaging.MessageModerationSweeper.sweep</code> 🔒 PT20M</td><td>every 10 min</td><td>Messages stranded in <code>PENDING</code> when a moderation verdict never landed. Fails closed to <code>UNDER_REVIEW</code>; never approves, never retries Gemini. Capped at <code>MAX_BATCH = 500</code>/run.</td></tr>
+        <tr><td><code>reviews.ReviewModerationSweeper.sweep</code> 🔒 PT20M</td><td>every 10 min</td><td>Reviews stranded in <code>PENDING</code> when the AFTER_COMMIT moderation write never landed (it swallows its own failures). Holds them as <code>UNDER_REVIEW/MODERATION_TIMEOUT</code> after <code>reviews.moderationOrphanGraceMinutes</code> (5–1440, default 30) so they reach the admin queue; atomic conditional UPDATE per row; never approves, never retries Gemini. Capped at 500/run.</td></tr>
         <tr><td><code>booking.QuickCompleteTimeoutService.processExpiredQuickCompletes</code> 🔒 PT15M</td><td>every 5 min</td><td>Quick-Complete sessions the parent never confirmed; force-completes after <code>booking.quick_complete_timeout_hours</code> (runtime config, 1–168h).</td></tr>
         <tr><td><code>booking.StuckCompletionSweeperService.processStuckCompletions</code> 🔒 PT15M</td><td>every 5 min</td><td>Bookings in <code>COMPLETED_PENDING_CONFIRMATION</code> with <em>no</em> <code>SessionCompletionData</code> row (coach abandoned <code>WrapUpSequence.vue</code> before step 5) — the case the Quick-Complete sweeper cannot see. Batch of 200/tick.</td></tr>
         <tr><td><code>booking.BookingExpiryScheduler.expireStaleRequests</code> 🔒 PT15M</td><td>every 5 min</td><td>Auto-declines <code>REQUESTED</code> bookings the coach never actioned (<code>booking.request_expiry_hours</code>, default 48h).</td></tr>
@@ -206,19 +207,20 @@
         <tr><td>security</td><td>3</td><td>3</td></tr>
         <tr><td>development</td><td>3</td><td>3</td></tr>
         <tr><td>messaging</td><td>3</td><td>2</td></tr>
+        <tr><td>reviews</td><td>1</td><td>1</td></tr>
         <tr><td>filestorage</td><td>2</td><td>2</td></tr>
         <tr><td>admin</td><td>1</td><td>1</td></tr>
         <tr><td>outbox</td><td>1</td><td>1</td></tr>
         <tr><td>config</td><td>1</td><td>0</td></tr>
         <tr><td><code>infrastructure</code></td><td>1</td><td>0</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>40</strong></td><td><strong>31</strong></td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>41</strong></td><td><strong>32</strong></td></tr>
       </tbody>
     </table>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
 
     <div class="callout warn">
-      <p><strong>9 of the 40 jobs are unguarded, and each has a reason.</strong> Five are per-instance by
+      <p><strong>9 of the 41 jobs are unguarded, and each has a reason.</strong> Five are per-instance by
       design (<code>ConfigService</code>, <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>,
       <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>) — they touch only in-memory state
       or this instance's metrics/connections. The other four (<code>UploadSessionExpiryScheduler</code>,
@@ -311,7 +313,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

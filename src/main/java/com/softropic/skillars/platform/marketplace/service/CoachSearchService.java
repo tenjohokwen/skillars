@@ -25,7 +25,6 @@ import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -43,8 +42,21 @@ public class CoachSearchService {
     private final FileStorageService fileStorageService;
 
     public CoachSearchResponse searchCoaches(CoachSearchParams params, int page, int size) {
-        // 1. Build DB-level specification — status=ACTIVE and city filter always applied
+        // 1. Build DB-level specification — searchable status set (ACTIVE, REDUCED) and city filter
+        //    always applied.
         Specification<CoachProfile> spec = CoachSearchSpecification.build(params);
+
+        // Language is part of the paged query, not a post-fetch filter: filtering a fetched page in
+        // memory used to return short or empty pages while later pages still held matches, and its
+        // status-unaware count disagreed with the rows. The native lookup resolves the city's
+        // matching ids; the Specification then pages over exactly those.
+        if (StringUtils.hasText(params.language())) {
+            List<UUID> languageIds = coachProfileRepository.findIdsByLanguage(params.language(), params.city());
+            if (languageIds.isEmpty()) {
+                return new CoachSearchResponse(List.of(), page, size, 0, 0, false);
+            }
+            spec = spec.and(CoachSearchSpecification.idIn(languageIds));
+        }
 
         // 2. Build sort + pageable (price sort applied post-fetch on current page)
         Sort sort = buildSort(params.sortBy());
@@ -57,8 +69,7 @@ public class CoachSearchService {
             return new CoachSearchResponse(List.of(), page, size, 0, 0, false);
         }
 
-        // 4. Apply language filter post-fetch if requested (PostgreSQL array ANY() not portable in JPA Criteria)
-        List<CoachProfile> profiles = applyLanguageFilter(profilePage.getContent(), params.language(), params.city());
+        List<CoachProfile> profiles = profilePage.getContent();
 
         // 5. Batch-load enrichment data for THIS PAGE's IDs only (not all coaches)
         List<UUID> pageIds = profiles.stream().map(CoachProfile::getId).toList();
@@ -86,28 +97,14 @@ public class CoachSearchService {
         // 7. Apply price sort within the current page (cross-page price sort deferred to future migration)
         List<CoachCardDto> sorted = sortPage(dtos, params.sortBy());
 
-        // 8. Compute accurate pagination metadata — when language filter is active, run a COUNT query
-        //    scoped to city+language (P8); otherwise use JPA page metadata directly
-        long totalElements;
-        int  totalPages;
-        boolean hasNext;
-        if (StringUtils.hasText(params.language())) {
-            totalElements = coachProfileRepository.countByLanguageAndCity(params.language(), params.city());
-            totalPages    = totalElements == 0 ? 0 : (int) Math.ceil((double) totalElements / size);
-            hasNext       = (long) (page + 1) * size < totalElements;
-        } else {
-            totalElements = profilePage.getTotalElements();
-            totalPages    = profilePage.getTotalPages();
-            hasNext       = profilePage.hasNext();
-        }
-
+        // 8. Pagination metadata comes straight from the paged query, language filter included.
         return new CoachSearchResponse(
             sorted,
             profilePage.getNumber(),
             profilePage.getSize(),
-            totalElements,
-            totalPages,
-            hasNext
+            profilePage.getTotalElements(),
+            profilePage.getTotalPages(),
+            profilePage.hasNext()
         );
     }
 
@@ -138,18 +135,6 @@ public class CoachSearchService {
                 .toList();
         }
         return dtos; // displayName sort was applied at DB level via Pageable
-    }
-
-    private List<CoachProfile> applyLanguageFilter(List<CoachProfile> profiles, String language, String city) {
-        if (!StringUtils.hasText(language)) {
-            return profiles;
-        }
-        // Native query returns IDs of coaches in this city speaking this language (city-scoped, not global)
-        Set<UUID> matchingIds = coachProfileRepository.findIdsByLanguage(language, city)
-            .stream().collect(Collectors.toSet());
-        return profiles.stream()
-            .filter(p -> matchingIds.contains(p.getId()))
-            .toList();
     }
 
     private Map<UUID, List<String>> loadSpecialties(List<UUID> ids) {

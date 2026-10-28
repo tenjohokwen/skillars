@@ -57,8 +57,8 @@ public class ModerationResultApplier {
         }
 
         // The guard is PENDING and undeleted, in one branch. A PENDING message can be soft-deleted
-        // (softDeleteMessage blocks only UNDER_REVIEW/BLOCKED) and toMessageDto does not hide PENDING
-        // content, so the sender can see and delete it while this verdict is still in flight.
+        // (softDeleteMessage blocks only UNDER_REVIEW/BLOCKED) and toMessageDto shows PENDING content
+        // to its sender (only), so the sender can see and delete it while this verdict is still in flight.
         // Writing onto a deleted row would have MessageModerationSweeper re-select it forever, raise
         // an admin alert with a content preview for a message the sender removed, and let an approve
         // emit a NEW_MESSAGE SSE for content no read path returns.

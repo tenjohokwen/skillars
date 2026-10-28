@@ -147,11 +147,14 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * StripeCustomerRepository.findByIdForUpdate+orElseThrow read, the per-payer wallet lock; the
      * balance read and ledger writes run after withBoundedRetry returns) -- now 52 after
      * fix/security-session-revocation added {@code AccountSuspensionEventListener.onAccountSuspensionRequested}'s
-     * findByIdForUpdate read (the SUSPENDED/lock writes and session revocation run after it returns). Asserted explicitly so an
+     * findByIdForUpdate read (the SUSPENDED/lock writes and session revocation run after it returns) -- now 53
+     * after fix/content-consistency-and-lost-updates added {@code SessionPlanService.updateSession} (a
+     * SessionRepository.findByIdForUpdate+orElseThrow plus entityManager.refresh; the plan save runs
+     * after withBoundedRetry returns). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 52;
+    private static final int EXPECTED_CALL_SITE_COUNT = 53;
 
     private record CallSite(String file, int line, String argument) {
     }
@@ -245,17 +248,18 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * test's own javadoc) to declare {@code @QueryHints(jakarta.persistence.lock.timeout = "0")} on
      * that method belong here.
      */
-    private static final Map<String, String> NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE = Map.of(
-        "VideoRepository", "findByIdForUpdate",
-        "PlayerProfileRepository", "findByIdForUpdate",
-        "BookingRescheduleRequestRepository", "findByIdForUpdate",
-        "BookingRepository", "findByIdForUpdate",
-        "BookingBatchRepository", "findByIdForUpdate",
-        "SessionPackPurchaseRepository", "findByIdForUpdate",
-        "CoachProfileRepository", "findByIdForUpdate",
-        "DrillRepository", "findByIdForUpdate",
-        "CoachReviewRepository", "findByIdForUpdateNoWait",
-        "StripeCustomerRepository", "findByIdForUpdate"
+    private static final Map<String, String> NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE = Map.ofEntries(
+        Map.entry("VideoRepository", "findByIdForUpdate"),
+        Map.entry("PlayerProfileRepository", "findByIdForUpdate"),
+        Map.entry("BookingRescheduleRequestRepository", "findByIdForUpdate"),
+        Map.entry("BookingRepository", "findByIdForUpdate"),
+        Map.entry("BookingBatchRepository", "findByIdForUpdate"),
+        Map.entry("SessionPackPurchaseRepository", "findByIdForUpdate"),
+        Map.entry("CoachProfileRepository", "findByIdForUpdate"),
+        Map.entry("DrillRepository", "findByIdForUpdate"),
+        Map.entry("CoachReviewRepository", "findByIdForUpdateNoWait"),
+        Map.entry("StripeCustomerRepository", "findByIdForUpdate"),
+        Map.entry("SessionRepository", "findByIdForUpdate")
     );
 
     private static List<String> findUnwrappedNoWaitLockCallsInFile(Path file) throws IOException {

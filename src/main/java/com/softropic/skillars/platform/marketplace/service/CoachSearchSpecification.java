@@ -28,12 +28,18 @@ public final class CoachSearchSpecification {
             .and(minPrice(p.minPrice()))
             .and(maxPrice(p.maxPrice()))
             .and(hasMinRating(p.minRating()));
-        // Note: language filter is applied separately via native query in CoachSearchService
-        // because PostgreSQL array ANY() predicate is not directly expressible in JPA Criteria API
+        // Note: the language filter is resolved to ids by a native query in CoachSearchService
+        // (PostgreSQL array ANY() is not expressible in the Criteria API) and ANDed in via idIn().
+    }
+
+    /** Restricts the search to {@code ids} — the language-matching coaches, still paged by the DB. */
+    static Specification<CoachProfile> idIn(java.util.Collection<UUID> ids) {
+        return (root, q, cb) -> root.get("id").in(ids);
     }
 
     private static Specification<CoachProfile> isActive() {
-        // REDUCED coaches appear in search results but are sorted after ACTIVE coaches (AC 9 / Task 7.1)
+        // REDUCED coaches appear in search results but are sorted after ACTIVE coaches (AC 9 / Task 7.1).
+        // Keep CoachProfileRepository.findIdsByLanguage's native status list in step with this one.
         return (root, q, cb) -> root.get("status").in(CoachProfileStatus.ACTIVE, CoachProfileStatus.REDUCED);
     }
 

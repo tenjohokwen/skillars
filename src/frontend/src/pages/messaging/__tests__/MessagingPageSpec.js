@@ -255,6 +255,9 @@ describe('MessagingPage.vue — messaging completion (feat/messaging-completion)
       ["other's UNDER_REVIEW", 'user-2', 'UNDER_REVIEW', 'messaging.moderation.underReview'],
       ['own BLOCKED', 'user-1', 'BLOCKED', 'messaging.moderation.blockedOwn'],
       ["other's BLOCKED", 'user-2', 'BLOCKED', 'messaging.moderation.blocked'],
+      // fix/content-consistency: the API nulls a PENDING message's content for everyone but its
+      // sender, so the recipient sees the held notice rather than [Content removed].
+      ["other's PENDING", 'user-2', 'PENDING', 'messaging.moderation.underReview'],
     ])('%s shows %s instead of [Content removed]', (_label, senderId, moderationStatus, key) => {
       const wrapper = mountPage([{ messageId: 9, senderId, content: null, moderationStatus }])
 
@@ -264,6 +267,12 @@ describe('MessagingPage.vue — messaging completion (feat/messaging-completion)
       expect(wrapper.find('[data-testid="message-bubble-9"]').text()).not.toContain(
         'messaging.contentRemoved',
       )
+    })
+
+    it("the sender's own PENDING message renders its content with no notice", () => {
+      const wrapper = mountPage([{ ...MY_MESSAGE, moderationStatus: 'PENDING' }])
+      expect(wrapper.find('[data-testid="moderation-notice-1"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="message-bubble-1"]').text()).toContain('Hi there')
     })
 
     it('an APPROVED message renders its content with no notice', () => {

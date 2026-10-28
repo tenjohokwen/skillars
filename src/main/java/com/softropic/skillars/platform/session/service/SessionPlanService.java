@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.session.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingSnapshot;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
@@ -26,6 +27,8 @@ import com.softropic.skillars.platform.session.repo.Drill;
 import com.softropic.skillars.platform.session.repo.DrillRepository;
 import com.softropic.skillars.platform.session.repo.Session;
 import com.softropic.skillars.platform.session.repo.SessionRepository;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -36,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -59,6 +63,8 @@ public class SessionPlanService {
     private final SessionDnaCalculator dnaCalculator;
     private final EquipmentListService equipmentListService;
     private final BookingStateMachine bookingStateMachine;
+    private final PessimisticLockRetryer lockRetryer;
+    private final EntityManager entityManager;
 
     public SessionPlanResponse createSession(CreateSessionPlanRequest req, Long coachUserId) {
         drillLibraryService.checkSessionBuilderGate(coachUserId);
@@ -126,11 +132,22 @@ public class SessionPlanService {
                 SessionErrorCode.SESSION_BOOKING_NOT_OWNED);
         }
 
-        if (SessionStatus.COMPLETED.equals(session.getStatus()) || SessionStatus.CANCELLED.equals(session.getStatus())) {
-            throw new OperationNotAllowedException(
-                "Completed sessions cannot be modified",
-                SessionErrorCode.SESSION_PLAN_LOCKED);
-        }
+        requireOpen(session);
+
+        // fix/content-consistency-and-lost-updates: Session has no @Version and the save() below
+        // rewrites every column, status included. Without the row lock, handleBookingCompleted
+        // committing COMPLETED after the read above was overwritten with this request's stale
+        // DRAFT/SAVED. Lock AFTER the ownership check (an unauthorised caller must not be able to pin
+        // the row) and refresh: findByIdForUpdate returns the instance already managed from findById
+        // without reloading it. Then re-check the status on the fresh, locked state. The completion
+        // and cancellation listeners use atomic conditional UPDATEs that take the same row lock.
+        lockRetryer.withBoundedRetry("SessionPlanService.updateSession", () -> {
+            Session locked = sessionRepository.findByIdForUpdate(sessionId)
+                .orElseThrow(() -> new ResourceNotFoundException("Session not found", "session"));
+            entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
+            return locked;
+        });
+        requireOpen(session);
 
         BookingSnapshot booking = bookingQueryService.getBookingSnapshot(session.getBookingId())
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
@@ -163,20 +180,27 @@ public class SessionPlanService {
         return buildResponse(saved, metaMap, toResponseMap(drills));
     }
 
+    private static void requireOpen(Session session) {
+        if (SessionStatus.COMPLETED.equals(session.getStatus()) || SessionStatus.CANCELLED.equals(session.getStatus())) {
+            throw new OperationNotAllowedException(
+                "Completed sessions cannot be modified",
+                SessionErrorCode.SESSION_PLAN_LOCKED);
+        }
+    }
+
+    /**
+     * Atomic conditional UPDATE, not load-then-save (fix/content-consistency-and-lost-updates): the
+     * old read-modify-write could interleave with {@code updateSession}'s own full-row save. The
+     * UPDATE takes the row lock, so it serialises with {@code updateSession}'s locked section.
+     */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async("taskExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleBookingCompleted(BookingCompletedEvent event) {
-        sessionRepository.findByBookingId(event.getBookingId()).ifPresentOrElse(session -> {
-            if (!SessionStatus.COMPLETED.equals(session.getStatus())) {
-                session.setStatus(SessionStatus.COMPLETED);
-                try {
-                    sessionRepository.save(session);
-                } catch (DataIntegrityViolationException e) {
-                    log.warn("Failed to transition session {} to COMPLETED for booking {} — concurrent modification or constraint violation", session.getId(), event.getBookingId(), e);
-                }
-            }
-        }, () -> log.debug("No session plan found for completed booking {} — nothing to transition", event.getBookingId()));
+        int updated = sessionRepository.markCompletedByBookingId(event.getBookingId(), Instant.now());
+        if (updated == 0) {
+            log.debug("No open session plan for completed booking {} — nothing to transition", event.getBookingId());
+        }
     }
 
     /**
@@ -200,16 +224,8 @@ public class SessionPlanService {
                 || !bookingStateMachine.isTerminal(BookingStatus.valueOf(event.newStatus()))) {
             return;
         }
-        sessionRepository.findByBookingId(event.bookingId()).ifPresent(session -> {
-            if (SessionStatus.DRAFT.equals(session.getStatus()) || SessionStatus.SAVED.equals(session.getStatus())) {
-                session.setStatus(SessionStatus.CANCELLED);
-                try {
-                    sessionRepository.save(session);
-                } catch (DataIntegrityViolationException e) {
-                    log.warn("Failed to transition session {} to CANCELLED for booking {} — concurrent modification or constraint violation", session.getId(), event.bookingId(), e);
-                }
-            }
-        });
+        // Same atomic conditional-UPDATE shape as handleBookingCompleted: only DRAFT/SAVED move.
+        sessionRepository.markCancelledIfOpenByBookingId(event.bookingId(), Instant.now());
     }
 
     @Transactional(readOnly = true)

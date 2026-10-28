@@ -127,11 +127,11 @@
         Write/admin side: <code>updateConfig</code>, <code>findResponse</code>, <code>listForAdmin</code>,
         <code>invalidate</code>.</td></tr>
       <tr><td><code>ConfigBounds</code></td><td>Static registry of <code>BoundedKey(key, min, max, failFast, note, defaultValue)</code>:
-        ~33 named keys (pack pause, dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
+        ~34 named keys (pack pause, dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
         TTL, timeline/roster windows, GDPR export TTL and erase lock timeout, message retention, batch sizes, review
-        eligibility, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows) plus generated
+        eligibility and moderation-orphan grace, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows) plus generated
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
-        <code>HAS_CODE_DEFAULT</code> (23 keys) marks keys whose call site has a code default. Call sites still pass
+        <code>HAS_CODE_DEFAULT</code> (24 keys) marks keys whose call site has a code default. Call sites still pass
         their <code>[min, max]</code> literally &mdash; change a bound in both places.</td></tr>
       <tr><td><code>ConfigStartupAssertion</code></td><td><code>ApplicationListener&lt;ApplicationReadyEvent&gt;</code>.
         For every <code>ConfigBounds.ALL</code> key reads the raw stored value and logs ERROR + increments
@@ -320,7 +320,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

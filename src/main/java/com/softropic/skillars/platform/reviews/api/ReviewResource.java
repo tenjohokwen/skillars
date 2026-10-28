@@ -35,8 +35,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.UUID;
 
-import java.util.UUID;
-
 @RestController
 @RequestMapping("/api/reviews")
 @RequiredArgsConstructor
@@ -94,12 +92,13 @@ public class ReviewResource {
     @Observed(name = "reviews.submit")
     public ResponseEntity<SubmitReviewResponse> submitReview(
             @PathVariable UUID coachId,
-            @Valid @RequestBody SubmitReviewRequest request,
-            Authentication auth) {
+            @Valid @RequestBody SubmitReviewRequest request) {
         Long userId = resolveUserId();
-        String role = resolveRole(auth);
+        // The author role (PARENT/PLAYER) is resolved by the service from the booking relation
+        // that makes this caller eligible, not from the token's authorities: a COACH+PARENT user
+        // would otherwise be read as COACH here and refused after passing the guard above.
         SubmitReviewResponse response = reviewSubmissionService.submitReview(
-            coachId, userId, role, request.rating(), request.body());
+            coachId, userId, request.rating(), request.body());
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
@@ -159,9 +158,4 @@ public class ReviewResource {
         }
     }
 
-    private String resolveRole(Authentication auth) {
-        if (auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_COACH"))) return "COACH";
-        if (auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("ROLE_PARENT"))) return "PARENT";
-        return "PLAYER";
-    }
 }

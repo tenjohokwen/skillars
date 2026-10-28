@@ -231,6 +231,39 @@ class CoachMarketplaceResourceIT extends AbstractIntegrationTest {
         assertThat(coaches.get(0).get("displayName")).isEqualTo("Alice Frankfurt");
     }
 
+    /**
+     * fix/content-consistency-and-lost-updates: the language filter used to run in memory over the
+     * already-fetched DB page (page 0 here holds only Alice, who does not speak German, so it came
+     * back empty while page 1 held a match), and its native lookup was status='ACTIVE' only, so a
+     * REDUCED coach vanished whenever a language was given. Both now page through the DB together.
+     */
+    @Test
+    void searchCoaches_filterByLanguage_pagesOverMatchesOnly_andKeepsReducedCoaches() {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET languages = '{german}' WHERE id IN (?, ?)",
+                coachProfileId2, coachProfileId3);
+            jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'REDUCED' WHERE id = ?",
+                coachProfileId3);
+            return null;
+        });
+
+        Map<?, ?> page0 = httpTestClient.makeHttpRequest(
+            baseUrl() + SEARCH_ENDPOINT + "?city=Frankfurt&language=German&page=0&size=1",
+            HttpMethod.GET, null, clientHeaders(), Map.class).getBody();
+        List<Map<String, Object>> coaches0 = (List<Map<String, Object>>) page0.get("coaches");
+        assertThat(coaches0).extracting(c -> c.get("displayName")).containsExactly("Bob Frankfurt");
+        assertThat((Integer) page0.get("totalElements")).isEqualTo(2);
+        assertThat((Boolean) page0.get("hasNext")).isTrue();
+
+        Map<?, ?> page1 = httpTestClient.makeHttpRequest(
+            baseUrl() + SEARCH_ENDPOINT + "?city=Frankfurt&language=German&page=1&size=1",
+            HttpMethod.GET, null, clientHeaders(), Map.class).getBody();
+        List<Map<String, Object>> coaches1 = (List<Map<String, Object>>) page1.get("coaches");
+        // REDUCED sorts after ACTIVE but is still searchable with a language filter.
+        assertThat(coaches1).extracting(c -> c.get("displayName")).containsExactly("Carol Frankfurt");
+        assertThat((Boolean) page1.get("hasNext")).isFalse();
+    }
+
     @Test
     void searchCoaches_noMatches_returnsEmptyPageNotError() {
         ResponseEntity<Map> response = httpTestClient.makeHttpRequest(

@@ -3,18 +3,22 @@ package com.softropic.skillars.platform.reviews.service;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.repo.DisputeRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.booking.repo.BookingReviewEligibilityProjection;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.reviews.contract.AuthorRole;
 import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
 import com.softropic.skillars.platform.reviews.repo.CoachReview;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -23,9 +27,11 @@ import org.springframework.context.ApplicationEventPublisher;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -83,7 +89,7 @@ class ReviewSubmissionServiceTest {
         when(bookingRepository.findQualifyingCompletedBookings(eq(COACH_ID), eq(AUTHOR_ID), any(), any()))
             .thenReturn(Collections.emptyList());
 
-        assertThatThrownBy(() -> service.submitReview(COACH_ID, AUTHOR_ID, "PARENT", 5, "Great coach!"))
+        assertThatThrownBy(() -> service.submitReview(COACH_ID, AUTHOR_ID, 5, "Great coach!"))
             .isInstanceOf(OperationNotAllowedException.class);
 
         verify(configService).getBoundedInt(
@@ -149,5 +155,54 @@ class ReviewSubmissionServiceTest {
             .isInstanceOf(OperationNotAllowedException.class)
             .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
             .isEqualTo(ReviewErrorCode.EDIT_NOT_PERMITTED);
+    }
+
+    // ── fix/content-consistency-and-lost-updates: author role from the booking relation ──────────
+
+    private static BookingReviewEligibilityProjection booking(long playerId) {
+        return () -> playerId;
+    }
+
+    private static PlayerProfile player(Long userId, Long parentId) {
+        PlayerProfile p = new PlayerProfile();
+        p.setUserId(userId);
+        p.setParentId(parentId);
+        return p;
+    }
+
+    private CoachReview submitAndCaptureSaved() {
+        when(coachProfileRepository.existsById(COACH_ID)).thenReturn(true);
+        when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
+            .thenReturn(7);
+        when(coachReviewRepository.saveAndFlush(any(CoachReview.class))).thenAnswer(inv -> {
+            CoachReview r = inv.getArgument(0);
+            r.setReviewId(REVIEW_ID);
+            return r;
+        });
+        service.submitReview(COACH_ID, AUTHOR_ID, 5, "Great coach!");
+        ArgumentCaptor<CoachReview> saved = ArgumentCaptor.forClass(CoachReview.class);
+        verify(coachReviewRepository).saveAndFlush(saved.capture());
+        return saved.getValue();
+    }
+
+    @Test
+    void submitReview_parentOfTheTrainedPlayer_isRecordedAsParent_whateverTheTokenAuthorities() {
+        // A COACH+PARENT account used to be read as COACH by ReviewResource and refused with
+        // AUTHOR_ROLE_NOT_ALLOWED; the role now comes from this relation alone.
+        when(bookingRepository.findQualifyingCompletedBookings(eq(COACH_ID), eq(AUTHOR_ID), any(), any()))
+            .thenReturn(List.of(booking(11L)));
+        when(playerProfileRepository.findById(11L)).thenReturn(Optional.of(player(null, AUTHOR_ID)));
+
+        assertThat(submitAndCaptureSaved().getAuthorRole()).isEqualTo(AuthorRole.PARENT);
+    }
+
+    @Test
+    void submitReview_selfOwnedPlayer_isRecordedAsPlayer_andWinsOverAParentRelation() {
+        when(bookingRepository.findQualifyingCompletedBookings(eq(COACH_ID), eq(AUTHOR_ID), any(), any()))
+            .thenReturn(List.of(booking(11L), booking(12L)));
+        when(playerProfileRepository.findById(11L)).thenReturn(Optional.of(player(null, AUTHOR_ID)));
+        when(playerProfileRepository.findById(12L)).thenReturn(Optional.of(player(AUTHOR_ID, null)));
+
+        assertThat(submitAndCaptureSaved().getAuthorRole()).isEqualTo(AuthorRole.PLAYER);
     }
 }

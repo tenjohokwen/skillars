@@ -149,18 +149,6 @@ public class CoachProfileService {
     }
 
     @Transactional
-    public CoachProfile getOrCreateDraft(Long userId) {
-        return coachProfileRepository.findByUserId(userId).orElseGet(() -> {
-            CoachProfile draft = new CoachProfile();
-            draft.setUserId(userId);
-            draft.setDisplayName("");
-            draft.setCanonicalTimezone("UTC");
-            draft.setStatus(CoachProfileStatus.DRAFT);
-            return coachProfileRepository.save(draft);
-        });
-    }
-
-    @Transactional
     public ProfileBuilderStepResponse saveStep1(Long userId, ProfileBuilderStep1Request req) {
         // AC2 (skillars-deferred-140): checked before any mutation — a rejected request must leave
         // nothing half-applied.
@@ -372,8 +360,12 @@ public class CoachProfileService {
             if (!req.photoUrl().startsWith(expectedPrefix)) {
                 throw new MarketplaceException("marketplace.invalidPhotoUrl", "Invalid photo key");
             }
-            profile.setPhotoUrl(req.photoUrl());
-            coachProfileRepository.save(profile);
+            // Targeted UPDATE of photo_url only (fix/content-consistency-and-lost-updates): the old
+            // setPhotoUrl + full-row save() from requireProfile's unlocked snapshot could silently
+            // revert a concurrent suspendCoach/strike status write, CoachProfile having no @Version.
+            // The managed `profile` is deliberately left untouched so its stale snapshot is never
+            // flushed over the row.
+            coachProfileRepository.updatePhotoUrlByUserId(userId, req.photoUrl());
         }
 
         return new ProfileBuilderStepResponse(profile.getId(), 5, 5);
@@ -519,7 +511,7 @@ public class CoachProfileService {
         // makes the two-concurrent-publishers case race-free by construction). Worse, an unconditional
         // insert would silently UPDATE — not conflict with — an existing row: SubscriptionService
         // .subscribeCoach has no DRAFT/ACTIVE guard, so a still-DRAFT coach can already hold a real
-        // PRO/ELITE marketplace.coach_subscriptions row before ever publishing, and overwriting it here
+        // paid-tier marketplace.coach_subscriptions row before ever publishing, and overwriting it here
         // would silently downgrade a paying coach to SCOUT with no error. Find-or-create instead:
         // preserve an existing row's tier untouched, and default only a genuinely new row to SCOUT.
         CoachSubscription subscription = coachSubscriptionRepository.findByCoachId(profile.getId())

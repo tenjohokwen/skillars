@@ -41,7 +41,7 @@ Separately, and not listed above because the set is large: many other schedulers
 jobs, `UserAdminService`, `VideoSubscriptionLifecycleListener`, `QuickCompleteTimeoutService`,
 `BookingExpiryScheduler`, `BookingReminderScheduler`, `SubscriptionGracePeriodChecker`,
 `SubscriptionChangeApplicator`, `PaymentPendingSweeper`, `SessionPackForfeitureScheduler`,
-`SessionPackExpiryNotifier`, `MessageModerationSweeper`, `MessageRetentionScheduler`). These are
+`SessionPackExpiryNotifier`, `MessageModerationSweeper`, `ReviewModerationSweeper`, `MessageRetentionScheduler`). These are
 correctly absent from the table above for a different reason than either bullet: their *cadence* is
 itself a hardcoded `cron`/`fixedDelay` literal, not a Spring property — so there is no cadence knob an
 operator could change that would leave the lock floor behind. If a scheduler's cadence is ever made

@@ -138,7 +138,7 @@
         <tr><td><code>Drill</code></td><td><code>drills</code></td><td><code>library_type</code> PLATFORM/PRIVATE, <code>status</code> ACTIVE/ARCHIVED, JSONB <code>metadata</code> (<code>DrillMetadata</code>: skills, <code>skillWeighting</code>, intensity, equipment, coaching points, …), <code>source_drill_id</code> for clones, <code>@Version</code>. 20 PLATFORM drills are seeded in V139.</td></tr>
         <tr><td><code>DrillTag</code> / <code>DrillTagId</code></td><td><code>drill_tags</code></td><td>Composite key (drillId, tag, coachId) — per-coach private tagging.</td></tr>
         <tr><td><code>DrillVideoRef</code></td><td><code>drill_video_refs</code></td><td>One row per drill pointing at a <code>video</code>-module <code>Video</code>; an original and its clones can share one <code>video_id</code>. No FK to <code>videos</code>.</td></tr>
-        <tr><td><code>Session</code></td><td><code>sessions</code></td><td>The plan for one <code>booking_id</code> (unique). JSONB <code>blocks</code> (max 4, each with ordered drill refs), <code>session_dna</code>, <code>equipment_list</code>, <code>development_focus</code>, <code>status</code> DRAFT/SAVED/COMPLETED/CANCELLED, and <code>source_template_id</code>/<code>source_template_name</code> when deployed from a template. No <code>@Version</code>.</td></tr>
+        <tr><td><code>Session</code></td><td><code>sessions</code></td><td>The plan for one <code>booking_id</code> (unique). JSONB <code>blocks</code> (max 4, each with ordered drill refs), <code>session_dna</code>, <code>equipment_list</code>, <code>development_focus</code>, <code>status</code> DRAFT/SAVED/COMPLETED/CANCELLED, and <code>source_template_id</code>/<code>source_template_name</code> when deployed from a template. No <code>@Version</code>: <code>updateSession</code> locks the row (<code>findByIdForUpdate</code>, NOWAIT + retry) and the two listeners use atomic conditional UPDATEs (see gotchas).</td></tr>
         <tr><td><code>SessionTemplate</code></td><td><code>session_templates</code></td><td>A coach's reusable copy of a plan's blocks/DNA/equipment/focus. <code>status</code> ACTIVE/ARCHIVED; <code>deploy_count</code>/<code>last_deployed_at</code> bumped by a bulk UPDATE on deploy.</td></tr>
         <tr><td><code>HomeworkAssignment</code></td><td><code>homework_assignments</code></td><td>One drill assigned to a player from a completed booking. Unique on (booking_id, drill_id); nullable <code>session_id</code> (QUICK bookings have no plan) and <code>pack_id</code> (provenance).</td></tr>
         <tr><td><code>HomeworkCompletion</code></td><td><code>homework_completions</code></td><td>Marks an assignment done; unique on <code>assignment_id</code>. Deleted by GDPR erasure (<code>GdprErasureService</code>).</td></tr>
@@ -154,7 +154,7 @@
         <tr><td><code>DrillSuggestionService</code></td><td>Suggests drills for a plan's open slots: weighted 40% development focus, 30% the player's open <code>NeglectedSkillFlag</code>s (from <code>development</code>), 20% age fit, 10% recency; candidates are ACTIVE PLATFORM + the coach's ACTIVE PRIVATE drills not already in the plan. Also used by <code>booking</code>'s <code>GET /api/bookings/session/{bookingId}/drills/suggestions</code>.</td></tr>
         <tr><td><code>DrillUploadService</code></td><td>Initiates/deletes a demo video on an owned PRIVATE drill. Takes the drill row lock (then the video row lock) before its check-then-act, delegates limits to <code>VideoTypeConstraints</code> and the upload session (incl. TUS auth fields) to <code>VideoService</code>, and fires <code>VideoPhysicalDeletionEvent</code> when the last ref to a video goes.</td></tr>
         <tr><td><code>SessionDnaCalculator</code> / <code>EquipmentListService</code></td><td>Pure functions over drill metadata: the radar score and a deduped, sorted equipment list.</td></tr>
-        <tr><td><code>SessionPlanService</code></td><td>Create/update/fetch a plan; validates booking ownership/status, enforces <code>DrillUsagePolicy</code>, recomputes DNA/equipment on every save. Also listens for <code>BookingCompletedEvent</code> (plan &rarr; COMPLETED) and <code>BookingStatusChangedEvent</code> (DRAFT/SAVED plan &rarr; CANCELLED when the booking reaches any terminal status other than COMPLETED).</td></tr>
+        <tr><td><code>SessionPlanService</code></td><td>Create/update/fetch a plan; validates booking ownership/status, enforces <code>DrillUsagePolicy</code>, recomputes DNA/equipment on every save. Also listens for <code>BookingCompletedEvent</code> (DRAFT/SAVED plan &rarr; COMPLETED; a CANCELLED plan stays CANCELLED) and <code>BookingStatusChangedEvent</code> (DRAFT/SAVED plan &rarr; CANCELLED when the booking reaches any terminal status other than COMPLETED).</td></tr>
         <tr><td><code>SessionTemplateService</code></td><td>Create (from a plan) / list / rename / archive templates; <code>listDeployableBookings</code> for the deploy picker; <code>deployTemplate</code> copies a template into a new DRAFT <code>Session</code> after re-validating the booking and every drill.</td></tr>
         <tr><td><code>HomeworkAssignmentService</code></td><td>Turns <code>BookingCompletedEvent.homeworkDrillIds</code> into assignments (one <code>REQUIRES_NEW</code> transaction per drill, erasure-guarded), publishes <code>HomeworkAssignedEvent</code>, serves the Locker Room (filtered to coaches with an active pack), records completions.</td></tr>
         <tr><td><code>CoachHomeworkQueryService</code></td><td>Read-only coach view of homework <em>this coach</em> assigned to a player, with <code>completedAt</code>. Authorised by <code>development.CoachPlayerAuthorizationService.requireCoachPlayerRelationshipForRead</code> (the shared coach-access window).</td></tr>
@@ -202,7 +202,7 @@
     <table>
       <thead><tr><th>Event</th><th>Direction</th><th>Notes</th></tr></thead>
       <tbody>
-        <tr><td><code>BookingCompletedEvent</code></td><td>Consumed (from <code>booking</code>)</td><td>Two <code>@Async</code> AFTER_COMMIT listeners: <code>HomeworkAssignmentService.handleBookingCompleted</code> (creates up to 2 assignments, truncating extras) and <code>SessionPlanService.handleBookingCompleted</code> (plan &rarr; COMPLETED, own <code>REQUIRES_NEW</code> tx).</td></tr>
+        <tr><td><code>BookingCompletedEvent</code></td><td>Consumed (from <code>booking</code>)</td><td>Two <code>@Async</code> AFTER_COMMIT listeners: <code>HomeworkAssignmentService.handleBookingCompleted</code> (creates up to 2 assignments, truncating extras) and <code>SessionPlanService.handleBookingCompleted</code> (DRAFT/SAVED plan &rarr; COMPLETED, own <code>REQUIRES_NEW</code> tx).</td></tr>
         <tr><td><code>BookingStatusChangedEvent</code></td><td>Consumed (from <code>booking</code>)</td><td><code>SessionPlanService.handleBookingTerminalNonCompletion</code> (AFTER_COMMIT, synchronous, <code>REQUIRES_NEW</code>): a DRAFT/SAVED plan whose booking hit a terminal status other than COMPLETED becomes CANCELLED. Terminality comes from <code>BookingStateMachine.isTerminal</code> — no hard-coded list. Forward-only (no backfill).</td></tr>
         <tr><td><code>HomeworkAssignedEvent</code></td><td>Published</td><td>Carries only the drill ids <em>newly inserted</em> by this invocation (a replayed completion publishes nothing). Published outside any transaction, so its consumer <code>development.TimelineEventListener.onHomeworkAssigned</code> uses <code>fallbackExecution = true</code>.</td></tr>
         <tr><td><code>VideoPhysicalDeletionEvent</code></td><td>Published + consumed internally</td><td>Fired by <code>DrillUploadService</code> when no <code>DrillVideoRef</code> still points at the video and the <code>videos</code> row still exists; consumed by <code>VideoPhysicalDeletionListener</code>.</td></tr>
@@ -263,7 +263,8 @@ sequenceDiagram
       are stored with the blocks, not recomputed on read; <code>uq_sessions_booking_id</code> (mapped to 409) backs
       the pre-check against a race. Updates follow the same path, are refused with <code>SESSION_PLAN_LOCKED</code>
       once the plan is COMPLETED/CANCELLED or the booking is terminal, and accept only DRAFT/SAVED as a client-set
-      status.
+      status. The COMPLETED/CANCELLED check is repeated after taking the row lock, so a completion that commits while
+      the edit is in flight wins.
     </p>
 
     <h3 id="2-coach-authors-deletes-a-private-drill">2. Coach authors / deletes a private drill</h3>
@@ -410,6 +411,18 @@ sequenceDiagram
         <code>feature.gate.fully_disabled</code> counter increments.</p>
     </div>
     <div class="callout warn">
+      <p><strong>A session plan's status has three writers and no <code>@Version</code>.</strong> The coach's
+      <code>updateSession</code> rewrites the whole row (status included) with <code>save()</code>, while
+      <code>handleBookingCompleted</code> and <code>handleBookingTerminalNonCompletion</code> move it to COMPLETED/CANCELLED.
+      <code>updateSession</code> therefore takes <code>SessionRepository.findByIdForUpdate</code> (NOWAIT, wrapped in
+      <code>PessimisticLockRetryer</code>) after its ownership check, refreshes, and re-checks COMPLETED/CANCELLED on the
+      locked state. The listeners are single conditional UPDATEs (<code>markCompletedByBookingId</code>,
+      <code>markCancelledIfOpenByBookingId</code>), which take the same row lock and so serialize with it. Both move only an
+      open (DRAFT/SAVED) plan, so a CANCELLED plan is no longer revived by a later completion event. Before
+      <code>fix/content-consistency-and-lost-updates</code> an edit racing a booking completion could flip COMPLETED back to SAVED.
+      A new writer of this entity must do the same: lock-and-refresh or a conditional UPDATE.</p>
+    </div>
+    <div class="callout warn">
       <p><strong>Use <code>DrillUsagePolicy</code> for any new code that puts a drill in front of a player.</strong>
         Before deferred-162, a plan could reference another coach's PRIVATE drill and return it in full. Writes must
         call <code>requireAllUsable</code> (same 404 for unknown and foreign — never a 403 that leaks existence);
@@ -469,7 +482,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

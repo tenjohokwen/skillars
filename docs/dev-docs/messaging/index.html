@@ -321,12 +321,15 @@ sequenceDiagram
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong><code>PENDING</code> content is <em>not</em> hidden.</strong> <code>toMessageDto</code> hides content
-      only for <code>BLOCKED</code> and <code>UNDER_REVIEW</code>, and <code>findByConversationIdAndNotDeleted</code>
-      does not filter on status. A message that is still PENDING, either during the Gemini call or because it is
-      stranded for up to the 30-minute sweep grace, is therefore returned with its content to <em>every</em> party who
-      fetches history, recipients included. Unread counts and list previews count only <code>APPROVED</code> rows. "Delivery" in
-      the strict sense means the SSE push and the unread badge, not visibility in the history API.</p>
+      <p><strong><code>PENDING</code> content is shown to its sender only.</strong> <code>toMessageDto(msg, viewerUserId)</code>
+      hides content for <code>BLOCKED</code> and <code>UNDER_REVIEW</code> for everyone, and for <code>PENDING</code> for
+      everyone except the sender. <code>findByConversationIdAndNotDeleted</code> does not filter on status, so a recipient
+      (or a parent in the oversight view) still gets the row, with <code>content: null</code> and
+      <code>moderationStatus: PENDING</code>, and the frontend renders the "held for review" notice. This covers the
+      Gemini call and a stranded message's up-to-30-minute sweep grace. The SSE path never carried content: it pushes ids
+      only, and <code>NEW_MESSAGE</code> fires only after an APPROVED verdict commits. Unread counts and list previews count
+      only <code>APPROVED</code> rows. (Before <code>fix/content-consistency-and-lost-updates</code>, PENDING content went
+      to every party.)</p>
     </div>
     <div class="callout warn">
       <p><strong>No sanitizer, and the fallback is wide open.</strong> Messaging content never passes through
@@ -412,7 +415,7 @@ sequenceDiagram
     </table>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
