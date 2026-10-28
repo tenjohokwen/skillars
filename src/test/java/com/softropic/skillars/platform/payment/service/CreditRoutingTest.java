@@ -114,6 +114,28 @@ class CreditRoutingTest {
         verify(creditWalletService, never()).lockAndGetBalance(any());
     }
 
+    /**
+     * fix/payment-agreed-price-lock: a negative wallet balance used to make creditToUse negative and
+     * charge the card price + |balance| with no ledger entry. Clamped: card charged exactly the price.
+     */
+    @Test
+    void negativeBalance_cardChargedExactlyTheSessionPrice_noCreditApplied() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("-15.00"));
+        reservationGranted();
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_neg");
+
+        service.onBookingAccepted(event(null));
+
+        verify(creditWalletService, never()).lockAndGetBalance(any());
+        verify(paymentGateway).chargeAndCapture(eq(BOOKING_ID), eq(PARENT_ID), eq(COACH_ID),
+            org.mockito.ArgumentMatchers.argThat(a -> a.compareTo(SESSION_PRICE) == 0));
+        verify(persistenceService).persistPaymentSuccess(
+            eq(BOOKING_ID), org.mockito.ArgumentMatchers.argThat(c -> c.signum() == 0),
+            org.mockito.ArgumentMatchers.argThat(a -> a.compareTo(SESSION_PRICE) == 0),
+            eq("pi_neg"), isNull(),
+            eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
+    }
+
     @Test
     void caseA_fullCreditCoversBooking_noStripeCall() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("100.00"));

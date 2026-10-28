@@ -13,8 +13,10 @@ import java.util.UUID;
 /**
  * feat/coach-workflow-gaps A22: previews the batch charge exactly as
  * {@link PaymentLifecycleService#onBatchBookingAccepted} will compute it — price per booking from
- * {@code coach_pricing.per_session_price} (zero when the coach has no pricing row, as there), subtotal over the
- * sessions, then {@link CreditCardSplit} against the payer's wallet balance.
+ * {@code coach_pricing.per_session_price}, subtotal over the sessions, then {@link CreditCardSplit} against the
+ * payer's wallet balance. fix/payment-agreed-price-lock: that same current price is what {@code createBatch}
+ * locks onto each booking ({@code agreed_price}) and settlement charges. With no pricing row the quote shows
+ * zero, but the accept then fails rather than confirming for free.
  */
 @Service
 @RequiredArgsConstructor

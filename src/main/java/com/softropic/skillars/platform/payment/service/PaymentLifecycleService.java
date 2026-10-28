@@ -28,8 +28,10 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -221,10 +223,11 @@ public class PaymentLifecycleService {
 
     private void handleCreditBasedBooking(BookingAcceptedEvent event) {
         BigDecimal balance = walletBalanceForSettlement(event.getParentId());
-        BigDecimal creditToUse = balance.min(event.getSessionPrice());
-        BigDecimal stripeAmount = creditToUse.compareTo(event.getSessionPrice()) >= 0
-            ? BigDecimal.ZERO
-            : event.getSessionPrice().subtract(creditToUse);
+        // fix/payment-agreed-price-lock: the same split rule as the batch path, which clamps a negative
+        // balance to zero (balance.min(price) here used to charge the card price + |balance|).
+        CreditCardSplit split = CreditCardSplit.of(balance, event.getSessionPrice());
+        BigDecimal creditToUse = split.creditApplied();
+        BigDecimal stripeAmount = split.cardCharge().signum() == 0 ? BigDecimal.ZERO : split.cardCharge();
 
         String paymentIntentId = null;
         if (stripeAmount.compareTo(BigDecimal.ZERO) > 0) {
@@ -327,13 +330,22 @@ public class PaymentLifecycleService {
         // here, it deadlocks with NO timeout — a plain UPDATE ignores the
         // jakarta.persistence.lock.timeout=0 (NOWAIT) hint.
         List<UUID> reserved = new ArrayList<>();
+        Map<UUID, BigDecimal> reservedPrices = new HashMap<>();
         BigDecimal creditSubtotal = BigDecimal.ZERO;
         for (UUID bookingId : creditIds) {
             Booking b = bookingRepository.findById(bookingId).orElse(null);
             if (b == null) continue;
-            BigDecimal price = coachPricingRepository.findByCoachId(b.getCoachId())
-                .map(p -> p.getPerSessionPrice())
-                .orElse(BigDecimal.ZERO);
+            BigDecimal price = batchBookingPrice(b);
+            if (price == null) {
+                // fix/payment-agreed-price-lock: used to settle at .orElse(ZERO), i.e. confirm for free.
+                // acceptOneBooking now refuses an unpriceable booking, so this is a backstop: decline it
+                // before any reservation or charge (nothing was taken).
+                Counter.builder(SETTLE_ABORTED_COUNTER).tag("reason", "unpriced").register(meterRegistry).increment();
+                log.error("Batch booking has no agreed price and no coach pricing — declined, nothing charged: "
+                    + "bookingId={} batchId={}", bookingId, event.getBatchId());
+                declineQuietly(bookingId, event.getBatchId());
+                continue;
+            }
             // Intended credit is not known per booking until the wallet split below, so the whole
             // price is reserved under stripeCharged and the settle write-back corrects both
             // columns. A reserved row's amounts are an operator's reconciliation hint, not an
@@ -351,6 +363,7 @@ public class PaymentLifecycleService {
                 continue;
             }
             reserved.add(bookingId);
+            reservedPrices.put(bookingId, price);
             creditSubtotal = creditSubtotal.add(price);
         }
 
@@ -396,17 +409,26 @@ public class PaymentLifecycleService {
         String finalPaymentIntentId = paymentIntentId;
         BigDecimal remainingCredit = creditToUse;
         for (UUID bookingId : reserved) {
-            if (isSettled(bookingId)) continue;
-            Booking b = bookingRepository.findById(bookingId).orElse(null);
-            if (b == null) continue;
-            BigDecimal price = coachPricingRepository.findByCoachId(b.getCoachId())
-                .map(p -> p.getPerSessionPrice()).orElse(BigDecimal.ZERO);
+            // fix/payment-agreed-price-lock: the price reserved above (agreed_price, or the legacy
+            // fallback), so the shares always sum to exactly what was debited and charged.
+            BigDecimal price = reservedPrices.get(bookingId);
             BigDecimal bookingCreditShare = remainingCredit.compareTo(BigDecimal.ZERO) > 0
                 ? price.min(remainingCredit) : BigDecimal.ZERO;
             remainingCredit = remainingCredit.subtract(bookingCreditShare);
             BigDecimal bookingStripeShare = price.subtract(bookingCreditShare);
             final BigDecimal creditShare = bookingCreditShare;
             final BigDecimal stripeShare = bookingStripeShare;
+            Booking b = isSettled(bookingId) ? null : bookingRepository.findById(bookingId).orElse(null);
+            if (b == null) {
+                // fix/payment-agreed-price-lock: this booking's share was already debited and charged
+                // above. It used to be skipped silently, keeping the money; credit it back instead. Its
+                // payment row is left alone (something else settled it, or the booking is gone).
+                log.error("Batch booking settled elsewhere or vanished after the batch charge — crediting its "
+                        + "share back to the wallet: bookingId={} batchId={} credit={} card={}",
+                    bookingId, event.getBatchId(), creditShare, stripeShare);
+                refundShareQuietly(event.getParentId(), bookingId, event.getBatchId(), creditShare.add(stripeShare));
+                continue;
+            }
             try {
                 // Own transaction per booking, as in the pack loop above: one booking failing to
                 // settle must not discard the siblings that already succeeded.
@@ -416,9 +438,53 @@ public class PaymentLifecycleService {
                         event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
                         b.getRequestedStartTime(), b.getCanonicalTimezone()));
             } catch (Exception e) {
-                log.error("Credit batch settle failed: bookingId={} batchId={}", bookingId, event.getBatchId());
-                persistenceService.declineBatchBooking(bookingId, event.getBatchId());
+                log.error("Credit batch settle failed after the batch charge: bookingId={} batchId={}",
+                    bookingId, event.getBatchId(), e);
+                // fix/payment-agreed-price-lock: the parent WAS charged for this booking (credit share +
+                // card share), so declining it with a zeroed CHARGE_FAILED row kept their money. Decline
+                // it with the real amounts and credit the full share back to the wallet, atomically.
+                try {
+                    persistenceService.declineBatchBookingAfterCharge(bookingId, event.getBatchId(),
+                        creditShare, stripeShare, finalPaymentIntentId, event.getParentId());
+                } catch (RuntimeException de) {
+                    // Nothing committed: the reserved CAPTURE_PENDING row survives, so the booking stays
+                    // in PAYMENT_PENDING and PaymentPendingSweeper escalates it. Do not abandon siblings.
+                    log.error("[BATCH_DECLINE_REFUND_FAILED] bookingId={} batchId={} parentId={} credit={} "
+                            + "card={} — decline and refund both rolled back; reconcile by hand",
+                        bookingId, event.getBatchId(), event.getParentId(), creditShare, stripeShare, de);
+                }
             }
+        }
+    }
+
+    /**
+     * fix/payment-agreed-price-lock: what a non-pack batch booking settles at — its {@code agreed_price},
+     * else (pre-V192 row) the coach's current price, else null (unpriceable).
+     */
+    private BigDecimal batchBookingPrice(Booking b) {
+        if (b.getAgreedPrice() != null) {
+            return b.getAgreedPrice();
+        }
+        return coachPricingRepository.findByCoachId(b.getCoachId())
+            .map(p -> p.getPerSessionPrice())
+            .orElse(null);
+    }
+
+    private void declineQuietly(UUID bookingId, UUID batchId) {
+        try {
+            persistenceService.declineBatchBooking(bookingId, batchId);
+        } catch (RuntimeException e) {
+            log.error("Declining unpriced batch booking failed: bookingId={} batchId={}", bookingId, batchId, e);
+        }
+    }
+
+    private void refundShareQuietly(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount) {
+        if (amount.signum() <= 0) return;
+        try {
+            persistenceService.refundBatchShareToCredit(parentId, bookingId, batchId, amount);
+        } catch (RuntimeException e) {
+            log.error("[BATCH_DECLINE_REFUND_FAILED] bookingId={} batchId={} parentId={} amount={} — refund "
+                + "not enqueued; credit by hand", bookingId, batchId, parentId, amount, e);
         }
     }
 }

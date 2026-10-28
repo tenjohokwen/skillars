@@ -51,6 +51,7 @@ public class BookingPaymentPersistenceService {
     private final MeterRegistry meterRegistry;
     private final PessimisticLockRetryer lockRetryer;
     private final ConfigService configService;
+    private final RefundOutboxSupport refundOutboxSupport;
 
     /**
      * skillars-deferred-137 AC2: self-reference so {@code reserveCapture}/{@code persistPaymentFailure}/
@@ -397,5 +398,65 @@ public class BookingPaymentPersistenceService {
         bp.setStatus(BookingPaymentStatus.CHARGE_FAILED);
         bookingPaymentRepository.save(bp);
         transitionOrReport(bookingId, BookingEvent.PAYMENT_FAILED);
+    }
+
+    /**
+     * fix/payment-agreed-price-lock: a batch booking whose confirm failed AFTER the batch charge
+     * succeeded. Unlike {@link #declineBatchBooking} (a zeroed CHARGE_FAILED row, "no money moved"),
+     * the parent was charged {@code creditShare + stripeShare} for it, so this records those real
+     * amounts under {@link BookingPaymentStatus#REFUNDED_TO_CREDIT}, declines the booking, and
+     * enqueues the full share as a wallet {@code BOOKING_REFUND} on the durable outbox — all in one
+     * {@code REQUIRES_NEW} transaction (the {@code MANDATORY} enqueue joins it), so the refund exists
+     * exactly when the decline does. Idempotent per booking via {@code uq_pcl_booking_refund}. Same
+     * REQUIRES_NEW / payment-pool routing as {@link #declineBatchBooking}, for the same reasons.
+     */
+    public void declineBatchBookingAfterCharge(UUID bookingId, UUID batchId, BigDecimal creditShare,
+                                               BigDecimal stripeShare, String paymentIntentId, Long parentId) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.declineBatchBookingAfterChargeTransactional(bookingId, batchId, creditShare, stripeShare,
+                paymentIntentId, parentId);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void declineBatchBookingAfterChargeTransactional(UUID bookingId, UUID batchId, BigDecimal creditShare,
+                                                            BigDecimal stripeShare, String paymentIntentId,
+                                                            Long parentId) {
+        BookingPayment bp = loadOrCreate(bookingId);
+        bp.setBatchPaymentIntentId(batchId);
+        bp.setCreditDebited(creditShare);
+        bp.setStripeCharged(stripeShare);
+        bp.setStripePaymentIntentId(paymentIntentId);
+        bp.setStatus(BookingPaymentStatus.REFUNDED_TO_CREDIT);
+        bookingPaymentRepository.save(bp);
+        transitionOrReport(bookingId, BookingEvent.PAYMENT_FAILED);
+        BigDecimal refund = creditShare.add(stripeShare);
+        if (refund.signum() > 0) {
+            refundOutboxSupport.enqueueBookingRefund(parentId, refund, bookingId,
+                "Batch booking could not be confirmed - payment returned as credit");
+        }
+    }
+
+    /**
+     * fix/payment-agreed-price-lock: credits a batch booking's already-charged share back to the wallet
+     * when the booking can no longer be settled (settled elsewhere or gone after the batch charge). Its
+     * own transaction so the {@code MANDATORY} outbox enqueue has one; touches no booking row.
+     */
+    public void refundBatchShareToCredit(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.refundBatchShareToCreditTransactional(parentId, bookingId, batchId, amount);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void refundBatchShareToCreditTransactional(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount) {
+        refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId,
+            "Batch booking could not be confirmed - payment returned as credit (batch " + batchId + ")");
     }
 }

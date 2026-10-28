@@ -296,8 +296,9 @@ public class BookingService {
 
     /**
      * What the payer actually paid for a captured booking — the full-refund amount. A card/credit
-     * booking's {@code booking_payments} row records the credit debited plus the Stripe charge; the
-     * coach's current price is only a fallback for a row-less legacy booking (and is wrong once the
+     * booking's {@code booking_payments} row records the credit debited plus the Stripe charge; failing
+     * that, the booking's {@code agreed_price} (fix/payment-agreed-price-lock); the
+     * coach's current price is only a fallback for a row-less pre-V192 booking (and is wrong once the
      * coach has re-priced, which is why it is not the primary source). A pack booking refunds the
      * pack's per-session price (its row records zero — the pack was charged at purchase).
      *
@@ -476,6 +477,11 @@ public class BookingService {
         String sanitizedNotes = sanitizeAndTruncate(contactDetailSanitizer, req.notes(), 500);
         booking.setNotes(sanitizedNotes);
         booking.setSessionPackPurchaseId(req.sessionPackPurchaseId());
+        // fix/payment-agreed-price-lock: lock the price the parent is requesting at (pack bookings keep
+        // the pack's own locked price), read under the coach row lock taken above.
+        if (req.sessionPackPurchaseId() == null) {
+            booking.setAgreedPrice(currentCoachPrice(req.coachId()));
+        }
         bookingRepository.save(booking);
 
         String coachEmail = resolveEmail(coach.getUserId(), booking.getId());
@@ -645,15 +651,34 @@ public class BookingService {
         transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, context, true);
     }
 
-    private BigDecimal resolveSessionPrice(Booking booking) {
+    /**
+     * The price a booking is charged (and, absent a captured payment row, refunded at): the pack's
+     * locked per-session price, else the {@code agreed_price} locked at request time
+     * (fix/payment-agreed-price-lock), else — only for a pre-V192 row — the coach's current price.
+     * Throws when none exists, so an unpriceable booking is never confirmed for free. Package-private
+     * for {@code BookingBatchService.acceptOneBooking}'s pre-accept check.
+     */
+    BigDecimal resolveSessionPrice(Booking booking) {
         if (booking.getSessionPackPurchaseId() != null) {
             return sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
                 .map(p -> p.getPricePerSession())
                 .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
         }
-        return coachPricingRepository.findByCoachId(booking.getCoachId())
+        if (booking.getAgreedPrice() != null) {
+            return booking.getAgreedPrice();
+        }
+        BigDecimal current = currentCoachPrice(booking.getCoachId());
+        if (current == null) {
+            throw new ResourceNotFoundException("Coach pricing not found", "coach_pricing");
+        }
+        return current;
+    }
+
+    /** fix/payment-agreed-price-lock: the coach's current per-session price, or null with no pricing row. */
+    BigDecimal currentCoachPrice(UUID coachId) {
+        return coachPricingRepository.findByCoachId(coachId)
             .map(p -> p.getPerSessionPrice())
-            .orElseThrow(() -> new ResourceNotFoundException("Coach pricing not found", "coach_pricing"));
+            .orElse(null);
     }
 
     @Transactional

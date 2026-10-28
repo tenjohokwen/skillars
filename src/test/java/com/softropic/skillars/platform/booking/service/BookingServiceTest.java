@@ -1286,6 +1286,34 @@ class BookingServiceTest {
         verify(eventPublisher).publishEvent(any(BookingAcceptedEvent.class));
     }
 
+    /** fix/payment-agreed-price-lock: the accept event carries the price locked at request time. */
+    @Test
+    void acceptBooking_agreedPriceLocked_eventCarriesItNotTheRaisedCurrentPrice() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        booking.setAgreedPrice(new BigDecimal("50.00"));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
+        lenient().when(coachPricingRepository.findByCoachId(COACH_ID))
+            .thenReturn(Optional.of(makeCoachPricing(new BigDecimal("80.00"))));
+
+        bookingService.acceptBooking(booking.getId(), COACH_USER_ID);
+
+        org.mockito.ArgumentCaptor<org.springframework.context.ApplicationEvent> ev =
+            org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(ev.capture());
+        assertThat(ev.getAllValues()).filteredOn(BookingAcceptedEvent.class::isInstance).singleElement()
+            .satisfies(e -> assertThat(((BookingAcceptedEvent) e).getSessionPrice()).isEqualByComparingTo("50.00"));
+    }
+
     @Test
     void acceptBooking_concurrentModification_throwsRetryableException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");

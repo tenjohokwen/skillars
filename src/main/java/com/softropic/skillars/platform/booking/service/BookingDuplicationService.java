@@ -132,6 +132,10 @@ public class BookingDuplicationService {
         newBooking.setRequestedStartTime(newStart);
         newBooking.setRequestedEndTime(newEnd);
         newBooking.setSessionPackPurchaseId(packId);
+        // fix/payment-agreed-price-lock: a non-pack duplicate locks the coach's price as of the proposal.
+        if (packId == null) {
+            newBooking.setAgreedPrice(bookingService.currentCoachPrice(original.getCoachId()));
+        }
         bookingRepository.save(newBooking);
 
         String parentEmail = userRepository.findById(original.getParentId())

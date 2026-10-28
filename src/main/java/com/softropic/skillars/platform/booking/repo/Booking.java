@@ -15,6 +15,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -95,6 +96,15 @@ public class Booking {
 
     @Column(name = "session_pack_purchase_id", updatable = false)
     private UUID sessionPackPurchaseId;
+
+    /**
+     * fix/payment-agreed-price-lock (V192): the coach's per-session price when this (non-pack) request
+     * was made — what accept/settle charges, so a coach re-pricing before accepting cannot change it.
+     * NULL for pack bookings (the pack's locked price applies), rows written before V192, and requests
+     * made while the coach had no pricing row; readers then fall back to the current coach_pricing row.
+     */
+    @Column(name = "agreed_price", precision = 10, scale = 2, updatable = false)
+    private BigDecimal agreedPrice;
 
     @Column(name = "cancel_reason", length = 50)
     private String cancelReason;
