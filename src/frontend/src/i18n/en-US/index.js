@@ -1306,6 +1306,7 @@ export default {
       reviewConversation: 'Review conversation',
       openReviewQueue: 'Open review queue',
       openCoach: 'Open coach',
+      openBooking: 'Open booking',
       openDisputes: 'Open disputes',
       markHandled: 'Mark handled',
       markHandledSuccess: 'Alert marked as handled.',
@@ -1569,9 +1570,8 @@ export default {
       coachStrikes: 'Reliability strikes (30 days)',
     },
     bookings: {
-      title: 'Stuck bookings',
-      subtitle:
-        'Look up a booking and force-complete it when the coach never finished the session wrap-up',
+      title: 'Booking lookup',
+      subtitle: 'Look up a booking to force-complete a stuck one, or cancel it with a full refund',
       bookingIdLabel: 'Booking ID',
       bookingIdInvalid: 'Enter a valid booking ID',
       lookupAction: 'Look up',
@@ -1607,6 +1607,27 @@ export default {
       outcomeNotStuck: 'No action taken: the booking is no longer awaiting the wrap-up.',
       forceCompleteConflict: 'The booking changed while you were working on it. Look it up again.',
       forceCompleteFailed: 'Force-complete failed. Please try again.',
+      cancelAction: 'Cancel booking',
+      cancelHint:
+        'Cancels the booking and refunds the parent in full for anything already paid. The coach gets no strike.',
+      liveSessionHint:
+        'This session is in progress or paused and cannot be cancelled here. Contact the parent directly.',
+      cancelConfirmTitle: 'Cancel this booking?',
+      cancelConsequencesIntro: 'Cancelling will:',
+      cancelConsequenceStatus: 'move the booking to Cancelled;',
+      cancelConsequenceRefund:
+        'refund the parent in full for anything already paid (a pack session goes back to the pack; a card or credit payment is credited to their Skillars balance);',
+      cancelConsequenceNoStrike: 'not count against the coach (no reliability strike);',
+      cancelConsequenceNotice:
+        'email the parent that the Skillars team cancelled the session, without giving a reason;',
+      cancelConsequenceAlert: "close the booking's open safety-hold alert, if there is one;",
+      cancelOutcomeCancelled: 'Booking cancelled. The parent has been refunded and notified.',
+      cancelOutcomeLiveSession: 'Not cancelled: the session is in progress or paused.',
+      cancelOutcomePaymentInProgress:
+        'Not cancelled: a card payment for this booking is being processed. Try again in a minute.',
+      cancelOutcomeNotCancellable:
+        'Not cancelled: the booking has already ended or been cancelled.',
+      cancelFailed: 'Cancelling failed. Please try again.',
     },
     videos: {
       title: 'Video review',
@@ -2486,7 +2507,7 @@ export default {
       BOOKING_CANCELLED_BY_PARENT:
         'The session on {requestedStartTime} was cancelled by the parent.',
       BOOKING_CANCELLED_COACH_UNAVAILABLE:
-        'Your session with {coachDisplayName} on {requestedStartTime} was cancelled because the coach is unavailable. Any payment has been refunded in full.',
+        'Your session with {coachDisplayName} on {requestedStartTime} has been cancelled. Any payment has been refunded in full.',
       BOOKING_CANCELLED_BY_COACH: 'Your coach cancelled the session on {requestedStartTime}.',
       COACH_NO_SHOW: 'A coach no-show was recorded for the session on {requestedStartTime}.',
       PLAYER_NO_SHOW: 'A player no-show was recorded for the session on {requestedStartTime}.',
@@ -2682,7 +2703,7 @@ export default {
     adminUsers: 'Users',
     groupAdminOperations: 'Operations',
     adminVideos: 'Video review',
-    adminBookings: 'Stuck bookings',
+    adminBookings: 'Booking lookup',
     adminFinance: 'Finance',
     adminGdpr: 'GDPR requests',
     adminConfig: 'Configuration',

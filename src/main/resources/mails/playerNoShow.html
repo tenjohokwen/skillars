@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.player_no_show.title}">Player No-Show Reported</title>
+</head>
+<body>
+    <h2 th:text="#{email.booking.player_no_show.title}">Player No-Show Reported</h2>
+    <p>Your no-show report for the session on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>) has been recorded.</p>
+    <p>You can review your bookings on Skillars: <a th:href="${map.bookingsUrl}" th:text="${map.bookingsUrl}">bookings</a></p>
+</body>
+</html>

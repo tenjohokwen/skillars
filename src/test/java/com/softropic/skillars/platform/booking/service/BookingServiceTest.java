@@ -7,6 +7,7 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
@@ -1403,7 +1404,6 @@ class BookingServiceTest {
         // `statusBeforeCancel == PAYMENT_PENDING &&`, and Java && short-circuits. Stubbing it in
         // the ACCEPTED/CONFIRMED tests would fail them with UnnecessaryStubbingException.
         when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.empty());
-        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
@@ -1486,7 +1486,6 @@ class BookingServiceTest {
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(failed));
-        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
@@ -1548,7 +1547,6 @@ class BookingServiceTest {
         // UAT.3 AC2: locked re-read. No bookingPaymentRepository stub — the payment lookup sits
         // behind `statusBeforeCancel == PAYMENT_PENDING &&` and is never reached from this status.
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
-        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
@@ -1671,7 +1669,6 @@ class BookingServiceTest {
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.empty());
-        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
@@ -1789,6 +1786,60 @@ class BookingServiceTest {
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
+    }
+
+    /**
+     * C6: ACCEPTED has taken no money (a card booking is charged, a pack session deducted, only at
+     * settle). The coach cancelling it must say so on the event — the refund listeners used to refund
+     * (or restore a pack session) for it — and must not look up a price at all.
+     */
+    @Test
+    void cancelBookingAsCoach_acceptedBooking_isNotCaptured_andOwesNothing() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "ACCEPTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "SCHEDULING_PREFERENCE");
+
+        BookingCancelledByCoachEvent event = capturedEvent(BookingCancelledByCoachEvent.class);
+        assertThat(event.isPaymentCaptured()).isFalse();
+        assertThat(event.isWalletRefund()).isFalse();
+        assertThat(event.getSessionPrice()).isEqualByComparingTo("0");
+        verify(coachPricingRepository, never()).findByCoachId(any());
+    }
+
+    @Test
+    void cancelBookingAsCoach_confirmedBooking_refundsWhatWasPaid_notTheCurrentPrice() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        BookingPayment paid = new BookingPayment();
+        paid.setBookingId(booking.getId());
+        paid.setStatus("CAPTURED");
+        paid.setCreditDebited(new BigDecimal("10.00"));
+        paid.setStripeCharged(new BigDecimal("30.00"));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(paid));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "HEALTH_MEDICAL");
+
+        BookingCancelledByCoachEvent event = capturedEvent(BookingCancelledByCoachEvent.class);
+        assertThat(event.isPaymentCaptured()).isTrue();
+        assertThat(event.isWalletRefund()).isTrue();
+        assertThat(event.getSessionPrice()).isEqualByComparingTo("40.00");
+    }
+
+    private <T extends ApplicationEvent> T capturedEvent(Class<T> type) {
+        ArgumentCaptor<ApplicationEvent> captor = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(captor.capture());
+        return captor.getAllValues().stream().filter(type::isInstance).map(type::cast).findFirst().orElseThrow();
     }
 
     // ---- recordNoShowPlayer tests ----

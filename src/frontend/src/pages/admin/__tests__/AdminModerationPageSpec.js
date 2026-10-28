@@ -189,6 +189,10 @@ describe('AdminModerationPage.vue', () => {
 
     const btn = wrapper.find('[data-testid="alert-resolve-safety-hold-btn"]')
     expect(btn.exists()).toBe(true)
+    // C6: the alert also links to the booking, where the admin can cancel it once it is cancellable.
+    expect(wrapper.find('[data-testid="alert-open-booking-btn"]').attributes('href')).toContain(
+      '/admin/bookings?bookingId=b6',
+    )
     await wrapper.vm.resolveSafetyHoldAlert('a6')
     await flushPromises()
 

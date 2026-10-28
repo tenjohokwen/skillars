@@ -127,6 +127,21 @@ class CancellationRefundMatrixTest {
         verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
+    // --- C6: coach cancels an ACCEPTED pack booking: the session was never deducted ---
+    @Test
+    void coachCancel_packNotCaptured_restoresNothing_butStillStrikes() {
+        UUID packId = UUID.randomUUID();
+        BookingCancelledByCoachEvent event = new BookingCancelledByCoachEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, "SCHEDULING_PREFERENCE", packId, java.math.BigDecimal.ZERO,
+            false, false, "parent@test.com", Instant.now(), "UTC");
+
+        service.onBookingCancelledByCoach(event);
+
+        verify(packSessionService, never()).restoreSession(any());
+        verify(cancellationHistoryRepository).save(any());
+        verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
+    }
+
     // --- Coach cancel, pack expired ---
     @Test
     void coachCancel_packExpired_writesRefund_noRestore() {
@@ -187,7 +202,7 @@ class CancellationRefundMatrixTest {
     private BookingCancelledByCoachEvent coachEvent(UUID packId, String reason, boolean packExpired) {
         return new BookingCancelledByCoachEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID,
-            reason, packId, SESSION_PRICE, packExpired,
+            reason, packId, SESSION_PRICE, packExpired, true,
             "parent@test.com", Instant.now(), "UTC"
         );
     }

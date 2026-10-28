@@ -30,6 +30,8 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -400,6 +402,17 @@ public class BookingEmailListener {
         }
     }
 
+    /**
+     * The refund a cancellation gave the payer, for the parent-facing notices: {@code refundType} PACK
+     * (session returned to the pack), CREDIT ({@code refundAmount} credited to the wallet) or NONE
+     * (nothing had been charged). Mirrors exactly what RefundEnqueueListener / CancellationRefundService do.
+     */
+    private static void putRefund(Map<String, Object> data, boolean packRestore, boolean walletRefund, BigDecimal amount) {
+        data.put("refundType", packRestore ? "PACK" : walletRefund ? "CREDIT" : "NONE");
+        data.put("refundAmount", walletRefund && amount != null
+            ? amount.setScale(2, RoundingMode.HALF_UP).toPlainString() : "");
+    }
+
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledDueToPause(BookingCancelledDueToPauseEvent event) {
         try {
@@ -431,6 +444,7 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("bookingsUrl", frontendLinks.route("coach/booking-requests"));
 
             Recipient recipient = new Recipient();
             recipient.setEmail(event.getCoachEmail());
@@ -455,6 +469,8 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
+            putRefund(data, event.isPackRestore(), event.isWalletRefund(), event.getSessionPrice());
+            data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();
             recipient.setEmail(event.getParentEmail());
@@ -487,10 +503,10 @@ public class BookingEmailListener {
             data.put("coachDisplayName", event.getCoachDisplayName() != null ? event.getCoachDisplayName() : "");
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
-            String refundType = event.isPackRestore() ? "PACK" : event.isWalletRefund() ? "CREDIT" : "NONE";
-            data.put("refundType", refundType);
-            data.put("refundAmount", event.isWalletRefund() && event.getRefundAmount() != null
-                ? event.getRefundAmount().setScale(2, java.math.RoundingMode.HALF_UP).toPlainString() : "");
+            putRefund(data, event.isPackRestore(), event.isWalletRefund(), event.getRefundAmount());
+            // C6: a single booking an admin cancelled from the admin bookings page is worded "cancelled by
+            // the Skillars team" — "the coach is unavailable" is only true for a suspension / safety-hold sweep.
+            data.put("cancelledBy", BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason()) ? "SKILLARS" : "COACH_UNAVAILABLE");
             data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();
@@ -516,6 +532,11 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
+            // NO_SHOW_COACH only leaves UPCOMING, so payment was always captured.
+            boolean pack = event.getSessionPackPurchaseId() != null;
+            putRefund(data, pack && !event.isPackExpiredAtCancellation(),
+                !pack || event.isPackExpiredAtCancellation(), event.getSessionPrice());
+            data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();
             recipient.setEmail(event.getParentEmail());
@@ -540,6 +561,7 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("bookingsUrl", frontendLinks.route("coach/booking-requests"));
 
             Recipient recipient = new Recipient();
             recipient.setEmail(event.getCoachEmail());

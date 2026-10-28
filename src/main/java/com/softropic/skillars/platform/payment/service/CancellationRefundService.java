@@ -47,11 +47,11 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
-        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
-        if (event.getSessionPackPurchaseId() != null) {
-            if (!event.isPackExpiredAtCancellation()) {
-                packSessionService.restoreSession(event.getSessionPackPurchaseId());
-            }
+        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT).
+        // C6: only a captured booking's pack session was ever deducted (at settle), so an ACCEPTED one
+        // has nothing to restore — restoring it would hand the parent a free session.
+        if (event.isPackRestore()) {
+            packSessionService.restoreSession(event.getSessionPackPurchaseId());
         }
 
         // Always record cancellation history — ALL coach cancellations (excused AND unexcused)

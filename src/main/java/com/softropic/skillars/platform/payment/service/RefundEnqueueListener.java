@@ -42,15 +42,15 @@ public class RefundEnqueueListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
-        // Replicate the two enqueue sites from CancellationRefundService.onBookingCancelledByCoach
-        if (event.getSessionPackPurchaseId() != null && event.isPackExpiredAtCancellation()) {
+        // C6: only money actually taken is refunded. isWalletRefund() is false for an ACCEPTED booking
+        // (nothing charged yet) and for an unexpired pack booking (its session is restored by
+        // CancellationRefundService instead) — the same rule as onBookingCancelledByAdmin.
+        if (event.isWalletRefund()) {
             refundOutboxSupport.enqueueBookingRefund(
                 event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach cancellation — expired pack refund");
-        } else if (event.getSessionPackPurchaseId() == null) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Coach cancellation — full refund");
+                event.getSessionPackPurchaseId() != null
+                    ? "Coach cancellation — expired pack refund"
+                    : "Coach cancellation — full refund");
         }
     }
 

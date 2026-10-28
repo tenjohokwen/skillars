@@ -284,7 +284,7 @@ public class BookingService {
 
         eventPublisher.publishEvent(new BookingCancelledByAdminEvent(
             this, bookingId, booking.getParentId(), booking.getCoachId(), booking.getSessionPackPurchaseId(),
-            refundAmount, paymentCaptured, packExpired, parentEmail, coachDisplayName,
+            refundAmount, paymentCaptured, packExpired, parentEmail, coachDisplayName, cancelReason,
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()));
         return AdminBookingCancellationOutcome.CANCELLED;
     }
@@ -1087,7 +1087,9 @@ public class BookingService {
         boolean refundEligible = paymentWasCaptured
             && (booking.getRequestedStartTime().isAfter(Instant.now().plus(24, ChronoUnit.HOURS))
                 || Instant.now().isAfter(booking.getRequestedStartTime()));
-        BigDecimal sessionPrice = resolveSessionPrice(booking);
+        // C6: the refund is what the payer actually paid (resolveAmountPaid), not the coach's current
+        // price; nothing is owed — and no price lookup can fail the cancel — before capture.
+        BigDecimal sessionPrice = paymentWasCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
         String parentEmail = resolveEmail(parentUserId, bookingId);
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
@@ -1106,24 +1108,41 @@ public class BookingService {
         "WEATHER", "SCHEDULING_PREFERENCE", "OTHER_UNEXCUSED"
     );
 
+    /**
+     * C6: everything money-related is decided under the booking row lock, from the status the
+     * cancellation actually leaves. {@code CANCEL_COACH} is legal from ACCEPTED (nothing charged yet: a
+     * card booking is charged, and a pack booking's session deducted, only at settle), CONFIRMED,
+     * UPCOMING and PAUSED (all captured). Previously the event carried no capture flag and the refund
+     * listeners refunded / restored for ACCEPTED too — minting wallet credit, or a pack session, for
+     * money never taken. The refund amount is what the payer actually paid ({@link #resolveAmountPaid}),
+     * not the coach's current price (wrong once the coach has re-priced). The reliability strike is
+     * unchanged: an accepted-then-cancelled booking still lets the family down.
+     */
     @Transactional
     public void cancelBookingAsCoach(UUID bookingId, Long coachUserId, String cancelReason) {
-        Booking booking = getBookingOrThrow(bookingId);
+        // Unlocked read + ownership check first, locked re-read second (cancelBookingAsParent's order:
+        // an unauthorised caller must not be able to pin the row before receiving their 403).
+        Booking unlocked = getBookingOrThrow(bookingId);
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
-        if (!Objects.equals(booking.getCoachId(), coach.getId())) {
+        if (!Objects.equals(unlocked.getCoachId(), coach.getId())) {
             throw new OperationNotAllowedException("Coach does not own this booking", SecurityError.MISSING_RIGHTS);
         }
-        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
         if (cancelReason != null && !VALID_CANCEL_REASONS.contains(cancelReason)) {
             throw new OperationNotAllowedException("Invalid cancel reason: " + cancelReason, SecurityError.MISSING_RIGHTS);
         }
+        Booking booking = lockBookingForUpdate(bookingId);
+        rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
+        BookingStatus statusBeforeCancel = readStatusOrThrow(booking);
+        boolean paymentCaptured = statusBeforeCancel == BookingStatus.CONFIRMED
+            || statusBeforeCancel == BookingStatus.UPCOMING
+            || statusBeforeCancel == BookingStatus.PAUSED;
 
-        BigDecimal sessionPrice = resolveSessionPrice(booking);
+        BigDecimal sessionPrice = paymentCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
         String parentEmail = resolveEmail(booking.getParentId(), bookingId);
 
         boolean packExpired = false;
-        if (booking.getSessionPackPurchaseId() != null) {
+        if (paymentCaptured && booking.getSessionPackPurchaseId() != null) {
             packExpired = sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
                 .map(p -> p.getExpiresAt().isBefore(Instant.now()))
                 .orElse(false);
@@ -1141,7 +1160,7 @@ public class BookingService {
         eventPublisher.publishEvent(new BookingCancelledByCoachEvent(
             this, bookingId, booking.getParentId(), booking.getCoachId(),
             resolvedReason, booking.getSessionPackPurchaseId(),
-            sessionPrice, packExpired, parentEmail,
+            sessionPrice, packExpired, paymentCaptured, parentEmail,
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()
         ));
     }
@@ -1196,7 +1215,9 @@ public class BookingService {
                 "Cannot report a no-show before the booking's scheduled start time",
                 Map.of("requested start time", booking.getRequestedStartTime()), BookingError.NO_SHOW_TOO_EARLY);
         }
-        BigDecimal sessionPrice = resolveSessionPrice(booking);
+        // C6: NO_SHOW_COACH only leaves UPCOMING, so payment was always captured — refund what the payer
+        // actually paid, not the coach's current price.
+        BigDecimal sessionPrice = resolveAmountPaid(booking);
         String parentEmail = resolveEmail(parentUserId, bookingId);
 
         boolean packExpired = false;

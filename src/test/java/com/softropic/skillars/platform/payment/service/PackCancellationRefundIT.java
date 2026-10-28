@@ -164,7 +164,7 @@ class PackCancellationRefundIT extends BasePaymentIT {
     private BookingCancelledByCoachEvent coachEvent(UUID purchaseId, String reason, boolean packExpired) {
         return new BookingCancelledByCoachEvent(
             this, UUID.randomUUID(), PARENT_ID, coachId,
-            reason, purchaseId, PRICE_PER_SESSION, packExpired,
+            reason, purchaseId, PRICE_PER_SESSION, packExpired, true,
             "parent@test.com", Instant.now(), "UTC"
         );
     }

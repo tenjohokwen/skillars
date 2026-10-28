@@ -117,17 +117,27 @@
                   to="/admin/disputes"
                   data-testid="alert-open-disputes-btn"
                 />
-                <q-btn
-                  v-else-if="props.row.type === 'SAFETY_HOLD_BOOKING'"
-                  flat
-                  dense
-                  size="sm"
-                  color="negative"
-                  :label="t('admin.moderation.markHandled')"
-                  :loading="resolvingAlertId === props.row.alertId"
-                  data-testid="alert-resolve-safety-hold-btn"
-                  @click="resolveSafetyHoldAlert(props.row.alertId)"
-                />
+                <template v-else-if="props.row.type === 'SAFETY_HOLD_BOOKING'">
+                  <q-btn
+                    flat
+                    dense
+                    size="sm"
+                    color="primary"
+                    :label="t('admin.moderation.openBooking')"
+                    :to="{ path: '/admin/bookings', query: { bookingId: props.row.referenceId } }"
+                    data-testid="alert-open-booking-btn"
+                  />
+                  <q-btn
+                    flat
+                    dense
+                    size="sm"
+                    color="negative"
+                    :label="t('admin.moderation.markHandled')"
+                    :loading="resolvingAlertId === props.row.alertId"
+                    data-testid="alert-resolve-safety-hold-btn"
+                    @click="resolveSafetyHoldAlert(props.row.alertId)"
+                  />
+                </template>
                 <span v-else class="text-meta">{{ t('admin.moderation.noInlineAction') }}</span>
               </q-td>
             </template>

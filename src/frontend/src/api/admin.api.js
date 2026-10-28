@@ -185,6 +185,12 @@ export const adminApi = {
     return api.post(`/api/admin/bookings/${bookingId}/force-complete`, { note })
   },
 
+  // C6: cancel one booking (full refund of anything paid, no coach strike, neutral parent notice).
+  // Returns { outcome: 'CANCELLED' | 'LIVE_SESSION' | 'PAYMENT_IN_PROGRESS' | 'NOT_CANCELLABLE' }.
+  cancelBookingAsAdmin(bookingId, note) {
+    return api.post(`/api/admin/bookings/${bookingId}/cancel`, { note })
+  },
+
   // Video operations (AdminVideoResource). filter: 'ATTENTION' | 'LOCKED' | 'FAILED' | 'BLOCKED'.
   getVideoReviewQueue(filter = 'ATTENTION', page = 0) {
     return api.get('/api/video/admin/videos', { params: { filter, page } })

@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.cancelled_by_coach.title}">Session Cancelled by Coach</title>
+</head>
+<body>
+    <h2 th:text="#{email.booking.cancelled_by_coach.title}">Session Cancelled by Coach</h2>
+    <p>We're sorry: your coach has cancelled your session on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>).</p>
+    <p th:if="${map.refundType == 'PACK'}">The session has been returned to your session pack, so you can book it again.</p>
+    <p th:if="${map.refundType == 'CREDIT'}">You have been fully refunded: <strong th:text="${map.refundAmount}">amount</strong> has been credited to your Skillars balance.</p>
+    <p th:if="${map.refundType == 'NONE'}">No payment had been taken for this session, so there is nothing to refund.</p>
+    <p>You can book another session at any time: <a th:href="${map.bookingsUrl}" th:text="${map.bookingsUrl}">bookings</a></p>
+</body>
+</html>

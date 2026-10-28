@@ -1205,6 +1205,7 @@ export default {
       reviewConversation: 'Examiner la conversation',
       openReviewQueue: 'Ouvrir la file des avis',
       openCoach: "Ouvrir l'entraîneur",
+      openBooking: 'Ouvrir la réservation',
       openDisputes: 'Ouvrir les litiges',
       markHandled: 'Marquer comme traitée',
       markHandledSuccess: 'Alerte marquée comme traitée.',
@@ -1474,9 +1475,9 @@ export default {
       coachStrikes: 'Avertissements de fiabilité (30 jours)',
     },
     bookings: {
-      title: 'Réservations bloquées',
+      title: 'Recherche de réservation',
       subtitle:
-        "Rechercher une réservation et la clôturer d'office lorsque le coach n'a jamais finalisé le bilan de séance",
+        "Rechercher une réservation pour clôturer d'office une réservation bloquée, ou l'annuler avec un remboursement intégral",
       bookingIdLabel: 'ID de réservation',
       bookingIdInvalid: 'Saisissez un ID de réservation valide',
       lookupAction: 'Rechercher',
@@ -1513,6 +1514,28 @@ export default {
       outcomeNotStuck: "Aucune action : la réservation n'attend plus le bilan.",
       forceCompleteConflict: 'La réservation a été modifiée entre-temps. Recherchez-la à nouveau.',
       forceCompleteFailed: "La clôture d'office a échoué. Veuillez réessayer.",
+      cancelAction: 'Annuler la réservation',
+      cancelHint:
+        "Annule la réservation et rembourse intégralement au parent tout ce qui a déjà été payé. Le coach ne reçoit pas d'avertissement.",
+      liveSessionHint:
+        'Cette séance est en cours ou en pause et ne peut pas être annulée ici. Contactez directement le parent.',
+      cancelConfirmTitle: 'Annuler cette réservation ?',
+      cancelConsequencesIntro: "L'annulation va :",
+      cancelConsequenceStatus: 'passer la réservation à Annulée ;',
+      cancelConsequenceRefund:
+        'rembourser intégralement au parent tout ce qui a déjà été payé (une séance de pack retourne dans le pack ; un paiement par carte ou par crédit est crédité sur son solde Skillars) ;',
+      cancelConsequenceNoStrike:
+        'ne pas compter contre le coach (aucun avertissement de fiabilité) ;',
+      cancelConsequenceNotice:
+        "informer le parent par e-mail que l'équipe Skillars a annulé la séance, sans en donner la raison ;",
+      cancelConsequenceAlert:
+        "clôturer l'alerte de suspension de sécurité ouverte pour cette réservation, s'il y en a une ;",
+      cancelOutcomeCancelled: 'Réservation annulée. Le parent a été remboursé et informé.',
+      cancelOutcomeLiveSession: 'Non annulée : la séance est en cours ou en pause.',
+      cancelOutcomePaymentInProgress:
+        'Non annulée : un paiement par carte pour cette réservation est en cours de traitement. Réessayez dans une minute.',
+      cancelOutcomeNotCancellable: 'Non annulée : la réservation est déjà terminée ou annulée.',
+      cancelFailed: "L'annulation a échoué. Veuillez réessayer.",
     },
     videos: {
       title: 'Revue des vidéos',
@@ -2499,7 +2522,7 @@ export default {
         'La séance du {requestedStartTime} a été annulée car le forfait a été mis en pause.',
       BOOKING_CANCELLED_BY_PARENT: 'La séance du {requestedStartTime} a été annulée par le parent.',
       BOOKING_CANCELLED_COACH_UNAVAILABLE:
-        "Votre séance avec {coachDisplayName} du {requestedStartTime} a été annulée car le coach n'est pas disponible. Tout paiement a été intégralement remboursé.",
+        'Votre séance avec {coachDisplayName} du {requestedStartTime} a été annulée. Tout paiement a été intégralement remboursé.',
       BOOKING_CANCELLED_BY_COACH: 'Votre coach a annulé la séance du {requestedStartTime}.',
       COACH_NO_SHOW:
         'Une absence du coach a été enregistrée pour la séance du {requestedStartTime}.',
@@ -2702,7 +2725,7 @@ export default {
     adminUsers: 'Utilisateurs',
     groupAdminOperations: 'Exploitation',
     adminVideos: 'Revue des vidéos',
-    adminBookings: 'Réservations bloquées',
+    adminBookings: 'Recherche de réservation',
     adminFinance: 'Finances',
     adminGdpr: 'Demandes RGPD',
     adminConfig: 'Configuration',

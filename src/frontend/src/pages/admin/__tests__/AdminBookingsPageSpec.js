@@ -6,7 +6,11 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 vi.mock('src/api/admin.api', () => ({
-  adminApi: { getAdminBooking: vi.fn(), forceCompleteBooking: vi.fn() },
+  adminApi: {
+    getAdminBooking: vi.fn(),
+    forceCompleteBooking: vi.fn(),
+    cancelBookingAsAdmin: vi.fn(),
+  },
 }))
 
 const notifySpy = vi.fn()
@@ -31,6 +35,15 @@ const STUCK = {
   updatedAt: '2026-10-01T11:00:00Z',
   completionRecorded: false,
   forceCompletable: true,
+  adminCancellable: false,
+  liveSession: false,
+}
+
+const CONFIRMED = {
+  ...STUCK,
+  status: 'CONFIRMED',
+  forceCompletable: false,
+  adminCancellable: true,
 }
 
 const mounted = []
@@ -161,6 +174,94 @@ describe('AdminBookingsPage.vue', () => {
         message: 'admin.bookings.forceCompleteConflict',
         type: 'negative',
       }),
+    )
+  })
+
+  // C6: admin single-booking cancellation.
+
+  it('offers the cancel action only for a cancellable booking', async () => {
+    const stuck = await mountPage({ bookingId: BOOKING_ID })
+    expect(stuck.find('[data-testid="booking-cancel-open-btn"]').exists()).toBe(false)
+
+    adminApi.getAdminBooking.mockResolvedValue(CONFIRMED)
+    const confirmed = await mountPage({ bookingId: BOOKING_ID })
+    expect(confirmed.find('[data-testid="booking-cancel-open-btn"]').exists()).toBe(true)
+  })
+
+  it('explains that a live session cannot be cancelled', async () => {
+    adminApi.getAdminBooking.mockResolvedValue({
+      ...STUCK,
+      status: 'IN_PROGRESS',
+      forceCompletable: false,
+      liveSession: true,
+    })
+    const wrapper = await mountPage({ bookingId: BOOKING_ID })
+
+    expect(wrapper.find('[data-testid="booking-cancel-open-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="booking-live-session-hint"]').text()).toContain(
+      'admin.bookings.liveSessionHint',
+    )
+  })
+
+  it('the cancel confirmation lists the consequences and requires a note', async () => {
+    adminApi.getAdminBooking.mockResolvedValue(CONFIRMED)
+    const wrapper = await mountPage({ bookingId: BOOKING_ID })
+    wrapper.vm.openCancelConfirm()
+    await flushPromises()
+
+    const dialog = wrapper.find('[data-testid="booking-cancel-dialog"]')
+    expect(dialog.text()).toContain('admin.bookings.cancelConsequenceRefund')
+    expect(dialog.text()).toContain('admin.bookings.cancelConsequenceNoStrike')
+    expect(dialog.text()).toContain('admin.bookings.cancelConsequenceNotice')
+    expect(
+      wrapper.find('[data-testid="booking-cancel-submit-btn"]').attributes('disabled'),
+    ).toBeDefined()
+  })
+
+  it('cancels with the trimmed note, reports the outcome and reloads', async () => {
+    adminApi.getAdminBooking.mockResolvedValue(CONFIRMED)
+    adminApi.cancelBookingAsAdmin.mockResolvedValue({ outcome: 'CANCELLED' })
+    const wrapper = await mountPage({ bookingId: BOOKING_ID })
+    wrapper.vm.openCancelConfirm()
+    wrapper.vm.cancelNote = '  safety follow-up  '
+
+    await wrapper.vm.submitCancel()
+    await flushPromises()
+
+    expect(adminApi.cancelBookingAsAdmin).toHaveBeenCalledWith(BOOKING_ID, 'safety follow-up')
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: 'admin.bookings.cancelOutcomeCancelled',
+        type: 'positive',
+      }),
+    )
+    expect(adminApi.getAdminBooking).toHaveBeenCalledTimes(2)
+    expect(wrapper.vm.cancelConfirmOpen).toBe(false)
+  })
+
+  it('reports a refusal with its reason', async () => {
+    adminApi.getAdminBooking.mockResolvedValue(CONFIRMED)
+    adminApi.cancelBookingAsAdmin.mockResolvedValue({ outcome: 'PAYMENT_IN_PROGRESS' })
+    const wrapper = await mountPage({ bookingId: BOOKING_ID })
+    wrapper.vm.cancelNote = 'x'
+
+    await wrapper.vm.submitCancel()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'admin.bookings.cancelOutcomePaymentInProgress' }),
+    )
+  })
+
+  it('reports a failed cancellation', async () => {
+    adminApi.getAdminBooking.mockResolvedValue(CONFIRMED)
+    adminApi.cancelBookingAsAdmin.mockRejectedValue({ response: { status: 500 } })
+    const wrapper = await mountPage({ bookingId: BOOKING_ID })
+    wrapper.vm.cancelNote = 'x'
+
+    await wrapper.vm.submitCancel()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'admin.bookings.cancelFailed', type: 'negative' }),
     )
   })
 })

@@ -207,9 +207,9 @@
       <tr><td>GET</td><td>/coaches/me/recaps-missing</td><td>Completed sessions in the edit window with no recap (true count + list capped at 50; excludes erased players and dispute-locked bookings)</td><td>Coach</td></tr>
       <tr><td>GET</td><td>/session/{bookingId}/drills/suggestions?limit=</td><td>Homework drill suggestions from the booking's session plan (empty list if none)</td><td>Coach</td></tr>
     </table>
-    <p>Related endpoints outside this module: admin force-complete
+    <p>Related endpoints outside this module: admin booking lookup, force-complete and single-booking cancel
     (<code>GET /api/admin/bookings/{bookingId}</code>, <code>POST /api/admin/bookings/{bookingId}/force-complete</code>,
-    UI <code>pages/admin/AdminBookingsPage.vue</code>), the batch price quote
+    <code>POST /api/admin/bookings/{bookingId}/cancel</code>, UI <code>pages/admin/AdminBookingsPage.vue</code>), the batch price quote
     (<code>GET /api/payment/credits/batch-quote</code>, used by <code>BookingRequestPage.vue</code> before a batch submit),
     and receipts (<code>payment</code>; <code>BookingResponse.receiptAvailable</code> is true when a <code>CAPTURED</code>
     <code>BookingPayment</code> exists — only computed in <code>GET /requests</code>).</p>
@@ -476,7 +476,19 @@ sequenceDiagram
       Everything is decided under the booking row lock. The caller passes booking <em>ids</em>
       (<code>findIdsByCoachIdAndStatusIn</code>), never loaded entities: a booking already managed at an old
       <code>@Version</code> makes the locked re-read throw <code>StaleObjectStateException</code> when a concurrent
-      writer has moved it, instead of returning the fresh status.</p>
+      writer has moved it, instead of returning the fresh status. An admin can also cancel one booking from the admin
+      bookings page (<code>admin.AdminBookingCancellationService</code>, C6): the same method with cancel reason
+      <code>ADMIN_SUPPORT</code>, so the parent's notice says the Skillars team cancelled it rather than that the coach
+      is unavailable.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>Refund decisions are made under the booking row lock, from the status being left.</strong>
+      <code>cancelBookingAsParent</code>, <code>cancelBookingAsCoach</code> and <code>cancelBookingAsAdmin</code> all lock
+      the row (after the ownership check), read the status, and only treat payment as captured from
+      <code>CONFIRMED</code>/<code>UPCOMING</code> (plus <code>PAUSED</code> for the coach). Before C6 the coach path read the
+      status unlocked and carried no capture flag, so a coach cancelling an <code>ACCEPTED</code> booking refunded a card
+      booking that was never charged and restored a pack session that was never deducted. The refund amount is
+      <code>resolveAmountPaid</code> (what <code>booking_payments</code> recorded), not the coach's current price.</p>
     </div>
     <div class="callout warn">
       <p><strong><code>DISPUTED</code>, <code>REFUND_PENDING</code> and <code>REFUNDED</code> are unreachable today.</strong> The state
@@ -558,7 +570,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>993c6f57</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
