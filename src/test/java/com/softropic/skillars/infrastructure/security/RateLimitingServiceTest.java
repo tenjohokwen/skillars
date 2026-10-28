@@ -1,7 +1,5 @@
 package com.softropic.skillars.infrastructure.security;
 
-import com.softropic.skillars.platform.config.service.ConfigService;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -12,27 +10,22 @@ import java.time.ZoneOffset;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 public class RateLimitingServiceTest {
 
-    private ConfigService configService;
+    /** Mutable TTL the service reads on every sweep; tests set it before sweeping. */
+    private volatile long ttlHours;
     private RateLimitingService rateLimitingService;
     /** Mutable so a test can advance "now" without a real sleep — see {@link #advanceClockBy}. */
     private Instant now;
 
     @BeforeEach
     void setUp() {
-        configService = mock(ConfigService.class);
         // Default TTL matches ConfigBounds.RATE_LIMIT_BUCKET_TTL_HOURS' own code default (24h) —
         // individual eviction tests override this where a shorter TTL makes the case clearer.
-        when(configService.getBoundedLong(eq("security.rate_limiting.bucket_ttl_hours"), anyLong(), anyLong(), anyLong()))
-            .thenReturn(24L);
+        ttlHours = 24L;
 
-        rateLimitingService = new RateLimitingService(configService);
+        rateLimitingService = new RateLimitingService(() -> ttlHours);
         now = Instant.parse("2026-01-01T00:00:00Z");
         rateLimitingService.clock = Clock.fixed(now, ZoneOffset.UTC);
     }
@@ -79,8 +72,7 @@ public class RateLimitingServiceTest {
     // clock is injected and advanced explicitly — no real Thread.sleep of wall-clock time.
     @Test
     void sweepIdleBuckets_bucketIdlePastTtl_isEvicted() {
-        when(configService.getBoundedLong(eq("security.rate_limiting.bucket_ttl_hours"), anyLong(), anyLong(), anyLong()))
-            .thenReturn(1L); // 1-hour TTL for this test
+        ttlHours = 1L; // 1-hour TTL for this test
 
         assertThat(rateLimitingService.tryConsume("user5", "sweepKey", 1, 1, TimeUnit.MINUTES)).isTrue();
         // Bucket now exists and is exhausted (capacity 1, already consumed).
@@ -98,8 +90,7 @@ public class RateLimitingServiceTest {
     // touched.
     @Test
     void sweepIdleBuckets_bucketAccessedWithinTtl_isNotEvictedAndRemainingTokensUnaffected() {
-        when(configService.getBoundedLong(eq("security.rate_limiting.bucket_ttl_hours"), anyLong(), anyLong(), anyLong()))
-            .thenReturn(24L); // 24-hour TTL for this test
+        ttlHours = 24L; // 24-hour TTL for this test
 
         assertThat(rateLimitingService.tryConsume("user6", "sweepKey", 1, 1, TimeUnit.MINUTES)).isTrue();
         // Bucket now exhausted (capacity 1, already consumed).

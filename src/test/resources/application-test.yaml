@@ -19,12 +19,11 @@ spring:
   # after System.exit(0)" at the end of the run. Consolidation is what made this appear: the
   # suite now holds ~21 cached ApplicationContexts alive until JVM exit instead of evicting
   # them as it goes, and Spring closes every one of them in a shutdown hook -- each stopping a
-  # Quartz scheduler, a Hikari pool, task executors and WireMock servers. Bounding the two
-  # slowest parts keeps that under Surefire's 30 s patience.
+  # Hikari pool, task executors and WireMock servers. Bounding the shutdown phase keeps that under
+  # Surefire's 30 s patience. (A Quartz scheduler used to be the other slow part; Quartz was removed
+  # as an unused dependency.)
   #
-  # Test-profile only. Production still waits for jobs to finish on shutdown.
-  quartz:
-    wait-for-jobs-to-complete-on-shutdown: false
+  # Test-profile only.
   lifecycle:
     timeout-per-shutdown-phase: 5s
   cloud:
@@ -106,17 +105,17 @@ platform:
 app:
   # AC5a (story deferred-19). Consolidating the suite onto a few long-lived Spring contexts
   # removes the accidental protection context fragmentation used to provide: a 5-minute job in
-  # a context that lived 90 seconds never fired. One long-lived context means all 30 @Scheduled
-  # threads write to the same database the tests assert on for the whole run, and the per-test
-  # ShedLock backdate makes all 11 locked jobs eligible on every one of ~905 test methods.
+  # a context that lived 90 seconds never fired. One long-lived context means every @Scheduled
+  # job writes to the same database the tests assert on for the whole run, and the per-test
+  # ShedLock backdate makes every locked job eligible on every test method.
   #
-  # A delay sweep cannot achieve this: 16 of the 30 @Scheduled methods hard-code their delay or
-  # cron with no property placeholder. See infrastructure.config.SchedulingConfig.
+  # A delay sweep cannot achieve this: roughly half of the @Scheduled methods hard-code their delay
+  # or cron with no property placeholder. See infrastructure.config.SchedulingConfig.
   #
   # No integration test depends on a scheduler firing on its own -- verified by enumerating every
   # Awaitility and Thread.sleep site in src/test (all are @Async, @TransactionalEventListener, SSE,
   # CountDownLatch, or DB row-lock contention). Tests that exercise a sweeper invoke it directly,
-  # as BasePaymentIT.releaseSchedulerLock documents.
+  # as AbstractIntegrationTest.releaseSchedulerLock documents.
   # skillars-deferred-91 code review D3: the AFTER_COMMIT outbox drain is @Async in production so
   # it never runs on an HTTP request thread. Under test it runs on the calling thread, so an IT can
   # assert on what the drain produced immediately after the call that triggered it instead of

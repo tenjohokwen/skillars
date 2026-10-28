@@ -20,7 +20,6 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -63,11 +62,9 @@ class ConfigStartupAssertionTest {
         // eligibility cross-field check, so an unrelated test (which never stubs getBoundedInt) does
         // not spuriously trip minSessionAgeDays >= updateCooldownDays against two unstubbed-Mockito
         // zeros.
-        lenient().when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        lenient().when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
             .thenReturn(7);
-        lenient().when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        lenient().when(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS))
             .thenReturn(30);
     }
 
@@ -287,11 +284,9 @@ class ConfigStartupAssertionTest {
 
     @Test
     void reviewWindowOrderingViolation_nonDev_throwsAppSetupExceptionNamingBothKeys() {
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
             .thenReturn(30);
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS))
             .thenReturn(7);
 
         assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
@@ -303,11 +298,9 @@ class ConfigStartupAssertionTest {
     @Test
     void reviewWindowOrderingViolation_devProfile_noThrowButErrorMetricStillFires() {
         when(env.getActiveProfiles()).thenReturn(new String[] {"dev"});
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
             .thenReturn(30);
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS))
             .thenReturn(7);
 
         assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
@@ -324,11 +317,9 @@ class ConfigStartupAssertionTest {
         // Equal values (gap=0) are a violation under both the old strict-ordering rule and the new
         // minimum-7-day-gap rule (skillars-deferred-149 AC5) — a non-positive gap is a strict subset
         // of a gap-under-7, so this case covers both without change.
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
             .thenReturn(30);
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS))
             .thenReturn(30);
 
         assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
@@ -341,11 +332,9 @@ class ConfigStartupAssertionTest {
         // skillars-deferred-149 AC5: minSessionAgeDays=29, updateCooldownDays=30 (gap=1) passed the
         // OLD strict-ordering rule (29 < 30) but leaves a one-day-wide qualifying window — this must
         // now fail fast under the new minimum-7-day-gap rule.
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
             .thenReturn(29);
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS))
             .thenReturn(30);
 
         assertThatThrownBy(() -> assertion.onApplicationEvent(EVENT))
@@ -356,11 +345,9 @@ class ConfigStartupAssertionTest {
     @Test
     void reviewWindowGapOfSevenOrMoreDays_doesNotFlag() {
         // Coded defaults (7/30, gap=23) must continue to pass unchanged under the new rule.
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS))
             .thenReturn(7);
-        when(configService.getBoundedInt(
-                eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), anyInt(), anyInt(), anyInt()))
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS))
             .thenReturn(30);
 
         assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();

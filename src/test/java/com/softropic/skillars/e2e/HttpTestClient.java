@@ -2,8 +2,6 @@ package com.softropic.skillars.e2e;
 
 import com.google.common.collect.ImmutableList;
 
-import com.softropic.skillars.infrastructure.client.Client;
-
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpEntity;
@@ -26,8 +24,6 @@ public class HttpTestClient {
 
     @Autowired
     private RestTemplate testRestTemplate;
-
-    private Client client;
 
     /**
      * General method for doing http call.

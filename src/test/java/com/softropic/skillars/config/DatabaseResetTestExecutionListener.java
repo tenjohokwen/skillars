@@ -53,7 +53,7 @@ import java.util.Set;
  *
  * <ul>
  *   <li><strong>{@code flyway_schema_history}</strong> — truncating it makes the next context's
- *       Flyway run re-apply all 91 migrations against a populated schema.</li>
+ *       Flyway run re-apply every migration against a populated schema.</li>
  *   <li><strong>{@code main.shedlock}</strong> — truncating it would <em>silently disable every
  *       {@code @SchedulerLock} job for the rest of the JVM</em>. {@code JdbcTemplateLockProvider}
  *       caches the lock names it has inserted and thereafter issues only
@@ -61,9 +61,10 @@ import java.util.Set;
  *       matches nothing, {@code lock()} returns empty, and the run is skipped — logged merely as
  *       "held by another instance". Story deferred-15's review hit exactly this and recorded that
  *       deleting the row is <em>worse than nothing</em>. Reset by backdating instead.</li>
- *   <li><strong>{@code qrtz_*}</strong> — Quartz runs with {@code job-store-type: jdbc} and
- *       {@code isClustered: true}, so a cluster check-in thread writes to these concurrently.
- *       Truncating under a live clustered scheduler is a data race, not a clean reset.</li>
+ *   <li><strong>{@code qrtz_*}</strong> — vestigial: {@code V138} still creates these tables but
+ *       Quartz is no longer a dependency, so nothing reads or writes them. They are skipped only
+ *       because truncating eleven permanently-empty tables before every test method is wasted
+ *       work.</li>
  * </ul>
  *
  * <h2>Reference data</h2>

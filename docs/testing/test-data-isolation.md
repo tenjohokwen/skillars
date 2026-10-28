@@ -63,7 +63,8 @@ Spring contexts.
 
 Excluding infrastructure tables is **not** sufficient, and this is the easiest way to break the whole suite.
 
-**33 of the 91 migrations contain `INSERT INTO`.** Flyway will not replay them after a truncate — the
+**Many migrations contain `INSERT INTO`** (33 of 91 when this was written, before the `V138` baseline
+squash folded them together). Flyway will not replay them after a truncate — the
 `flyway_schema_history` row is intact, so the next context's run is a no-op validation pass. The first
 truncated test method destroys that data for the rest of the JVM.
 
@@ -92,10 +93,10 @@ migration reference data into individual test classes is never the right fix. Se
 database leaves both holding rows that no longer exist. The reset listener evicts them; do not rely on
 the refresh schedule.
 
-## Three tables must never be truncated — and exclusions alone are not enough
+## Tables the reset never truncates — and exclusions alone are not enough
 
-Getting these wrong produces **silent, suite-wide** failures, not loud ones. All three are exclusions,
-not preferences.
+Getting the first two wrong produces **silent, suite-wide** failures, not loud ones. Those two are
+exclusions, not preferences; the third (`qrtz_*`) is now only a harmless skip.
 
 > **Correction.** An earlier draft of this document said the three exclusions below were sufficient.
 > They are not. Excluding infrastructure tables does nothing for the **reference data Flyway seeds**,
@@ -106,14 +107,14 @@ not preferences.
 
 ### `flyway_schema_history`
 
-Truncating it makes the next context's Flyway run re-apply all 91 migrations against an
+Truncating it makes the next context's Flyway run re-apply every migration against an
 already-populated schema.
 
 ### `main.shedlock` — the dangerous one
 
 **Truncating `main.shedlock` silently disables every `@SchedulerLock` job for the rest of the JVM.**
 
-`ShedLockConfig.lockProvider` (`infrastructure/config/ShedLockConfig.java:21-29`) is a
+`ShedLockConfig.lockProvider` (`infrastructure/config/ShedLockConfig.java`) is a
 `JdbcTemplateLockProvider` against `main.shedlock`. That provider **caches the lock names it has already
 inserted**, and thereafter issues only `UPDATE`. Delete the row and the `UPDATE` matches zero rows,
 `lock()` returns `Optional.empty()`, and the run is skipped — logged at INFO as *"held by another
@@ -127,8 +128,8 @@ This is not hypothetical. `deferred-15`'s code review hit it and recorded it ver
 The provider instance is per-context, and one context now serves ~90 classes — so the poisoning would
 span the whole suite, and the affected tests would **pass**, asserting nothing.
 
-**Reset by backdating instead**, which is the approach `BasePaymentIT.releaseSchedulerLock`
-(`BasePaymentIT.java:87-93`) already proved correct:
+**Reset by backdating instead**, which is the approach `AbstractIntegrationTest.releaseSchedulerLock`
+(promoted from `BasePaymentIT`, where it was first proved correct) uses:
 
 ```sql
 UPDATE main.shedlock SET lock_until = now() - interval '1 minute'
@@ -136,10 +137,11 @@ UPDATE main.shedlock SET lock_until = now() - interval '1 minute'
 
 ### The `qrtz_*` tables
 
-Quartz runs with `job-store-type: jdbc` and `org.quartz.jobStore.isClustered: true`
-(`application.yaml:18-31`), so a cluster check-in thread is writing to those tables concurrently with the
-tests. Truncating under a live clustered scheduler is a data race with a background thread, not a clean
-reset.
+Vestigial. `V138` still creates them, but Quartz is no longer a dependency (it was configured but never
+scheduled a job — and its `quartz:` block sat at the YAML root instead of under `spring.quartz`, so the
+JDBC job store it described never even took effect). Nothing reads or writes these tables. The reset
+skips them only because truncating eleven permanently-empty tables before every test method is wasted
+work; truncating them would be harmless.
 
 ---
 
@@ -259,7 +261,7 @@ cleanup ordering, `git bisect` isolates it immediately.
 
 ## Reference data must be restored, not re-seeded
 
-**33 of the 91 migrations contain `INSERT INTO`.** They seed four tables:
+**Migrations that contain `INSERT INTO`** (33 of 91 when this was written) seed four tables:
 
 | Table | Migrations | Read by |
 |---|---|---|

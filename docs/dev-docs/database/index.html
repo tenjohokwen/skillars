@@ -249,7 +249,7 @@
       <thead><tr><th>Piece</th><th>Behaviour</th></tr></thead>
       <tbody>
         <tr><td><code>PessimisticLockRetryer</code></td><td>Flushes, takes a JDBC savepoint via <code>Session.doWork</code> (declarative <code>NESTED</code> is unavailable — <code>DefaultJpaDialect</code> has no savepoint support), runs the supplier, and on <code>PessimisticLockingFailureException</code> rolls back to the savepoint and retries with jittered backoff. Defaults <code>app.locking.retry.max-attempts=8</code>, <code>app.locking.retry.initial-backoff-ms=100</code> (≈3.2s worst case, <em>holding the pooled connection</em>). Exhaustion rethrows the exception, which <code>ApiAdvice</code> maps to a 409. Metrics: <code>persistence.lock_retry</code> timer and <code>.retries</code>/<code>.exhausted</code> counters, tagged <code>lock</code> and <code>outcome</code>.</td></tr>
-        <tr><td><code>PessimisticLockRetryerCallSiteAuditTest</code> (<code>src/test/.../infrastructure/persistence/</code>)</td><td>Source-text scan of <code>src/main/java</code>. (1) Pins <code>EXPECTED_CALL_SITE_COUNT = 50</code> <code>.withBoundedRetry(</code> sites and fails if any retried lambda contains a write (<code>.save(</code>, <code>.delete(</code>, <code>publishEvent(</code>, <code>new …Event(</code>, <code>.send(</code>, <code>.enqueue(</code>, <code>RestTemplate</code>) — the supplier can run more than once, so it must be a read (lock + optional <code>entityManager.refresh</code>); writes go after it returns. (2) Fails if a file calls a NOWAIT lock method (map <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code>) with no <code>withBoundedRetry</code> in the file. <strong>Adding a call site means bumping the count and adding a line to its Javadoc history.</strong></td></tr>
+        <tr><td><code>PessimisticLockRetryerCallSiteAuditTest</code> (<code>src/test/.../infrastructure/persistence/</code>)</td><td>Source-text scan of <code>src/main/java</code>. (1) Pins <code>EXPECTED_CALL_SITE_COUNT = 50</code> <code>.withBoundedRetry(</code> sites and fails if any retried lambda contains a write (<code>.save(</code>, <code>.delete(</code>, <code>publishEvent(</code>, <code>new …Event(</code>, <code>.send(</code>, <code>.enqueue(</code>, <code>RestTemplate</code>) — the supplier can run more than once, so it must be a read (lock + optional <code>entityManager.refresh</code>); writes go after it returns. (2) Fails if a file calls a NOWAIT lock method (map <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code>) with no <code>withBoundedRetry</code> in the file. (3) Fails if a repository method with <code>lock.timeout = "0"</code> is missing from that map. <strong>Adding a call site means bumping the count and adding a line to its Javadoc history.</strong></td></tr>
         <tr><td>Deliberately blocking locks</td><td><code>VideoQuotaRepository</code>, <code>CoachPayoutRepository</code>, <code>MessageRepository</code> and <code>CoachReviewRepository.findByIdForUpdate</code> (as opposed to its <code>findByIdForUpdateNoWait</code>) have no NOWAIT hint and no retry wrapper, by design.</td></tr>
         <tr><td>Claim-style queues</td><td>Schedulers and outbox drainers use <code>FOR UPDATE SKIP LOCKED</code> batch claims (often with a run-scoped <code>claimed_at</code>) instead — see <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</td></tr>
       </tbody>
@@ -334,7 +334,7 @@
         truncates application tables before each method and restores the Flyway-seeded reference data
         (snapshotted on first reset) — seed what you need, clean up nothing. It never truncates
         <code>flyway_schema_history</code>, <code>main.shedlock</code> (that silently disables every lock — it
-        backdates <code>lock_until</code> instead) or <code>qrtz_*</code>. See
+        backdates <code>lock_until</code> instead) or the vestigial <code>qrtz_*</code>. See
         <code>docs/testing/test-data-isolation.md</code>.</li>
       <li><strong>Bare <code>jdbcTemplate</code> writes in an IT method body never commit</strong>, because
         Hikari's <code>auto-commit</code> is <code>false</code>. Wrap fixture writes in
@@ -362,12 +362,12 @@
       option is gone after the first production deploy. Add a new migration instead.</p>
     </div>
     <div class="callout">
-      <p><strong>Quartz tables exist and Quartz is still configured, but nothing schedules a Quartz job.</strong>
-      <code>V138</code> still creates <code>qrtz_*</code>, <code>spring-boot-starter-quartz</code> is still a
-      dependency and <code>application.yaml</code> configures a clustered JDBC job store whose check-in thread
-      writes those tables. All background work uses Spring <code>@Scheduled</code> + ShedLock — see
-      <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>. Don't add a Quartz job just because the tables
-      are there.</p>
+      <p><strong>The <code>qrtz_*</code> tables are vestigial.</strong> <code>V138</code> still creates them, but
+      Quartz is no longer a dependency: it was never used to schedule a job, and its <code>quartz:</code> block sat at
+      the YAML root rather than under <code>spring.quartz</code>, so the clustered JDBC job store it described never took
+      effect. Nothing reads or writes these tables. They are left in place (dropping them would be a contract migration
+      for no gain). All background work uses Spring <code>@Scheduled</code> + ShedLock — see
+      <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
     </div>
     <div class="callout">
       <p><strong>Cross-module references are plain id columns, not foreign keys.</strong>
@@ -402,7 +402,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -40,10 +40,9 @@ import java.util.Optional;
  * flow entirely — it then throws {@link AppSetupException}, refusing to boot until the operator
  * corrects the row.
  *
- * <p><strong>Deviation from {@code TlsStartupAssertion}:</strong> that assertion skips the whole
- * check under the {@code dev} profile because {@code checkCertificate:false} is a <em>legitimate</em>
- * dev setting. There is no legitimate reason for a {@code platform_config} value to be out of range
- * in any environment (the values are migration-seeded), so this assertion runs the ERROR + metric in
+ * <p><strong>Profiles.</strong> There is no legitimate reason for a {@code platform_config} value to
+ * be out of range in any environment (the values are migration-seeded), so this assertion runs the
+ * ERROR + metric in
  * <strong>all</strong> profiles and gates only the boot-blocking {@code throw} to non-{@code dev} — a
  * local developer who hand-edits a row to an out-of-range value for a test sees the loud ERROR and
  * the metric, but is not blocked from booting.
@@ -58,17 +57,12 @@ import java.util.Optional;
  * <em>clamped</em> (safe) value before this assertion refuses the boot. The read-time clamp is the
  * primary protection; this assertion is the "make the operator fix it" backstop.
  *
- * <p>Fires on {@link ApplicationReadyEvent} (after full wiring), matching {@code TlsStartupAssertion}.
+ * <p>Fires on {@link ApplicationReadyEvent} (after full wiring), not {@code @PostConstruct}.
  */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ConfigStartupAssertion implements ApplicationListener<ApplicationReadyEvent> {
-
-    // skillars-deferred-149 AC5: the review-eligibility cross-field invariant's minimum qualifying
-    // window. Kept in sync with ConfigService.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS — both guards
-    // read the same stored config independently and must agree on the rule they fail-fast/reject on.
-    private static final long MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS = 7;
 
     private final ConfigService configService;
     private final MeterRegistry meterRegistry;
@@ -185,26 +179,22 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
         // skillars-deferred-149 AC5: widened from strict ordering (gap > 0) to a minimum 7-day gap
         // — every pair the old condition rejected (gap <= 0) is a subset of every pair this one
         // rejects (gap < 7), so this replaces the old condition without losing any coverage.
-        // Code review (2026-10-08): the max literals here MUST mirror each key's own declared
-        // ConfigBounds max — 358 for minSessionAgeDays (narrowed from 365 by this same review, to
-        // 365 - MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS), 365 for updateCooldownDays. Leaving a
-        // stale 365 here diverged this read from both ConfigBounds' declaration and
-        // ConfigService.rejectOutOfRange's PUT-path check (which reads the BoundedKey directly):
-        // a stored 359-365 was accepted as-is by this read, then rejected a few lines down by the
+        // Code review (2026-10-08): this read MUST use each key's own declared ConfigBounds range
+        // (358 for minSessionAgeDays, 365 for updateCooldownDays). A stale literal 365 here once
+        // diverged from ConfigBounds and from ConfigService.rejectOutOfRange's PUT-path check: a
+        // stored 359-365 was accepted as-is by this read, then rejected a few lines down by the
         // cross-field guard with a message naming updateCooldownDays — a key the operator never
-        // touched and cannot raise, which is the exact confusing error the ConfigBounds narrowing
-        // exists to prevent.
-        long minSessionAgeDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), 7, 1, 358);
-        long updateCooldownDays = configService.getBoundedInt(
-            ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), 30, 1, 365);
-        if (updateCooldownDays - minSessionAgeDays < MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS) {
+        // touched. Reading the range from the BoundedKey itself (ConfigService.getBoundedInt(
+        // BoundedKey)) makes that drift impossible.
+        long minSessionAgeDays = configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS);
+        long updateCooldownDays = configService.getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
+        if (updateCooldownDays - minSessionAgeDays < ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS) {
             log.error("Platform config '{}' = {} must be at least {} days less than '{}' = {} — the "
                     + "update cooldown would be silently superseded by the maturity floor (every edit "
                     + "attempt near the intended cooldown boundary would 403 as "
                     + "reviews.noQualifyingSession instead). Correct the stored values.",
                 ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key(), minSessionAgeDays,
-                MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS,
+                ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS,
                 ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key(), updateCooldownDays);
             Counter.builder("config.value.misconfigured")
                 .tag("key", "reviews.eligibility_window_ordering")
@@ -212,7 +202,7 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
                 .register(meterRegistry)
                 .increment();
             failFastViolations.add(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key() + " = " + minSessionAgeDays
-                + " must be at least " + MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than "
+                + " must be at least " + ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than "
                 + ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key() + " = " + updateCooldownDays);
         }
 

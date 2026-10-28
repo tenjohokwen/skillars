@@ -81,12 +81,21 @@
       wrap), but anything that has business rules layered on top of a raw technical capability — like blob storage —
       gets its own platform-level wrapper module instead of being called directly.
     </p>
+    <p>
+      The dependency only points one way: infrastructure must not import <code>platform.*</code>. When an
+      infrastructure class needs a platform value, declare a small port here and implement it in platform (e.g.
+      <code>RateLimitBucketTtlSource</code>, implemented by <code>platform.config</code>).
+      <code>InfrastructureLayeringAuditTest</code> fails on any new <code>import com.softropic.skillars.platform…</code>
+      under <code>infrastructure</code>. It lists the four inversions that still exist (<code>gemini</code> ×2,
+      <code>RequestMetadataProvider</code>, <code>BunnyVideoProviderAdapter</code>) and also fails if one of them is
+      fixed but left on the list.
+    </p>
 
     <h2 id="subpackage-reference">Subpackage Reference</h2>
     <div class="card-grid">
       <div class="card"><h4>blobstore</h4><p>S3 / local-filesystem object storage abstraction. Wrapped exclusively by <code>platform.filestorage</code>.</p></div>
       <div class="card"><h4>security</h4><p>Cross-cutting auth primitives: cookie helpers, <code>@RateLimited</code> + in-memory Bucket4j rate limiting, request context, JWT/role constants, access-denied/auth-failure handlers, security events.</p></div>
-      <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys). Only <code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code> are read today.</p></div>
+      <div class="card"><h4>feature</h4><p>Simple properties-backed feature-toggle service (<code>features.*</code> config keys): <code>ARACHNID_ENABLED</code> and <code>VIDEOINTEL_ENABLED</code>.</p></div>
       <div class="card"><h4>persistence</h4><p>JPA base classes (<code>BaseEntity</code>, <code>AbstractAuditingEntity</code>), TSID generation, Flyway schema check, audit listeners, and <code>PessimisticLockRetryer</code>.</p></div>
       <div class="card"><h4>email</h4><p>The <code>OutboundEmailSender</code> transport port + <code>EmailTransport</code> enum (<code>ses</code>/<code>smtp</code>/<code>log</code>), the SMTP and log adapters, address parsing and PII masking.</p></div>
       <div class="card"><h4>ses</h4><p>The AWS SES implementation of the <code>infrastructure.email</code> transport port — active when <code>app.email.transport=ses</code>. The only package allowed to import the SES SDK.</p></div>
@@ -101,7 +110,6 @@
       <div class="card"><h4>videointel</h4><p>Client for Google Cloud Video Intelligence, used to flag explicit content in uploaded videos before publish.</p></div>
       <div class="card"><h4>message</h4><p>Shared REST response/error DTO shapes (<code>Response</code>, <code>ErrorDto</code>, <code>FieldErrorDto</code>, <code>ErrorMsg</code>, <code>Success</code>/<code>Failure</code>) returned by controllers app-wide.</p></div>
       <div class="card"><h4>arachnid</h4><p>Client for a third-party CSAM (child sexual abuse material) hash-matching scanner, gating video publish before public availability.</p></div>
-      <div class="card"><h4>client</h4><p><code>AbstractClient</code> — shared RestTemplate wiring for provider clients. <strong>Currently unused</strong>: no class outside the package extends or imports it.</p></div>
       <div class="card"><h4>i18n</h4><p><code>WarnOnMissingMessageSource</code> — the app's <code>MessageSource</code> (wired in <code>platform.security.config.MvcConfig</code>): an unresolvable code renders as the code plus one WARN instead of a 500.</p></div>
       <div class="card"><h4>logging</h4><p>Small constant holders (<code>LogKeys</code>, <code>InventoryCode</code>) standardising structured-log field names across modules.</p></div>
       <div class="card"><h4>validation</h4><p>Bean Validation annotations/validators: <code>@Phone</code>/<code>@CamPhone</code>, <code>@Name</code>, <code>@LangIso2</code>, <code>@LocalDateWindow</code>, <code>@IanaTimezone</code>, plus ISO language/phone-rule helpers.</p></div>
@@ -145,8 +153,9 @@
       (about two dozen endpoints) and directly by modules needing ad-hoc throttling (registration OTP resend, video
       upload, report generation). Buckets live in a per-instance in-memory map, so limits are per-node; an hourly
       <code>@Scheduled</code> <code>evictIdleBuckets()</code> removes buckets idle past
-      <code>security.rate_limiting.bucket_ttl_hours</code> (runtime config, default 24h — note this reaches
-      <em>up</em> into <code>platform.config.ConfigService</code>). <code>ApplicationAccessDeniedHandler</code>,
+      <code>security.rate_limiting.bucket_ttl_hours</code> (runtime config, default 24h). The TTL comes through the
+      <code>RateLimitBucketTtlSource</code> port, implemented in <code>platform.config</code> by
+      <code>ConfigRateLimitBucketTtlSource</code>, so this package does not import <code>platform</code>. <code>ApplicationAccessDeniedHandler</code>,
       <code>AuthenticationExceptionHandler</code> and <code>AjaxLogoutSuccessHandler</code> are the Spring Security
       handlers wired by <code>platform.security</code>. Also here: <code>RequestMetadataProvider</code>/<code>ClientContextProvider</code>
       (current request's IP/HTTPS/locale), <code>RequestIdProvider</code>, and the <code>security.event</code>
@@ -157,7 +166,7 @@
     <h3 id="feature">feature</h3>
     <p>
       A deliberately minimal feature-toggle system: <code>AppFeature</code> is a closed enum
-      (<code>PAYMENTS</code>, <code>INVOICING</code>, <code>ARACHNID_ENABLED</code>, <code>VIDEOINTEL_ENABLED</code>) —
+      (<code>ARACHNID_ENABLED</code>, <code>VIDEOINTEL_ENABLED</code>) —
       there is no dynamic/admin-editable toggle registry, every flag must be added to this enum first.
       <code>FeatureProperties</code> binds a <code>features.*</code> map from application config, and
       <code>PropertiesFeatureToggleService</code> (the only <code>FeatureToggleService</code> implementation) fails
@@ -166,8 +175,9 @@
       Consumers call <code>featureToggleService.isEnabled(AppFeature.X)</code> rather than reading raw config. Today
       the only readers are the video moderation pipeline (<code>ModerationOrchestrationService</code>, gating
       whether CSAM/explicit-content scanning runs) and <code>VideoModerationEmailListener</code>, both on
-      <code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code>; <code>PAYMENTS</code> and <code>INVOICING</code>
-      are declared but read nowhere. Don't confuse this with <code>platform.security</code>'s
+      <code>ARACHNID_ENABLED</code>/<code>VIDEOINTEL_ENABLED</code>. (The unused <code>PAYMENTS</code> and
+      <code>INVOICING</code> values were removed; a leftover <code>features.toggles.payments</code>/<code>invoicing</code>
+      setting is ignored with a WARN rather than failing startup — see <code>RETIRED_KEYS</code>.) Don't confuse this with <code>platform.security</code>'s
       <code>FeatureGatedException</code>, which is subscription-tier gating (e.g. radar assessments), not a toggle.
     </p>
 
@@ -536,7 +546,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>be46d7bb</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -34,7 +34,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
@@ -61,7 +60,7 @@ class ReviewSubmissionServiceTest {
     // so @InjectMocks has a non-null value for ReviewSubmissionService's new constructor dependency.
     @Mock private PessimisticLockRetryer lockRetryer;
     // skillars-deferred-145: new constructor dependencies for the eligibility rework. Unused by
-    // submitReview_readsMinSessionAgeConfigWithTheDocumentedKeyAndBoundsLiterally (
+    // submitReview_readsMinSessionAgeThroughItsConfigBoundsEntry (
     // findQualifyingCompletedBookings is stubbed to return empty, so checkEligibility's loop body —
     // which is what would call these — never runs); present only so @InjectMocks has non-null values.
     @Mock private PlayerProfileRepository playerProfileRepository;
@@ -75,37 +74,37 @@ class ReviewSubmissionServiceTest {
     private static final Long AUTHOR_ID = 500L;
 
     /**
-     * Pins the exact key string {@code checkEligibility} (invoked from {@code submitReview}) passes to
-     * {@code getBoundedInt} — mirrors {@code ReviewFlagServiceTest}'s own identical pin for its sibling
+     * Pins that {@code checkEligibility} (invoked from {@code submitReview}) reads the
+     * {@code REVIEWS_MIN_SESSION_AGE_DAYS} registry entry via {@code getBoundedInt(BoundedKey)}, so key,
+     * default and range come from {@code ConfigBounds} (the range itself is pinned by
+     * {@code ConfigServiceTest.reviewEligibilityBounds_derivedFromTheSingleGapConstant}) — mirrors {@code ReviewFlagServiceTest}'s own identical pin for its sibling
      * config key. Stubs {@code findQualifyingCompletedBookings} to return an empty list so
      * {@code checkEligibility} throws {@code NO_QUALIFYING_SESSION} right after the config read this
      * test exists to pin — the rest of {@code submitReview}'s own logic is out of scope here.
      */
     @Test
-    void submitReview_readsMinSessionAgeConfigWithTheDocumentedKeyAndBoundsLiterally() {
+    void submitReview_readsMinSessionAgeThroughItsConfigBoundsEntry() {
         when(coachProfileRepository.existsById(COACH_ID)).thenReturn(true);
-        when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
-            .thenReturn(7);
+        when(configService.getBoundedInt(any(ConfigBounds.BoundedKey.class))).thenReturn(7);
         when(bookingRepository.findQualifyingCompletedBookings(eq(COACH_ID), eq(AUTHOR_ID), any(), any()))
             .thenReturn(Collections.emptyList());
 
         assertThatThrownBy(() -> service.submitReview(COACH_ID, AUTHOR_ID, 5, "Great coach!"))
             .isInstanceOf(OperationNotAllowedException.class);
 
-        verify(configService).getBoundedInt(
-            eq(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS.key()), eq(7), eq(1), eq(365));
+        verify(configService).getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS);
     }
 
     /**
      * skillars-deferred-145 code review (Patch, 2026-10-06): mirrors the pin above for
-     * {@code REVIEWS_UPDATE_COOLDOWN_DAYS}, which had no test pinning its call-site literals at all —
+     * {@code REVIEWS_UPDATE_COOLDOWN_DAYS}, which had no test pinning its config read at all —
      * unlike its {@code REVIEWS_MIN_SESSION_AGE_DAYS} sibling. Stubs the found review's
      * {@code lastModifiedAt} to 1 day ago so {@code updateReview}'s cooldown check throws
      * {@code UPDATE_TOO_SOON} immediately after the config read this test exists to pin — the rest of
      * {@code updateReview}'s own logic is out of scope here.
      */
     @Test
-    void updateReview_readsUpdateCooldownConfigWithTheDocumentedKeyAndBoundsLiterally() {
+    void updateReview_readsUpdateCooldownThroughItsConfigBoundsEntry() {
         CoachReview review = new CoachReview();
         review.setReviewId(REVIEW_ID);
         review.setCoachId(COACH_ID);
@@ -113,14 +112,12 @@ class ReviewSubmissionServiceTest {
         review.setLastModifiedAt(Instant.now().minus(1, ChronoUnit.DAYS));
         when(coachReviewRepository.findByReviewIdAndAuthorId(REVIEW_ID, AUTHOR_ID))
             .thenReturn(Optional.of(review));
-        when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
-            .thenReturn(30);
+        when(configService.getBoundedInt(any(ConfigBounds.BoundedKey.class))).thenReturn(30);
 
         assertThatThrownBy(() -> service.updateReview(REVIEW_ID, AUTHOR_ID, 5, "Updated"))
             .isInstanceOf(OperationNotAllowedException.class);
 
-        verify(configService).getBoundedInt(
-            eq(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS.key()), eq(30), eq(1), eq(365));
+        verify(configService).getBoundedInt(ConfigBounds.REVIEWS_UPDATE_COOLDOWN_DAYS);
     }
 
     /**
@@ -148,8 +145,7 @@ class ReviewSubmissionServiceTest {
         review.setModerationStatus(ReviewModerationStatus.BLOCKED);
         when(coachReviewRepository.findByReviewIdAndAuthorId(REVIEW_ID, AUTHOR_ID))
             .thenReturn(Optional.of(review));
-        lenient().when(configService.getBoundedInt(
-            anyString(), any(Integer.class), any(Integer.class), any(Integer.class))).thenReturn(30);
+        lenient().when(configService.getBoundedInt(any(ConfigBounds.BoundedKey.class))).thenReturn(30);
 
         assertThatThrownBy(() -> service.updateReview(REVIEW_ID, AUTHOR_ID, 5, "Updated"))
             .isInstanceOf(OperationNotAllowedException.class)
@@ -172,8 +168,7 @@ class ReviewSubmissionServiceTest {
 
     private CoachReview submitAndCaptureSaved() {
         when(coachProfileRepository.existsById(COACH_ID)).thenReturn(true);
-        when(configService.getBoundedInt(anyString(), any(Integer.class), any(Integer.class), any(Integer.class)))
-            .thenReturn(7);
+        when(configService.getBoundedInt(ConfigBounds.REVIEWS_MIN_SESSION_AGE_DAYS)).thenReturn(7);
         when(coachReviewRepository.saveAndFlush(any(CoachReview.class))).thenAnswer(inv -> {
             CoachReview r = inv.getArgument(0);
             r.setReviewId(REVIEW_ID);

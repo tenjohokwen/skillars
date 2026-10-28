@@ -8,8 +8,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(classes = {PropertiesFeatureToggleService.class}, properties = {
-        "features.toggles.payments=true",
-        "features.toggles.invoicing=false"
+        "features.toggles.arachnid-enabled=true",
+        "features.toggles.videointel-enabled=false"
 })
 @EnableConfigurationProperties(FeatureProperties.class)
 class PropertiesFeatureToggleServiceIT {
@@ -19,11 +19,11 @@ class PropertiesFeatureToggleServiceIT {
 
     @Test
     void testEnabledFeature() {
-        assertThat(featureToggleService.isEnabled(AppFeature.PAYMENTS)).isTrue();
+        assertThat(featureToggleService.isEnabled(AppFeature.ARACHNID_ENABLED)).isTrue();
     }
 
     @Test
     void testDisabledFeature() {
-        assertThat(featureToggleService.isEnabled(AppFeature.INVOICING)).isFalse();
+        assertThat(featureToggleService.isEnabled(AppFeature.VIDEOINTEL_ENABLED)).isFalse();
     }
 }
