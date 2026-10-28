@@ -6,4 +6,7 @@
 -- are HAS_CODE_DEFAULT keys in ConfigBounds (defaults 30 / 3 / 90), editable from the admin config
 -- editor without a stored row. coach_reliability_strikes.reason has no CHECK constraint, so the new
 -- COACH_CANCELLATION_EXCUSED_LIMIT reason needs no schema change.
+-- Fail fast instead of queueing behind live booking traffic (migration-conventions rule 7).
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE booking.bookings ADD COLUMN original_start_time timestamp with time zone;
