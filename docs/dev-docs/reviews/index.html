@@ -367,7 +367,7 @@ sequenceDiagram
       <p><strong>Maturity is measured from when the booking became <code>COMPLETED</code>, not the session time.</strong>
       <code>findQualifyingCompletedBookings</code> filters <code>COALESCE(b.statusChangedAt, b.updatedAt) &lt;= now - minSessionAgeDays</code>.
       <code>statusChangedAt</code> (V178) only moves when the status value changes, so a later recap edit or GDPR note anonymisation no
-      longer restarts the clock; rows last transitioned before V178 still fall back to <code>updatedAt</code>. The query is capped at
+      longer restarts the clock. V178 backfilled already-settled rows from their <code>updatedAt</code> at deploy time; a still-NULL value falls back to <code>updatedAt</code>. The query is capped at
       50 distinct player ids, and hitting the cap logs a WARN.</p>
     </div>
     <div class="callout">

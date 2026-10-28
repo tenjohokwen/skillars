@@ -360,7 +360,7 @@ sequenceDiagram
       <code>UNAUTHORISED_CHARGE</code>, <code>OTHER</code>; eligible booking statuses are <code>COMPLETED</code>,
       <code>CANCELLED*</code> and <code>NO_SHOW_*</code>. The submission window is measured from
       <code>Booking.getStatusAnchor()</code> (when the booking reached that status, V178 <code>status_changed_at</code>;
-      <code>updated_at</code> only for older rows), so a later unrelated write to the booking cannot reopen it. Ownership resolves the player through
+      <code>updated_at</code> only while that is NULL), so a later unrelated write to the booking cannot reopen it. Ownership resolves the player through
       <code>PlayerProfile.userId</code> (<code>Booking.playerId</code> is a profile id) and the coach through
       <code>CoachProfile.userId</code>. Credit is computed only from a <code>CAPTURED</code>
       <code>BookingPayment</code> (credit debited + Stripe charged); otherwise <code>FULL_CREDIT</code> issues nothing
