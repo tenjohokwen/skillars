@@ -5,7 +5,6 @@ import com.softropic.skillars.platform.security.contract.CreatePlayerProfileRequ
 import com.softropic.skillars.platform.security.contract.CreateSelfPlayerProfileRequest;
 import com.softropic.skillars.platform.security.contract.PlayerProfileResponse;
 import com.softropic.skillars.platform.security.contract.UpdatePlayerPositionRequest;
-import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.security.service.ShadowAccountService;
 import io.micrometer.observation.annotation.Observed;
@@ -87,12 +86,6 @@ public class ShadowAccountResource {
     public ResponseEntity<PlayerProfileResponse> getPlayerProfile(@PathVariable Long playerId) {
         Long parentId = securityUtil.requireCurrentUserId();
         return ResponseEntity.ok(shadowAccountService.getPlayerProfile(playerId, parentId));
-    }
-
-    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
-    @PostMapping("/{playerId}/link-parent")
-    public ResponseEntity<Void> linkParent(@PathVariable Long playerId) {
-        throw new ShadowAccountException("security.playerAlreadyHasParent", "Player already has a parent");
     }
 
     /**

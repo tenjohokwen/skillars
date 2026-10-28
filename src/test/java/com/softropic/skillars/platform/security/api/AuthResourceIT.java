@@ -7,6 +7,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.Gender;
+import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
 import com.softropic.skillars.platform.security.infrastructure.jwt.TokenCreator;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
@@ -40,6 +42,7 @@ import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.JWT_TTL;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -93,6 +96,9 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private TokenCreator tokenCreator;
+
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
 
     private static final String PHONE_OTP_REQUIRED_KEY = "security.registration.phone-otp-required";
 
@@ -806,6 +812,135 @@ class AuthResourceIT extends AbstractIntegrationTest {
         assertThat(usedFlagOf(hash))
             .as("REQUIRES_NEW revocation must survive the caller's rollback")
             .isTrue();
+    }
+
+    // --- fix/security-session-revocation ------------------------------------------------------
+
+    @Test
+    void csamSuspension_revokesEverySessionAndBlocksRefreshAndLogin() {
+        // AccountSuspensionEventListener used to set verification_status = SUSPENDED and nothing
+        // else: the open session kept refreshing and login was only refused while
+        // phone-otp-required happened to be true. It must now behave like an admin suspension.
+        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "false");
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class);
+        String rtknCookie = extractCookieValue(loginResponse, "rtkn");
+        assertThat(rtknCookie).isNotNull();
+
+        eventPublisher.publishEvent(new AccountSuspensionRequestedEvent(COACH_EMAIL, UUID.randomUUID()));
+
+        Map<String, Object> row = jdbcTemplate.queryForMap(
+            "SELECT verification_status, locked, security_session_invalidated_at FROM main.\"user\" WHERE id = ?",
+            COACH_USER_ID);
+        assertThat(row.get("verification_status")).isEqualTo("SUSPENDED");
+        assertThat(row.get("locked")).isEqualTo(true);
+        assertThat(row.get("security_session_invalidated_at"))
+            .as("standing JWTs must be invalidated, not just the refresh tokens")
+            .isNotNull();
+        long liveTokens = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.refresh_tokens WHERE used = false AND user_id = ?",
+            Long.class, COACH_USER_ID);
+        assertThat(liveTokens).isZero();
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtknCookie), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED));
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accLocked");
+            });
+    }
+
+    @Test
+    void suspendedStatusAlone_blocksLoginWhenPhoneOtpIsNotRequired() {
+        // SUSPENDED but not locked (e.g. a pre-fix suspension, or `locked` cleared by another path):
+        // the status itself must refuse a session, independent of the phone-otp flag.
+        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "false");
+        commitWrite("UPDATE main.\"user\" SET verification_status = 'SUSPENDED', locked = false WHERE id = ?",
+            PARENT_USER_ID);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", PARENT_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                assertThat(ex.getResponseBodyAsString()).contains("security.accLocked");
+            });
+    }
+
+    @Test
+    void springSecurityLogoutEndpoint_revokesTheSessionsRefreshToken() {
+        // POST /api/logout (Spring Security's LogoutFilter) used to only delete cookies, leaving the
+        // refresh token usable for its whole TTL.
+        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "false");
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class);
+        String rtknCookie = extractCookieValue(loginResponse, "rtkn");
+        assertThat(rtknCookie).isNotNull();
+
+        ResponseEntity<Void> logoutResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/logout", HttpMethod.POST, null, cookieHeaders(rtknCookie), Void.class);
+
+        assertThat(logoutResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(usedFlagOf(sha256Hex(rtknCookie))).isTrue();
+        assertThat(logoutResponse.getHeaders().get("Set-Cookie"))
+            .anyMatch(c -> c.startsWith("rtkn=") && c.contains("Max-Age=0"));
+    }
+
+    @Test
+    void springSecurityLogoutEndpoint_ignoresGet_soACrossSiteLinkCannotRevokeTheSession() {
+        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "false");
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", COACH_EMAIL, "password", TEST_PASSWORD), clientHeaders(), Map.class);
+        String rtknCookie = extractCookieValue(loginResponse, "rtkn");
+
+        try {
+            httpTestClient.makeHttpRequest(
+                baseUrl() + "/api/logout", HttpMethod.GET, null, cookieHeaders(rtknCookie), Void.class);
+        } catch (HttpClientErrorException ignored) {
+            // Whatever GET answers, it must not be the logout.
+        }
+
+        assertThat(usedFlagOf(sha256Hex(rtknCookie))).isFalse();
+    }
+
+    @Test
+    void legacyAuthenticateFailure_isRecordedOnceInTheSharedDbLimiter_andSpaFailureIsNotDoubleCounted() {
+        // The legacy /authenticate path counted failures in per-instance Guava caches; it now writes
+        // the same main.login_attempts rows /api/auth/login does (same key), and the app-wide
+        // BadCredentialsEvent no longer adds a second count for an /api/auth/login failure.
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/authenticate", HttpMethod.POST,
+            Map.of("id", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders(), Map.class))
+            .isInstanceOf(HttpClientErrorException.class);
+        assertThat(loginAttemptCountFor(COACH_EMAIL)).isEqualTo(1L);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders(), Map.class))
+            .isInstanceOf(HttpClientErrorException.class);
+        assertThat(loginAttemptCountFor(COACH_EMAIL))
+            .as("one /api/auth/login failure adds exactly one row to the shared counter")
+            .isEqualTo(2L);
+    }
+
+    private long loginAttemptCountFor(String email) {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.login_attempts WHERE subject_hash = ?",
+            Long.class, sha256Hex(email.toLowerCase()));
     }
 
     /**

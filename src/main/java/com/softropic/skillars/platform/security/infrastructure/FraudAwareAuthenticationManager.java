@@ -4,10 +4,12 @@ package com.softropic.skillars.platform.security.infrastructure;
 
 import com.softropic.skillars.infrastructure.security.RequestMetadata;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
+import com.softropic.skillars.platform.security.service.LoginAttemptConsumer;
 import com.softropic.skillars.platform.security.service.LoginDecisionManager;
 
 import org.springframework.security.authentication.AccountStatusException;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.LockedException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.AuthenticationException;
@@ -20,14 +22,17 @@ public class FraudAwareAuthenticationManager implements AuthenticationManager {
 
     private final AuthenticationManager                 authenticationManager;
     private final LoginDecisionManager<RequestMetadata> loginDecisionManager;
+    private final LoginAttemptConsumer<RequestMetadata> loginAttemptConsumer;
     private final AuthenticationManager                 simulator;
 
 
     public FraudAwareAuthenticationManager(final AuthenticationManager authenticationManager,
                                            final LoginDecisionManager<RequestMetadata> loginDecisionManager,
+                                           final LoginAttemptConsumer<RequestMetadata> loginAttemptConsumer,
                                            final AuthenticationManager simulator) {
         this.authenticationManager = authenticationManager;
         this.loginDecisionManager = loginDecisionManager;
+        this.loginAttemptConsumer = loginAttemptConsumer;
         this.simulator = simulator;
     }
 
@@ -56,8 +61,18 @@ public class FraudAwareAuthenticationManager implements AuthenticationManager {
     }
 
     private Authentication verifyAccountStatusThenAuthenticate(final Authentication authentication) {
-        if(loginDecisionManager.isAllowed(RequestMetadataProvider.getClientInfo())) {
-            return authenticationManager.authenticate(authentication);
+        final RequestMetadata clientInfo = RequestMetadataProvider.getClientInfo();
+        if(loginDecisionManager.isAllowed(clientInfo)) {
+            try {
+                return authenticationManager.authenticate(authentication);
+            } catch (BadCredentialsException bce) {
+                // Recorded HERE, at the one place a wrong /authenticate password surfaces, rather
+                // than from the app-wide BadCredentialsEvent: that event also fires for the SPA's
+                // /api/auth/login (which records its own failures) and for refresh-token denials,
+                // which must not eat into a user's login budget.
+                loginAttemptConsumer.loginFailed(clientInfo);
+                throw bce;
+            }
         } else {
             final String errorMsg = String.format("Possibly too many failed login attempts. " +
                     "Client device or ip address or user has been locked.");

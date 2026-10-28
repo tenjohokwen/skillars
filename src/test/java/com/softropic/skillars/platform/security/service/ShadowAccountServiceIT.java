@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.security.contract.exception.UserNotFoundE
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -163,17 +164,21 @@ class ShadowAccountServiceIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void linkAdditionalParent_existingLink_throws() {
+    void secondParentLinkForSamePlayer_isRejectedByUniqueConstraint() {
+        // FR-USR-001 (one parent per player). The always-409 POST .../link-parent stub and its
+        // never-called ShadowAccountService.linkAdditionalParent were removed as dead code; the rule
+        // itself is enforced by uq_ppl_player_id, which this pins.
         LocalDate adultDob = LocalDate.now().minusYears(20);
         PlayerProfileResponse profile = shadowAccountService.createPlayerProfile(PARENT_A_ID,
             new CreatePlayerProfileRequest("Shared Player", adultDob, PlayerPosition.FORWARD, null, null)
         );
 
-        // Parent B attempts to claim the same player — must be refused
-        assertThatThrownBy(() -> shadowAccountService.linkAdditionalParent(PARENT_B_ID, profile.id()))
-            .isInstanceOf(ShadowAccountException.class)
-            .satisfies(e -> assertThat(((ShadowAccountException) e).getErrorCode())
-                .isEqualTo("security.playerAlreadyHasParent"));
+        assertThatThrownBy(() -> transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO main.parent_player_links (id, parent_id, player_id, consent_accepted_at, "
+                + "consent_policy_version) VALUES (?, ?, ?, ?, '1.0')",
+            987654321L, PARENT_B_ID, profile.id(), Timestamp.from(Instant.now()))))
+            .isInstanceOf(DataIntegrityViolationException.class)
+            .hasMessageContaining("uq_ppl_player_id");
     }
 
     // ---- AC4: updateOwnPosition ----

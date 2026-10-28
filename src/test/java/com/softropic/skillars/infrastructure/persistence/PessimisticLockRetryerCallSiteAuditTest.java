@@ -145,11 +145,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * orElseThrow read); every drill/gallery write runs after withBoundedRetry returns) -- now 51 after
      * fix/payment-money-integrity added {@code CreditWalletService.debitForCashOut} (a
      * StripeCustomerRepository.findByIdForUpdate+orElseThrow read, the per-payer wallet lock; the
-     * balance read and ledger writes run after withBoundedRetry returns). Asserted explicitly so an
+     * balance read and ledger writes run after withBoundedRetry returns) -- now 52 after
+     * fix/security-session-revocation added {@code AccountSuspensionEventListener.onAccountSuspensionRequested}'s
+     * findByIdForUpdate read (the SUSPENDED/lock writes and session revocation run after it returns). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 51;
+    private static final int EXPECTED_CALL_SITE_COUNT = 52;
 
     private record CallSite(String file, int line, String argument) {
     }

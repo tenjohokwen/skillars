@@ -5,7 +5,6 @@ export default {
     parentConsentBody:
       "As the legal guardian of the player(s) you register, you consent to Skillars collecting and processing data about your child for coaching purposes. You confirm you are the legal parent or guardian. You are responsible for ensuring your child's participation is appropriate. You may withdraw consent at any time by contacting support.",
     activateRedirecting: 'Redirecting in {seconds}…',
-    otpCodeExpiry: 'the code expires in 10 minutes.',
     parentTosBody:
       'By using Skillars, you agree to our terms and conditions. These terms govern your use of the platform, including booking sessions, payments, and data handling. You must be at least 18 years old to register as a parent. All accounts are subject to our acceptable use policy.',
     activationTitle: 'Account activation',
@@ -14,8 +13,6 @@ export default {
     recoveryBody: 'Enter your email and date of birth to reset your password.',
     recoveryEmailSent: 'Email sent',
     loginWelcome: 'Welcome back. Sign in to continue.',
-    twoFactorTitle: 'Two-factor authentication',
-    otpNotReceived: "Didn't receive the code?",
     registerTitle: 'Create your account',
     registerBody: 'Fill in your details to get started.',
     resetTitle: 'Password reset',
@@ -61,11 +58,6 @@ export default {
     registerAsParent: 'Register as a Parent',
     registerAsPlayer: 'Register as a Player (18+)',
     activateAccount: 'Activate Account',
-    enterOtp: 'Enter Verification Code',
-    otpSent: 'A verification code has been sent to your email',
-    resendOtp: 'Resend Code',
-    verifyOtp: 'Verify',
-    enableTwoFactor: 'Enable Two-Factor Authentication',
     preferredLanguage: 'Preferred Language',
     languageEnglish: 'English',
     languageFrench: 'French',
@@ -823,8 +815,6 @@ export default {
     phoneChanged: 'Your phone number has been updated.',
     addressChanged: 'Your address has been updated.',
     infoChanged: 'Your profile information has been updated.',
-    twoFactorEnabled: 'Two-factor authentication has been enabled.',
-    twoFactorDisabled: 'Two-factor authentication has been disabled.',
   },
   common: {
     retry: 'Retry',
@@ -881,7 +871,6 @@ export default {
     address: 'Address',
     noAddress: 'Not provided',
     personalInfo: 'Personal Information',
-    twoFactorAuth: 'Two-Factor Authentication',
     enabled: 'Enabled',
     disabled: 'Disabled',
     edit: 'Edit',
@@ -891,7 +880,6 @@ export default {
     updatePhone: 'Update Phone Number',
     updateAddress: 'Update Address',
     updateInfo: 'Update Personal Information',
-    toggle2fa: 'Two-Factor Authentication',
     // Address fields
     addressName: 'Address Label',
     addressNameHint: 'e.g., HOME, WORK',
@@ -909,11 +897,6 @@ export default {
     stateProvince: 'State/Province',
     postalCode: 'Postal Code',
     country: 'Country',
-    // 2FA dialog
-    enable2fa: 'Enable Two-Factor Authentication',
-    disable2fa: 'Disable Two-Factor Authentication',
-    confirm2faEnable: 'Enter your password to enable two-factor authentication.',
-    confirm2faDisable: 'Enter your password to disable two-factor authentication.',
     emailChangeWarning:
       'Changing your email address will also change your login credentials. You will be automatically signed out and will need to log in again with your new email address.',
     // skillars-deferred-139: role-gated sections on this same page — Coach (AC2/AC3), Player (AC4),
@@ -1483,6 +1466,8 @@ export default {
       cannotModifyAdmin: 'Administrator accounts cannot be changed from this page.',
       cannotSuspendSelf: 'You cannot suspend your own account.',
       erased: 'This account has been erased (GDPR) and cannot be reactivated.',
+      safetyHold:
+        'This account is under a child-safety suspension (flagged upload) and cannot be reactivated from this page.',
       actionFailed: 'The action failed. Please try again.',
       actions: {
         USER_SUSPEND: 'Suspended',

@@ -13,7 +13,8 @@ public interface LoginAttemptRepository extends JpaRepository<LoginAttempt, Long
 
     long countByIdentifierAndAttemptedAtAfter(String identifier, Instant windowStart);
 
-    Optional<LoginAttempt> findFirstByIdentifierOrderByAttemptedAtAsc(String identifier);
+    Optional<LoginAttempt> findFirstByIdentifierAndAttemptedAtAfterOrderByAttemptedAtAsc(String identifier,
+                                                                                         Instant windowStart);
 
     /** V171: failed attempts for one account (any IP) since {@code windowStart} — admin read-out only. */
     long countBySubjectHashAndAttemptedAtAfter(String subjectHash, Instant windowStart);

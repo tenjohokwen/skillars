@@ -71,14 +71,4 @@ export const profileApi = {
   updateInfo(infoData) {
     return api.put('/api/account/info', infoData)
   },
-
-  /**
-   * Toggle two-factor authentication
-   * @param {boolean} enabled - Whether to enable or disable 2FA
-   * @param {string} password - Current password for verification
-   * @returns {Promise} 2FA toggle result
-   */
-  toggle2fa(enabled, password) {
-    return api.put('/api/account/2fa', { enabled, password })
-  },
 }

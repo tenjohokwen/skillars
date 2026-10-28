@@ -160,47 +160,6 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     }
 
     // -------------------------------------------------------------------------
-    // toggle2fa
-    // -------------------------------------------------------------------------
-
-    @Test
-    void toggle2fa_disabling_updatesUserAndPublishesDisabledEvent() {
-        // Test user has otp_enabled=true
-        Optional<User> result = userProfileService.toggle2fa(false, CORRECT_PW);
-
-        assertThat(result).isPresent();
-        assertThat(result.get().isOtpEnabled()).isFalse();
-
-        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.TWO_FACTOR_AUTH_DISABLED);
-        assertThat(event).isNotNull();
-        assertThat(event.getOldValue()).isEqualTo("true");
-        assertThat(event.getNewValue()).isEqualTo("false");
-    }
-
-    @Test
-    void toggle2fa_enabling_updatesUserAndPublishesEnabledEvent() {
-        // Disable first, then re-enable
-        userProfileService.toggle2fa(false, CORRECT_PW);
-        recordedEvents.clear();
-
-        Optional<User> result = userProfileService.toggle2fa(true, CORRECT_PW);
-
-        assertThat(result).isPresent();
-        assertThat(result.get().isOtpEnabled()).isTrue();
-
-        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.TWO_FACTOR_AUTH_ENABLED);
-        assertThat(event).isNotNull();
-        assertThat(event.getOldValue()).isEqualTo("false");
-        assertThat(event.getNewValue()).isEqualTo("true");
-    }
-
-    @Test
-    void toggle2fa_wrongPassword_throwsProfileActionException() {
-        assertThatThrownBy(() -> userProfileService.toggle2fa(false, "wrongPassword"))
-                .isInstanceOf(ProfileActionException.class);
-    }
-
-    // -------------------------------------------------------------------------
     // updatePostalAddress
     // -------------------------------------------------------------------------
 

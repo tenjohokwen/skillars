@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.security.service;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.config.service.ConfigService;
-import com.softropic.skillars.platform.security.repo.LoginAttemptRepository;
 import com.softropic.skillars.platform.security.repo.RefreshToken;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
@@ -49,7 +48,7 @@ class AuthServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private RefreshTokenRepository refreshTokenRepository;
-    @Mock private LoginAttemptRepository loginAttemptRepository;
+    @Mock private LoginRateLimiter loginRateLimiter;
     @Mock private ConfigService configService;
     @Mock private LoginTokenManager loginTokenManager;
     @Mock private SecurityUtil securityUtil;
@@ -62,7 +61,7 @@ class AuthServiceTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         authService = new AuthService(userRepository, passwordEncoder, refreshTokenRepository,
-            loginAttemptRepository, configService, loginTokenManager, securityUtil);
+            loginRateLimiter, configService, loginTokenManager, securityUtil);
         request = new MockHttpServletRequest();
         request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
         response = new MockHttpServletResponse();

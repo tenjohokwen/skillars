@@ -95,6 +95,8 @@ public class SecurityIT extends AbstractIntegrationTest {
             jdbcTemplate.execute("delete from main.authority");
             jdbcTemplate.execute("delete from main.user");
             jdbcTemplate.execute("delete from main.audit_log");
+            // Failed /authenticate attempts are now DB-backed (LoginRateLimiter), not in-memory.
+            jdbcTemplate.execute("delete from main.login_attempts");
             return 0;
         });
         loginAttemptsService.unblacklistClient(CLIENT_ID);

@@ -385,6 +385,7 @@ function errorMessage(err) {
   if (key === 'admin.users.cannotModifyAdmin') return t('admin.users.cannotModifyAdmin')
   if (key === 'admin.users.cannotSuspendSelf') return t('admin.users.cannotSuspendSelf')
   if (key === 'admin.users.erased') return t('admin.users.erased')
+  if (key === 'admin.users.safetyHold') return t('admin.users.safetyHold')
   return t('admin.users.actionFailed')
 }
 

@@ -9,8 +9,6 @@ import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
-import com.softropic.skillars.platform.security.repo.LoginAttempt;
-import com.softropic.skillars.platform.security.repo.LoginAttemptRepository;
 import com.softropic.skillars.platform.security.repo.RefreshToken;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
@@ -29,7 +27,6 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
@@ -55,12 +52,12 @@ public class AuthService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenRepository refreshTokenRepository;
-    private final LoginAttemptRepository loginAttemptRepository;
+    private final LoginRateLimiter loginRateLimiter;
     private final ConfigService configService;
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil securityUtil;
 
-    // noRollbackFor BadCredentialsException: the failed-attempt row recordAttempt() writes just before
+    // noRollbackFor BadCredentialsException: the failed-attempt row loginRateLimiter.recordFailure() writes (joining this transaction) just before
     // that throw is the ONLY thing this rate limiter counts. With the class-level @Transactional's
     // default rollback-on-RuntimeException it was rolled back together with the very failure it
     // recorded, so countByIdentifierAndAttemptedAtAfter never grew past what tests seeded directly and
@@ -68,37 +65,22 @@ public class AuthService {
     // refresh-token insert happens only after the password check), so committing on it is safe.
     @Transactional(noRollbackFor = BadCredentialsException.class)
     public LoginResponse login(String email, String rawPassword, String clientIp, HttpServletResponse res) {
-        int maxAttempts = configService.find("security.login.max-attempts")
-            .map(Integer::parseInt).orElse(5);
-        int lockWindowMin = configService.find("security.login.lock-window-minutes")
-            .map(Integer::parseInt).orElse(15);
-
-        // Rate-limit key is SHA-256(email|ip) so an attacker on a different IP cannot
-        // lock the legitimate user's own IP+email combination (account-DoS prevention).
-        String identifier = sha256Hex(email.toLowerCase() + "|" + canonicaliseIp(clientIp));
-        String subjectHash = loginSubjectHash(email);
-        Instant windowStart = Instant.now(ClockProvider.getClock()).minus(lockWindowMin, ChronoUnit.MINUTES);
-        long recentAttempts = loginAttemptRepository.countByIdentifierAndAttemptedAtAfter(identifier, windowStart);
-        if (recentAttempts >= maxAttempts) {
-            long retryAfterSeconds = loginAttemptRepository
-                .findFirstByIdentifierOrderByAttemptedAtAsc(identifier)
-                .map(a -> Math.max(1L, ChronoUnit.SECONDS.between(
-                        Instant.now(ClockProvider.getClock()),
-                        a.getAttemptedAt().plus(lockWindowMin, ChronoUnit.MINUTES))))
-                .orElse((long) lockWindowMin * 60);
+        // Rate limit keyed on SHA-256(email|ip) — see LoginRateLimiter. Shared with the legacy
+        // /authenticate filter, so a failure on either entry point counts against both.
+        loginRateLimiter.checkLimited(email, clientIp).ifPresent(limited -> {
             throw new LoginRateLimitedException(
                 "Too many failed login attempts",
-                Map.of("attempts", recentAttempts),
-                retryAfterSeconds);
-        }
+                Map.of("attempts", limited.recentAttempts()),
+                limited.retryAfterSeconds());
+        });
 
         var user = userRepository.findOneByLogin(email.toLowerCase()).orElseThrow(() -> {
-            recordAttempt(identifier, subjectHash);
+            loginRateLimiter.recordFailure(email, clientIp);
             return new BadCredentialsException("Invalid credentials");
         });
 
         if (!passwordEncoder.matches(rawPassword, user.getPassword())) {
-            recordAttempt(identifier, subjectHash);
+            loginRateLimiter.recordFailure(email, clientIp);
             throw new BadCredentialsException("Invalid credentials");
         }
 
@@ -318,40 +300,29 @@ public class AuthService {
         if (user.isLocked()) {
             throw new LockedException("Account is locked");
         }
-    }
-
-    private void recordAttempt(String identifier, String subjectHash) {
-        loginAttemptRepository.save(
-            new LoginAttempt(identifier, subjectHash, Instant.now(ClockProvider.getClock())));
+        // A safety suspension (AccountSuspensionEventListener, CSAM match) also locks the account,
+        // but the status is checked on its own as well: an account must never get a session while
+        // it is SUSPENDED, whatever later touches `locked` and whatever
+        // security.registration.phone-otp-required is set to (the only check that caught SUSPENDED
+        // before, and only while that flag was true).
+        if (user.getVerificationStatus() == SkillarsVerificationStatus.SUSPENDED) {
+            throw new LockedException("Account is suspended");
+        }
     }
 
     /**
      * Admin "unlock login" (V171): deletes every recorded failed attempt for this account across all
-     * IPs, lifting {@link #login}'s per-(email, ip) rate limit for it immediately instead of waiting
+     * IPs, lifting the shared {@link LoginRateLimiter} limit for it immediately instead of waiting
      * out the lock window. Returns the number of attempt rows removed.
      */
     public int clearLoginRateLimit(String login) {
-        return loginAttemptRepository.deleteBySubjectHash(loginSubjectHash(login));
+        return loginRateLimiter.clear(login);
     }
 
     /** Admin read-out (V171): failed attempts for this account, any IP, inside the current lock window. */
     @Transactional(readOnly = true)
     public long countRecentFailedAttempts(String login) {
-        int lockWindowMin = configService.find("security.login.lock-window-minutes")
-            .map(Integer::parseInt).orElse(15);
-        Instant windowStart = Instant.now(ClockProvider.getClock()).minus(lockWindowMin, ChronoUnit.MINUTES);
-        return loginAttemptRepository.countBySubjectHashAndAttemptedAtAfter(loginSubjectHash(login), windowStart);
-    }
-
-    private static String loginSubjectHash(String email) {
-        return sha256Hex(email.toLowerCase());
-    }
-
-    private static String canonicaliseIp(String ip) {
-        if (ip == null) return "unknown";
-        if ("0:0:0:0:0:0:0:1".equals(ip) || "::1".equals(ip)) return "127.0.0.1";
-        if (ip.startsWith("::ffff:")) return ip.substring(7);
-        return ip;
+        return loginRateLimiter.countRecentFailures(login);
     }
 
     private static String sha256Hex(String raw) {

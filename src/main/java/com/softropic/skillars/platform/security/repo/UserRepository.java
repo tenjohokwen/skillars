@@ -70,6 +70,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findOneByEmailOrLogin(final String email, final String login);
 
+    /**
+     * Scalar id lookups for callers that must then take the row lock with {@link #findByIdForUpdate}:
+     * loading the entity first would make that locked query return the already-managed, pre-lock
+     * snapshot (see AdminUserService.suspendCoachProfileIfAny's note on the same hazard).
+     */
+    @Query("select u.id from User u where u.login = :login")
+    Optional<Long> findIdByLogin(@Param("login") String login);
+
+    @Query("select u.id from User u where u.email = :email")
+    Optional<Long> findIdByEmail(@Param("email") String email);
+
     @Override
     void delete(final User user);
 

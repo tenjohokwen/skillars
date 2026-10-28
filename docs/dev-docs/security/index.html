@@ -101,16 +101,16 @@
       the <code>user.locked</code> flag, <code>securitySessionInvalidatedAt</code>, refresh-token revocation, and the
       login rate-limit tables. GDPR self-service (export/erasure, <code>/api/gdpr</code>) is likewise an admin-module
       feature that writes security-owned rows. This module keeps a narrow admin surface of its own:
-      <code>AdminLoginResource</code> (clear login locks) and <code>UserAdminService</code> (lock, delete, and the nightly
-      purge of never-activated accounts).
+      <code>UserAdminService</code> (lock, delete, and the nightly purge of never-activated accounts). Clearing a
+      login lock is the admin console's <code>POST /api/admin/users/{id}/unlock-login</code>.
     </p>
 
     <h2 id="technical-overview">Technical Overview</h2>
     <h3 id="package-layout">Package layout</h3>
     <table>
       <tr><th>Package</th><th>Purpose</th></tr>
-      <tr><td><code>api</code></td><td>REST controllers (Resources) for auth, account, profile, registration (coach/parent/player), shadow accounts, admin login-unlock, and sanitizer preview; plus the global <code>ApiAdvice</code> exception mapper and <code>AccountManagementFacade</code> (legacy registration/password-reset orchestration).</td></tr>
-      <tr><td><code>api.dto</code></td><td>Request/response records for profile and registration endpoints (address, password change, phone change, 2FA toggle, OTP resend, <code>VerifyPhoneRequest</code>/<code>VerifyEmailResponse</code> carrying the signed <code>verificationToken</code> handle).</td></tr>
+      <tr><td><code>api</code></td><td>REST controllers (Resources) for auth, account, profile, registration (coach/parent/player), shadow accounts, and sanitizer preview; plus the global <code>ApiAdvice</code> exception mapper and <code>AccountManagementFacade</code> (legacy registration/password-reset orchestration).</td></tr>
+      <tr><td><code>api.dto</code></td><td>Request/response records for profile and registration endpoints (address, password change, phone change, OTP resend, <code>VerifyPhoneRequest</code>/<code>VerifyEmailResponse</code> carrying the signed <code>verificationToken</code> handle).</td></tr>
       <tr><td><code>api.registration</code></td><td>Strategy pattern (<code>EmailRegistrationStrategy</code>/<code>SmsRegistrationStrategy</code>) used by <code>AccountManagementFacade</code> to notify users via the channel matching their chosen login type. Links in these mails are built from <code>FrontendLinkBuilder.base()</code> (hash-routed SPA origin), not <code>baseurl:server.port</code>.</td></tr>
       <tr><td><code>audit</code></td><td>Security/account audit trail — <code>AuditLog</code> entity, <code>TrailService</code>, and listeners (<code>AccountChangeEventListener</code>, <code>SecurityAuditListener</code>) that record account changes, auth events and <code>SecurityAlertEvent</code>s.</td></tr>
       <tr><td><code>config</code></td><td><code>SecurityConfiguration</code> (Spring Security filter chain wiring), <code>AppEndpoints</code> (public vs secured URL matcher lists), CORS and MVC config.</td></tr>
@@ -148,10 +148,11 @@
       <tr><td><code>RegistrationOtpResendSupport</code></td><td>The shared body of the three <code>resendPhoneOtp</code> methods: per-user rate cap, OTP re-issue, role-specific OTP email event.</td></tr>
       <tr><td><code>RegistrationVerificationTokenService</code></td><td>Issues/verifies the opaque phone-verification handle (<code>base64url(payload).base64url(HmacSHA256)</code> over <code>role, userId, expiry</code>, 24h) returned by <code>/verify-email</code> and required by <code>/verify-phone</code> and <code>/resend-otp</code>, so those <code>permitAll</code> endpoints never take a raw <code>userId</code>. Keyed by <code>skillars.platform.registration-verification-secret</code>; aborts startup if unset.</td></tr>
       <tr><td><code>OtpHasher</code></td><td>Sole owner of <code>phone_otp_tokens.otp_hash</code>: <code>HmacSHA256(otpKey, userId:otp)</code>, with <code>otpKey</code> derived from <code>registration-verification-secret</code> under a fixed purpose label (never equal to the handle-signing key).</td></tr>
-      <tr><td><code>ShadowAccountService</code></td><td>Creates/lists/fetches <code>PlayerProfile</code>s for parent-managed minors (with consent enforcement) and self-registered adults; updates position (<code>updateOwnPosition</code>/<code>updateChildPosition</code>); hides GDPR-erased children from listings. <code>linkAdditionalParent</code> exists but the endpoint never calls it.</td></tr>
-      <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>User/profile lookups and self-service profile mutations (email, password, phone, address, info, 2FA toggle), each publishing an <code>AccountChangeEvent</code> for audit/notification.</td></tr>
+      <tr><td><code>ShadowAccountService</code></td><td>Creates/lists/fetches <code>PlayerProfile</code>s for parent-managed minors (with consent enforcement) and self-registered adults; updates position (<code>updateOwnPosition</code>/<code>updateChildPosition</code>); hides GDPR-erased children from listings. There is no "link another parent" path: one parent per player is enforced by <code>uq_ppl_player_id</code>.</td></tr>
+      <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>User/profile lookups and self-service profile mutations (email, password, phone, address, info), each publishing an <code>AccountChangeEvent</code> for audit/notification.</td></tr>
       <tr><td><code>AgePolicyService</code></td><td>Config-driven age-tier calculation and derived <code>MessagingPolicy</code> (<code>getMessagingPolicy</code>, <code>findMessagingPolicy</code>, batch <code>findMessagingPoliciesByPlayerIds</code>), shared by shadow-account creation, player self-registration and messaging.</td></tr>
-      <tr><td><code>LoginAttemptsService</code> / <code>LoginDecisionManager</code></td><td>In-memory Guava caches (per user, IP+user, client+user: 4h; blacklisted clients: 30 days) consulted by <code>FraudAwareAuthenticationManager</code> on the legacy <code>/authenticate</code> path only. Not cluster-shared, lost on restart.</td></tr>
+      <tr><td><code>LoginRateLimiter</code></td><td>The one failed-login limiter, in <code>main.login_attempts</code> keyed by SHA-256(login|ip): <code>checkLimited</code>, <code>recordFailure</code>, admin <code>clear</code>/<code>countRecentFailures</code>. Budget/window from <code>security.login.max-attempts</code> / <code>lock-window-minutes</code>. Used by <code>AuthService.login</code> and by the legacy <code>/authenticate</code> path, with the same key, so the two share one budget. The legacy path also checks <code>isAccountLimited</code> (same budget across all IPs); the SPA path does not, to avoid account-DoS.</td></tr>
+      <tr><td><code>LoginAttemptsService</code> / <code>LoginDecisionManager</code></td><td>Login decision for the legacy <code>/authenticate</code> path (<code>FraudAwareAuthenticationManager</code>): delegates counting to <code>LoginRateLimiter</code> (failures are recorded where <code>/authenticate</code> rejects a password, not from the app-wide <code>BadCredentialsEvent</code>). Only the <code>FraudEvent</code>-fed client blacklist (30 days) is still in memory, per instance.</td></tr>
       <tr><td><code>TwoFactorLoginService</code></td><td>Generates and validates the email OTP for the legacy <code>/authenticate</code> &rarr; <code>/otp</code> flow (distinct from the registration phone OTP).</td></tr>
       <tr><td><code>LoginTokenManager</code> / <code>JwtManagerImpl</code></td><td>Mint, extend and delete the JWT cookie set (<code>potc</code>, <code>user</code>, <code>rint</code>, <code>ION</code>, <code>skp</code>…). The JWT carries <code>ROLES</code> and <code>sessIat</code> (<code>SESSION_ISSUED_AT</code>); role precedence for a multi-role claim set is explicit ADMIN &gt; COACH &gt; PARENT &gt; PLAYER, and a null/non-string <code>ROLES</code> claim is rejected cleanly.</td></tr>
       <tr><td><code>PasswordResetService</code></td><td>Reset-key issuance/validation and password completion, delegating invariant checks to <code>User</code> domain methods.</td></tr>
@@ -170,9 +171,9 @@
       <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT</td><td>Public (refresh-token cookie)</td></tr>
       <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies</td><td>Public</td></tr>
       <tr><td>GET (any verb)</td><td><code>/refresh</code></td><td>Keep-alive: <code>JWTAuthorizationFilter</code> extends the JWT, <code>SessionRefreshFilter</code> returns an empty 200</td><td>Any authenticated role</td></tr>
-      <tr><td>POST</td><td><code>/authenticate</code></td><td>Legacy first-factor login (<code>JWTAuthenticationFilter</code>); always answers <code>check.otp</code> with a <code>loginInfoId</code></td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/authenticate</code></td><td>Legacy login (<code>JWTAuthenticationFilter</code>); answers <code>JWT_CREATED</code>, or <code>check.otp</code> with a <code>loginInfoId</code> when <code>User.otpEnabled</code>. Still used by ITs (<code>AdminLogin</code>)</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/otp</code></td><td>Legacy second factor (<code>SecondFactorLoginFilter</code>); only active when the login-info cookie is present</td><td>Public (login-info cookie)</td></tr>
-      <tr><td>POST</td><td><code>/api/logout</code></td><td>Spring Security logout (<code>AjaxLogoutSuccessHandler</code>, deletes session/JWT cookies; does not revoke refresh tokens)</td><td>Public</td></tr>
+      <tr><td>POST</td><td><code>/api/logout</code></td><td>Spring Security logout (POST only, so a cross-site GET cannot trigger it): a <code>LogoutHandler</code> runs <code>SecurityUtil.terminateSession</code> (revokes the <code>rtkn</code> refresh token, clears cookies), then <code>AjaxLogoutSuccessHandler</code> answers 200</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/register</code></td><td>Legacy full account registration (<code>RegisterPage.vue</code>)</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/regislink</code></td><td>Resend registration/activation link</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/v1/account/activate</code></td><td>Activate account via key</td><td>Public</td></tr>
@@ -187,7 +188,6 @@
       <tr><td>PUT</td><td><code>/api/account/phone</code></td><td>Change phone</td><td>Same as above</td></tr>
       <tr><td>PUT</td><td><code>/api/account/address</code></td><td>Add/replace an address</td><td>Same as above</td></tr>
       <tr><td>PUT</td><td><code>/api/account/info</code></td><td>Update name/lang/gender/title/nationalId</td><td>Same as above</td></tr>
-      <tr><td>PUT</td><td><code>/api/account/2fa</code></td><td>Toggle <code>User.otpEnabled</code> (see gotcha below)</td><td>Same as above</td></tr>
       <tr><td>POST</td><td><code>/api/security/{coach|parent|player}/register</code></td><td>Role self-registration</td><td>Public</td></tr>
       <tr><td>GET</td><td><code>/api/security/{coach|parent|player}/verify-email</code></td><td>Verify email token; returns <code>VerifyEmailResponse(nextStep, verificationToken)</code></td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/api/security/{coach|parent|player}/verify-phone</code></td><td>Verify phone OTP (<code>{verificationToken, otp}</code>)</td><td>Public</td></tr>
@@ -200,8 +200,6 @@
       <tr><td>PATCH</td><td><code>/api/security/players/me/position</code></td><td>Update own position; returns the updated profile</td><td>ROLE_PLAYER</td></tr>
       <tr><td>GET</td><td><code>/api/security/players/{playerId}</code></td><td>Fetch one player profile</td><td><code>@playerOwnershipGuard.check</code></td></tr>
       <tr><td>PATCH</td><td><code>/api/security/players/{playerId}/position</code></td><td>Parent updates a child's position</td><td><code>@playerOwnershipGuard.check</code></td></tr>
-      <tr><td>POST</td><td><code>/api/security/players/{playerId}/link-parent</code></td><td>Link an additional parent — always rejects with <code>security.playerAlreadyHasParent</code> (not implemented)</td><td><code>@playerOwnershipGuard.check</code></td></tr>
-      <tr><td>DELETE</td><td><code>/v1/admin/users/{username}/login-lock</code></td><td>Clear both the legacy in-memory locks and the DB <code>login_attempts</code> rows for a login</td><td>ROLE_ADMIN/LTD_ADMIN</td></tr>
       <tr><td>POST</td><td><code>/api/util/sanitize-preview</code></td><td>Preview PII/contact-detail sanitization on arbitrary text</td><td><code>HAS_ANY_ROLE</code></td></tr>
     </table>
     <p>
@@ -211,8 +209,8 @@
       unsubscribe, V175). <code>PUBLIC_MGMT_ENDPOINTS</code> opens <code>/manage/health</code>, <code>/manage/health/smoke</code>,
       <code>/manage/info</code> and <code>/manage/prometheus</code>; the rest of <code>/manage/**</code> needs ADMIN.
       Everything under <code>/v1/**</code> and <code>/api/**</code> otherwise needs one of the six authorities, with
-      method-level <code>@PreAuthorize</code> narrowing further. Field-level request/response detail for the legacy
-      <code>/v1/account</code> + <code>/authenticate</code>/<code>/otp</code> surface is in
+      method-level <code>@PreAuthorize</code> narrowing further. Field-level request/response detail for every
+      endpoint in this table is in
       <a href="../../security-api-endpoints.md">docs/security-api-endpoints.md</a>; the session keep-alive contract
       (<code>rint</code>, <code>GET /refresh</code>, the 401 contract) is in
       <a href="../../session-refresh-mechanism.md">docs/session-refresh-mechanism.md</a>.
@@ -222,16 +220,16 @@
     <p>Published (via <code>ApplicationEventPublisher</code>):</p>
     <ul>
       <li><code>UserRegisteredEvent</code>, <code>CoachVerificationEmailEvent</code>/<code>CoachOtpEmailEvent</code>, <code>ParentVerificationEmailEvent</code>/<code>ParentOtpEmailEvent</code>, <code>PlayerVerificationEmailEvent</code>/<code>PlayerOtpEmailEvent</code> — registration/verification emails and OTP codes per role. They are consumed by this module's own <code>{Role}RegistrationEmailListener</code>s (<code>BEFORE_COMMIT</code>), which enqueue onto the notification outbox via <code>NotificationOutboxSupport</code> — so an outbox insert failure rolls the registration back with a 500 rather than silently losing the email.</li>
-      <li><code>AccountChangeEvent</code> / <code>AccountChangeUserInfo</code> — published on every self-service profile mutation (email, password, phone, address, 2FA) for audit trail and notification.</li>
+      <li><code>AccountChangeEvent</code> / <code>AccountChangeUserInfo</code> — published on every self-service profile mutation (email, password, phone, address) for audit trail and notification.</li>
       <li><code>SecurityAlertEvent</code> (throttled per client+cause by <code>JWTAuthorizationFilter</code>), <code>SendMailEvent</code> — security side effects recorded by <code>SecurityAuditListener</code> / sent by <code>SendMailListener</code>.</li>
     </ul>
     <p>Defined here but published elsewhere and (partly) consumed here:</p>
     <ul>
-      <li><code>AccountSuspensionRequestedEvent</code> — published by video's <code>ModerationOrchestrationService</code> (CSAM hit); <code>AccountSuspensionEventListener</code> sets <code>verificationStatus = SUSPENDED</code> in a <code>REQUIRES_NEW</code> transaction.</li>
+      <li><code>AccountSuspensionRequestedEvent</code> — published by video's <code>ModerationOrchestrationService</code> (CSAM hit); <code>AccountSuspensionEventListener</code>, in a <code>REQUIRES_NEW</code> transaction under the user row lock, sets <code>verificationStatus = SUSPENDED</code>, locks the account, clears persistent tokens, stamps <code>securitySessionInvalidatedAt</code> and revokes every refresh token.</li>
       <li><code>UserErasedEvent</code> — published by admin's <code>GdprErasureService</code>; <code>UserErasedEventListener</code> (<code>AFTER_COMMIT</code>) re-asserts <code>activated=false, locked=true</code> and clears persistent tokens if erasure somehow left them. Also consumed by notification.</li>
       <li><code>AccountDeletionRequestedEvent</code> — published by <code>GdprErasureService</code>, consumed by video's <code>AccountDeletionCascadeListener</code>.</li>
     </ul>
-    <p>Consumed from <code>infrastructure.security.event</code> (cross-cutting): <code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>AuthEvent</code>/<code>PreAuthEvent</code>, picked up by listeners in <code>platform.security.infrastructure.listener</code> to feed <code>LoginAttemptsService</code> and audit logging.</p>
+    <p>Consumed from <code>infrastructure.security.event</code> (cross-cutting): <code>BadCredentialsEvent</code>, <code>FraudEvent</code>, <code>AuthEvent</code>/<code>PreAuthEvent</code>, picked up by listeners in <code>platform.security.infrastructure.listener</code> for audit logging and the legacy client blacklist (<code>FraudEvent</code>). <code>BadCredentialsEvent</code> no longer feeds any login counter.</p>
     <p>Depends on <code>infrastructure.security</code> for cookie handling (<code>CookieUtil</code>), rate limiting (<code>@RateLimited</code>/<code>RateLimitingService</code>), the shared <code>SecurityConstants</code>/<code>SecurityError</code>, and request-context helpers (<code>ClientContextProvider</code>, <code>RequestMetadataProvider</code>). Also imports from <code>infrastructure.sanitizer</code>, <code>infrastructure.validation</code> (<code>PhoneNumber</code>), <code>infrastructure.persistence</code>, <code>infrastructure.web</code> (<code>FrontendLinkBuilder</code>), and reaches into <code>platform.config</code> (<code>ConfigService</code>), <code>platform.admin</code> (<code>SkillarsPlatformProperties</code>), <code>platform.notification</code> (outbox support), and every module's contract exceptions (handled centrally in <code>ApiAdvice</code>).</p>
 
     <h3 id="scheduled-jobs">Scheduled jobs</h3>
@@ -253,11 +251,11 @@
     <table>
       <tr><th></th><th>SPA stack (in use)</th><th>Legacy stack (wired, not used by the SPA)</th></tr>
       <tr><td>Entry</td><td><code>POST /api/auth/login</code> &rarr; <code>AuthResource</code>/<code>AuthService</code></td><td><code>POST /authenticate</code> (<code>JWTAuthenticationFilter</code>) &rarr; <code>POST /otp</code> (<code>SecondFactorLoginFilter</code>)</td></tr>
-      <tr><td>Who uses it</td><td><code>LoginPage.vue</code> for <em>every</em> persona, admins included (admins get <code>role = "ADMIN"</code> in <code>skp</code> because their <code>skillarsRole</code> is null)</td><td>No in-app caller: <code>authApi.login</code> is unused; <code>OtpPage.vue</code> is still routed (<code>/otp</code>) but nothing navigates to it</td></tr>
-      <tr><td>Second factor</td><td>None</td><td>Always (the principal is built with <code>otpEnabled(true)</code>); email OTP via <code>TwoFactorLoginService</code>/<code>LoginInfo</code></td></tr>
-      <tr><td>Brute-force counters</td><td>DB: <code>main.login_attempts</code> (shared across nodes, survives restarts)</td><td>In-memory Guava caches in <code>LoginAttemptsService</code> via <code>FraudAwareAuthenticationManager</code></td></tr>
+      <tr><td>Who uses it</td><td><code>LoginPage.vue</code> for <em>every</em> persona, admins included (admins get <code>role = "ADMIN"</code> in <code>skp</code> because their <code>skillarsRole</code> is null)</td><td>No in-app caller (the SPA's <code>authApi.login</code>/<code>verifyOtp</code> and <code>OtpPage.vue</code> were removed). ITs still log in through it (<code>e2e/AdminLogin</code>, <code>ConfigResourceIT</code>, <code>StorageResourceIT</code>, <code>ReportGenerationServiceIT</code>)</td></tr>
+      <tr><td>Second factor</td><td>None</td><td>Only when <code>User.otpEnabled</code> (the authenticated principal comes from the user row); email OTP via <code>TwoFactorLoginService</code>/<code>LoginInfo</code></td></tr>
+      <tr><td>Brute-force counters</td><td colspan="2">One DB-backed limiter for both: <code>LoginRateLimiter</code> over <code>main.login_attempts</code>, same SHA-256(login|ip) key, so failures on either path count against both</td></tr>
       <tr><td>Refresh</td><td><code>rtkn</code> rotation via <code>POST /api/auth/refresh</code></td><td>Sliding-window extension only (<code>GET /refresh</code>)</td></tr>
-      <tr><td>Logout</td><td><code>POST /api/auth/logout</code> (revokes the refresh token)</td><td><code>POST /api/logout</code> (Spring logout, cookies only)</td></tr>
+      <tr><td>Logout</td><td><code>POST /api/auth/logout</code> (revokes the refresh token)</td><td><code>POST /api/logout</code> (Spring logout; also revokes the refresh token)</td></tr>
     </table>
 
     <h3 id="coach-parent-player-self-registration-verification">Coach / Parent / Player self-registration &amp; verification</h3>
@@ -412,23 +410,29 @@ sequenceDiagram
     <div class="callout warn">
       <p><strong>Two login stacks, one JWT.</strong> See <a href="#the-two-login-stacks">the table above</a>. Only
       <code>/api/auth/login</code> is used by the SPA, for every role including admins. The legacy
-      <code>/authenticate</code> &rarr; <code>/otp</code> path is still a live, public endpoint pair with its own
-      in-memory brute-force counters. Rate limits and lockouts on one path do not apply to the other — which is why
-      both admin unlock endpoints clear both stores.</p>
+      <code>/authenticate</code> &rarr; <code>/otp</code> path is still a live, public endpoint pair (ITs log in through
+      it). Both paths share one DB-backed failed-login limiter (<code>LoginRateLimiter</code>), so a lockout on one
+      applies to the other and the admin "unlock login" clears it for both. The <code>/otp</code> step itself has no
+      attempt counter beyond its 10-minute expiry and the client/session binding.</p>
     </div>
     <div class="callout warn">
-      <p><strong>The 2FA toggle does nothing for SPA logins.</strong> <code>PUT /api/account/2fa</code>
-      (<code>Toggle2faDialog.vue</code>) flips <code>User.otpEnabled</code>, but <code>AuthService.login</code> never
-      reads it. The only code that does is the legacy <code>/authenticate</code> path, and that path forces OTP
-      regardless.</p>
+      <p><strong>No self-service 2FA toggle.</strong> <code>User.otpEnabled</code> is only read by the legacy
+      <code>/authenticate</code> path; <code>AuthService.login</code> (the SPA) never enforces a second factor. The
+      former <code>PUT /api/account/2fa</code>, its <code>Toggle2faDialog.vue</code> and the registration checkbox were
+      removed rather than left as a toggle that silently did nothing. Real SPA 2FA needs <code>/api/auth/login</code>
+      to issue the refresh/<code>skp</code> cookies only after the OTP step, and an attempt counter on that step.</p>
     </div>
     <div class="callout warn">
-      <p><strong>"Locked" and "SUSPENDED" are different things.</strong> Admin suspend, <code>lockUserAccount</code> and
-      GDPR erasure use <code>user.locked</code>, which every auth path enforces. The CSAM path
-      (<code>AccountSuspensionEventListener</code>) sets <code>verificationStatus = SUSPENDED</code> instead. That blocks
-      a <em>new</em> login for role users only while <code>phone-otp-required</code> is true (via the
-      <code>BASIC_VERIFIED</code> check). It does not stamp <code>securitySessionInvalidatedAt</code>, does not revoke
-      refresh tokens, and <code>refresh()</code> does not check verification status.</p>
+      <p><strong>A safety suspension is a lock plus a status.</strong> Admin suspend, <code>lockUserAccount</code> and
+      GDPR erasure use <code>user.locked</code>. The CSAM path (<code>AccountSuspensionEventListener</code>) sets
+      <code>verificationStatus = SUSPENDED</code> <em>and</em> locks, stamps <code>securitySessionInvalidatedAt</code> and
+      revokes every refresh token, like an admin suspend. <code>SUSPENDED</code> is also refused on its own:
+      <code>AuthService.ensureAccountIsLive</code> (login and refresh) and <code>Principal.instanceFrom</code>
+      (<code>accountNonLocked</code>, so the legacy login and the JWT filter's DB re-auth) treat it as locked, whatever
+      <code>phone-otp-required</code> says. The admin console's reactivate refuses a <code>SUSPENDED</code> account
+      (<code>409 admin.users.safetyHold</code>): lifting a child-safety hold is not a one-click action. A suspended
+      coach's marketplace profile is <em>not</em> suspended by this path (the admin suspend does that via
+      <code>AdminCoachEnforcementService</code>, which the security module cannot call).</p>
     </div>
     <div class="callout warn">
       <p><strong>Minors never get a standalone login.</strong> A minor's <code>PlayerProfile</code> has <code>parent_id</code>
@@ -515,7 +519,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
