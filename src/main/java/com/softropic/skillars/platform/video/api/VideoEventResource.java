@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
 import com.softropic.skillars.platform.video.contract.OperationalState;
@@ -32,6 +33,7 @@ public class VideoEventResource {
     private final VideoService videoService;
     private final VideoSseService videoSseService;
     private final SecurityUtil securityUtil;
+    private final PlayerProfileRepository playerProfileRepository;
 
     @GetMapping("/{id}/events")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
@@ -72,12 +74,15 @@ public class VideoEventResource {
 
     private boolean isCurrentUserOwner(String ownerId) {
         try {
-            Long.parseLong(ownerId);
-            // Player video: ownerId is a Long TSID string — compare with the authenticated user's businessId
+            long playerProfileId = Long.parseLong(ownerId);
+            // Player video: ownerId is the PlayerProfile id (Long TSID string), NOT a user id — the
+            // caller owns it when that profile is their own (PlayerProfile.userId == businessId).
+            // Comparing businessId to ownerId directly never matched, so a player could not follow
+            // their own upload's processing status (SSE + polling fallback both 403'd).
             org.springframework.security.core.userdetails.User user = securityUtil.getCurrentUser();
-            if (user instanceof Principal principal) {
-                String businessId = principal.getBusinessId();
-                return businessId != null && businessId.equals(ownerId);
+            if (user instanceof Principal principal && principal.getBusinessId() != null) {
+                return playerProfileRepository.existsByIdAndUserId(
+                    playerProfileId, Long.parseLong(principal.getBusinessId()));
             }
             return false;
         } catch (NumberFormatException e) {

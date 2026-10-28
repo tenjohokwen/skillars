@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.api;
 
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
@@ -30,13 +31,16 @@ import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletResponse;
 
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest({StripeOnboardingResource.class, PaymentApiAdvice.class})
-@Import(StripeOnboardingResourceWebMvcTest.TestSecurityConfig.class)
+@WebMvcTest(value = {StripeOnboardingResource.class, PaymentApiAdvice.class},
+    properties = "app.frontend-url=https://app.example.com/")
+@Import({StripeOnboardingResourceWebMvcTest.TestSecurityConfig.class, FrontendLinkBuilder.class})
 class StripeOnboardingResourceWebMvcTest {
 
     @TestConfiguration
@@ -103,6 +107,67 @@ class StripeOnboardingResourceWebMvcTest {
         mockMvc.perform(get("/api/payment/coaches/me/stripe/onboard"))
             .andExpect(status().isUnprocessableEntity())
             .andExpect(jsonPath("$.helpCode").value("payment.providerUnavailable"));
+    }
+
+    // ─── GET /api/payment/coaches/me/stripe/callback ──────────────────────────
+    // The redirect used to be the bare relative "/coach/payment-settings" — resolved against the
+    // BACKEND origin and missing the hash router's "#/". It must land on the frontend's hash route,
+    // with ?stripe_error inside the fragment so CoachPaymentSettingsPage can read route.query.
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_success_redirectsToFrontendHashRoute() throws Exception {
+        stubCoachResolution();
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings");
+
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback")
+                .param("code", "ac_123").param("state", COACH_UUID.toString()))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings"));
+        verify(onboardingService).handleOAuthCallback(COACH_UUID, "ac_123");
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_stripeError_redirectsWithEncodedErrorInsideHash() throws Exception {
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings");
+
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback")
+                .param("error", "access denied"))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings?stripe_error=access+denied"));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_stateMismatch_redirectsWithStateMismatch() throws Exception {
+        stubCoachResolution();
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings");
+
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback")
+                .param("code", "ac_123").param("state", "someone-else"))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings?stripe_error=state_mismatch"));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_absoluteConfiguredUrl_usedVerbatim() throws Exception {
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("https://other.example.com/#/coach/payment-settings");
+
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback"))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://other.example.com/#/coach/payment-settings?stripe_error=missing_code"));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_configuredUrlWithQuery_appendsErrorWithAmpersand() throws Exception {
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings?tab=stripe");
+
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback"))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings?tab=stripe&stripe_error=missing_code"));
     }
 
     // ─── GET /api/payment/coaches/me/stripe/status ────────────────────────────

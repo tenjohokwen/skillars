@@ -15,6 +15,12 @@ vi.mock('quasar', async (importOriginal) => {
   const actual = await importOriginal()
   return { ...actual, useQuasar: () => ({ notify: notifyMock }) }
 })
+// onMounted fetches missing recaps; unmocked it hits the network (ECONNREFUSED) and the axios
+// interceptor's late console output can race worker teardown (EnvironmentTeardownError in CI).
+vi.mock('src/api/booking.api', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, getMissingRecaps: vi.fn().mockResolvedValue({ count: 0, items: [] }) }
+})
 
 import CoachCommandCenterPage from 'src/pages/coach/CoachCommandCenterPage.vue'
 

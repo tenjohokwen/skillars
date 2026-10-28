@@ -75,6 +75,7 @@ const routes = [
       },
       {
         path: 'coach/command-center',
+        name: 'coach-command-center',
         component: () => import('pages/coach/CoachCommandCenterPage.vue'),
         meta: { requiresAuth: true, requiresCoach: true },
       },
@@ -350,6 +351,7 @@ const routes = [
       // Marketplace — public (guests can browse, AC 5, FR-MKT-005)
       {
         path: 'marketplace',
+        name: 'marketplace',
         component: () => import('pages/marketplace/MarketplacePage.vue'),
       },
       {

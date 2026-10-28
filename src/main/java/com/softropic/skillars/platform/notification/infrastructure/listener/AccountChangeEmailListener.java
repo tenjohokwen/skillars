@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.notification.infrastructure.listener;
 
 import com.softropic.skillars.infrastructure.util.ClockProvider;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
@@ -9,7 +10,6 @@ import com.softropic.skillars.platform.security.contract.event.AccountChangeUser
 import com.softropic.skillars.platform.security.contract.util.ShortCode;
 
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
 import org.springframework.context.ApplicationEventPublisher;
@@ -29,15 +29,12 @@ import java.util.UUID;
 public class AccountChangeEmailListener {
 
     private final ApplicationEventPublisher publisher;
-    private final String baseUrl;
-    private final String serverPort;
+    private final FrontendLinkBuilder frontendLinks;
 
     public AccountChangeEmailListener(ApplicationEventPublisher publisher,
-                                       @Value("${baseurl}") String baseUrl,
-                                       @Value("${server.port}") String serverPort) {
+                                       FrontendLinkBuilder frontendLinks) {
         this.publisher = publisher;
-        this.baseUrl = baseUrl;
-        this.serverPort = serverPort;
+        this.frontendLinks = frontendLinks;
     }
 
     @Transactional
@@ -49,7 +46,9 @@ public class AccountChangeEmailListener {
 
     private void sendNotificationEmail(AccountChangeEvent event) {
         final String helpCode = ShortCode.shortenInt(UUID.randomUUID().hashCode());
-        final String fullBaseUrl = baseUrl + ":" + serverPort;
+        // Frontend origin (not the backend's ${baseurl}:${server.port}) — any link a template builds
+        // from it must append '/#/<route>' (hash router).
+        final String fullBaseUrl = frontendLinks.base();
 
         final Map<String, Object> data = new HashMap<>();
         data.put("helpCode", helpCode);

@@ -40,6 +40,9 @@ class HomeworkResourceIT extends BaseSessionIT {
     private static final long WRONG_PARENT_ID = 9540000002L;
     private static final long PLAYER_ID       = 9540000010L;
     private static final long COACH_USER_ID   = 9540000020L;
+    private static final long SELF_PLAYER_USER_ID    = 9540000030L;
+    private static final long SELF_PLAYER_PROFILE_ID = 9540000031L;
+    private static final String SELF_PLAYER_EMAIL    = "selfplayer.homework@skillars-test.com";
 
     private static final String PARENT_EMAIL       = "parent.homework@skillars-test.com";
     private static final String WRONG_PARENT_EMAIL = "wrongparent.homework@skillars-test.com";
@@ -50,6 +53,7 @@ class HomeworkResourceIT extends BaseSessionIT {
     private UUID packId;
     private UUID packTierId;
     private UUID paymentPurchaseId;
+    private UUID selfPlayerAssignmentId;
 
     @BeforeEach
     void setUp() {
@@ -131,8 +135,60 @@ class HomeworkResourceIT extends BaseSessionIT {
                 Timestamp.from(Instant.now())
             );
 
+            // Self-registered adult player (ROLE_PLAYER only, no parent) owning their own profile —
+            // the locker-room "mark done" toggle is shown to this user.
+            insertUser(SELF_PLAYER_USER_ID, SELF_PLAYER_EMAIL, passwordHash, "PLAYER");
+            jdbcTemplate.update(
+                "INSERT INTO main.user_authority (user_id, authority_id) " +
+                "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PLAYER')) ON CONFLICT DO NOTHING",
+                SELF_PLAYER_USER_ID
+            );
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles " +
+                "(id, name, date_of_birth, position, age_tier, user_id, independent_account_allowed, created_at, created_by) " +
+                "VALUES (?, 'Self Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                SELF_PLAYER_PROFILE_ID, Date.valueOf(LocalDate.now().minusYears(25)),
+                SELF_PLAYER_USER_ID, Timestamp.from(Instant.now())
+            );
+            selfPlayerAssignmentId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO session.homework_assignments " +
+                "(id, booking_id, player_id, coach_id, drill_id, pack_id, assigned_at) " +
+                "VALUES (?, ?, ?, ?, ?, NULL, ?)",
+                selfPlayerAssignmentId, UUID.randomUUID(), SELF_PLAYER_PROFILE_ID, coachProfileId, drillId,
+                Timestamp.from(Instant.now())
+            );
+
             return null;
         });
+    }
+
+    @Test
+    void markComplete_selfRegisteredPlayerOwnAssignment_returns200AndRecordsCompletion() {
+        // Before the fix the endpoint was HAS_PARENT_ROLE → a ROLE_PLAYER-only caller got 403.
+        String cookies = loginAndGetCookies(SELF_PLAYER_EMAIL);
+        String url = baseUrl() + "/api/session/homework/" + selfPlayerAssignmentId + "/complete";
+        ResponseEntity<Void> first = httpTestClient.makeHttpRequest(
+            url, HttpMethod.POST, null, authenticatedHeaders(cookies), Void.class);
+        ResponseEntity<Void> second = httpTestClient.makeHttpRequest(
+            url, HttpMethod.POST, null, authenticatedHeaders(cookies), Void.class);
+        assertThat(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(second.getStatusCode()).isEqualTo(HttpStatus.OK);
+        Integer count = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM session.homework_completions WHERE assignment_id = ? AND player_id = ?",
+            Integer.class, selfPlayerAssignmentId, SELF_PLAYER_PROFILE_ID
+        );
+        assertThat(count).isEqualTo(1);
+    }
+
+    @Test
+    void markComplete_selfRegisteredPlayerOnSomeoneElsesAssignment_returns404() {
+        String cookies = loginAndGetCookies(SELF_PLAYER_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/session/homework/" + assignmentId + "/complete",
+            HttpMethod.POST, null, authenticatedHeaders(cookies), Void.class
+        )).isInstanceOf(HttpClientErrorException.class)
+          .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
 

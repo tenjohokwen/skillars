@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.video.api;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.infrastructure.jwt.JwtSecretService;
+import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.AccessState;
@@ -39,6 +40,7 @@ import java.util.Optional;
 import jakarta.servlet.http.HttpServletResponse;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -112,6 +114,32 @@ class VideoListQuotaResourceWebMvcTest {
     }
 
     @Test
+    @WithMockUser(roles = "PLAYER")
+    void getMyVideos_selfRegisteredPlayerRole_returns200ScopedToOwnProfile() throws Exception {
+        // Self-registered players carry ROLE_PLAYER only — this used to be a 403 (ROLE_USER/COACH only).
+        stubPlayerPrincipal(PLAYER_PROFILE_ID);
+        Video video = stubVideo("asset-my-2", OperationalState.READY);
+        when(videoRepository.findByOwnerIdAndOperationalStateNotInOrderByCreatedAtDesc(
+                eq(PLAYER_OWNER_ID), any()))
+            .thenReturn(List.of(video));
+
+        mockMvc.perform(get("/api/video/my"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].ownerId").value(PLAYER_OWNER_ID));
+    }
+
+    @Test
+    @WithMockUser(roles = "PLAYER")
+    void getMyVideos_playerWithoutOwnProfile_returns403() throws Exception {
+        when(securityUtil.requireCurrentUserId()).thenReturn(PLAYER_USER_ID);
+        when(securityUtil.isCurrentUserInRole(anyString())).thenReturn(false);
+        when(playerProfileRepository.findByUserId(PLAYER_USER_ID)).thenReturn(Optional.empty());
+
+        mockMvc.perform(get("/api/video/my"))
+            .andExpect(status().isForbidden());
+    }
+
+    @Test
     @WithAnonymousUser
     void getMyVideos_unauthenticated_returns401() throws Exception {
         mockMvc.perform(get("/api/video/my"))
@@ -179,12 +207,19 @@ class VideoListQuotaResourceWebMvcTest {
 
     // ─── helpers ─────────────────────────────────────────────────────────────
 
-    private void stubPlayerPrincipal(Long playerId) {
+    // businessId is the caller's USER id — deliberately different from the PlayerProfile id so a
+    // regression back to "userId as ownerId" queries the wrong owner and fails the assertions.
+    private static final long PLAYER_USER_ID = 77_000_001L;
+
+    private void stubPlayerPrincipal(Long playerProfileId) {
         Principal principal = mock(Principal.class);
-        when(principal.getBusinessId()).thenReturn(String.valueOf(playerId));
+        when(principal.getBusinessId()).thenReturn(String.valueOf(PLAYER_USER_ID));
         when(securityUtil.getCurrentUser()).thenReturn(principal);
-        when(securityUtil.requireCurrentUserId()).thenReturn(playerId);
+        when(securityUtil.requireCurrentUserId()).thenReturn(PLAYER_USER_ID);
         when(securityUtil.isCurrentUserInRole(anyString())).thenReturn(false);
+        PlayerProfile profile = new PlayerProfile();
+        profile.setId(playerProfileId);
+        when(playerProfileRepository.findByUserId(PLAYER_USER_ID)).thenReturn(Optional.of(profile));
     }
 
     private Video stubVideo(String providerAssetId, OperationalState state) {

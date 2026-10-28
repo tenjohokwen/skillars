@@ -137,7 +137,7 @@ class EmailDataRoundTripContractTest {
     @DisplayName("every data map both listeners actually produce round-trips with its types intact")
     void everyProducedDataMapSurvivesTheRoundTrip() throws Exception {
         NotificationOutboxSupport support = mock(NotificationOutboxSupport.class);
-        BookingEmailListener bookingListener = new BookingEmailListener(support, "http://localhost", "8080");
+        BookingEmailListener bookingListener = new BookingEmailListener(support, new com.softropic.skillars.infrastructure.web.FrontendLinkBuilder("http://localhost:9000"));
         SessionPackEmailListener packListener = new SessionPackEmailListener(support);
 
         List<String> invoked = new ArrayList<>();

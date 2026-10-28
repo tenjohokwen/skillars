@@ -23,11 +23,10 @@
           :aria-label="$t('video.quota.storage')"
         />
         <div
-          v-if="storagePercent >= 95 && showUpgradePrompt"
-          class="text-caption text-negative q-mt-xs"
+          v-if="needsUpgradePrompt && upgradeRoute"
+          class="text-caption text-negative q-mt-xs quota-upgrade-prompt"
         >
-          <!-- TODO Story 7.x: replace with real upgrade route -->
-          <router-link to="/upgrade" class="text-negative">{{
+          <router-link :to="upgradeRoute" class="text-negative">{{
             t('video.quota.upgradePrompt')
           }}</router-link>
         </div>
@@ -54,8 +53,10 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from 'src/stores/auth.store'
+import { usePlayerStore } from 'src/stores/playerStore'
 
 const props = defineProps({
   storageUsedBytes: { type: Number, default: 0 },
@@ -81,6 +82,29 @@ const bandwidthPercent = computed(() =>
   props.bandwidthLimitBytes > 0
     ? Math.min(100, (props.bandwidthUsedBytes / props.bandwidthLimitBytes) * 100)
     : 0,
+)
+
+const needsUpgradePrompt = computed(() => storagePercent.value >= 95 && props.showUpgradePrompt)
+
+// The upgrade target is the caller's own subscription page: a coach's coach-subscription, or a
+// self-registered player's player-subscription (keyed by their own PlayerProfile id). Any other
+// role has no subscription of its own here, so no link is shown (there is no generic /upgrade route).
+const authStore = useAuthStore()
+const playerStore = usePlayerStore()
+const upgradeRoute = computed(() => {
+  if (authStore.isCoach) return { name: 'coach-subscription' }
+  if (authStore.isPlayer && playerStore.selfPlayerId != null) {
+    return { name: 'player-subscription', params: { playerId: String(playerStore.selfPlayerId) } }
+  }
+  return null
+})
+watch(
+  () => needsUpgradePrompt.value && authStore.isPlayer,
+  (needed) => {
+    // Resolution failure just leaves the prompt hidden — nothing to surface on a quota bar.
+    if (needed) playerStore.fetchSelfPlayerId().catch(() => {})
+  },
+  { immediate: true },
 )
 
 function barColor(percent) {

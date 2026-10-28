@@ -87,15 +87,12 @@
               </q-item>
             </q-list>
             <div class="tier-actions">
-              <!-- Mutating controls — parent-only (skillars-deferred-149 AC1): subscribePlayer/
-                   changePlayerTier/cancelPlayerSubscription stay HAS_PARENT_ROLE-only server-side,
-                   so a self-registered PLAYER sees a read-only view here rather than controls that
-                   would all 403, matching ParentBookingsPage.vue's parent-only-for-mutating-actions
-                   precedent. -->
+              <!-- Mutating controls — shown to the profile's owner: the parent, or a self-registered
+                   adult PLAYER on their own profile (the only profile the route's ownership-guarded
+                   GET lets a PLAYER load). Server-side, subscribe/change-tier/cancel are guarded by
+                   PlayerOwnershipGuard, which admits exactly those two callers. -->
               <q-btn
-                v-if="
-                  authStore.isParent && tier.tier !== subscription?.tier && tier.tier !== 'ATHLETE'
-                "
+                v-if="canManage && tier.tier !== subscription?.tier && tier.tier !== 'ATHLETE'"
                 color="primary"
                 :label="
                   isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
@@ -105,7 +102,7 @@
               />
               <q-btn
                 v-else-if="
-                  authStore.isParent &&
+                  canManage &&
                   tier.tier === subscription?.tier &&
                   tier.tier !== 'ATHLETE' &&
                   !subscription?.cancelAtPeriodEnd
@@ -197,6 +194,8 @@ const paymentStore = usePaymentStore()
 const authStore = useAuthStore()
 
 const playerId = computed(() => route.params.playerId)
+// Parent of the profile, or the self-registered player who owns it (route admits only these two).
+const canManage = computed(() => authStore.isParent || authStore.isPlayer)
 
 const loading = ref(false)
 const actionLoading = ref(false)

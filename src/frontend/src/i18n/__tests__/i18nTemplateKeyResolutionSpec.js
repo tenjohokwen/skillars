@@ -175,12 +175,17 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:859',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:883',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:870',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:894',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
+  },
+  {
+    at: 'src/pages/coach/CoachPaymentSettingsPage.vue:43',
+    reason:
+      't on stripeCallbackErrorKey, a computed mapping ?stripe_error to one of three payment.error.stripeCallback.* keys',
   },
   {
     at: 'src/pages/coach/CoachPlayerDetailPage.vue:188',

@@ -28,6 +28,24 @@
         {{ t('payment.error.statusLoadFailed') }}
       </q-banner>
 
+      <!-- Stripe OAuth callback outcome: StripeOnboardingResource redirects back here with
+           ?stripe_error=<code> (inside the hash, so it is a normal route query). -->
+      <q-banner
+        v-if="stripeCallbackErrorKey"
+        class="q-mb-md stripe-callback-error"
+        rounded
+        inline-actions
+        style="background: rgba(var(--color-error-rgb, 200, 0, 0), 0.12)"
+      >
+        <template #avatar>
+          <q-icon name="mdi-alert" color="negative" />
+        </template>
+        {{ t(stripeCallbackErrorKey) }}
+        <template #action>
+          <q-btn flat dense :label="t('common.close')" @click="dismissStripeCallbackError" />
+        </template>
+      </q-banner>
+
       <q-banner
         v-if="connectError"
         class="q-mb-md"
@@ -112,6 +130,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { getStripeOnboardingUrl } from 'src/api/payment.api'
 
@@ -121,6 +140,28 @@ const connectingStripe = ref(false)
 const connectError = ref(false)
 
 const stripeStatus = computed(() => paymentStore.stripeStatus)
+
+const route = useRoute()
+const router = useRouter()
+
+// stripe_error values: Stripe's own OAuth error code (access_denied when the coach declines; others
+// are rare) or the backend's missing_code / state_mismatch. Anything unrecognised → generic message.
+const STRIPE_CALLBACK_ERROR_KEYS = {
+  access_denied: 'payment.error.stripeCallback.accessDenied',
+  state_mismatch: 'payment.error.stripeCallback.stateMismatch',
+}
+const stripeCallbackErrorKey = computed(() => {
+  const raw = route.query.stripe_error
+  const code = Array.isArray(raw) ? raw[0] : raw
+  if (!code) return null
+  return STRIPE_CALLBACK_ERROR_KEYS[code] || 'payment.error.stripeCallback.generic'
+})
+
+function dismissStripeCallbackError() {
+  const query = { ...route.query }
+  delete query.stripe_error
+  router.replace({ query })
+}
 
 onMounted(async () => {
   await paymentStore.fetchStripeStatus()

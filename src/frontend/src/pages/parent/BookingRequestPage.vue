@@ -15,17 +15,13 @@
       />
     </div>
 
-    <!-- Packs are out of scope for a self-booking player (UAT.5): pay-per-session only, and
-         purchase-sessions stays a parent-only route — hide both credit UI elements rather than
-         show a dead-end "buy sessions" action. -->
-    <SessionPackTracker
-      v-if="!authStore.isPlayer"
-      :credits-remaining="creditsForCoach"
-      :session-count="0"
-      class="q-mb-md"
-    />
+    <!-- Shown to a self-booking PLAYER too: since Deferred-81/82 a self-registered player can buy
+         their own packs (purchase-sessions route) and GET /api/payment/session-packs admits
+         ROLE_PLAYER (packs they bought are keyed to their own user id), so the UAT.5-era
+         "packs out of scope for players" gating here had gone stale. -->
+    <SessionPackTracker :credits-remaining="creditsForCoach" :session-count="0" class="q-mb-md" />
 
-    <q-banner v-if="!authStore.isPlayer && !hasCredits" class="bg-warning text-white q-mb-md">
+    <q-banner v-if="!hasCredits" class="bg-warning text-white q-mb-md">
       {{ t('booking.requests.noCreditsWarning') }}
       <template #action>
         <q-btn flat :label="t('booking.packs.buySessions')" @click="goToPurchase" />
@@ -187,12 +183,12 @@
               </q-item-section>
             </q-item>
           </q-list>
-          <!-- UAT.5: a self-booking player has no credit concept (packs out of scope) — the
-               credit-oriented preview text would read as confusing/wrong ("0 credits available")
-               for a per-session-by-card payer. -->
+          <!-- A self-booking player with pack credits sees the same credit preview as a parent
+               (matching the pack tracker above); one paying per session by card, with no
+               credits, sees a plain session count instead of a misleading "0 credits". -->
           <div class="q-mt-md text-caption" style="color: var(--text-secondary)">
             {{
-              authStore.isPlayer
+              authStore.isPlayer && !hasCredits
                 ? t('booking.batch.sessionCountPreview', { count: bookingStore.batchBasketSize })
                 : t('booking.batch.creditPreview', {
                     credits: creditsForCoach,
@@ -226,6 +222,7 @@ import { useAuthStore } from 'src/stores/auth.store'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePlayerStore } from 'src/stores/playerStore'
 import { getBatchConfig, getBookingRequestConfig } from 'src/api/booking.api'
+import { parseSharedSlot, sharedSlotWeekStart, toZonedLocalIso } from 'src/utils/sharedSlot'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import BookingStateChip from 'src/components/booking/BookingStateChip.vue'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
@@ -299,6 +296,17 @@ const canSubmit = computed(
 
 function selectSlot(slot) {
   selectedSlot.value = slot
+}
+
+// A coach's shared-slot link forwards ?slot=<coach-local YYYY-MM-DDTHH:mm>: preselect the matching
+// available slot, if it is in the loaded availability. No match (taken, other week) → no-op.
+function preselectSharedSlot() {
+  const shared = parseSharedSlot(route.query.slot)
+  if (!shared) return
+  const match = (bookingStore.computedSlots ?? []).find(
+    (s) => toZonedLocalIso(s.startDatetime, bookingStore.coachTimezone) === shared,
+  )
+  if (match) selectSlot(match)
 }
 
 function toggleSlotInBasket(slot) {
@@ -640,15 +648,22 @@ onMounted(async () => {
       }
     }
   }
-  await bookingStore.loadAvailability(coachId)
+  // A shared-slot link may point at a later week (the coach can share from next week's grid):
+  // load the week containing it so the preselect below can find the slot.
+  const sharedWeek = sharedSlotWeekStart(parseSharedSlot(route.query.slot))
+  if (sharedWeek) {
+    await bookingStore.loadAvailability(coachId, sharedWeek)
+  } else {
+    await bookingStore.loadAvailability(coachId)
+  }
+  preselectSharedSlot()
   // AC5: the data behind the "you already requested this" rows. The store action and its API call
   // already exist; a failure is swallowed into bookingsError and leaves parentBookings empty,
   // which degrades to exactly the pre-AC5 rendering rather than blanking the page.
   await bookingStore.loadParentBookings()
-  // Packs are out of scope for a self-booking player (GET /api/payment/session-packs stays
-  // @PreAuthorize(HAS_PARENT_ROLE)) — skip the guaranteed-403 request entirely rather than rely
-  // on it degrading internally to 0 credits.
-  if (playerId.value && !authStore.isPlayer) {
+  // GET /api/payment/session-packs is HAS_PARENT_OR_PLAYER_ROLE and returns the packs the caller
+  // bought — a self-registered player's own packs — so players load them exactly like parents.
+  if (playerId.value) {
     await bookingStore.loadPlayerPacks(playerId.value)
   }
   try {

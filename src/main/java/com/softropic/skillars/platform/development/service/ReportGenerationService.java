@@ -10,6 +10,7 @@ import com.lowagie.text.pdf.BaseFont;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
 import com.softropic.skillars.platform.development.contract.CoachBrandingResponse;
@@ -43,7 +44,6 @@ import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.infrastructure.security.RateLimited;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.access.AccessDeniedException;
@@ -100,8 +100,7 @@ public class ReportGenerationService {
     private final PlayerProfileRepository playerProfileRepository;
     private final PlayerTimelineRepository playerTimelineRepository;
 
-    @Value("${baseurl}")
-    private String baseUrl;
+    private final FrontendLinkBuilder frontendLinks;
 
     /**
      * Per-coach report-generation budget (skillars-deferred-92 AC18), enforced <em>in addition to</em>
@@ -402,7 +401,8 @@ public class ReportGenerationService {
                 return;
             }
 
-            String reportsPageUrl = baseUrl + "/portal/players/" + playerId + "/reports";
+            // The recipient is the player's parent: their development portal hosts the reports panel.
+            String reportsPageUrl = frontendLinks.route("parent/players/" + playerId + "/development");
             String reportDate = DateTimeFormatter.ofLocalizedDate(FormatStyle.LONG)
                 .withLocale(Locale.ENGLISH)
                 .format(generatedAt.atZone(ZoneOffset.UTC).toLocalDate());

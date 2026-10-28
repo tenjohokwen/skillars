@@ -32,10 +32,14 @@ public class HomeworkResource {
     }
 
     @PostMapping("/api/session/homework/{assignmentId}/complete")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    // The locker room (and its "mark done" toggle) is shown to the player themselves as well as the
+    // parent, so both roles are admitted here; ownership of the assignment's player profile — parent
+    // of a minor's profile OR the self-registered player owning their own — is enforced in the
+    // service against the assignment row, since the path carries an assignmentId, not a playerId.
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
     public ResponseEntity<Void> markComplete(@PathVariable UUID assignmentId) {
-        Long parentId = securityUtil.getCurrentCoachUserId();
-        homeworkAssignmentService.markComplete(assignmentId, parentId);
+        Long callerUserId = securityUtil.requireCurrentUserId();
+        homeworkAssignmentService.markComplete(assignmentId, callerUserId);
         return ResponseEntity.ok().build();
     }
 }

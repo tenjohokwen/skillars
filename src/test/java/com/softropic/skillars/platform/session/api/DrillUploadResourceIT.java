@@ -160,6 +160,9 @@ class DrillUploadResourceIT extends BaseSessionIT {
         assertThat(response.getBody()).containsKey("videoId");
         assertThat(response.getBody()).containsKey("signedUploadUrl");
         assertThat(response.getBody().get("signedUploadUrl")).isEqualTo("https://tus.bunny.net/upload/test");
+        // The Bunny TUS auth fields the frontend's createTusUpload sends as headers.
+        assertThat(response.getBody()).containsKeys(
+            "providerUploadId", "tusAuthorizationSignature", "tusAuthorizationExpire", "tusLibraryId");
     }
 
     @Test

@@ -352,7 +352,12 @@
               <div class="text-caption" style="color: var(--text-secondary)">
                 {{ window.startTime }}
               </div>
-              <q-btn flat dense :label="t('booking.schedule.shareSlot')" @click="shareSlot()" />
+              <q-btn
+                flat
+                dense
+                :label="t('booking.schedule.shareSlot')"
+                @click="shareSlot(window)"
+              />
             </div>
           </div>
         </div>
@@ -496,6 +501,7 @@ function isDisputeEligible(status) {
   return DISPUTE_ELIGIBLE_STATUSES.includes(status)
 }
 import { getMissingRecaps } from 'src/api/booking.api'
+import { getProfileBuilderStatus } from 'src/api/marketplace.api'
 
 const { t, locale } = useI18n()
 const $q = useQuasar()
@@ -721,9 +727,27 @@ function formatCurrency(value) {
   return Number(value).toFixed(2)
 }
 
-function generateSlotLink() {
-  // TODO(3.x): deep-link to coach profile with pre-selected slot
-  return window.location.origin + '/marketplace'
+// The coach's own CoachProfile id — the public profile route is keyed on it, not on the user id.
+// Resolved lazily (only a share needs it) and cached for the page's lifetime.
+const ownCoachId = ref(null)
+async function resolveOwnCoachId() {
+  if (!ownCoachId.value) {
+    const status = await getProfileBuilderStatus()
+    ownCoachId.value = status?.coachId ?? null
+  }
+  return ownCoachId.value
+}
+
+// Deep link to the coach's public profile (hash router: '#/coaches/<id>') carrying the shared slot
+// as ?slot=<coach-local YYYY-MM-DDTHH:mm>; the profile page shows it and forwards it to the booking
+// request page, which preselects the matching slot. The date is the window's ISO dayOfWeek
+// (Monday = 1) within the displayed week (selectedWeek is that week's Monday).
+function generateSlotLink(coachId, slotWindow) {
+  const date = addDaysToIsoDate(selectedWeek.value, (slotWindow?.dayOfWeek ?? 1) - 1)
+  const time = String(slotWindow?.startTime ?? '').slice(0, 5)
+  const base = window.location.origin + window.location.pathname
+  const slot = /^\d{2}:\d{2}$/.test(time) ? `?slot=${encodeURIComponent(`${date}T${time}`)}` : ''
+  return `${base}#/coaches/${coachId}${slot}`
 }
 
 // skillars-deferred-151 AC6: client-side pre-check for immediate UX feedback (skip the API call
@@ -1111,9 +1135,11 @@ async function handleRepeatNextWeek(booking) {
   }
 }
 
-async function shareSlot() {
+async function shareSlot(slotWindow) {
   try {
-    await navigator.clipboard.writeText(generateSlotLink())
+    const coachId = await resolveOwnCoachId()
+    if (!coachId) throw new Error('No coach profile id for this account')
+    await navigator.clipboard.writeText(generateSlotLink(coachId, slotWindow))
     $q.notify({ message: t('booking.schedule.slotCopied'), type: 'positive' })
   } catch {
     $q.notify({ message: t('booking.schedule.slotCopyFailed'), type: 'negative' })

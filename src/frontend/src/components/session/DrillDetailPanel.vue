@@ -343,7 +343,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { useI18n } from 'vue-i18n'
-import { Upload } from 'tus-js-client'
+import { videoApi } from 'src/api/video.api'
 import { useSessionStore } from 'src/stores/session.store'
 import { useDrillVideoPlayback } from 'src/composables/useDrillVideoPlayback'
 
@@ -447,7 +447,7 @@ async function startUpload() {
       selectedVideoFile.value,
       selectedVideoFileDuration.value,
     )
-    await runTusUpload(selectedVideoFile.value, creds.signedUploadUrl)
+    await runTusUpload(selectedVideoFile.value, creds)
     $q.notify({ type: 'positive', message: t('session.drillLibrary.upload.uploadStarted') })
     sessionStore.updateDrillVideoState(props.drill.id, { hasVideo: true, videoUrl: null })
   } catch (e) {
@@ -474,10 +474,18 @@ async function startUpload() {
   }
 }
 
-function runTusUpload(file, signedUploadUrl) {
+// Shares videoApi.createTusUpload with the generic video upload: it sets the Bunny TUS auth
+// headers (AuthorizationSignature/AuthorizationExpire/LibraryId/VideoId) and the title/filetype
+// metadata Bunny requires. The previous bare `new Upload(file, { uploadUrl })` sent none of them.
+function runTusUpload(file, creds) {
   return new Promise((resolve, reject) => {
-    tusUpload = new Upload(file, {
-      uploadUrl: signedUploadUrl,
+    tusUpload = videoApi.createTusUpload({
+      file,
+      signedUploadUrl: creds.signedUploadUrl,
+      providerUploadId: creds.providerUploadId,
+      tusAuthorizationSignature: creds.tusAuthorizationSignature,
+      tusAuthorizationExpire: creds.tusAuthorizationExpire,
+      tusLibraryId: creds.tusLibraryId,
       onProgress(bytesUploaded, bytesTotal) {
         uploadPercent.value = bytesTotal > 0 ? bytesUploaded / bytesTotal : 0
       },

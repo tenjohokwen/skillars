@@ -751,6 +751,7 @@ export default {
     deletionFailed: 'Video konnte nicht gelöscht werden. Bitte erneut versuchen.',
   },
   marketplace: {
+    sharedSlot: 'Ihr Coach hat diesen Termin geteilt: {slot} (Ortszeit des Coaches)',
     // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
     duplicateSessionPackCount:
       'Diese Paketgröße ist doppelt vorhanden. Jedes Sitzungspaket muss eine unterschiedliche Anzahl an Sitzungen haben.',
@@ -1327,6 +1328,13 @@ export default {
       providerUnavailable: 'Zahlungsdienst nicht verfügbar. Bitte versuchen Sie es erneut.',
       statusLoadFailed: 'Zahlungsstatus konnte nicht geladen werden. Bitte Seite neu laden.',
       connectFailed: 'Stripe-Onboarding konnte nicht gestartet werden. Bitte erneut versuchen.',
+      stripeCallback: {
+        accessDenied:
+          'Die Stripe-Verbindung wurde abgebrochen. Verbinden Sie Ihr Konto, um Zahlungen zu erhalten.',
+        stateMismatch:
+          'Die Stripe-Verbindung konnte für dieses Konto nicht bestätigt werden. Bitte starten Sie die Verbindung erneut.',
+        generic: 'Die Stripe-Verbindung ist fehlgeschlagen. Bitte erneut versuchen.',
+      },
     },
     credits: {
       title: 'Guthaben-Wallet',

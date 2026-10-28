@@ -1,9 +1,9 @@
 package com.softropic.skillars.platform.security.api;
 
-
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.infrastructure.util.PhoneNumberUtil;
 import com.softropic.skillars.infrastructure.validation.PhoneNumber;
+import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.notification.contract.Recipient;
@@ -26,7 +26,6 @@ import com.softropic.skillars.platform.security.service.PasswordResetService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -67,8 +66,7 @@ public class AccountManagementFacade {
                                    final ApplicationEventPublisher publisher,
                                    final EmailRegistrationStrategy emailStrategy,
                                    final SmsRegistrationStrategy smsStrategy,
-                                   @Value("${baseurl}") final String baseurl,
-                                   @Value("${server.port}") final String serverPort) {
+                                   final FrontendLinkBuilder frontendLinks) {
         this.userService = userService;
         this.userRegistrationService = userRegistrationService;
         this.userProfileService = userProfileService;
@@ -76,7 +74,8 @@ public class AccountManagementFacade {
         this.publisher = publisher;
         this.emailStrategy = emailStrategy;
         this.smsStrategy = smsStrategy;
-        this.host = baseurl + ":" + serverPort;
+        // Frontend origin: the mail templates append '/#/reset-password?…', '/#/login', etc.
+        this.host = frontendLinks.base();
     }
 
     @RateLimited(key = "password_reset_request", capacity = 3, duration = 15) // 3 requests per 15 minutes

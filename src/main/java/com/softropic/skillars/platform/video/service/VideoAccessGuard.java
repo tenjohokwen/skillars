@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
+import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.video.contract.OperationalState;
 import com.softropic.skillars.platform.video.contract.exception.VideoDeletionNotAuthorisedException;
@@ -29,7 +30,8 @@ import java.util.UUID;
  *
  * ownerId format (confirmed Task 0 investigation):
  *   - Coach videos: coach profile UUID string (from coachProfileService.getCoachIdByUserId())
- *   - Player videos: Long user ID as string (Story 6.6 path)
+ *   - Player videos: PlayerProfile.id (Long) as string (Story 6.6 path) — NOT the user id; the
+ *     owner check resolves the caller's user id through PlayerProfile.userId
  * getCurrentUserName() returns email — does NOT match either ownerId format.
  * Owner check must use UUID parse to detect coach videos, then Long.toString for players.
  * See Story 6.5 Task 0.
@@ -46,6 +48,7 @@ public class VideoAccessGuard {
     private final CoachProfileService coachProfileService;
     private final ConfigService configService;
     private final VideoAccessCache videoAccessCache;
+    private final PlayerProfileRepository playerProfileRepository;
 
     /**
      * Guards GET /api/video/{id}/play.
@@ -170,9 +173,12 @@ public class VideoAccessGuard {
 
     private boolean isOwner(Video video) {
         if (isPlayerOwnedVideo(video)) {
-            // Player video: ownerId = Long user ID string
+            // Player video: ownerId = PlayerProfile.id string; the caller owns it when that profile is
+            // their own (PlayerProfile.userId == caller's user id). Comparing the user id directly to
+            // the profile id never matched, so a player could not play or delete their own upload.
             Long currentUserLongId = getCurrentUserLongId();
-            return currentUserLongId != null && String.valueOf(currentUserLongId).equals(video.getOwnerId());
+            return currentUserLongId != null
+                && playerProfileRepository.existsByIdAndUserId(Long.parseLong(video.getOwnerId()), currentUserLongId);
         } else {
             // Coach video: ownerId = coach profile UUID string
             try {
