@@ -199,6 +199,13 @@
             :label="t('common.reason')"
             data-testid="user-action-reason-input"
           />
+          <q-checkbox
+            v-if="actionMode === 'suspend' && detail?.role === 'COACH'"
+            v-model="cancelUpcomingBookings"
+            class="q-mt-sm"
+            :label="t('admin.users.cancelUpcomingLabel')"
+            data-testid="user-cancel-upcoming-checkbox"
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -243,6 +250,7 @@ const selectedUserId = ref(null)
 const actionDialogOpen = ref(false)
 const actionMode = ref(null)
 const actionReason = ref('')
+const cancelUpcomingBookings = ref(true)
 const submitting = ref(false)
 
 const columns = [
@@ -349,6 +357,7 @@ async function reloadDetail() {
 function openAction(mode) {
   actionMode.value = mode
   actionReason.value = ''
+  cancelUpcomingBookings.value = true
   actionDialogOpen.value = true
 }
 
@@ -359,7 +368,7 @@ async function submitAction() {
   try {
     let successMessage
     if (actionMode.value === 'suspend') {
-      await adminApi.suspendUser(userId, reason)
+      await adminApi.suspendUser(userId, reason, cancelUpcomingBookings.value)
       successMessage = t('admin.users.suspendSuccess')
     } else if (actionMode.value === 'reactivate') {
       await adminApi.reactivateUser(userId, reason)
@@ -386,6 +395,8 @@ function errorMessage(err) {
   if (key === 'admin.users.cannotSuspendSelf') return t('admin.users.cannotSuspendSelf')
   if (key === 'admin.users.erased') return t('admin.users.erased')
   if (key === 'admin.users.safetyHold') return t('admin.users.safetyHold')
+  // C2: suspending a coach account also cancels their sessions; a capture in flight refuses it (409).
+  if (key === 'admin.coaches.paymentInProgress') return t('admin.coaches.paymentInProgress')
   return t('admin.users.actionFailed')
 }
 

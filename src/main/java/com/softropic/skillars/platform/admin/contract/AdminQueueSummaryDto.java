@@ -15,4 +15,6 @@ public record AdminQueueSummaryDto(
     // SUBSCRIPTION_ORPHANED — without its own bucket, `total` would silently exceed the sum of the
     // reported buckets the moment one is raised.
     long subscriptionOrphaned,
+    // C2: urgent bookings a coach child-safety hold could not cancel (live session / payment in flight).
+    long safetyHoldBookings,
     long total) {}

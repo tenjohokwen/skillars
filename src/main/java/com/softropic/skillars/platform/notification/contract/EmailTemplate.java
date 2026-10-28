@@ -59,6 +59,12 @@ public enum EmailTemplate {
     VIDEO_MODERATION_OWNER_FLAGGED("email.video.moderation.owner_flagged.title"),
     BOOKING_CANCELLED_BY_PARENT("email.booking.cancelled_by_parent.title"),
     BOOKING_CANCELLED_BY_COACH("email.booking.cancelled_by_coach.title"),
+    /**
+     * C2 (V185): the payer's booking was cancelled by a coach suspension / child-safety hold. Neutral by
+     * design — "the coach is unavailable", never why — and states the refund (pack session restored,
+     * credit refunded, or nothing was charged).
+     */
+    BOOKING_CANCELLED_COACH_UNAVAILABLE("email.booking.cancelled_coach_unavailable.title"),
     COACH_NO_SHOW("email.booking.coach_no_show.title"),
     PLAYER_NO_SHOW("email.booking.player_no_show.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),

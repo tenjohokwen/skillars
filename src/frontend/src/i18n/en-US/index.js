@@ -1302,6 +1302,9 @@ export default {
       openReviewQueue: 'Open review queue',
       openCoach: 'Open coach',
       openDisputes: 'Open disputes',
+      markHandled: 'Mark handled',
+      markHandledSuccess: 'Alert marked as handled.',
+      markHandledFailed: 'Could not update the alert — it may already be handled.',
       noInlineAction: 'No action here',
       messageTitle: 'Message under review',
       conversationTitle: 'Reported conversation',
@@ -1331,6 +1334,7 @@ export default {
         DISPUTE_RAISED: 'Dispute raised',
         MODERATION_UNRESOLVED: 'Held message',
         GDPR_ERASURE_DEADLINE: 'GDPR erasure overdue',
+        SAFETY_HOLD_BOOKING: 'Urgent: booking under a safety hold',
         SUBSCRIPTION_ORPHANED: 'Orphaned subscription',
       },
     },
@@ -1402,6 +1406,13 @@ export default {
       deleteStrikeHint: "The coach's status is re-evaluated after the strike is removed.",
       strikeBookingIdLabel: 'Booking ID',
       strikeReasonLabel: 'Strike reason',
+      cancelUpcomingLabel:
+        "Also cancel the coach's upcoming sessions and fully refund the families",
+      alreadySuspended: 'This coach was already suspended — nothing changed.',
+      suspendSuccess:
+        'Coach suspended. Sessions cancelled: {count} (any that were paid are fully refunded).',
+      paymentInProgress:
+        "A payment for one of this coach's sessions is being processed. Try again in a moment, or untick the session cancellation to suspend now.",
       notifyCoachLabel: 'Notify the coach by email',
       actionSuccess: 'Done.',
       actionFailed: 'The action failed. Please try again.',
@@ -1464,6 +1475,8 @@ export default {
       unlockSuccess: 'Login unlocked ({count} failed attempts cleared).',
       cannotSuspendAdmin: 'Administrator accounts cannot be suspended.',
       cannotModifyAdmin: 'Administrator accounts cannot be changed from this page.',
+      cancelUpcomingLabel:
+        "Also cancel this coach's upcoming sessions and fully refund the families",
       cannotSuspendSelf: 'You cannot suspend your own account.',
       erased: 'This account has been erased (GDPR) and cannot be reactivated.',
       safetyHold:
@@ -2464,6 +2477,8 @@ export default {
         'The session on {requestedStartTime} was cancelled because the session pack was paused.',
       BOOKING_CANCELLED_BY_PARENT:
         'The session on {requestedStartTime} was cancelled by the parent.',
+      BOOKING_CANCELLED_COACH_UNAVAILABLE:
+        'Your session with {coachDisplayName} on {requestedStartTime} was cancelled because the coach is unavailable. Any payment has been refunded in full.',
       BOOKING_CANCELLED_BY_COACH: 'Your coach cancelled the session on {requestedStartTime}.',
       COACH_NO_SHOW: 'A coach no-show was recorded for the session on {requestedStartTime}.',
       PLAYER_NO_SHOW: 'A player no-show was recorded for the session on {requestedStartTime}.',

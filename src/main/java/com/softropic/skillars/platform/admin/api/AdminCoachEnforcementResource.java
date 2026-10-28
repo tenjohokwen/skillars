@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.admin.contract.AdminManualStrikeResponse;
 import com.softropic.skillars.platform.admin.contract.AdminReinstateCoachRequest;
 import com.softropic.skillars.platform.admin.contract.AdminSetVerificationTierRequest;
 import com.softropic.skillars.platform.admin.contract.AdminSuspendCoachRequest;
+import com.softropic.skillars.platform.admin.contract.AdminSuspendCoachResponse;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementListItemDto;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementProfileDto;
 import com.softropic.skillars.platform.admin.service.AdminCoachEnforcementService;
@@ -52,11 +53,11 @@ public class AdminCoachEnforcementResource {
     @PostMapping("/{coachId}/suspend")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
     @Observed(name = "admin.coach.suspend")
-    public ResponseEntity<Void> suspendCoach(
+    public ResponseEntity<AdminSuspendCoachResponse> suspendCoach(
             @PathVariable UUID coachId,
             @Valid @RequestBody AdminSuspendCoachRequest request) {
-        enforcementService.suspendCoach(coachId, request.reason(), request.notifyCoach(), resolveAdminId());
-        return ResponseEntity.ok().build();
+        return ResponseEntity.ok(enforcementService.suspendCoach(coachId, request.reason(), request.notifyCoach(),
+            resolveAdminId(), request.cancelUpcomingBookingsOrDefault()));
     }
 
     @PostMapping("/{coachId}/reinstate")

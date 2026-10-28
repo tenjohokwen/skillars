@@ -20,14 +20,19 @@ public class BookingStateMachine {
             BookingEvent.ACCEPT,              BookingStatus.ACCEPTED,
             BookingEvent.DECLINE,             BookingStatus.DECLINED,
             BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED,
-            // Coach suspension (AdminCoachEnforcementService.suspendCoach) — ADMIN actor only.
+            // Coach suspension / child-safety hold (AdminCoachEnforcementService) — ADMIN actor only.
             BookingEvent.CANCEL_ADMIN,        BookingStatus.CANCELLED
         ));
+        // CANCEL_ADMIN (C2, DECISIONS.md item 2) is legal from every pre-session status: REQUESTED
+        // above and ACCEPTED / PAYMENT_PENDING / CONFIRMED / UPCOMING below. Never from IN_PROGRESS or
+        // PAUSED — a live session cannot be called off server-side; the safety hold raises an urgent
+        // admin alert for those instead. BookingService.cancelBookingAsAdmin decides the refund.
         t.put(BookingStatus.ACCEPTED, Map.of(
             BookingEvent.INITIATE_PAYMENT,    BookingStatus.PAYMENT_PENDING,
             BookingEvent.CANCEL_COACH,        BookingStatus.CANCELLED_COACH,
             BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
-            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED,
+            BookingEvent.CANCEL_ADMIN,        BookingStatus.CANCELLED
         ));
         // CANCEL_PARENT is the parent's escape hatch from a booking whose payment never captured —
         // e.g. a crash between the INITIATE_PAYMENT commit and the AFTER_COMMIT payment listener
@@ -36,13 +41,16 @@ public class BookingStateMachine {
         t.put(BookingStatus.PAYMENT_PENDING, Map.of(
             BookingEvent.PAYMENT_CAPTURED, BookingStatus.CONFIRMED,
             BookingEvent.PAYMENT_FAILED,   BookingStatus.DECLINED,  // was REFUND_PENDING — see Story 7.2
-            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT
+            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT,
+            // Only once BookingService.cancelBookingAsAdmin has ruled out an in-flight capture.
+            BookingEvent.CANCEL_ADMIN,     BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.CONFIRMED, Map.of(
             BookingEvent.SCHEDULE_UPCOMING,   BookingStatus.UPCOMING,
             BookingEvent.CANCEL_COACH,        BookingStatus.CANCELLED_COACH,
             BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
-            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED,
+            BookingEvent.CANCEL_ADMIN,        BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.UPCOMING, Map.of(
             BookingEvent.START,               BookingStatus.IN_PROGRESS,
@@ -51,7 +59,8 @@ public class BookingStateMachine {
             BookingEvent.CANCEL_COACH,        BookingStatus.CANCELLED_COACH,
             BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
             BookingEvent.COMPLETE_PENDING,    BookingStatus.COMPLETED_PENDING_CONFIRMATION,
-            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED
+            BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED,
+            BookingEvent.CANCEL_ADMIN,        BookingStatus.CANCELLED
         ));
         t.put(BookingStatus.IN_PROGRESS, Map.of(
             BookingEvent.PAUSE,            BookingStatus.PAUSED,
@@ -61,7 +70,7 @@ public class BookingStateMachine {
         // CANCEL_COACH/CANCEL_PARENT from PAUSED (not IN_PROGRESS): a live session cannot be cancelled
         // mid-flight, but a paused one can be called off. Only the coach (CANCEL_COACH) or the parent
         // (CANCEL_PARENT) can fire these — BookingService.EVENT_ROLES grants neither to ADMIN or SYSTEM,
-        // so there is no admin/system path out of PAUSED.
+        // and CANCEL_ADMIN is deliberately absent here, so there is no admin/system path out of PAUSED.
         t.put(BookingStatus.PAUSED, Map.of(
             BookingEvent.RESUME,           BookingStatus.IN_PROGRESS,
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,

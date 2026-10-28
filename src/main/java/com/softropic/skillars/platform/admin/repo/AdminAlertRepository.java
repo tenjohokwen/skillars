@@ -93,4 +93,20 @@ public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
         """, nativeQuery = true)
     int updateOpenAlertReason(@Param("referenceId") String referenceId, @Param("type") String type,
                               @Param("reason") String reason);
+
+    /**
+     * C2: an admin marks one OPEN alert of {@code type} handled — one atomic conditional UPDATE (no
+     * load-check-write), so two admins resolving the same alert at once resolve it once; the loser gets 0.
+     * AdminAlert has no {@code @Version}, so a native UPDATE needs no version bump.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+        UPDATE admin.admin_alerts
+        SET status = 'RESOLVED', resolved_at = NOW(), resolved_by = :adminId
+        WHERE alert_id = :alertId
+          AND type = :type
+          AND status = 'OPEN'
+        """, nativeQuery = true)
+    int resolveOpenAlert(@Param("alertId") java.util.UUID alertId, @Param("type") String type,
+                         @Param("adminId") Long adminId);
 }

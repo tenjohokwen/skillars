@@ -202,7 +202,7 @@ class CoachSuspensionIT extends AbstractIntegrationTest {
         Future<?> suspender = executor.submit(() -> {
             try {
                 suspensionStagedAndLockHeld.await(10, TimeUnit.SECONDS);
-                adminCoachEnforcementService.suspendCoach(coachProfileId, "Concurrent duplicate", false, ADMIN_ID);
+                adminCoachEnforcementService.suspendCoach(coachProfileId, "Concurrent duplicate", false, ADMIN_ID, true);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Throwable t) {
@@ -233,15 +233,17 @@ class CoachSuspensionIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void suspendCoach_setsStatusAndCancelsRequestedBookings() {
+    void suspendCoach_setsStatusAndCancelsRequestedAndUpcomingBookingsByDefault() {
         String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
-        ResponseEntity<Void> resp = httpTestClient.makeHttpRequest(
+        // C2: no cancelUpcomingBookings in the body — the default is to cancel upcoming bookings too.
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
             baseUrl() + "/api/admin/coaches/" + coachProfileId + "/suspend",
             HttpMethod.POST,
             Map.of("reason", "Repeated misconduct", "notifyCoach", false),
-            authenticatedHeaders(adminCookies), Void.class);
+            authenticatedHeaders(adminCookies), Map.class);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody()).containsEntry("newlySuspended", true).containsEntry("cancelledBookings", 3);
 
         String status = jdbcTemplate.queryForObject(
             "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachProfileId);
@@ -252,23 +254,35 @@ class CoachSuspensionIT extends AbstractIntegrationTest {
         assertThat(statusChangedAt).isNotNull();
 
         List<String> cancelledStatuses = jdbcTemplate.queryForList(
-            "SELECT status FROM booking.bookings WHERE coach_id = ? AND id IN (?, ?)",
-            String.class, coachProfileId, bookingId1, bookingId2);
-        assertThat(cancelledStatuses).containsOnly("CANCELLED");
+            "SELECT status FROM booking.bookings WHERE coach_id = ? AND id IN (?, ?, ?)",
+            String.class, coachProfileId, bookingId1, bookingId2, acceptedBookingId);
+        assertThat(cancelledStatuses).hasSize(3).containsOnly("CANCELLED");
 
         List<String> cancelReasons = jdbcTemplate.queryForList(
-            "SELECT cancel_reason FROM booking.bookings WHERE coach_id = ? AND id IN (?, ?)",
-            String.class, coachProfileId, bookingId1, bookingId2);
-        assertThat(cancelReasons).containsOnly("COACH_SUSPENDED_BY_ADMIN");
-
-        String acceptedStatus = jdbcTemplate.queryForObject(
-            "SELECT status FROM booking.bookings WHERE id = ?", String.class, acceptedBookingId);
-        assertThat(acceptedStatus).isEqualTo("ACCEPTED");
+            "SELECT cancel_reason FROM booking.bookings WHERE coach_id = ? AND id IN (?, ?, ?)",
+            String.class, coachProfileId, bookingId1, bookingId2, acceptedBookingId);
+        assertThat(cancelReasons).containsOnly("COACH_UNAVAILABLE");
 
         Long logCount = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM admin.admin_action_log WHERE reference_id = ? AND action_type = 'COACH_SUSPEND'",
             Long.class, coachProfileId.toString());
         assertThat(logCount).isEqualTo(1L);
+    }
+
+    /** C2: the admin can opt out of cancelling upcoming bookings; REQUESTED ones are always cancelled. */
+    @Test
+    void suspendCoach_optingOutOfTheUpcomingCancellation_leavesAcceptedBookingsAlone() {
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/admin/coaches/" + coachProfileId + "/suspend",
+            HttpMethod.POST,
+            Map.of("reason", "Repeated misconduct", "notifyCoach", false, "cancelUpcomingBookings", false),
+            authenticatedHeaders(adminCookies), Map.class);
+
+        assertThat(resp.getBody()).containsEntry("cancelledBookings", 2);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, acceptedBookingId))
+            .isEqualTo("ACCEPTED");
     }
 
     /**

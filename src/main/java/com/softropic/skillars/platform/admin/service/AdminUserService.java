@@ -130,10 +130,13 @@ public class AdminUserService {
      * Suspends (locks) a non-admin account and revokes its sessions. Idempotent: suspending an
      * already-suspended account is a no-op that writes no second audit row.
      *
+     * @param cancelUpcomingBookings for a COACH account: also cancel the coach's upcoming bookings with
+     *                               a full refund (C2; the default), see
+     *                               {@link AdminCoachEnforcementService#suspendCoach}
      * @return {@code true} if this call suspended the account, {@code false} if it already was
      */
     @Transactional
-    public boolean suspendUser(Long userId, String reason, Long adminId) {
+    public boolean suspendUser(Long userId, String reason, Long adminId, boolean cancelUpcomingBookings) {
         if (userId.equals(adminId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "admin.users.cannotSuspendSelf");
         }
@@ -146,7 +149,7 @@ public class AdminUserService {
             // UserAdminService.lockUserAccount): no second USER_SUSPEND row, but still make sure a
             // coach's marketplace profile is not left bookable. suspendCoach is itself idempotent
             // under its own row lock and writes its own COACH_SUSPEND audit row when it acts.
-            suspendCoachProfileIfAny(userId, reason, adminId);
+            suspendCoachProfileIfAny(userId, reason, adminId, cancelUpcomingBookings);
             return false;
         }
 
@@ -159,7 +162,7 @@ public class AdminUserService {
         userRepository.invalidateSessionsForUserInCurrentTransaction(userId, Instant.now(ClockProvider.getClock()));
         refreshTokenRepository.markAllUsedByUserId(userId);
 
-        suspendCoachProfileIfAny(userId, reason, adminId);
+        suspendCoachProfileIfAny(userId, reason, adminId, cancelUpcomingBookings);
 
         audit(adminId, AdminActionType.USER_SUSPEND, userId, reason);
         log.info("User account suspended by admin: userId={} adminId={}", userId, adminId);
@@ -231,7 +234,8 @@ public class AdminUserService {
     /**
      * A suspended COACH account must not stay bookable: an ACTIVE marketplace profile would keep
      * taking booking requests for a coach who can no longer log in to accept or deliver them. Delegates
-     * to the existing coach suspension (marketplace status SUSPENDED + REQUESTED bookings cancelled),
+     * to the existing coach suspension (marketplace status SUSPENDED + REQUESTED bookings cancelled, and
+     * by default the upcoming ones too, with full refunds — C2),
      * in this same transaction, so a failure rolls the account suspension back with it. Lock order is
      * user row then coach_profiles row; the coach lock is NO_WAIT + bounded retry, so contention
      * surfaces as a 409, never a hang. Reactivating the account deliberately does NOT reinstate the
@@ -243,10 +247,10 @@ public class AdminUserService {
      * full-row save() would run on stale state and could revert a concurrently committed profile
      * edit. suspendCoach does its own SUSPENDED no-op check under the lock.
      */
-    private void suspendCoachProfileIfAny(Long userId, String reason, Long adminId) {
+    private void suspendCoachProfileIfAny(Long userId, String reason, Long adminId, boolean cancelUpcomingBookings) {
         coachProfileRepository.findIdByUserId(userId)
             .ifPresent(coachId -> coachEnforcementService.suspendCoach(
-                coachId, truncate("Account suspended: " + reason), false, adminId));
+                coachId, truncate("Account suspended: " + reason), false, adminId, cancelUpcomingBookings));
     }
 
     private long countRecentFailedAttempts(User user) {

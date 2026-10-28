@@ -128,9 +128,13 @@
       more than 24h before the start or <em>after</em> the start time has passed (Deferred-64). That is
       <code>BookingService</code>'s <code>refundEligible</code> flag on the event. A booking paid by card
       or credit is refunded as a <code>BOOKING_REFUND</code> wallet credit for the <em>full session
-      price</em>. A pack-funded booking gets its session restored instead. Coach cancellations, coach
-      no-shows, and admin cancellations always refund. If the pack had already expired when a coach
-      cancelled or no-showed, the refund goes to the wallet instead of the pack. Coach cancellations and
+      price</em>. A pack-funded booking gets its session restored instead. Coach cancellations and coach
+      no-shows always refund. An admin cancellation (coach suspension or child-safety hold,
+      <code>BookingCancelledByAdminEvent</code>) refunds only a booking whose payment was captured
+      (<code>CONFIRMED</code>/<code>UPCOMING</code>; the event's <code>refundEligible</code>) and then refunds
+      what was actually paid (<code>booking_payments</code> credit + card), never strikes the coach and
+      writes no cancellation history. If the pack had already expired when a coach cancelled, no-showed,
+      or was suspended, the refund goes to the wallet instead of the pack. Coach cancellations and
       no-shows also issue a reliability strike, unless the cancel reason is <code>MUTUAL_AGREEMENT</code>,
       <code>HEALTH_MEDICAL</code>, <code>FAMILY_EMERGENCY</code> or <code>WEATHER</code>. No-shows always
       get a strike. A player no-show forfeits the fee, with no refund and no strike.</p>
@@ -678,7 +682,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

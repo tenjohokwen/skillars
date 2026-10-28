@@ -274,6 +274,12 @@
             :label="t('admin.coaches.notifyCoachLabel')"
             data-testid="coach-notify-checkbox"
           />
+          <q-checkbox
+            v-if="actionMode === 'suspend'"
+            v-model="cancelUpcomingBookings"
+            :label="t('admin.coaches.cancelUpcomingLabel')"
+            data-testid="coach-cancel-upcoming-checkbox"
+          />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -326,6 +332,7 @@ const actionDialogOpen = ref(false)
 const actionMode = ref(null)
 const actionReason = ref('')
 const notifyCoach = ref(true)
+const cancelUpcomingBookings = ref(true)
 const strikeBookingId = ref('')
 const strikeReason = ref(null)
 const strikeToDelete = ref(null)
@@ -493,6 +500,7 @@ function openAction(mode, strike = null) {
   actionMode.value = mode
   actionReason.value = ''
   notifyCoach.value = true
+  cancelUpcomingBookings.value = true
   strikeBookingId.value = ''
   strikeReason.value = null
   strikeToDelete.value = strike
@@ -503,9 +511,17 @@ async function submitAction() {
   const coachId = selectedCoachId.value
   const reason = actionReason.value.trim()
   submitting.value = true
+  let successMessage = t('admin.coaches.actionSuccess')
   try {
     if (actionMode.value === 'suspend') {
-      await adminApi.suspendCoach(coachId, { reason, notifyCoach: notifyCoach.value })
+      const resp = await adminApi.suspendCoach(coachId, {
+        reason,
+        notifyCoach: notifyCoach.value,
+        cancelUpcomingBookings: cancelUpcomingBookings.value,
+      })
+      successMessage = resp?.newlySuspended
+        ? t('admin.coaches.suspendSuccess', { count: resp.cancelledBookings ?? 0 })
+        : t('admin.coaches.alreadySuspended')
     } else if (actionMode.value === 'reinstate') {
       await adminApi.reinstateCoach(coachId, { reason })
     } else if (actionMode.value === 'strike') {
@@ -517,12 +533,17 @@ async function submitAction() {
       await adminApi.deleteCoachStrike(coachId, strikeToDelete.value.strikeId, reason)
     }
     actionDialogOpen.value = false
-    $q.notify({ message: t('admin.coaches.actionSuccess'), type: 'positive' })
+    $q.notify({ message: successMessage, type: 'positive' })
     await Promise.all([reloadProfile(), loadList()])
   } catch (err) {
     const status = err?.response?.status
     let message = t('admin.coaches.actionFailed')
-    if (status === 409) message = t('admin.coaches.actionConflict')
+    if (
+      status === 409 &&
+      err?.response?.data?.errorMsg?.message === 'admin.coaches.paymentInProgress'
+    )
+      message = t('admin.coaches.paymentInProgress')
+    else if (status === 409) message = t('admin.coaches.actionConflict')
     else if (status === 400 && actionMode.value === 'strike')
       message = t('admin.coaches.strikeInvalid')
     $q.notify({ message, type: 'negative' })

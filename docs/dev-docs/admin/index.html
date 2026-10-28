@@ -96,7 +96,7 @@
       <code>REDUCED</code>; crossing <code>reliability.strike.suspensionThreshold</code> (default 5) sets
       <code>PENDING_REVIEW</code> and publishes <code>StrikeThresholdReachedEvent</code>, which lands in the admin
       queue. There is no automatic suspension — an admin inspects the coach's strike and cancellation history, then
-      suspends (auto-cancelling their <code>REQUESTED</code> bookings), reinstates, or issues/deletes strikes. Admins
+      suspends (auto-cancelling their <code>REQUESTED</code> bookings and, unless the admin opts out, their upcoming ones with full refunds), reinstates, or issues/deletes strikes. Admins
       also set the coach's marketplace verification tier (<code>BASIC</code>/<code>TRUSTED</code>/<code>FEATURED</code>).
     </p>
     <p>
@@ -146,7 +146,7 @@
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>AdminActionLog</code></td><td><code>admin.admin_action_log</code></td><td>Immutable audit trail (admin id, <code>AdminActionType</code>, reference id, reason). <code>action_type</code> is CHECK-constrained; last widened by V171 (<code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>), before that V162 (<code>BOOKING_FORCE_COMPLETE</code>).</td></tr>
-        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) and V153 (<code>SUBSCRIPTION_ORPHANED</code>).</td></tr>
+        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) V153 (<code>SUBSCRIPTION_ORPHANED</code>) and V185 (<code>SAFETY_HOLD_BOOKING</code>, reference type <code>BOOKING</code>).</td></tr>
         <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute from raise to RESOLVED/DISMISSED; optimistic-locked (<code>@Version</code>).</td></tr>
         <tr><td><code>Appeal</code></td><td><code>admin.appeals</code> (V172)</td><td>One appeal against one enforcement action: <code>subject_type</code> + <code>subject_id</code> + <code>enforced_at</code>, status OPEN/UPHELD/OVERTURNED, <code>reversal_applied</code>. Unique <code>uq_appeals_per_enforcement</code> and partial unique <code>uq_appeals_one_open_per_subject</code>; CHECK <code>appeals_decision_consistent</code>. Deliberately no <code>@Version</code>.</td></tr>
         <tr><td><code>GdprRequest</code></td><td><code>admin.gdpr_requests</code></td><td>One EXPORT or ERASURE request: PENDING → PROCESSING → COMPLETED/FAILED, signed <code>download_url</code> + <code>expires_at</code> for exports, <code>retry_count</code> + <code>failed_at</code> (V154) for the retry sweep, and nullable <code>player_id</code> (V172) — non-null means a parent-requested, child-scoped request where <code>user_id</code> is the <em>parent</em>. Partial unique indexes <code>idx_gdpr_requests_unique_active_self</code> / <code>_player</code> allow one active request per type per subject.</td></tr>
@@ -181,6 +181,7 @@
       <tbody>
         <tr><td>GET</td><td><code>/api/admin/queue</code></td><td>Unified moderation queue (<code>type</code>, <code>status=OPEN</code> only, <code>page</code>)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/queue/summary</code></td><td>Open-alert counts by type</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/queue/safety-hold-alerts/{alertId}/resolve</code></td><td>Mark an urgent <code>SAFETY_HOLD_BOOKING</code> alert handled (404 if not open)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/messages/{messageId}</code></td><td>Message detail with surrounding conversation context</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/approve</code></td><td>Approve a held message</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/block</code></td><td>Block a message</td><td>ADMIN</td></tr>
@@ -196,7 +197,7 @@
         <tr><td>POST</td><td><code>/api/admin/users/{userId}/unlock-login</code></td><td>Clear the failed-login rate limit; returns cleared-attempt count</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/coaches</code></td><td>Coaches under enforcement (default PENDING_REVIEW + SUSPENDED; <code>status</code> filter)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/coaches/{coachId}/enforcement</code></td><td>Enforcement profile (status, tier, 30-day strikes, histories, open alerts)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/suspend</code></td><td>Suspend a coach</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/suspend</code></td><td>Suspend a coach (<code>{reason, notifyCoach, cancelUpcomingBookings}</code>; returns <code>{newlySuspended, cancelledBookings, alertedBookings}</code>)</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/reinstate</code></td><td>Reinstate from SUSPENDED / PENDING_REVIEW / REDUCED</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/strikes</code></td><td>Issue a manual reliability strike</td><td>ADMIN</td></tr>
         <tr><td>DELETE</td><td><code>/api/admin/coaches/{coachId}/strikes/{strikeId}</code></td><td>Delete a strike (may re-tier the coach)</td><td>ADMIN</td></tr>
@@ -248,7 +249,7 @@
         <tr><td><code>StrikeThresholdReachedEvent</code></td><td>Consumed (from <code>payment</code>; also re-published by <code>reinstateCoach</code>)</td><td>STRIKE_THRESHOLD alert.</td></tr>
         <tr><td><code>CoachSubscriptionOrphanedEvent</code></td><td>Consumed (from <code>payment</code>'s Stripe webhook handling)</td><td>SUBSCRIPTION_ORPHANED alert (reference type COACH).</td></tr>
         <tr><td><code>DisputeRaisedEvent</code></td><td>Published &amp; consumed (internal)</td><td>DISPUTE_RAISED alert, keyed on the booking id.</td></tr>
-        <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>payment</code>)</td><td>One per <code>REQUESTED</code> booking cancelled on coach suspension, carrying the price; consumed by <code>CancellationRefundService</code> / <code>RefundEnqueueListener</code>.</td></tr>
+        <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>payment</code>)</td><td>Published by <code>booking.BookingService.cancelBookingAsAdmin</code>, one per booking a coach suspension / safety hold cancels. Carries the amount actually paid, <code>refundEligible</code> (payment was captured) and the neutral-notice data; consumed by <code>RefundEnqueueListener</code> (wallet refund), <code>CancellationRefundService</code> (pack restore, no strike) and <code>BookingEmailListener</code> (<code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>).</td></tr>
         <tr><td><code>GdprExportRequestedEvent</code>, <code>GdprErasureRequestedEvent</code></td><td>Published &amp; consumed (internal, <code>AFTER_COMMIT</code>)</td><td>Carry <code>requestId</code>, <code>userId</code> and nullable <code>playerId</code>.</td></tr>
         <tr><td><code>UserErasedEvent</code>, <code>AccountDeletionRequestedEvent</code></td><td>Published (to <code>security</code> and cascades)</td><td>Consumed by <code>UserErasedEventListener</code> and <code>AccountDeletionCascadeListener</code>.</td></tr>
         <tr><td><code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code>, <code>CoachWarningIssuedEvent</code>, <code>DisputeResolvedEvent</code>, <code>DisputeDismissedEvent</code>, <code>GdprExportReadyEvent</code>, <code>ReviewModerationResolvedEvent</code> (class in <code>reviews</code>)</td><td>Published (to <code>notification</code>)</td><td>Admin-outcome notices. Each carries an <code>AdminNotificationRecipient</code> (email + language) resolved by the publisher in its own transaction by <code>AdminNotificationRecipientResolver</code>; <code>notification.AdminOutcomeEmailListener</code> (<code>BEFORE_COMMIT</code>) turns it into an outbox email + inbox row. See the gotcha below.</td></tr>
@@ -289,9 +290,10 @@ sequenceDiagram
   Enforce-->>Admin: status, tier, strikes, cancellation history
   Admin->>Enforce: POST /api/admin/coaches/{coachId}/suspend
   Enforce->>Enforce: findByIdForUpdate (bounded retry), no-op if already SUSPENDED
-  Enforce->>Booking: findByCoachIdAndStatus(REQUESTED)
-  Enforce->>Booking: cancelRequestedBookingAsAdmin per booking (CANCEL_ADMIN, publishes BookingStatusChangedEvent)
-  Enforce-->>Payment: BookingCancelledByAdminEvent (per booking)
+  Enforce->>Booking: findByCoachIdAndStatusIn(REQUESTED, plus ACCEPTED to UPCOMING unless opted out)
+  Enforce->>Booking: cancelBookingAsAdmin per booking (booking row lock, CANCEL_ADMIN, BookingStatusChangedEvent)
+  Booking-->>Payment: BookingCancelledByAdminEvent (refund if captured, neutral parent notice, no strike)
+  Note over Enforce: a capture in flight (CAPTURE_PENDING) fails the whole suspension - 409 admin.coaches.paymentInProgress
   Enforce->>Enforce: CoachSuspendedEvent (+ CoachSuspensionNotificationEvent if notifyCoach)
   Enforce->>Alerts: AdminActionLog(COACH_SUSPEND)
   Note over Enforce: notifyCoach - AdminOutcomeEmailListener enqueues COACH_SUSPENDED (BEFORE_COMMIT)
@@ -301,25 +303,44 @@ sequenceDiagram
       with the video's <code>ownerId</code>, which for a coach upload is the <code>CoachProfile</code> UUID.
       <code>CoachSafetySuspensionListener</code> (<code>AFTER_COMMIT</code>, <code>fallbackExecution</code>, never
       throws) calls <code>suspendCoachForSafetyHold</code> (<code>REQUIRES_NEW</code>), which runs the same locked
-      suspension as the admin path: profile SUSPENDED, REQUESTED bookings cancelled through the state machine
-      (<code>CANCEL_ADMIN</code>, actor id 0) with refunds. It is idempotent, does
+      suspension in two transactions: <code>applySafetyHoldStatus</code> (<code>REQUIRES_NEW</code>) commits the
+      profile SUSPENDED and the <code>COACH_SAFETY_HOLD</code> row first, then <code>sweepBookingsForSafetyHold</code>
+      (<code>REQUIRES_NEW</code>) cancels every not-yet-started booking (REQUESTED, ACCEPTED, PAYMENT_PENDING, CONFIRMED,
+      UPCOMING) through the state machine (<code>CANCEL_ADMIN</code>, actor id 0) with full refunds - so booking-row
+      contention can fail the sweep (the listener retries the whole, idempotent hold three times) but never undo the
+      takedown. A coach an admin had already suspended is converted (new <code>statusChangedAt</code> + the
+      <code>COACH_SAFETY_HOLD</code> row) and swept too; a coach already under a safety hold is only re-swept. It does
       not notify the coach, and is logged as <code>COACH_SAFETY_HOLD</code> with <code>admin_id = 0</code>
       (<code>AdminActionLog.SYSTEM_ACTOR_ID</code>; the column is NOT NULL and has no FK) at the same instant as the
       profile's <code>statusChangedAt</code>. That row is what makes the hold <strong>non-appealable</strong>:
       <code>AppealService</code> answers <code>409 appeals.notAppealable</code> on submit and never reverses it on
-      overturn (an admin can still reinstate directly from the console). CONFIRMED upcoming sessions are
-      <em>not</em> cancelled — <code>CANCEL_ADMIN</code> exists only from REQUESTED, and <code>CANCEL_COACH</code> would
-      strike the coach and refund under the wrong actor, so there is no clean admin path yet — and are counted in
-      the <code>[COACH_SAFETY_SUSPENSION]</code> ERROR log for the admin handling the CSAM alert.
+      overturn (an admin can still reinstate directly from the console). What the hold cannot cancel server-side
+      - an <code>IN_PROGRESS</code> / <code>PAUSED</code> session, or a <code>PAYMENT_PENDING</code> booking whose
+      Stripe capture is in flight - raises one urgent <code>SAFETY_HOLD_BOOKING</code> admin alert per booking
+      (reason <code>IN_PROGRESS</code> / <code>PAUSED</code> / <code>PAYMENT_IN_FLIGHT</code>); the queue summary
+      resolves the parent's email at read time so the admin can contact them (the alert row stores no contact PII).
+      The hold never fails on those. An admin marks one handled from the moderation queue
+      (<code>POST /api/admin/queue/safety-hold-alerts/{alertId}/resolve</code>, an atomic conditional UPDATE; 404 once
+      it is no longer open). The payout freeze
+      for a held coach belongs to the payment module and keys off the <code>COACH_SAFETY_HOLD</code> row.
       <code>CoachSafetySuspensionListener</code> runs at <code>HIGHEST_PRECEDENCE</code> because with no transaction
       the multicaster stops at the first listener that throws, and this one never throws.
     </p>
     <p>
-      Suspension is not just a status flip: every <code>REQUESTED</code> booking for the coach is cancelled
-      (<code>COACH_SUSPENDED_BY_ADMIN</code>) through the booking state machine
-      (<code>BookingService.cancelRequestedBookingAsAdmin</code>, so the batch roll-up, SSE and session-plan listeners
-      see a <code>BookingStatusChangedEvent</code>; a booking that already left <code>REQUESTED</code> is skipped) and a
-      <code>BookingCancelledByAdminEvent</code> per cancelled booking lets payment refund the parent. The coach-profile row lock matters: the booking accept paths re-check SUSPENDED
+      Suspension is not just a status flip (DECISIONS item 2): every <code>REQUESTED</code> booking for the coach is
+      cancelled and, by default, so is every <code>ACCEPTED</code> / <code>PAYMENT_PENDING</code> /
+      <code>CONFIRMED</code> / <code>UPCOMING</code> one (request flag <code>cancelUpcomingBookings</code>, default
+      <code>true</code>, a checkbox in the suspend dialog; the response reports <code>cancelledBookings</code>).
+      Each goes through the booking state machine (<code>BookingService.cancelBookingAsAdmin</code>, cancel reason
+      <code>COACH_UNAVAILABLE</code> for both paths - neutral, because the booking row reaches the parent's GDPR
+      export; the real reason is on the coach's <code>admin_action_log</code> row), so the batch roll-up, SSE and session-plan listeners see a
+      <code>BookingStatusChangedEvent</code>; a booking whose fresh status (re-read under its row lock) is no longer
+      cancellable is skipped. Its <code>BookingCancelledByAdminEvent</code> refunds the payer in full when payment was
+      captured (card/credit to the credit wallet, pack session restored, expired pack refunded to the wallet), issues
+      no reliability strike, and sends the parent a neutral "the coach is unavailable" notice. A
+      <code>PAYMENT_PENDING</code> booking with a capture in flight fails the whole suspension with a retryable
+      <code>409 admin.coaches.paymentInProgress</code> (all-or-nothing). Live sessions are left to finish. No payout
+      freeze for an ordinary suspension. The coach-profile row lock matters: the booking accept paths re-check SUSPENDED
       under the same lock, so a suspension cannot slip in between their check and write. <code>reinstateCoach</code>
       runs <code>CoachProfileService.validateReadyForActivation</code> first and falls back to <code>DRAFT</code> if
       the profile is incomplete, ensures a SCOUT <code>coach_subscriptions</code> row exists, and then re-checks the
@@ -336,14 +357,14 @@ sequenceDiagram
   participant Users as main.user
   participant Tokens as refresh_tokens
   participant Enforce as AdminCoachEnforcementService
-  Admin->>Svc: POST /api/admin/users/{userId}/suspend {reason}
+  Admin->>Svc: POST /api/admin/users/{userId}/suspend {reason, cancelUpcomingBookings}
   Svc->>Svc: reject self (400)
   Svc->>Users: findByIdForUpdate (NO_WAIT, bounded retry)
   Svc->>Svc: reject ADMIN / LTD_ADMIN target (409)
   Svc->>Users: lock(), clear persistent tokens, saveAndFlush
   Svc->>Users: invalidateSessionsForUserInCurrentTransaction (stamp)
   Svc->>Tokens: markAllUsedByUserId (REQUIRES_NEW)
-  Svc->>Enforce: suspendCoach(coachId, notifyCoach=false) if a coach profile exists
+  Svc->>Enforce: suspendCoach(coachId, notifyCoach=false, cancelUpcomingBookings) if a coach profile exists
   Svc->>Users: AdminActionLog(USER_SUSPEND)
     </pre>
     <p>
@@ -574,7 +595,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

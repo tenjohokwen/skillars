@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.platform.admin.contract.AdminSuspendCoachResponse;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
 import org.junit.jupiter.api.Test;
@@ -29,6 +30,8 @@ class CoachSafetySuspensionListenerTest {
         UUID coachId = UUID.randomUUID();
         UUID videoId = UUID.randomUUID();
         when(coachProfileRepository.existsById(coachId)).thenReturn(true);
+        when(enforcementService.suspendCoachForSafetyHold(coachId, videoId))
+            .thenReturn(new AdminSuspendCoachResponse(true, 2, 1));
 
         listener.onAccountSuspensionRequested(new AccountSuspensionRequestedEvent(coachId.toString(), videoId));
 
@@ -60,5 +63,23 @@ class CoachSafetySuspensionListenerTest {
             .thenThrow(new PessimisticLockingFailureException("contended"));
 
         listener.onAccountSuspensionRequested(new AccountSuspensionRequestedEvent(coachId.toString(), UUID.randomUUID()));
+
+        // C2: the whole hold is re-attempted before giving up.
+        verify(enforcementService, org.mockito.Mockito.times(CoachSafetySuspensionListener.SAFETY_HOLD_ATTEMPTS))
+            .suspendCoachForSafetyHold(any(), any());
+    }
+
+    @Test
+    void transientLockContention_isRetried_soTheHoldStillLands() {
+        UUID coachId = UUID.randomUUID();
+        UUID videoId = UUID.randomUUID();
+        when(coachProfileRepository.existsById(coachId)).thenReturn(true);
+        when(enforcementService.suspendCoachForSafetyHold(coachId, videoId))
+            .thenThrow(new PessimisticLockingFailureException("contended"))
+            .thenReturn(new AdminSuspendCoachResponse(true, 1, 0));
+
+        listener.onAccountSuspensionRequested(new AccountSuspensionRequestedEvent(coachId.toString(), videoId));
+
+        verify(enforcementService, org.mockito.Mockito.times(2)).suspendCoachForSafetyHold(coachId, videoId);
     }
 }

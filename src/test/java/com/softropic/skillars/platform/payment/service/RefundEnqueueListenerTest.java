@@ -14,6 +14,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -143,8 +144,8 @@ class RefundEnqueueListenerTest {
     // ========== Admin cancel events ==========
 
     @Test
-    void onBookingCancelledByAdmin_creditBased_enqueues() {
-        BookingCancelledByAdminEvent event = adminCancelEvent(null);
+    void onBookingCancelledByAdmin_capturedCreditBased_enqueuesTheAmountPaid() {
+        BookingCancelledByAdminEvent event = adminCancelEvent(null, true, false);
 
         listener.onBookingCancelledByAdmin(event);
 
@@ -152,14 +153,31 @@ class RefundEnqueueListenerTest {
             eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
     }
 
+    /** C2: REQUESTED / ACCEPTED / PAYMENT_PENDING took no money — a refund here would mint free credit. */
     @Test
-    void onBookingCancelledByAdmin_packBased_neverEnqueues() {
-        UUID packId = UUID.randomUUID();
-        BookingCancelledByAdminEvent event = adminCancelEvent(packId);
+    void onBookingCancelledByAdmin_notCaptured_neverEnqueues() {
+        listener.onBookingCancelledByAdmin(adminCancelEvent(null, false, false));
+        listener.onBookingCancelledByAdmin(adminCancelEvent(UUID.randomUUID(), false, true));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+    }
+
+    @Test
+    void onBookingCancelledByAdmin_capturedUnexpiredPack_neverEnqueues_theSessionIsRestoredInstead() {
+        BookingCancelledByAdminEvent event = adminCancelEvent(UUID.randomUUID(), true, false);
 
         listener.onBookingCancelledByAdmin(event);
 
+        assertThat(event.isPackRestore()).isTrue();
         verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+    }
+
+    @Test
+    void onBookingCancelledByAdmin_capturedExpiredPack_enqueuesAWalletRefund() {
+        listener.onBookingCancelledByAdmin(adminCancelEvent(UUID.randomUUID(), true, true));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
     }
 
     private BookingCancelledByParentEvent parentEvent(UUID packId, boolean refundEligible) {
@@ -187,9 +205,10 @@ class RefundEnqueueListenerTest {
         );
     }
 
-    private BookingCancelledByAdminEvent adminCancelEvent(UUID packId) {
+    private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {
         return new BookingCancelledByAdminEvent(
-            this, BOOKING_ID, PARENT_ID, COACH_ID, packId, SESSION_PRICE
+            this, BOOKING_ID, PARENT_ID, COACH_ID, packId, SESSION_PRICE, captured, packExpired,
+            "parent@test.com", "Coach", Instant.now(), "UTC"
         );
     }
 }

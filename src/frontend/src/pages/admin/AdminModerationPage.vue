@@ -117,6 +117,17 @@
                   to="/admin/disputes"
                   data-testid="alert-open-disputes-btn"
                 />
+                <q-btn
+                  v-else-if="props.row.type === 'SAFETY_HOLD_BOOKING'"
+                  flat
+                  dense
+                  size="sm"
+                  color="negative"
+                  :label="t('admin.moderation.markHandled')"
+                  :loading="resolvingAlertId === props.row.alertId"
+                  data-testid="alert-resolve-safety-hold-btn"
+                  @click="resolveSafetyHoldAlert(props.row.alertId)"
+                />
                 <span v-else class="text-meta">{{ t('admin.moderation.noInlineAction') }}</span>
               </q-td>
             </template>
@@ -359,6 +370,7 @@ const typeLabels = computed(() => ({
   MODERATION_UNRESOLVED: t('admin.moderation.types.MODERATION_UNRESOLVED'),
   GDPR_ERASURE_DEADLINE: t('admin.moderation.types.GDPR_ERASURE_DEADLINE'),
   SUBSCRIPTION_ORPHANED: t('admin.moderation.types.SUBSCRIPTION_ORPHANED'),
+  SAFETY_HOLD_BOOKING: t('admin.moderation.types.SAFETY_HOLD_BOOKING'),
 }))
 
 const typeOptions = computed(() => [
@@ -375,6 +387,7 @@ const summaryBuckets = computed(() => [
   { key: 'disputes', label: typeLabels.value.DISPUTE_RAISED },
   { key: 'gdprErasureDeadlines', label: typeLabels.value.GDPR_ERASURE_DEADLINE },
   { key: 'subscriptionOrphaned', label: typeLabels.value.SUBSCRIPTION_ORPHANED },
+  { key: 'safetyHoldBookings', label: typeLabels.value.SAFETY_HOLD_BOOKING },
   { key: 'total', label: t('admin.moderation.totalOpen') },
 ])
 
@@ -416,6 +429,23 @@ onMounted(() => {
   loadSummary()
   loadQueue()
 })
+
+const resolvingAlertId = ref(null)
+
+// C2: the urgent safety-hold booking alert has no workflow of its own — the admin contacts the
+// parent (named in the summary) and marks it handled here.
+async function resolveSafetyHoldAlert(alertId) {
+  resolvingAlertId.value = alertId
+  try {
+    await adminApi.resolveSafetyHoldAlert(alertId)
+    $q.notify({ message: t('admin.moderation.markHandledSuccess'), type: 'positive' })
+  } catch {
+    $q.notify({ message: t('admin.moderation.markHandledFailed'), type: 'negative' })
+  } finally {
+    resolvingAlertId.value = null
+  }
+  await Promise.all([loadSummary(), loadQueue()])
+}
 
 async function loadSummary() {
   try {

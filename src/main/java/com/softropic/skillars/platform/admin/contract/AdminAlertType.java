@@ -11,5 +11,10 @@ public enum AdminAlertType {
     // skillars-deferred-134 AC2: also raised via the identical underlying condition detected from an
     // invoice.payment_failed event (StripeWebhookService.maybeAlertOrphanedInvoicePaymentFailed) — the
     // same alert type covers both trigger paths, not a second type.
-    SUBSCRIPTION_ORPHANED
+    SUBSCRIPTION_ORPHANED,
+    // C2 (V185): URGENT. A coach child-safety hold could not cancel this booking server-side — the
+    // session is live (IN_PROGRESS / PAUSED) or its payment capture was in flight (PAYMENT_IN_FLIGHT,
+    // in `reason`). referenceId is the booking id (reference_type BOOKING); the queue summary names the
+    // parent to contact. Raised by AdminCoachEnforcementService.suspendCoachForSafetyHold.
+    SAFETY_HOLD_BOOKING
 }

@@ -18,6 +18,8 @@ import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.CoachPlanNoteResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
 import com.softropic.skillars.platform.booking.contract.CoachInboxResponse;
+import com.softropic.skillars.platform.booking.contract.AdminBookingCancellationOutcome;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
@@ -206,35 +208,111 @@ public class BookingService {
     }
 
     /**
-     * B2: admin-side cancellation of a still-{@code REQUESTED} booking (coach suspension). Goes
-     * through the state machine ({@code CANCEL_ADMIN}: REQUESTED to CANCELLED, ADMIN actor) so a
-     * {@link BookingStatusChangedEvent} is published — batch roll-up, SSE and the session-plan
-     * listeners all key off it. {@code AdminCoachEnforcementService.suspendCoach} used to write
-     * {@code CANCELLED} straight onto the entity and none of them ever heard about it.
+     * Statuses {@code CANCEL_ADMIN} leaves from — every pre-session status (C2, DECISIONS.md item 2).
+     * Kept in step with {@code BookingStateMachine}; IN_PROGRESS / PAUSED are deliberately absent.
+     */
+    public static final List<String> ADMIN_CANCELLABLE_STATUSES = List.of(
+        BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(), BookingStatus.PAYMENT_PENDING.name(),
+        BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
+
+    /** A session that is happening right now — reported, never cancelled ({@link AdminBookingCancellationOutcome#LIVE_SESSION}). */
+    public static final List<String> LIVE_SESSION_STATUSES = List.of(
+        BookingStatus.IN_PROGRESS.name(), BookingStatus.PAUSED.name());
+
+    /**
+     * Admin/system cancellation of a booking on the coach's side — a coach suspension or a child-safety
+     * hold (B2 for REQUESTED; C2 extends it to ACCEPTED / PAYMENT_PENDING / CONFIRMED / UPCOMING). Goes
+     * through the state machine ({@code CANCEL_ADMIN}, ADMIN actor) so a {@link BookingStatusChangedEvent}
+     * is published — batch roll-up, SSE and the session-plan listeners all key off it — and publishes
+     * {@link BookingCancelledByAdminEvent}, whose listeners refund the payer in full (no coach strike:
+     * {@code CancellationRefundService} issues none for this event) and send the parent a neutral
+     * "the coach is unavailable" notice.
      *
-     * <p>The status is re-read under the booking row lock. A booking that already left
-     * {@code REQUESTED} (a concurrent decline or expiry) is skipped and {@code false} returned rather
-     * than thrown: this method joins the caller's transaction, so a throw would mark the whole
-     * suspension rollback-only.
+     * <p>Everything is decided under the booking row lock, which the caller takes after the coach row
+     * lock (the accept paths' order). A refund is owed only when payment was captured
+     * ({@code CONFIRMED}/{@code UPCOMING}) — the same whitelist as {@link #cancelBookingAsParent}, so a
+     * pre-payment booking never mints a refund or restores a pack session that was never deducted.
+     * {@code PAYMENT_PENDING} with a {@code CAPTURE_PENDING} payment row is refused (a charge is in
+     * flight — cancelling on top of it is "captured but cancelled, no refund"). A capture that has not
+     * reserved yet is safe to cancel ahead of: {@code reserveCapture} and the pack/credit settle both
+     * re-check {@code PAYMENT_PENDING} under the same row lock, so they abort before taking money.
      *
-     * @return {@code true} if the booking was cancelled by this call
+     * <p>Never throws for a booking that simply is not cancellable (any more): this method joins the
+     * caller's transaction, so a throw would mark the whole suspension rollback-only. Lock contention
+     * still propagates ({@code PessimisticLockRetryer} exhaustion), rolling the suspension back as a
+     * retryable 409 — all-or-nothing.
+     *
+     * @param actorId the admin's user id, or {@code AdminActionLog.SYSTEM_ACTOR_ID} for a safety hold
      */
     @Transactional
-    public boolean cancelRequestedBookingAsAdmin(UUID bookingId, Long adminId, String cancelReason) {
-        TransitionContext ctx = new TransitionContext(ActorRole.ADMIN, adminId);
+    public AdminBookingCancellationOutcome cancelBookingAsAdmin(UUID bookingId, Long actorId, String cancelReason) {
+        TransitionContext ctx = new TransitionContext(ActorRole.ADMIN, actorId);
         validateActorAuthorization(BookingEvent.CANCEL_ADMIN, ctx);
         Booking booking = lockBookingForUpdate(bookingId);
-        if (!BookingStatus.REQUESTED.name().equals(booking.getStatus())) {
-            log.info("Booking {} is no longer REQUESTED (status={}) -- not cancelled by admin",
-                bookingId, booking.getStatus());
-            return false;
+        String status = booking.getStatus();
+        if (LIVE_SESSION_STATUSES.contains(status)) {
+            return AdminBookingCancellationOutcome.LIVE_SESSION;
         }
+        if (!ADMIN_CANCELLABLE_STATUSES.contains(status)) {
+            log.info("Booking {} is not admin-cancellable (status={}) -- left as is", bookingId, status);
+            return AdminBookingCancellationOutcome.NOT_CANCELLABLE;
+        }
+        if (BookingStatus.PAYMENT_PENDING.name().equals(status)
+                && bookingPaymentRepository.findById(bookingId)
+                       .filter(bp -> BookingPaymentStatus.CAPTURE_PENDING.equals(bp.getStatus())).isPresent()) {
+            return AdminBookingCancellationOutcome.PAYMENT_IN_PROGRESS;
+        }
+
+        boolean paymentCaptured = BookingStatus.CONFIRMED.name().equals(status)
+            || BookingStatus.UPCOMING.name().equals(status);
+        boolean packExpired = false;
+        if (paymentCaptured && booking.getSessionPackPurchaseId() != null) {
+            packExpired = sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(p -> p.getExpiresAt().isBefore(Instant.now()))
+                .orElse(false);
+        }
+        BigDecimal refundAmount = paymentCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
+        CoachProfile coach = coachProfileRepository.findById(booking.getCoachId()).orElse(null);
+        String coachDisplayName = coach != null ? coach.getDisplayName() : "";
+        String parentEmail = resolveEmail(booking.getParentId(), bookingId);
+
         transitionInternal(bookingId, BookingEvent.CANCEL_ADMIN, ctx, true);
         // After the transition, never before: transitionInternal refreshes this same managed instance,
         // which would discard an unflushed cancelReason.
         booking.setCancelReason(cancelReason);
         bookingRepository.save(booking);
-        return true;
+
+        eventPublisher.publishEvent(new BookingCancelledByAdminEvent(
+            this, bookingId, booking.getParentId(), booking.getCoachId(), booking.getSessionPackPurchaseId(),
+            refundAmount, paymentCaptured, packExpired, parentEmail, coachDisplayName,
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone()));
+        return AdminBookingCancellationOutcome.CANCELLED;
+    }
+
+    /**
+     * What the payer actually paid for a captured booking — the full-refund amount. A card/credit
+     * booking's {@code booking_payments} row records the credit debited plus the Stripe charge; the
+     * coach's current price is only a fallback for a row-less legacy booking (and is wrong once the
+     * coach has re-priced, which is why it is not the primary source). A pack booking refunds the
+     * pack's per-session price (its row records zero — the pack was charged at purchase).
+     */
+    private BigDecimal resolveAmountPaid(Booking booking) {
+        if (booking.getSessionPackPurchaseId() == null) {
+            BigDecimal paid = bookingPaymentRepository.findById(booking.getId())
+                .filter(bp -> BookingPaymentStatus.CAPTURED.equals(bp.getStatus()))
+                .map(bp -> bp.getCreditDebited().add(bp.getStripeCharged()))
+                .orElse(null);
+            if (paid != null && paid.signum() > 0) {
+                return paid;
+            }
+        }
+        try {
+            return resolveSessionPrice(booking);
+        } catch (ResourceNotFoundException e) {
+            log.error("[ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN] bookingId={} — no payment row and no price; "
+                + "refund recorded as 0, reconcile by hand", booking.getId());
+            return BigDecimal.ZERO;
+        }
     }
 
     @Transactional
@@ -482,9 +560,9 @@ public class BookingService {
             // required, not defensive — this row is already managed from the findByUserId above, so the
             // JPQL locked read returns that instance without overwriting its in-memory state and the
             // check could never fire. Identical reasoning to createBookingRequest:203-207. Note the
-            // second-order effect this closes: suspendCoach only cancels REQUESTED bookings, so a
-            // booking accepted inside its window moves to PAYMENT_PENDING and survives with a
-            // suspended coach, invisible to that sweep.
+            // second-order effect this closes: a booking accepted inside suspendCoach's window would
+            // move to PAYMENT_PENDING after its sweep had already read the coach's bookings, and
+            // survive with a suspended coach.
             entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
             return c;
         });
