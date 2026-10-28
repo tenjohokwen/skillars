@@ -40,8 +40,12 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  * <p>No {@code @SchedulerLock}, deliberately: each instance must write its OWN heartbeat — a
  * cluster-wide lock would let one instance's beat suppress the other's, the very signal this job
  * exists to produce. Per-node work like this is the documented exception (cookbook recipe 5).
- * A graceful shutdown deletes this instance's row so a normal rolling deploy only warns for the
- * overlap itself; rows from crashed instances age out of the live window and are pruned after a day.
+ * A graceful shutdown deletes this instance's row (and stops further beats, so an in-flight beat
+ * cannot re-create it) so a normal rolling deploy only warns for the overlap itself. After a crash
+ * (OOM kill, SIGKILL) a restarted container keeps its hostname: the first beat deletes that host's
+ * earlier incarnations so they are not reported as a live peer. (Two real instances sharing one
+ * hostname, e.g. host networking, still warn — one beat later, once the other re-upserts.) Other
+ * rows from crashed instances age out of the live window and are pruned after a day.
  */
 @Slf4j
 @Component
@@ -51,6 +55,10 @@ public class InstanceHeartbeatMonitor {
         "INSERT INTO main.app_instance_heartbeat (instance_id, hostname, started_at, last_seen_at) "
             + "VALUES (?, ?, now(), now()) "
             + "ON CONFLICT (instance_id) DO UPDATE SET last_seen_at = now()";
+    private static final String FORGET_EARLIER_INCARNATIONS_SQL =
+        "DELETE FROM main.app_instance_heartbeat WHERE hostname = ? AND instance_id <> ?";
+    /** Rows older than a day only accumulate after crashes; pruning once per this many beats is plenty. */
+    private static final long PRUNE_EVERY_N_BEATS = 60;
     private static final String PRUNE_SQL =
         "DELETE FROM main.app_instance_heartbeat WHERE last_seen_at < now() - interval '1 day'";
     private static final String LIVE_PEERS_SQL =
@@ -64,6 +72,10 @@ public class InstanceHeartbeatMonitor {
     private final String hostname = resolveHostname();
     private final long liveWindowSeconds;
     private final AtomicInteger liveInstances = new AtomicInteger(1);
+    // Guarded by `this`: checkForPeers and deregister are synchronized, so deregister waits for an
+    // in-flight beat and no beat runs after it.
+    private long beats;
+    private boolean stopped;
 
     public InstanceHeartbeatMonitor(JdbcTemplate jdbcTemplate,
                                     TransactionTemplate transactionTemplate,
@@ -97,10 +109,19 @@ public class InstanceHeartbeatMonitor {
      * Records this instance's heartbeat, prunes long-dead rows, and returns the hostnames of the other
      * instances seen within the live window — logging a WARN when there is any.
      */
-    public List<String> checkForPeers() {
+    public synchronized List<String> checkForPeers() {
+        if (stopped) {
+            return List.of();
+        }
+        final long beat = beats++;
         List<String> peers = transactionTemplate.execute(status -> {
             jdbcTemplate.update(UPSERT_SQL, instanceId, hostname);
-            jdbcTemplate.update(PRUNE_SQL);
+            if (beat == 0) {
+                jdbcTemplate.update(FORGET_EARLIER_INCARNATIONS_SQL, hostname, instanceId);
+            }
+            if (beat % PRUNE_EVERY_N_BEATS == 0) {
+                jdbcTemplate.update(PRUNE_SQL);
+            }
             return jdbcTemplate.queryForList(LIVE_PEERS_SQL, String.class, instanceId, liveWindowSeconds);
         });
         List<String> livePeers = peers == null ? List.of() : peers;
@@ -119,7 +140,8 @@ public class InstanceHeartbeatMonitor {
 
     /** Graceful shutdown: remove this instance's row so the next instance does not see a phantom peer. */
     @PreDestroy
-    public void deregister() {
+    public synchronized void deregister() {
+        stopped = true;
         try {
             transactionTemplate.executeWithoutResult(status ->
                 jdbcTemplate.update("DELETE FROM main.app_instance_heartbeat WHERE instance_id = ?", instanceId));
@@ -131,6 +153,10 @@ public class InstanceHeartbeatMonitor {
 
     String instanceId() {
         return instanceId;
+    }
+
+    String hostname() {
+        return hostname;
     }
 
     private static String resolveHostname() {

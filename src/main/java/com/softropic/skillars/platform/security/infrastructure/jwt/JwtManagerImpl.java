@@ -1,9 +1,6 @@
 package com.softropic.skillars.platform.security.infrastructure.jwt;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
-import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.service.LoginTokenManager;
 import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -11,22 +8,15 @@ import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDataException;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
-import com.softropic.skillars.platform.security.contract.SkillarsRole;
-import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.*;
 import static com.softropic.skillars.infrastructure.security.SecurityError.*;
@@ -38,16 +28,13 @@ public class JwtManagerImpl implements LoginTokenManager {
     private final TokenCreator tokenCreator;
     private final TokenValidator tokenValidator;
     private final ClaimsExtractor claimsExtractor;
-    private final JwtConfiguration jwtConfiguration;
 
     public JwtManagerImpl(TokenCreator tokenCreator,
                           TokenValidator tokenValidator,
-                          ClaimsExtractor claimsExtractor,
-                          JwtConfiguration jwtConfiguration) {
+                          ClaimsExtractor claimsExtractor) {
         this.tokenCreator = tokenCreator;
         this.tokenValidator = tokenValidator;
         this.claimsExtractor = claimsExtractor;
-        this.jwtConfiguration = jwtConfiguration;
     }
 
     @Override

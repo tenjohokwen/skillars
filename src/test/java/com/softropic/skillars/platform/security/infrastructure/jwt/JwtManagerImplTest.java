@@ -133,7 +133,7 @@ public class JwtManagerImplTest {
         TokenValidator tokenValidator = new TokenValidatorImpl(claimsExtractor);
 
         // Instantiate JwtManagerImpl with its dependencies
-        jwtManager = new JwtManagerImpl(tokenCreator, tokenValidator, claimsExtractor, jwtConfiguration);
+        jwtManager = new JwtManagerImpl(tokenCreator, tokenValidator, claimsExtractor);
 
         TestClockProvider.setSystemClock();
     }

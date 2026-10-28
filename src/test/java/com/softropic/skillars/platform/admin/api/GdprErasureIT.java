@@ -1070,8 +1070,8 @@ class GdprErasureIT extends AbstractIntegrationTest {
         verify(fileStorageService, never()).deleteRawBytes(otherLogoKey);
     }
 
-    /** A branding row whose key is not a branding-slot upload (e.g. an unchanged server-written key) is
-     *  removed with the coach's erasure, but the foreign blob it points at is not deleted. */
+    /** A branding row whose key is not one of the coach's own uploads (e.g. an unchanged server-written
+     *  key) is removed with the coach's erasure, but the foreign blob it points at is not deleted. */
     @Test
     void erase_coachUser_brandingRowWithForeignKey_isRemovedWithoutDeletingThatBlob() {
         String foreignKey = "performance_report/" + UUID.randomUUID() + ".pdf";

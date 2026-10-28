@@ -79,8 +79,9 @@ The budget and window come from `platform_config`: `security.login.max-attempts`
 `security.login.lock-window-minutes` (default 15). Each attempt claims its (login, IP) key with a
 transaction-scoped Postgres advisory try-lock (`pg_try_advisory_xact_lock`), so a parallel burst of
 wrong passwords cannot all pass the count before any of them is recorded: at most the budget is ever
-recorded (`401`); an attempt over budget, or one that finds another attempt for the same key still in
-flight, gets `429` with `Retry-After` (1 s in the in-flight case) without being counted. There is deliberately no account-wide (all
+recorded (`401`). An attempt that finds another one for the same key in flight re-tries the lock for
+up to 2 s (an ordinary overlap just waits); an attempt over budget, or one whose key stays busy for
+the whole wait, gets `429` with `Retry-After` without being counted. There is deliberately no account-wide (all
 IPs) cap, so a stranger cannot lock a real user out. An admin clears the counter with
 `POST /api/admin/users/{id}/unlock-login`. `POST /api/auth/login` is the only password entry point:
 the legacy `POST /authenticate` → `POST /otp` email-2FA filters and Spring's default form login

@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HexFormat;
@@ -31,10 +32,11 @@ import lombok.RequiredArgsConstructor;
  * before counting, and must run inside the caller's transaction ({@code MANDATORY}) so the lock is
  * held until the caller has recorded (and committed) its own failure. Without it, N parallel wrong
  * passwords all read a count below the budget and then all insert — the budget was exceeded by the
- * degree of parallelism. The lock is a TRY lock: an attempt that finds another attempt for the same
- * (login, ip) in flight is refused as rate limited (429, retry after 1s) rather than queued, so a
- * burst cannot park pooled connections behind the lock. A real user never sends two concurrent
- * logins from one IP (the login form disables its button while submitting).
+ * degree of parallelism. The lock is a TRY lock re-tried for a bounded {@link #CLAIM_WAIT}: an
+ * ordinary overlap (two tabs, a client retry) just waits for the other attempt's bcrypt check and
+ * transaction to finish, while a sustained burst on one key gives up after that bound and is refused
+ * as rate limited (429, retry after 1s) — so a burst cannot park pooled connections behind the lock
+ * for longer than the bound. A blocking {@code pg_advisory_xact_lock} would have no such bound.
  */
 @Service
 @RequiredArgsConstructor
@@ -43,16 +45,20 @@ public class LoginRateLimiter {
     private final LoginAttemptRepository loginAttemptRepository;
     private final ConfigService configService;
 
-    /** Retry-After for an attempt refused because another attempt for the same (login, ip) was in flight. */
+    /** Retry-After for an attempt refused because the (login, ip) key stayed busy for the whole {@link #CLAIM_WAIT}. */
     static final long CONCURRENT_ATTEMPT_RETRY_AFTER_SECONDS = 1L;
+    /** How long an attempt keeps re-trying the key's try-lock (one bcrypt check plus commit is ~0.1-0.2s). */
+    static final Duration CLAIM_WAIT = Duration.ofSeconds(2);
+    private static final long CLAIM_RETRY_SLEEP_MS = 50L;
 
     /** A (login, ip) pair that has used up its failed-attempt budget for the current window. */
     public record Limited(long recentAttempts, long retryAfterSeconds) {}
 
     /**
-     * Claims this (login, ip) pair for the caller's transaction, then reports whether the pair has used
-     * up its budget. When another attempt for the pair is still in flight the claim fails and this
-     * attempt is reported as limited (retry after 1s) without being counted.
+     * Claims this (login, ip) pair for the caller's transaction (waiting up to {@link #CLAIM_WAIT} for
+     * an in-flight attempt on the same pair), then reports whether the pair has used up its budget.
+     * If the pair stays busy for the whole wait, this attempt is reported as limited (retry after 1s)
+     * without being counted.
      *
      * @return the limit state when this (login, ip) pair has used up its failed-attempt budget for
      *         the current window (or is busy), or empty when an attempt is allowed
@@ -62,7 +68,7 @@ public class LoginRateLimiter {
         int maxAttempts = maxAttempts();
         int lockWindowMin = lockWindowMinutes();
         String identifier = identifier(login, clientIp);
-        boolean claimed = loginAttemptRepository.tryAcquireIdentifierLock(identifier);
+        boolean claimed = claim(identifier);
         Instant now = Instant.now(ClockProvider.getClock());
         long recentAttempts = loginAttemptRepository
             .countByIdentifierAndAttemptedAtAfter(identifier, now.minus(lockWindowMin, ChronoUnit.MINUTES));
@@ -81,6 +87,24 @@ public class LoginRateLimiter {
                 now, a.getAttemptedAt().plus(lockWindowMin, ChronoUnit.MINUTES))))
             .orElse((long) lockWindowMin * 60);
         return Optional.of(new Limited(recentAttempts, retryAfterSeconds));
+    }
+
+    private boolean claim(String identifier) {
+        long deadline = System.nanoTime() + CLAIM_WAIT.toNanos();
+        while (true) {
+            if (loginAttemptRepository.tryAcquireIdentifierLock(identifier)) {
+                return true;
+            }
+            if (System.nanoTime() >= deadline) {
+                return false;
+            }
+            try {
+                Thread.sleep(CLAIM_RETRY_SLEEP_MS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
     }
 
     /**

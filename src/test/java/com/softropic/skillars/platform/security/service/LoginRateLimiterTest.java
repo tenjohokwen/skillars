@@ -78,7 +78,16 @@ class LoginRateLimiterTest {
     }
 
     @Test
-    void anotherAttemptInFlightForTheSameKey_isLimitedWithoutWaiting() {
+    void aBriefOverlapOnTheSameKey_waitsForTheLockInsteadOfRefusing() {
+        when(repository.tryAcquireIdentifierLock(anyString())).thenReturn(false, false, true);
+        when(repository.countByIdentifierAndAttemptedAtAfter(anyString(), any())).thenReturn(0L);
+
+        assertThat(limiter.checkLimited("a@b.com", "1.2.3.4")).isEmpty();
+        verify(repository, times(3)).tryAcquireIdentifierLock(anyString());
+    }
+
+    @Test
+    void aKeyBusyForTheWholeBoundedWait_isLimited() {
         when(repository.tryAcquireIdentifierLock(anyString())).thenReturn(false);
         when(repository.countByIdentifierAndAttemptedAtAfter(anyString(), any())).thenReturn(1L);
 

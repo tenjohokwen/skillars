@@ -2,7 +2,8 @@ package com.softropic.skillars.infrastructure.persistence;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 
-import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -15,14 +16,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * DECISIONS item 4: a second application instance against the same database must be detected (WARN +
  * {@code skillars.app.instances.live} gauge). Scheduling is off under the test profile, so the beat is
- * driven directly through {@link InstanceHeartbeatMonitor#checkForPeers()}.
+ * driven directly. Each test builds its own monitor (a fresh "JVM start": new instance id, beat counter
+ * at zero) on the context's real JdbcTemplate/TransactionTemplate, so the shared context bean's state
+ * never leaks between tests.
  */
 class InstanceHeartbeatMonitorIT extends AbstractIntegrationTest {
 
-    @Autowired private InstanceHeartbeatMonitor monitor;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
-    @Autowired private MeterRegistry meterRegistry;
+
+    private SimpleMeterRegistry meterRegistry;
+    private InstanceHeartbeatMonitor monitor;
+
+    @BeforeEach
+    void setUp() {
+        meterRegistry = new SimpleMeterRegistry();
+        monitor = newMonitor(meterRegistry);
+    }
 
     @Test
     void singleInstance_recordsItsOwnHeartbeat_andSeesNoPeers() {
@@ -44,6 +54,21 @@ class InstanceHeartbeatMonitorIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void aCrashedEarlierIncarnationOnThisHost_isForgottenOnTheFirstBeat_notReportedAsAPeer() {
+        // OOM kill / SIGKILL: @PreDestroy never ran, the row is still fresh, and the restarted
+        // container keeps its hostname.
+        transactionTemplate.executeWithoutResult(status -> jdbcTemplate.update(
+            "INSERT INTO main.app_instance_heartbeat (instance_id, hostname, started_at, last_seen_at) "
+                + "VALUES ('previous-run', ?, now() - interval '1 hour', now() - interval '30 seconds')",
+            monitor.hostname()));
+
+        assertThat(monitor.checkForPeers()).isEmpty();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.app_instance_heartbeat WHERE instance_id = 'previous-run'", Integer.class))
+            .isZero();
+    }
+
+    @Test
     void stalePeers_areIgnored_andRowsOlderThanADayArePruned() {
         commit("INSERT INTO main.app_instance_heartbeat (instance_id, hostname, started_at, last_seen_at) "
             + "VALUES ('crashed-recently', 'old-host', now() - interval '2 hours', now() - interval '1 hour')");
@@ -59,15 +84,20 @@ class InstanceHeartbeatMonitorIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void deregister_removesOnlyThisInstancesRow() {
+    void deregister_removesOnlyThisInstancesRow_andNoLaterBeatRecreatesIt() {
         monitor.checkForPeers();
         commit("INSERT INTO main.app_instance_heartbeat (instance_id, hostname, started_at, last_seen_at) "
-            + "VALUES ('peer-2', 'other-host', now(), now())");
+            + "VALUES ('peer-3', 'other-host', now(), now())");
 
         monitor.deregister();
+        monitor.checkForPeers();
 
         assertThat(jdbcTemplate.queryForList("SELECT instance_id FROM main.app_instance_heartbeat", String.class))
-            .containsExactly("peer-2");
+            .containsExactly("peer-3");
+    }
+
+    private InstanceHeartbeatMonitor newMonitor(SimpleMeterRegistry registry) {
+        return new InstanceHeartbeatMonitor(jdbcTemplate, transactionTemplate, registry, 60_000L);
     }
 
     private double liveGauge() {

@@ -975,4 +975,18 @@ class GdprErasureServiceTest {
         when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
         return request;
     }
+
+    @Test
+    void coachOwnUploadKey_matchesOnlyThisUsersCoachSlots() {
+        // saveBranding accepts any upload the coach owns as a logo, so a logo reusing a gallery or
+        // photo upload must still be erased; another user's key, a server-written key and a legacy
+        // URL must not.
+        assertThat(GdprErasureService.isCoachOwnUploadKey("coach_branding/42/2026/10/a.png", 42L)).isTrue();
+        assertThat(GdprErasureService.isCoachOwnUploadKey("coach_gallery/42/2026/10/a.png", 42L)).isTrue();
+        assertThat(GdprErasureService.isCoachOwnUploadKey("coach_profile/42/2026/10/a.png", 42L)).isTrue();
+        assertThat(GdprErasureService.isCoachOwnUploadKey("coach_profile/421/2026/10/a.png", 42L)).isFalse();
+        assertThat(GdprErasureService.isCoachOwnUploadKey("performance_report/x.pdf", 42L)).isFalse();
+        assertThat(GdprErasureService.isCoachOwnUploadKey("https://cdn.example.com/a.png", 42L)).isFalse();
+        assertThat(GdprErasureService.isCoachOwnUploadKey(null, 42L)).isFalse();
+    }
 }

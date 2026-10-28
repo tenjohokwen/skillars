@@ -17,7 +17,11 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.boot.web.client.RestTemplateBuilder;
+import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.web.client.RestTemplate;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
@@ -979,12 +983,17 @@ class AuthResourceIT extends AbstractIntegrationTest {
         // LoginRateLimiter.checkLimited claims a transaction-scoped advisory try-lock per
         // SHA-256(email|ip). Before that, every request in a parallel burst read a count below the
         // budget and then inserted its own failure, so the budget was exceeded by the degree of
-        // parallelism. Now each attempt either holds the key (and is counted: 401) or is turned away
-        // (429) without being recorded — whether because the budget is used up or because another
-        // attempt for the key was in flight. Follow-up sequential attempts then fill the budget
-        // exactly, never beyond it.
+        // parallelism. Now each attempt holds the key while it counts and records (401), waits a
+        // bounded time for a busy key, or is turned away (429) without being recorded — because the
+        // budget is used up or the key stayed busy. Follow-up sequential attempts then fill the
+        // budget exactly, never beyond it.
         long maxAttempts = configService.find("security.login.max-attempts").map(Long::parseLong).orElse(5L);
         int burst = (int) maxAttempts * 3;
+        // Its own JDK-connection RestTemplate: a burst through the shared pooled Apache client
+        // (5 connections per route) can starve that pool for later tests.
+        RestTemplate client = new RestTemplateBuilder()
+            .requestFactory(SimpleClientHttpRequestFactory.class)
+            .build();
         ExecutorService pool = Executors.newFixedThreadPool(burst);
         CountDownLatch start = new CountDownLatch(1);
         try {
@@ -993,10 +1002,7 @@ class AuthResourceIT extends AbstractIntegrationTest {
                 results.add(pool.submit(() -> {
                     start.await();
                     try {
-                        return httpTestClient.makeHttpRequest(
-                            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
-                            Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"),
-                            clientHeaders(), Map.class).getStatusCode();
+                        return wrongPasswordAttempt(client);
                     } catch (HttpClientErrorException e) {
                         return e.getStatusCode();
                     }
@@ -1017,8 +1023,7 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
             for (int i = 0; i < maxAttempts; i++) {
                 try {
-                    httpTestClient.makeHttpRequest(baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
-                        Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders(), Map.class);
+                    wrongPasswordAttempt(client);
                 } catch (HttpClientErrorException expected) {
                     // 401 until the budget is used up, then 429
                 }
@@ -1027,6 +1032,12 @@ class AuthResourceIT extends AbstractIntegrationTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    private HttpStatusCode wrongPasswordAttempt(RestTemplate client) {
+        return client.exchange(baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            new HttpEntity<>(Map.of("email", COACH_EMAIL, "password", "wrongPassword123!"), clientHeaders()),
+            Map.class).getStatusCode();
     }
 
     private long loginAttemptCountFor(String email) {

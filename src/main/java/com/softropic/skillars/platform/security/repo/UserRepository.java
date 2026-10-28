@@ -101,10 +101,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Modifying
     void changeAccountLockStatus(boolean locked, String username);
 
-    @Query("update User  set otpEnabled = true where login = ?1")
-    @Modifying
-    void enableOtp(String username);
-
     /**
      * skillars-deferred-122 AC9: an explicit @Modifying @Query update, not a setter call against a
      * detached entity. {@code UserAdminService.removeNotActivatedUsers} runs with

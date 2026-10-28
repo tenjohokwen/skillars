@@ -123,9 +123,18 @@ public class GdprErasureService {
     // The coach's report-branding logo (development.coach_branding.logo_key).
     private final CoachBrandingRepository coachBrandingRepository;
 
-    /** Storage-key prefixes StorageKeyGenerator issues for the coach photo and branding-logo upload slots. */
-    static final String COACH_PHOTO_KEY_PREFIX = "coach_profile/";
-    static final String COACH_BRANDING_KEY_PREFIX = "coach_branding/";
+    /**
+     * The owner-bound upload slots (FileStorageService.OWNER_BOUND_ENTITIES) a coach's own images live
+     * under, as {@code <slot>/<userId>/...} keys from StorageKeyGenerator. saveBranding accepts any
+     * upload the coach owns as a logo (not only a coach_branding/ one), so the photo/logo keys are
+     * matched against all three slots for THIS user.
+     */
+    static final List<String> COACH_UPLOAD_SLOTS = List.of("coach_profile/", "coach_branding/", "coach_gallery/");
+
+    /** True for a key under one of this user's own coach upload slots (never a legacy URL or a server-written key). */
+    static boolean isCoachOwnUploadKey(String key, Long userId) {
+        return key != null && COACH_UPLOAD_SLOTS.stream().anyMatch(slot -> key.startsWith(slot + userId + "/"));
+    }
 
     /**
      * Self-reference so {@link #erase}'s pre-transaction connection-pool check (skillars-deferred-132
@@ -430,12 +439,12 @@ public class GdprErasureService {
             // REQUIRES_NEW recap scrub below, whose first statement (markRecapDataErased) locks the
             // same row. Residual, accepted: a new photo confirmed in the milliseconds between this
             // read and the commit is unlinked by the full-row save but its blob is not enqueued.
-            // Only keys this app generated for the photo slot are deleted — a legacy absolute URL
-            // has no blob of ours behind it.
+            // Only the coach's own upload keys are deleted — a legacy absolute URL has no blob of ours
+            // behind it.
             String photoKey = cp.getPhotoUrl();
             cp.setPhotoUrl(null);
             coachProfileRepository.save(cp);
-            if (photoKey != null && photoKey.startsWith(COACH_PHOTO_KEY_PREFIX)) {
+            if (isCoachOwnUploadKey(photoKey, userId)) {
                 blobDeletionOutboxSupport.enqueue(List.of(photoKey));
             }
 
@@ -610,10 +619,11 @@ public class GdprErasureService {
             // pending coach_profiles UPDATE (save(cp) above), and that row lock, held until this
             // outer transaction commits, would block markRecapDataErased into its lock_timeout.
             // DELETE ... RETURNING removes the row and reports the exact key it held in one
-            // statement. Only keys generated for the branding slot are deleted: saveBranding also
-            // accepts an unchanged server-written key (e.g. a report PDF), which is not ours to drop.
+            // statement. Only the coach's own uploads are deleted (any of their three slots — see
+            // COACH_UPLOAD_SLOTS): saveBranding also accepts an unchanged server-written key (e.g. a
+            // report PDF), which is not ours to drop.
             List<String> logoKeys = coachBrandingRepository.deleteByCoachIdReturningLogoKey(cp.getId()).stream()
-                .filter(k -> k != null && k.startsWith(COACH_BRANDING_KEY_PREFIX))
+                .filter(k -> isCoachOwnUploadKey(k, userId))
                 .toList();
             blobDeletionOutboxSupport.enqueue(logoKeys);
         });

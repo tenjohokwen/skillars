@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 // skillars-deferred-149 AC3: instanceFrom's credentialsNonExpired previously hardcoded true, then
 // (code review 2026-10-08) was briefly bound to securitySessionInvalidatedAt == null -- reverted
 // to hardcoded true after that binding re-armed a stolen JWT on the victim's own next login and
-// separately locked the still-live /authenticate endpoint out of a flagged account. The real
+// separately locked the since-removed /authenticate endpoint out of a flagged account. The real
 // per-JWT revocation check now lives in JWTAuthorizationFilter.assertSessionNotRevoked, which
 // reads securitySessionInvalidatedAt off this class's own new getter instead.
 class PrincipalTest {
