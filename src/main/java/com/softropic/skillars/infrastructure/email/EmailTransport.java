@@ -6,7 +6,7 @@ package com.softropic.skillars.infrastructure.email;
  *
  * <ul>
  *   <li>{@link #SES} — {@code infrastructure.ses.SesEmailSender} (the {@code prod} profile);</li>
- *   <li>{@link #SMTP} — {@code infrastructure.email.smtp.SmtpEmailSender} (the {@code uat}
+ *   <li>{@link #SMTP} — the SMTP sender in {@code infrastructure.email.smtp} (the {@code uat}
  *       profile; story ses-1.2 made it a working transport);</li>
  *   <li>{@link #LOG} — {@code infrastructure.email.log.LoggingEmailSender} (the base default and
  *       {@code dev}).</li>
