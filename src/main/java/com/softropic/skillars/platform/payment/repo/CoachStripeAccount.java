@@ -39,6 +39,21 @@ public class CoachStripeAccount {
     @Column(name = "payouts_enabled", nullable = false)
     private boolean payoutsEnabled = false;
 
+    /**
+     * fix/payment-payouts-disputes-webhooks (V193): the {@code transfers} capability from the last
+     * applied {@code account.updated} ({@code active} / {@code inactive} / {@code pending}). A
+     * Transfer to the account needs it {@code active}; null until the first event after V193.
+     */
+    @Column(name = "transfers_capability", length = 20)
+    private String transfersCapability;
+
+    /**
+     * fix/payment-payouts-disputes-webhooks (V193): {@code created} of the last applied
+     * {@code account.updated}. Stripe does not deliver in order — an older event is ignored.
+     */
+    @Column(name = "last_event_created_at")
+    private Instant lastEventCreatedAt;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 

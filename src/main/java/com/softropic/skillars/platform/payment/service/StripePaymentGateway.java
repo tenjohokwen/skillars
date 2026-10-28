@@ -5,6 +5,7 @@ import com.stripe.exception.IdempotencyException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Charge;
 import com.stripe.model.PaymentIntent;
+import com.stripe.model.Transfer;
 import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.RefundCreateParams;
@@ -142,10 +143,26 @@ public class StripePaymentGateway implements PaymentGateway {
      * COACH_PAYOUT_TRANSFER outbox row replays the original transfer, never a second (AC5.3).
      * StripeExceptions are pre-classified (AC8.1) into {@link CoachPayoutTransferException} carrying
      * the retryable-vs-HOLD decision for the handler.
+     *
+     * <p>fix/payment-payouts-disputes-webhooks:
+     * <ul>
+     *   <li>an account that cannot receive a transfer is a non-retryable {@link CoachPayoutTransferException}
+     *       (HOLD), not a plain {@link PaymentGatewayException} the handler would re-drive forever;</li>
+     *   <li>Stripe keeps an idempotency key for 24h only, so a transfer already made for this
+     *       {@code transfer_group} (its DB commit failed, then kept failing past the key window) is
+     *       adopted instead of made again. Listed on every attempt: the payout row's own attempt count
+     *       rolls back with each failed attempt, so it cannot tell a retry apart.</li>
+     * </ul>
      */
     @Override
     public String transferToCoach(UUID transferGroupId, UUID coachId, BigDecimal netAmount, String currency) {
-        String coachStripeAccountId = resolveCoachStripeAccountId(coachId);
+        String coachStripeAccountId = resolveTransferDestination(coachId);
+        String existing = findExistingTransfer(transferGroupId, coachStripeAccountId);
+        if (existing != null) {
+            log.warn("Stripe transfer already exists for transferGroup={} coach={} — adopting transferId={} "
+                + "instead of creating another", transferGroupId, coachId, existing);
+            return existing;
+        }
         TransferCreateParams params = TransferCreateParams.builder()
             .setAmount(toCents(netAmount))
             .setCurrency(currency == null ? resolveCurrency() : currency.toLowerCase(Locale.ROOT))
@@ -160,25 +177,70 @@ public class StripePaymentGateway implements PaymentGateway {
                 transferGroupId, coachId, netAmount, transferId);
             return transferId;
         } catch (StripeException e) {
-            StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classify(e);
-            log.error("Stripe transfer failed: transferGroup={} coach={} retryable={} reason={} error={}",
-                transferGroupId, coachId, d.retryable(), d.reason(), e.getMessage());
-            throw new CoachPayoutTransferException("payment.coachTransferFailed", d.retryable(), d.reason(), e);
+            throw classifiedTransferFailure(transferGroupId, coachId, e);
         }
+    }
+
+    /** A transfer already made for this group to this destination, not fully reversed; null if none. */
+    private String findExistingTransfer(UUID transferGroupId, String destination) {
+        try {
+            return stripeClient.listTransfersByGroup(transferGroupId.toString()).stream()
+                .filter(t -> destination.equals(t.getDestination()))
+                .filter(t -> !Boolean.TRUE.equals(t.getReversed()))
+                .map(Transfer::getId)
+                .findFirst()
+                .orElse(null);
+        } catch (StripeException e) {
+            // Unknown whether one exists: do not create blind — retry (the key still dedupes inside 24h).
+            throw classifiedTransferFailure(transferGroupId, null, e);
+        }
+    }
+
+    private CoachPayoutTransferException classifiedTransferFailure(UUID transferGroupId, UUID coachId, StripeException e) {
+        StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classify(e);
+        log.error("Stripe transfer failed: transferGroup={} coach={} retryable={} reason={} error={}",
+            transferGroupId, coachId, d.retryable(), d.reason(), e.getMessage());
+        return new CoachPayoutTransferException("payment.coachTransferFailed", d.retryable(), d.reason(), e);
+    }
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: the connected account a transfer can go to. A transfer needs
+     * the account's {@code transfers} capability active — not {@code charges_enabled}, which is about the
+     * account taking its own charges. Before the first {@code account.updated} that reports the
+     * capability ({@code transfers_capability} null), falls back to onboarding COMPLETE with payouts
+     * enabled. Anything else is a non-retryable failure: HOLD until the coach fixes the account.
+     */
+    private String resolveTransferDestination(UUID coachId) {
+        CoachStripeAccount account = coachStripeAccountRepository.findById(coachId).orElse(null);
+        if (account == null || account.getStripeAccountId() == null) {
+            throw new CoachPayoutTransferException("payment.coachStripeNotConfigured", false, "NO_ACCOUNT",
+                new IllegalStateException("coach has no connected Stripe account"));
+        }
+        String capability = account.getTransfersCapability();
+        boolean usable = capability != null
+            ? "active".equalsIgnoreCase(capability)
+            : "COMPLETE".equals(account.getOnboardingStatus()) && account.isPayoutsEnabled();
+        if (!usable) {
+            throw new CoachPayoutTransferException("payment.coachStripeNotConfigured", false, "ACCOUNT_NOT_READY",
+                new IllegalStateException("onboarding=" + account.getOnboardingStatus() + " transfers="
+                    + capability + " payoutsEnabled=" + account.isPayoutsEnabled()));
+        }
+        return account.getStripeAccountId();
     }
 
     /**
      * skillars-deferred-106 AC5 / AC8.3: reverse (part of) a released transfer — the post-payout
-     * dispute path. Key {@code reversal-{stripeTransferId}}.
+     * dispute path. fix/payment-payouts-disputes-webhooks: the caller's key names one reversal.
      */
     @Override
-    public void reverseTransfer(String stripeTransferId, BigDecimal amount) {
+    public void reverseTransfer(String stripeTransferId, BigDecimal amount, String idempotencyKey) {
         TransferReversalCollectionCreateParams params = TransferReversalCollectionCreateParams.builder()
             .setAmount(toCents(amount))
             .build();
         try {
-            stripeClient.createTransferReversal(stripeTransferId, params, "reversal-" + stripeTransferId);
-            log.info("Stripe transfer reversal created: transferId={} amount={}", stripeTransferId, amount);
+            stripeClient.createTransferReversal(stripeTransferId, params, idempotencyKey);
+            log.info("Stripe transfer reversal created: transferId={} amount={} key={}", stripeTransferId, amount,
+                idempotencyKey);
         } catch (StripeException e) {
             StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classify(e);
             log.error("Stripe transfer reversal failed: transferId={} retryable={} reason={} error={}",

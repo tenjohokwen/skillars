@@ -1195,6 +1195,7 @@ export default {
       typeFilterLabel: "Type d'alerte",
       allTypes: 'Tous les types',
       totalOpen: 'Total ouvert',
+      paymentIntegrity: 'Intégrité des paiements',
       loadError: 'Impossible de charger la file de modération',
       emptyState: 'Aucune alerte ouverte',
       colType: 'Type',
@@ -1242,6 +1243,10 @@ export default {
         SAFETY_HOLD_BOOKING: 'Urgent : réservation sous suspension de sécurité',
         SUBSCRIPTION_ORPHANED: 'Abonnement orphelin',
         CASH_OUT_UNRESOLVED: 'Remboursement de retrait non confirmé',
+        CHARGEBACK: 'Litige carte (rétrofacturation)',
+        EXTERNAL_REFUND: "Remboursement effectué hors de l'application",
+        PAYOUT_HELD: 'Versement coach en attente',
+        PAYOUT_REVERSAL_FAILED: "Échec de l'annulation du versement coach",
       },
     },
     reviewModeration: {

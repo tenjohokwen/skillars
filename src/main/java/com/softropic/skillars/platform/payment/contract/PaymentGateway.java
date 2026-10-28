@@ -35,12 +35,13 @@ public interface PaymentGateway {
 
     /**
      * skillars-deferred-106 AC5.1: reverses (part of) a released coach transfer — the post-payout
-     * dispute path. Key {@code reversal-{stripeTransferId}}.
+     * dispute path. fix/payment-payouts-disputes-webhooks: {@code idempotencyKey} names one reversal
+     * ({@code reversal-{stripeTransferId}-{reversalId}}), so a transfer can be reversed in parts.
      *
      * @throws com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException
      *     pre-classified retryable-vs-REVERSAL_FAILED (AC8.3)
      */
-    void reverseTransfer(String stripeTransferId, BigDecimal amount);
+    void reverseTransfer(String stripeTransferId, BigDecimal amount, String idempotencyKey);
 
     /**
      * Refunds {@code amount} against the given Stripe PaymentIntent under the caller-supplied Stripe

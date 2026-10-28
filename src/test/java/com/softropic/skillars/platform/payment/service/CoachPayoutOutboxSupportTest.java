@@ -56,6 +56,8 @@ class CoachPayoutOutboxSupportTest {
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock PessimisticLockRetryer lockRetryer;
+    @Mock com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository chargeDisputeRepository;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private CoachPayoutOutboxSupport support;
     private final UUID bookingId = UUID.randomUUID();
@@ -65,7 +67,8 @@ class CoachPayoutOutboxSupportTest {
     void setUp() {
         support = new CoachPayoutOutboxSupport(coachPayoutRepository, bookingPaymentRepository, bookingRepository,
             sessionPackPurchaseRepository, coachPayoutFreezeRepository, lockRetryer,
-            coachStripeAccountRepository, outboxService, configService, new ObjectMapper());
+            coachStripeAccountRepository, outboxService, configService, new ObjectMapper(), chargeDisputeRepository,
+            eventPublisher);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
         lenient().when(bookingRepository.findById(any())).thenReturn(Optional.empty());
@@ -286,6 +289,52 @@ class CoachPayoutOutboxSupportTest {
         assertThat(row.getNetAmount()).isEqualByComparingTo("45.00");
         verify(outboxService, never()).enqueue(any(), any(), any());
         verify(outboxService, never()).enqueue(any(), any());
+    }
+
+    // fix/payment-payouts-disputes-webhooks: a dispute opened before completion freezes the payout from the start.
+    @Test
+    void openInAppDispute_payoutRecordedFrozenWithDisputeFlag_notEnqueued() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        when(coachPayoutRepository.existsOpenDisputeForBooking(bookingId)).thenReturn(true);
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        assertThat(row.isDisputeFrozen()).isTrue();
+        assertThat(row.getLastError()).isEqualTo(CoachPayoutAdjustmentService.REASON_DISPUTE_OPEN);
+        verify(outboxService, never()).enqueue(any(), any(), any());
+    }
+
+    @Test
+    void openCardDisputeOnTheFundingCharge_payoutRecordedFrozenWithChargebackFlag() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        when(chargeDisputeRepository.findFundingPaymentIntents(bookingId)).thenReturn(java.util.List.of("pi_1"));
+        when(chargeDisputeRepository.findStatusesByPaymentIntentIds(java.util.List.of("pi_1")))
+            .thenReturn(java.util.List.of(com.softropic.skillars.platform.payment.repo.ChargeDispute.STATUS_OPEN));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        assertThat(row.isChargebackFrozen()).isTrue();
+        verify(outboxService, never()).enqueue(any(), any(), any());
+    }
+
+    @Test
+    void lostCardDisputeOnTheFundingCharge_payoutRecordedHold_andAlerted() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        when(chargeDisputeRepository.findFundingPaymentIntents(bookingId)).thenReturn(java.util.List.of("pi_1"));
+        when(chargeDisputeRepository.findStatusesByPaymentIntentIds(java.util.List.of("pi_1")))
+            .thenReturn(java.util.List.of(com.softropic.skillars.platform.payment.repo.ChargeDispute.STATUS_LOST));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.HOLD);
+        assertThat(row.getLastError()).isEqualTo(CoachPayoutOutboxSupport.REASON_CHARGEBACK_LOST);
+        verify(eventPublisher).publishEvent(any(com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent.class));
+        verify(outboxService, never()).enqueue(any(), any(), any());
     }
 
     @Test

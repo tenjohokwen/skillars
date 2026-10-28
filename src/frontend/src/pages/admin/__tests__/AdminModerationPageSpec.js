@@ -16,6 +16,7 @@ vi.mock('src/api/admin.api', () => ({
     unblockConversation: vi.fn(),
     getReviewQueue: vi.fn(),
     resolveSafetyHoldAlert: vi.fn(),
+    resolvePaymentAlert: vi.fn(),
   },
 }))
 
@@ -39,6 +40,7 @@ const SUMMARY = {
   subscriptionOrphaned: 0,
   safetyHoldBookings: 0,
   cashOutUnresolved: 0,
+  paymentIntegrity: 0,
   total: 5,
 }
 
@@ -201,6 +203,46 @@ describe('AdminModerationPage.vue', () => {
     // Queue and summary are reloaded so the resolved alert drops out of both.
     expect(adminApi.getModerationQueue).toHaveBeenCalledTimes(2)
     expect(adminApi.getModerationSummary).toHaveBeenCalledTimes(2)
+  })
+
+  it('a held-payout alert links to its booking and can be marked handled', async () => {
+    const heldAlert = {
+      alertId: 'a7',
+      type: 'PAYOUT_HELD',
+      referenceId: 'b7',
+      referenceType: 'BOOKING',
+      status: 'OPEN',
+      createdAt: '2026-01-01T10:00:00Z',
+      summary: 'Coach payout for booking b7 is on HOLD',
+    }
+    const chargeback = {
+      alertId: 'a8',
+      type: 'CHARGEBACK',
+      referenceId: 'pi_1',
+      referenceType: 'PAYMENT_INTENT',
+      status: 'OPEN',
+      createdAt: '2026-01-01T10:00:00Z',
+      summary: 'Card dispute on payment pi_1',
+    }
+    adminApi.getModerationQueue.mockResolvedValue({
+      content: [heldAlert, chargeback],
+      totalPages: 1,
+    })
+    adminApi.resolvePaymentAlert.mockResolvedValue(undefined)
+    const wrapper = await mountPage()
+
+    expect(wrapper.findAll('[data-testid="alert-resolve-payment-btn"]')).toHaveLength(2)
+    // Only the payout alert references a booking.
+    const bookingLinks = wrapper.findAll('[data-testid="alert-open-payout-booking-btn"]')
+    expect(bookingLinks).toHaveLength(1)
+    expect(bookingLinks[0].attributes('href')).toContain('/admin/bookings?bookingId=b7')
+
+    await wrapper.vm.resolvePaymentAlert('a8')
+    await flushPromises()
+
+    expect(adminApi.resolvePaymentAlert).toHaveBeenCalledWith('a8')
+    expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+    expect(adminApi.getModerationQueue).toHaveBeenCalledTimes(2)
   })
 
   it('a review-flag alert switches to the reviews tab', async () => {

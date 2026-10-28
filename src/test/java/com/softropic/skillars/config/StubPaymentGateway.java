@@ -41,7 +41,7 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public void reverseTransfer(String stripeTransferId, BigDecimal amount) {
+    public void reverseTransfer(String stripeTransferId, BigDecimal amount, String idempotencyKey) {
         // no-op for tests
     }
 

@@ -240,10 +240,16 @@ if you want to test webhook-driven flows without touching UAT at all).
    **Developers → Webhooks → Add endpoint**
 2. Endpoint URL: `https://<DOMAIN>/api/payment/webhooks/stripe`
    (e.g. `https://uat.skillars.com/api/payment/webhooks/stripe`)
-3. Select the events this app handles — check
-   `StripeWebhookService`/`StripeWebhookResource` for the current list, or
-   select **all events** for a UAT box since correctness matters more than
-   noise here
+3. Select the events this app handles (`StripeWebhookService`), or select
+   **all events** for a UAT box since correctness matters more than noise here:
+   - `account.updated` — tick **Listen to events on Connected accounts** for
+     this one (it is a coach's connected account changing, not the platform's)
+   - `customer.subscription.updated`, `customer.subscription.deleted`,
+     `invoice.payment_failed`
+   - `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` —
+     card disputes freeze the coach payouts the charge funded; a refund made
+     in the Dashboard raises an admin alert. Without these a chargeback is
+     invisible to the app and the coach is paid anyway
 4. After creating the endpoint, click it and copy the **Signing secret**
    (`whsec_...`) — this is `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` in `.env.uat`
 

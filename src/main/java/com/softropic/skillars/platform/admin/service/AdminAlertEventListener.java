@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.messaging.contract.MessageReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessagesPurgedEvent;
 import com.softropic.skillars.platform.payment.contract.event.CashOutRefundResolvedEvent;
 import com.softropic.skillars.platform.payment.contract.event.CashOutRefundUnresolvedEvent;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.reviews.contract.ReviewFlaggedEvent;
@@ -206,6 +207,26 @@ public class AdminAlertEventListener {
                 log.info("CASH_OUT_UNRESOLVED alert for cash-out {} resolved automatically ({})",
                     event.getCashOutId(), event.getOutcome());
             });
+    }
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: chargebacks, refunds made outside the app, held payouts and
+     * failed reversals. AFTER_COMMIT (fallbackExecution: an outbox handler or webhook always has a
+     * transaction, but never lose the alert if one does not) + REQUIRES_NEW, like
+     * {@link #onCashOutRefundUnresolved}. One OPEN alert per (reference, type): a later event — a
+     * chargeback closing, a payout held again — refreshes the open alert's reason instead.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onPaymentIntegrityAlert(PaymentIntegrityAlertEvent event) {
+        AdminAlertType type = AdminAlertType.valueOf(event.getKind().name());
+        AdminAlertReferenceType referenceType = event.getReference() == PaymentIntegrityAlertEvent.Reference.BOOKING
+            ? AdminAlertReferenceType.BOOKING : AdminAlertReferenceType.PAYMENT_INTENT;
+        String reason = truncateReason(event.getReason());
+        if (adminAlertRepository.updateOpenAlertReason(event.getReferenceId(), type.name(), reason) > 0) {
+            return;
+        }
+        insertAlert(type, event.getReferenceId(), referenceType, reason);
     }
 
     private static String truncateReason(String reason) {

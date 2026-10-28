@@ -27,14 +27,13 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
-import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
-import com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport;
+import com.softropic.skillars.platform.payment.service.CoachPayoutAdjustmentService;
 import com.softropic.skillars.platform.payment.service.CreditWalletService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -51,7 +50,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -79,7 +77,7 @@ public class DisputeService {
     private final ConfigService configService;
     private final CreditWalletService creditWalletService;
     private final CoachPayoutRepository coachPayoutRepository;
-    private final CoachPayoutOutboxSupport coachPayoutOutboxSupport;
+    private final CoachPayoutAdjustmentService coachPayoutAdjustmentService;
     private final ApplicationEventPublisher eventPublisher;
     private final PlayerProfileRepository playerProfileRepository;
     private final AdminNotificationRecipientResolver recipientResolver;
@@ -151,6 +149,11 @@ public class DisputeService {
         dispute.setReason(reason);
         dispute.setDetails(details);
         disputeRepository.save(dispute);
+
+        // fix/payment-payouts-disputes-webhooks: the payout hold (48h) is shorter than the dispute window
+        // (14 days), so an open dispute must stop the release itself — freeze the not-yet-released payout
+        // under its row lock, in this transaction. Resolve/dismiss clears it.
+        coachPayoutAdjustmentService.freezeForDispute(bookingId);
 
         eventPublisher.publishEvent(
             new DisputeRaisedEvent(this, dispute.getId(), bookingId, raisedBy, reason));
@@ -288,11 +291,12 @@ public class DisputeService {
         }
 
         // skillars-deferred-106 AC10.2: reconcile the coach payout, in THIS transaction (resolveDispute
-        // is @Transactional). A dispute that returns money to the parent must also reach the coach:
-        //   - payout RELEASED  -> enqueue a COACH_PAYOUT_REVERSAL for the coach's proportional share
-        //   - payout PENDING_RELEASE / HOLD / FROZEN (dispute inside the 48h hold, or while a safety-hold
-        //     freeze stands) -> flip it CANCELLED here;
-        //     the pending COACH_PAYOUT_TRANSFER outbox row is LEFT in place and no-ops on next drain
+        // is @Transactional). A dispute that returns money to the parent must also reach the coach, by the
+        // coach's proportional share — the same outcome whenever it lands
+        // (fix/payment-payouts-disputes-webhooks):
+        //   - payout RELEASED  -> enqueue a COACH_PAYOUT_REVERSAL for that share
+        //   - payout PENDING_RELEASE / HOLD / FROZEN -> cut the pending net by that share (cancel only when
+        //     it is the whole net), then lift the dispute freeze so it releases unless another freeze holds it
         //   - no row (session not completed, or nothing charged) -> nothing on the coach side
         reconcileCoachPayout(dispute.getBookingId(), resolution, creditAmount, sessionPrice);
 
@@ -333,6 +337,9 @@ public class DisputeService {
         dispute.setResolutionNote(reason);
         disputeRepository.save(dispute);
 
+        // fix/payment-payouts-disputes-webhooks: nothing refunded — lift the dispute freeze only.
+        coachPayoutAdjustmentService.clearDisputeFreeze(dispute.getBookingId());
+
         resolveDisputeAlert(dispute.getBookingId(), adminId, now);
         // B6: its own action type — a dismissal used to be audited as DISPUTE_RESOLVE, indistinguishable
         // from a resolution in admin_action_log.
@@ -350,54 +357,42 @@ public class DisputeService {
 
     /**
      * skillars-deferred-106 AC10.2/AC10.3: the coach-payout side of a resolved dispute. Idempotent —
-     * the {@code coach_payouts} row status gate below, the "already resolved" 409 at the top of
-     * {@code resolveDispute}, and the deterministic {@code reversal-{transferId}} Stripe key together
-     * mean a dispute resolved twice never double-reverses or re-cancels.
+     * the "already resolved" 409 at the top of {@code resolveDispute} and the per-reversal Stripe key
+     * mean a dispute resolved twice never double-reverses or re-cuts.
+     *
+     * <p>fix/payment-payouts-disputes-webhooks: two steps, kept apart so further resolutions (e.g. one
+     * that forfeits or upholds the coach's payout) slot in as their own refund/coach-share rule:
+     * <ol>
+     *   <li>{@link #parentRefundFor} — what went back to the parent;</li>
+     *   <li>{@link CoachPayoutAdjustmentService#applyRefund} — the coach's proportional share of it
+     *       (reversal if released, pro-rata cut if not), then the dispute freeze is lifted.</li>
+     * </ol>
      *
      * @param parentPrice the full session price (credit + Stripe portions) — the denominator for the
      *     coach's proportional share of a partial refund
      */
     private void reconcileCoachPayout(UUID bookingId, String resolution, BigDecimal creditAmount,
                                       BigDecimal parentPrice) {
-        BigDecimal parentRefund = switch (resolution) {
-            case "FULL_CREDIT" -> parentPrice;
-            case "PARTIAL_CREDIT" -> creditAmount;
-            case "COACH_WARNING" -> creditAmount != null && creditAmount.signum() > 0 ? creditAmount : BigDecimal.ZERO;
-            default -> BigDecimal.ZERO; // NO_ACTION
-        };
-        if (parentRefund == null || parentRefund.signum() <= 0) {
-            return;
-        }
-
         CoachPayout row = coachPayoutRepository.findByIdForUpdate(bookingId).orElse(null);
         if (row == null) {
             // No payout row (session not completed yet) — nothing has been transferred to the coach.
             return;
         }
-
-        switch (row.getStatus()) {
-            case CoachPayoutStatus.RELEASED -> {
-                BigDecimal reverseAmount = coachShareOfRefund(row.getNetAmount(), parentRefund, parentPrice);
-                if (reverseAmount.signum() > 0) {
-                    coachPayoutOutboxSupport.enqueueReversal(bookingId, reverseAmount);
-                    log.info("Dispute {} on booking {}: coach payout RELEASED — enqueued reversal of {}",
-                        resolution, bookingId, reverseAmount);
-                }
-            }
-            case CoachPayoutStatus.PENDING_RELEASE, CoachPayoutStatus.HOLD, CoachPayoutStatus.FROZEN -> {
-                String was = row.getStatus();
-                row.setStatus(CoachPayoutStatus.CANCELLED);
-                row.setLastError("DISPUTE_RESOLVED_" + resolution + " (was " + was + ")");
-                coachPayoutRepository.save(row);
-                log.info("Dispute {} on booking {}: pending coach payout ({}) cancelled — no transfer",
-                    resolution, bookingId, was);
-            }
-            default -> {
-                // REVERSED / CANCELLED / REVERSAL_FAILED / FAILED_PERMANENT — nothing to do.
-                log.info("Dispute {} on booking {}: coach payout already {} — no coach-side action",
-                    resolution, bookingId, row.getStatus());
-            }
+        BigDecimal parentRefund = parentRefundFor(resolution, creditAmount, parentPrice);
+        coachPayoutAdjustmentService.applyRefund(row, parentRefund, parentPrice, "DISPUTE_RESOLVED_" + resolution);
+        if (row.isDisputeFrozen()) {
+            row.setDisputeFrozen(false);
+            coachPayoutAdjustmentService.releaseIfUnfrozen(row);
         }
+    }
+
+    private static BigDecimal parentRefundFor(String resolution, BigDecimal creditAmount, BigDecimal parentPrice) {
+        return switch (resolution) {
+            case "FULL_CREDIT" -> parentPrice;
+            case "PARTIAL_CREDIT" -> creditAmount;
+            case "COACH_WARNING" -> creditAmount != null && creditAmount.signum() > 0 ? creditAmount : BigDecimal.ZERO;
+            default -> BigDecimal.ZERO; // NO_ACTION
+        };
     }
 
     /**
@@ -419,16 +414,6 @@ public class DisputeService {
         return coachPayoutRepository.findGrossAmountByBookingId(booking.getId())
             .filter(gross -> gross.signum() > 0)
             .orElse(BigDecimal.ZERO);
-    }
-
-    private static BigDecimal coachShareOfRefund(BigDecimal coachNet, BigDecimal parentRefund, BigDecimal parentPrice) {
-        if (coachNet == null || coachNet.signum() <= 0 || parentPrice == null || parentPrice.signum() <= 0) {
-            return BigDecimal.ZERO;
-        }
-        if (parentRefund.compareTo(parentPrice) >= 0) {
-            return coachNet;
-        }
-        return coachNet.multiply(parentRefund).divide(parentPrice, 2, RoundingMode.HALF_UP);
     }
 
     private String coachDisplayName(Booking booking) {

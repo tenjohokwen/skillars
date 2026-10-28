@@ -19,5 +19,16 @@ public enum AdminAlertType {
     SAFETY_HOLD_BOOKING,
     // feat/coach-payouts-pack-and-credit: a credit cash-out whose Stripe refund outcome could not be
     // confirmed (payment.cash_out_reconciliations UNKNOWN) — see V186.
-    CASH_OUT_UNRESOLVED
+    CASH_OUT_UNRESOLVED,
+    // fix/payment-payouts-disputes-webhooks (V193): payment-integrity alerts with no workflow of their own
+    // (an admin marks them handled). CHARGEBACK / EXTERNAL_REFUND reference the Stripe PaymentIntent
+    // (reference_type PAYMENT_INTENT); PAYOUT_HELD / PAYOUT_REVERSAL_FAILED the booking.
+    CHARGEBACK,
+    EXTERNAL_REFUND,
+    PAYOUT_HELD,
+    PAYOUT_REVERSAL_FAILED;
+
+    /** fix/payment-payouts-disputes-webhooks: the payment-integrity types (one queue bucket, one resolve action). */
+    public static final java.util.Set<AdminAlertType> PAYMENT_INTEGRITY =
+        java.util.EnumSet.of(CHARGEBACK, EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED);
 }

@@ -45,6 +45,11 @@ export const adminApi = {
     return api.post(`/api/admin/queue/safety-hold-alerts/${alertId}/resolve`)
   },
 
+  // Mark a payment-integrity alert (chargeback, external refund, held / unreversed payout) handled.
+  resolvePaymentAlert(alertId) {
+    return api.post(`/api/admin/queue/payment-alerts/${alertId}/resolve`)
+  },
+
   getMessageDetail(messageId) {
     return api.get(`/api/admin/messages/${messageId}`)
   },

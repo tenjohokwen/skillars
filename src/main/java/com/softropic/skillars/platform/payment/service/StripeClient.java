@@ -19,6 +19,7 @@ import com.stripe.param.SubscriptionCreateParams;
 import com.stripe.param.SubscriptionListParams;
 import com.stripe.param.SubscriptionUpdateParams;
 import com.stripe.param.TransferCreateParams;
+import com.stripe.param.TransferListParams;
 import com.stripe.param.TransferReversalCollectionCreateParams;
 import org.springframework.stereotype.Component;
 
@@ -89,6 +90,19 @@ public class StripeClient {
             .setIdempotencyKey(idempotencyKey)
             .build();
         return Transfer.create(params, options);
+    }
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: the transfers already made for one {@code transfer_group}
+     * (the booking id) — checked before {@code Transfer.create}, because Stripe forgets an idempotency key
+     * after 24h and a transfer whose DB commit kept failing for longer would otherwise be made twice.
+     */
+    public java.util.List<Transfer> listTransfersByGroup(String transferGroup) throws StripeException {
+        TransferListParams params = TransferListParams.builder()
+            .setTransferGroup(transferGroup)
+            .setLimit(10L)
+            .build();
+        return Transfer.list(params).getData();
     }
 
     /**

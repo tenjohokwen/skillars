@@ -19,4 +19,6 @@ public record AdminQueueSummaryDto(
     long safetyHoldBookings,
     // feat/coach-payouts-pack-and-credit: CASH_OUT_UNRESOLVED — same reasoning, its own bucket.
     long cashOutUnresolved,
+    // fix/payment-payouts-disputes-webhooks: CHARGEBACK + EXTERNAL_REFUND + PAYOUT_HELD + PAYOUT_REVERSAL_FAILED.
+    long paymentIntegrity,
     long total) {}

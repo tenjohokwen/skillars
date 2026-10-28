@@ -1296,6 +1296,7 @@ export default {
       typeFilterLabel: 'Alert type',
       allTypes: 'All types',
       totalOpen: 'Total open',
+      paymentIntegrity: 'Payment integrity',
       loadError: 'Failed to load the moderation queue',
       emptyState: 'No open alerts',
       colType: 'Type',
@@ -1343,6 +1344,10 @@ export default {
         SAFETY_HOLD_BOOKING: 'Urgent: booking under a safety hold',
         SUBSCRIPTION_ORPHANED: 'Orphaned subscription',
         CASH_OUT_UNRESOLVED: 'Unconfirmed cash-out refund',
+        CHARGEBACK: 'Card dispute (chargeback)',
+        EXTERNAL_REFUND: 'Refund made outside the app',
+        PAYOUT_HELD: 'Coach payout on hold',
+        PAYOUT_REVERSAL_FAILED: 'Coach payout reversal failed',
       },
     },
     reviewModeration: {

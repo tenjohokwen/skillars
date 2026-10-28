@@ -58,6 +58,22 @@ public class CoachPayout {
     @Column(name = "net_amount", nullable = false, precision = 10, scale = 2)
     private BigDecimal netAmount;
 
+    /**
+     * fix/payment-payouts-disputes-webhooks (V193): what has been reversed from the released transfer
+     * so far. A partial reversal keeps the row {@code RELEASED}; the coach's earned net is
+     * {@link #getEffectiveNetAmount()}.
+     */
+    @Column(name = "reversed_amount", nullable = false, precision = 10, scale = 2)
+    private BigDecimal reversedAmount = BigDecimal.ZERO;
+
+    /** fix/payment-payouts-disputes-webhooks (V193): an in-app dispute on the booking is open. */
+    @Column(name = "dispute_frozen", nullable = false)
+    private boolean disputeFrozen;
+
+    /** fix/payment-payouts-disputes-webhooks (V193): a Stripe card dispute on the funding charge is open. */
+    @Column(name = "chargeback_frozen", nullable = false)
+    private boolean chargebackFrozen;
+
     @Column(name = "currency", nullable = false)
     private String currency;
 
@@ -92,6 +108,36 @@ public class CoachPayout {
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
+
+    /** Net still with the coach: {@code net_amount - reversed_amount}, never negative. */
+    public BigDecimal getEffectiveNetAmount() {
+        BigDecimal reversed = reversedAmount == null ? BigDecimal.ZERO : reversedAmount;
+        BigDecimal net = netAmount == null ? BigDecimal.ZERO : netAmount;
+        return net.subtract(reversed).max(BigDecimal.ZERO);
+    }
+
+    /** Gross pro rata to the net the coach kept (same formula as the reporting queries). */
+    public BigDecimal getEffectiveGrossAmount() {
+        return proRata(grossAmount);
+    }
+
+    /** Commission pro rata to the net the coach kept (same formula as the reporting queries). */
+    public BigDecimal getEffectiveCommissionAmount() {
+        return proRata(commissionAmount);
+    }
+
+    private BigDecimal proRata(BigDecimal amount) {
+        if (amount == null || netAmount == null || netAmount.signum() <= 0
+                || reversedAmount == null || reversedAmount.signum() == 0) {
+            return amount;
+        }
+        return amount.multiply(getEffectiveNetAmount()).divide(netAmount, 2, java.math.RoundingMode.HALF_UP);
+    }
+
+    /** True while a per-payout freeze reason (in-app dispute or card dispute) stands. */
+    public boolean hasPayoutFreezeReason() {
+        return disputeFrozen || chargebackFrozen;
+    }
 
     @PrePersist
     void onCreate() {

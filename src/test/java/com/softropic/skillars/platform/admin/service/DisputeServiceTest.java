@@ -63,6 +63,7 @@ class DisputeServiceTest {
     @Mock private CreditWalletService creditWalletService;
     @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutRepository coachPayoutRepository;
     @Mock private com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport coachPayoutOutboxSupport;
+    @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private AdminNotificationRecipientResolver recipientResolver;
@@ -77,7 +78,10 @@ class DisputeServiceTest {
         service = new DisputeService(
             disputeRepository, bookingRepository, bookingPaymentRepository, coachProfileRepository,
             coachCancellationHistoryRepository, adminAlertRepository, adminActionLogRepository,
-            configService, creditWalletService, coachPayoutRepository, coachPayoutOutboxSupport, eventPublisher,
+            configService, creditWalletService, coachPayoutRepository,
+            new com.softropic.skillars.platform.payment.service.CoachPayoutAdjustmentService(
+                coachPayoutRepository, coachPayoutFreezeRepository, coachPayoutOutboxSupport),
+            eventPublisher,
             playerProfileRepository, recipientResolver
         );
     }
@@ -354,6 +358,123 @@ class DisputeServiceTest {
         assertThat(payout.getStatus())
             .isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.CANCELLED);
         verify(coachPayoutOutboxSupport, never()).enqueueReversal(any(), any());
+    }
+
+    // ── fix/payment-payouts-disputes-webhooks items 2 + 3 ─────────────────
+
+    private com.softropic.skillars.platform.payment.repo.CoachPayout payout(String status) {
+        com.softropic.skillars.platform.payment.repo.CoachPayout p = new com.softropic.skillars.platform.payment.repo.CoachPayout();
+        p.setBookingId(bookingId);
+        p.setCoachId(UUID.randomUUID());
+        p.setGrossAmount(new BigDecimal("30.00"));
+        p.setCommissionAmount(new BigDecimal("3.00"));
+        p.setNetAmount(new BigDecimal("27.00"));
+        p.setReleaseAfter(Instant.now().minusSeconds(60));
+        p.setStatus(status);
+        return p;
+    }
+
+    @Test
+    void raiseDispute_freezesTheNotYetReleasedPayout() {
+        Booking booking = buildBooking();
+        booking.setUpdatedAt(Instant.now());
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.PENDING_RELEASE);
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
+        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+
+        service.raiseDispute(bookingId, "OTHER", "details", 1L, "PARENT");
+
+        assertThat(payout.getStatus()).isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        assertThat(payout.isDisputeFrozen()).isTrue();
+    }
+
+    @Test
+    void raiseDispute_releasedPayout_isLeftAsIs() {
+        Booking booking = buildBooking();
+        booking.setUpdatedAt(Instant.now());
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.RELEASED);
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
+        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+
+        service.raiseDispute(bookingId, "OTHER", "details", 1L, "PARENT");
+
+        assertThat(payout.getStatus()).isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.RELEASED);
+        assertThat(payout.isDisputeFrozen()).isFalse();
+    }
+
+    /** Item 3: a partial credit on a not-yet-released payout cuts it pro rata and lets it release. */
+    @Test
+    void resolveDispute_partialCredit_onFrozenPayout_cutsProRata_andReleases() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        payout.setDisputeFrozen(true);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(buildPayment("CAPTURED")));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        // 10.00 of 30.00 refunded -> the coach bears a third of their 27.00 net.
+        service.resolveDispute(disputeId, "PARTIAL_CREDIT", new BigDecimal("10.00"), "note", 99L);
+
+        assertThat(payout.getStatus())
+            .isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.PENDING_RELEASE);
+        assertThat(payout.isDisputeFrozen()).isFalse();
+        assertThat(payout.getNetAmount()).isEqualByComparingTo("18.00");
+        assertThat(payout.getGrossAmount()).isEqualByComparingTo("20.00");
+        assertThat(payout.getCommissionAmount()).isEqualByComparingTo("2.00");
+        verify(coachPayoutOutboxSupport).enqueueTransfer(eq(bookingId), any());
+        verify(coachPayoutOutboxSupport, never()).enqueueReversal(any(), any());
+    }
+
+    /** Item 3: the same partial credit after release reverses the same share — same outcome either way. */
+    @Test
+    void resolveDispute_partialCredit_onReleasedPayout_reversesTheSameShare() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.RELEASED);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(buildPayment("CAPTURED")));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        service.resolveDispute(disputeId, "PARTIAL_CREDIT", new BigDecimal("10.00"), "note", 99L);
+
+        verify(coachPayoutOutboxSupport).enqueueReversal(bookingId, new BigDecimal("9.00"));
+        assertThat(payout.getStatus()).isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.RELEASED);
+    }
+
+    /** Item 2: a dispute freeze lifted while a safety hold still stands keeps the payout FROZEN. */
+    @Test
+    void dismissDispute_liftsDisputeFreeze_butSafetyHoldKeepsItFrozen() {
+        Dispute dispute = buildDispute();
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        payout.setDisputeFrozen(true);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+        when(coachPayoutFreezeRepository.isFrozenForShare(payout.getCoachId())).thenReturn(true);
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        service.dismissDispute(disputeId, "no merit", 99L);
+
+        assertThat(payout.isDisputeFrozen()).isFalse();
+        assertThat(payout.getStatus()).isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        assertThat(payout.getLastError()).isEqualTo("SAFETY_HOLD");
+        verify(coachPayoutOutboxSupport, never()).enqueueTransfer(any(), any());
     }
 
     @Test

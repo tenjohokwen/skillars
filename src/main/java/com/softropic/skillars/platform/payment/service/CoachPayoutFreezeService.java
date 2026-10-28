@@ -148,7 +148,17 @@ public class CoachPayoutFreezeService {
         // a new READ COMMITTED snapshot — sees their rows.
         int lifted = freezeRepository.lift(coachId, event.getAdminId(), now);
         List<CoachPayout> frozen = coachPayoutRepository.findFrozenByCoachIdForUpdate(coachId);
+        int released = 0;
         for (CoachPayout row : frozen) {
+            if (row.hasPayoutFreezeReason()) {
+                // fix/payment-payouts-disputes-webhooks: an open dispute / card dispute still holds this one;
+                // its own resolution releases it (CoachPayoutAdjustmentService.releaseIfUnfrozen).
+                row.setLastError(row.isDisputeFrozen() ? CoachPayoutAdjustmentService.REASON_DISPUTE_OPEN
+                    : CoachPayoutAdjustmentService.REASON_CHARGEBACK_OPEN);
+                coachPayoutRepository.save(row);
+                continue;
+            }
+            released++;
             row.setStatus(CoachPayoutStatus.PENDING_RELEASE);
             row.setLastError(null);
             coachPayoutRepository.save(row);
@@ -158,7 +168,8 @@ public class CoachPayoutFreezeService {
         }
         if (lifted > 0 || !frozen.isEmpty()) {
             log.warn("[COACH_PAYOUT_UNFREEZE] coach={} adminId={} — safety-hold payout freeze lifted, {} payout(s) "
-                + "re-enqueued for release", coachId, event.getAdminId(), frozen.size());
+                + "re-enqueued for release ({} still held by a dispute)", coachId, event.getAdminId(), released,
+                frozen.size() - released);
         }
     }
 

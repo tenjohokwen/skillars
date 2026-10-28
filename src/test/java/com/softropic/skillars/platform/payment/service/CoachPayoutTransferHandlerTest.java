@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutTransferPayload;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
@@ -11,8 +12,10 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -38,6 +41,7 @@ class CoachPayoutTransferHandlerTest {
     @Mock CoachPayoutRepository coachPayoutRepository;
     @Mock com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock PaymentGateway paymentGateway;
+    @Mock ApplicationEventPublisher eventPublisher;
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -49,7 +53,7 @@ class CoachPayoutTransferHandlerTest {
     @BeforeEach
     void setUp() {
         handler = new CoachPayoutTransferHandler(coachPayoutRepository, coachPayoutFreezeRepository, paymentGateway,
-            meterRegistry, objectMapper);
+            meterRegistry, objectMapper, eventPublisher);
     }
 
     private String payload() throws Exception {
@@ -193,5 +197,42 @@ class CoachPayoutTransferHandlerTest {
         assertThat(r.getLastError()).contains("INVALID_DESTINATION");
         assertThat(meterRegistry.get(CoachPayoutTransferHandler.METRIC_HELD)
             .tag("reason", "INVALID_DESTINATION").counter().count()).isEqualTo(1.0);
+        // fix/payment-payouts-disputes-webhooks item 8: an admin alert per booking.
+        ArgumentCaptor<PaymentIntegrityAlertEvent> alert = ArgumentCaptor.forClass(PaymentIntegrityAlertEvent.class);
+        verify(eventPublisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().getKind()).isEqualTo(PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD);
+        assertThat(alert.getValue().getReferenceId()).isEqualTo(bookingId.toString());
+    }
+
+    // fix/payment-payouts-disputes-webhooks item 4: an unusable account is classified non-retryable by the
+    // gateway, so the handler holds the row and counts the attempt instead of re-driving forever.
+    @Test
+    void accountNotReady_movesRowToHold_andCountsTheAttempt() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minusSeconds(1));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        when(paymentGateway.transferToCoach(any(), any(), any(), any()))
+            .thenThrow(new CoachPayoutTransferException("payment.coachStripeNotConfigured", false, "ACCOUNT_NOT_READY",
+                new IllegalStateException("transfers=inactive")));
+
+        handler.handle(payload());
+
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.HOLD);
+        assertThat(r.getAttempts()).isEqualTo(1);
+        assertThat(r.getLastError()).startsWith("ACCOUNT_NOT_READY");
+    }
+
+    // fix/payment-payouts-disputes-webhooks item 2: a dispute freeze stops the transfer even if the row was
+    // put back to PENDING_RELEASE by hand.
+    @Test
+    void disputeFrozenRow_isFrozen_noTransfer() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minusSeconds(1));
+        r.setDisputeFrozen(true);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+
+        handler.handle(payload());
+
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        assertThat(r.getLastError()).isEqualTo(CoachPayoutAdjustmentService.REASON_DISPUTE_OPEN);
+        verify(paymentGateway, never()).transferToCoach(any(), any(), any(), any());
     }
 }

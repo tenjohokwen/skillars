@@ -16,6 +16,8 @@ import com.softropic.skillars.platform.payment.repo.StripeWebhookEventRepository
 import com.stripe.exception.EventDataObjectDeserializationException;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.model.Account;
+import com.stripe.model.Charge;
+import com.stripe.model.Dispute;
 import com.stripe.model.Event;
 import com.stripe.model.Invoice;
 import com.stripe.model.Subscription;
@@ -93,6 +95,10 @@ public class StripeWebhookService {
     @Lazy
     private SubscriptionService subscriptionService;
 
+    /** fix/payment-payouts-disputes-webhooks: chargebacks and refunds made outside the app. */
+    @Autowired
+    private ChargeDisputeWebhookService chargeDisputeWebhookService;
+
     /** Self-reference so @Transactional on handleEventAtomically is honoured via the Spring proxy. */
     @Autowired
     @Lazy
@@ -130,6 +136,13 @@ public class StripeWebhookService {
             handleSubscriptionDeleted(event);
         } else if ("invoice.payment_failed".equals(event.getType())) {
             handleInvoicePaymentFailed(event);
+        } else if ("charge.dispute.created".equals(event.getType())) {
+            // fix/payment-payouts-disputes-webhooks: chargebacks and refunds made outside the app.
+            chargeDisputeWebhookService.onDisputeCreated(deserialize(event, Dispute.class));
+        } else if ("charge.dispute.closed".equals(event.getType())) {
+            chargeDisputeWebhookService.onDisputeClosed(deserialize(event, Dispute.class));
+        } else if ("charge.refunded".equals(event.getType())) {
+            chargeDisputeWebhookService.onChargeRefunded(deserialize(event, Charge.class), event);
         } else {
             log.debug("[STRIPE_WEBHOOK_UNKNOWN_TYPE type={}]", event.getType());
         }
@@ -158,7 +171,23 @@ public class StripeWebhookService {
             log.warn("[STRIPE_WEBHOOK_NULL_ACCOUNT type={}]", event.getType());
             return;
         }
+        Instant eventCreated = event.getCreated() != null ? Instant.ofEpochSecond(event.getCreated()) : null;
         coachStripeAccountRepository.findByStripeAccountId(acct.getId()).ifPresent(coachAccount -> {
+            // fix/payment-payouts-disputes-webhooks: Stripe does not deliver events in order — a snapshot
+            // older than the one last applied must not overwrite it (same-second events still apply).
+            if (eventCreated != null && coachAccount.getLastEventCreatedAt() != null
+                    && eventCreated.isBefore(coachAccount.getLastEventCreatedAt())) {
+                log.info("[STRIPE_ACCOUNT_UPDATED_STALE stripeAccountId={} eventId={} created={} lastApplied={}] ignored",
+                    acct.getId(), event.getId(), eventCreated, coachAccount.getLastEventCreatedAt());
+                return;
+            }
+            if (eventCreated != null) {
+                coachAccount.setLastEventCreatedAt(eventCreated);
+            }
+            // A Transfer to the account needs its `transfers` capability active (StripePaymentGateway).
+            if (acct.getCapabilities() != null) {
+                coachAccount.setTransfersCapability(acct.getCapabilities().getTransfers());
+            }
             boolean charges = Boolean.TRUE.equals(acct.getChargesEnabled());
             boolean payouts = Boolean.TRUE.equals(acct.getPayoutsEnabled());
             coachAccount.setChargesEnabled(charges);
@@ -353,6 +382,23 @@ public class StripeWebhookService {
             resolveCoachAndAlertIfOrphaned(invoice.getCustomer(), stripeSubId);
         } catch (Exception e) {
             log.warn("[STRIPE_WEBHOOK_ORPHAN_ALERT_FAILED stripeSubId={}]", stripeSubId, e);
+        }
+    }
+
+    /**
+     * fix/payment-payouts-disputes-webhooks: same contract as the other deserializers here — a
+     * deserialization failure re-throws so the idempotency row rolls back and Stripe retries.
+     */
+    private <T> T deserialize(Event event, Class<T> type) {
+        try {
+            Object obj = event.getDataObjectDeserializer().deserializeUnsafe();
+            if (!type.isInstance(obj)) {
+                throw new IllegalStateException("expected " + type.getSimpleName() + " for " + event.getType());
+            }
+            return type.cast(obj);
+        } catch (EventDataObjectDeserializationException e) {
+            log.error("[STRIPE_WEBHOOK_DESERIALIZE_FAILED type={} error={}]", event.getType(), e.getMessage(), e);
+            throw new RuntimeException("Webhook deserialization failed for type " + event.getType(), e);
         }
     }
 

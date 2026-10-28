@@ -1636,6 +1636,7 @@ export default {
       typeFilterLabel: 'Meldungstyp',
       allTypes: 'Alle Typen',
       totalOpen: 'Offen gesamt',
+      paymentIntegrity: 'Zahlungsintegrität',
       loadError: 'Moderationswarteschlange konnte nicht geladen werden',
       emptyState: 'Keine offenen Meldungen',
       colType: 'Typ',
@@ -1684,6 +1685,10 @@ export default {
         SAFETY_HOLD_BOOKING: 'Dringend: Buchung unter Schutzsperre',
         SUBSCRIPTION_ORPHANED: 'Verwaistes Abonnement',
         CASH_OUT_UNRESOLVED: 'Unbestätigte Guthaben-Auszahlung',
+        CHARGEBACK: 'Kartenstreitfall (Rückbuchung)',
+        EXTERNAL_REFUND: 'Erstattung außerhalb der App',
+        PAYOUT_HELD: 'Trainer-Auszahlung angehalten',
+        PAYOUT_REVERSAL_FAILED: 'Rückbuchung der Trainer-Auszahlung fehlgeschlagen',
       },
     },
     reviewModeration: {

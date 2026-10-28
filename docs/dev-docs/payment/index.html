@@ -449,6 +449,10 @@ sequenceDiagram
   else invoice.payment_failed
     Svc->>Svc: orphan check first, then
     Svc->>Sub: mark PAST_DUE, stamp pastDueSince (first failure only)
+  else charge.dispute.created / closed
+    Svc->>Svc: freeze (or, if lost, cut / reverse pro rata) the coach payouts the charge funded, admin alert
+  else charge.refunded
+    Svc->>Svc: refund not issued by the app: admin alert only
   end
   WH-->>Stripe: 200 (500 on failure so Stripe retries)
     </pre>
@@ -711,9 +715,11 @@ sequenceDiagram
       <code>sk_test_...</code> key (a live key refuses to boot outside the <code>prod</code> profile). Set
       <code>APP_PAYMENT_STRIPE_PUBLISHABLE_KEY</code> to the matching <code>pk_test_...</code> key, which the
       frontend reads from <code>GET /api/payment/stripe/config</code>. The handled events are
-      <code>account.updated</code>, <code>customer.subscription.updated</code>/<code>deleted</code> and
-      <code>invoice.payment_failed</code>, so trigger those, e.g.
-      <code>stripe trigger customer.subscription.updated</code>.</p>
+      <code>account.updated</code>, <code>customer.subscription.updated</code>/<code>deleted</code>,
+      <code>invoice.payment_failed</code>, <code>charge.dispute.created</code>/<code>closed</code> and
+      <code>charge.refunded</code>, so trigger those, e.g.
+      <code>stripe trigger customer.subscription.updated</code> or <code>stripe trigger charge.dispute.created</code>.
+      A deployed webhook endpoint must be subscribed to all of them.</p>
       <p><strong>Use the standard secret key (<code>sk_test_...</code>), not a Restricted key
       (<code>rk_test_...</code>).</strong> Stripe only accepts <code>OAuth.token</code> (Connect onboarding)
       with the account's standard secret key.</p>
