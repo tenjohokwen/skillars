@@ -11,6 +11,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -62,6 +63,21 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("statuses") List<String> statuses);
 
     List<Booking> findByCoachIdAndStatusOrderByRequestedStartTimeAsc(UUID coachId, String status);
+
+    /** C2: a safety hold's unlocked read of the coach's live sessions (reported, never modified). */
+    List<Booking> findByCoachIdAndStatusInOrderByRequestedStartTimeAsc(UUID coachId, Collection<String> statuses);
+
+    /**
+     * C2: the coach-suspension sweep's candidate list — ids only, deliberately. Loading the entities
+     * here would put each booking (at its current @Version) into the persistence context, and the
+     * per-booking locked re-read ({@code findByIdForUpdate}) on an already-managed, since-updated row
+     * fails with StaleObjectStateException instead of returning the fresh state — the exact race (a
+     * parent cancelling mid-sweep) the re-read exists for. Each row is re-checked under its own lock.
+     */
+    @Query("SELECT b.id FROM Booking b WHERE b.coachId = :coachId AND b.status IN :statuses "
+        + "ORDER BY b.requestedStartTime ASC")
+    List<UUID> findIdsByCoachIdAndStatusIn(@Param("coachId") UUID coachId,
+                                           @Param("statuses") Collection<String> statuses);
 
     @Query("""
         SELECT b FROM Booking b

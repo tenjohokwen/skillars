@@ -60,6 +60,15 @@ public class AdminModerationResource {
         return ResponseEntity.ok(adminQueueService.getSummary());
     }
 
+    /** C2: mark an urgent SAFETY_HOLD_BOOKING alert handled (the only alert type with no workflow of its own). */
+    @PostMapping("/queue/safety-hold-alerts/{alertId}/resolve")
+    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @Observed(name = "admin.queue.safetyHold.resolve")
+    public ResponseEntity<Void> resolveSafetyHoldAlert(@PathVariable java.util.UUID alertId) {
+        adminQueueService.resolveSafetyHoldBookingAlert(alertId, resolveAdminId());
+        return ResponseEntity.noContent().build();
+    }
+
     @GetMapping("/messages/{messageId}")
     @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
     @Observed(name = "admin.messages.detail")

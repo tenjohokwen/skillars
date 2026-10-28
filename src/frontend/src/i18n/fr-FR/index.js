@@ -1210,6 +1210,9 @@ export default {
       openReviewQueue: 'Ouvrir la file des avis',
       openCoach: "Ouvrir l'entraîneur",
       openDisputes: 'Ouvrir les litiges',
+      markHandled: 'Marquer comme traitée',
+      markHandledSuccess: 'Alerte marquée comme traitée.',
+      markHandledFailed: "Impossible de mettre à jour l'alerte — elle est peut-être déjà traitée.",
       noInlineAction: 'Aucune action ici',
       messageTitle: "Message en cours d'examen",
       conversationTitle: 'Conversation signalée',
@@ -1239,6 +1242,7 @@ export default {
         DISPUTE_RAISED: 'Litige ouvert',
         MODERATION_UNRESOLVED: 'Message retenu',
         GDPR_ERASURE_DEADLINE: 'Effacement RGPD en retard',
+        SAFETY_HOLD_BOOKING: 'Urgent : réservation sous suspension de sécurité',
         SUBSCRIPTION_ORPHANED: 'Abonnement orphelin',
       },
     },
@@ -1310,6 +1314,13 @@ export default {
       deleteStrikeHint: "Le statut de l'entraîneur est réévalué après la suppression.",
       strikeBookingIdLabel: 'ID de réservation',
       strikeReasonLabel: "Motif de l'avertissement",
+      cancelUpcomingLabel:
+        "Annuler aussi les séances à venir de l'entraîneur et rembourser intégralement les familles",
+      alreadySuspended: "Cet entraîneur était déjà suspendu — rien n'a changé.",
+      suspendSuccess:
+        'Entraîneur suspendu. Séances annulées : {count} (celles déjà payées sont intégralement remboursées).',
+      paymentInProgress:
+        "Un paiement pour une séance de cet entraîneur est en cours de traitement. Réessayez dans un instant, ou décochez l'annulation des séances pour suspendre immédiatement.",
       notifyCoachLabel: "Prévenir l'entraîneur par e-mail",
       actionSuccess: 'Terminé.',
       actionFailed: "L'action a échoué. Veuillez réessayer.",
@@ -1376,6 +1387,8 @@ export default {
       cannotSuspendAdmin: 'Les comptes administrateur ne peuvent pas être suspendus.',
       cannotModifyAdmin:
         'Les comptes administrateur ne peuvent pas être modifiés depuis cette page.',
+      cancelUpcomingLabel:
+        'Annuler aussi les séances à venir de cet entraîneur et rembourser intégralement les familles',
       cannotSuspendSelf: 'Vous ne pouvez pas suspendre votre propre compte.',
       erased: 'Ce compte a été effacé (RGPD) et ne peut pas être réactivé.',
       safetyHold:
@@ -2475,6 +2488,8 @@ export default {
       BOOKING_CANCELLED_DUE_TO_PAUSE:
         'La séance du {requestedStartTime} a été annulée car le forfait a été mis en pause.',
       BOOKING_CANCELLED_BY_PARENT: 'La séance du {requestedStartTime} a été annulée par le parent.',
+      BOOKING_CANCELLED_COACH_UNAVAILABLE:
+        "Votre séance avec {coachDisplayName} du {requestedStartTime} a été annulée car le coach n'est pas disponible. Tout paiement a été intégralement remboursé.",
       BOOKING_CANCELLED_BY_COACH: 'Votre coach a annulé la séance du {requestedStartTime}.',
       COACH_NO_SHOW:
         'Une absence du coach a été enregistrée pour la séance du {requestedStartTime}.',

@@ -1,8 +1,10 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.platform.admin.contract.AdminSuspendCoachResponse;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.PessimisticLockingFailureException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -37,6 +39,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class CoachSafetySuspensionListener {
 
+    /** Whole-hold attempts on lock contention (each already retries every row lock ~3s). */
+    static final int SAFETY_HOLD_ATTEMPTS = 3;
+
     private final CoachProfileRepository coachProfileRepository;
     private final AdminCoachEnforcementService enforcementService;
 
@@ -53,12 +58,34 @@ public class CoachSafetySuspensionListener {
                     + "videoId={}", event.ownerId(), event.videoId());
                 return;
             }
-            boolean suspended = enforcementService.suspendCoachForSafetyHold(coachId, event.videoId());
-            log.error("[COACH_SAFETY_SUSPENSION] coachId={} videoId={} newlySuspended={}",
-                coachId, event.videoId(), suspended);
+            AdminSuspendCoachResponse result = suspendWithRetry(coachId, event.videoId());
+            log.error("[COACH_SAFETY_SUSPENSION] coachId={} videoId={} newlySuspended={} cancelledBookings={} "
+                    + "urgentBookingAlerts={}", coachId, event.videoId(), result.newlySuspended(),
+                result.cancelledBookings(), result.alertedBookings());
         } catch (RuntimeException e) {
             log.error("CRITICAL: [COACH_SAFETY_SUSPENSION_FAILED] coach profile still live after a CSAM match: "
                 + "coachId={} videoId={} — suspend it from the admin console", coachId, event.videoId(), e);
+        }
+    }
+
+    /**
+     * C2: the hold now also locks every not-yet-started booking of the coach, so a single booking row
+     * held past {@code PessimisticLockRetryer}'s budget (a parent cancelling at that instant) exhausts it
+     * — and, the final NOWAIT failure having aborted the Postgres transaction, rolls the whole hold
+     * back, profile included. The hold must land: re-run it (each attempt is its own
+     * {@code REQUIRES_NEW} transaction and the hold is idempotent) before giving up loudly.
+     */
+    private AdminSuspendCoachResponse suspendWithRetry(UUID coachId, UUID videoId) {
+        for (int attempt = 1; ; attempt++) {
+            try {
+                return enforcementService.suspendCoachForSafetyHold(coachId, videoId);
+            } catch (PessimisticLockingFailureException e) {
+                if (attempt >= SAFETY_HOLD_ATTEMPTS) {
+                    throw e;
+                }
+                log.warn("[COACH_SAFETY_SUSPENSION] lock contention on attempt {} — retrying: coachId={}",
+                    attempt, coachId);
+            }
         }
     }
 

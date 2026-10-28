@@ -83,6 +83,7 @@
         <tr><td><a href="#adr-inbox">14</a></td><td>In-app inbox written <code>BEFORE_COMMIT</code> in a savepoint, no push channel</td><td>PR #313 (<code>e350d169</code>)</td></tr>
         <tr><td><a href="#adr-it-base">15</a></td><td><code>AbstractIntegrationTest</code> inheritance + a pinned context count</td><td>deferred-19 (<code>b1d8c831</code>), deferred-160 (<code>4869338a</code>)</td></tr>
         <tr><td><a href="#adr-tenant">16</a></td><td>The <code>tenant</code> module was removed</td><td><code>a170e69d</code> (PR #37)</td></tr>
+        <tr><td><a href="#adr-suspension-cancels">17</a></td><td>A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</td><td>Owner decision 2026-10-28 (item 2), chunk C2</td></tr>
       </tbody>
     </table>
 
@@ -316,6 +317,28 @@
       other audited entities depend on them.</p>
     <p><strong>Where enforced.</strong> Nothing to enforce — the code is gone. See the callout on <a href="../index.html">Home</a>.</p>
 
+    <h2 id="adr-suspension-cancels">17. A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</h2>
+    <p><strong>Context.</strong> A suspension used to cancel only <code>REQUESTED</code> bookings: a suspended coach's
+      <code>CONFIRMED</code> sessions stayed scheduled and paid for, and a child-safety (CSAM) hold could only log them.
+      Cancelling them as the coach (<code>CANCEL_COACH</code>) would strike the coach and refund under the wrong actor.</p>
+    <p><strong>Decision.</strong> <code>CANCEL_ADMIN</code> is legal from every pre-session status (REQUESTED, ACCEPTED,
+      PAYMENT_PENDING, CONFIRMED, UPCOMING), never from IN_PROGRESS / PAUSED. The payer is made whole only for money
+      actually taken (captured = CONFIRMED / UPCOMING): card/credit to the credit wallet for what was paid, a pack session
+      restored (or, for an expired pack, a wallet refund). No reliability strike, no cancellation history. The parent gets
+      a neutral notice (<code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>, "the coach is unavailable") that never names
+      the reason. An admin suspension does this by default with an opt-out (<code>cancelUpcomingBookings</code>); a
+      safety hold always does it (after committing the takedown on its own, so booking contention cannot undo it), and raises an urgent <code>SAFETY_HOLD_BOOKING</code> alert per booking it cannot
+      cancel. A capture in flight fails an admin suspension (409, all-or-nothing) but never a safety hold. Only the
+      safety hold freezes payouts (payment module).</p>
+    <p><strong>Consequences.</strong> Families are never left holding a session with a coach who cannot deliver it.
+      Card portions are refunded as wallet credit, as for a coach cancellation (cash-out turns it back into a card
+      refund). Live sessions and in-flight captures still need a human: the alerts carry the parent contact in the
+      queue summary, but there is no single-booking admin cancel tool yet.</p>
+    <p><strong>Where enforced.</strong> <code>BookingStateMachine</code>, <code>BookingService.cancelBookingAsAdmin</code>,
+      <code>AdminCoachEnforcementService.applySuspension</code>, <code>RefundEnqueueListener</code> /
+      <code>CancellationRefundService.onBookingCancelledByAdmin</code>; <code>CoachSuspensionCancelsUpcomingBookingsIT</code>,
+      <code>BookingStateMachineTest</code>.</p>
+
     <h2 id="related">Related</h2>
     <ul>
       <li><a href="../walkthrough/index.html">Anatomy of a request</a> — several of these decisions seen in one booking flow.</li>
@@ -323,7 +346,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

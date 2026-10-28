@@ -114,7 +114,7 @@ class AdminOutcomeNotificationIT extends AbstractIntegrationTest {
 
     @Test
     void adminSuspendWithNotify_thenReinstate_emailsAndInboxesTheCoach() {
-        enforcementService.suspendCoach(coachId, "Repeated no-shows", true, ADMIN_ID);
+        enforcementService.suspendCoach(coachId, "Repeated no-shows", true, ADMIN_ID, true);
 
         assertThat(sentTo(EmailTemplate.COACH_SUSPENDED))
             .singleElement()
@@ -131,7 +131,7 @@ class AdminOutcomeNotificationIT extends AbstractIntegrationTest {
 
     @Test
     void adminSuspendWithoutNotify_sendsTheCoachNothing() {
-        enforcementService.suspendCoach(coachId, "Quiet suspension", false, ADMIN_ID);
+        enforcementService.suspendCoach(coachId, "Quiet suspension", false, ADMIN_ID, true);
 
         assertThat(sentTo(EmailTemplate.COACH_SUSPENDED)).isEmpty();
         assertThat(inbox(COACH_USER_ID)).isEmpty();
@@ -151,7 +151,8 @@ class AdminOutcomeNotificationIT extends AbstractIntegrationTest {
         assertThat(jdbcTemplate.queryForMap(
             "SELECT status, cancel_reason FROM booking.bookings WHERE id = ?", bookingId))
             .containsEntry("status", "CANCELLED")
-            .containsEntry("cancel_reason", "COACH_SUSPENDED_BY_ADMIN");
+            // C2: neutral on the row — the parent's GDPR export carries it and must not reveal the hold.
+            .containsEntry("cancel_reason", "COACH_UNAVAILABLE");
 
         // Re-delivery is a no-op: the suspension timestamp (the appealable enforcement action) is unchanged.
         eventPublisher.publishEvent(new AccountSuspensionRequestedEvent(coachId.toString(), videoId));
@@ -177,7 +178,7 @@ class AdminOutcomeNotificationIT extends AbstractIntegrationTest {
 
     @Test
     void adminSuspension_remainsAppealable() {
-        enforcementService.suspendCoach(coachId, "Repeated no-shows", false, ADMIN_ID);
+        enforcementService.suspendCoach(coachId, "Repeated no-shows", false, ADMIN_ID, true);
 
         var appeal = appealService.submit(COACH_USER_ID,
             com.softropic.skillars.platform.admin.contract.AppealSubjectType.COACH_SUSPENSION, coachId, "unfair");

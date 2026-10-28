@@ -61,6 +61,11 @@ class BookingStateMachineTest {
             Arguments.of(REQUESTED, DECLINE, DECLINED),
             // B2: coach suspension cancels REQUESTED bookings through the state machine.
             Arguments.of(REQUESTED, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
+            // C2: ... and every other pre-session status (suspension / child-safety hold).
+            Arguments.of(ACCEPTED, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
+            Arguments.of(PAYMENT_PENDING, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
+            Arguments.of(CONFIRMED, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
+            Arguments.of(UPCOMING, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
             Arguments.of(ACCEPTED, INITIATE_PAYMENT, PAYMENT_PENDING),
             Arguments.of(ACCEPTED, CANCEL_COACH, CANCELLED_COACH),
             Arguments.of(ACCEPTED, CANCEL_PARENT, CANCELLED_PARENT),
@@ -113,6 +118,18 @@ class BookingStateMachineTest {
     void validate_invalidTransition_throwsBookingStateTransitionException() {
         assertThatThrownBy(() -> stateMachine.validate(REQUESTED, DISPUTE))
             .isInstanceOf(BookingStateTransitionException.class);
+    }
+
+    /** C2: a live (or paused) session can never be cancelled by an admin/system action. */
+    @ParameterizedTest
+    @MethodSource("liveStatuses")
+    void cancelAdmin_fromALiveSession_isRejected(BookingStatus live) {
+        assertThatThrownBy(() -> stateMachine.validate(live, BookingEvent.CANCEL_ADMIN))
+            .isInstanceOf(BookingStateTransitionException.class);
+    }
+
+    static Stream<BookingStatus> liveStatuses() {
+        return Stream.of(IN_PROGRESS, BookingStatus.PAUSED, COMPLETED_PENDING_CONFIRMATION, COMPLETED, DISPUTED);
     }
 
     @Test

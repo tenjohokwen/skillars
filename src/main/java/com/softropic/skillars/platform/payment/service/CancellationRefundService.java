@@ -101,10 +101,13 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onBookingCancelledByAdmin(BookingCancelledByAdminEvent event) {
-        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT)
-        if (event.getSessionPackPurchaseId() != null) {
+        // skillars-deferred-101 AC4: refund enqueue now handled by RefundEnqueueListener (BEFORE_COMMIT).
+        // C2: only a captured booking's pack session was ever deducted (PaymentLifecycleService deducts
+        // at settle, not at request), so only that one is restored. Deliberately no cancellation
+        // history and no reliability strike — the coach did not cancel; an admin/system action did.
+        if (event.isPackRestore()) {
             packSessionService.restoreSession(event.getSessionPackPurchaseId());
-            log.info("Pack session restored for admin suspension: bookingId={}", event.getBookingId());
+            log.info("Pack session restored for admin cancellation: bookingId={}", event.getBookingId());
         }
     }
 

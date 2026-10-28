@@ -117,7 +117,11 @@ describe('AdminCoachEnforcementPage.vue', () => {
   })
 
   it('suspend requires a reason and sends it with the notify flag', async () => {
-    adminApi.suspendCoach.mockResolvedValue(undefined)
+    adminApi.suspendCoach.mockResolvedValue({
+      newlySuspended: true,
+      cancelledBookings: 3,
+      alertedBookings: 0,
+    })
     const wrapper = await mountPage()
     await wrapper.vm.openProfile(COACH_ID)
 
@@ -132,9 +136,77 @@ describe('AdminCoachEnforcementPage.vue', () => {
     expect(adminApi.suspendCoach).toHaveBeenCalledWith(COACH_ID, {
       reason: 'Repeated no-shows',
       notifyCoach: false,
+      cancelUpcomingBookings: true,
     })
     expect(wrapper.vm.actionDialogOpen).toBe(false)
     expect(adminApi.getCoachEnforcementProfile).toHaveBeenCalledTimes(2)
+    // C2: the toast reports how many sessions the suspension cancelled and refunded.
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'positive', message: 'admin.coaches.suspendSuccess' }),
+    )
+  })
+
+  it('suspend cancels upcoming sessions by default; the admin can opt out (C2)', async () => {
+    adminApi.suspendCoach.mockResolvedValue({
+      newlySuspended: true,
+      cancelledBookings: 1,
+      alertedBookings: 0,
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openProfile(COACH_ID)
+
+    wrapper.vm.openAction('suspend')
+    expect(wrapper.vm.cancelUpcomingBookings).toBe(true)
+    wrapper.vm.actionReason = 'Policy'
+    wrapper.vm.cancelUpcomingBookings = false
+    await wrapper.vm.submitAction()
+
+    expect(adminApi.suspendCoach).toHaveBeenCalledWith(COACH_ID, {
+      reason: 'Policy',
+      notifyCoach: true,
+      cancelUpcomingBookings: false,
+    })
+    // Re-opening the dialog resets the opt-out to the default.
+    wrapper.vm.openAction('suspend')
+    expect(wrapper.vm.cancelUpcomingBookings).toBe(true)
+  })
+
+  it('suspending an already-suspended coach says nothing changed', async () => {
+    adminApi.suspendCoach.mockResolvedValue({
+      newlySuspended: false,
+      cancelledBookings: 0,
+      alertedBookings: 0,
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openProfile(COACH_ID)
+
+    wrapper.vm.openAction('suspend')
+    wrapper.vm.actionReason = 'Policy'
+    await wrapper.vm.submitAction()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'positive', message: 'admin.coaches.alreadySuspended' }),
+    )
+  })
+
+  it('a suspend refused because a payment is in flight shows the retry hint (C2)', async () => {
+    adminApi.suspendCoach.mockRejectedValue({
+      response: { status: 409, data: { errorMsg: { message: 'admin.coaches.paymentInProgress' } } },
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openProfile(COACH_ID)
+
+    wrapper.vm.openAction('suspend')
+    wrapper.vm.actionReason = 'Policy'
+    await wrapper.vm.submitAction()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'negative',
+        message: 'admin.coaches.paymentInProgress',
+      }),
+    )
+    expect(wrapper.vm.actionDialogOpen).toBe(true)
   })
 
   it('reinstate sends the reason', async () => {

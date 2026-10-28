@@ -58,7 +58,8 @@ public class AdminUserResource {
     public ResponseEntity<Void> suspendUser(
             @PathVariable Long userId,
             @Valid @RequestBody AdminUserStatusRequest request) {
-        adminUserService.suspendUser(userId, request.reason(), resolveAdminId());
+        adminUserService.suspendUser(userId, request.reason(), resolveAdminId(),
+            request.cancelUpcomingBookingsOrDefault());
         return ResponseEntity.noContent().build();
     }
 

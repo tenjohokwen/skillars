@@ -30,6 +30,8 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.booking.contract.AdminBookingCancellationOutcome;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
@@ -44,6 +46,8 @@ import com.softropic.skillars.platform.security.repo.UserRepository;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
@@ -217,35 +221,138 @@ class BookingServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
     }
 
-    // ---- B2: admin cancellation of REQUESTED bookings goes through the state machine ----
+    // ---- B2/C2: admin cancellation (coach suspension / safety hold) goes through the state machine ----
 
-    @Test
-    void cancelRequestedBookingAsAdmin_requestedBooking_transitionsToCancelledAndPublishesStatusChange() {
-        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
-        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
-
-        boolean cancelled = bookingService.cancelRequestedBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN");
-
-        assertThat(cancelled).isTrue();
-        assertThat(booking.getStatus()).isEqualTo("CANCELLED");
-        assertThat(booking.getCancelReason()).isEqualTo("COACH_SUSPENDED_BY_ADMIN");
+    private java.util.List<org.springframework.context.ApplicationEvent> publishedEvents() {
         org.mockito.ArgumentCaptor<org.springframework.context.ApplicationEvent> events =
             org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
-        verify(eventPublisher).publishEvent(events.capture());
-        assertThat(events.getValue()).isInstanceOfSatisfying(
-            com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent.class,
-            e -> assertThat(e.newStatus()).isEqualTo("CANCELLED"));
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(events.capture());
+        return events.getAllValues();
+    }
+
+    private BookingCancelledByAdminEvent adminEvent() {
+        return publishedEvents().stream()
+            .filter(BookingCancelledByAdminEvent.class::isInstance)
+            .map(BookingCancelledByAdminEvent.class::cast)
+            .findFirst().orElseThrow();
     }
 
     @Test
-    void cancelRequestedBookingAsAdmin_bookingAlreadyLeftRequested_isSkippedWithoutThrowing() {
-        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "DECLINED");
+    void cancelBookingAsAdmin_requestedBooking_cancelsWithoutARefund_andPublishesStatusChange() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
 
-        boolean cancelled = bookingService.cancelRequestedBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN");
+        AdminBookingCancellationOutcome outcome =
+            bookingService.cancelBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN");
 
-        assertThat(cancelled).isFalse();
-        assertThat(booking.getStatus()).isEqualTo("DECLINED");
+        assertThat(outcome).isEqualTo(AdminBookingCancellationOutcome.CANCELLED);
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED");
+        assertThat(booking.getCancelReason()).isEqualTo("COACH_SUSPENDED_BY_ADMIN");
+        assertThat(publishedEvents()).anySatisfy(e -> assertThat(e).isInstanceOfSatisfying(
+            com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent.class,
+            sc -> assertThat(sc.newStatus()).isEqualTo("CANCELLED")));
+        // C2: nothing was captured for a REQUESTED booking — no refund, no pack restore.
+        BookingCancelledByAdminEvent event = adminEvent();
+        assertThat(event.isRefundEligible()).isFalse();
+        assertThat(event.isWalletRefund()).isFalse();
+        assertThat(event.isPackRestore()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"ACCEPTED", "PAYMENT_PENDING"})
+    void cancelBookingAsAdmin_preCaptureBooking_cancelsWithoutARefund(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThat(bookingService.cancelBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN"))
+            .isEqualTo(AdminBookingCancellationOutcome.CANCELLED);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED");
+        assertThat(adminEvent().isRefundEligible()).isFalse();
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"CONFIRMED", "UPCOMING"})
+    void cancelBookingAsAdmin_capturedCardBooking_refundsWhatWasActuallyPaid(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        BookingPayment bp = new BookingPayment();
+        bp.setBookingId(booking.getId());
+        bp.setStatus("CAPTURED");
+        bp.setCreditDebited(new BigDecimal("12.00"));
+        bp.setStripeCharged(new BigDecimal("28.00"));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(bp));
+
+        assertThat(bookingService.cancelBookingAsAdmin(booking.getId(), 1L, "COACH_UNAVAILABLE"))
+            .isEqualTo(AdminBookingCancellationOutcome.CANCELLED);
+
+        BookingCancelledByAdminEvent event = adminEvent();
+        assertThat(event.isWalletRefund()).isTrue();
+        assertThat(event.getRefundAmount()).isEqualByComparingTo("40.00");
+        // The coach's current price is never consulted when the payment row says what was paid.
+        verify(coachPricingRepository, never()).findByCoachId(any());
+    }
+
+    @Test
+    void cancelBookingAsAdmin_capturedPackBooking_restoresTheSession_orRefundsAnExpiredPack() {
+        UUID packId = UUID.randomUUID();
+        Booking live = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        live.setSessionPackPurchaseId(packId);
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchase pack =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
+        pack.setExpiresAt(Instant.now().minusSeconds(60));
+        pack.setPricePerSession(new BigDecimal("30.00"));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+        when(bookingRepository.findByIdForUpdate(live.getId())).thenReturn(Optional.of(live));
+
+        bookingService.cancelBookingAsAdmin(live.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN");
+
+        BookingCancelledByAdminEvent event = adminEvent();
+        assertThat(event.isPackExpiredAtCancellation()).isTrue();
+        assertThat(event.isPackRestore()).isFalse();
+        assertThat(event.isWalletRefund()).isTrue();
+        assertThat(event.getRefundAmount()).isEqualByComparingTo("30.00");
+    }
+
+    @Test
+    void cancelBookingAsAdmin_paymentPendingWithACaptureInFlight_isLeftUntouched() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        BookingPayment bp = new BookingPayment();
+        bp.setBookingId(booking.getId());
+        bp.setStatus("CAPTURE_PENDING");
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(bp));
+
+        assertThat(bookingService.cancelBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN"))
+            .isEqualTo(AdminBookingCancellationOutcome.PAYMENT_IN_PROGRESS);
+
+        assertThat(booking.getStatus()).isEqualTo("PAYMENT_PENDING");
+        verify(bookingRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"IN_PROGRESS", "PAUSED"})
+    void cancelBookingAsAdmin_liveSession_isReportedNotCancelled(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThat(bookingService.cancelBookingAsAdmin(booking.getId(), 1L, "COACH_UNAVAILABLE"))
+            .isEqualTo(AdminBookingCancellationOutcome.LIVE_SESSION);
+
+        assertThat(booking.getStatus()).isEqualTo(status);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void cancelBookingAsAdmin_bookingAlreadyTerminal_isSkippedWithoutThrowing() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CANCELLED_PARENT");
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThat(bookingService.cancelBookingAsAdmin(booking.getId(), 1L, "COACH_SUSPENDED_BY_ADMIN"))
+            .isEqualTo(AdminBookingCancellationOutcome.NOT_CANCELLABLE);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
         verify(bookingRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any());
     }

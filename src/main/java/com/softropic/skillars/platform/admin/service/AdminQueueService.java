@@ -4,9 +4,11 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertDto;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.contract.AdminQueueSummaryDto;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.messaging.repo.ConversationReportRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.ReviewFlagRepository;
+import com.softropic.skillars.platform.security.repo.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
@@ -37,6 +39,8 @@ public class AdminQueueService {
     private final MessageRepository messageRepository;
     private final ConversationReportRepository conversationReportRepository;
     private final ReviewFlagRepository reviewFlagRepository;
+    private final BookingRepository bookingRepository;
+    private final UserRepository userRepository;
 
     @Transactional(readOnly = true)
     public Page<AdminAlertDto> getAlerts(String typeParam, int page) {
@@ -197,8 +201,47 @@ public class AdminQueueService {
             // needed here (see StripeWebhookService's own Javadoc for that dedup-granularity note).
             case SUBSCRIPTION_ORPHANED -> "Coach " + referenceId + " has a live Stripe subscription "
                 + "with no matching local payment.coach_subscriptions row";
+            // C2: referenceId is the booking id, reason its state (IN_PROGRESS / PAUSED /
+            // PAYMENT_IN_FLIGHT). The parent's contact is resolved here, at read time, rather than
+            // copied into the alert row — admin_alerts must not become a second store of contact PII.
+            case SAFETY_HOLD_BOOKING -> {
+                String state = reason != null ? reason : "UNKNOWN";
+                yield "URGENT — coach under child-safety hold; booking " + referenceId + " is " + state
+                    + " and could not be cancelled. Contact the parent: " + parentContact(referenceId);
+            }
             default -> "";
         };
+    }
+
+    /**
+     * C2: an admin marks an urgent {@code SAFETY_HOLD_BOOKING} alert handled (the parent was contacted,
+     * the live session ended, the in-flight payment was dealt with). Only that type: every other alert
+     * type is resolved by its own workflow (message approve/block, reinstate, dispute resolution, ...).
+     *
+     * @throws ResponseStatusException 404 when no OPEN safety-hold alert has this id (already resolved,
+     *                                 by a concurrent admin too)
+     */
+    @Transactional
+    public void resolveSafetyHoldBookingAlert(UUID alertId, Long adminId) {
+        int updated = adminAlertRepository.resolveOpenAlert(alertId, AdminAlertType.SAFETY_HOLD_BOOKING.name(), adminId);
+        if (updated == 0) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.NOT_FOUND, "admin.moderation.alertNotOpen");
+        }
+        log.info("Safety-hold booking alert resolved: alertId={} adminId={}", alertId, adminId);
+    }
+
+    /** "email (user id)" of the booking's payer — booking.parentId is a user id (the requester's own). */
+    private String parentContact(String bookingId) {
+        try {
+            return bookingRepository.findById(UUID.fromString(bookingId))
+                .map(b -> userRepository.findById(b.getParentId())
+                    .map(u -> u.getEmail() + " (user " + u.getId() + ")")
+                    .orElse("[user " + b.getParentId() + " not found]"))
+                .orElse("[booking not found]");
+        } catch (IllegalArgumentException e) {
+            return "[invalid referenceId]";
+        }
     }
 
     /**
@@ -261,6 +304,7 @@ public class AdminQueueService {
             // skillars-deferred-133 AC3: same fix skillars-deferred-128 applied above, for
             // SUBSCRIPTION_ORPHANED.
             counts.getOrDefault(AdminAlertType.SUBSCRIPTION_ORPHANED, 0L),
+            counts.getOrDefault(AdminAlertType.SAFETY_HOLD_BOOKING, 0L),
             total);
     }
 }

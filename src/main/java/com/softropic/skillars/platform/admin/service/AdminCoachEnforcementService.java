@@ -3,6 +3,8 @@ package com.softropic.skillars.platform.admin.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
+import com.softropic.skillars.platform.admin.contract.AdminAlertReferenceType;
+import com.softropic.skillars.platform.admin.contract.AdminSuspendCoachResponse;
 import com.softropic.skillars.platform.admin.contract.CoachCancellationHistoryEntryDto;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementListItemDto;
 import com.softropic.skillars.platform.admin.contract.CoachEnforcementProfileDto;
@@ -16,7 +18,7 @@ import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
 import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
-import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
+import com.softropic.skillars.platform.booking.contract.AdminBookingCancellationOutcome;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.service.BookingService;
@@ -26,14 +28,12 @@ import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTie
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
-import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrike;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
-import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeService;
@@ -52,7 +52,6 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -75,8 +74,6 @@ public class AdminCoachEnforcementService {
     private final AdminAlertRepository adminAlertRepository;
     private final AdminActionLogRepository adminActionLogRepository;
     private final BookingRepository bookingRepository;
-    private final CoachPricingRepository coachPricingRepository;
-    private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
@@ -137,74 +134,36 @@ public class AdminCoachEnforcementService {
             activeStrikes, strikeHistory, cancellationHistory, openAlerts);
     }
 
+    /**
+     * cancel_reason stamped on every booking a coach suspension or child-safety hold cancels.
+     * Deliberately neutral: the booking row reaches the parent (the GDPR export serialises it), and the
+     * parent must never learn why — the reason lives on the coach's admin_action_log row instead.
+     */
+    static final String CANCEL_REASON_COACH_UNAVAILABLE = "COACH_UNAVAILABLE";
+
+    /**
+     * Admin suspension. REQUESTED bookings are always cancelled; with {@code cancelUpcomingBookings}
+     * (the default — C2, DECISIONS.md item 2) the coach's ACCEPTED / PAYMENT_PENDING / CONFIRMED /
+     * UPCOMING bookings are cancelled too, each with a full refund to the payer, no reliability strike
+     * and a neutral parent notice. All-or-nothing: a booking whose payment capture is in flight fails
+     * the whole suspension with a retryable 409 ({@code admin.coaches.paymentInProgress}) rather than
+     * leave money captured on a cancelled booking — retry in a few seconds, or opt out of the
+     * cancellation to suspend immediately. Live sessions (IN_PROGRESS / PAUSED) are left to finish.
+     * No payout freeze (that is the safety hold only).
+     */
     @Transactional
-    public void suspendCoach(UUID coachId, String reason, boolean notifyCoach, Long adminId) {
-        applySuspension(coachId, reason, notifyCoach, adminId);
-    }
-
-    /**
-     * Child-safety hold (B6, issue 6): a CSAM match on a coach's uploaded video. The account side —
-     * user SUSPENDED + locked + sessions revoked — is {@code AccountSuspensionEventListener}'s job; this
-     * takes the coach's <em>marketplace</em> profile down with the same mechanics an admin suspension
-     * uses (profile SUSPENDED under the row lock, open REQUESTED bookings cancelled with their refunds),
-     * so the profile stops being searchable and bookable.
-     *
-     * <p>{@code REQUIRES_NEW}: called from {@code CoachSafetySuspensionListener} after the publisher's
-     * transaction (if any) has committed, so it needs its own. Idempotent — an already-SUSPENDED coach
-     * is a no-op, so a re-delivered event does nothing twice. The coach is NOT notified (a safety
-     * action never tips off the account it acts against). It is logged as {@code COACH_SAFETY_HOLD}
-     * with {@code admin_id = AdminActionLog.SYSTEM_ACTOR_ID} (V183), which also makes it non-appealable ({@code AppealService}).
-     * CONFIRMED upcoming sessions are not cancelled here (see the design note in applySuspension).
-     *
-     * @return true when this call suspended the profile, false when it was already suspended
-     */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public boolean suspendCoachForSafetyHold(UUID coachId, UUID videoId) {
-        return applySuspension(coachId, "SAFETY_HOLD video=" + videoId, false, null);
-    }
-
-    /**
-     * Shared by both suspension entry points (one lock call site, so the {@code
-     * PessimisticLockRetryerCallSiteAuditTest} count is unchanged). {@code adminId == null} means a
-     * system (safety) suspension, logged as COACH_SAFETY_HOLD.
-     */
-    private boolean applySuspension(UUID coachId, String reason, boolean notifyCoach, Long adminId) {
-        // Deferred-15 AC4: locked read. The three accept paths re-check SUSPENDED under this same
-        // row lock — but two writers serialise only when BOTH take it. With a plain findById the
-        // suspension could read, write and commit entirely inside the window an accept path holds
-        // its lock, making that lock decorative.
-        CoachProfile coach = lockRetryer.withBoundedRetry("AdminCoachEnforcementService.suspendCoach",
-            () -> coachProfileRepository.findByIdForUpdate(coachId)
-                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
-
+    public AdminSuspendCoachResponse suspendCoach(UUID coachId, String reason, boolean notifyCoach, Long adminId,
+                                                  boolean cancelUpcomingBookings) {
+        CoachProfile coach = lockCoachForSuspension(coachId);
         if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
-            return false;
+            return AdminSuspendCoachResponse.alreadySuspended();
         }
+        Instant suspendedAt = markSuspended(coach);
 
-        Instant suspendedAt = Instant.now();
-        coach.setStatus(CoachProfileStatus.SUSPENDED);
-        coach.setStatusChangedAt(suspendedAt);
-        coachProfileRepository.save(coach);
-
-        List<Booking> requestedBookings = bookingRepository
-            .findByCoachIdAndStatusOrderByRequestedStartTimeAsc(coachId, "REQUESTED");
-
-        // B2: through the booking state machine (CANCEL_ADMIN), not a raw setStatus, so each
-        // cancellation publishes BookingStatusChangedEvent (batch roll-up, SSE, session-plan
-        // listeners). Lock order is coach row (above) then booking row, the same order the accept
-        // paths take. A booking that left REQUESTED since the list was read is skipped.
-        int cancelled = 0;
-        for (Booking booking : requestedBookings) {
-            Long actorId = adminId == null ? AdminActionLog.SYSTEM_ACTOR_ID : adminId;
-            if (!bookingService.cancelRequestedBookingAsAdmin(booking.getId(), actorId, "COACH_SUSPENDED_BY_ADMIN")) {
-                continue;
-            }
-            cancelled++;
-            BigDecimal sessionPrice = resolveAdminBookingPrice(booking);
-            eventPublisher.publishEvent(new BookingCancelledByAdminEvent(
-                this, booking.getId(), booking.getParentId(), coachId,
-                booking.getSessionPackPurchaseId(), sessionPrice));
-        }
+        // Lock order: coach row (above, held to commit — no booking of this coach can be accepted behind
+        // the sweep's back) then each booking row.
+        SweepResult sweep = sweepBookings(coachId, cancelUpcomingBookings
+            ? BookingService.ADMIN_CANCELLABLE_STATUSES : List.of("REQUESTED"), adminId, false);
 
         if (notifyCoach) {
             // B6: the coach is emailed + gets an inbox row (AdminOutcomeEmailListener). The recipient is
@@ -212,36 +171,185 @@ public class AdminCoachEnforcementService {
             eventPublisher.publishEvent(new CoachSuspensionNotificationEvent(this, coachId, reason,
                 coach.getDisplayName(), recipientResolver.forCoach(coachId).orElse(null)));
         }
-
         eventPublisher.publishEvent(new CoachSuspendedEvent(this, coachId, reason, adminId));
+        logSuspension(coachId, adminId, AdminActionType.COACH_SUSPEND, reason, suspendedAt);
+        log.info("Coach suspended by admin: coachId={} adminId={} cancelUpcoming={} cancelledBookings={}",
+            coachId, adminId, cancelUpcomingBookings, sweep.cancelled());
+        return new AdminSuspendCoachResponse(true, sweep.cancelled(), 0);
+    }
 
-        // A safety hold is logged too (admin_id = SYSTEM_ACTOR_ID, V183) — with the same instant as statusChangedAt, so
-        // AppealService can recognise THIS suspension as a non-appealable child-safety hold, and the admin
-        // console shows why the coach is suspended.
+    /**
+     * Child-safety hold (B6, issue 6): a CSAM match on a coach's uploaded video. The account side —
+     * user SUSPENDED + locked + sessions revoked — is {@code AccountSuspensionEventListener}'s job; this
+     * takes the coach's <em>marketplace</em> profile down, so it stops being searchable and bookable.
+     *
+     * <p>Two transactions, in this order, so booking contention can never undo the takedown:
+     * {@link #applySafetyHoldStatus} commits the profile SUSPENDED + the {@code COACH_SAFETY_HOLD} row
+     * first; {@link #sweepBookingsForSafetyHold} then cancels every not-yet-started booking (full refund,
+     * no strike, neutral parent notice — C2, DECISIONS.md item 2) and raises one urgent
+     * {@code SAFETY_HOLD_BOOKING} alert per booking it cannot cancel (a live session, or a capture in
+     * flight). If the sweep fails, the hold already stands; a re-run (the listener retries, and a
+     * re-delivered event re-runs) sweeps again — both steps are idempotent.
+     *
+     * <p>Not {@code @Transactional} itself: each step is {@code REQUIRES_NEW} through {@link #self}.
+     * The coach is NOT notified (a safety action never tips off the account it acts against). The
+     * payout freeze for a held coach is the payment module's (chunk C3); it keys off the
+     * {@code COACH_SAFETY_HOLD} row, which also makes the hold non-appealable ({@code AppealService}).
+     */
+    public AdminSuspendCoachResponse suspendCoachForSafetyHold(UUID coachId, UUID videoId) {
+        boolean newlyHeld = self.applySafetyHoldStatus(coachId, "SAFETY_HOLD video=" + videoId);
+        SweepResult sweep = self.sweepBookingsForSafetyHold(coachId);
+        log.error("[COACH_SAFETY_SUSPENSION] coach profile under safety hold: coachId={} videoId={} newlyHeld={} "
+            + "cancelledBookings={} urgentBookingAlerts={}", coachId, videoId, newlyHeld, sweep.cancelled(),
+            sweep.alerted());
+        return new AdminSuspendCoachResponse(newlyHeld, sweep.cancelled(), sweep.alerted());
+    }
+
+    /**
+     * Step 1 of a safety hold: profile SUSPENDED and a {@code COACH_SAFETY_HOLD} admin_action_log row
+     * (admin_id = SYSTEM_ACTOR_ID, V183) stamped with the same instant as {@code statusChangedAt} — that
+     * pairing is what {@code AppealService} (and the C3 payout freeze) recognise as a safety hold. A coach
+     * an admin had already suspended is converted too (new {@code statusChangedAt} + the row): otherwise
+     * the earlier, appealable admin suspension would be the one in force and a CSAM hold would leave no
+     * trace. Already under a safety hold = no-op (re-delivery).
+     *
+     * @return true if this call put the hold in place
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean applySafetyHoldStatus(UUID coachId, String reason) {
+        CoachProfile coach = lockCoachForSuspension(coachId);
+        if (coach.getStatus() == CoachProfileStatus.SUSPENDED && coach.getStatusChangedAt() != null
+                && adminActionLogRepository.existsByReferenceIdAndActionTypeAndCreatedAtGreaterThanEqual(
+                    coachId.toString(), AdminActionType.COACH_SAFETY_HOLD, coach.getStatusChangedAt())) {
+            return false;
+        }
+        Instant heldAt = markSuspended(coach);
+        eventPublisher.publishEvent(new CoachSuspendedEvent(this, coachId, reason, null));
+        logSuspension(coachId, AdminActionLog.SYSTEM_ACTOR_ID, AdminActionType.COACH_SAFETY_HOLD, reason, heldAt);
+        return true;
+    }
+
+    /**
+     * Step 2 of a safety hold, in its own transaction after the hold committed. No coach row lock: the
+     * profile is already SUSPENDED and committed, so every accept path rejects — no booking can enter a
+     * cancellable status behind this sweep — and not taking it keeps the sweep off the coach-row
+     * contention surface. Live sessions are read, never locked: they are only reported.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public SweepResult sweepBookingsForSafetyHold(UUID coachId) {
+        SweepResult sweep = sweepBookings(coachId, BookingService.ADMIN_CANCELLABLE_STATUSES,
+            AdminActionLog.SYSTEM_ACTOR_ID, true);
+        int alerted = sweep.alerted();
+        for (Booking live : bookingRepository.findByCoachIdAndStatusInOrderByRequestedStartTimeAsc(
+                coachId, BookingService.LIVE_SESSION_STATUSES)) {
+            alerted += raiseSafetyHoldBookingAlert(live, live.getStatus()) ? 1 : 0;
+        }
+        return new SweepResult(sweep.cancelled(), alerted);
+    }
+
+    /** Outcome of a booking sweep: bookings cancelled, urgent alerts raised. */
+    public record SweepResult(int cancelled, int alerted) {
+    }
+
+    /**
+     * Deferred-15 AC4: locked read. The three accept paths re-check SUSPENDED under this same row lock
+     * — but two writers serialise only when BOTH take it. With a plain findById the suspension could
+     * read, write and commit entirely inside the window an accept path holds its lock, making that lock
+     * decorative. One call site for both suspension paths (PessimisticLockRetryerCallSiteAuditTest).
+     */
+    private CoachProfile lockCoachForSuspension(UUID coachId) {
+        return lockRetryer.withBoundedRetry("AdminCoachEnforcementService.suspendCoach",
+            () -> coachProfileRepository.findByIdForUpdate(coachId)
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile")));
+    }
+
+    private Instant markSuspended(CoachProfile coach) {
+        Instant at = Instant.now();
+        coach.setStatus(CoachProfileStatus.SUSPENDED);
+        coach.setStatusChangedAt(at);
+        coachProfileRepository.save(coach);
+        return at;
+    }
+
+    private void logSuspension(UUID coachId, Long actorId, AdminActionType type, String reason, Instant at) {
         AdminActionLog actionLog = new AdminActionLog();
-        actionLog.setAdminId(adminId == null ? AdminActionLog.SYSTEM_ACTOR_ID : adminId);
-        actionLog.setActionType(adminId == null ? AdminActionType.COACH_SAFETY_HOLD : AdminActionType.COACH_SUSPEND);
+        actionLog.setAdminId(actorId);
+        actionLog.setActionType(type);
         actionLog.setReferenceId(coachId.toString());
         actionLog.setReason(reason);
-        actionLog.setCreatedAt(suspendedAt);
+        // Same instant as statusChangedAt: how AppealService tells a safety hold from an admin suspension.
+        actionLog.setCreatedAt(at);
         adminActionLogRepository.save(actionLog);
-        if (adminId != null) {
-            log.info("Coach suspended by admin: coachId={} adminId={} cancelledBookings={}",
-                coachId, adminId, cancelled);
-        } else {
-            // Design note (B6, re-checked after B2/#320): only REQUESTED bookings are cancelled, as on the
-            // admin path. The state machine's CANCEL_ADMIN exists only from REQUESTED; a CONFIRMED session
-            // has no admin cancellation + refund transition (CANCEL_COACH would issue the coach a strike
-            // and coach-cancel refunds under the wrong actor). They are surfaced for the admin handling
-            // the CSAM alert instead.
-            long confirmedUpcoming = bookingRepository
-                .findByCoachIdAndStatusOrderByRequestedStartTimeAsc(coachId, "CONFIRMED").stream()
-                .filter(b -> b.getRequestedStartTime() != null && b.getRequestedStartTime().isAfter(suspendedAt))
-                .count();
-            log.error("[COACH_SAFETY_SUSPENSION] coach profile suspended by safety hold: coachId={} reason={} "
-                + "cancelledRequested={} confirmedUpcomingStillScheduled={} — review and cancel those from the "
-                + "admin console", coachId, reason, cancelled, confirmedUpcoming);
+    }
+
+    /**
+     * B2/C2: cancels the coach's bookings in {@code statuses} through the booking state machine
+     * ({@code CANCEL_ADMIN}, not a raw setStatus), so each cancellation publishes
+     * BookingStatusChangedEvent (batch roll-up, SSE, session-plan listeners) and
+     * BookingCancelledByAdminEvent (refund + neutral parent notice). Each booking is re-read under its
+     * own row lock by cancelBookingAsAdmin, so one that moved since the id list was read (a concurrent
+     * parent cancel, a settle) is judged on its fresh status.
+     *
+     * <p>A capture in flight: an admin suspension fails as a whole with a retryable 409 (all-or-nothing
+     * — every cancellation above rolls back with it, their BEFORE_COMMIT refunds and notices never run;
+     * same contract as the parent's booking.paymentInProgress); a safety hold raises an urgent alert.
+     */
+    private SweepResult sweepBookings(UUID coachId, List<String> statuses, Long actorId, boolean safetyHold) {
+        List<UUID> bookingIds = bookingRepository.findIdsByCoachIdAndStatusIn(coachId, statuses);
+        int cancelled = 0;
+        int alerted = 0;
+        for (UUID bookingId : bookingIds) {
+            AdminBookingCancellationOutcome outcome =
+                bookingService.cancelBookingAsAdmin(bookingId, actorId, CANCEL_REASON_COACH_UNAVAILABLE);
+            switch (outcome) {
+                case CANCELLED -> cancelled++;
+                case PAYMENT_IN_PROGRESS -> {
+                    if (!safetyHold) {
+                        throw new ResponseStatusException(HttpStatus.CONFLICT, "admin.coaches.paymentInProgress");
+                    }
+                    alerted += raiseSafetyHoldBookingAlert(lockedBooking(bookingId), "PAYMENT_IN_FLIGHT") ? 1 : 0;
+                }
+                // A booking that went live since the id list was read: left to finish (the safety hold
+                // reports live sessions separately, unlocked).
+                case LIVE_SESSION, NOT_CANCELLABLE -> { }
+            }
         }
+        return new SweepResult(cancelled, alerted);
+    }
+
+    /**
+     * The booking as cancelBookingAsAdmin just re-read it under its row lock (still locked, already
+     * managed and refreshed in this persistence context — no second query, no stale snapshot).
+     */
+    private Booking lockedBooking(UUID bookingId) {
+        return bookingRepository.findById(bookingId)
+            .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking"));
+    }
+
+    /**
+     * One urgent admin alert for a booking a safety hold could not cancel, written in the sweep's
+     * transaction. The OPEN-dedup pre-check covers re-runs; a concurrent duplicate sweep of the same
+     * coach (two CSAM events at once) is caught by the {@code admin_alerts_unique_open_per_ref} unique
+     * index, failing that sweep — which the listener retries, and whose retry then dedups. The parent to
+     * contact is resolved for display by {@code AdminQueueService} from the booking.
+     *
+     * @return true if an alert was created (false: one is already open for this booking)
+     */
+    private boolean raiseSafetyHoldBookingAlert(Booking booking, String state) {
+        String bookingRef = booking.getId().toString();
+        if (adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(
+                bookingRef, AdminAlertType.SAFETY_HOLD_BOOKING, AdminAlertStatus.OPEN).isPresent()) {
+            return false;
+        }
+        AdminAlert alert = new AdminAlert();
+        alert.setType(AdminAlertType.SAFETY_HOLD_BOOKING);
+        alert.setReferenceId(bookingRef);
+        alert.setReferenceType(AdminAlertReferenceType.BOOKING);
+        alert.setReason(state);
+        adminAlertRepository.save(alert);
+        log.error("CRITICAL: [COACH_SAFETY_HOLD_BOOKING] booking could not be cancelled by the safety hold: "
+            + "bookingId={} state={} coachId={} parentUserId={} — contact the parent now",
+            booking.getId(), state, booking.getCoachId(), booking.getParentId());
         return true;
     }
 
@@ -686,23 +794,6 @@ public class AdminCoachEnforcementService {
         log.info("Coach verification tier changed by admin: coachId={} {} -> {} adminId={}",
             coachId, previous, tier, adminId);
         return true;
-    }
-
-    private BigDecimal resolveAdminBookingPrice(Booking booking) {
-        if (booking.getSessionPackPurchaseId() != null) {
-            return sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
-                .map(p -> p.getPricePerSession())
-                .orElseGet(() -> {
-                    log.warn("Session pack not found for booking={}, defaulting to ZERO", booking.getId());
-                    return BigDecimal.ZERO;
-                });
-        }
-        return coachPricingRepository.findByCoachId(booking.getCoachId())
-            .map(p -> p.getPerSessionPrice())
-            .orElseGet(() -> {
-                log.warn("Coach pricing not found for booking={}, defaulting to ZERO", booking.getId());
-                return BigDecimal.ZERO;
-            });
     }
 
     // skillars-deferred-131 AC1 Fix 3 (code review 2026-09-23): extracted — the same 9-line find-or-create

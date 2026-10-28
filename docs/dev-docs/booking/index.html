@@ -101,7 +101,7 @@
       <li><strong>Coach must be booking-ready:</strong> single and batch creation both require coach status <code>ACTIVE</code>/<code>REDUCED</code>/<code>PENDING_REVIEW</code> (<code>BookingService.requireBookableCoachStatus</code>, re-checked under the coach row lock) and <code>paymentGateway.isCoachPaymentReady</code> (<code>requireCoachPaymentReady</code>, else 422 <code>payment.coachStripeNotConfigured</code> via <code>BookingApiAdvice</code>). Every accept path rejects a <code>SUSPENDED</code> coach.</li>
       <li><strong>Erased players cannot be booked:</strong> single create, batch create and duplicate-next-week reject a player whose <code>developmentDataErasedAt</code> is set or who has a child-scoped <code>ERASURE</code> request in <code>PENDING</code>/<code>PROCESSING</code>/<code>FAILED</code> (<code>booking.playerNotBookable</code>). The authoritative check (<code>BookingService.requirePlayerBookableUnderLock</code>) runs under the <code>player_profiles</code> row lock, which <code>GdprRequestService.requestChildErasure</code> also takes before its live-booking check, so a booking and a child-erasure request cannot both succeed. Lock order: coach row, then player row.</li>
       <li><strong>No overlapping active bookings per coach</strong> — app-layer check under a coach-row lock on every write path plus a DB exclusion constraint; see <a href="#slot-exclusivity">Slot exclusivity</a>.</li>
-      <li><strong>Parent cancellation refund (binary):</strong> <code>cancelBookingAsParent</code> sets <code>refundEligible = true</code> only if payment was captured (status was <code>CONFIRMED</code>/<code>UPCOMING</code>) <em>and</em> either the session is more than 24h away <em>or</em> its start time has already passed (Deferred-64 AC4). Cancelling a <code>PAYMENT_PENDING</code> booking whose <code>BookingPayment</code> is <code>CAPTURE_PENDING</code> is refused with 409 <code>booking.paymentInProgress</code>. Coach cancellation and coach no-show are always full refunds; player no-show forfeits fully. The money moves in <code>payment</code>, not here.</li>
+      <li><strong>Parent cancellation refund (binary):</strong> <code>cancelBookingAsParent</code> sets <code>refundEligible = true</code> only if payment was captured (status was <code>CONFIRMED</code>/<code>UPCOMING</code>) <em>and</em> either the session is more than 24h away <em>or</em> its start time has already passed (Deferred-64 AC4). Cancelling a <code>PAYMENT_PENDING</code> booking whose <code>BookingPayment</code> is <code>CAPTURE_PENDING</code> is refused with 409 <code>booking.paymentInProgress</code>. Coach cancellation and coach no-show are always full refunds; player no-show forfeits fully. An admin/system cancellation on a coach suspension or child-safety hold (<code>cancelBookingAsAdmin</code>) is a full refund of what was actually paid when payment was captured (same <code>CONFIRMED</code>/<code>UPCOMING</code> whitelist), nothing otherwise, never a coach strike, and the same <code>CAPTURE_PENDING</code> interlock. The money moves in <code>payment</code>, not here.</li>
       <li><strong>Completed is final for cancellation:</strong> cancel/no-show on a <code>COMPLETED</code> booking fails fast with <code>booking.alreadyCompleted</code> (<code>rejectIfPostCompletion</code>) — post-completion problems go through admin disputes.</li>
       <li><strong>No-show and start are time-gated:</strong> both no-show reports, <code>start</code> and <code>quick-complete</code> are rejected before <code>requestedStartTime</code> (<code>booking.noShowTooEarly</code> / <code>booking.sessionNotYetStarted</code>).</li>
       <li><strong>Reschedule:</strong> either party may propose (the other answers; <code>booking.cannotRespondToOwnProposal</code>), only for <code>CONFIRMED</code>/<code>UPCOMING</code> bookings, one <code>PENDING</code> proposal per booking at a time, future start, same duration, inside availability and not blocked.</li>
@@ -237,7 +237,7 @@
       <tr><th>Event</th><th>Actually published by</th></tr>
       <tr><td><code>BookingConfirmedEvent</code></td><td><code>payment.BookingPaymentPersistenceService</code> (after <code>PAYMENT_CAPTURED</code>)</td></tr>
       <tr><td><code>BookingPaymentUnresolvedEvent</code></td><td><code>payment.PaymentPendingSweeper</code></td></tr>
-      <tr><td><code>BookingCancelledByAdminEvent</code></td><td><code>admin.AdminCoachEnforcementService.suspendCoach</code></td></tr>
+      <tr><td><code>BookingCancelledByAdminEvent</code></td><td><code>BookingService.cancelBookingAsAdmin</code>, called per booking by <code>admin.AdminCoachEnforcementService</code> (suspension / safety hold)</td></tr>
       <tr><td><code>SessionPackExhaustedEvent</code>, <code>PackPausedEvent</code></td><td><code>payment.PackSessionService</code></td></tr>
       <tr><td><code>SessionPackExpiredEvent</code></td><td><code>payment.SessionPackForfeitureScheduler</code></td></tr>
       <tr><td><code>SessionPackExpiryWarningEvent</code></td><td><code>payment.SessionPackExpiryNotifier</code></td></tr>
@@ -465,10 +465,18 @@ sequenceDiagram
       <p><strong>Status changes go through <code>BookingService.transition()</code>.</strong> It locks the booking row
       (<code>findByIdForUpdate</code>, NO_WAIT + retry, then refresh), validates the actor against <code>EVENT_ROLES</code>,
       validates the transition with <code>BookingStateMachine</code>, saves, and publishes <code>BookingStatusChangedEvent</code>.
-      Don't call <code>booking.setStatus(...)</code> directly. Coach suspension uses
-      <code>BookingService.cancelRequestedBookingAsAdmin</code> (event <code>CANCEL_ADMIN</code>, ADMIN actor,
-      <code>REQUESTED → CANCELLED</code>, cancel reason <code>COACH_SUSPENDED_BY_ADMIN</code>); it skips, rather than throws on, a
-      booking that has already left <code>REQUESTED</code>, because a throw would roll back the whole suspension.</p>
+      Don't call <code>booking.setStatus(...)</code> directly. Coach suspension and the child-safety hold use
+      <code>BookingService.cancelBookingAsAdmin</code> (event <code>CANCEL_ADMIN</code>, ADMIN actor, legal from
+      <code>REQUESTED</code>, <code>ACCEPTED</code>, <code>PAYMENT_PENDING</code>, <code>CONFIRMED</code> and
+      <code>UPCOMING</code> to <code>CANCELLED</code>, never from <code>IN_PROGRESS</code>/<code>PAUSED</code>; the
+      neutral cancel reason <code>COACH_UNAVAILABLE</code>, because the row reaches the parent's GDPR export).
+      It returns an <code>AdminBookingCancellationOutcome</code> (<code>CANCELLED</code> / <code>PAYMENT_IN_PROGRESS</code> /
+      <code>LIVE_SESSION</code> / <code>NOT_CANCELLABLE</code>) rather than throwing, because it joins the suspension's
+      transaction and a throw would roll back the whole suspension; the caller decides what each outcome means.
+      Everything is decided under the booking row lock. The caller passes booking <em>ids</em>
+      (<code>findIdsByCoachIdAndStatusIn</code>), never loaded entities: a booking already managed at an old
+      <code>@Version</code> makes the locked re-read throw <code>StaleObjectStateException</code> when a concurrent
+      writer has moved it, instead of returning the fresh status.</p>
     </div>
     <div class="callout warn">
       <p><strong><code>DISPUTED</code>, <code>REFUND_PENDING</code> and <code>REFUNDED</code> are unreachable today.</strong> The state
@@ -541,7 +549,7 @@ sequenceDiagram
       <li><a href="../payment/index.html">Payment</a> — Stripe charge/capture/refund, credit wallet, session packs, refund and payout outboxes, batch price quote, receipts; drives <code>PAYMENT_CAPTURED</code>/<code>PAYMENT_FAILED</code> and sweeps stranded <code>PAYMENT_PENDING</code> bookings.</li>
       <li><a href="../session/index.html">Session</a> — session plans and drills (homework validation, plan snapshot, drill suggestions); reacts to completion for homework and plan lifecycle; deploys templates onto a booking via <code>BookingQueryService</code>.</li>
       <li><a href="../development/index.html">Development</a> — timeline and SLU from <code>BookingCompletedEvent</code>/<code>SessionRecapUpdatedEvent</code>; roster, coach–player access window and session prep read booking tables.</li>
-      <li><a href="../admin/index.html">Admin</a> — disputes (recap lock via <code>BookingDisputeLookup</code>), coach suspension (cancels requested bookings), force-complete, GDPR erasure/export and child-erasure guard.</li>
+      <li><a href="../admin/index.html">Admin</a> — disputes (recap lock via <code>BookingDisputeLookup</code>), coach suspension / safety hold (cancels requested and upcoming bookings with full refunds), force-complete, GDPR erasure/export and child-erasure guard.</li>
       <li><a href="../notification/index.html">Notification</a> — all booking emails and in-app notifications, via the outbox.</li>
       <li><a href="../reviews/index.html">Reviews</a> — eligibility is gated on qualifying completed bookings (<code>findQualifyingCompletedBookings</code>).</li>
       <li><a href="../security/index.html">Security</a> — player/user identity, <code>SecurityUtil</code>, role constants and the global <code>ApiAdvice</code> that maps lock and constraint failures to 409.</li>
@@ -550,7 +558,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>8661a41e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>5d85d8ec</code> (2026-10-28).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

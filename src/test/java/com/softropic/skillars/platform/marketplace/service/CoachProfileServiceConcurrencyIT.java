@@ -166,7 +166,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             Future<?> suspender = executor.submit(() -> {
                 try {
                     transactionTemplate.execute(status -> {
-                        adminCoachEnforcementService.suspendCoach(profileId, "policy violation", false, ADMIN_ID);
+                        adminCoachEnforcementService.suspendCoach(profileId, "policy violation", false, ADMIN_ID, true);
                         suspendLockHeld.countDown();
                         try {
                             boolean released = releaseSuspend.await(30, TimeUnit.SECONDS);

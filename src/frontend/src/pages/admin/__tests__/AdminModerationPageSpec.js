@@ -15,6 +15,7 @@ vi.mock('src/api/admin.api', () => ({
     getConversationDetail: vi.fn(),
     unblockConversation: vi.fn(),
     getReviewQueue: vi.fn(),
+    resolveSafetyHoldAlert: vi.fn(),
   },
 }))
 
@@ -36,6 +37,7 @@ const SUMMARY = {
   moderationHolds: 0,
   gdprErasureDeadlines: 0,
   subscriptionOrphaned: 0,
+  safetyHoldBookings: 0,
   total: 5,
 }
 
@@ -168,6 +170,32 @@ describe('AdminModerationPage.vue', () => {
     expect(wrapper.find('[data-testid="alert-open-coach-btn"]').attributes('href')).toContain(
       '/admin/coaches?coachId=c1',
     )
+  })
+
+  it('an urgent safety-hold booking alert can be marked handled (C2)', async () => {
+    const safetyAlert = {
+      alertId: 'a6',
+      type: 'SAFETY_HOLD_BOOKING',
+      referenceId: 'b6',
+      referenceType: 'BOOKING',
+      status: 'OPEN',
+      createdAt: '2026-01-01T10:00:00Z',
+      summary: 'URGENT — contact the parent: p@example.com',
+    }
+    adminApi.getModerationQueue.mockResolvedValue({ content: [safetyAlert], totalPages: 1 })
+    adminApi.resolveSafetyHoldAlert.mockResolvedValue(undefined)
+    const wrapper = await mountPage()
+
+    const btn = wrapper.find('[data-testid="alert-resolve-safety-hold-btn"]')
+    expect(btn.exists()).toBe(true)
+    await wrapper.vm.resolveSafetyHoldAlert('a6')
+    await flushPromises()
+
+    expect(adminApi.resolveSafetyHoldAlert).toHaveBeenCalledWith('a6')
+    expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+    // Queue and summary are reloaded so the resolved alert drops out of both.
+    expect(adminApi.getModerationQueue).toHaveBeenCalledTimes(2)
+    expect(adminApi.getModerationSummary).toHaveBeenCalledTimes(2)
   })
 
   it('a review-flag alert switches to the reviews tab', async () => {

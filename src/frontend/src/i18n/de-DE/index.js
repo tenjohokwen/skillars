@@ -1638,6 +1638,10 @@ export default {
       openReviewQueue: 'Bewertungen öffnen',
       openCoach: 'Trainer öffnen',
       openDisputes: 'Streitfälle öffnen',
+      markHandled: 'Als erledigt markieren',
+      markHandledSuccess: 'Meldung als erledigt markiert.',
+      markHandledFailed:
+        'Die Meldung konnte nicht aktualisiert werden — sie ist eventuell schon erledigt.',
       noInlineAction: 'Keine Aktion hier',
       messageTitle: 'Nachricht in Prüfung',
       conversationTitle: 'Gemeldete Unterhaltung',
@@ -1667,6 +1671,7 @@ export default {
         DISPUTE_RAISED: 'Streitfall eröffnet',
         MODERATION_UNRESOLVED: 'Zurückgehaltene Nachricht',
         GDPR_ERASURE_DEADLINE: 'DSGVO-Löschung überfällig',
+        SAFETY_HOLD_BOOKING: 'Dringend: Buchung unter Schutzsperre',
         SUBSCRIPTION_ORPHANED: 'Verwaistes Abonnement',
       },
     },
@@ -1737,6 +1742,13 @@ export default {
       deleteStrikeHint: 'Der Status des Trainers wird nach dem Löschen neu bewertet.',
       strikeBookingIdLabel: 'Buchungs-ID',
       strikeReasonLabel: 'Grund der Verwarnung',
+      cancelUpcomingLabel:
+        'Auch die anstehenden Sitzungen des Trainers absagen und den Familien vollständig erstatten',
+      alreadySuspended: 'Dieser Trainer war bereits gesperrt — es wurde nichts geändert.',
+      suspendSuccess:
+        'Trainer gesperrt. Abgesagte Sitzungen: {count} (bereits bezahlte werden vollständig erstattet).',
+      paymentInProgress:
+        'Eine Zahlung für eine Sitzung dieses Trainers wird gerade verarbeitet. Versuchen Sie es gleich noch einmal oder entfernen Sie das Häkchen bei der Sitzungsabsage, um sofort zu sperren.',
       notifyCoachLabel: 'Trainer per E-Mail benachrichtigen',
       actionSuccess: 'Erledigt.',
       actionFailed: 'Die Aktion ist fehlgeschlagen. Bitte erneut versuchen.',
@@ -1801,6 +1813,8 @@ export default {
       unlockSuccess: 'Anmeldung entsperrt ({count} Fehlversuche gelöscht).',
       cannotSuspendAdmin: 'Administratorkonten können nicht gesperrt werden.',
       cannotModifyAdmin: 'Administratorkonten können auf dieser Seite nicht geändert werden.',
+      cancelUpcomingLabel:
+        'Auch die anstehenden Sitzungen dieses Trainers absagen und den Familien vollständig erstatten',
       cannotSuspendSelf: 'Sie können Ihr eigenes Konto nicht sperren.',
       erased: 'Dieses Konto wurde gelöscht (DSGVO) und kann nicht reaktiviert werden.',
       safetyHold:
@@ -2496,6 +2510,8 @@ export default {
         'Die Trainingseinheit am {requestedStartTime} wurde storniert, weil das Paket pausiert wurde.',
       BOOKING_CANCELLED_BY_PARENT:
         'Die Trainingseinheit am {requestedStartTime} wurde von den Eltern storniert.',
+      BOOKING_CANCELLED_COACH_UNAVAILABLE:
+        'Ihre Sitzung mit {coachDisplayName} am {requestedStartTime} wurde abgesagt, weil der Trainer nicht verfügbar ist. Bereits gezahlte Beträge wurden vollständig erstattet.',
       BOOKING_CANCELLED_BY_COACH:
         'Ihr Coach hat die Trainingseinheit am {requestedStartTime} storniert.',
       COACH_NO_SHOW:

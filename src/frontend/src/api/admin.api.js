@@ -40,6 +40,11 @@ export const adminApi = {
     return api.get('/api/admin/queue/summary')
   },
 
+  // C2: mark an urgent SAFETY_HOLD_BOOKING alert handled (404 if it is no longer open).
+  resolveSafetyHoldAlert(alertId) {
+    return api.post(`/api/admin/queue/safety-hold-alerts/${alertId}/resolve`)
+  },
+
   getMessageDetail(messageId) {
     return api.get(`/api/admin/messages/${messageId}`)
   },
@@ -83,6 +88,8 @@ export const adminApi = {
     return api.get(`/api/admin/coaches/${coachId}/enforcement`)
   },
 
+  // payload: { reason, notifyCoach, cancelUpcomingBookings }. Resolves to
+  // { newlySuspended, cancelledBookings, alertedBookings } (C2).
   suspendCoach(coachId, payload) {
     return api.post(`/api/admin/coaches/${coachId}/suspend`, payload)
   },
@@ -112,8 +119,10 @@ export const adminApi = {
     return api.get(`/api/admin/users/${userId}`)
   },
 
-  suspendUser(userId, reason) {
-    return api.post(`/api/admin/users/${userId}/suspend`, { reason })
+  // cancelUpcomingBookings only matters for a COACH account (C2): the suspension also takes the
+  // coach's marketplace profile down and, by default, cancels + fully refunds their upcoming bookings.
+  suspendUser(userId, reason, cancelUpcomingBookings = true) {
+    return api.post(`/api/admin/users/${userId}/suspend`, { reason, cancelUpcomingBookings })
   },
 
   reactivateUser(userId, reason) {

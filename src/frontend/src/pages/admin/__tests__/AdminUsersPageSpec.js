@@ -118,10 +118,53 @@ describe('AdminUsersPage.vue', () => {
     await wrapper.vm.submitAction()
     await flushPromises()
 
-    expect(adminApi.suspendUser).toHaveBeenCalledWith('9171000010', 'Abusive messages')
+    expect(adminApi.suspendUser).toHaveBeenCalledWith('9171000010', 'Abusive messages', true)
     expect(wrapper.vm.actionDialogOpen).toBe(false)
     expect(adminApi.getUser).toHaveBeenCalledTimes(2)
     expect(adminApi.searchUsers).toHaveBeenCalledTimes(2)
+  })
+
+  it('suspending a coach offers the cancel-upcoming-sessions opt-out (C2)', async () => {
+    adminApi.getUser.mockResolvedValue({ ...DETAIL, role: 'COACH' })
+    adminApi.suspendUser.mockResolvedValue(undefined)
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('9171000010')
+
+    wrapper.vm.openAction('suspend')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="user-cancel-upcoming-checkbox"]').exists()).toBe(true)
+    wrapper.vm.actionReason = 'Policy'
+    wrapper.vm.cancelUpcomingBookings = false
+    await wrapper.vm.submitAction()
+
+    expect(adminApi.suspendUser).toHaveBeenCalledWith('9171000010', 'Policy', false)
+  })
+
+  it('a coach suspension refused for a payment in flight shows the retry hint (C2)', async () => {
+    adminApi.getUser.mockResolvedValue({ ...DETAIL, role: 'COACH' })
+    adminApi.suspendUser.mockRejectedValue({
+      response: { status: 409, data: { errorMsg: { message: 'admin.coaches.paymentInProgress' } } },
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('9171000010')
+
+    wrapper.vm.openAction('suspend')
+    wrapper.vm.actionReason = 'Policy'
+    await wrapper.vm.submitAction()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'admin.coaches.paymentInProgress' }),
+    )
+  })
+
+  it('suspending a non-coach shows no session-cancellation option', async () => {
+    adminApi.getUser.mockResolvedValue({ ...DETAIL, role: 'PARENT' })
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('9171000010')
+
+    wrapper.vm.openAction('suspend')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="user-cancel-upcoming-checkbox"]').exists()).toBe(false)
   })
 
   it('a suspended account offers reactivate, which sends the reason', async () => {

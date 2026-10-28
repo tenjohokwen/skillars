@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.notification.infrastructure.listener;
 
 import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
@@ -463,6 +464,43 @@ public class BookingEmailListener {
                 EmailTemplate.BOOKING_CANCELLED_BY_COACH, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_BY_COACH),
+                kv("bookingId", event.getBookingId()), e);
+        }
+    }
+
+    /**
+     * C2 (DECISIONS.md item 2): a coach suspension / child-safety hold cancelled the payer's booking.
+     * The notice is deliberately neutral — "the coach is unavailable" — and never carries the reason
+     * (the event does not even hold it). It states the refund the cancellation enqueued: the pack
+     * session restored, the amount credited to the wallet, or that nothing had been charged.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onBookingCancelledByAdmin(BookingCancelledByAdminEvent event) {
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send coach-unavailable cancellation email: parent email is blank, bookingId={}",
+                    event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("coachDisplayName", event.getCoachDisplayName() != null ? event.getCoachDisplayName() : "");
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            String refundType = event.isPackRestore() ? "PACK" : event.isWalletRefund() ? "CREDIT" : "NONE";
+            data.put("refundType", refundType);
+            data.put("refundAmount", event.isWalletRefund() && event.getRefundAmount() != null
+                ? event.getRefundAmount().setScale(2, java.math.RoundingMode.HALF_UP).toPlainString() : "");
+            data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.BOOKING_CANCELLED_COACH_UNAVAILABLE, recipient, data, UUID.randomUUID().toString());
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.BOOKING_CANCELLED_COACH_UNAVAILABLE),
                 kv("bookingId", event.getBookingId()), e);
         }
     }
