@@ -49,4 +49,37 @@ class CreditCardSplitTest {
             assertThat(s.creditApplied().signum()).isGreaterThanOrEqualTo(0);
         }
     }
+
+    // ── fix/payment-charge-idempotency (L3): a card part below Stripe's minimum is re-balanced ──
+
+    private static CreditCardSplit splitMin(String balance, String amount, String min) {
+        return CreditCardSplit.of(new BigDecimal(balance), new BigDecimal(amount), new BigDecimal(min));
+    }
+
+    @Test
+    void cardBelowMinimum_cardRaisedToMinimum_creditReducedBySameAmount() {
+        CreditCardSplit s = splitMin("49.80", "50.00", "0.50");
+        assertThat(s.cardCharge()).isEqualByComparingTo("0.50");
+        assertThat(s.creditApplied()).isEqualByComparingTo("49.50");
+    }
+
+    @Test
+    void cardAtOrAboveMinimum_orZero_unchanged() {
+        assertThat(splitMin("49.50", "50.00", "0.50").cardCharge()).isEqualByComparingTo("0.50");
+        assertThat(splitMin("80.00", "50.00", "0.50").cardCharge()).isEqualByComparingTo("0");
+        assertThat(splitMin("10.00", "50.00", "0.50").cardCharge()).isEqualByComparingTo("40.00");
+    }
+
+    @Test
+    void amountItselfBelowMinimum_leftAsIs() {
+        CreditCardSplit s = splitMin("0.10", "0.30", "0.50");
+        assertThat(s.creditApplied()).isEqualByComparingTo("0.10");
+        assertThat(s.cardCharge()).isEqualByComparingTo("0.20");
+    }
+
+    @Test
+    void nullMinimum_disablesTheAdjustment() {
+        CreditCardSplit s = CreditCardSplit.of(new BigDecimal("49.80"), new BigDecimal("50.00"), null);
+        assertThat(s.cardCharge()).isEqualByComparingTo("0.20");
+    }
 }

@@ -2296,6 +2296,8 @@ export default {
       notActive:
         'Ihr Abonnement ist derzeit nicht aktiv. Begleichen Sie die offene Zahlung, bevor Sie Ihren Tarif ändern.',
       alreadyActive: 'Sie haben bereits ein aktives Abonnement.',
+      inProgress:
+        'Ihr Abonnement wird bereits eingerichtet. Bitte warten Sie einen Moment und laden Sie die Seite neu.',
     },
     coach: {
       pageTitle: 'Coach-Abonnement',

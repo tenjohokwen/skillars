@@ -207,7 +207,7 @@ class CaptureReservationIT extends BasePaymentIT {
 
         paymentLifecycleService.onBookingAccepted(acceptedEvent(bookingId));
 
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         assertThat(paymentStatusOf(bookingId))
             .as("a refused reservation must write nothing — a row here would falsely record a charge")
             .isNull();
@@ -364,7 +364,7 @@ class CaptureReservationIT extends BasePaymentIT {
         UUID batchId = UUID.randomUUID();
 
         doThrow(new PaymentGatewayException("payment.batchFailure"))
-            .when(paymentGateway).chargeAndCaptureForBatch(any(), any(), any(), any());
+            .when(paymentGateway).chargeAndCaptureForBatch(any(), any(), any(), any(), any());
 
         paymentLifecycleService.onBatchBookingAccepted(new BatchBookingAcceptedEvent(
             this, batchId, List.of(first, second), PARENT_ID, coachId, new BigDecimal("100.00"),
@@ -397,7 +397,7 @@ class CaptureReservationIT extends BasePaymentIT {
             "capture_coach@test.com", "capture_parent@test.com", "Capture Coach", "Test Parent", 2));
 
         ArgumentCaptor<BigDecimal> charged = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(paymentGateway).chargeAndCaptureForBatch(any(), any(), any(), charged.capture());
+        verify(paymentGateway).chargeAndCaptureForBatch(any(), any(), any(), charged.capture(), any());
         assertThat(charged.getValue())
             .as("the cancelled booking must not appear in the subtotal — that is money taken for nothing")
             .isEqualByComparingTo(SESSION_PRICE);
@@ -494,7 +494,7 @@ class CaptureReservationIT extends BasePaymentIT {
         });
 
         doReturn("pi_self_player_test").when(paymentGateway)
-            .chargeAndCapture(eq(bookingId), eq(selfPlayerUserId), eq(coachId), any(BigDecimal.class));
+            .chargeAndCapture(eq(bookingId), eq(selfPlayerUserId), eq(coachId), any(BigDecimal.class), any());
 
         paymentLifecycleService.onBookingAccepted(new BookingAcceptedEvent(
             this, bookingId, selfPlayerUserId, coachId, SESSION_PRICE, null,

@@ -56,7 +56,15 @@ public class StripeWebhookResource {
             log.warn("[STRIPE_WEBHOOK_OVERSIZED length={} path={}]", contentLength, request.getRequestURI());
             return ResponseEntity.status(413).build();
         }
-        String payload = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        // fix/payment-charge-idempotency (L4): a chunked body has no Content-Length (-1), so the check above
+        // never fires for it and readAllBytes() would buffer whatever an unauthenticated caller streams. Read
+        // at most one byte past the limit and refuse if it is there.
+        byte[] body = request.getInputStream().readNBytes(MAX_WEBHOOK_BODY_BYTES + 1);
+        if (body.length > MAX_WEBHOOK_BODY_BYTES) {
+            log.warn("[STRIPE_WEBHOOK_OVERSIZED length=chunked>{} path={}]", MAX_WEBHOOK_BODY_BYTES, request.getRequestURI());
+            return ResponseEntity.status(413).build();
+        }
+        String payload = new String(body, StandardCharsets.UTF_8);
         String sigHeader = request.getHeader("Stripe-Signature");
         try {
             processor.accept(payload, sigHeader);

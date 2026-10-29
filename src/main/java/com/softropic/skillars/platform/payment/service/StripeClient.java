@@ -15,6 +15,7 @@ import com.stripe.net.RequestOptions;
 import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.InvoicePayParams;
 import com.stripe.param.PaymentIntentCreateParams;
+import com.stripe.param.PaymentIntentListParams;
 import com.stripe.param.PaymentIntentRetrieveParams;
 import com.stripe.param.RefundCreateParams;
 import com.stripe.param.SetupIntentCreateParams;
@@ -59,6 +60,23 @@ public class StripeClient {
 
     public PaymentIntent retrievePaymentIntent(String id) throws StripeException {
         return PaymentIntent.retrieve(id);
+    }
+
+    /**
+     * fix/payment-charge-idempotency: the customer's PaymentIntents created at or after {@code createdGte}
+     * (epoch seconds), newest first, auto-paged. List endpoints are strongly consistent (unlike Search), so a
+     * PaymentIntent created by a charge whose response was lost is visible here. As with
+     * {@link #listSubscriptionsByStatus}, a failure mid-pagination surfaces from the iteration as an
+     * unchecked {@code RuntimeException}.
+     */
+    public Iterable<PaymentIntent> listPaymentIntentsForCustomer(String stripeCustomerId, long createdGte)
+            throws StripeException {
+        PaymentIntentListParams params = PaymentIntentListParams.builder()
+            .setCustomer(stripeCustomerId)
+            .setCreated(PaymentIntentListParams.Created.builder().setGte(createdGte).build())
+            .setLimit(100L)
+            .build();
+        return PaymentIntent.list(params).autoPagingIterable();
     }
 
     /** One round-trip: the PaymentIntent with its latest Charge expanded (refundable-amount check). */
@@ -305,6 +323,28 @@ public class StripeClient {
             .setIdempotencyKey("sub-cancel-now-" + stripeSubscriptionId)
             .build();
         return sub.cancel(SubscriptionCancelParams.builder().build(), options);
+    }
+
+    /**
+     * fix/payment-charge-idempotency: refunds what the subscription's latest invoice actually charged — the
+     * paid first invoice of a duplicate subscription created by a double-submitted subscribe, which
+     * {@link #cancelSubscriptionImmediately} alone kept (the payer paid two periods for one). Returns the
+     * refunded amount in minor units, 0 when nothing was paid. Deterministic key
+     * {@code sub-dup-refund-{invoiceId}}: a retry replays the refund instead of refunding twice.
+     */
+    public long refundLatestInvoicePayment(String stripeSubscriptionId) throws StripeException {
+        Subscription sub = Subscription.retrieve(stripeSubscriptionId);
+        String invoiceId = sub.getLatestInvoice();
+        if (invoiceId == null) return 0L;
+        Invoice invoice = Invoice.retrieve(invoiceId);
+        long paid = invoice.getAmountPaid() == null ? 0L : invoice.getAmountPaid();
+        String paymentIntentId = invoice.getPaymentIntent();
+        if (paid <= 0 || paymentIntentId == null) return 0L;
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey("sub-dup-refund-" + invoiceId)
+            .build();
+        Refund.create(RefundCreateParams.builder().setPaymentIntent(paymentIntentId).setAmount(paid).build(), options);
+        return paid;
     }
 
     /**

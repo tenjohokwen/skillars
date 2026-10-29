@@ -26,6 +26,8 @@ class BatchPaymentQuoteServiceTest {
 
     @Mock CoachPricingRepository coachPricingRepository;
     @Mock CreditWalletService creditWalletService;
+    // fix/payment-charge-idempotency: minimumCardCharge() returns null from the mock — no re-balance.
+    @Mock com.softropic.skillars.platform.payment.contract.PaymentGateway paymentGateway;
     @InjectMocks BatchPaymentQuoteService service;
 
     private void price(String perSession) {

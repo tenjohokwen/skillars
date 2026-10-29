@@ -54,7 +54,13 @@ public class PaymentConfig {
                 "here so this environment can never charge real money.");
         }
         Stripe.apiKey = apiKey;
-        log.info("Stripe SDK initialised (apiKey present={})", !apiKey.isBlank());
+        // fix/payment-charge-idempotency (L2): bound every Stripe call (see PaymentProperties).
+        Stripe.setConnectTimeout(paymentProperties.getConnectTimeoutMs());
+        Stripe.setReadTimeout(paymentProperties.getReadTimeoutMs());
+        Stripe.setMaxNetworkRetries(paymentProperties.getMaxNetworkRetries());
+        log.info("Stripe SDK initialised (apiKey present={} connectTimeoutMs={} readTimeoutMs={} maxNetworkRetries={})",
+            !apiKey.isBlank(), paymentProperties.getConnectTimeoutMs(), paymentProperties.getReadTimeoutMs(),
+            paymentProperties.getMaxNetworkRetries());
         // P26: Stripe OAuth requires an absolute redirect_uri — fail-fast rather than silently break in prod
         String callbackUrl = paymentProperties.getOauthCallbackUrl();
         if (!callbackUrl.startsWith("https://") && !callbackUrl.startsWith("http://")) {

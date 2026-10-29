@@ -2041,6 +2041,8 @@ export default {
       notActive:
         "Votre abonnement n'est pas actif actuellement. Réglez le paiement en attente avant de changer de formule.",
       alreadyActive: 'Vous avez déjà un abonnement actif.',
+      inProgress:
+        'Votre abonnement est déjà en cours de création. Veuillez patienter un instant puis actualiser.',
     },
     coach: {
       pageTitle: 'Abonnement Coach',

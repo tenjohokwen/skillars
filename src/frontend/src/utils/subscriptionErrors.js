@@ -10,6 +10,7 @@ const KNOWN_CODES = {
   'payment.subscription.updatePaymentMethod': 'subscription.errors.updatePaymentMethod',
   'payment.subscription.notActive': 'subscription.errors.notActive',
   'payment.subscription.alreadyActive': 'subscription.errors.alreadyActive',
+  'payment.subscription.inProgress': 'subscription.errors.inProgress',
 }
 
 export function subscriptionErrorCode(err) {

@@ -14,7 +14,9 @@ import com.stripe.param.TransferCreateParams;
 import com.stripe.param.TransferReversalCollectionCreateParams;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.payment.contract.ChargeLookup;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException;
 import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
@@ -32,6 +34,8 @@ import java.time.Instant;
 import java.util.Currency;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -46,6 +50,24 @@ public class StripePaymentGateway implements PaymentGateway {
     /** fix/payment-payout-recovery: HOLD reasons the automatic HOLD re-drive leaves to an operator. */
     public static final String REASON_AMOUNT_MISMATCH = "TRANSFER_AMOUNT_MISMATCH";
     public static final String REASON_DESTINATION_MISMATCH = "TRANSFER_DESTINATION_MISMATCH";
+
+    /** PaymentIntent metadata key carrying the charge's idempotency key (see findChargeByIdempotencyKey). */
+    static final String CHARGE_KEY_METADATA = "chargeKey";
+
+    private static final BigDecimal DEFAULT_MINIMUM_CHARGE = new BigDecimal("0.50");
+    private static final Map<String, BigDecimal> MINIMUM_CHARGE_BY_CURRENCY = Map.ofEntries(
+        Map.entry("usd", new BigDecimal("0.50")), Map.entry("eur", new BigDecimal("0.50")),
+        Map.entry("gbp", new BigDecimal("0.30")), Map.entry("chf", new BigDecimal("0.50")),
+        Map.entry("cad", new BigDecimal("0.50")), Map.entry("aud", new BigDecimal("0.50")),
+        Map.entry("nzd", new BigDecimal("0.50")), Map.entry("sgd", new BigDecimal("0.50")),
+        Map.entry("dkk", new BigDecimal("2.50")), Map.entry("nok", new BigDecimal("3.00")),
+        Map.entry("sek", new BigDecimal("3.00")), Map.entry("pln", new BigDecimal("2.00")),
+        Map.entry("czk", new BigDecimal("15.00")), Map.entry("huf", new BigDecimal("175.00")),
+        Map.entry("ron", new BigDecimal("2.00")), Map.entry("bgn", new BigDecimal("1.00")),
+        Map.entry("hkd", new BigDecimal("4.00")), Map.entry("mxn", new BigDecimal("10.00")),
+        Map.entry("aed", new BigDecimal("2.00")), Map.entry("brl", new BigDecimal("0.50")),
+        Map.entry("inr", new BigDecimal("0.50")), Map.entry("myr", new BigDecimal("2.00")),
+        Map.entry("thb", new BigDecimal("10.00")));
 
     private final CoachStripeAccountRepository coachStripeAccountRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
@@ -120,26 +142,54 @@ public class StripePaymentGateway implements PaymentGateway {
                    .setOffSession(true);
         }
 
-        // skillars-deferred-106 AC1.3: the idempotency-key scheme is preserved UNCHANGED — only the
-        // PaymentIntent params changed.
-        //
-        // Default key (no explicit key): the two PaymentLifecycleService callers pass a booking/batch id that
-        // is already unique per charge attempt, so the parentId component and the time bucket are a no-op
-        // there — those are fired once per booking acceptance with no scheduled retry of the charge itself.
-        // The bucket originally existed for the session-pack purchase, whose referenceId (the tier id) is
-        // not unique per purchase; that path now passes a per-attempt key instead (see
-        // fix/payment-session-pack-integrity on the 5-arg chargeAndCapture).
+        // fix/payment-charge-idempotency: every live caller now passes an explicit, per-attempt key that it
+        // persisted BEFORE this call — "pi-booking-{bookingId}" / "pi-batch-{batchId}-{reserved ids hash}"
+        // (PaymentLifecycleService, on the CAPTURE_PENDING rows) or the pack purchase's attempt key — so a
+        // lost response can be looked up under the same key. Booking and batch charges used to fall through
+        // to the time-bucketed default below: a key that could not be rebuilt after the fact, and that two
+        // batch accepts in the same minute shared. The default is kept only for the 4-arg overload (no
+        // booking caller left) and the deprecated capturePayment(); the bucket stops a non-unique referenceId
+        // (a pack tier id) from replaying an earlier purchase across windows.
         long bucket = Instant.now(ClockProvider.getClock()).getEpochSecond() / IDEMPOTENCY_KEY_WINDOW.toSeconds();
         // parentId is null only via the deprecated capturePayment() overload (no current caller).
         // Fall back to coachId — always non-null — rather than the literal "null", so two
         // distinct null-parentId charges sharing a referenceId don't collide on one key.
         Object keyOwner = parentId != null ? parentId : coachId;
         String idempotencyKey = explicitKey != null ? explicitKey : "pi-" + referenceId + "-" + keyOwner + "-" + bucket;
+        // The key travels on the PaymentIntent too, so ChargeOutcomeReconciler can find it by listing the
+        // payer's PaymentIntents (findChargeByIdempotencyKey).
+        builder.putMetadata(CHARGE_KEY_METADATA, idempotencyKey);
         PaymentIntent intent;
         try {
             intent = stripeClient.createPaymentIntent(builder.build(), idempotencyKey);
         } catch (StripeException e) {
-            log.error("Stripe charge failed: referenceId={} error={}", referenceId, e.getMessage());
+            // Classified the way refund() does. A card decline / 4xx means Stripe rejected the request and
+            // created no charge. No response (connection failure, read timeout after the SDK's retries), a 5xx,
+            // or an idempotency conflict (409, or IdempotencyException — another request under this key is
+            // executing or already ran) means the card MAY have been charged: declining the booking then
+            // kept the parent's money with no record. Those surface as ChargeOutcomeUnknownException and the
+            // caller leaves the reservation for reconciliation.
+            if (isOutcomeUnknown(e)) {
+                log.error("[STRIPE_CHARGE_OUTCOME_UNKNOWN] referenceId={} key={} status={} error={} — not a decline; "
+                    + "left for reconciliation", referenceId, idempotencyKey, e.getStatusCode(), e.getMessage());
+                throw new ChargeOutcomeUnknownException(idempotencyKey, e);
+            }
+            log.error("Stripe charge failed: referenceId={} status={} error={}", referenceId, e.getStatusCode(),
+                e.getMessage());
+            throw new PaymentGatewayException("payment.lifecycleFailure", e);
+        }
+        // fix/payment-charge-idempotency (L5): only "succeeded" is money captured. Off-session card charges
+        // return succeeded or throw today, but any other payment-method type could come back processing
+        // (captured later, or not) or requires_action (nothing captured) — never confirm a booking on either.
+        String status = intent.getStatus();
+        if (ChargeLookup.PROCESSING.equals(status)) {
+            log.error("[STRIPE_CHARGE_OUTCOME_UNKNOWN] referenceId={} intentId={} status=processing — left for "
+                + "reconciliation", referenceId, intent.getId());
+            throw new ChargeOutcomeUnknownException(idempotencyKey, null);
+        }
+        if (!ChargeLookup.SUCCEEDED.equals(status)) {
+            log.error("[STRIPE_CHARGE_NOT_SUCCEEDED] referenceId={} intentId={} status={} — nothing captured, "
+                + "treated as declined", referenceId, intent.getId(), status);
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }
         log.info("Stripe charge captured (platform account): referenceId={} intentId={}", referenceId, intent.getId());
@@ -159,8 +209,78 @@ public class StripePaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount) {
-        return chargeAndCapture(batchId, parentId, coachId, amount);
+    public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount,
+                                           String idempotencyKey) {
+        return chargeAndCapture(batchId, parentId, coachId, amount, idempotencyKey);
+    }
+
+    /**
+     * No HTTP response at all (ApiConnectionException carries status 0 / null), a 5xx, or an idempotency
+     * conflict: Stripe may have executed the charge. Mirrors the refund() classification.
+     */
+    static boolean isOutcomeUnknown(StripeException e) {
+        Integer status = e.getStatusCode();
+        return e instanceof ApiConnectionException || e instanceof IdempotencyException
+            || status == null || status == 0 || status == 409 || status >= 500;
+    }
+
+    /**
+     * fix/payment-charge-idempotency: finds the PaymentIntent a booking charge was sent under, by its
+     * {@code chargeKey} metadata among the payer's PaymentIntents. A payer with no Stripe customer could not
+     * have been charged (charge() refuses before calling Stripe), so that is a proven absence.
+     */
+    @Override
+    public Optional<ChargeLookup> findChargeByIdempotencyKey(Long parentId, String idempotencyKey,
+                                                             Instant createdAfter) {
+        StripeCustomer customer = stripeCustomerRepository.findById(parentId).orElse(null);
+        if (customer == null || customer.getStripeCustomerId() == null) {
+            return Optional.empty();
+        }
+        try {
+            for (PaymentIntent pi : stripeClient.listPaymentIntentsForCustomer(customer.getStripeCustomerId(),
+                    createdAfter.getEpochSecond())) {
+                if (pi.getMetadata() != null && idempotencyKey.equals(pi.getMetadata().get(CHARGE_KEY_METADATA))) {
+                    return Optional.of(toLookup(pi));
+                }
+            }
+            return Optional.empty();
+        } catch (StripeException | RuntimeException e) {
+            // RuntimeException: auto-paging wraps a mid-pagination StripeException in an unchecked one.
+            log.error("Stripe charge lookup failed: parentId={} key={} error={}", parentId, idempotencyKey, e.getMessage());
+            throw new PaymentGatewayException("payment.chargeLookupFailed", e);
+        }
+    }
+
+    @Override
+    public ChargeLookup retrieveCharge(String paymentIntentId) {
+        try {
+            return toLookup(stripeClient.retrievePaymentIntent(paymentIntentId));
+        } catch (StripeException e) {
+            log.error("Stripe charge lookup failed: intentId={} error={}", paymentIntentId, e.getMessage());
+            throw new PaymentGatewayException("payment.chargeLookupFailed", e);
+        }
+    }
+
+    private static ChargeLookup toLookup(PaymentIntent pi) {
+        BigDecimal amount = pi.getAmount() == null ? null : BigDecimal.valueOf(pi.getAmount(), 2);
+        return new ChargeLookup(pi.getId(), pi.getStatus(), amount);
+    }
+
+    /**
+     * fix/payment-charge-idempotency (L3): Stripe's documented minimum charge per settlement currency
+     * (https://docs.stripe.com/currencies#minimum-and-maximum-charge-amounts), in major units. Unknown
+     * currencies fall back to 0.50, the minimum of most. An unreadable currency config is not this method's
+     * failure to report (the charge itself raises payment.configurationUnavailable): 0.50 again.
+     */
+    @Override
+    public BigDecimal minimumCardCharge() {
+        String currency;
+        try {
+            currency = resolveCurrency();
+        } catch (RuntimeException e) {
+            return DEFAULT_MINIMUM_CHARGE;
+        }
+        return MINIMUM_CHARGE_BY_CURRENCY.getOrDefault(currency, DEFAULT_MINIMUM_CHARGE);
     }
 
     /**

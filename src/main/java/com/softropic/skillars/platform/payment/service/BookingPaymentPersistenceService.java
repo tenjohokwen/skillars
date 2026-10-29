@@ -30,6 +30,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -116,9 +118,21 @@ public class BookingPaymentPersistenceService {
      */
     public CaptureReservation reserveCapture(UUID bookingId, BigDecimal intendedCredit,
                                              BigDecimal intendedStripe, UUID batchId) {
+        return reserveCapture(bookingId, intendedCredit, intendedStripe, batchId, null);
+    }
+
+    /**
+     * fix/payment-charge-idempotency: as {@link #reserveCapture(UUID, BigDecimal, BigDecimal, UUID)}, also
+     * writing the Stripe idempotency key the charge will be sent under, so it is durable BEFORE the call —
+     * {@code ChargeOutcomeReconciler} finds the PaymentIntent from it if the response is lost. A batch passes
+     * null here (its key names the whole reserved set, known only once every booking is reserved) and stamps
+     * it with {@link #stampBatchCharge}.
+     */
+    public CaptureReservation reserveCapture(UUID bookingId, BigDecimal intendedCredit,
+                                             BigDecimal intendedStripe, UUID batchId, String chargeKey) {
         RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
         try {
-            return self.reserveCaptureTransactional(bookingId, intendedCredit, intendedStripe, batchId);
+            return self.reserveCaptureTransactional(bookingId, intendedCredit, intendedStripe, batchId, chargeKey);
         } finally {
             RoutingDataSourceContext.clear();
         }
@@ -126,7 +140,7 @@ public class BookingPaymentPersistenceService {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public CaptureReservation reserveCaptureTransactional(UUID bookingId, BigDecimal intendedCredit,
-                                             BigDecimal intendedStripe, UUID batchId) {
+                                             BigDecimal intendedStripe, UUID batchId, String chargeKey) {
         Booking booking = lockRetryer.withBoundedRetry("BookingPaymentPersistenceService.reserveCapture",
             () -> bookingRepository.findByIdForUpdate(bookingId).orElse(null));
         if (booking == null) {
@@ -159,8 +173,69 @@ public class BookingPaymentPersistenceService {
         // PaymentPendingSweeper can age a stuck CAPTURE_PENDING row past
         // booking.payment_pending.capture_pending_max_hours.
         bp.setReservedAt(Instant.now());
+        bp.setChargeIdempotencyKey(chargeKey);
         bookingPaymentRepository.save(bp);
         return CaptureReservation.RESERVED;
+    }
+
+    /** One reserved batch booking's part of a batch charge. */
+    public record ChargeShare(UUID bookingId, BigDecimal credit, BigDecimal card) {
+    }
+
+    /**
+     * fix/payment-charge-idempotency: writes a batch charge's idempotency key and each reserved row's real
+     * credit / card share onto the CAPTURE_PENDING rows BEFORE the Stripe call, in its own committed
+     * transaction — so a charge whose response is lost (or a JVM death right after it) leaves rows the
+     * reconciler can settle from: which PaymentIntent to look for, and what each booking owes.
+     *
+     * <p>REQUIRES_NEW on the payment pool, like {@link #reserveCapture}: the listener calling this has only
+     * READ these rows (they were inserted and committed by reserveCapture), so this second connection cannot
+     * self-deadlock against it. Only rows still CAPTURE_PENDING are touched.
+     */
+    public void stampBatchCharge(List<ChargeShare> shares, String chargeKey) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.stampBatchChargeTransactional(shares, chargeKey);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void stampBatchChargeTransactional(List<ChargeShare> shares, String chargeKey) {
+        for (ChargeShare share : shares) {
+            bookingPaymentRepository.findById(share.bookingId())
+                .filter(bp -> BookingPaymentStatus.CAPTURE_PENDING.equals(bp.getStatus()))
+                .ifPresent(bp -> {
+                    bp.setCreditDebited(share.credit());
+                    bp.setStripeCharged(share.card());
+                    bp.setChargeIdempotencyKey(chargeKey);
+                    bookingPaymentRepository.save(bp);
+                });
+        }
+    }
+
+    /**
+     * fix/payment-charge-idempotency (M1): records a captured charge's PaymentIntent id on the still
+     * CAPTURE_PENDING reservation(s) right after Stripe answered, in its own committed transaction. The
+     * settle that follows can still fail and roll back (a booking-row lock it cannot get, a DB blip); the id
+     * used to roll back with it, leaving a reservation that only a manual Stripe metadata search could
+     * connect to the parent's money. Same REQUIRES_NEW / payment-pool reasoning as {@link #stampBatchCharge}.
+     * Best-effort by contract: the caller logs and carries on (the row's charge key still finds the
+     * PaymentIntent).
+     */
+    public void recordChargeIntent(Collection<UUID> bookingIds, String paymentIntentId) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.recordChargeIntentTransactional(bookingIds, paymentIntentId);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordChargeIntentTransactional(Collection<UUID> bookingIds, String paymentIntentId) {
+        bookingPaymentRepository.recordPendingPaymentIntent(bookingIds, paymentIntentId);
     }
 
     /**
@@ -412,10 +487,24 @@ public class BookingPaymentPersistenceService {
      */
     public void declineBatchBookingAfterCharge(UUID bookingId, UUID batchId, BigDecimal creditShare,
                                                BigDecimal stripeShare, String paymentIntentId, Long parentId) {
+        declineBookingAfterCharge(bookingId, batchId, creditShare, stripeShare, paymentIntentId, parentId,
+            "Batch booking could not be confirmed - payment returned as credit");
+    }
+
+    /**
+     * fix/payment-charge-idempotency (M1): {@link #declineBatchBookingAfterCharge} for any booking whose
+     * confirm failed after its charge succeeded — the single-booking settle and the charge reconciler use it
+     * too (batchId null for a single booking). {@code creditShare} must be only credit that was actually
+     * debited: since the deduction commits together with the confirm, a failed confirm debited none, and the
+     * callers pass zero.
+     */
+    public void declineBookingAfterCharge(UUID bookingId, UUID batchId, BigDecimal creditShare,
+                                          BigDecimal stripeShare, String paymentIntentId, Long parentId,
+                                          String refundDescription) {
         RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
         try {
             self.declineBatchBookingAfterChargeTransactional(bookingId, batchId, creditShare, stripeShare,
-                paymentIntentId, parentId);
+                paymentIntentId, parentId, refundDescription);
         } finally {
             RoutingDataSourceContext.clear();
         }
@@ -424,7 +513,7 @@ public class BookingPaymentPersistenceService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void declineBatchBookingAfterChargeTransactional(UUID bookingId, UUID batchId, BigDecimal creditShare,
                                                             BigDecimal stripeShare, String paymentIntentId,
-                                                            Long parentId) {
+                                                            Long parentId, String refundDescription) {
         BookingPayment bp = loadOrCreate(bookingId);
         bp.setBatchPaymentIntentId(batchId);
         bp.setCreditDebited(creditShare);
@@ -435,8 +524,7 @@ public class BookingPaymentPersistenceService {
         transitionOrReport(bookingId, BookingEvent.PAYMENT_FAILED);
         BigDecimal refund = creditShare.add(stripeShare);
         if (refund.signum() > 0) {
-            refundOutboxSupport.enqueueBookingRefund(parentId, refund, bookingId,
-                "Batch booking could not be confirmed - payment returned as credit");
+            refundOutboxSupport.enqueueBookingRefund(parentId, refund, bookingId, refundDescription);
         }
     }
 

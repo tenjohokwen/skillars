@@ -1,8 +1,11 @@
 package com.softropic.skillars.config;
 
+import com.softropic.skillars.platform.payment.contract.ChargeLookup;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -24,8 +27,26 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount) {
+    public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount,
+                                           String idempotencyKey) {
         return "pi_batch_stub_" + batchId;
+    }
+
+    @Override
+    public Optional<ChargeLookup> findChargeByIdempotencyKey(Long parentId, String idempotencyKey,
+                                                             Instant createdAfter) {
+        // No charge exists unless a test stubs one on the AbstractIntegrationTest spy.
+        return Optional.empty();
+    }
+
+    @Override
+    public ChargeLookup retrieveCharge(String paymentIntentId) {
+        return new ChargeLookup(paymentIntentId, ChargeLookup.SUCCEEDED, null);
+    }
+
+    @Override
+    public BigDecimal minimumCardCharge() {
+        return new BigDecimal("0.50");
     }
 
     @Override

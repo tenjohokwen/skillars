@@ -82,6 +82,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * {@code findByIdForUpdate}; the ACCEPTING / PENDING status write and {@code save} run after
  * {@code withBoundedRetry} returns — in the claim after {@code .orElseThrow}, in the release inside the
  * chained {@code .ifPresent(}, which the balanced-paren scan correctly excludes).
+ * Now 62 as of fix/payment-charge-idempotency's {@code ChargeOutcomeReconciler.lockBooking}: a read-only
+ * {@code BookingRepository.findByIdForUpdate(bookingId).orElse(null)}; the reservation re-read, the settle
+ * ({@code persistPaymentSuccess}) or decline writes and the event publish run after it returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -169,11 +172,13 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * after withBoundedRetry returns) -- now 54 after feat/coach-payouts-pack-and-credit added {@code
      * CoachPayoutOutboxSupport.allocatePackShare} (a
      * SessionPackPurchaseRepository.findByIdForUpdate+orElse(null) read; the pack allocation write runs
-     * after withBoundedRetry returns). Asserted explicitly so an
+     * after withBoundedRetry returns) -- now 62 after fix/payment-charge-idempotency added {@code
+     * ChargeOutcomeReconciler.lockBooking} (a BookingRepository.findByIdForUpdate+orElse(null) read; the
+     * settle/decline writes and event publish run after withBoundedRetry returns). Asserted explicitly so an
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 61;
+    private static final int EXPECTED_CALL_SITE_COUNT = 62;
 
     private record CallSite(String file, int line, String argument) {
     }

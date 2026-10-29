@@ -397,6 +397,9 @@ app:
       oauth-callback-url: ${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:/api/payment/coaches/me/stripe/callback}
       callback-success-url: ${APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL:/coach/payment-settings}
       publishable-key: ${APP_PAYMENT_STRIPE_PUBLISHABLE_KEY:}
+      connect-timeout-ms: ${APP_PAYMENT_STRIPE_CONNECT_TIMEOUT_MS:10000}
+      read-timeout-ms: ${APP_PAYMENT_STRIPE_READ_TIMEOUT_MS:30000}
+      max-network-retries: ${APP_PAYMENT_STRIPE_MAX_NETWORK_RETRIES:2}
 
 features:
   toggles:
