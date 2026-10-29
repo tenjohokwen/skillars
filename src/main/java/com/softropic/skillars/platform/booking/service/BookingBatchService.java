@@ -93,6 +93,16 @@ public class BookingBatchService {
         trailingTx.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
+    /**
+     * fix/booking-request-consent (M3): the batch is being accepted right now. {@link #acceptAll} claims
+     * PENDING -> ACCEPTING under the batch row lock in its own short transaction before its per-booking
+     * loop, so a concurrent second accept-all is refused instead of splitting the bookings between two
+     * loops and publishing a second settlement event for the same batch. The final status is written by
+     * the trailing transaction (or by {@link #updateBatchStatusFromBooking}, whichever runs last — both
+     * compute it from the bookings); a failed run hands the batch back via {@link #releaseAcceptClaim}.
+     */
+    static final String BATCH_ACCEPTING = "ACCEPTING";
+
     private static final Set<String> POST_ACCEPTANCE_STATUSES = Set.of(
         "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS",
         "COMPLETED_PENDING_CONFIRMATION", "COMPLETED"
@@ -214,6 +224,10 @@ public class BookingBatchService {
         });
         BookingService.requireBookableCoachStatus(lockedCoach, coachMeta);
         bookingService.requirePlayerBookableUnderLock(req.playerId(), "BookingBatchService.createBatch");
+        // fix/booking-request-consent (M2): booking horizon + per-parent pending-request cap, under the coach
+        // row lock like the single path (the whole batch counts against the cap).
+        bookingService.requireRequestQuota(parentId, req.coachId(),
+            req.slots().stream().map(BatchSlot::requestedStartTime).toList());
 
         // skillars-deferred-69 AC7: narrows (does not eliminate) the read-then-write staleness
         // window between the initial resolve above and this persist point — a coach edit landing in
@@ -357,6 +371,22 @@ public class BookingBatchService {
                 Map.of("submitted coach id", coach.getId()), BookingError.COACH_UNAVAILABLE);
         }
 
+        // fix/booking-request-consent (M3): the PENDING check above is an unlocked read, so two concurrent
+        // calls (a double-click, a client retry) both passed it and split the batch between them. The claim
+        // re-checks PENDING under the batch row lock and commits ACCEPTING at once; the lock is NOT held
+        // across the loop (updateBatchStatusFromBooking and the trailing transaction lock the same row from
+        // their own transactions, which would self-deadlock against it).
+        claimBatchForAccept(batchId);
+        try {
+            return acceptClaimedBatch(batch, coach, coachUserId);
+        } catch (RuntimeException e) {
+            releaseAcceptClaim(batchId);
+            throw e;
+        }
+    }
+
+    private List<BatchAcceptResult> acceptClaimedBatch(BookingBatch batch, CoachProfile coach, Long coachUserId) {
+        UUID batchId = batch.getId();
         List<Booking> requestedBookings = bookingRepository.findByBatchIdAndStatus(batchId, "REQUESTED");
         List<UUID> acceptedIds = new ArrayList<>();
         List<BatchAcceptResult> results = new ArrayList<>();
@@ -442,6 +472,48 @@ public class BookingBatchService {
         log.info("Batch accepted: batchId={} acceptedCount={}", batchId, acceptedIds.size());
 
         return results;
+    }
+
+    /** PENDING -> ACCEPTING under the batch row lock, committed on its own (see {@link #BATCH_ACCEPTING}). */
+    private void claimBatchForAccept(UUID batchId) {
+        trailingTx.executeWithoutResult(tx -> {
+            BookingBatch fresh = lockRetryer.withBoundedRetry("BookingBatchService.claimBatchForAccept",
+                    () -> batchRepository.findByIdForUpdate(batchId))
+                .orElseThrow(() -> new ResourceNotFoundException("Booking batch not found", "booking_batch"));
+            if (!"PENDING".equals(fresh.getStatus())) {
+                throw new OperationNotAllowedException("Batch has already been processed",
+                    BookingError.BATCH_ALREADY_PROCESSED);
+            }
+            fresh.setStatus(BATCH_ACCEPTING);
+            batchRepository.save(fresh);
+        });
+    }
+
+    /**
+     * Hands an ACCEPTING batch back after a run that did not reach (or failed in) the trailing transaction:
+     * PENDING while any booking is still REQUESTED, so the coach can retry; otherwise the computed status.
+     * A batch some other writer already moved on is left alone. Never throws — it runs on the way out of a
+     * failure, which must reach the caller unchanged. If it cannot run (crash), the batch stays ACCEPTING
+     * until {@link #updateBatchStatusFromBooking} rewrites it, which the next individual accept, decline or
+     * expiry of its remaining bookings triggers.
+     */
+    private void releaseAcceptClaim(UUID batchId) {
+        try {
+            trailingTx.executeWithoutResult(tx ->
+                lockRetryer.withBoundedRetry("BookingBatchService.releaseAcceptClaim",
+                        () -> batchRepository.findByIdForUpdate(batchId)).ifPresent(fresh -> {
+                    if (!BATCH_ACCEPTING.equals(fresh.getStatus())) {
+                        return;
+                    }
+                    List<Booking> all = bookingRepository.findByBatchId(batchId);
+                    boolean anyRequested = all.stream().anyMatch(b -> "REQUESTED".equals(b.getStatus()));
+                    fresh.setStatus(anyRequested ? "PENDING" : computeBatchStatus(all));
+                    batchRepository.save(fresh);
+                }));
+        } catch (RuntimeException e) {
+            log.error("[BATCH_ACCEPT_CLAIM_RELEASE_FAILED] batchId={} — batch left ACCEPTING until its next "
+                + "booking status change", batchId, e);
+        }
     }
 
     /**

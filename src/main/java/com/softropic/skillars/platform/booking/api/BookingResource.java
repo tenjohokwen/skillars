@@ -75,6 +75,28 @@ public class BookingResource {
         return ResponseEntity.noContent().build();
     }
 
+    /**
+     * fix/booking-request-consent: the parent confirms a coach-proposed booking ("repeat next week"),
+     * which accepts it and charges it exactly like a coach accept. Re-fetched for the same reason as accept.
+     */
+    @PutMapping("/{id}/confirm")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    public ResponseEntity<BookingResponse> confirmProposedBooking(@PathVariable UUID id) {
+        bookingService.confirmProposedBooking(id, currentParentId());
+        return ResponseEntity.ok(bookingService.getBooking(id));
+    }
+
+    /**
+     * fix/booking-request-consent: the parent withdraws a request, or declines a coach's proposal — any
+     * booking still REQUESTED. Never charges or refunds anything; refused once the booking has moved on.
+     */
+    @PutMapping("/{id}/withdraw")
+    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    public ResponseEntity<Void> withdrawBookingRequest(@PathVariable UUID id) {
+        bookingService.withdrawBookingRequest(id, currentParentId());
+        return ResponseEntity.noContent().build();
+    }
+
     private Long currentParentId() {
         return securityUtil.requireCurrentUserId();
     }

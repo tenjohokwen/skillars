@@ -533,3 +533,121 @@ describe('ParentBookingsPage.vue — receipt link (feat/coach-workflow-gaps A23)
     expect(wrapper.findAll('[data-test="booking-receipt"]')).toHaveLength(1)
   })
 })
+
+// fix/booking-request-consent: a coach-proposed booking ("repeat next week") waits on the family —
+// Confirm (accept + charge) or Decline — and any other REQUESTED booking can be withdrawn.
+describe('ParentBookingsPage.vue — coach proposals and request withdrawal (booking-request-consent)', () => {
+  const PROPOSAL = { ...BOOKING_1H, status: 'REQUESTED', proposedByCoach: true }
+  const OWN_REQUEST = { ...BOOKING_1H, status: 'REQUESTED', proposedByCoach: false }
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.restoreAllMocks()
+    notifySpy.mockReset()
+  })
+
+  it('a coach proposal shows Confirm and Decline, not Withdraw', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [PROPOSAL] },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="confirm-proposal-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="decline-proposal-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="withdraw-request-btn"]').exists()).toBe(false)
+  })
+
+  it("the family's own request shows Withdraw, not Confirm", async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [OWN_REQUEST] },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="withdraw-request-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="confirm-proposal-btn"]').exists()).toBe(false)
+  })
+
+  it.each(['CONFIRMED', 'PAYMENT_PENDING', 'DECLINED'])(
+    'offers neither action once the booking is %s',
+    async (status) => {
+      const { wrapper } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: { parentBookings: [{ ...PROPOSAL, status }] },
+      })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="coach-proposal"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="withdraw-request-btn"]').exists()).toBe(false)
+    },
+  )
+
+  it('confirming a proposal calls the store and notifies success', async () => {
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [PROPOSAL] },
+    })
+    await flushPromises()
+    bookingStore.handleConfirmProposedBooking.mockResolvedValue()
+
+    wrapper.vm.openConfirmProposalDialog(PROPOSAL)
+    expect(wrapper.vm.confirmProposalDialogOpen).toBe(true)
+    await wrapper.vm.submitConfirmProposal()
+
+    expect(bookingStore.handleConfirmProposedBooking).toHaveBeenCalledWith(42)
+    expect(wrapper.vm.confirmProposalDialogOpen).toBe(false)
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'positive', message: 'booking.proposal.confirmed' }),
+    )
+  })
+
+  it('a proposal already answered maps to its copy and reloads the list', async () => {
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [PROPOSAL] },
+    })
+    await flushPromises()
+    bookingStore.handleConfirmProposedBooking.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'booking.requestNotPending' } } },
+    })
+
+    wrapper.vm.openConfirmProposalDialog(PROPOSAL)
+    await wrapper.vm.submitConfirmProposal()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'booking.errors.requestNotPending' }),
+    )
+    expect(bookingStore.loadParentBookings).toHaveBeenCalled()
+  })
+
+  it('declining a proposal withdraws it with the declined toast', async () => {
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [PROPOSAL] },
+    })
+    await flushPromises()
+    bookingStore.handleWithdrawBookingRequest.mockResolvedValue()
+
+    await wrapper.find('[data-testid="decline-proposal-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(bookingStore.handleWithdrawBookingRequest).toHaveBeenCalledWith(42)
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'positive', message: 'booking.proposal.declined' }),
+    )
+  })
+
+  it('withdrawing an own request notifies with the withdrawn toast', async () => {
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [OWN_REQUEST] },
+    })
+    await flushPromises()
+    bookingStore.handleWithdrawBookingRequest.mockResolvedValue()
+
+    await wrapper.vm.submitWithdraw(OWN_REQUEST, 'withdrawn')
+
+    expect(bookingStore.handleWithdrawBookingRequest).toHaveBeenCalledWith(42)
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'positive', message: 'booking.proposal.withdrawn' }),
+    )
+  })
+})

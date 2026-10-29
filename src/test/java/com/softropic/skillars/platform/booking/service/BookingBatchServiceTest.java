@@ -138,6 +138,28 @@ class BookingBatchServiceTest {
         verify(batchRepository).save(any(BookingBatch.class));
         verify(bookingRepository, times(2)).save(any(Booking.class));
         verify(eventPublisher).publishEvent(any(BatchBookingRequestedEvent.class));
+        // fix/booking-request-consent (M2): every slot goes through the horizon + pending-request cap.
+        verify(bookingService).requireRequestQuota(PARENT_ID, COACH_ID,
+            req.slots().stream().map(BatchSlot::requestedStartTime).toList());
+    }
+
+    /** fix/booking-request-consent (M2): a batch over the parent's pending-request cap writes nothing. */
+    @Test
+    void createBatch_overThePendingRequestCap_isRefusedAndWritesNothing() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(buildActiveCoach()));
+        doThrow(new OperationNotAllowedException("cap", BookingError.TOO_MANY_PENDING_REQUESTS))
+            .when(bookingService).requireRequestQuota(eq(PARENT_ID), eq(COACH_ID), any());
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, buildRequest(2)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.TOO_MANY_PENDING_REQUESTS));
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
     }
 
     // ---- skillars-deferred-72 AC4: batch-level availability-staleness guard ----
@@ -1099,7 +1121,10 @@ class BookingBatchServiceTest {
         when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(requested));
         // Every per-booking accept dies on the slot-collision guard inside acceptOneBooking, and the
         // loop's catch swallows it — acceptedIds ends up empty. Never reaches acceptAll's trailing
-        // transaction, so no findByIdForUpdate stub is needed here (skillars-deferred-69 AC6).
+        // transaction; the locked read is the fix/booking-request-consent claim (PENDING -> ACCEPTING)
+        // and its release (back to PENDING: the booking is still REQUESTED).
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(requested));
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
             .thenReturn(List.of(bookingInStatus("CONFIRMED")));
 
@@ -1114,10 +1139,9 @@ class BookingBatchServiceTest {
                         List.of(new BatchAcceptResult(requested.getId(), false, "booking.slotUnavailable")));
             });
 
-        verify(batchRepository, never()).save(any());
         verify(eventPublisher, never()).publishEvent(any(BatchBookingAcceptedEvent.class));
         assertThat(batch.getStatus())
-            .as("nothing was accepted, so the batch must stay PENDING")
+            .as("nothing was accepted, so the claim is released and the batch is PENDING again")
             .isEqualTo("PENDING");
     }
 
@@ -1136,6 +1160,7 @@ class BookingBatchServiceTest {
         batch.setTotalAmount(BigDecimal.ZERO);
         when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildActiveCoach()));
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
         when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of());
 
         assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
@@ -1149,8 +1174,72 @@ class BookingBatchServiceTest {
             });
 
         verify(bookingService, never()).acceptAndInitiatePayment(any(), any());
-        verify(batchRepository, never()).save(any());
         assertThat(batch.getStatus()).isEqualTo("PENDING");
+    }
+
+    /**
+     * fix/booking-request-consent (M3): the batch is claimed PENDING -> ACCEPTING under its row lock, in
+     * its own transaction, BEFORE any booking is accepted — so a concurrent second accept-all sees it.
+     */
+    @Test
+    void acceptAll_claimsTheBatchAcceptingBeforeTheFirstPerBookingAccept() {
+        BookingBatch batch = pendingBatch();
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        Instant slot = Instant.now().plus(3, ChronoUnit.DAYS);
+        Booking b1 = new Booking(); b1.setId(UUID.randomUUID()); b1.setStatus("REQUESTED");
+        b1.setRequestedStartTime(slot); b1.setRequestedEndTime(slot.plus(1, ChronoUnit.HOURS));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(b1));
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(bookingInStatus("PAYMENT_PENDING")));
+        List<String> statusAtAccept = new java.util.ArrayList<>();
+        doAnswer(inv -> statusAtAccept.add(batch.getStatus()))
+            .when(bookingService).acceptAndInitiatePayment(any(), any());
+
+        service.acceptAll(BATCH_ID, COACH_USER_ID);
+
+        assertThat(statusAtAccept).containsExactly(BookingBatchService.BATCH_ACCEPTING);
+        assertThat(batch.getStatus()).isEqualTo("FULLY_ACCEPTED");
+    }
+
+    /**
+     * fix/booking-request-consent (M3): the unlocked PENDING check passed, but a concurrent accept-all
+     * claimed the batch first — this call is refused under the lock and accepts nothing.
+     */
+    @Test
+    void acceptAll_batchClaimedByAConcurrentCall_isRefusedAndAcceptsNothing() {
+        BookingBatch unlockedRead = pendingBatch();
+        BookingBatch lockedRead = pendingBatch();
+        lockedRead.setStatus(BookingBatchService.BATCH_ACCEPTING);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(unlockedRead));
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(lockedRead));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(buildActiveCoach()));
+
+        assertThatThrownBy(() -> service.acceptAll(BATCH_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BATCH_ALREADY_PROCESSED));
+
+        verify(bookingRepository, never()).findByBatchIdAndStatus(any(), any());
+        verify(bookingService, never()).acceptAndInitiatePayment(any(), any());
+        verify(eventPublisher, never()).publishEvent(any(BatchBookingAcceptedEvent.class));
+        assertThat(lockedRead.getStatus())
+            .as("the other call's claim is left alone")
+            .isEqualTo(BookingBatchService.BATCH_ACCEPTING);
+    }
+
+    private BookingBatch pendingBatch() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        return batch;
     }
 
     private Booking bookingInStatus(String status) {

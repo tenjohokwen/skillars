@@ -101,10 +101,23 @@
             <q-item-label v-if="booking.notes" caption class="q-mt-xs">
               <q-icon name="notes" size="14px" class="q-mr-xs" />{{ booking.notes }}
             </q-item-label>
+            <!-- fix/booking-request-consent: a session this coach proposed ("repeat next week") is
+                 confirmed by the family, never accepted by the coach — the server refuses that accept
+                 (booking.parentConfirmationRequired), so no Accept is offered. -->
+            <q-item-label
+              v-if="booking.proposedByCoach"
+              caption
+              class="q-mt-xs"
+              style="color: var(--accent-warning)"
+              data-testid="awaiting-parent-confirmation"
+            >
+              {{ t('booking.proposal.awaitingParent') }}
+            </q-item-label>
           </q-item-section>
           <q-item-section side>
             <div class="row q-gutter-sm">
               <q-btn
+                v-if="!booking.proposedByCoach"
                 unelevated
                 color="primary"
                 size="sm"
@@ -116,7 +129,11 @@
                 flat
                 color="negative"
                 size="sm"
-                :label="t('booking.requests.decline')"
+                :label="
+                  booking.proposedByCoach
+                    ? t('booking.proposal.withdrawProposal')
+                    : t('booking.requests.decline')
+                "
                 :loading="declining[booking.id]"
                 @click="handleDecline(booking.id)"
               />
@@ -173,6 +190,8 @@ async function handleAccept(id) {
       $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
     } else if (errorKey === 'booking.slotUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
+    } else if (errorKey === 'booking.parentConfirmationRequired') {
+      $q.notify({ type: 'negative', message: t('booking.errors.parentConfirmationRequired') })
     } else if (errorKey === 'booking.priceNotLocked') {
       // fix/booking-price-and-excused-race: a request with no agreed price is never charged at the
       // coach's current price — the coach declines it and the family re-requests.

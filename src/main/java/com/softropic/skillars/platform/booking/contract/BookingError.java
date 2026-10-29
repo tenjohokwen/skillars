@@ -173,7 +173,35 @@ public enum BookingError implements ErrorCode {
      * coach had no pricing) is never charged at the coach's current price, which the payer did not agree
      * to. The coach declines it and the payer re-requests, which locks the price they then see.
      */
-    PRICE_NOT_LOCKED;
+    PRICE_NOT_LOCKED,
+    /**
+     * fix/booking-request-consent: the coach tried to accept a booking they proposed themselves ("repeat
+     * next week"). Only the parent can confirm a coach-proposed booking, which is what accepts and charges it.
+     */
+    PARENT_CONFIRMATION_REQUIRED,
+    /**
+     * fix/booking-request-consent: the parent tried to confirm a booking the coach did not propose — a
+     * parent's own request is accepted by the coach, never by the parent.
+     */
+    NOT_A_COACH_PROPOSAL,
+    /**
+     * fix/booking-request-consent: confirm / decline / withdraw on a booking that is no longer REQUESTED
+     * (the coach accepted or declined it, it expired, or it was already withdrawn). Distinct from the
+     * generic cancel, which applies the paid-booking refund rules: a "withdraw" click must never turn
+     * into the cancellation of a booking that was accepted and charged a moment earlier.
+     */
+    REQUEST_NOT_PENDING,
+    /**
+     * fix/booking-request-consent (M2): the parent already has {@code booking.request.maxPendingPerCoach}
+     * requests awaiting this coach's answer. Requests are free and hold their slot, so without a cap one
+     * account could hide a coach's whole calendar.
+     */
+    TOO_MANY_PENDING_REQUESTS,
+    /**
+     * fix/booking-request-consent (M2): the requested start is further ahead than
+     * {@code booking.request.maxHorizonDays}. Also bounds how far ahead a price can be locked.
+     */
+    BEYOND_BOOKING_HORIZON;
 
     @Override
     public String getErrorCode() {
@@ -208,6 +236,11 @@ public enum BookingError implements ErrorCode {
             case PLAYER_NOT_BOOKABLE       -> "booking.playerNotBookable";
             case COACH_PRICING_UNAVAILABLE -> "booking.coachPricingUnavailable";
             case PRICE_NOT_LOCKED          -> "booking.priceNotLocked";
+            case PARENT_CONFIRMATION_REQUIRED -> "booking.parentConfirmationRequired";
+            case NOT_A_COACH_PROPOSAL      -> "booking.notACoachProposal";
+            case REQUEST_NOT_PENDING       -> "booking.requestNotPending";
+            case TOO_MANY_PENDING_REQUESTS -> "booking.tooManyPendingRequests";
+            case BEYOND_BOOKING_HORIZON    -> "booking.beyondBookingHorizon";
         };
     }
 

@@ -114,13 +114,21 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """)
     List<Booking> findUpcomingWithin2hWindow(@Param("now") Instant now, @Param("windowEnd") Instant windowEnd);
 
+    /**
+     * fix/booking-request-consent (M2): the parent's own requests still awaiting this coach's answer — the
+     * input to {@code BookingService.requireRequestQuota}. Replaces the never-called countInFlightBookings
+     * (keyed on the player, so a parent with two children got two quotas, and it counted paid bookings that
+     * hold no free slot). Coach-proposed bookings are excluded: the parent did not make them. Read under the
+     * coach row lock on every create path, so two concurrent creates cannot both pass the cap.
+     */
     @Query("""
         SELECT COUNT(b) FROM Booking b
-        WHERE b.playerId = :playerId
+        WHERE b.parentId = :parentId
           AND b.coachId = :coachId
-          AND b.status IN ('REQUESTED', 'ACCEPTED', 'CONFIRMED', 'UPCOMING')
+          AND b.status = 'REQUESTED'
+          AND b.proposedByCoach = false
         """)
-    long countInFlightBookings(@Param("playerId") Long playerId, @Param("coachId") UUID coachId);
+    long countPendingParentRequests(@Param("parentId") Long parentId, @Param("coachId") UUID coachId);
 
     List<Booking> findByBatchId(UUID batchId);
 

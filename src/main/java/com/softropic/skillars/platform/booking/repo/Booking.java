@@ -106,6 +106,15 @@ public class Booking {
     @Column(name = "agreed_price", precision = 10, scale = 2, updatable = false)
     private BigDecimal agreedPrice;
 
+    /**
+     * fix/booking-request-consent (V202): true for a booking the COACH created for the family ("repeat
+     * next week"). It stays REQUESTED until the parent confirms it ({@code BookingService
+     * .confirmProposedBooking} — accept + charge) or declines it; the coach cannot accept it
+     * ({@code BookingService.acceptAndInitiatePayment} enforces both directions).
+     */
+    @Column(name = "proposed_by_coach", nullable = false, updatable = false)
+    private boolean proposedByCoach;
+
     @Column(name = "cancel_reason", length = 50)
     private String cancelReason;
 

@@ -148,6 +148,14 @@ class BookingServiceTest {
         lenient().when(configService.getBoundedLong(
                 com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES))
             .thenReturn(30L);
+        // fix/booking-request-consent (M2): the coded defaults, so the create-path fixtures (a few days
+        // out, nothing else pending) pass the horizon and pending-request cap unless a test overrides them.
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_HORIZON_DAYS))
+            .thenReturn(120L);
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH))
+            .thenReturn(10L);
     }
 
     // ---- createBookingRequest tests ----
@@ -1314,6 +1322,228 @@ class BookingServiceTest {
         when(coachProfileRepository.findById(COACH_ID))
             .thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
         when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+    }
+
+    // ---- fix/booking-request-consent: coach proposals, parent confirm / withdraw, request quota ----
+
+    /** H3: the coach can no longer accept (and charge) a booking they proposed themselves. */
+    @Test
+    void acceptBooking_coachProposal_isRefusedParentConfirmationRequired() {
+        Booking booking = makeProposal("REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        stubAcceptPath(booking, coach);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PARENT_CONFIRMATION_REQUIRED));
+        assertThat(booking.getStatus()).isEqualTo("REQUESTED");
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingAcceptedEvent.class));
+    }
+
+    @Test
+    void confirmProposedBooking_parentConfirms_movesToPaymentPendingAndPublishesAccepted() {
+        Booking booking = makeProposal("REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        stubAcceptPath(booking, coach);
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
+
+        BookingResponse response = bookingService.confirmProposedBooking(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("PAYMENT_PENDING");
+        assertThat(response.proposedByCoach()).isTrue();
+        ArgumentCaptor<ApplicationEvent> ev = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(ev.capture());
+        assertThat(ev.getAllValues()).filteredOn(BookingAcceptedEvent.class::isInstance).singleElement()
+            .satisfies(e -> {
+                BookingAcceptedEvent accepted = (BookingAcceptedEvent) e;
+                assertThat(accepted.getSessionPrice()).isEqualByComparingTo("50.00");
+                assertThat(accepted.getParentId()).isEqualTo(PARENT_ID);
+            });
+    }
+
+    /** Ownership is checked on Booking.parentId (a user id) before any row lock is taken. */
+    @Test
+    void confirmProposedBooking_otherParent_isRejectedBeforeAnyLock() {
+        Booking booking = makeProposal("REQUESTED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.confirmProposedBooking(booking.getId(), 999L))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(com.softropic.skillars.infrastructure.security.SecurityError.MISSING_RIGHTS));
+        verify(coachProfileRepository, never()).findByIdForUpdate(any());
+        verify(bookingRepository, never()).findByIdForUpdate(any());
+    }
+
+    /** A parent's own request is accepted by the coach — the parent cannot accept it for them. */
+    @Test
+    void confirmProposedBooking_ownRequestNotAProposal_isRefused() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        booking.setAgreedPrice(new BigDecimal("50.00"));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.confirmProposedBooking(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.NOT_A_COACH_PROPOSAL));
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    @Test
+    void confirmProposedBooking_alreadyAnswered_isRefusedRequestNotPending() {
+        Booking booking = makeProposal("DECLINED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.confirmProposedBooking(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.REQUEST_NOT_PENDING));
+    }
+
+    @Test
+    void confirmProposedBooking_startHasPassed_isRefused() {
+        Booking booking = makeProposal("REQUESTED");
+        Instant start = Instant.now().minusSeconds(60);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plusSeconds(3600));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.confirmProposedBooking(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.START_TIME_IN_PAST));
+        verify(coachProfileRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void confirmProposedBooking_suspendedCoach_isRefusedCoachUnavailable() {
+        Booking booking = makeProposal("REQUESTED");
+        CoachProfile suspended = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        suspended.setStatus(CoachProfileStatus.SUSPENDED);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> bookingService.confirmProposedBooking(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_UNAVAILABLE));
+        assertThat(booking.getStatus()).isEqualTo("REQUESTED");
+    }
+
+    /** M1/H3: withdraw (own request) and decline (coach proposal) — no money moves, no forfeit. */
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void withdrawBookingRequest_requested_cancelsWithNothingRefundedOrForfeited(boolean proposal) {
+        Booking booking = proposal ? makeProposal("REQUESTED") : makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.withdrawBookingRequest(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        ArgumentCaptor<ApplicationEvent> ev = ArgumentCaptor.forClass(ApplicationEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(ev.capture());
+        assertThat(ev.getAllValues()).filteredOn(BookingCancelledByParentEvent.class::isInstance).singleElement()
+            .satisfies(e -> {
+                BookingCancelledByParentEvent cancelled = (BookingCancelledByParentEvent) e;
+                assertThat(cancelled.isWalletRefund()).isFalse();
+                assertThat(cancelled.isPackRestore()).isFalse();
+                assertThat(cancelled.isForfeit()).isFalse();
+                assertThat(cancelled.getSessionPrice()).isEqualByComparingTo("0");
+            });
+    }
+
+    /** A withdraw racing a coach accept never turns into the cancellation of a charged booking. */
+    @ParameterizedTest
+    @ValueSource(strings = {"PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "DECLINED"})
+    void withdrawBookingRequest_noLongerRequested_isRefusedAndLeavesTheBookingAlone(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.withdrawBookingRequest(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.REQUEST_NOT_PENDING));
+        assertThat(booking.getStatus()).isEqualTo(status);
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingCancelledByParentEvent.class));
+    }
+
+    @Test
+    void withdrawBookingRequest_otherParent_isRejectedBeforeTheRowLock() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.withdrawBookingRequest(booking.getId(), 999L))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(bookingRepository, never()).findByIdForUpdate(any());
+    }
+
+    /** M2: the parent's pending requests to this coach plus the new ones may not exceed the cap. */
+    @Test
+    void requireRequestQuota_atTheCap_isRefusedTooManyPendingRequests() {
+        when(bookingRepository.countPendingParentRequests(PARENT_ID, COACH_ID)).thenReturn(9L);
+        Instant soon = Instant.now().plus(Duration.ofDays(2));
+
+        assertThatCode(() -> bookingService.requireRequestQuota(PARENT_ID, COACH_ID, List.of(soon)))
+            .doesNotThrowAnyException();
+        assertThatThrownBy(() -> bookingService.requireRequestQuota(PARENT_ID, COACH_ID,
+                List.of(soon, soon.plus(Duration.ofDays(1)))))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.TOO_MANY_PENDING_REQUESTS));
+    }
+
+    @Test
+    void requireRequestQuota_beyondTheHorizon_isRefused() {
+        Instant beyond = Instant.now().plus(Duration.ofDays(121));
+
+        assertThatThrownBy(() -> bookingService.requireRequestQuota(PARENT_ID, COACH_ID, List.of(beyond)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BEYOND_BOOKING_HORIZON));
+        verify(bookingRepository, never()).countPendingParentRequests(any(), any());
+    }
+
+    /** M2 wiring: the single-request path runs the quota under the coach lock and writes nothing when over it. */
+    @Test
+    void createBookingRequest_overThePendingRequestCap_isRefusedAndWritesNothing() {
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.countPendingParentRequests(PARENT_ID, COACH_ID)).thenReturn(10L);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID,
+                makeValidRequest(COACH_ID, PLAYER_ID, window)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.TOO_MANY_PENDING_REQUESTS));
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    private Booking makeProposal(String status) {
+        Booking b = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        b.setProposedByCoach(true);
+        b.setAgreedPrice(new BigDecimal("50.00"));
+        return b;
+    }
+
+    private void stubAcceptPath(Booking booking, CoachProfile coach) {
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
     }
 
     // ---- acceptBooking tests ----

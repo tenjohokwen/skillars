@@ -26,5 +26,8 @@ public record BookingResponse(
     boolean receiptAvailable,
     // feat/payment-forfeit-payouts-and-clawback: when the payer may report a coach no-show (start + the
     // late-cancel grace) — BookingService.recordNoShowCoach refuses earlier. Display hint; the server decides.
-    Instant coachNoShowReportableAt
+    Instant coachNoShowReportableAt,
+    // fix/booking-request-consent: a coach-proposed booking ("repeat next week"). While REQUESTED, only the
+    // parent can act on it (confirm or decline); the coach sees it as awaiting parent confirmation.
+    boolean proposedByCoach
 ) {}

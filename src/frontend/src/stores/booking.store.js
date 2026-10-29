@@ -12,6 +12,8 @@ import {
   acceptBooking,
   declineBooking,
   cancelBooking,
+  confirmProposedBooking,
+  withdrawBookingRequest,
   getParentBookings,
   getCoachBookingRequests,
   getBookingById,
@@ -540,6 +542,18 @@ export const useBookingStore = defineStore('booking', () => {
     await loadParentBookings()
   }
 
+  // fix/booking-request-consent: same refetch-after-mutate pattern as handleCancelBooking. Confirming
+  // moves the booking through payment server-side, so the refetch shows where it landed.
+  async function handleConfirmProposedBooking(bookingId) {
+    await confirmProposedBooking(bookingId)
+    await loadParentBookings()
+  }
+
+  async function handleWithdrawBookingRequest(bookingId) {
+    await withdrawBookingRequest(bookingId)
+    await loadParentBookings()
+  }
+
   // skillars-deferred-155 AC5/AC7, reworded by skillars-deferred-156 AC3: a full
   // loadParentBookings() refetch rather than splicing the PATCH response in. The PATCH response is
   // now a narrow PlayerRequestResponse (bookingId, playerRequest only) — it never carries
@@ -781,6 +795,8 @@ export const useBookingStore = defineStore('booking', () => {
     handleInitiateQuickComplete,
     handleConfirmCompletion,
     handleCancelBooking,
+    handleConfirmProposedBooking,
+    handleWithdrawBookingRequest,
     handleSetPlayerRequest,
     handleRequestReschedule,
     handleAcceptReschedule,

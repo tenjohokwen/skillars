@@ -36,6 +36,8 @@ vi.mock('src/api/booking.api', () => {
     'acceptBooking',
     'declineBooking',
     'cancelBooking',
+    'confirmProposedBooking',
+    'withdrawBookingRequest',
     'getParentBookings',
     'getCoachBookingRequests',
     'getBookingById',
@@ -68,6 +70,9 @@ vi.mock('src/api/payment.api', () => ({
 
 import {
   getCoachBookingRequests,
+  getParentBookings,
+  confirmProposedBooking,
+  withdrawBookingRequest,
   acceptAllBatch,
   createBatch,
   getCoachAvailability,
@@ -495,5 +500,43 @@ describe('booking.store — loadAvailability coachPriced (fix/booking-price-and-
     await store.loadAvailability('c1', '2026-03-09')
 
     expect(store.coachPriced).toBeNull()
+  })
+})
+
+// fix/booking-request-consent: both parent actions refetch the list, like handleCancelBooking.
+describe('booking.store — coach proposal confirm / request withdraw (booking-request-consent)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it('handleConfirmProposedBooking confirms, then reloads the parent bookings', async () => {
+    confirmProposedBooking.mockResolvedValue({})
+    getParentBookings.mockResolvedValue([{ id: 'b-1', status: 'CONFIRMED' }])
+    const store = useBookingStore()
+
+    await store.handleConfirmProposedBooking('b-1')
+
+    expect(confirmProposedBooking).toHaveBeenCalledWith('b-1')
+    expect(store.parentBookings).toEqual([{ id: 'b-1', status: 'CONFIRMED' }])
+  })
+
+  it('handleWithdrawBookingRequest withdraws, then reloads the parent bookings', async () => {
+    withdrawBookingRequest.mockResolvedValue()
+    getParentBookings.mockResolvedValue([{ id: 'b-1', status: 'CANCELLED_PARENT' }])
+    const store = useBookingStore()
+
+    await store.handleWithdrawBookingRequest('b-1')
+
+    expect(withdrawBookingRequest).toHaveBeenCalledWith('b-1')
+    expect(store.parentBookings).toEqual([{ id: 'b-1', status: 'CANCELLED_PARENT' }])
+  })
+
+  it('a rejected withdraw propagates and skips the reload', async () => {
+    withdrawBookingRequest.mockRejectedValue(new Error('booking.requestNotPending'))
+    const store = useBookingStore()
+
+    await expect(store.handleWithdrawBookingRequest('b-1')).rejects.toThrow()
+    expect(getParentBookings).not.toHaveBeenCalled()
   })
 })

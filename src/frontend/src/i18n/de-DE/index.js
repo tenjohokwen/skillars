@@ -400,6 +400,7 @@ export default {
       bookingsLoadError:
         'Ihre Buchungen konnten nicht geladen werden. Bitte laden Sie die Seite neu.',
       statusRequested: 'Warten auf Trainerantwort',
+      statusProposedByCoach: 'Wartet auf Ihre Bestätigung',
       statusAccepted: 'Angenommen',
       statusConfirmed: 'Bestätigt',
       statusUpcoming: 'Bevorstehend',
@@ -611,6 +612,23 @@ export default {
       declineFailed: 'Verschiebung konnte nicht abgelehnt werden. Bitte erneut versuchen.',
       proposeNewTime: 'Neue Zeit vorschlagen',
     },
+    proposal: {
+      proposedLabel:
+        'Ihr Trainer hat diese Sitzung vorgeschlagen. Es wird erst nach Ihrer Bestätigung abgerechnet.',
+      confirm: 'Bestätigen',
+      decline: 'Ablehnen',
+      withdraw: 'Anfrage zurückziehen',
+      withdrawProposal: 'Vorschlag zurückziehen',
+      awaitingParent: 'Von Ihnen vorgeschlagen — wartet auf Bestätigung der Eltern',
+      confirmTitle: 'Diese Sitzung bestätigen?',
+      confirmBody:
+        'Mit der Bestätigung wird die Sitzung gebucht. Die Zahlung erfolgt sofort, aus Ihrem Sitzungspaket, falls der Trainer eines verwendet hat, sonst aus Ihrem Guthaben und Ihrer gespeicherten Karte.',
+      confirmed: 'Sitzung bestätigt',
+      confirmFailed: 'Die Sitzung konnte nicht bestätigt werden. Bitte erneut versuchen.',
+      declined: 'Vorschlag abgelehnt',
+      withdrawn: 'Anfrage zurückgezogen',
+      withdrawFailed: 'Die Anfrage konnte nicht zurückgezogen werden. Bitte erneut versuchen.',
+    },
     cancel: {
       cta: 'Stornieren',
       dialogTitle: 'Diese Sitzung stornieren?',
@@ -674,6 +692,14 @@ export default {
       weekStartOutOfRange:
         'Diese Woche liegt zu weit in der Vergangenheit oder Zukunft, um sie anzuzeigen.',
       batchAlreadyProcessed: 'Diese Anfragen wurden bereits bearbeitet.',
+      requestNotPending: 'Diese Anfrage wurde bereits beantwortet.',
+      notACoachProposal: 'Hier kann nur eine vom Trainer vorgeschlagene Sitzung bestätigt werden.',
+      parentConfirmationRequired:
+        'Sie haben diese Sitzung vorgeschlagen, daher kann nur die Familie sie bestätigen.',
+      tooManyPendingRequests:
+        'Sie haben bereits die maximale Anzahl offener Anfragen bei diesem Trainer. Warten Sie auf eine Antwort oder ziehen Sie eine Anfrage zurück.',
+      beyondBookingHorizon:
+        'Dieses Datum liegt zu weit in der Zukunft. Bitte wählen Sie ein früheres Datum.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',
       rescheduleAlreadyPending:

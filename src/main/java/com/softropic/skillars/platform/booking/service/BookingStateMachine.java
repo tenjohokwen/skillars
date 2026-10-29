@@ -19,6 +19,10 @@ public class BookingStateMachine {
         t.put(BookingStatus.REQUESTED, Map.of(
             BookingEvent.ACCEPT,              BookingStatus.ACCEPTED,
             BookingEvent.DECLINE,             BookingStatus.DECLINED,
+            // fix/booking-request-consent (M1): the parent withdraws their request, or declines a coach's
+            // proposal (BookingService.withdrawBookingRequest). Nothing is charged before accept, so
+            // cancelBookingAsParent's capture whitelist also refunds nothing from here.
+            BookingEvent.CANCEL_PARENT,       BookingStatus.CANCELLED_PARENT,
             BookingEvent.CANCEL_DUE_TO_PAUSE, BookingStatus.CANCELLED,
             // Coach suspension / child-safety hold (AdminCoachEnforcementService) — ADMIN actor only.
             BookingEvent.CANCEL_ADMIN,        BookingStatus.CANCELLED

@@ -2232,6 +2232,7 @@ export default {
   booking: {
     requests: {
       statusRequested: 'En attente de la réponse du coach',
+      statusProposedByCoach: 'En attente de votre confirmation',
       statusAccepted: 'Acceptée',
       statusConfirmed: 'Confirmée',
       statusUpcoming: 'À venir',
@@ -2398,6 +2399,23 @@ export default {
       declineFailed: 'Impossible de refuser le report. Veuillez réessayer.',
       proposeNewTime: 'Proposer un nouvel horaire',
     },
+    proposal: {
+      proposedLabel:
+        "Votre coach a proposé cette séance. Rien n'est débité avant votre confirmation.",
+      confirm: 'Confirmer',
+      decline: 'Refuser',
+      withdraw: 'Retirer la demande',
+      withdrawProposal: 'Retirer la proposition',
+      awaitingParent: 'Proposée par vous — en attente de la confirmation du parent',
+      confirmTitle: 'Confirmer cette séance ?',
+      confirmBody:
+        'La confirmation réserve cette séance. Le paiement est effectué maintenant, sur votre pack de séances si le coach en a utilisé un, sinon sur votre crédit et votre carte enregistrée.',
+      confirmed: 'Séance confirmée',
+      confirmFailed: 'Impossible de confirmer cette séance. Veuillez réessayer.',
+      declined: 'Proposition refusée',
+      withdrawn: 'Demande retirée',
+      withdrawFailed: 'Impossible de retirer cette demande. Veuillez réessayer.',
+    },
     cancel: {
       cta: 'Annuler',
       dialogTitle: 'Annuler cette séance ?',
@@ -2459,6 +2477,14 @@ export default {
       weekStartOutOfRange:
         'Cette semaine est trop éloignée dans le passé ou le futur pour être affichée.',
       batchAlreadyProcessed: 'Ces demandes ont déjà été traitées.',
+      requestNotPending: 'Cette demande a déjà reçu une réponse.',
+      notACoachProposal: 'Seule une séance proposée par votre coach peut être confirmée ici.',
+      parentConfirmationRequired:
+        'Vous avez proposé cette séance, seule la famille peut donc la confirmer.',
+      tooManyPendingRequests:
+        'Vous avez déjà le nombre maximal de demandes en attente auprès de ce coach. Attendez une réponse ou retirez une demande.',
+      beyondBookingHorizon:
+        'Cette date est trop éloignée pour réserver. Choisissez une date plus proche.',
       batchNoneAccepted: "Aucune des séances de cette demande n'a pu être acceptée.",
       notReschedulable: 'Cette séance ne peut plus être reprogrammée.',
       rescheduleAlreadyPending:

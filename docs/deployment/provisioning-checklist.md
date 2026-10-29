@@ -74,7 +74,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
   product decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200 and V205 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V202 and V205 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -459,6 +459,23 @@ SELECT booking_id, coach_id, net_amount, updated_at FROM payment.coach_payouts
 WHERE status = 'HOLD' AND last_error = 'CHARGEBACK_LOST';
 ```
 
+**V202: `booking_batches_status_check`** (`V202__booking_request_consent.sql`, rebuilt as a validating
+CHECK with `ACCEPTING` added). It is the union of the old values, so every existing row passes; this
+must return 0 rows:
+```sql
+SELECT id, status FROM booking.booking_batches
+WHERE status NOT IN ('PENDING', 'ACCEPTING', 'FULLY_ACCEPTED', 'PARTIALLY_ACCEPTED', 'DECLINED');
+```
+**V202 follow-up (informational, not a blocker):** coach "repeat next week" bookings created before
+V202 get `proposed_by_coach = false`, so the coach can still accept them. List any still waiting; decline
+them, or let them expire, if the family never asked for them:
+```sql
+SELECT b.id, b.coach_id, b.parent_id, b.requested_start_time FROM booking.bookings b
+WHERE b.status = 'REQUESTED' AND b.batch_id IS NULL
+  AND EXISTS (SELECT 1 FROM booking.bookings o WHERE o.status = 'COMPLETED' AND o.coach_id = b.coach_id
+              AND o.player_id = b.player_id AND o.requested_start_time = b.requested_start_time - interval '7 days');
+```
+
 V187, V188, V191 and V193's new columns and tables are additive (new tables, `NOT NULL DEFAULT`
 constants, nullable columns) and need no data check. V186's backfill `UPDATE` of
 `session_pack_purchases.session_count` cannot violate a constraint.
@@ -734,6 +751,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.lateCancel.graceMinutes` | 30 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-28: 30 |
 | `coach.excusedCancellations.maxPerWindow` | 3 (code default, 0–100) | `ConfigBounds` | Keep unless policy changes |
 | `coach.excusedCancellations.windowDays` | 90 (code default, 1–3650) | `ConfigBounds` | Keep |
+| `booking.request.maxPendingPerCoach` | 10 (code default, range 1–100) | `ConfigBounds` | Keep. A parent's own requests awaiting one coach's answer at once (single and batch; coach proposals not counted). Raise only if `booking.batch.maxSize` is raised above it |
+| `booking.request.maxHorizonDays` | 120 (code default, range 1–730) | `ConfigBounds` | Keep. How many days ahead a session can be requested |
 | `payment.payout.hold_hours` | 48 (seed; code default 48, range 0–336) | V139, `CoachPayoutOutboxSupport` | Keep at or above the dispute window you are comfortable with **(confirm)** |
 | `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
 | `platform.commission.rate` **and** `platform.commission_rate` | 0.08 each | V139 | Two keys for one concept. Payments read `platform.commission.rate`; `ProjectedRevenueService` reads `platform.commission_rate`. Change both together |
@@ -912,3 +931,10 @@ an operator must now do.
   payouts are also re-driven automatically when `account.updated` (or the onboarding sync) shows that the
   coach's account can receive transfers, so the Connect webhook endpoint (section 4.3) must deliver
   `account.updated`. No new config keys and no new scheduled jobs.
+- 2026-10-29: fix/booking-request-consent (V202). Two new config keys, both code defaults with no seed
+  row: `booking.request.maxPendingPerCoach` (10) and `booking.request.maxHorizonDays` (120)
+  ([section 7](#7-application-config-and-policy-keys)). New parent endpoints
+  `PUT /api/bookings/requests/{id}/confirm` and `/withdraw`; coach "repeat next week" bookings now wait
+  for the parent's confirmation. Run the V202 pre-migration check and review its informational follow-up
+  query ([3.2](#32-pre-migration-data-checks)). V202 joins the "prod is not live" list in section 0. No new
+  job, webhook or env var.

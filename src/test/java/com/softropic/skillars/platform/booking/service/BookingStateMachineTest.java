@@ -59,6 +59,8 @@ class BookingStateMachineTest {
         return Stream.of(
             Arguments.of(REQUESTED, ACCEPT, ACCEPTED),
             Arguments.of(REQUESTED, DECLINE, DECLINED),
+            // fix/booking-request-consent (M1): the parent withdraws a request / declines a proposal.
+            Arguments.of(REQUESTED, CANCEL_PARENT, CANCELLED_PARENT),
             // B2: coach suspension cancels REQUESTED bookings through the state machine.
             Arguments.of(REQUESTED, BookingEvent.CANCEL_ADMIN, BookingStatus.CANCELLED),
             // C2: ... and every other pre-session status (suspension / child-safety hold).

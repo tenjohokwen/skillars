@@ -147,7 +147,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'i18n.global.t() on a messageKey resolved earlier in the same function from an HTTP-status lookup table',
   },
   {
-    at: 'src/components/booking/BookingStateChip.vue:53',
+    at: 'src/components/booking/BookingStateChip.vue:59',
     reason: "status label keyed by a lookup-table entry's own key field",
   },
   {
@@ -296,9 +296,14 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:536',
+    at: 'src/pages/parent/ParentBookingsPage.vue:612',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
+  },
+  {
+    at: 'src/pages/parent/ParentBookingsPage.vue:650',
+    reason:
+      't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },
 ]
 
