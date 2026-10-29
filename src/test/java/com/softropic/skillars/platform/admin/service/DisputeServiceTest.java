@@ -67,6 +67,7 @@ class DisputeServiceTest {
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private AdminNotificationRecipientResolver recipientResolver;
+    @Mock private com.softropic.skillars.platform.payment.service.RefundClawbackService refundClawbackService;
 
     private DisputeService service;
 
@@ -82,7 +83,7 @@ class DisputeServiceTest {
             new com.softropic.skillars.platform.payment.service.CoachPayoutAdjustmentService(
                 coachPayoutRepository, coachPayoutFreezeRepository, coachPayoutOutboxSupport),
             eventPublisher,
-            playerProfileRepository, recipientResolver
+            playerProfileRepository, recipientResolver, refundClawbackService
         );
     }
 
@@ -585,5 +586,127 @@ class DisputeServiceTest {
                 assertThat(e.getResolutionNote()).isEqualTo("half");
                 assertThat(e.getRecipient()).isEqualTo(raiser);
             });
+    }
+
+    // ── feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH ─────────────────
+
+    private void stubUpholdCoachBase(Dispute dispute, Booking booking) {
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(buildPayment("CAPTURED")));
+    }
+
+    @Test
+    void resolveDispute_upholdCoach_withoutARefund_isRejectedBeforeAnyWrite() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        booking.setStatus("NO_SHOW_COACH");
+        stubUpholdCoachBase(dispute, booking);
+        when(refundClawbackService.clawBack(bookingId, null)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.resolveDispute(disputeId, "UPHOLD_COACH", null, "session happened", 99L))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("disputes.noRefundToReverse");
+
+        verify(disputeRepository, never()).save(any());
+        verify(disputeRepository, never()).saveAndFlush(any());
+        verifyNoInteractions(coachPayoutOutboxSupport);
+    }
+
+    @Test
+    void resolveDispute_upholdCoach_secondTimeOnTheSameBooking_isRejected() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        booking.setStatus("NO_SHOW_COACH");
+        stubUpholdCoachBase(dispute, booking);
+        when(disputeRepository.existsByBookingIdAndResolution(bookingId, "UPHOLD_COACH")).thenReturn(true);
+
+        assertThatThrownBy(() -> service.resolveDispute(disputeId, "UPHOLD_COACH", null, "again", 99L))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("disputes.noRefundToReverse");
+        verifyNoInteractions(refundClawbackService);
+    }
+
+    @Test
+    void resolveDispute_upholdCoach_clawsBackPartially_paysCoachInFull_andTellsBothSides() {
+        Dispute dispute = buildDispute();
+        dispute.setRaisedByRole("COACH");
+        dispute.setRaisedBy(7L);
+        Booking booking = buildBooking();
+        booking.setStatus("NO_SHOW_COACH");
+        stubUpholdCoachBase(dispute, booking);
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+        when(refundClawbackService.clawBack(bookingId, null)).thenReturn(Optional.of(
+            new com.softropic.skillars.platform.payment.service.RefundClawbackService.RefundClawback(
+                new BigDecimal("30.00"), new BigDecimal("12.00"), false, false)));
+        // No payout row (a refunded booking never completed): a new one is computed and enqueued.
+        com.softropic.skillars.platform.payment.repo.CoachPayout created = payout(
+            com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.PENDING_RELEASE);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.empty());
+        when(coachPayoutRepository.findById(bookingId)).thenReturn(Optional.of(created));
+        var coachAddress = new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("c@x.test", "en");
+        var parentAddress = new com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient("p@x.test", "de");
+        when(recipientResolver.forUser(7L)).thenReturn(Optional.of(coachAddress));
+        when(recipientResolver.forUser(1L)).thenReturn(Optional.of(parentAddress));
+
+        service.resolveDispute(disputeId, "UPHOLD_COACH", new BigDecimal("99.00"), "session happened", 99L);
+
+        assertThat(dispute.getStatus()).isEqualTo("RESOLVED");
+        assertThat(dispute.getResolution()).isEqualTo("UPHOLD_COACH");
+        assertThat(dispute.getCreditAmount()).isNull(); // a stray amount is never stored for this resolution
+        assertThat(dispute.getRecoveredAmount()).isEqualByComparingTo("12.00");
+        assertThat(dispute.getAbsorbedAmount()).isEqualByComparingTo("18.00");
+        // The dispute is flushed RESOLVED before the payout is computed, so the payout is not frozen for it.
+        var order = org.mockito.Mockito.inOrder(disputeRepository, coachPayoutOutboxSupport);
+        order.verify(disputeRepository).saveAndFlush(dispute);
+        order.verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, booking.getCoachId());
+        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+
+        var resolved = org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
+        verify(eventPublisher).publishEvent(resolved.capture());
+        assertThat(resolved.getValue()).isInstanceOfSatisfying(
+            com.softropic.skillars.platform.admin.contract.DisputeResolvedEvent.class, e -> {
+                assertThat(e.getRecipient()).isEqualTo(coachAddress);
+                assertThat(e.getAudience())
+                    .isEqualTo(com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome.Audience.COACH);
+                assertThat(e.getUpholdOutcome().coachNet()).isEqualByComparingTo("27.00");
+                assertThat(e.getUpholdOutcome().recovered()).isEqualByComparingTo("12.00");
+            });
+        var other = org.mockito.ArgumentCaptor.forClass(Object.class);
+        verify(eventPublisher).publishEvent(other.capture());
+        assertThat(other.getValue()).isInstanceOfSatisfying(
+            com.softropic.skillars.platform.admin.contract.DisputeCoachUpheldEvent.class, e -> {
+                assertThat(e.recipient()).isEqualTo(parentAddress);
+                assertThat(e.audience())
+                    .isEqualTo(com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome.Audience.PARENT);
+                assertThat(e.outcome().absorbed()).isEqualByComparingTo("18.00");
+            });
+    }
+
+    @Test
+    void resolveDispute_upholdCoach_reinstatesACancelledPayout() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        booking.setStatus("NO_SHOW_PLAYER");
+        stubUpholdCoachBase(dispute, booking);
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+        when(refundClawbackService.clawBack(bookingId, null)).thenReturn(Optional.of(
+            new com.softropic.skillars.platform.payment.service.RefundClawbackService.RefundClawback(
+                new BigDecimal("30.00"), new BigDecimal("30.00"), false, false)));
+        // An earlier FULL_CREDIT dispute cut the forfeit payout to nothing.
+        com.softropic.skillars.platform.payment.repo.CoachPayout cancelled = payout(
+            com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.CANCELLED);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(cancelled));
+        when(coachPayoutFreezeRepository.isFrozenForShare(cancelled.getCoachId())).thenReturn(false);
+
+        service.resolveDispute(disputeId, "UPHOLD_COACH", null, "session happened", 99L);
+
+        assertThat(cancelled.getStatus())
+            .isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.PENDING_RELEASE);
+        verify(coachPayoutOutboxSupport).enqueueTransfer(eq(bookingId), any());
+        verify(coachPayoutOutboxSupport, never()).enqueuePayout(any(), any());
+        assertThat(dispute.getAbsorbedAmount()).isEqualByComparingTo("0.00");
     }
 }

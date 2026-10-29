@@ -21,6 +21,10 @@ public interface DisputeRepository extends JpaRepository<Dispute, UUID> {
 
     List<Dispute> findByRaisedBy(Long raisedBy);
 
+    // feat/payment-forfeit-payouts-and-clawback: a booking's refund is clawed back at most once — a second
+    // UPHOLD_COACH (a later dispute on the same booking) would re-deduct a pack session again.
+    boolean existsByBookingIdAndResolution(UUID bookingId, String resolution);
+
     // skillars-deferred-165 AC1: admin worklist of open disputes, mirroring
     // AdminReviewService.getUnderReviewQueue's single-status paged query shape.
     Page<Dispute> findByStatusOrderByCreatedAtAsc(String status, Pageable pageable);

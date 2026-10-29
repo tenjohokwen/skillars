@@ -23,5 +23,8 @@ public record BookingResponse(
     // feat/coach-workflow-gaps A23: true when the booking has a CAPTURED payment, i.e. the payer's
     // receipt endpoint will render it. Only computed for the payer's own list (getParentBookings);
     // false everywhere else.
-    boolean receiptAvailable
+    boolean receiptAvailable,
+    // feat/payment-forfeit-payouts-and-clawback: when the payer may report a coach no-show (start + the
+    // late-cancel grace) — BookingService.recordNoShowCoach refuses earlier. Display hint; the server decides.
+    Instant coachNoShowReportableAt
 ) {}

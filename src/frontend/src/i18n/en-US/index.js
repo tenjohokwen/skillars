@@ -522,6 +522,7 @@ export default {
       PARTIAL_CREDIT: 'Partial credit',
       NO_ACTION: 'No action',
       COACH_WARNING: 'Coach warning',
+      UPHOLD_COACH: 'Uphold coach (reverse refund)',
     },
   },
   session: {
@@ -1287,6 +1288,11 @@ export default {
       dismissFailed: 'Failed to dismiss the dispute. Please try again.',
       alreadyResolved: 'This dispute has already been resolved.',
       invalidCreditAmount: 'Please enter a valid credit amount.',
+      noRefundToReverse: 'This booking has no refund to the parent that could be reversed.',
+      upholdCoachHelp:
+        'Use when the session actually took place or the refund was not owed. The refund is taken back from the parent’s credit wallet (never below zero) or the restored pack session is deducted again, and the coach is paid their full share. Any amount that cannot be recovered is absorbed by Skillars.',
+      recoveredAmountLabel: 'Recovered from parent',
+      absorbedAmountLabel: 'Absorbed by Skillars',
     },
     moderation: {
       title: 'Moderation',
@@ -2033,6 +2039,8 @@ export default {
       // long-standing gap for whenever a parent-facing no-show-report surface is eventually built,
       // not a key this story's own UI wires up.
       noShowTooEarly: 'A no-show cannot be reported before the session has started.',
+      coachNoShowTooEarly:
+        'A coach no-show can only be reported once the grace period after the scheduled start has passed.',
       // skillars-deferred-163 AC2.1/AC2.2: shown when the wrap-up wizard can no longer be submitted
       // because this booking was already completed (by the stuck-completion sweeper or an admin) -- the
       // coach is redirected into the recap dialog with their typed text carried over. Deliberately names
@@ -2338,6 +2346,7 @@ export default {
     noShowCoachConfirmBody:
       'Confirm that the coach did not turn up for this session. The session is refunded and the coach receives a reliability strike. This cannot be undone.',
     noShowCoachFailed: 'Unable to report the no-show. Please try again.',
+    noShowCoachAvailableFrom: 'You can report a coach no-show from {time}.',
     title: 'Cancel Session',
     selectReason: 'Select cancellation reason',
     confirmCancel: 'Confirm Cancellation',
@@ -2553,6 +2562,8 @@ export default {
       COACH_WARNING_ISSUED: 'You received a formal warning following a dispute.',
       DISPUTE_RESOLVED: 'Your dispute about the session on {requestedStartTime} was resolved.',
       DISPUTE_DISMISSED: 'Your dispute about the session on {requestedStartTime} was dismissed.',
+      DISPUTE_COACH_UPHELD:
+        'A dispute about the session on {requestedStartTime} was resolved in the coach’s favour.',
       GDPR_EXPORT_READY: 'Your data export is ready to download until {expiresAt}.',
       REVIEW_APPROVED: 'Your review of {coachDisplayName} was published.',
       REVIEW_BLOCKED: 'Your review of {coachDisplayName} was not published.',

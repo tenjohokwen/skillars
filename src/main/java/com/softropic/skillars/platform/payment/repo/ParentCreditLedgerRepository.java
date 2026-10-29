@@ -18,8 +18,13 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
     @Query("SELECT SUM(l.amount) FROM ParentCreditLedger l WHERE l.parentId = :parentId")
     Optional<BigDecimal> sumByParentId(@Param("parentId") Long parentId);
 
-    @Query("SELECT COALESCE(SUM(ABS(l.amount)), 0) FROM ParentCreditLedger l WHERE l.type = '"
-        + CreditLedgerEntryType.BOOKING_REFUND + "' AND l.referenceId IN :bookingIds")
+    /**
+     * Refunds credited for these bookings, net of what an {@code UPHOLD_COACH} dispute took back
+     * ({@code BOOKING_REFUND_REVERSAL}, negative) — feat/payment-forfeit-payouts-and-clawback.
+     */
+    @Query("SELECT COALESCE(SUM(l.amount), 0) FROM ParentCreditLedger l WHERE l.type IN ('"
+        + CreditLedgerEntryType.BOOKING_REFUND + "', '" + CreditLedgerEntryType.BOOKING_REFUND_REVERSAL
+        + "') AND l.referenceId IN :bookingIds")
     BigDecimal sumRefundsByBookingIds(@Param("bookingIds") List<UUID> bookingIds);
 
     @Query("SELECT l FROM ParentCreditLedger l WHERE l.parentId = :parentId AND l.createdAt BETWEEN :from AND :to ORDER BY l.createdAt DESC, l.txId DESC")
@@ -40,8 +45,10 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
                                         @Param("createdAt") Instant createdAt,
                                         @Param("txId") UUID txId);
 
-    @Query("SELECT COALESCE(SUM(ABS(l.amount)), 0) FROM ParentCreditLedger l WHERE l.type = '"
-        + CreditLedgerEntryType.BOOKING_REFUND + "' AND l.createdAt BETWEEN :from AND :to")
+    /** Refund credit in the period, net of refund reversals booked in it (feat/payment-forfeit-payouts-and-clawback). */
+    @Query("SELECT COALESCE(SUM(l.amount), 0) FROM ParentCreditLedger l WHERE l.type IN ('"
+        + CreditLedgerEntryType.BOOKING_REFUND + "', '" + CreditLedgerEntryType.BOOKING_REFUND_REVERSAL
+        + "') AND l.createdAt BETWEEN :from AND :to")
     BigDecimal sumTotalRefundCredit(@Param("from") Instant from, @Param("to") Instant to);
 
     /**
@@ -65,4 +72,11 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
      * {@code uq_pcl_reference_type} partial unique index for the concurrent case.
      */
     boolean existsByReferenceIdAndType(UUID referenceId, String type);
+
+    /**
+     * feat/payment-forfeit-payouts-and-clawback: the booking's {@code BOOKING_REFUND} (V138's
+     * {@code uq_pcl_booking_refund} allows at most one per booking) — what an {@code UPHOLD_COACH}
+     * dispute resolution claws back.
+     */
+    Optional<ParentCreditLedger> findFirstByReferenceIdAndType(UUID referenceId, String type);
 }

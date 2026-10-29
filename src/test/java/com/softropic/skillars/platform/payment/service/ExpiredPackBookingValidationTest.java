@@ -78,6 +78,9 @@ class ExpiredPackBookingValidationTest {
     // createBookingRequest, which never reaches it — but @InjectMocks would otherwise inject null
     // silently, which is exactly the twelfth-file class of miss UAT.2 recorded.
     @Mock BookingPaymentRepository bookingPaymentRepository;
+    // feat/payment-forfeit-payouts-and-clawback: toResponse reads booking.lateCancel.graceMinutes for
+    // BookingResponse.coachNoShowReportableAt (an unstubbed mock returns 0 — fine here).
+    @Mock com.softropic.skillars.platform.config.service.ConfigService configService;
     // Deferred-12 AC3: createBookingRequest re-reads the locked coach row via EntityManager.refresh
     // before the overlap check; a mock keeps that a no-op here. The real re-read is proven against a
     // live database in BookingServiceConcurrencyIT.

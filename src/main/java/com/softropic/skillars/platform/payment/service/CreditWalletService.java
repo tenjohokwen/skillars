@@ -97,6 +97,28 @@ public class CreditWalletService {
     }
 
     /**
+     * feat/payment-forfeit-payouts-and-clawback: takes back up to {@code refundAmount} of a booking's refund
+     * from the payer's wallet — an {@code UPHOLD_COACH} dispute resolution. Capped at the balance read under
+     * the per-payer wallet lock ({@link #lockAndGetBalance}), so the wallet never goes below zero and a
+     * concurrent cash-out or settlement cannot spend the same credit. Nothing is written when the wallet is
+     * empty.
+     *
+     * @return what was actually taken back (zero to {@code refundAmount})
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal debitRefundReversal(Long parentId, UUID bookingId, BigDecimal refundAmount) {
+        BigDecimal balance = lockAndGetBalance(parentId).max(BigDecimal.ZERO);
+        BigDecimal recovered = refundAmount.min(balance);
+        if (recovered.signum() <= 0) {
+            log.info("Refund reversal for booking {}: payer {} has no wallet balance — nothing recovered", bookingId, parentId);
+            return BigDecimal.ZERO;
+        }
+        writeLedgerEntry(parentId, recovered.negate(), CreditLedgerEntryType.BOOKING_REFUND_REVERSAL, bookingId,
+            "Dispute resolved in the coach's favour — refund reversed");
+        return recovered;
+    }
+
+    /**
      * Compensation for a cash-out whose Stripe refund failed: restores the debited net and fee as
      * two {@code CASH_OUT_REVERSAL} rows tagged with the same {@code cashOutId}, in ONE transaction —
      * two separate {@code writeLedgerEntry} calls could commit the net and lose the fee.

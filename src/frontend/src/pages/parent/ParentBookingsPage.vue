@@ -133,7 +133,9 @@
           <!-- Coach no-show report (FR: parent/self-booking-player). Mirrors
                BookingService.recordNoShowCoach for visibility only: the NO_SHOW_COACH transition
                exists only from UPCOMING, and the backend refuses a report before the scheduled
-               start (BookingError.NO_SHOW_TOO_EARLY). The server stays authoritative. -->
+               start + the late-cancel grace (BookingError.NO_SHOW_TOO_EARLY;
+               feat/payment-forfeit-payouts-and-clawback — booking.coachNoShowReportableAt). The
+               server stays authoritative. -->
           <q-btn
             v-if="(authStore.isParent || authStore.isPlayer) && canReportCoachNoShow(booking)"
             flat
@@ -147,6 +149,17 @@
             @click="openNoShowCoachDialog(booking)"
             class="q-mt-xs self-start"
           />
+          <div
+            v-else-if="(authStore.isParent || authStore.isPlayer) && coachNoShowPending(booking)"
+            class="text-caption text-grey-7 q-mt-xs"
+            data-testid="no-show-coach-pending"
+          >
+            {{
+              t('cancellation.noShowCoachAvailableFrom', {
+                time: formatDateTime(booking.coachNoShowReportableAt, booking.canonicalTimezone),
+              })
+            }}
+          </div>
 
           <!-- Player/parent session-prep request (skillars-deferred-155 AC7).
                skillars-deferred-155 code review: the read-only display is deliberately NOT nested
@@ -466,11 +479,31 @@ const nowTimer = setInterval(() => {
 }, 60 * 1000)
 onBeforeUnmount(() => clearInterval(nowTimer))
 
+// feat/payment-forfeit-payouts-and-clawback: not before start + the late-cancel grace — a coach a few
+// minutes late is not a no-show. The server sends the instant (coachNoShowReportableAt); an older
+// response without it falls back to the start time, and the server still refuses too early a report.
+function coachNoShowReportableMs(booking) {
+  return new Date(booking.coachNoShowReportableAt || booking.requestedStartTime).getTime()
+}
+
 function canReportCoachNoShow(booking) {
   if (booking.status !== 'UPCOMING') return false
+  const reportable = coachNoShowReportableMs(booking)
+  // Unparseable instant: fail closed (hide) rather than offer an action the server would refuse.
+  return !Number.isNaN(reportable) && reportable <= nowMs.value
+}
+
+/** The session has started but the grace has not passed yet: say when the report opens. */
+function coachNoShowPending(booking) {
+  if (booking.status !== 'UPCOMING' || !booking.coachNoShowReportableAt) return false
   const start = new Date(booking.requestedStartTime).getTime()
-  // Unparseable start: fail closed (hide) rather than offer an action the server would refuse.
-  return !Number.isNaN(start) && start <= nowMs.value
+  const reportable = coachNoShowReportableMs(booking)
+  return (
+    !Number.isNaN(start) &&
+    !Number.isNaN(reportable) &&
+    start <= nowMs.value &&
+    nowMs.value < reportable
+  )
 }
 
 const noShowCoachDialogOpen = ref(false)
@@ -495,7 +528,7 @@ async function submitNoShowCoach() {
     // Same error-key → copy mapping as CoachCommandCenterPage's player no-show report.
     const messages = {
       MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
-      'booking.noShowTooEarly': 'booking.errors.noShowTooEarly',
+      'booking.noShowTooEarly': 'booking.errors.coachNoShowTooEarly',
       'booking.alreadyCompleted': 'cancellation.alreadyCompleted',
       'booking.invalidTransition': 'cancellation.invalidTransition',
     }

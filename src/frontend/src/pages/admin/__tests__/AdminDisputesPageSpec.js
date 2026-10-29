@@ -251,4 +251,58 @@ describe('AdminDisputesPage.vue (skillars-deferred-165 AC3)', () => {
     expect(text).toContain('€12.50')
     expect(text).toMatch(/admin\.disputes\.stripeChargedLabel: —/)
   })
+
+  // ── feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH ───────────────
+
+  it('offers UPHOLD_COACH with its explanation, and submits it without a credit amount', async () => {
+    adminApi.resolveDispute.mockResolvedValue({})
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('d1')
+
+    wrapper.vm.openResolveDialog()
+    expect(wrapper.vm.resolutionOptions.map((o) => o.value)).toContain('UPHOLD_COACH')
+    wrapper.vm.resolution = 'UPHOLD_COACH'
+    wrapper.vm.resolutionNote = 'Session took place'
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dispute-uphold-coach-help"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dispute-credit-amount-input"]').exists()).toBe(false)
+    await wrapper.vm.submitResolve()
+
+    expect(adminApi.resolveDispute).toHaveBeenCalledWith('d1', {
+      resolution: 'UPHOLD_COACH',
+      creditAmount: null,
+      resolutionNote: 'Session took place',
+    })
+  })
+
+  it('maps the no-refund rejection to its copy', async () => {
+    adminApi.resolveDispute.mockRejectedValue({
+      response: { data: { errorMsg: { message: 'disputes.noRefundToReverse' } } },
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('d1')
+    wrapper.vm.openResolveDialog()
+    wrapper.vm.resolution = 'UPHOLD_COACH'
+    wrapper.vm.resolutionNote = 'x'
+    await wrapper.vm.submitResolve()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'admin.disputes.noRefundToReverse' }),
+    )
+  })
+
+  it('shows recovered and absorbed amounts of a resolved UPHOLD_COACH dispute', async () => {
+    adminApi.getDisputeDetail.mockResolvedValue({
+      ...DETAIL,
+      status: 'RESOLVED',
+      resolution: 'UPHOLD_COACH',
+      recoveredAmount: 12,
+      absorbedAmount: 18,
+    })
+    const wrapper = await mountPage()
+    await wrapper.vm.openDetail('d1')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="dispute-recovered-amount"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dispute-absorbed-amount"]').exists()).toBe(true)
+  })
 })

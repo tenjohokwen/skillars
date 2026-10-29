@@ -5,9 +5,11 @@ import com.softropic.skillars.platform.admin.contract.AdminNotificationRecipient
 import com.softropic.skillars.platform.admin.contract.CoachReinstatedEvent;
 import com.softropic.skillars.platform.admin.contract.CoachSuspensionNotificationEvent;
 import com.softropic.skillars.platform.admin.contract.CoachWarningIssuedEvent;
+import com.softropic.skillars.platform.admin.contract.DisputeCoachUpheldEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeDismissedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeResolvedEvent;
 import com.softropic.skillars.platform.admin.contract.GdprExportReadyEvent;
+import com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
@@ -44,7 +46,7 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  * the child) and every display fact inside its own transaction and puts them on the event. A null
  * recipient (no reachable address) is logged and skipped.
  *
- * <p>All eight templates are transactional (not opt-out-able) — see {@code NotificationCatalog}.
+ * <p>All nine templates are transactional (not opt-out-able) — see {@code NotificationCatalog}.
  * {@code CoachSuspendedEvent} is deliberately <em>not</em> consumed: it is always published, including
  * for a child-safety hold and when the admin chose not to notify; {@link CoachSuspensionNotificationEvent}
  * is the one that carries the admin's "notify coach" choice.
@@ -94,7 +96,33 @@ public class AdminOutcomeEmailListener {
         data.put("resolutionNote", text(event.getResolutionNote()));
         data.put("coachDisplayName", text(event.getCoachDisplayName()));
         data.put("requestedStartTime", instant(event.getSessionStart()));
+        putUpholdOutcome(data, event.getUpholdOutcome(), event.getAudience());
         send(EmailTemplate.DISPUTE_RESOLVED, event.getRecipient(), data, "disputeId", event.getDisputeId());
+    }
+
+    /** feat/payment-forfeit-payouts-and-clawback: the party that did not raise an upheld-coach dispute. */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onDisputeCoachUpheld(DisputeCoachUpheldEvent event) {
+        Map<String, Object> data = new HashMap<>();
+        data.put("coachDisplayName", text(event.coachDisplayName()));
+        data.put("requestedStartTime", instant(event.sessionStart()));
+        putUpholdOutcome(data, event.outcome(), event.audience());
+        send(EmailTemplate.DISPUTE_COACH_UPHELD, event.recipient(), data, "disputeId", event.disputeId());
+    }
+
+    /** UPHOLD_COACH facts, string-typed; nothing is added for any other resolution. */
+    private static void putUpholdOutcome(Map<String, Object> data, UpholdCoachOutcome outcome,
+                                         UpholdCoachOutcome.Audience audience) {
+        if (outcome == null) {
+            return;
+        }
+        data.put("audience", audience == null ? "" : audience.name());
+        data.put("refundedAmount", amount(outcome.refunded()));
+        data.put("recoveredAmount", amount(outcome.recovered()));
+        data.put("absorbedAmount", amount(outcome.absorbed()));
+        data.put("coachPayoutAmount", amount(outcome.coachNet()));
+        data.put("packSession", String.valueOf(outcome.packSession()));
+        data.put("sessionRededucted", String.valueOf(outcome.sessionRededucted()));
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)

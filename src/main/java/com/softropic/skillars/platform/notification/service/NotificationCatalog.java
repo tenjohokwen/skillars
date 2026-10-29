@@ -114,6 +114,8 @@ public final class NotificationCatalog {
             case COACH_WARNING_ISSUED -> inApp(NotificationCategory.MODERATION, COACH_RELIABILITY, DASHBOARD);
             // Dispute outcome to whoever raised it: a coach, a parent, or a self-registered player.
             case DISPUTE_RESOLVED, DISPUTE_DISMISSED -> inApp(NotificationCategory.BOOKING, COACH_BOOKINGS, PARENT_BOOKINGS);
+            // The other side of an UPHOLD_COACH resolution (feat/payment-forfeit-payouts-and-clawback).
+            case DISPUTE_COACH_UPHELD -> inApp(NotificationCategory.BOOKING, COACH_BOOKINGS, PARENT_BOOKINGS);
             // The download sits in the Privacy section of the requester's own profile page.
             case GDPR_EXPORT_READY -> inApp(NotificationCategory.ACCOUNT, PROFILE, PROFILE);
             // Review author: deep link to the reviewed coach's public profile (coachProfileUrl embeds the id).

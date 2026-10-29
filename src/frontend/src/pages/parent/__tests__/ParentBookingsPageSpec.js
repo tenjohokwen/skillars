@@ -463,9 +463,50 @@ describe('ParentBookingsPage.vue — coach no-show report (A13)', () => {
     await wrapper.vm.submitNoShowCoach()
 
     expect(notifySpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'negative', message: 'booking.errors.noShowTooEarly' }),
+      expect.objectContaining({ type: 'negative', message: 'booking.errors.coachNoShowTooEarly' }),
     )
     expect(bookingStore.loadParentBookings).toHaveBeenCalled()
+  })
+
+  // feat/payment-forfeit-payouts-and-clawback: not before start + the late-cancel grace.
+  it('inside the grace window hides the action and says when it opens', async () => {
+    const started = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+    const reportableAt = new Date(Date.now() + 20 * 60 * 1000).toISOString()
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: {
+        parentBookings: [
+          {
+            ...BOOKING_1H,
+            status: 'UPCOMING',
+            requestedStartTime: started,
+            coachNoShowReportableAt: reportableAt,
+          },
+        ],
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="no-show-coach-pending"]').exists()).toBe(true)
+  })
+
+  it('offers the action once the grace has passed', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: {
+        parentBookings: [
+          {
+            ...BOOKING_1H,
+            status: 'UPCOMING',
+            requestedStartTime: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+            coachNoShowReportableAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          },
+        ],
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="no-show-coach-pending"]').exists()).toBe(false)
   })
 })
 

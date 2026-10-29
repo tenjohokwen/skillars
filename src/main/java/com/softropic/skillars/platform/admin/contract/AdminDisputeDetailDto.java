@@ -26,4 +26,7 @@ public record AdminDisputeDetailDto(
     BigDecimal creditDebited,
     BigDecimal stripeCharged,
     BigDecimal sessionPrice,
-    List<CoachCancellationHistoryEntryDto> cancellationHistory) {}
+    List<CoachCancellationHistoryEntryDto> cancellationHistory,
+    // feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH only — refund taken back / absorbed by the platform
+    BigDecimal recoveredAmount,
+    BigDecimal absorbedAmount) {}

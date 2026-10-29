@@ -103,7 +103,8 @@ public class CancellationRefundService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPlayerNoShow(PlayerNoShowEvent event) {
-        // No credit action — session fee forfeited, coach earnings unaffected (AC 3)
+        // No credit action — the session fee is forfeited. feat/payment-forfeit-payouts-and-clawback: the coach
+        // IS paid for it, by CoachPayoutEnqueueListener (BEFORE_COMMIT, atomic with the NO_SHOW_PLAYER write).
         log.info("Player no-show recorded: bookingId={}", event.getBookingId());
     }
 

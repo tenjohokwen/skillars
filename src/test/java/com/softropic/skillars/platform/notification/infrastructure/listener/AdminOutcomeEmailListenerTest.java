@@ -93,6 +93,40 @@ class AdminOutcomeEmailListenerTest {
             .containsEntry("requestedStartTime", "2026-10-01T10:00:00Z");
     }
 
+    // feat/payment-forfeit-payouts-and-clawback
+    private static final com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome UPHELD =
+        new com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome(new java.math.BigDecimal("30.00"),
+            new java.math.BigDecimal("12.00"), new java.math.BigDecimal("18.00"), new java.math.BigDecimal("27.00"),
+            false, false);
+
+    @Test
+    void disputeResolved_upholdCoach_carriesTheClawbackAmounts() {
+        listener.onDisputeResolved(new DisputeResolvedEvent(this, UUID.randomUUID(), UUID.randomUUID(),
+            "UPHOLD_COACH", 1L, java.math.BigDecimal.ZERO, "happened", "Coach Kim", null, TO, UPHELD,
+            com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome.Audience.PARENT));
+
+        assertThat(sent(EmailTemplate.DISPUTE_RESOLVED))
+            .containsEntry("audience", "PARENT")
+            .containsEntry("refundedAmount", "30.00")
+            .containsEntry("recoveredAmount", "12.00")
+            .containsEntry("absorbedAmount", "18.00")
+            .containsEntry("coachPayoutAmount", "27.00")
+            .containsEntry("packSession", "false");
+    }
+
+    @Test
+    void disputeCoachUpheld_sendsTheCounterpartyNotice() {
+        listener.onDisputeCoachUpheld(new com.softropic.skillars.platform.admin.contract.DisputeCoachUpheldEvent(
+            UUID.randomUUID(), UUID.randomUUID(),
+            com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome.Audience.COACH, UPHELD, "Coach Kim",
+            java.time.Instant.parse("2026-10-01T10:00:00Z"), TO));
+
+        assertThat(sent(EmailTemplate.DISPUTE_COACH_UPHELD))
+            .containsEntry("audience", "COACH")
+            .containsEntry("coachPayoutAmount", "27.00")
+            .containsEntry("requestedStartTime", "2026-10-01T10:00:00Z");
+    }
+
     @Test
     void disputeDismissed_sendsDisputeDismissed() {
         listener.onDisputeDismissed(new DisputeDismissedEvent(UUID.randomUUID(), UUID.randomUUID(), 7L,

@@ -53,12 +53,19 @@ class AdminOutcomeEmailRenderingTest {
         data.put("dashboardUrl", "https://app.test/#/dashboard");
         data.put("reliabilityUrl", "https://app.test/#/coach/reliability");
         data.put("coachProfileUrl", "https://app.test/#/coaches/abc");
+        data.put("audience", "PARENT");
+        data.put("refundedAmount", "30.00");
+        data.put("recoveredAmount", "12.00");
+        data.put("absorbedAmount", "18.00");
+        data.put("coachPayoutAmount", "27.00");
+        data.put("packSession", "false");
+        data.put("sessionRededucted", "false");
         return data;
     }
 
     @ParameterizedTest
     @EnumSource(value = EmailTemplate.class, names = {"COACH_SUSPENDED", "COACH_REINSTATED", "COACH_WARNING_ISSUED",
-        "DISPUTE_RESOLVED", "DISPUTE_DISMISSED", "GDPR_EXPORT_READY", "REVIEW_APPROVED", "REVIEW_BLOCKED"})
+        "DISPUTE_RESOLVED", "DISPUTE_DISMISSED", "DISPUTE_COACH_UPHELD", "GDPR_EXPORT_READY", "REVIEW_APPROVED", "REVIEW_BLOCKED"})
     void rendersInEveryBundledLocale(EmailTemplate template) {
         String english = null;
         for (String lang : List.of("en", "de", "fr")) {
@@ -84,5 +91,37 @@ class AdminOutcomeEmailRenderingTest {
         recipient.setLangKey("en");
         assertThat(renderer.render(recipient, EmailTemplate.DISPUTE_RESOLVED, data()).htmlBody())
             .contains("12.50").contains("Coach Kim").contains("Half refunded");
+    }
+
+    // feat/payment-forfeit-payouts-and-clawback
+    @org.junit.jupiter.api.Test
+    void upholdCoach_tellsTheParentWhatWasRecoveredAndAbsorbed_inEveryLocale() {
+        Map<String, Object> data = data();
+        data.put("resolution", "UPHOLD_COACH");
+        for (String lang : List.of("en", "de", "fr")) {
+            Recipient recipient = new Recipient();
+            recipient.setLangKey(lang);
+            for (EmailTemplate template : List.of(EmailTemplate.DISPUTE_RESOLVED, EmailTemplate.DISPUTE_COACH_UPHELD)) {
+                String body = renderer.render(recipient, template, data).htmlBody();
+                assertThat(body).as("%s/%s", template, lang)
+                    .contains("12.00").contains("30.00").contains("18.00")
+                    .doesNotContain("email.admin.").doesNotContain("??");
+            }
+        }
+        Recipient en = new Recipient();
+        en.setLangKey("en");
+        assertThat(renderer.render(en, EmailTemplate.DISPUTE_RESOLVED, data).htmlBody())
+            .doesNotContain("No credit was issued");
+    }
+
+    @org.junit.jupiter.api.Test
+    void upholdCoach_tellsTheCoachTheyArePaid() {
+        Map<String, Object> data = data();
+        data.put("resolution", "UPHOLD_COACH");
+        data.put("audience", "COACH");
+        Recipient en = new Recipient();
+        en.setLangKey("en");
+        assertThat(renderer.render(en, EmailTemplate.DISPUTE_COACH_UPHELD, data).htmlBody())
+            .contains("27.00").contains("Coach Kim").doesNotContain("credit wallet");
     }
 }

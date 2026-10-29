@@ -1,7 +1,7 @@
 package com.softropic.skillars.platform.payment.contract;
 
 /**
- * The six values currently written to {@code payment.parent_credit_ledger.type}, enforced by the
+ * The seven values currently written to {@code payment.parent_credit_ledger.type}, enforced by the
  * {@code chk_ledger_type} CHECK constraint ({@code V138__baseline_schema.sql}). Kept here, in
  * {@code payment.contract}, rather than beside the writing service because
  * {@code platform.admin.service.DisputeService} writes {@link #BOOKING_REFUND} too — a cross-module
@@ -40,6 +40,13 @@ public final class CreditLedgerEntryType {
      * {@code DisputeService}'s admin-resolution credits both write this.
      */
     public static final String BOOKING_REFUND = "BOOKING_REFUND";
+
+    /**
+     * feat/payment-forfeit-payouts-and-clawback: an {@code UPHOLD_COACH} dispute resolution taking a
+     * {@link #BOOKING_REFUND} back from the payer's wallet — negative, capped at the wallet's balance at the
+     * time (never below zero), {@code reference_id} = the booking id (V198: at most one per booking).
+     */
+    public static final String BOOKING_REFUND_REVERSAL = "BOOKING_REFUND_REVERSAL";
 
     /** A booking's session price, debited on settlement ({@code BookingPaymentPersistenceService}/{@code PaymentLifecycleService}). */
     public static final String BOOKING_DEDUCTION = "BOOKING_DEDUCTION";

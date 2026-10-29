@@ -145,4 +145,55 @@ class CoachPayoutAdjustmentServiceTest {
         assertThat(service.applyRefund(row(CoachPayoutStatus.PENDING_RELEASE), BigDecimal.ZERO, new BigDecimal("50.00"), "T"))
             .isEqualTo(CoachPayoutAdjustmentService.RefundOutcome.NONE);
     }
+
+    // ── feat/payment-forfeit-payouts-and-clawback: payInFull (UPHOLD_COACH) ──
+
+    @Test
+    void payInFull_noRow_computesANewPayout() {
+        CoachPayout created = row(CoachPayoutStatus.PENDING_RELEASE);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.empty());
+        when(coachPayoutRepository.findById(bookingId)).thenReturn(Optional.of(created));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
+    }
+
+    @Test
+    void payInFull_cancelledWithANet_isReinstatedAndReleasedNow() {
+        CoachPayout cancelled = row(CoachPayoutStatus.CANCELLED);
+        cancelled.setDisputeFrozen(true);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(cancelled));
+        when(coachPayoutFreezeRepository.isFrozenForShare(coachId)).thenReturn(false);
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        assertThat(cancelled.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
+        assertThat(cancelled.isDisputeFrozen()).isFalse();
+        verify(coachPayoutOutboxSupport).enqueueTransfer(eq(bookingId), any());
+        verify(coachPayoutOutboxSupport, never()).enqueuePayout(any(), any());
+    }
+
+    @Test
+    void payInFull_cancelledUnderASafetyHold_staysFrozen() {
+        CoachPayout cancelled = row(CoachPayoutStatus.CANCELLED);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(cancelled));
+        when(coachPayoutFreezeRepository.isFrozenForShare(coachId)).thenReturn(true);
+
+        service.payInFull(bookingId, coachId);
+
+        assertThat(cancelled.getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+        verify(coachPayoutOutboxSupport, never()).enqueueTransfer(any(), any());
+    }
+
+    @Test
+    void payInFull_cancelledWithNothingComputed_isReplacedByAFreshPayout() {
+        CoachPayout skipped = row(CoachPayoutStatus.CANCELLED);
+        skipped.setNetAmount(BigDecimal.ZERO);
+        CoachPayout fresh = row(CoachPayoutStatus.PENDING_RELEASE);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(skipped));
+        when(coachPayoutRepository.findById(bookingId)).thenReturn(Optional.of(fresh));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        verify(coachPayoutRepository).delete(skipped);
+        verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
+    }
 }
