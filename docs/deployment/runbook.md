@@ -834,6 +834,39 @@ log (and startup aborts if Arachnid is enabled), and EMAIL alert rules send noth
 `PUT /api/config/values/platform.admin_alert_email` before relying on either path (see
 "Config change appears to have no effect" for cache timing).
 
+## Moving object storage to a managed provider
+
+Production starts on single-node SeaweedFS (`storage` in `docker-compose.yml`). Moving to a managed
+S3-compatible provider (Hetzner Object Storage, Backblaze B2, Cloudflare R2, AWS S3) is a config change
+plus a copy. The database stores object keys only, never URLs, and presigned URLs expire after
+`app.storage.presign-ttl-seconds` (300 s), so nothing needs rewriting.
+
+1. **Prepare the target.** Create a private bucket. Apply the same CORS rule `storage-init` sets
+   (origin `https://<DOMAIN>`, methods `GET PUT POST HEAD`, headers `*`, expose `ETag`). Create an
+   access key limited to that bucket. Find out whether the provider wants path-style (`true`) or
+   virtual-hosted (`false`) addressing.
+2. **Bulk copy while live.** Run `rclone sync` from SeaweedFS to the new bucket. Reach SeaweedFS
+   through `https://<STORAGE_DOMAIN>` with `STORAGE_ROOT_*`, using an rclone `s3` remote with
+   `provider = Other` and `force_path_style = true`. This can take a while; nothing is down.
+3. **Cut over** in a quiet window:
+   - Pause uploads, or accept a few minutes in which a new upload might be missed.
+   - Run the same `rclone sync` again to pick up the difference.
+   - In `docker-compose.yml`, point the app's storage block back at `.env`:
+     `APP_STORAGE_ENDPOINT_URL=${APP_STORAGE_ENDPOINT_URL}`, `APP_STORAGE_S3_ACCESS_KEY=${APP_STORAGE_S3_ACCESS_KEY}`,
+     `APP_STORAGE_S3_SECRET_KEY=${APP_STORAGE_S3_SECRET_KEY}`,
+     `APP_STORAGE_S3_PATH_STYLE_ACCESS=${APP_STORAGE_S3_PATH_STYLE_ACCESS:-false}`. Remove
+     `storage: service_healthy` from `app.depends_on`. Merge that through a PR, then set the new values
+     in `/opt/skillars/.env`.
+   - `docker compose up -d app`. Spot-check a coach photo, a gallery image and a new upload in the
+     browser network tab: the URLs must point at the new host and return 200.
+4. **Retire SeaweedFS** after a week or so of clean running. Delete the `storage` and `storage-init`
+   services and the `STORAGE_DOMAIN` DNS record. Keep the last `/opt/skillars/data/storage` volume
+   backup until you are sure nothing is missing. Note that `volume-backup.sh` no longer covers media
+   once it is off the node; the provider's durability, and optionally `app.storage.replication`,
+   take over.
+
+Rehearse steps 1–3 on UAT first.
+
 ## Repository cleanup safety
 
 **skillars-deferred-102 AC6:** the git checkout now lives at `/opt/skillars/app`, a **sibling** of the

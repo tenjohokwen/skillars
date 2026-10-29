@@ -342,6 +342,10 @@ app:
       # leaving these empty preserves the AWS-default-chain behaviour prod has always had.
       access-key: ${APP_STORAGE_S3_ACCESS_KEY:}
       secret-key: ${APP_STORAGE_S3_SECRET_KEY:}
+      # true for a single-hostname S3 endpoint (SeaweedFS on STORAGE_DOMAIN, set by
+      # docker-compose.yml); false (virtual-hosted, {bucket}.host) suits AWS S3 and most managed
+      # providers. dev/uat pin it to true in their profile files.
+      path-style-access: ${APP_STORAGE_S3_PATH_STYLE_ACCESS:false}
     local:
       base-dir: ${APP_STORAGE_LOCAL_BASE_DIR:/tmp/skillars-storage}
   video:

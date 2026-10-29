@@ -140,6 +140,10 @@ services:
   # 8888 is the closest thing, not wired up here).
   storage:
     image: chrislusf/seaweedfs:3.97
+    # Restores the image's own entrypoint. docker-compose.yml's production `storage` replaces it
+    # with a shell script that writes the identity file from STORAGE_ROOT_* — but here that file is
+    # the read-only s3-identity.json mount below, so inheriting that entrypoint would fail on boot.
+    entrypoint: ["/entrypoint.sh"]
     command: >
       server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
       -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
