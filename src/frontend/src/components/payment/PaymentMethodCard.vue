@@ -45,6 +45,9 @@
         <div v-if="!savedCard?.hasCard" class="text-body2 q-mb-sm">
           {{ t('payment.card.addCardPrompt') }}
         </div>
+        <div v-if="subscriptionNote" class="text-caption q-mb-sm" data-test="subscription-note">
+          {{ t('payment.card.subscriptionNote') }}
+        </div>
         <div ref="cardElementRef" class="card-element q-pa-sm q-mb-sm"></div>
         <q-banner v-if="cardError" dense rounded class="bg-negative text-white q-mb-sm">
           {{ cardError }}
@@ -83,6 +86,9 @@ const { t } = useI18n()
 const $q = useQuasar()
 const paymentStore = usePaymentStore()
 const emit = defineEmits(['saved'])
+// fix/payment-subscription-payment-method-sync: on subscription pages, tell the user a new card also
+// moves their subscription onto it and retries an outstanding payment.
+defineProps({ subscriptionNote: { type: Boolean, default: false } })
 
 const cardElementRef = ref(null)
 const loadingInitial = ref(true)

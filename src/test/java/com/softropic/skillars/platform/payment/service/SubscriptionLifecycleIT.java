@@ -407,6 +407,40 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         assertThat(sub.getStripeSubscriptionId()).isEqualTo(STRIPE_SUB_ID);
     }
 
+    // ─── fix/payment-subscription-payment-method-sync ───────────────────────────
+
+    @Test
+    void unpaidPastGrace_cancelledAtStripeAndLinkCleared() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", STRIPE_SUB_ID,
+            Map.of("status", "unpaid"));
+        PaymentCoachSubscription unpaid = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(unpaid.getPastDueSince()).as("UNPAID starts the grace clock").isNotNull();
+
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE payment.coach_subscriptions SET past_due_since = ? WHERE coach_id = ?",
+            java.sql.Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)), coachId));
+
+        subscriptionService.checkPastDueGracePeriod();
+
+        verify(stripeClient).cancelSubscriptionImmediately(STRIPE_SUB_ID);
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow();
+        assertThat(sub.getStatus()).isEqualTo("CANCELLED");
+        assertThat(sub.getStripeSubscriptionId()).isNull();
+        assertThat(marketplaceTier()).isEqualTo("SCOUT");
+    }
+
+    @Test
+    void newCardSaved_pastDueSubscriptionMovedToCardAndInvoiceRetried() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", STRIPE_SUB_ID, Map.of());
+
+        subscriptionService.syncPaymentMethodToSubscriptions(COACH_USER_ID, "pm_replacement");
+
+        verify(stripeClient).updateSubscriptionDefaultPaymentMethod(STRIPE_SUB_ID, "pm_replacement");
+        verify(stripeClient).payLatestOpenInvoice(eq(STRIPE_SUB_ID), eq("pm_replacement"), startsWith("inv-retry-"));
+    }
+
     // ─── Cancel ──────────────────────────────────────────────────────────────────
 
     @Test

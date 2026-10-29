@@ -16,16 +16,17 @@ public class SubscriptionGracePeriodChecker {
     /**
      * skillars-deferred-116 AC3 sizing basis — same arithmetic and reasoning as
      * {@link SubscriptionChangeApplicator#applyPendingChanges()}'s own sizing comment:
-     * {@code findByStatusAndPastDueSinceBefore} carries no config-bound batch-size ceiling either
-     * (known gap, out of scope here); per-row work in
-     * {@link SubscriptionService#checkPastDueGracePeriod()} is a couple of DB round-trips with no
-     * external HTTP call. {@code PT30M}/{@code PT2M} sized identically, for the same reasons.
+     * {@code findByStatusInAndPastDueSinceBefore} carries no config-bound batch-size ceiling either
+     * (known gap, out of scope here). Per-row work in
+     * {@link SubscriptionService#checkPastDueGracePeriod()} is a couple of DB round-trips plus, for an
+     * expired row, one idempotent Stripe cancel (fix/payment-subscription-entitlements). Covers
+     * PAST_DUE, UNPAID and PAUSED (fix/payment-subscription-payment-method-sync).
      */
     @SchedulerLock(name = "SubscriptionGracePeriodChecker_checkGracePeriods",
                    lockAtMostFor = "PT30M", lockAtLeastFor = "PT2M")
     @Scheduled(cron = "0 0 3 * * *")
     public void checkGracePeriods() {
-        log.info("[SUBSCRIPTION_GRACE_PERIOD_CHECKER] Running PAST_DUE grace period check");
+        log.info("[SUBSCRIPTION_GRACE_PERIOD_CHECKER] Running PAST_DUE/UNPAID/PAUSED grace period check");
         subscriptionService.checkPastDueGracePeriod();
     }
 }

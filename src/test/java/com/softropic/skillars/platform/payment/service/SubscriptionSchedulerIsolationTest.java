@@ -219,9 +219,9 @@ class SubscriptionSchedulerIsolationTest {
         PaymentCoachSubscription validCoach = pastDueCoach("ACADEMY");
         PaymentPlayerSubscription validPlayer = pastDuePlayer("SEMI_PRO");
 
-        when(paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any()))
+        when(paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any()))
             .thenReturn(List.of(failingCoach, validCoach));
-        when(paymentPlayerSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any()))
+        when(paymentPlayerSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any()))
             .thenReturn(List.of(validPlayer));
         when(paymentCoachSubscriptionRepository.save(failingCoach))
             .thenThrow(new RuntimeException("simulated DB write failure"));
@@ -250,9 +250,9 @@ class SubscriptionSchedulerIsolationTest {
         PaymentPlayerSubscription failingPlayer = pastDuePlayer("SEMI_PRO");
         PaymentPlayerSubscription validPlayer = pastDuePlayer("PRO");
 
-        when(paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any()))
+        when(paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any()))
             .thenReturn(List.of(failingCoach, validCoach));
-        when(paymentPlayerSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any()))
+        when(paymentPlayerSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any()))
             .thenReturn(List.of(failingPlayer, validPlayer));
         when(paymentCoachSubscriptionRepository.save(failingCoach))
             .thenThrow(new RuntimeException("simulated DB write failure"));

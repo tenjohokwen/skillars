@@ -341,7 +341,7 @@ class SubscriptionEntitlementIntegrityTest {
         coachSub.setStatus("PAST_DUE");
         coachSub.setPastDueSince(Instant.now().minus(30, ChronoUnit.DAYS));
         when(configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L)).thenReturn(7L);
-        when(paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore(eq("PAST_DUE"), any()))
+        when(paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any()))
             .thenReturn(List.of(coachSub));
 
         service.checkPastDueGracePeriod();
@@ -358,7 +358,7 @@ class SubscriptionEntitlementIntegrityTest {
         coachSub.setStatus("PAST_DUE");
         coachSub.setPastDueSince(Instant.now().minus(30, ChronoUnit.DAYS));
         when(configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L)).thenReturn(7L);
-        when(paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore(eq("PAST_DUE"), any()))
+        when(paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any()))
             .thenReturn(List.of(coachSub));
         when(stripeClient.cancelSubscriptionImmediately(SUB_ID)).thenThrow(new ApiConnectionException("down"));
 

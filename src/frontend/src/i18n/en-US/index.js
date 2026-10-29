@@ -2237,6 +2237,8 @@ export default {
       saveError: 'Could not save your card. Please try again.',
       savedRefreshFailed:
         'Your card was saved, but we could not refresh the view. Reload to see it.',
+      subscriptionNote:
+        'Saving a new card also updates your subscription and retries any outstanding payment with it.',
       unavailable: 'Card payments are unavailable right now',
     },
     sessionPackTiersTitle: 'Session Pack Offer',
@@ -2389,11 +2391,14 @@ export default {
     confirm: 'Confirm',
     perMonth: '{price} / month',
     perYear: '{price} / year',
+    paymentIssue:
+      'Your last subscription payment failed. Update your card and we will retry the payment straight away.',
+    updateCard: 'Update card',
     errors: {
       paymentDeclined:
         'Your card was declined or needs extra authentication. Please update your payment method and try again.',
       updatePaymentMethod:
-        'Your current subscription has an unpaid invoice. Update your payment method to restore it instead of subscribing again.',
+        'Your current subscription has an unpaid invoice. Update your card instead of subscribing again: saving it retries the payment and restores your plan.',
       notActive:
         'Your subscription is not active right now. Settle the outstanding payment before changing your plan.',
       alreadyActive: 'You already have an active subscription.',

@@ -85,6 +85,13 @@ public class SubscriptionService {
     private static final String PLAYER_FREE_TIER = SubscriptionEntitlement.PLAYER_FREE_TIER;
     // Statuses a paid invoice returns to ACTIVE (fix/payment-subscription-entitlements).
     private static final Set<String> RECOVERABLE_ON_PAYMENT = Set.of("PAST_DUE", "UNPAID", "INCOMPLETE");
+    // fix/payment-subscription-payment-method-sync: delinquent statuses that run the grace clock
+    // (pastDueSince) and are cancelled at Stripe once it expires. UNPAID/PAUSED used to lose the paid
+    // tier but were never swept, so the Stripe subscription lingered (UNPAID keeps raising invoices).
+    private static final List<String> GRACE_STATUSES = List.of("PAST_DUE", "UNPAID", "PAUSED");
+    // Statuses whose open invoice is retried when a new card is saved (PAUSED has no invoice to pay;
+    // it resumes via Stripe's resume flow, so it only gets the new default payment method).
+    private static final Set<String> RETRY_ON_NEW_PAYMENT_METHOD = Set.of("PAST_DUE", "UNPAID");
 
     // ─── Tier Info ─────────────────────────────────────────────────────────────
 
@@ -555,6 +562,54 @@ public class SubscriptionService {
         log.info("[PLAYER_CANCEL_AT_PERIOD_END playerId={} periodEnd={}]", playerId, periodEnd);
     }
 
+    // ─── Payment Method Sync ──────────────────────────────────────────────────────
+
+    /**
+     * fix/payment-subscription-payment-method-sync: called after the user saves a new card
+     * (POST /save-payment-method). Every live Stripe subscription this user pays for — their own coach
+     * subscription and the player subscriptions of players they own (parent link or self-registered
+     * profile) — gets the card as its {@code default_payment_method}; a PAST_DUE/UNPAID one also has its
+     * open invoice retried with it, so updating the card actually recovers the subscription (the
+     * resulting invoice.paid restores ACTIVE). Best-effort per subscription and never throws: the card
+     * is already saved, and Stripe's own retries still use the new default.
+     */
+    public void syncPaymentMethodToSubscriptions(Long userId, String paymentMethodId) {
+        coachProfileRepository.findByUserId(userId)
+            .flatMap(coach -> paymentCoachSubscriptionRepository.findByCoachId(coach.getId()))
+            .ifPresent(sub -> syncPaymentMethod(sub.getStripeSubscriptionId(), sub.getStatus(),
+                paymentMethodId, "COACH", sub.getCoachId()));
+
+        Set<Long> playerIds = new java.util.LinkedHashSet<>();
+        parentPlayerLinkRepository.findByParentId(userId).forEach(link -> playerIds.add(link.getPlayerId()));
+        playerProfileRepository.findByUserId(userId).ifPresent(profile -> playerIds.add(profile.getId()));
+        for (Long playerId : playerIds) {
+            paymentPlayerSubscriptionRepository.findByPlayerId(playerId)
+                .ifPresent(sub -> syncPaymentMethod(sub.getStripeSubscriptionId(), sub.getStatus(),
+                    paymentMethodId, "PLAYER", playerId));
+        }
+    }
+
+    private void syncPaymentMethod(String stripeSubId, String status, String paymentMethodId,
+                                   String kind, Object ownerId) {
+        if (stripeSubId == null || "CANCELLED".equals(status)) return;
+        try {
+            stripeClient.updateSubscriptionDefaultPaymentMethod(stripeSubId, paymentMethodId);
+            log.info("[{}_SUBSCRIPTION_PAYMENT_METHOD_UPDATED ownerId={} stripeSubId={}]", kind, ownerId, stripeSubId);
+            if (RETRY_ON_NEW_PAYMENT_METHOD.contains(status)) {
+                com.stripe.model.Invoice invoice = stripeClient.payLatestOpenInvoice(
+                    stripeSubId, paymentMethodId, "inv-retry-" + UUID.randomUUID());
+                log.info("[{}_SUBSCRIPTION_INVOICE_RETRIED ownerId={} stripeSubId={} invoiceStatus={}]",
+                    kind, ownerId, stripeSubId, invoice == null ? null : invoice.getStatus());
+            }
+        } catch (CardException e) {
+            log.warn("[{}_SUBSCRIPTION_INVOICE_RETRY_DECLINED ownerId={} stripeSubId={} code={}]",
+                kind, ownerId, stripeSubId, e.getCode());
+        } catch (StripeException | RuntimeException e) {
+            log.error("[{}_SUBSCRIPTION_PAYMENT_METHOD_SYNC_FAILED ownerId={} stripeSubId={}]",
+                kind, ownerId, stripeSubId, e);
+        }
+    }
+
     // ─── Scheduled: Apply Pending Changes ────────────────────────────────────────
 
     // skillars-deferred-116 AC1/AC2: restructured from a single method-level @Transactional wrapping
@@ -753,9 +808,10 @@ public class SubscriptionService {
         // downgraded); 0 = "no grace" is legitimate. Mirrors ConfigBounds.SUBSCRIPTION_PAST_DUE_GRACE_PERIOD_DAYS.
         long gracePeriodDays = configService.getBoundedLong("subscription.pastDue.gracePeriodDays", 0L, 365L);
         Instant graceCutoff = Instant.now().minus(gracePeriodDays, java.time.temporal.ChronoUnit.DAYS);
+        startMissingGraceClocks();
 
         List<PaymentCoachSubscription> pastDueCoaches = transactionTemplate.execute(
-            status -> paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore("PAST_DUE", graceCutoff));
+            status -> paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(GRACE_STATUSES, graceCutoff));
         if (pastDueCoaches == null) pastDueCoaches = List.of();
         log.info("[SUBSCRIPTION_GRACE_PERIOD_CHECKER] {} past-due coach subscription(s) loaded", pastDueCoaches.size());
         for (PaymentCoachSubscription loaded : pastDueCoaches) {
@@ -780,7 +836,7 @@ public class SubscriptionService {
         }
 
         List<PaymentPlayerSubscription> pastDuePlayers = transactionTemplate.execute(
-            status -> paymentPlayerSubscriptionRepository.findByStatusAndPastDueSinceBefore("PAST_DUE", graceCutoff));
+            status -> paymentPlayerSubscriptionRepository.findByStatusInAndPastDueSinceBefore(GRACE_STATUSES, graceCutoff));
         if (pastDuePlayers == null) pastDuePlayers = List.of();
         log.info("[SUBSCRIPTION_GRACE_PERIOD_CHECKER] {} past-due player subscription(s) loaded", pastDuePlayers.size());
         for (PaymentPlayerSubscription loaded : pastDuePlayers) {
@@ -807,6 +863,45 @@ public class SubscriptionService {
         }
     }
 
+    /**
+     * fix/payment-subscription-payment-method-sync: a delinquent row with no pastDueSince (e.g. it went
+     * straight to UNPAID/PAUSED, or predates the stamp) would never be swept — start its clock now.
+     */
+    private void startMissingGraceClocks() {
+        List<PaymentCoachSubscription> coaches = transactionTemplate.execute(
+            status -> paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceIsNull(GRACE_STATUSES));
+        for (PaymentCoachSubscription loaded : coaches == null ? List.<PaymentCoachSubscription>of() : coaches) {
+            try {
+                transactionTemplate.executeWithoutResult(status ->
+                    paymentCoachSubscriptionRepository.findByCoachIdForUpdate(loaded.getCoachId())
+                        .filter(sub -> GRACE_STATUSES.contains(sub.getStatus()) && sub.getPastDueSince() == null)
+                        .ifPresent(sub -> {
+                            sub.setPastDueSince(Instant.now());
+                            paymentCoachSubscriptionRepository.save(sub);
+                            log.warn("[COACH_GRACE_CLOCK_STARTED coachId={} status={}]", sub.getCoachId(), sub.getStatus());
+                        }));
+            } catch (Exception e) {
+                log.error("Failed to start grace clock for coach {}", loaded.getCoachId(), e);
+            }
+        }
+        List<PaymentPlayerSubscription> players = transactionTemplate.execute(
+            status -> paymentPlayerSubscriptionRepository.findByStatusInAndPastDueSinceIsNull(GRACE_STATUSES));
+        for (PaymentPlayerSubscription loaded : players == null ? List.<PaymentPlayerSubscription>of() : players) {
+            try {
+                transactionTemplate.executeWithoutResult(status ->
+                    paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(loaded.getPlayerId())
+                        .filter(sub -> GRACE_STATUSES.contains(sub.getStatus()) && sub.getPastDueSince() == null)
+                        .ifPresent(sub -> {
+                            sub.setPastDueSince(Instant.now());
+                            paymentPlayerSubscriptionRepository.save(sub);
+                            log.warn("[PLAYER_GRACE_CLOCK_STARTED playerId={} status={}]", sub.getPlayerId(), sub.getStatus());
+                        }));
+            } catch (Exception e) {
+                log.error("Failed to start grace clock for player {}", loaded.getPlayerId(), e);
+            }
+        }
+    }
+
     /** The Stripe subscription a grace-expired row was linked to when it was selected. */
     private record GraceTarget(String stripeSubscriptionId) {
         /**
@@ -816,12 +911,13 @@ public class SubscriptionService {
          */
         boolean matches(String currentStripeSubscriptionId, String currentStatus) {
             if (!Objects.equals(stripeSubscriptionId, currentStripeSubscriptionId)) return false;
-            return stripeSubscriptionId != null || "PAST_DUE".equals(currentStatus);
+            return stripeSubscriptionId != null || GRACE_STATUSES.contains(currentStatus);
         }
     }
 
     private static boolean isGraceExpired(String status, Instant pastDueSince, Instant graceCutoff) {
-        return "PAST_DUE".equals(status) && pastDueSince != null && pastDueSince.isBefore(graceCutoff);
+        return status != null && GRACE_STATUSES.contains(status)
+            && pastDueSince != null && pastDueSince.isBefore(graceCutoff);
     }
 
     private boolean cancelAtStripeForGrace(GraceTarget target, String kind, Object ownerId) {
@@ -1066,7 +1162,7 @@ public class SubscriptionService {
                 // a later failure on an UNPAID/INCOMPLETE/PAUSED row must not re-entitle it.
                 if (isBillingHealthy(sub.getStatus())) sub.setStatus("PAST_DUE");
                 // Only set pastDueSince on the first failure — do not overwrite on repeated failures
-                if ("PAST_DUE".equals(sub.getStatus()) && sub.getPastDueSince() == null) sub.setPastDueSince(Instant.now());
+                if (GRACE_STATUSES.contains(sub.getStatus()) && sub.getPastDueSince() == null) sub.setPastDueSince(Instant.now());
                 sub.setLastStripeEventAt(newer(sub.getLastStripeEventAt(), eventCreated));
                 paymentCoachSubscriptionRepository.save(sub);
                 log.warn("[COACH_PAYMENT_FAILED coachId={} pastDueSince={}]",
@@ -1077,7 +1173,7 @@ public class SubscriptionService {
             .ifPresent(sub -> {
                 if (isStaleEvent(sub.getLastStripeEventAt(), eventCreated, "PLAYER", stripeSubscriptionId)) return;
                 if (isBillingHealthy(sub.getStatus())) sub.setStatus("PAST_DUE");
-                if ("PAST_DUE".equals(sub.getStatus()) && sub.getPastDueSince() == null) sub.setPastDueSince(Instant.now());
+                if (GRACE_STATUSES.contains(sub.getStatus()) && sub.getPastDueSince() == null) sub.setPastDueSince(Instant.now());
                 sub.setLastStripeEventAt(newer(sub.getLastStripeEventAt(), eventCreated));
                 paymentPlayerSubscriptionRepository.save(sub);
                 log.warn("[PLAYER_PAYMENT_FAILED playerId={} pastDueSince={}]",
@@ -1122,7 +1218,7 @@ public class SubscriptionService {
         setStatus.accept(status);
         if (BILLING_HEALTHY.contains(status)) {
             setPastDueSince.accept(null);
-        } else if ("PAST_DUE".equals(status) && pastDueSince.get() == null) {
+        } else if (GRACE_STATUSES.contains(status) && pastDueSince.get() == null) {
             setPastDueSince.accept(Instant.now());
         }
     }

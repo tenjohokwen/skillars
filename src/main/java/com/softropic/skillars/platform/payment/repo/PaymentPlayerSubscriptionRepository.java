@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -17,7 +18,12 @@ public interface PaymentPlayerSubscriptionRepository extends JpaRepository<Payme
 
     Optional<PaymentPlayerSubscription> findByStripeSubscriptionId(String stripeSubscriptionId);
 
-    List<PaymentPlayerSubscription> findByStatusAndPastDueSinceBefore(String status, Instant cutoff);
+    // fix/payment-subscription-payment-method-sync: the grace sweep covers every delinquent status
+    // (PAST_DUE, UNPAID, PAUSED), not just PAST_DUE.
+    List<PaymentPlayerSubscription> findByStatusInAndPastDueSinceBefore(Collection<String> statuses, Instant cutoff);
+
+    /** Delinquent rows whose grace clock never started (pastDueSince is only stamped on entry). */
+    List<PaymentPlayerSubscription> findByStatusInAndPastDueSinceIsNull(Collection<String> statuses);
 
     @Query("SELECT p.tier, COUNT(p) FROM PaymentPlayerSubscription p WHERE p.status IN ('ACTIVE', 'TRIALLING') GROUP BY p.tier")
     List<Object[]> countActiveByTier();

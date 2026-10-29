@@ -79,6 +79,7 @@ class SessionPackPaymentResourceWebMvcTest {
     @MockitoBean JwtSecretService jwtSecretService;
     @MockitoBean VideoMetrics videoMetrics;
     @MockitoBean com.softropic.skillars.platform.payment.service.CoachSoldPackQueryService coachSoldPackQueryService;
+    @MockitoBean com.softropic.skillars.platform.payment.service.SubscriptionService subscriptionService;
 
     // ─── GET /api/payment/coaches/me/session-packs (feat/coach-workflow-gaps A20) ────────────
 
@@ -255,6 +256,25 @@ class SessionPackPaymentResourceWebMvcTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"paymentMethodId\":\"pm_coach_test\"}"))
             .andExpect(status().isNoContent());
+    }
+
+    // fix/payment-subscription-payment-method-sync: a saved card is pushed to the caller's live
+    // subscriptions (and retries a past-due invoice) — see SubscriptionPaymentMethodSyncTest.
+    @Test
+    @WithMockUser(roles = "COACH")
+    void savePaymentMethod_syncsCardToCallersSubscriptions() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_coach_test");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_sync_test\"}"))
+            .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verify(subscriptionService).syncPaymentMethodToSubscriptions(PARENT_USER_ID, "pm_sync_test");
     }
 
     @Test

@@ -22,6 +22,7 @@ import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.service.CoachSoldPackQueryService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.payment.service.SessionPackPaymentService;
+import com.softropic.skillars.platform.payment.service.SubscriptionService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
@@ -60,6 +61,7 @@ public class SessionPackPaymentResource {
     private final SecurityUtil securityUtil;
     private final PaymentProperties paymentProperties;
     private final CoachSoldPackQueryService coachSoldPackQueryService;
+    private final SubscriptionService subscriptionService;
 
     // ─── Parent: purchase a session pack ──────────────────────────────────────
 
@@ -205,6 +207,9 @@ public class SessionPackPaymentResource {
             existing.setStripePaymentMethodId(request.paymentMethodId());
             stripeCustomerRepository.save(existing);
         }
+        // fix/payment-subscription-payment-method-sync: move live subscriptions onto the new card and
+        // retry a past-due invoice with it. Best-effort; never fails the save.
+        subscriptionService.syncPaymentMethodToSubscriptions(parentId, request.paymentMethodId());
         return ResponseEntity.noContent().build();
     }
 
