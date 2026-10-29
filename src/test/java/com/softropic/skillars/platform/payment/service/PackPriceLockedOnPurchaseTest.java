@@ -52,6 +52,15 @@ class PackPriceLockedOnPurchaseTest {
     private static final BigDecimal PRICE_PER_SESSION = new BigDecimal("25.00");
     private static final BigDecimal TOTAL_PRICE = new BigDecimal("250.00");
 
+    /** fix/payment-pack-integrity: purchasePack checks the tier's coach is bookable. */
+    @org.junit.jupiter.api.BeforeEach
+    void activeCoach() {
+        com.softropic.skillars.platform.marketplace.repo.CoachProfile coach =
+            new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
+        coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
+        org.mockito.Mockito.lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+    }
+
     @Test
     void purchasePack_pricePerSessionLockedFromTierAtPurchaseTime() {
         SessionPackTier tier = new SessionPackTier();

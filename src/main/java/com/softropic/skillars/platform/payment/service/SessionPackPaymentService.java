@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -62,6 +63,7 @@ public class SessionPackPaymentService {
     private final PessimisticLockRetryer lockRetryer;
     private final RefundReconciliationService refundReconciliationService;
     private final ConfigService configService;
+    private final SubscriptionService subscriptionService;
 
     /**
      * Purchase a session pack for a player.
@@ -113,7 +115,15 @@ public class SessionPackPaymentService {
         if (!tier.isActive()) {
             throw new PaymentGatewayException("payment.packTierInactive");
         }
+        // fix/payment-pack-integrity: a pack of a coach who cannot be booked (suspended, safety hold, not
+        // active) bought nothing usable — refuse before charging, with the booking flow's own status gate.
+        CoachProfile coach = coachProfileRepository.findById(tier.getCoachId())
+            .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+        BookingService.requireBookableCoachStatus(coach, Map.of("coach id", tier.getCoachId()));
 
+        Optional<StripeCustomer> customerBefore = stripeCustomerRepository.findById(parentId);
+        boolean customerExisted = customerBefore.isPresent();
+        String previousCard = customerBefore.map(StripeCustomer::getStripePaymentMethodId).orElse(null);
         StripeCustomer customer = getOrCreateStripeCustomer(parentId, paymentMethodId);
 
         // Scoped by parentId so two payers can never share a key, whatever the client sends.
@@ -162,7 +172,31 @@ public class SessionPackPaymentService {
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }
 
+        if (customerExisted) {
+            scheduleSubscriptionCardSync(parentId, previousCard, paymentMethodId);
+        }
         return toResponse(purchase, tier.getLabel(), tier.getSessionCount());
+    }
+
+    /**
+     * fix/payment-pack-integrity: paying for a pack with a different card makes it the saved default card
+     * (the charge reads it from {@code stripe_customers}) — the subscriptions this payer funds are moved onto it
+     * too, through the same durable outbox sync as the save-card flow (#351: default payment method, open
+     * invoice retry, resume of a paused subscription). Only once the charge succeeded and the pack is recorded,
+     * so a declined card is never pushed onto the subscriptions. A failure to enqueue never fails the purchase
+     * the payer has already been charged for — it is logged; saving the card again re-runs the sync. A payer
+     * with no {@code stripe_customers} row before this purchase has no subscription to move.
+     */
+    private void scheduleSubscriptionCardSync(Long parentId, String previousCard, String paymentMethodId) {
+        if (paymentMethodId == null || paymentMethodId.isBlank() || Objects.equals(previousCard, paymentMethodId)) {
+            return;
+        }
+        try {
+            subscriptionService.savePaymentMethodAndScheduleSync(parentId, paymentMethodId);
+        } catch (RuntimeException e) {
+            log.error("[PACK_PURCHASE_CARD_SYNC_FAILED] pack bought with a new card but the subscription card sync "
+                + "could not be enqueued: parentId={}", parentId, e);
+        }
     }
 
     /** The pack an earlier delivery of the same attempt already recorded for this charge. */
@@ -293,7 +327,10 @@ public class SessionPackPaymentService {
             .orElse(null);
     }
 
-    @Transactional(readOnly = true)
+    /**
+     * Not {@code @Transactional} (fix/payment-pack-integrity): one repository read, then a Stripe round-trip
+     * that must not hold a pooled connection open.
+     */
     public SavedPaymentMethodResponse getSavedPaymentMethod(Long parentId) {
         String paymentMethodId = stripeCustomerRepository.findById(parentId)
             .map(StripeCustomer::getStripePaymentMethodId)
@@ -380,7 +417,8 @@ public class SessionPackPaymentService {
             purchase.getPlayerId(),
             purchase.getCoachId(),
             purchase.getPausedUntil(),
-            computeStatus(purchase)
+            computeStatus(purchase),
+            purchase.getPausedFrom()
         );
     }
 
@@ -396,7 +434,9 @@ public class SessionPackPaymentService {
         if (purchase.getRemainingSessions() == 0) {
             return "EXHAUSTED";
         }
-        if (purchase.getPausedUntil() != null && purchase.getPausedUntil().isAfter(now)) {
+        // fix/payment-pack-integrity: paused over [pausedFrom, pausedUntil) only — a pause scheduled for later
+        // leaves the pack ACTIVE until it starts.
+        if (purchase.isPausedAt(now)) {
             return "PAUSED";
         }
         if (purchase.getExpiresAt().isBefore(now)) {

@@ -1909,6 +1909,12 @@ export default {
       pauseDialogTitle: 'Pause session pack',
       pauseStartLabel: 'Pause start date',
       pauseDurationLabel: 'Pause duration (days)',
+      pauseStartHint: 'Starts tomorrow at the earliest',
+      pauseStartInPast: 'The pause must start in the future — pick tomorrow or later.',
+      pauseScheduledLabel: 'Pause scheduled {from} – {until}',
+      pauseConflictInsideNotice: 'Within 24 hours of the session — cannot be cancelled by a pause',
+      pauseBlockedInsideNotice:
+        'A paid session within 24 hours of its start cannot be cancelled by a pause. Start the pause after it, or cancel the session under the usual cancellation rules.',
       pauseDurationHint: '1–90 days',
       pauseConflictsTitle: 'Conflicting sessions',
       pauseConflictsWarning:
@@ -2273,6 +2279,7 @@ export default {
       packCoachMismatch: 'This session pack is for a different coach.',
       packPlayerMismatch: 'This session pack belongs to a different player.',
       packPaused: 'This session pack is paused. Book again once the pause ends.',
+      packFrozen: 'This session pack is on hold while a payment dispute on it is open.',
       packExpired: 'This session pack has expired.',
       packExhausted: 'This session pack has no remaining sessions.',
       extendSuccess: 'Your session pack has been extended to {date}',

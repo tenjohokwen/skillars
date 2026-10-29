@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.payment.repo.ChargeDispute;
 import com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.stripe.model.Charge;
 import com.stripe.model.Dispute;
 import com.stripe.model.Event;
@@ -44,6 +45,9 @@ import java.util.List;
  *       ({@code payout_loss_fraction}) so a session completing after the close is cut the same way.</li>
  *   <li>{@code charge.refunded} — a refund the app did not issue (e.g. from the Stripe Dashboard): an
  *       alert only, no money is moved.</li>
+ *   <li>fix/payment-pack-integrity: a session pack bought with the charge is frozen while a dispute is open,
+ *       unfrozen when it is won, and its remaining sessions are revoked when it is lost or the charge is
+ *       refunded in full outside the app ({@link PackSessionService}).</li>
  * </ul>
  * Runs inside {@code StripeWebhookService.handleEventAtomically}'s transaction. Nothing here throws for a
  * charge the app does not know — a throw would roll back the idempotency row and Stripe would retry the
@@ -63,6 +67,7 @@ public class ChargeDisputeWebhookService {
     private final CoachPayoutAdjustmentService adjustmentService;
     private final ChargebackCreditReversalService creditReversalService;
     private final ApplicationEventPublisher eventPublisher;
+    private final PackSessionService packSessionService;
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void onDisputeCreated(Dispute dispute) {
@@ -97,6 +102,9 @@ public class ChargeDisputeWebhookService {
             alert(PaymentIntegrityAlertEvent.Kind.CHARGEBACK, pi, "OPENED_UNKNOWN_INTENT " + amountOf(dispute));
             return;
         }
+        // fix/payment-pack-integrity: a pack bought with this charge cannot be booked against or spent while the
+        // dispute is open — otherwise a lost dispute leaves the coach delivering its remaining sessions for free.
+        boolean packFrozen = packSessionService.freezeForDispute(pi);
         int frozen = 0;
         int released = 0;
         for (CoachPayout row : coachPayoutRepository.findFundedByPaymentIntentForUpdate(pi)) {
@@ -109,7 +117,8 @@ public class ChargeDisputeWebhookService {
         log.error("[STRIPE_CHARGE_DISPUTE] dispute={} intent={} amount={} — {} payout(s) frozen, {} already released "
             + "(not reversed automatically)", dispute.getId(), pi, amountOf(dispute), frozen, released);
         alert(PaymentIntegrityAlertEvent.Kind.CHARGEBACK, pi,
-            "OPENED " + amountOf(dispute) + " frozen=" + frozen + " released=" + released + creditNote(credit));
+            "OPENED " + amountOf(dispute) + " frozen=" + frozen + " released=" + released + creditNote(credit)
+                + (packFrozen ? " pack=frozen" : ""));
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -161,6 +170,15 @@ public class ChargeDisputeWebhookService {
             return;
         }
         boolean otherOpen = chargeDisputeRepository.existsByPaymentIntentIdAndStatus(pi, ChargeDispute.STATUS_OPEN);
+        // fix/payment-pack-integrity: lost — the payer has the pack's money back, so its remaining sessions are
+        // revoked (sessions already played stay settled); won — the freeze is lifted unless another dispute on
+        // the charge is still open.
+        int packRevoked = -1;
+        if (lost) {
+            packRevoked = packSessionService.revokeForCharge(pi, SessionPackPurchase.REVOKED_CHARGEBACK_LOST);
+        } else if (!otherOpen) {
+            packSessionService.liftDisputeFreeze(pi);
+        }
         int adjusted = 0;
         for (CoachPayout row : coachPayoutRepository.findFundedByPaymentIntentForUpdate(pi)) {
             if (lost) {
@@ -184,7 +202,8 @@ public class ChargeDisputeWebhookService {
         }
         alert(PaymentIntegrityAlertEvent.Kind.CHARGEBACK, pi,
             outcome + " " + amountOf(dispute) + (lost ? " adjusted=" + adjusted : "") + creditNote(credit)
-                + (restored.signum() > 0 ? " restored=" + restored : ""));
+                + (restored.signum() > 0 ? " restored=" + restored : "")
+                + (packRevoked >= 0 ? " packSessionsRevoked=" + packRevoked : ""));
     }
 
     /** An app-issued refund is recognised by its idempotency key; anything else is alerted on. */
@@ -198,12 +217,20 @@ public class ChargeDisputeWebhookService {
         String pi = charge.getPaymentIntent();
         String ref = refOf(pi, charge.getId());
         boolean known = pi != null && isKnownIntent(pi);
+        // fix/payment-pack-integrity: a pack charge refunded IN FULL outside the app — the payer has the money
+        // back, so the pack's remaining sessions are revoked. A partial external refund is alerted only (an
+        // admin decides what it bought back).
+        int packRevoked = -1;
+        if (pi != null && charge.getAmount() != null && charge.getAmountRefunded() != null
+                && charge.getAmountRefunded() >= charge.getAmount()) {
+            packRevoked = packSessionService.revokeForCharge(pi, SessionPackPurchase.REVOKED_EXTERNAL_REFUND);
+        }
         log.error("[STRIPE_EXTERNAL_REFUND] charge={} intent={} refunded {} of {} outside the app (known intent={}) — "
             + "no money moved by the app, alerting", charge.getId(), pi, cents(charge.getAmountRefunded()),
             cents(charge.getAmount()), known);
         alert(PaymentIntegrityAlertEvent.Kind.EXTERNAL_REFUND, ref,
             (known ? "" : "UNKNOWN_INTENT ") + "refunded " + cents(charge.getAmountRefunded()) + " of "
-                + cents(charge.getAmount()));
+                + cents(charge.getAmount()) + (packRevoked >= 0 ? " packSessionsRevoked=" + packRevoked : ""));
     }
 
     private boolean isKnownIntent(String pi) {

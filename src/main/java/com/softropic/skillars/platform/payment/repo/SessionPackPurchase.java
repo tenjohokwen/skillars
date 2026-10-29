@@ -24,6 +24,13 @@ import java.util.UUID;
 @NoArgsConstructor
 public class SessionPackPurchase {
 
+    /** A card dispute on the pack's charge was lost: the payer has the money back. */
+    public static final String REVOKED_CHARGEBACK_LOST = "CHARGEBACK_LOST";
+    /** The pack's charge was refunded in full outside the app (e.g. the Stripe Dashboard). */
+    public static final String REVOKED_EXTERNAL_REFUND = "EXTERNAL_REFUND";
+    /** The coach was suspended: the unused sessions were refunded to the payer's wallet. */
+    public static final String REVOKED_COACH_SUSPENDED = "COACH_SUSPENDED";
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     @Column(name = "purchase_id", updatable = false, nullable = false)
@@ -116,8 +123,33 @@ public class SessionPackPurchase {
     @Column(name = "extended_at")
     private Instant extendedAt;
 
+    /**
+     * fix/payment-pack-integrity (V210): when the pause starts. The pack is paused over
+     * {@code [pausedFrom, pausedUntil)} only — see {@link #isPausedAt}. Null on a pause recorded before
+     * V210, which keeps the old meaning (paused until {@code pausedUntil}).
+     */
+    @Column(name = "paused_from")
+    private Instant pausedFrom;
+
     @Column(name = "paused_until")
     private Instant pausedUntil;
+
+    /**
+     * fix/payment-pack-integrity (V210): set while a card dispute on the pack's charge is open — the pack
+     * cannot be booked against or spent until the dispute is won (cleared) or lost (revoked).
+     */
+    @Column(name = "dispute_frozen_at")
+    private Instant disputeFrozenAt;
+
+    /**
+     * fix/payment-pack-integrity (V210): the pack's remaining sessions were taken away, and why
+     * ({@link #REVOKED_CHARGEBACK_LOST}, {@link #REVOKED_EXTERNAL_REFUND}, {@link #REVOKED_COACH_SUSPENDED}).
+     */
+    @Column(name = "revoked_at")
+    private Instant revokedAt;
+
+    @Column(name = "revoked_reason", length = 40)
+    private String revokedReason;
 
     @Column(name = "expired_notified_at")
     private Instant expiredNotifiedAt;
@@ -211,6 +243,25 @@ public class SessionPackPurchase {
     public void releaseRefund(BigDecimal amount) {
         refundSessionsIssued = Math.max(0, refundSessionsIssued - 1);
         refundGrossIssued = nz(refundGrossIssued).subtract(amount).max(BigDecimal.ZERO);
+    }
+
+    /**
+     * fix/payment-pack-integrity: whether the pack is paused at {@code at} — inside
+     * {@code [pausedFrom, pausedUntil)}. A pause scheduled for a later date does not block the pack before it
+     * starts. A pre-V210 pause (no {@code pausedFrom}) counts from any time until {@code pausedUntil}.
+     */
+    public boolean isPausedAt(Instant at) {
+        return pausedUntil != null && at.isBefore(pausedUntil) && (pausedFrom == null || !at.isBefore(pausedFrom));
+    }
+
+    /** fix/payment-pack-integrity: a card dispute on the pack's charge is open. */
+    public boolean isDisputeFrozen() {
+        return disputeFrozenAt != null;
+    }
+
+    /** fix/payment-pack-integrity: the pack's remaining sessions were revoked. */
+    public boolean isRevoked() {
+        return revokedAt != null;
     }
 
     /** True when {@code amountCharged} and {@code sessionCount} were stamped at purchase. */

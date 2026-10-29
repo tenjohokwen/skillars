@@ -561,6 +561,13 @@ export default {
       pauseDialogTitle: 'Sitzungspaket pausieren',
       pauseStartLabel: 'Pausenstart',
       pauseDurationLabel: 'Pausendauer (Tage)',
+      pauseStartHint: 'Frühestens ab morgen',
+      pauseStartInPast: 'Die Pause muss in der Zukunft beginnen – wähle morgen oder später.',
+      pauseScheduledLabel: 'Pause geplant {from} – {until}',
+      pauseConflictInsideNotice:
+        'Weniger als 24 Stunden vor der Sitzung – kann nicht durch eine Pause storniert werden',
+      pauseBlockedInsideNotice:
+        'Eine bezahlte Sitzung, die in weniger als 24 Stunden beginnt, kann nicht durch eine Pause storniert werden. Beginne die Pause danach oder storniere die Sitzung nach den üblichen Stornierungsregeln.',
       pauseDurationHint: '1–90 Tage',
       pauseConflictsTitle: 'Widersprüchliche Sitzungen',
       pauseConflictsWarning:
@@ -1518,6 +1525,8 @@ export default {
       packCoachMismatch: 'Dieses Sitzungspaket gilt für einen anderen Coach.',
       packPlayerMismatch: 'Dieses Sitzungspaket gehört einem anderen Spieler.',
       packPaused: 'Dieses Sitzungspaket ist pausiert. Buche erneut, sobald die Pause endet.',
+      packFrozen:
+        'Dieses Sitzungspaket ist gesperrt, solange eine Zahlungsreklamation dazu offen ist.',
       packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
       packExhausted: 'Dieses Sitzungspaket hat keine verbleibenden Sitzungen.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',

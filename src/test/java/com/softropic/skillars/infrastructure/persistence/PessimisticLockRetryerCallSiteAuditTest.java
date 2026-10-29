@@ -85,6 +85,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Now 62 as of fix/payment-charge-idempotency's {@code ChargeOutcomeReconciler.lockBooking}: a read-only
  * {@code BookingRepository.findByIdForUpdate(bookingId).orElse(null)}; the reservation re-read, the settle
  * ({@code persistPaymentSuccess}) or decline writes and the event publish run after it returns.
+ * Now 64 as of fix/payment-pack-integrity's {@code PackSessionService.refundUnusedSessionsForSuspendedCoach}
+ * and {@code PackSessionService.lockPackByPaymentIntent}: each a read-only
+ * {@code findByIdForUpdate(purchaseId).orElse(null)} on the pack row; the refund / freeze / revoke writes run
+ * after it returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -178,7 +182,7 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 62;
+    private static final int EXPECTED_CALL_SITE_COUNT = 64;
 
     private record CallSite(String file, int line, String argument) {
     }

@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
+import com.softropic.skillars.platform.booking.contract.BatchRuleViolationException;
 import com.softropic.skillars.platform.booking.contract.BookingStatus;
 import com.softropic.skillars.platform.booking.contract.CoachPlanNoteResponse;
 import com.softropic.skillars.platform.booking.contract.BookingStatusChangedEvent;
@@ -489,8 +490,16 @@ public class BookingService {
             }
             // fix/payment-session-pack-integrity: a pause extends expiresAt — booking against a paused pack
             // would turn the pause into a free extension (findActivePacks applies the same rule).
-            if (pack.getPausedUntil() != null && pack.getPausedUntil().isAfter(Instant.now())) {
+            // fix/payment-pack-integrity: paused means inside [pausedFrom, pausedUntil) — a pause scheduled for
+            // later no longer blocks the pack today; but a session inside the scheduled pause is refused too,
+            // since the pause exists to take those weeks out of the pack.
+            Instant packCheckNow = Instant.now(ClockProvider.getClock());
+            if (pack.isPausedAt(packCheckNow) || pack.isPausedAt(req.requestedStartTime())) {
                 throw new PaymentGatewayException("payment.packPaused");
+            }
+            // fix/payment-pack-integrity: a card dispute on the pack's charge is open.
+            if (pack.isDisputeFrozen()) {
+                throw new PaymentGatewayException("payment.packFrozen");
             }
             if (!pack.getCoachId().equals(req.coachId())) {
                 throw new PaymentGatewayException("payment.packCoachMismatch");
@@ -539,7 +548,7 @@ public class BookingService {
      * {@code ACTIVE} only, while this path also admits {@code REDUCED}/{@code PENDING_REVIEW}).
      * Called on both the unlocked read and the locked re-read.
      */
-    static void requireBookableCoachStatus(CoachProfile coach, Map<String, Object> metaData) {
+    public static void requireBookableCoachStatus(CoachProfile coach, Map<String, Object> metaData) {
         if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
             throw new OperationNotAllowedException("Coach is suspended", metaData, BookingError.COACH_UNAVAILABLE);
         }
@@ -1178,12 +1187,31 @@ public class BookingService {
         return new ParentScheduleResponse(playerId, items);
     }
 
+    /**
+     * fix/payment-pack-integrity: the notice half of the parent-cancel refund rule — more than 24h before the
+     * EARLIER of the original and the current start (see {@link #isParentCancelRefundEligible}). A pack pause
+     * may only cancel a paid booking that has this notice.
+     */
+    public static boolean hasCancellationNotice(Instant currentStart, Instant originalStart, Instant now) {
+        Instant noticeAnchor = originalStart != null && originalStart.isBefore(currentStart)
+            ? originalStart : currentStart;
+        return noticeAnchor.isAfter(now.plus(24, ChronoUnit.HOURS));
+    }
+
+    /**
+     * Cancels one booking on behalf of a pack pause. fix/payment-pack-integrity: only a booking drawn on the
+     * paused pack, and never a paid booking inside the 24h cancellation notice window — the pause used to
+     * cancel every booking of the player with the coach (card-paid ones too, even after their start) with a
+     * full refund and no forfeit to the coach. {@code PackSessionService.pausePack} refuses such a pause
+     * before getting here; this re-checks under the booking row lock.
+     */
     @Transactional
-    public void cancelDueToPause(UUID bookingId, UUID coachId, Long parentId) {
+    public void cancelDueToPause(UUID bookingId, UUID purchaseId, UUID coachId, Long parentId) {
         // fix/payment-session-pack-integrity: locked (not a plain read) so the captured/not-captured decision
         // below cannot race a concurrent settle — the same reason cancelBookingAsAdmin locks first.
         Booking booking = lockBookingForUpdate(bookingId);
-        if (!Objects.equals(booking.getParentId(), parentId) || !Objects.equals(booking.getCoachId(), coachId)) {
+        if (!Objects.equals(booking.getParentId(), parentId) || !Objects.equals(booking.getCoachId(), coachId)
+                || !Objects.equals(booking.getSessionPackPurchaseId(), purchaseId)) {
             throw new OperationNotAllowedException("Booking does not belong to this parent/pack", SecurityError.MISSING_RIGHTS);
         }
         rejectIfPostCompletion(booking); // skillars-deferred-106 AC9.2
@@ -1192,6 +1220,10 @@ public class BookingService {
         // resolveAmountPaid, not the current price). A not-yet-captured booking was never charged.
         boolean paymentCaptured = BookingStatus.CONFIRMED.name().equals(booking.getStatus())
             || BookingStatus.UPCOMING.name().equals(booking.getStatus());
+        if (paymentCaptured && !hasCancellationNotice(booking.getRequestedStartTime(), booking.getOriginalStartTime(),
+                Instant.now(ClockProvider.getClock()))) {
+            throw new BatchRuleViolationException("booking.pauseInsideCancellationNotice");
+        }
         boolean packExpired = paymentCaptured && booking.getSessionPackPurchaseId() != null
             && sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
                 .map(p -> p.getExpiresAt().isBefore(Instant.now()))

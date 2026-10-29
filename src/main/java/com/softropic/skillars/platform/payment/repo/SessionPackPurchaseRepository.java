@@ -37,9 +37,32 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
 
     List<SessionPackPurchase> findByParentIdAndCoachIdOrderByCreatedAtDesc(Long parentId, UUID coachId);
 
-    @Query("SELECT p FROM SessionPackPurchase p WHERE p.expiresAt < :now AND p.expiredNotifiedAt IS NULL AND p.remainingSessions > 0")
-    List<SessionPackPurchase> findExpiredNotYetNotified(@Param("now") Instant now);
+    /**
+     * fix/payment-pack-integrity: one page of expired, not-yet-notified packs, keyset-paged by purchase id
+     * (pass the nil UUID for the first page) so the forfeiture run never loads a whole backlog at once and a
+     * row it deliberately leaves unstamped (missing coach) cannot make it loop.
+     */
+    @Query("""
+        SELECT p FROM SessionPackPurchase p
+        WHERE p.expiresAt < :now AND p.expiredNotifiedAt IS NULL AND p.remainingSessions > 0
+          AND p.purchaseId > :afterId
+        ORDER BY p.purchaseId ASC
+        """)
+    List<SessionPackPurchase> findExpiredNotYetNotified(@Param("now") Instant now, @Param("afterId") UUID afterId,
+                                                        org.springframework.data.domain.Pageable page);
 
+    /**
+     * fix/payment-pack-integrity: a suspended coach's packs that still hold unused sessions and were not
+     * revoked yet — what the suspension refunds.
+     */
+    @Query("SELECT p.purchaseId FROM SessionPackPurchase p WHERE p.coachId = :coachId AND p.remainingSessions > 0 "
+        + "AND p.revokedAt IS NULL ORDER BY p.purchaseId ASC")
+    List<UUID> findUnrevokedPackIdsWithSessionsByCoachId(@Param("coachId") UUID coachId);
+
+    // fix/payment-pack-integrity: a pause is [pausedFrom, pausedUntil) — a pause scheduled for a later date
+    // (pausedFrom > now) does not hide the pack yet; a pre-V210 pause (pausedFrom NULL) keeps the old
+    // "paused until pausedUntil" meaning. A pack whose charge is under an open card dispute is not active.
+    // SessionPackPurchase.isPausedAt is the same rule in Java.
     // Deferred-65 AC1: soonest-expiring pack first, matching what the frontend already displays as
     // "current" (SessionPackPurchasePage.vue/ParentPlayerPortalPage.vue). createdAt DESC is a
     // secondary tiebreak for packs sharing an identical expiresAt — it mirrors the frontend's own
@@ -51,7 +74,8 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
         SELECT p FROM SessionPackPurchase p
         WHERE p.playerId = :playerId AND p.coachId = :coachId
           AND p.remainingSessions > 0 AND p.expiresAt > :now
-          AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now)
+          AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now OR p.pausedFrom > :now)
+          AND p.disputeFrozenAt IS NULL
         ORDER BY p.expiresAt ASC, p.createdAt DESC, p.purchaseId ASC
         """)
     List<SessionPackPurchase> findActivePacks(@Param("playerId") Long playerId,
@@ -66,7 +90,8 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     // HomeworkAssignmentService.getLockerRoomDrills's N+1 loop.
     @Query("SELECT DISTINCT p.coachId FROM SessionPackPurchase p WHERE p.playerId = :playerId " +
         "AND p.coachId IN :coachIds AND p.remainingSessions > 0 AND p.expiresAt > :now " +
-        "AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now)")
+        "AND (p.pausedUntil IS NULL OR p.pausedUntil <= :now OR p.pausedFrom > :now) " +
+        "AND p.disputeFrozenAt IS NULL")
     Set<UUID> findCoachIdsWithActivePack(@Param("playerId") Long playerId,
                                           @Param("coachIds") Set<UUID> coachIds,
                                           @Param("now") Instant now);

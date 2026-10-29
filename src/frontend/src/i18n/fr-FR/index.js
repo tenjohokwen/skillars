@@ -1954,6 +1954,8 @@ export default {
       packCoachMismatch: 'Ce pack de séances est pour un autre coach.',
       packPlayerMismatch: 'Ce pack de séances appartient à un autre joueur.',
       packPaused: 'Ce pack de séances est en pause. Réservez à nouveau à la fin de la pause.',
+      packFrozen:
+        "Ce pack de séances est bloqué tant qu'une contestation de paiement le concernant est ouverte.",
       packExpired: 'Ce pack de séances a expiré.',
       packExhausted: "Ce pack de séances n'a plus de séances restantes.",
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
@@ -2362,6 +2364,13 @@ export default {
       pauseDialogTitle: 'Mettre le pack de séances en pause',
       pauseStartLabel: 'Date de début de la pause',
       pauseDurationLabel: 'Durée de la pause (jours)',
+      pauseStartHint: 'Au plus tôt demain',
+      pauseStartInPast: 'La pause doit commencer dans le futur — choisissez demain ou plus tard.',
+      pauseScheduledLabel: 'Pause prévue du {from} au {until}',
+      pauseConflictInsideNotice:
+        'Moins de 24 heures avant la séance — ne peut pas être annulée par une pause',
+      pauseBlockedInsideNotice:
+        "Une séance payée qui commence dans moins de 24 heures ne peut pas être annulée par une pause. Commencez la pause après elle, ou annulez la séance selon les règles d'annulation habituelles.",
       pauseDurationHint: '1 à 90 jours',
       pauseConflictsTitle: 'Séances en conflit',
       pauseConflictsWarning:

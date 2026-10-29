@@ -16,5 +16,7 @@ public record SessionPackPurchaseResponse(
     Long playerId,
     UUID coachId,
     Instant pausedUntil,
-    String status
+    String status,
+    /* fix/payment-pack-integrity: when the pause starts (null for no pause, or a pre-V210 pause). */
+    Instant pausedFrom
 ) {}

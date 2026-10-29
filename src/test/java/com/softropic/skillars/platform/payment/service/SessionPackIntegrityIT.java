@@ -156,8 +156,12 @@ class SessionPackIntegrityIT extends BasePaymentIT {
 
     // ── item 5: a pause returns what the cancelled bookings paid ──
 
+    /**
+     * fix/payment-pack-integrity: only bookings drawn on the paused pack are cancelled — a card-paid booking of
+     * the same player and coach is not the pause's business (it used to be cancelled with a 100% refund).
+     */
     @Test
-    void pauseCancellingPaidBookings_refundsTheAmountPaid_restoresThePackSession_nothingForUncaptured() {
+    void pauseCancelsOnlyThePacksBookings_restoresThePackSession_cardBookingUntouched() {
         UUID packId = insertPack(3);
         Instant base = Instant.now().plus(3, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
         UUID card = booking("CONFIRMED", null, base);
@@ -170,13 +174,117 @@ class SessionPackIntegrityIT extends BasePaymentIT {
 
         assertThat(response.pauseApplied()).isTrue();
         outboxService.drain();
-        assertThat(refundedAmount(card)).isEqualByComparingTo("40.00");
+        assertThat(bookingStatus(card)).isEqualTo("CONFIRMED");
+        assertThat(ledgerRows(card)).isZero();
+        assertThat(bookingStatus(packBooking)).isEqualTo("CANCELLED");
         assertThat(remainingSessions(packId)).isEqualTo(4);
         assertThat(restoreMarkers(packBooking)).isEqualTo(1);
         assertThat(restoreMarkers(requested)).isZero();
         assertThat(ledgerRows(requested)).isZero();
         assertThat(ledgerRows(packBooking)).isZero();
         assertThat(count("SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?")).isZero();
+    }
+
+    /**
+     * fix/payment-pack-integrity (the pause loophole): a paid pack session 20h away is inside the 24h
+     * cancellation notice — a pause starting before it is refused, even when the parent confirms, and the
+     * booking stays as it is (it used to be cancelled with a full refund and no forfeit to the coach).
+     */
+    @Test
+    void pauseOverAPaidSessionInside24h_isRefused_nothingCancelledNothingRefunded() {
+        UUID packId = insertPack(2);
+        UUID soon = booking("UPCOMING", packId, Instant.now().plus(20, ChronoUnit.HOURS).truncatedTo(ChronoUnit.SECONDS));
+
+        PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, packId, new PausePackRequest(
+            Instant.now().plus(1, ChronoUnit.HOURS), 1, List.of(soon)));
+
+        assertThat(response.pauseApplied()).isFalse();
+        assertThat(response.conflictingBookings()).singleElement()
+            .satisfies(item -> assertThat(item.cancellable()).isFalse());
+        outboxService.drain();
+        assertThat(bookingStatus(soon)).isEqualTo("UPCOMING");
+        assertThat(remainingSessions(packId)).isEqualTo(2);
+        assertThat(restoreMarkers(soon)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT paused_until IS NULL FROM payment.session_pack_purchases "
+            + "WHERE purchase_id = ?", Boolean.class, packId)).isTrue();
+    }
+
+    /** fix/payment-pack-integrity (H1): a pause scheduled for later stores its start and leaves the pack active now. */
+    @Test
+    void pauseScheduledForLater_storesItsStart_packStaysActiveAndSpendableUntilThen() {
+        UUID packId = insertPack(3);
+        Instant pauseStart = Instant.now().plus(20, ChronoUnit.DAYS).truncatedTo(ChronoUnit.SECONDS);
+
+        assertThat(packSessionService.pausePack(PARENT_ID, packId, new PausePackRequest(pauseStart, 14, List.of()))
+            .pauseApplied()).isTrue();
+
+        assertThat(jdbcTemplate.queryForObject("SELECT paused_from FROM payment.session_pack_purchases "
+            + "WHERE purchase_id = ?", Timestamp.class, packId).toInstant()).isEqualTo(pauseStart);
+        assertThat(packSessionService.hasActivePack(PLAYER_ID, coachId)).isTrue();
+        assertThat(packSessionService.findActivePackId(PLAYER_ID, coachId)).isEqualTo(packId);
+        packSessionService.deductSession(packId);
+        assertThat(remainingSessions(packId)).isEqualTo(2);
+    }
+
+    /** fix/payment-pack-integrity (H2): an open card dispute on the pack's charge freezes it; a lost one revokes it. */
+    @Test
+    void disputeOnThePacksCharge_freezesIt_thenALostDisputeRevokesTheRemainingSessions() {
+        UUID packId = insertPack(3);
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE payment.session_pack_purchases SET stripe_payment_intent_id = 'pi_c4_pack' WHERE purchase_id = ?", packId));
+
+        Boolean frozen = transactionTemplate.execute(s -> packSessionService.freezeForDispute("pi_c4_pack"));
+        assertThat(frozen).isTrue();
+        assertThat(packSessionService.hasActivePack(PLAYER_ID, coachId)).isFalse();
+        assertThatThrownBy(() -> packSessionService.deductSession(packId))
+            .isInstanceOf(PaymentGatewayException.class).hasMessageContaining("payment.packFrozen");
+
+        Integer revoked = transactionTemplate.execute(s -> packSessionService.revokeForCharge(
+            "pi_c4_pack", SessionPackPurchase.REVOKED_CHARGEBACK_LOST));
+        assertThat(revoked).isEqualTo(3);
+        assertThat(remainingSessions(packId)).isZero();
+        assertThat(jdbcTemplate.queryForObject("SELECT revoked_reason FROM payment.session_pack_purchases "
+            + "WHERE purchase_id = ?", String.class, packId)).isEqualTo("CHARGEBACK_LOST");
+
+        // A cancellation's restore that lands after the revocation gives nothing back: the payer has the money.
+        UUID bookingId = UUID.randomUUID();
+        publishCoachCancellation(packId, bookingId);
+        assertThat(remainingSessions(packId)).isZero();
+        assertThat(restoreMarkers(bookingId)).isZero();
+    }
+
+    /**
+     * fix/payment-pack-integrity (H3): a suspended coach's unused pack sessions are refunded to the payer's wallet
+     * at the locked price (the last session taking the remainder) and the pack is revoked; a cancelled booking's
+     * restore that lands afterwards is refunded to the wallet too, never put back into the unusable pack.
+     */
+    @Test
+    void coachSuspended_unusedSessionsRefundedToTheWallet_laterRestoreRefundedToo() {
+        UUID packId = insertPack(3);
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", coachId));
+        try {
+            assertThat(packSessionService.refundUnusedSessionsForSuspendedCoach(coachId)).isEqualTo(1);
+            assertThat(packSessionService.refundUnusedSessionsForSuspendedCoach(coachId)).as("idempotent").isZero();
+            outboxService.drain();
+
+            assertThat(remainingSessions(packId)).isZero();
+            assertThat(refundedAmount(packId)).isEqualByComparingTo("90.00");
+            assertThat(jdbcTemplate.queryForObject("SELECT source_payment_intent_id IS NULL FROM payment.parent_credit_ledger "
+                + "WHERE reference_id = ? AND type = 'BOOKING_REFUND'", Boolean.class, packId)).isTrue();
+
+            UUID bookingId = UUID.randomUUID();
+            transactionTemplate.execute(s -> jdbcTemplate.update(
+                "UPDATE payment.session_pack_purchases SET refund_sessions_issued = 2, refund_gross_issued = 60.00 "
+                    + "WHERE purchase_id = ?", packId)); // as if one of the three had been booked, not unused
+            publishCoachCancellation(packId, bookingId);
+            outboxService.drain();
+            assertThat(restoreMarkers(bookingId)).isZero();
+            assertThat(refundedAmount(bookingId)).isEqualByComparingTo("30.00");
+        } finally {
+            transactionTemplate.execute(s -> jdbcTemplate.update(
+                "UPDATE marketplace.coach_profiles SET status = 'ACTIVE' WHERE id = ?", coachId));
+        }
     }
 
     // ── item 6: restores are durable and once per booking ──
@@ -275,6 +383,10 @@ class SessionPackIntegrityIT extends BasePaymentIT {
         transactionTemplate.execute(s -> jdbcTemplate.update(
             "INSERT INTO payment.booking_payments (booking_id, credit_debited, stripe_charged, status, captured_at) "
                 + "VALUES (?, ?, ?, 'CAPTURED', now())", bookingId, new BigDecimal(credit), new BigDecimal(card)));
+    }
+
+    private String bookingStatus(UUID bookingId) {
+        return jdbcTemplate.queryForObject("SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId);
     }
 
     private long packCount() {

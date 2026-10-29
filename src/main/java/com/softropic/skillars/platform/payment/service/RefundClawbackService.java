@@ -124,12 +124,13 @@ public class RefundClawbackService {
         }
         BigDecimal share = pack.perSessionShare();
         BigDecimal sessionValue = share == null ? BigDecimal.ZERO : share;
-        if (pack.getRemainingSessions() <= 0) {
+        // fix/payment-pack-integrity: a clawback, not a spend — taken back even while the pack is paused or
+        // frozen by a card dispute (deductSession's guards used to throw payment.packPaused and roll the whole
+        // dispute resolution back for as long as the pause lasted). Same transaction, pack lock already held.
+        if (!packSessionService.deductSessionForClawback(pack)) {
             log.info("[REFUND_CLAWBACK] booking={} pack={} has no session left — nothing re-deducted", bookingId, packId);
             return new RefundClawback(sessionValue, BigDecimal.ZERO, true, false);
         }
-        // Same transaction and the pack lock is already held, so deductSession's own lock is re-entrant.
-        packSessionService.deductSession(packId);
         log.info("[REFUND_CLAWBACK] booking={} pack={} — restored session deducted again", bookingId, packId);
         return new RefundClawback(sessionValue, sessionValue, true, true);
     }

@@ -343,7 +343,9 @@ export const useBookingStore = defineStore('booking', () => {
         confirmedCancellationIds,
       })
       packPauseResult.value = res
-      packPauseConflicts.value = []
+      // A refused confirmation (a new conflict, or a paid session now inside 24h) comes back with the
+      // current conflict list — keep showing it instead of an empty dialog.
+      packPauseConflicts.value = res.pauseApplied ? [] : (res.conflictingBookings ?? [])
       await loadPlayerPacks(playerId)
       return res
     } catch (e) {

@@ -100,7 +100,7 @@ class PackSessionServicePauseTest {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
         when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
         User parentUser = mock(User.class);
@@ -163,7 +163,7 @@ class PackSessionServicePauseTest {
         when(conflictingBooking.getRequestedEndTime()).thenReturn(Instant.now().plus(6, ChronoUnit.DAYS).plusSeconds(3600));
         when(conflictingBooking.getStatus()).thenReturn("CONFIRMED");
         when(conflictingBooking.getCanonicalTimezone()).thenReturn("UTC");
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of(conflictingBooking));
 
         Instant pauseStart = Instant.now().plus(5, ChronoUnit.DAYS);
@@ -176,7 +176,7 @@ class PackSessionServicePauseTest {
         assertThat(response.conflictingBookings().get(0).id()).isEqualTo(bookingId);
         assertThat(purchase.getPausedUntil()).isNull();
         verify(sessionPackPurchaseRepository, never()).save(any());
-        verify(bookingService, never()).cancelDueToPause(any(), any(), any());
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any(), any());
     }
 
     @Test
@@ -190,7 +190,7 @@ class PackSessionServicePauseTest {
         UUID bookingId = UUID.randomUUID();
         when(conflictingBooking.getId()).thenReturn(bookingId);
         when(conflictingBooking.getRequestedStartTime()).thenReturn(Instant.now().plus(6, ChronoUnit.DAYS));
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of(conflictingBooking));
         User parentUser = mock(User.class);
         when(parentUser.getEmail()).thenReturn("parent@test.com");
@@ -202,7 +202,7 @@ class PackSessionServicePauseTest {
         PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req);
 
         assertThat(response.pauseApplied()).isTrue();
-        verify(bookingService).cancelDueToPause(bookingId, COACH_ID, PARENT_ID);
+        verify(bookingService).cancelDueToPause(bookingId, PURCHASE_ID, COACH_ID, PARENT_ID);
         assertThat(purchase.getPausedUntil()).isEqualTo(pauseStart.plus(14, ChronoUnit.DAYS));
         verify(sessionPackPurchaseRepository).save(purchase);
     }
@@ -229,7 +229,7 @@ class PackSessionServicePauseTest {
         when(conflictB.getId()).thenReturn(bookingIdB);
         when(conflictB.getRequestedStartTime()).thenReturn(Instant.now().plus(7, ChronoUnit.DAYS));
 
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of(conflictA, conflictB));
 
         Instant pauseStart = Instant.now().plus(5, ChronoUnit.DAYS);
@@ -241,7 +241,7 @@ class PackSessionServicePauseTest {
         assertThat(response.pauseApplied()).isFalse();
         assertThat(response.conflictingBookings()).hasSize(2);
         assertThat(purchase.getPausedUntil()).isNull();
-        verify(bookingService, never()).cancelDueToPause(any(), any(), any());
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any(), any());
         verify(sessionPackPurchaseRepository, never()).save(any());
     }
 
@@ -264,7 +264,7 @@ class PackSessionServicePauseTest {
         when(lateBooking.getStatus()).thenReturn("CONFIRMED");
         when(lateBooking.getCanonicalTimezone()).thenReturn("UTC");
 
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of())             // initial read (:195-196): no conflicts
             .thenReturn(List.of(lateBooking));  // D8 re-check, immediately before the write: one appeared
 
@@ -303,7 +303,7 @@ class PackSessionServicePauseTest {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
         when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("")));
         User parentUser = mock(User.class);
@@ -323,7 +323,7 @@ class PackSessionServicePauseTest {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
         when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("Europe/Nowhere")));
         User parentUser = mock(User.class);
@@ -393,7 +393,7 @@ class PackSessionServicePauseTest {
         SessionPackPurchase purchase = buildPurchase();
         when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
         when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
-        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), anyList()))
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
         User parentUser = mock(User.class);
@@ -407,6 +407,106 @@ class PackSessionServicePauseTest {
         assertThat(response.pauseApplied()).isTrue();
         verify(sessionPackPurchaseRepository).save(purchase);
         verify(eventPublisher, never()).publishEvent(any(PackPausedEvent.class));
+    }
+
+    // ---- fix/payment-pack-integrity: pause loophole ------------------------------------------
+
+    @Test
+    void pausePack_startEarlierToday_isRejected_pauseMustStartInTheFuture() {
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+
+        // "Today" used to pass the date-only check, so a pause could start hours in the past.
+        PausePackRequest req = new PausePackRequest(Instant.now().minus(1, ChronoUnit.MINUTES), 1, List.of());
+
+        assertThatThrownBy(() -> packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req))
+            .isInstanceOf(BatchRuleViolationException.class)
+            .hasMessageContaining("booking.pauseStartInPast");
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any(), any());
+    }
+
+    @Test
+    void pausePack_paidBookingInside24h_refusesPauseEvenWhenConfirmed_andCancelsNothing() {
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+
+        Instant sessionStart = Instant.now().plus(20, ChronoUnit.HOURS);
+        Booking paidSoon = mock(Booking.class);
+        UUID bookingId = UUID.randomUUID();
+        when(paidSoon.getId()).thenReturn(bookingId);
+        when(paidSoon.getRequestedStartTime()).thenReturn(sessionStart);
+        when(paidSoon.getRequestedEndTime()).thenReturn(sessionStart.plusSeconds(3600));
+        when(paidSoon.getStatus()).thenReturn("UPCOMING");
+        when(paidSoon.getCanonicalTimezone()).thenReturn("UTC");
+        when(bookingRepository.findConflictingBookingsForPause(eq(PURCHASE_ID), any(), any(), any(), any(), anyList()))
+            .thenReturn(List.of(paidSoon));
+
+        PausePackRequest req = new PausePackRequest(Instant.now().plus(1, ChronoUnit.HOURS), 1, List.of(bookingId));
+
+        PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req);
+
+        assertThat(response.pauseApplied()).isFalse();
+        assertThat(response.conflictingBookings()).singleElement()
+            .satisfies(item -> assertThat(item.cancellable()).isFalse());
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any(), any());
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        assertThat(purchase.getPausedUntil()).isNull();
+    }
+
+    @Test
+    void pausePack_unpaidRequestInside24h_isCancellable_pauseApplies() {
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+        User parentUser = mock(User.class);
+        when(parentUser.getEmail()).thenReturn("parent@test.com");
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parentUser));
+
+        Booking requested = mock(Booking.class);
+        UUID bookingId = UUID.randomUUID();
+        when(requested.getId()).thenReturn(bookingId);
+        when(requested.getRequestedStartTime()).thenReturn(Instant.now().plus(20, ChronoUnit.HOURS));
+        when(requested.getStatus()).thenReturn("REQUESTED");
+        when(bookingRepository.findConflictingBookingsForPause(eq(PURCHASE_ID), any(), any(), any(), any(), anyList()))
+            .thenReturn(List.of(requested));
+
+        Instant pauseStart = Instant.now().plus(1, ChronoUnit.HOURS);
+        PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, PURCHASE_ID,
+            new PausePackRequest(pauseStart, 3, List.of(bookingId)));
+
+        assertThat(response.pauseApplied()).isTrue();
+        verify(bookingService).cancelDueToPause(bookingId, PURCHASE_ID, COACH_ID, PARENT_ID);
+        assertThat(purchase.getPausedFrom()).isEqualTo(pauseStart);
+        assertThat(purchase.getPausedUntil()).isEqualTo(pauseStart.plus(3, ChronoUnit.DAYS));
+    }
+
+    @Test
+    void pausePack_storesPauseStart_soAFuturePauseDoesNotBlockThePackToday() {
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
+        when(bookingRepository.findConflictingBookingsForPause(any(), any(), any(), any(), any(), anyList()))
+            .thenReturn(List.of());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+        User parentUser = mock(User.class);
+        when(parentUser.getEmail()).thenReturn("parent@test.com");
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parentUser));
+
+        Instant pauseStart = Instant.now().plus(30, ChronoUnit.DAYS);
+        packSessionService.pausePack(PARENT_ID, PURCHASE_ID, new PausePackRequest(pauseStart, 14, List.of()));
+
+        assertThat(purchase.getPausedFrom()).isEqualTo(pauseStart);
+        assertThat(purchase.isPausedAt(Instant.now())).isFalse();
+        assertThat(purchase.isPausedAt(pauseStart.plus(1, ChronoUnit.DAYS))).isTrue();
+        assertThat(purchase.isPausedAt(pauseStart.plus(14, ChronoUnit.DAYS))).isFalse();
+        // Twice: the conflict read and the D8 re-check before the write — both scoped to this pack.
+        verify(bookingRepository, org.mockito.Mockito.times(2)).findConflictingBookingsForPause(eq(PURCHASE_ID), eq(PLAYER_ID), eq(COACH_ID),
+            eq(pauseStart), eq(pauseStart.plus(14, ChronoUnit.DAYS)), anyList());
     }
 
     private SessionPackPurchase buildPurchase() {
