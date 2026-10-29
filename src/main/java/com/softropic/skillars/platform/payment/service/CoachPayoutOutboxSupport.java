@@ -289,6 +289,22 @@ public class CoachPayoutOutboxSupport {
         return new PackShare(gross, pack.getCommissionRate(), null);
     }
 
+    /**
+     * fix/payment-pack-clawback-and-expired-cancel: whether a zero-net CANCELLED payout may be deleted and
+     * computed afresh by {@link #enqueuePayout}. A card / credit payout always can (its gross is re-read from
+     * {@code booking_payments}, nothing else is written). A pack payout only when it was a skip
+     * ({@code PACK_AMOUNT_UNKNOWN} / {@code PACK_FULLY_ALLOCATED}): those never allocated the session's share.
+     * Any other pack row (e.g. {@code NOTHING_CHARGED}, a 0.00 share) has already been settled on the pack,
+     * and recomputing it would settle the session twice.
+     */
+    static boolean isRecomputable(CoachPayout row) {
+        if (row.getSessionPackPurchaseId() == null) {
+            return true;
+        }
+        return REASON_PACK_AMOUNT_UNKNOWN.equals(row.getLastError())
+            || REASON_PACK_FULLY_ALLOCATED.equals(row.getLastError());
+    }
+
     /** A pack session's gross share and the pack's stamped rate, or why nothing is paid. */
     private record PackShare(BigDecimal gross, BigDecimal commissionRate, String skipReason) {
         static final PackShare ALREADY_PAID_OUT = new PackShare(BigDecimal.ZERO, null, "ALREADY_PAID_OUT");

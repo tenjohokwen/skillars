@@ -115,12 +115,15 @@
         <li><strong>Session pack:</strong> <code>gross</code> = this session's share of
         <code>session_pack_purchases.amount_charged</code>: <code>amount_charged / session_count</code> rounded
         <em>down</em> to the cent, with the last (<code>session_count</code>-th) <em>settled</em> session taking
-        the remainder. A session refunded to the payer as wallet credit (a booking on an expired pack cancelled,
-        coach no-show, admin-cancelled or paused) settles on the same ledger
+        the remainder. A session refunded to the payer as wallet credit (a booking on an expired pack cancelled
+        by the parent more than 24h ahead or by the coach, a coach no-show, admin-cancelled or paused) settles on the same ledger
         (<code>refund_sessions_issued</code> / <code>refund_gross_issued</code>, one
         <code>pack_session_refunds</code> marker per booking, V200, <code>PackRefundAllocationService</code>), so
         payouts plus refunds of a fully settled pack equal <code>amount_charged</code> to the cent. An
-        <code>UPHOLD_COACH</code> clawback un-settles the refund before the coach is paid. The
+        <code>UPHOLD_COACH</code> clawback un-settles the refund before the coach is paid, and
+        <code>payInFull</code> never recomputes a pack payout whose share was already allocated (only a
+        <code>PACK_AMOUNT_UNKNOWN</code> / <code>PACK_FULLY_ALLOCATED</code> skip is), so a session is never
+        settled twice. The
         rate is <code>session_pack_purchases.commission_rate</code>, stamped at <em>pack purchase</em> (V186).
         The running <code>payout_sessions_allocated</code> / <code>payout_gross_allocated</code> is updated
         under the pack row lock, so the sum never exceeds what the pack was charged. Unused sessions of an
@@ -157,7 +160,9 @@
       row on a second connection. That is
       <code>BookingService</code>'s <code>refundEligible</code> flag on the event. A booking paid by card
       or credit is refunded as a <code>BOOKING_REFUND</code> wallet credit for the <em>full session
-      price</em>. A pack-funded booking gets its session restored instead. Refunds only ever give back
+      price</em>. A pack-funded booking gets its session restored instead, unless the pack has expired:
+      then the session's value is credited to the wallet, settled on the pack ledger
+      (<code>PackRefundAllocationService</code>), as for the coach, admin, no-show and pause paths. Refunds only ever give back
       money actually taken: a card booking is charged, and a pack booking's session deducted, only at
       settle, so nothing is owed before <code>CONFIRMED</code>. A coach cancellation refunds only a captured
       booking (<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>PAUSED</code>; the event's

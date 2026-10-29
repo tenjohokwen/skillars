@@ -194,6 +194,35 @@ class PackCancellationRefundIT extends BasePaymentIT {
         assertThat(ledgerCount).isZero();
     }
 
+    /**
+     * fix/payment-pack-clawback-and-expired-cancel: a >24h parent cancellation on an EXPIRED pack is refunded to
+     * the wallet (settled on the pack ledger), not restored to the pack, where the session could never be used.
+     */
+    @Test
+    void parentCancels_gt24h_onAnExpiredPack_walletRefunded_sessionNotRestored() {
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE payment.session_pack_purchases SET expires_at = ? WHERE purchase_id = ?",
+            Timestamp.from(Instant.now().minus(1, ChronoUnit.DAYS)), packId));
+        int remainingBefore = getRemainingSessions();
+        BookingCancelledByParentEvent event = new BookingCancelledByParentEvent(
+            this, UUID.randomUUID(), PARENT_ID, coachId, packId, 48, true, PRICE_PER_SESSION,
+            "parent@test.com", "coach@test.com", Instant.now(), "UTC", true, true);
+
+        transactionTemplate.execute(status -> {
+            eventPublisher.publishEvent(event);
+            return null;
+        });
+
+        assertThat(getRemainingSessions()).isEqualTo(remainingBefore);
+        assertThat(ledgerAmount(event.getBookingId())).isEqualByComparingTo(PRICE_PER_SESSION);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT refund_sessions_issued FROM payment.session_pack_purchases WHERE purchase_id = ?",
+            Integer.class, packId)).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.pack_session_restores WHERE booking_id = ?", Long.class,
+            event.getBookingId())).isZero();
+    }
+
     @Test
     void parentCancels_lte24h_sessionNotRestored_noLedgerEntry() {
         int remainingBefore = getRemainingSessions();

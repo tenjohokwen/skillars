@@ -1213,6 +1213,12 @@ public class BookingService {
         // C6: the refund is what the payer actually paid (resolveAmountPaid), not the coach's current
         // price; nothing is owed — and no price lookup can fail the cancel — before capture.
         BigDecimal sessionPrice = paymentWasCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
+        // fix/payment-pack-clawback-and-expired-cancel: a session given back to an expired pack could never be
+        // used, so a refund-eligible cancellation on one is refunded to the wallet instead (RefundEnqueueListener).
+        boolean packExpired = refundEligible && booking.getSessionPackPurchaseId() != null
+            && sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
+                .map(p -> p.getExpiresAt().isBefore(Instant.now()))
+                .orElse(false);
         String parentEmail = resolveEmail(parentUserId, bookingId);
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
@@ -1222,7 +1228,7 @@ public class BookingService {
             this, bookingId, parentUserId, booking.getCoachId(),
             booking.getSessionPackPurchaseId(), hoursBeforeSession, refundEligible,
             sessionPrice, parentEmail, coachEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken, packExpired
         ));
     }
 

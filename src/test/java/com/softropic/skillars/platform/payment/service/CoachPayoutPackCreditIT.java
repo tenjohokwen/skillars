@@ -47,6 +47,7 @@ class CoachPayoutPackCreditIT extends BasePaymentIT {
 
     @Autowired CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     @Autowired CoachPayoutFreezeService coachPayoutFreezeService;
+    @Autowired CoachPayoutAdjustmentService coachPayoutAdjustmentService;
     @Autowired CoachPayoutRepository coachPayoutRepository;
     @Autowired OutboxService outboxService;
     @Autowired ApplicationEventPublisher eventPublisher;
@@ -196,6 +197,56 @@ class CoachPayoutPackCreditIT extends BasePaymentIT {
 
         assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
         assertThat(payout(bookingId).getStripeTransferId()).isEqualTo("tr_stub_" + bookingId);
+    }
+
+    /**
+     * fix/payment-pack-clawback-and-expired-cancel: 0.02 for 3 sessions, so each share is 0.00. The first
+     * session completes NOTHING_CHARGED, with its 0.00 share already allocated on the pack. An UPHOLD_COACH
+     * payInFull on it used to delete that row and enqueue again, allocating the session a second time: the
+     * second session then became the pack's "last" and took the 0.02, and the real last session got nothing.
+     * Now the session stays settled once and the third session takes the remainder.
+     */
+    @Test
+    void upholdCoachOnAPackSessionSettledAtZero_neverSettlesItTwice() {
+        UUID packId = seedPack("0.02", 3, "0.10");
+        UUID first = seedBooking(packId);
+        UUID second = seedBooking(packId);
+        UUID third = seedBooking(packId);
+
+        enqueue(first);
+        assertThat(payout(first).getStatus()).isEqualTo(CoachPayoutStatus.CANCELLED);
+        BigDecimal owed = transactionTemplate.execute(s -> coachPayoutAdjustmentService.payInFull(first, coachId));
+        assertThat(owed).isEqualByComparingTo("0");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT payout_sessions_allocated FROM payment.session_pack_purchases WHERE purchase_id = ?",
+            Integer.class, packId)).as("the session is settled once").isEqualTo(1);
+
+        enqueue(second);
+        enqueue(third);
+        assertThat(payout(second).getGrossAmount()).isEqualByComparingTo("0.00");
+        assertThat(payout(third).getGrossAmount()).as("the real last session takes the remainder")
+            .isEqualByComparingTo("0.02");
+        Map<String, Object> ledger = jdbcTemplate.queryForMap(
+            "SELECT payout_sessions_allocated, payout_gross_allocated FROM payment.session_pack_purchases "
+                + "WHERE purchase_id = ?", packId);
+        assertThat(ledger.get("payout_sessions_allocated")).isEqualTo(3);
+        assertThat((BigDecimal) ledger.get("payout_gross_allocated")).isEqualByComparingTo("0.02");
+    }
+
+    /** The card / credit path still replaces a nothing-charged payout with one computed from its payment row. */
+    @Test
+    void upholdCoachOnACardSessionWithNothingComputed_isStillRecomputed() {
+        UUID booking = seedBooking(null);
+        seedCapturedPayment(booking, "0.00", "0.00", "0.10");
+        enqueue(booking);
+        assertThat(payout(booking).getStatus()).isEqualTo(CoachPayoutStatus.CANCELLED);
+
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE payment.booking_payments SET stripe_charged = 50.00 WHERE booking_id = ?", booking));
+        BigDecimal owed = transactionTemplate.execute(s -> coachPayoutAdjustmentService.payInFull(booking, coachId));
+
+        assertThat(owed).isEqualByComparingTo("45.00");
+        assertThat(payout(booking).getGrossAmount()).isEqualByComparingTo("50.00");
     }
 
     // ── credit ──

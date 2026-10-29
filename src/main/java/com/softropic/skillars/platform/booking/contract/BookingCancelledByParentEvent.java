@@ -25,6 +25,12 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
      * ({@code CoachPayoutEnqueueListener}).
      */
     private final boolean paymentCaptured;
+    /**
+     * fix/payment-pack-clawback-and-expired-cancel: the booking's pack had expired when it was cancelled, so
+     * giving the session back to it would be worthless — a refund-eligible cancellation credits the session's
+     * value to the wallet instead ({@link #isWalletRefund()}), as the coach / admin / no-show paths do.
+     */
+    private final boolean packExpiredAtCancellation;
 
     public BookingCancelledByParentEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
                                           UUID sessionPackPurchaseId, long hoursBeforeSession,
@@ -42,6 +48,17 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
                                           BigDecimal sessionPrice, String parentEmail, String coachEmail,
                                           Instant requestedStartTime, String canonicalTimezone,
                                           boolean paymentCaptured) {
+        this(source, bookingId, parentId, coachId, sessionPackPurchaseId, hoursBeforeSession, refundEligible,
+            sessionPrice, parentEmail, coachEmail, requestedStartTime, canonicalTimezone, paymentCaptured, false);
+    }
+
+    @SuppressWarnings("java:S107") // an immutable event: one field per fact its listeners need
+    public BookingCancelledByParentEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
+                                          UUID sessionPackPurchaseId, long hoursBeforeSession,
+                                          boolean refundEligible,
+                                          BigDecimal sessionPrice, String parentEmail, String coachEmail,
+                                          Instant requestedStartTime, String canonicalTimezone,
+                                          boolean paymentCaptured, boolean packExpiredAtCancellation) {
         super(source);
         this.bookingId = bookingId;
         this.parentId = parentId;
@@ -55,6 +72,7 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
         this.requestedStartTime = requestedStartTime;
         this.canonicalTimezone = canonicalTimezone;
         this.paymentCaptured = paymentCaptured;
+        this.packExpiredAtCancellation = packExpiredAtCancellation;
     }
 
     public UUID getBookingId() { return bookingId; }
@@ -69,6 +87,20 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
     public Instant getRequestedStartTime() { return requestedStartTime; }
     public String getCanonicalTimezone() { return canonicalTimezone; }
     public boolean isPaymentCaptured() { return paymentCaptured; }
+    public boolean isPackExpiredAtCancellation() { return packExpiredAtCancellation; }
+
+    /**
+     * Refund-eligible and paid by card / credit, or by a pack that has since expired: the session's value is
+     * credited to the wallet. (The refund-eligible flag already implies the money was captured.)
+     */
+    public boolean isWalletRefund() {
+        return refundEligible && (sessionPackPurchaseId == null || packExpiredAtCancellation);
+    }
+
+    /** Refund-eligible and paid by a pack that is still valid: the session goes back to the pack. */
+    public boolean isPackRestore() {
+        return refundEligible && sessionPackPurchaseId != null && !packExpiredAtCancellation;
+    }
 
     /** Captured money the parent does not get back: the session is forfeited and the coach is paid for it. */
     public boolean isForfeit() {

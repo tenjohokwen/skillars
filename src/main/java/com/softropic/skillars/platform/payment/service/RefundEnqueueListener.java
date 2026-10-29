@@ -41,13 +41,18 @@ public class RefundEnqueueListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
-        // skillars-10-2 D1, skillars-deferred-101 AC4: enqueue in the same tx as CANCELLED write
-        if (event.getSessionPackPurchaseId() == null && event.isRefundEligible()) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
-                "Parent cancellation >24h — full refund");
+        // skillars-10-2 D1, skillars-deferred-101 AC4: enqueue in the same tx as CANCELLED write.
+        // fix/payment-pack-clawback-and-expired-cancel: a refund-eligible (>24h) cancellation on an EXPIRED pack
+        // refunds the session's value to the wallet, settled on the pack ledger like the coach / admin / no-show
+        // expired-pack refunds; restoring it to the expired pack would give back nothing usable.
+        if (event.isWalletRefund()) {
+            enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
+                event.getSessionPrice(),
+                event.getSessionPackPurchaseId() != null
+                    ? "Parent cancellation >24h — expired pack refund"
+                    : "Parent cancellation >24h — full refund");
         }
-        if (event.getSessionPackPurchaseId() != null && event.isRefundEligible()) {
+        if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
                 event.getSessionPackPurchaseId(), event.getBookingId(), "PARENT_CANCELLATION");
         }

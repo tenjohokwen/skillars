@@ -196,4 +196,57 @@ class CoachPayoutAdjustmentServiceTest {
         verify(coachPayoutRepository).delete(skipped);
         verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
     }
+
+    // ── fix/payment-pack-clawback-and-expired-cancel: payInFull never settles a pack session twice ──
+
+    @Test
+    void payInFull_packSessionAlreadySettledAtZero_isLeftAlone_neverReallocated() {
+        CoachPayout settled = row(CoachPayoutStatus.CANCELLED);
+        settled.setSessionPackPurchaseId(UUID.randomUUID());
+        settled.setGrossAmount(BigDecimal.ZERO);
+        settled.setCommissionAmount(BigDecimal.ZERO);
+        settled.setNetAmount(BigDecimal.ZERO);
+        settled.setLastError(CoachPayoutOutboxSupport.REASON_NOTHING_CHARGED);
+        settled.setDisputeFrozen(true);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(settled));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("0");
+        verify(coachPayoutRepository, never()).delete(any());
+        verify(coachPayoutOutboxSupport, never()).enqueuePayout(any(), any());
+        assertThat(settled.getStatus()).isEqualTo(CoachPayoutStatus.CANCELLED);
+        assertThat(settled.isDisputeFrozen()).isFalse();
+    }
+
+    @Test
+    void payInFull_packSkipThatNeverAllocated_isRecomputed() {
+        for (String reason : java.util.List.of(CoachPayoutOutboxSupport.REASON_PACK_FULLY_ALLOCATED,
+                CoachPayoutOutboxSupport.REASON_PACK_AMOUNT_UNKNOWN)) {
+            org.mockito.Mockito.reset(coachPayoutRepository, coachPayoutOutboxSupport);
+            CoachPayout skipped = row(CoachPayoutStatus.CANCELLED);
+            skipped.setSessionPackPurchaseId(UUID.randomUUID());
+            skipped.setNetAmount(BigDecimal.ZERO);
+            skipped.setLastError(reason);
+            when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(skipped));
+            when(coachPayoutRepository.findById(bookingId)).thenReturn(Optional.empty());
+
+            service.payInFull(bookingId, coachId);
+
+            verify(coachPayoutRepository).delete(skipped);
+            verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
+        }
+    }
+
+    @Test
+    void payInFull_cardBookingNothingCharged_isStillRecomputedFromItsPaymentRow() {
+        CoachPayout nothing = row(CoachPayoutStatus.CANCELLED);
+        nothing.setNetAmount(BigDecimal.ZERO);
+        nothing.setLastError(CoachPayoutOutboxSupport.REASON_NOTHING_CHARGED);
+        CoachPayout fresh = row(CoachPayoutStatus.PENDING_RELEASE);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(nothing));
+        when(coachPayoutRepository.findById(bookingId)).thenReturn(Optional.of(fresh));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        verify(coachPayoutRepository).delete(nothing);
+        verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
+    }
 }
