@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.stripe.model.Account;
 import lombok.RequiredArgsConstructor;
@@ -40,6 +41,20 @@ public class CoachStripeAccountStatusApplier {
     static final String STATUS_COMPLETE = "COMPLETE";
     static final String STATUS_RESTRICTED = "RESTRICTED";
 
+    /**
+     * Local sentinel stored in {@code transfers_capability} once the coach has disconnected the
+     * platform ({@code account.application.deauthorized}). Stripe's own values are {@code active} /
+     * {@code inactive} / {@code pending}; anything but {@code active} already makes
+     * {@code StripePaymentGateway.resolveTransferDestination} refuse the transfer non-retryably, so
+     * the payout goes to HOLD (with its PAYOUT_HELD alert) instead of looping. Cleared by the next
+     * OAuth connect ({@code StripeOnboardingService.upsertCoachStripeAccount}). Avoids a migration:
+     * {@code onboarding_status}'s CHECK allows only PENDING / COMPLETE / RESTRICTED.
+     */
+    public static final String TRANSFERS_DEAUTHORIZED = "deauthorized";
+
+    /** Admin alert reason prefix; AdminQueueService.STRIPE_DEAUTHORIZED_REASON matches on it. */
+    static final String DEAUTHORIZED_ALERT_REASON = "STRIPE_DEAUTHORIZED";
+
     private final ApplicationEventPublisher eventPublisher;
 
     /**
@@ -52,6 +67,13 @@ public class CoachStripeAccountStatusApplier {
      * @return true if applied, false if ignored as stale
      */
     public boolean apply(CoachStripeAccount coachAccount, Account acct, Instant snapshotAt, String source) {
+        // Once disconnected, only a new OAuth connect (which clears the sentinel) re-enables the
+        // account: Stripe sends nothing newer for a revoked connection, so any snapshot is old.
+        if (isDeauthorized(coachAccount)) {
+            log.info("[STRIPE_ACCOUNT_UPDATED_AFTER_DEAUTHORIZATION stripeAccountId={} source={}] ignored",
+                acct.getId(), source);
+            return false;
+        }
         // fix/payment-payouts-disputes-webhooks: Stripe does not deliver events in order — a snapshot
         // older than the one last applied must not overwrite it (same-second events still apply).
         if (snapshotAt != null && coachAccount.getLastEventCreatedAt() != null
@@ -80,6 +102,49 @@ public class CoachStripeAccountStatusApplier {
         log.info("[STRIPE_ACCOUNT_UPDATED stripeAccountId={} source={} chargesEnabled={} payoutsEnabled={} status={}]",
             acct.getId(), source, charges, payouts, coachAccount.getOnboardingStatus());
         return true;
+    }
+
+    /**
+     * {@code account.application.deauthorized}: the coach revoked the platform's access to their
+     * Stripe account, so nothing can be transferred to it any more. The row is kept (the coach may
+     * reconnect through OAuth) but made not payable: RESTRICTED, charges/payouts off, transfers
+     * capability {@link #TRANSFERS_DEAUTHORIZED}. Raises one coach-level PAYOUT_HELD alert (one OPEN
+     * per coach; a redelivery is already stopped by the webhook-event dedup).
+     *
+     * <p>Ordered like {@link #apply}: a deauthorization created before the last applied snapshot is
+     * stale and ignored. In particular a reconnect stamps {@code last_event_created_at} with the
+     * connect time, so a late-delivered deauthorization from before the reconnect cannot disconnect
+     * the coach again.
+     *
+     * @return true if applied, false if ignored as stale
+     */
+    public boolean applyDeauthorization(CoachStripeAccount coachAccount, Instant eventCreatedAt, String source) {
+        if (eventCreatedAt != null && coachAccount.getLastEventCreatedAt() != null
+                && eventCreatedAt.isBefore(coachAccount.getLastEventCreatedAt())) {
+            log.info("[STRIPE_ACCOUNT_DEAUTHORIZED_STALE stripeAccountId={} source={} created={} lastApplied={}] ignored",
+                coachAccount.getStripeAccountId(), source, eventCreatedAt, coachAccount.getLastEventCreatedAt());
+            return false;
+        }
+        if (eventCreatedAt != null) {
+            coachAccount.setLastEventCreatedAt(eventCreatedAt);
+        }
+        coachAccount.setOnboardingStatus(STATUS_RESTRICTED);
+        coachAccount.setChargesEnabled(false);
+        coachAccount.setPayoutsEnabled(false);
+        coachAccount.setTransfersCapability(TRANSFERS_DEAUTHORIZED);
+        log.warn("[STRIPE_ACCOUNT_DEAUTHORIZED coachId={} stripeAccountId={} source={}] coach disconnected the "
+            + "platform; payouts to this account go to HOLD until the coach reconnects",
+            coachAccount.getCoachId(), coachAccount.getStripeAccountId(), source);
+        // Published inside the transaction; the admin listener inserts the alert AFTER_COMMIT.
+        eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
+            coachAccount.getCoachId().toString(), PaymentIntegrityAlertEvent.Reference.COACH,
+            DEAUTHORIZED_ALERT_REASON + " " + coachAccount.getStripeAccountId()));
+        return true;
+    }
+
+    /** True once the coach has disconnected the platform and has not reconnected since. */
+    public static boolean isDeauthorized(CoachStripeAccount coachAccount) {
+        return TRANSFERS_DEAUTHORIZED.equals(coachAccount.getTransfersCapability());
     }
 
     /** P23: publish after TX commit so listeners see the persisted COMPLETE status. */

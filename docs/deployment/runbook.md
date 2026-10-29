@@ -473,6 +473,12 @@ The coach disconnected, closed, or restricted their Stripe connected account bet
 `BookingCompletedEvent` and the transfer (or the `transfers` capability is not active). The payout is
 blocked and the handler will not retry on its own (a `HOLD` is a decision, not a transient error).
 
+If the Connect endpoint received `account.application.deauthorized`, there is also one coach-level
+`PAYOUT_HELD` admin alert (reference type `COACH`, reason `STRIPE_DEAUTHORIZED acct_…`), and the
+coach's account row has `onboarding_status = 'RESTRICTED'`, `transfers_capability = 'deauthorized'`.
+The coach's payment-settings page shows a reconnect button; reconnecting clears the sentinel. Mark
+that alert handled once the held payouts below are released.
+
 1. **Message the coach** (adapt to the channel in use):
    > *"Your Stripe payout account was disconnected before we could release payment for session
    > {ref}. Please reconnect it at {link}, then reply here — we'll verify and retry automatically."*

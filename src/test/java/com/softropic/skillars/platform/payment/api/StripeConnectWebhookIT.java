@@ -63,6 +63,7 @@ class StripeConnectWebhookIT extends BasePaymentIT {
     void cleanUp() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM payment.stripe_webhook_events WHERE event_id = ?", eventId);
+            jdbcTemplate.update("DELETE FROM admin.admin_alerts WHERE reference_id = ?", coachId.toString());
             jdbcTemplate.update("DELETE FROM payment.coach_stripe_accounts WHERE coach_id = ?", coachId);
             jdbcTemplate.update("DELETE FROM marketplace.coach_profiles WHERE id = ?", coachId);
             jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", COACH_USER_ID);
@@ -86,6 +87,43 @@ class StripeConnectWebhookIT extends BasePaymentIT {
         // Stripe redelivery of the same event: acknowledged, recorded once.
         postSigned(CONNECT_URL, payload, CONNECT_SECRET).andExpect(status().isOk());
         assertThat(eventRows()).isEqualTo(1);
+    }
+
+    @Test
+    void connectEndpoint_deauthorized_makesAccountNotPayable_raisesOneCoachAlert_evenOnRedelivery() throws Exception {
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update("UPDATE payment.coach_stripe_accounts SET onboarding_status = 'COMPLETE', "
+                + "charges_enabled = true, payouts_enabled = true, transfers_capability = 'active' "
+                + "WHERE coach_id = ?", coachId);
+            return null;
+        });
+        String payload = """
+            {
+              "id": "%s",
+              "object": "event",
+              "type": "account.application.deauthorized",
+              "account": "%s",
+              "created": %d,
+              "data": { "object": { "id": "ca_it", "object": "application", "name": "Skillars" } }
+            }
+            """.formatted(eventId, stripeAccountId, Instant.now().getEpochSecond());
+
+        postSigned(CONNECT_URL, payload, CONNECT_SECRET).andExpect(status().isOk());
+        postSigned(CONNECT_URL, payload, CONNECT_SECRET).andExpect(status().isOk());
+
+        Map<String, Object> row = accountRow();
+        assertThat(row.get("onboarding_status")).isEqualTo("RESTRICTED");
+        assertThat(row.get("charges_enabled")).isEqualTo(false);
+        assertThat(row.get("transfers_capability")).isEqualTo("deauthorized");
+        assertThat(eventRows()).isEqualTo(1);
+        // The alert is inserted AFTER_COMMIT in its own transaction; the request has returned by then.
+        Map<String, Object> alert = jdbcTemplate.queryForMap("SELECT type, reference_type, reason, "
+            + "(SELECT COUNT(*) FROM admin.admin_alerts a2 WHERE a2.reference_id = a.reference_id) AS n "
+            + "FROM admin.admin_alerts a WHERE reference_id = ?", coachId.toString());
+        assertThat(alert.get("type")).isEqualTo("PAYOUT_HELD");
+        assertThat(alert.get("reference_type")).isEqualTo("COACH");
+        assertThat((String) alert.get("reason")).startsWith("STRIPE_DEAUTHORIZED");
+        assertThat(((Number) alert.get("n")).intValue()).isEqualTo(1);
     }
 
     @Test

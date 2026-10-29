@@ -224,14 +224,24 @@ describe('AdminModerationPage.vue', () => {
       createdAt: '2026-01-01T10:00:00Z',
       summary: 'Card dispute on payment pi_1',
     }
+    // A coach-level held-payout alert (Stripe access revoked): no booking to open.
+    const coachHeld = {
+      alertId: 'a9',
+      type: 'PAYOUT_HELD',
+      referenceId: 'coach-9',
+      referenceType: 'COACH',
+      status: 'OPEN',
+      createdAt: '2026-01-01T10:00:00Z',
+      summary: 'Coach coach-9 disconnected the platform from their Stripe account',
+    }
     adminApi.getModerationQueue.mockResolvedValue({
-      content: [heldAlert, chargeback],
+      content: [heldAlert, chargeback, coachHeld],
       totalPages: 1,
     })
     adminApi.resolvePaymentAlert.mockResolvedValue(undefined)
     const wrapper = await mountPage()
 
-    expect(wrapper.findAll('[data-testid="alert-resolve-payment-btn"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="alert-resolve-payment-btn"]')).toHaveLength(3)
     // Only the payout alert references a booking.
     const bookingLinks = wrapper.findAll('[data-testid="alert-open-payout-booking-btn"]')
     expect(bookingLinks).toHaveLength(1)

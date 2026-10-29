@@ -430,6 +430,24 @@ class StripePaymentGatewayTest {
     }
 
     @Test
+    void transferToCoach_deauthorizedAccount_isNonRetryableHold() {
+        // fix/payment-stripe-connect-webhook-endpoint: account.application.deauthorized leaves this state.
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setOnboardingStatus("RESTRICTED");
+        account.setTransfersCapability(CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED);
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> {
+                    assertThat(e.isRetryable()).isFalse();
+                    assertThat(e.getReason()).isEqualTo("ACCOUNT_NOT_READY");
+                });
+        org.mockito.Mockito.verifyNoInteractions(stripeClient);
+    }
+
+    @Test
     void transferToCoach_restrictedLegacyAccount_isNonRetryableHold() {
         CoachStripeAccount account = new CoachStripeAccount();
         account.setStripeAccountId("acct_coach");

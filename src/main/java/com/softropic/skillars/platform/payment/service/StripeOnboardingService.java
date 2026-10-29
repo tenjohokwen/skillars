@@ -89,12 +89,15 @@ public class StripeOnboardingService {
             log.error("[STRIPE_OAUTH_NULL_USER_ID coachId={}]", coachId);
             throw new PaymentGatewayException("payment.providerUnavailable");
         }
-        self.upsertCoachStripeAccount(coachId, stripeUserId);
+        Instant connectedAt = clock.instant().truncatedTo(ChronoUnit.SECONDS);
+        self.upsertCoachStripeAccount(coachId, stripeUserId, connectedAt);
         log.info("[STRIPE_OAUTH_CALLBACK_SUCCESS coachId={} stripeAccountId={}]", coachId, stripeUserId);
         // A Standard account that already exists is often fully enabled at this point, and Stripe
-        // may send no account.updated at all for it. Read the status now instead of waiting.
+        // may send no account.updated at all for it. Read the status now instead of waiting. The
+        // fetch runs after the connect, so its snapshot is stamped with the connect time (equal to
+        // the marker the upsert set, so it applies).
         lastStatusSyncAttempt.put(coachId, clock.instant());
-        syncAccountFromStripe(coachId, stripeUserId);
+        syncAccountFromStripe(coachId, stripeUserId, connectedAt);
     }
 
     private TokenResponse exchangeOAuthCode(UUID coachId, String code) {
@@ -109,27 +112,32 @@ public class StripeOnboardingService {
         }
     }
 
+    /** Connect at the current time; see {@link #upsertCoachStripeAccount(UUID, String, Instant)}. */
+    @Transactional
+    public void upsertCoachStripeAccount(UUID coachId, String stripeUserId) {
+        upsertCoachStripeAccount(coachId, stripeUserId, clock.instant().truncatedTo(ChronoUnit.SECONDS));
+    }
+
     /**
      * Must be public so the Spring CGLIB proxy intercepts it and @Transactional is applied.
      * Self-calls from handleOAuthCallback go through self.upsertCoachStripeAccount (not this).
+     *
+     * <p>A (re)connect starts a new snapshot history: status PENDING, flags and transfers capability
+     * cleared (including the {@code deauthorized} sentinel, so a coach who disconnected can come
+     * back), and {@code last_event_created_at} set to {@code connectedAt}. Anything Stripe created
+     * before the connect, such as a late-delivered {@code account.application.deauthorized} or
+     * {@code account.updated} from the previous connection, is then ignored as stale.
      */
     @Transactional
-    public void upsertCoachStripeAccount(UUID coachId, String stripeUserId) {
+    public void upsertCoachStripeAccount(UUID coachId, String stripeUserId, Instant connectedAt) {
         coachStripeAccountRepository.findById(coachId).ifPresentOrElse(
             existing -> {
-                if (!stripeUserId.equals(existing.getStripeAccountId())) {
-                    // A different Stripe account: the old one's capability does not describe it.
-                    existing.setTransfersCapability(null);
-                }
-                // The row is reset to PENDING below, so the previous snapshot's ordering marker no
-                // longer describes it either; without clearing it, the post-callback fetch (whose
-                // snapshot time is deliberately conservative) could be skipped as "stale" and leave a
-                // re-connected, fully enabled account PENDING until its next account.updated.
-                existing.setLastEventCreatedAt(null);
                 existing.setStripeAccountId(stripeUserId);
                 existing.setOnboardingStatus("PENDING");
                 existing.setChargesEnabled(false);
                 existing.setPayoutsEnabled(false);
+                existing.setTransfersCapability(null);
+                existing.setLastEventCreatedAt(connectedAt);
                 // dirty-checking persists changes at transaction commit; entity is managed within this TX
             },
             () -> {
@@ -137,6 +145,7 @@ public class StripeOnboardingService {
                 acct.setCoachId(coachId);
                 acct.setStripeAccountId(stripeUserId);
                 acct.setOnboardingStatus("PENDING");
+                acct.setLastEventCreatedAt(connectedAt);
                 coachStripeAccountRepository.save(acct);
             }
         );
@@ -154,13 +163,20 @@ public class StripeOnboardingService {
             return new CoachStripeStatusResponse(coachId, "NOT_CONNECTED", false, false);
         }
         CoachStripeAccount account = stored.get();
+        // A disconnected account cannot be read by the platform any more; only a reconnect helps.
         if (!CoachStripeAccountStatusApplier.STATUS_COMPLETE.equals(account.getOnboardingStatus())
+                && !CoachStripeAccountStatusApplier.isDeauthorized(account)
                 && tryAcquireStatusSync(coachId)
-                && syncAccountFromStripe(coachId, account.getStripeAccountId())) {
+                && syncAccountFromStripe(coachId, account.getStripeAccountId(), pollSnapshotTime())) {
             account = coachStripeAccountRepository.findById(coachId).orElse(account);
         }
-        return new CoachStripeStatusResponse(
-            coachId, account.getOnboardingStatus(), account.isChargesEnabled(), account.isPayoutsEnabled());
+        return new CoachStripeStatusResponse(coachId, account.getOnboardingStatus(), account.isChargesEnabled(),
+            account.isPayoutsEnabled(), CoachStripeAccountStatusApplier.isDeauthorized(account));
+    }
+
+    /** Captured before the request: the fetched state is at least this new (minus the skew allowance). */
+    private Instant pollSnapshotTime() {
+        return clock.instant().truncatedTo(ChronoUnit.SECONDS).minus(FETCH_SNAPSHOT_SKEW_ALLOWANCE);
     }
 
     /** True at most once per {@link #STATUS_SYNC_MIN_INTERVAL} per coach (atomic per key). */
@@ -181,18 +197,17 @@ public class StripeOnboardingService {
     }
 
     /**
-     * Retrieves the connected account from Stripe (outside any DB transaction) and applies it through
+     * Retrieves the connected account from Stripe (outside any DB transaction) and applies it, as a
+     * snapshot taken at {@code snapshotAt}, through
      * {@link CoachStripeAccountStatusApplier}, the same rules as the {@code account.updated} webhook.
      * Never throws: this is a fallback, the webhook remains the primary path.
      *
      * @return true if the stored status was updated
      */
-    boolean syncAccountFromStripe(UUID coachId, String stripeAccountId) {
+    boolean syncAccountFromStripe(UUID coachId, String stripeAccountId, Instant snapshotAt) {
         if (stripeAccountId == null || stripeAccountId.isBlank()) {
             return false;
         }
-        // Captured before the request: the snapshot reflects Stripe's state at some point after this.
-        Instant snapshotAt = clock.instant().truncatedTo(ChronoUnit.SECONDS).minus(FETCH_SNAPSHOT_SKEW_ALLOWANCE);
         Account acct;
         try {
             acct = stripeClient.retrieveAccount(stripeAccountId);

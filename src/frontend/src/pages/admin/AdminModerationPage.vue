@@ -140,7 +140,7 @@
                 </template>
                 <template v-else-if="isPaymentIntegrityAlert(props.row.type)">
                   <q-btn
-                    v-if="isPayoutAlert(props.row.type)"
+                    v-if="isPayoutAlert(props.row.type) && props.row.referenceType === 'BOOKING'"
                     flat
                     dense
                     size="sm"

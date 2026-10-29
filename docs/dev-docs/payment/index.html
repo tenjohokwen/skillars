@@ -326,7 +326,7 @@
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/callback</td><td>OAuth redirect target. Validates <code>state</code>, exchanges the code, and redirects to the frontend settings page (with <code>?stripe_error=…</code> on failure)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/status</td><td>Onboarding/charges/payouts status</td><td>COACH</td></tr>
         <tr><td>POST</td><td>/api/payment/webhooks/stripe</td><td>Stripe webhook receiver for the platform account (<code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code>): 413 above 1&nbsp;MB, 400 on a bad signature, 500 on a processing failure so Stripe retries</td><td>permitAll</td></tr>
-        <tr><td>POST</td><td>/api/payment/webhooks/stripe/connect</td><td>Stripe Connect endpoint ("events on connected accounts", own secret <code>APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET</code>). Acts on <code>account.updated</code> only; same idempotency table and status codes</td><td>permitAll</td></tr>
+        <tr><td>POST</td><td>/api/payment/webhooks/stripe/connect</td><td>Stripe Connect endpoint ("events on connected accounts", own secret <code>APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET</code>). Acts on <code>account.updated</code> and <code>account.application.deauthorized</code> only; same idempotency table and status codes</td><td>permitAll</td></tr>
         <tr><td>GET</td><td>/api/payment/subscriptions/coach/tiers</td><td>Coach tier catalogue</td><td>permitAll</td></tr>
         <tr><td>GET</td><td>/api/payment/subscriptions/coach/me</td><td>Coach's subscription</td><td>COACH</td></tr>
         <tr><td>POST</td><td>/api/payment/subscriptions/coach/subscribe</td><td>Subscribe to a paid coach tier</td><td>COACH</td></tr>
@@ -438,7 +438,12 @@ sequenceDiagram
       OAuth callback and, at most every 30&nbsp;s per coach, when the status is read while not
       <code>COMPLETE</code>. Both paths go through <code>CoachStripeAccountStatusApplier</code> and respect
       <code>last_event_created_at</code>: a fetch records its snapshot as 30&nbsp;s before the request, so it
-      never overwrites a newer event. Charges and transfers
+      never overwrites a newer event. An OAuth (re)connect resets the row to <code>PENDING</code> and stamps
+      <code>last_event_created_at</code> with the connect time, so events from an earlier connection are stale.
+      <code>account.application.deauthorized</code> leaves the row <code>RESTRICTED</code> with the local
+      <code>transfers_capability</code> sentinel <code>deauthorized</code>: transfers go to <code>HOLD</code>,
+      later <code>account.updated</code> snapshots are ignored, and the status response reports
+      <code>disconnected: true</code> so the coach is offered a reconnect. Charges and transfers
       both require <code>COMPLETE</code> with <code>charges_enabled</code>.
     </p>
 
@@ -457,7 +462,9 @@ sequenceDiagram
   Svc->>Idem: INSERT eventId ON CONFLICT DO NOTHING (in TX)
   alt duplicate (0 rows)
     Idem-->>Svc: no-op
-  else account.updated (Connect endpoint acts on this type only)
+  else account.application.deauthorized (Connect endpoint)
+    Svc->>Svc: RESTRICTED, transfers_capability deauthorized, coach-level PAYOUT_HELD alert
+  else account.updated (Connect endpoint acts on these two types only)
     Svc->>Svc: set flags, status COMPLETE or RESTRICTED
     Svc-->>Svc: publish CoachStripeOnboardingCompleteEvent after commit
   else customer.subscription.updated / deleted
@@ -744,7 +751,8 @@ sequenceDiagram
       <code>invoice.payment_failed</code>, <code>invoice.paid</code>, <code>charge.dispute.created</code>/<code>closed</code> and
       <code>charge.refunded</code>, so trigger those, e.g.
       <code>stripe trigger customer.subscription.updated</code> or <code>stripe trigger charge.dispute.created</code>.
-      A deployed environment needs two endpoints: <code>account.updated</code> on the Connect endpoint,
+      A deployed environment needs two endpoints: <code>account.updated</code> and
+      <code>account.application.deauthorized</code> on the Connect endpoint,
       the rest on the account endpoint.</p>
       <p><strong>Use the standard secret key (<code>sk_test_...</code>), not a Restricted key
       (<code>rk_test_...</code>).</strong> Stripe only accepts <code>OAuth.token</code> (Connect onboarding)

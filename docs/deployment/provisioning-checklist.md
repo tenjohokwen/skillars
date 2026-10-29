@@ -495,7 +495,7 @@ logged at DEBUG and acknowledged):
 | Endpoint (per mode) | Dashboard setting | URL | Events (exact) | Secret env var |
 |---|---|---|---|---|
 | **Account** endpoint | "Events on your account" | `https://<DOMAIN>/api/payment/webhooks/stripe` | `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` | `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` |
-| **Connect** endpoint | "Events on connected accounts" | `https://<DOMAIN>/api/payment/webhooks/stripe/connect` | `account.updated` (`StripeWebhookService.CONNECT_EVENT_TYPES`) | `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` |
+| **Connect** endpoint | "Events on connected accounts" | `https://<DOMAIN>/api/payment/webhooks/stripe/connect` | `account.updated`, `account.application.deauthorized` (`StripeWebhookService.CONNECT_EVENT_TYPES`) | `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` |
 
 - [ ] Both endpoints created for PROD (live mode) and UAT (test mode): four endpoints in total.
 - [ ] Each endpoint's own signing secret copied into its env var (above). Swapping them makes both
@@ -521,6 +521,13 @@ logged at DEBUG and acknowledged):
     30 s per coach, while `GET /api/payment/coaches/me/stripe/status` is called on a non-`COMPLETE`
     account. Nothing re-reads a `COMPLETE` account, so a later restriction still depends on the
     webhook.
+  - `account.application.deauthorized` (Connect endpoint): the coach disconnected Skillars from their
+    Stripe account. The account becomes `RESTRICTED`, not payable (`transfers_capability =
+    'deauthorized'`), and one coach-level `PAYOUT_HELD` admin alert is raised (reason
+    `STRIPE_DEAUTHORIZED`). Pending payouts then go to `HOLD` instead of retrying; the coach sees a
+    reconnect button. After the coach reconnects through OAuth, release the held payouts by hand
+    (`runbook.md` → `HOLD`). Without this event, the app only learns of the disconnect when a
+    transfer fails.
   - UAT may subscribe to all events (`uat-deployment.md` Step 5). PROD should subscribe to the
     exact list above.
 - [ ] Deliveries are idempotent per event ID (`payment.stripe_webhook_events`,
@@ -864,6 +871,7 @@ an operator must now do.
 - 2026-10-29: PR fix/payment-stripe-connect-webhook-endpoint: clears the section 0 Stripe blocker.
   New endpoint `POST /api/payment/webhooks/stripe/connect` and env var
   `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` (all compose files). Create a Connect webhook endpoint
-  ("events on connected accounts", `account.updated`) at that URL in each mode, set its `whsec_`,
+  ("events on connected accounts", `account.updated` and `account.application.deauthorized`) at that
+  URL in each mode, set its `whsec_`,
   and repoint any existing Connect endpoint that still targets `/api/payment/webhooks/stripe`. No
   migration.

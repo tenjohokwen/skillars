@@ -19,14 +19,14 @@ import CoachPaymentSettingsPage from 'src/pages/coach/CoachPaymentSettingsPage.v
 
 const mounted = []
 
-async function mountAt(url) {
+async function mountAt(url, initialState = {}) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [{ path: '/coach/payment-settings', component: CoachPaymentSettingsPage }],
   })
   router.push(url)
   await router.isReady()
-  const pinia = createTestingPinia({ createSpy: vi.fn })
+  const pinia = createTestingPinia({ createSpy: vi.fn, initialState })
   const wrapper = mount(CoachPaymentSettingsPage, { global: { plugins: [pinia, router] } })
   mounted.push(wrapper)
   await flushPromises()
@@ -62,5 +62,36 @@ describe('CoachPaymentSettingsPage.vue — ?stripe_error banner', () => {
     await flushPromises()
     expect(router.currentRoute.value.query.stripe_error).toBeUndefined()
     expect(wrapper.find('.stripe-callback-error').exists()).toBe(false)
+  })
+})
+
+// fix/payment-stripe-connect-webhook-endpoint: account.application.deauthorized leaves the account
+// RESTRICTED with disconnected=true; the coach must be offered a reconnect, not "contact Stripe".
+describe('CoachPaymentSettingsPage.vue — disconnected Stripe account', () => {
+  const status = (extra) => ({
+    payment: {
+      stripeStatus: {
+        coachId: 'c1',
+        onboardingStatus: 'RESTRICTED',
+        chargesEnabled: false,
+        payoutsEnabled: false,
+        ...extra,
+      },
+    },
+  })
+
+  it('offers a reconnect when the coach disconnected the platform', async () => {
+    const { wrapper } = await mountAt('/coach/payment-settings', status({ disconnected: true }))
+    expect(wrapper.find('[data-testid="stripe-disconnected"]').text()).toContain(
+      'payment.stripe.disconnected',
+    )
+    expect(wrapper.find('[data-testid="stripe-reconnect-btn"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('payment.stripe.setupRestricted')
+  })
+
+  it('keeps the plain restricted message when still connected', async () => {
+    const { wrapper } = await mountAt('/coach/payment-settings', status({ disconnected: false }))
+    expect(wrapper.find('[data-testid="stripe-disconnected"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('payment.stripe.setupRestricted')
   })
 })

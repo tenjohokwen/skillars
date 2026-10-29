@@ -143,7 +143,7 @@ class StripeOnboardingStatusSyncTest {
     }
 
     @Test
-    void upsert_existingRow_clearsOrderingMarkerAndOldAccountCapability() {
+    void upsert_existingRow_resetsSnapshotHistoryToTheConnectTime() {
         CoachStripeAccount row = row("COMPLETE");
         row.setLastEventCreatedAt(NOW.minusSeconds(1));
         row.setTransfersCapability("active");
@@ -152,9 +152,39 @@ class StripeOnboardingStatusSyncTest {
         service.upsertCoachStripeAccount(COACH_ID, "acct_new");
 
         assertThat(row.getOnboardingStatus()).isEqualTo("PENDING");
-        assertThat(row.getLastEventCreatedAt()).isNull();
+        assertThat(row.getLastEventCreatedAt()).isEqualTo(NOW);
         assertThat(row.getTransfersCapability()).isNull();
         assertThat(row.getStripeAccountId()).isEqualTo("acct_new");
+    }
+
+    @Test
+    void reconnectAfterDeauthorization_clearsSentinel_andCallbackFetchApplies() throws Exception {
+        CoachStripeAccount row = row("RESTRICTED");
+        row.setTransfersCapability(CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED);
+        row.setLastEventCreatedAt(NOW.minusSeconds(60));
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+        when(stripeClient.retrieveAccount(ACCT)).thenReturn(account(ACCT, true, true, "active"));
+
+        // What handleOAuthCallback does after the OAuth code exchange.
+        service.upsertCoachStripeAccount(COACH_ID, ACCT, NOW);
+        boolean applied = service.syncAccountFromStripe(COACH_ID, ACCT, NOW);
+
+        assertThat(applied).isTrue();
+        assertThat(row.getOnboardingStatus()).isEqualTo("COMPLETE");
+        assertThat(row.getTransfersCapability()).isEqualTo("active");
+    }
+
+    @Test
+    void getStripeStatus_deauthorized_reportsDisconnected_withoutCallingStripe() throws Exception {
+        CoachStripeAccount row = row("RESTRICTED");
+        row.setTransfersCapability(CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED);
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+
+        CoachStripeStatusResponse status = service.getStripeStatus(COACH_ID);
+
+        assertThat(status.disconnected()).isTrue();
+        assertThat(status.onboardingStatus()).isEqualTo("RESTRICTED");
+        verify(stripeClient, never()).retrieveAccount(any());
     }
 
     private static CoachStripeAccount row(String status) {

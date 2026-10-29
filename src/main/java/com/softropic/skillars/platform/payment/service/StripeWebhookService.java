@@ -62,7 +62,7 @@ public class StripeWebhookService {
     static final Set<String> LIVE_SUBSCRIPTION_STATUSES = Set.of("active", "trialing", "past_due");
 
     /** Event types the Connect endpoint acts on (and the only ones it needs to be subscribed to). */
-    public static final Set<String> CONNECT_EVENT_TYPES = Set.of("account.updated");
+    public static final Set<String> CONNECT_EVENT_TYPES = Set.of("account.updated", "account.application.deauthorized");
 
     // skillars-deferred-133 AC3: subscribeCoach commits a placeholder payment.coach_subscriptions row
     // (coachId set, stripeSubscriptionId null) BEFORE its own Stripe call, then links
@@ -157,6 +157,8 @@ public class StripeWebhookService {
         }
         if ("account.updated".equals(event.getType())) {
             handleAccountUpdated(event);
+        } else if ("account.application.deauthorized".equals(event.getType())) {
+            handleAccountDeauthorized(event);
         } else {
             // Not in CONNECT_EVENT_TYPES: the coach's own business, not this platform's.
             log.debug("[STRIPE_CONNECT_WEBHOOK_IGNORED_TYPE type={} account={}]", event.getType(), event.getAccount());
@@ -231,6 +233,25 @@ public class StripeWebhookService {
         Instant eventCreated = event.getCreated() != null ? Instant.ofEpochSecond(event.getCreated()) : null;
         coachStripeAccountRepository.findByStripeAccountId(acct.getId()).ifPresent(coachAccount ->
             accountStatusApplier.apply(coachAccount, acct, eventCreated, "webhook:" + event.getId()));
+    }
+
+    /**
+     * fix/payment-stripe-connect-webhook-endpoint: the coach disconnected the platform from their
+     * Stripe account. The payload object is the platform's Application, not the account, so the
+     * account comes from {@code event.account}. An unknown account (never connected here, or replaced
+     * by a reconnect to a different account) is a no-op.
+     */
+    private void handleAccountDeauthorized(Event event) {
+        String stripeAccountId = event.getAccount();
+        if (stripeAccountId == null || stripeAccountId.isBlank()) {
+            log.warn("[STRIPE_ACCOUNT_DEAUTHORIZED_NO_ACCOUNT eventId={}] ignored", event.getId());
+            return;
+        }
+        Instant eventCreated = event.getCreated() != null ? Instant.ofEpochSecond(event.getCreated()) : null;
+        coachStripeAccountRepository.findByStripeAccountId(stripeAccountId).ifPresentOrElse(
+            coachAccount -> accountStatusApplier.applyDeauthorization(coachAccount, eventCreated, "webhook:" + event.getId()),
+            () -> log.info("[STRIPE_ACCOUNT_DEAUTHORIZED_UNKNOWN stripeAccountId={} eventId={}] no local account",
+                stripeAccountId, event.getId()));
     }
 
     private void handleSubscriptionUpdated(Event event) {

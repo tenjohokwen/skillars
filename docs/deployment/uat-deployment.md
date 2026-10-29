@@ -260,8 +260,11 @@ connected accounts. Each endpoint has its own signing secret.
      `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` in `.env.uat`
 3. **Connect endpoint** ("events on connected accounts"): add a second endpoint
    - URL: `https://<DOMAIN>/api/payment/webhooks/stripe/connect`
-   - Event: `account.updated` (the only Connect event the app acts on; it marks
-     a coach's onboarding `COMPLETE` or `RESTRICTED`)
+   - Events (the only Connect events the app acts on):
+     - `account.updated` — marks a coach's onboarding `COMPLETE` or `RESTRICTED`
+     - `account.application.deauthorized` — the coach disconnected Skillars in
+       Stripe: the account becomes not payable, payouts go to `HOLD`, an admin
+       `PAYOUT_HELD` alert is raised, and the coach is offered a reconnect
    - Copy its **Signing secret** into
      `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` in `.env.uat`
 
