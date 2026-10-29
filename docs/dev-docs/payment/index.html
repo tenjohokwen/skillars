@@ -325,7 +325,8 @@
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/onboard</td><td>Connect OAuth authorize URL</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/callback</td><td>OAuth redirect target. Validates <code>state</code>, exchanges the code, and redirects to the frontend settings page (with <code>?stripe_error=…</code> on failure)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/status</td><td>Onboarding/charges/payouts status</td><td>COACH</td></tr>
-        <tr><td>POST</td><td>/api/payment/webhooks/stripe</td><td>Stripe webhook receiver: 413 above 1&nbsp;MB, 400 on a bad signature, 500 on a processing failure so Stripe retries</td><td>permitAll</td></tr>
+        <tr><td>POST</td><td>/api/payment/webhooks/stripe</td><td>Stripe webhook receiver for the platform account (<code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code>): 413 above 1&nbsp;MB, 400 on a bad signature, 500 on a processing failure so Stripe retries</td><td>permitAll</td></tr>
+        <tr><td>POST</td><td>/api/payment/webhooks/stripe/connect</td><td>Stripe Connect endpoint ("events on connected accounts", own secret <code>APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET</code>). Acts on <code>account.updated</code> only; same idempotency table and status codes</td><td>permitAll</td></tr>
         <tr><td>GET</td><td>/api/payment/subscriptions/coach/tiers</td><td>Coach tier catalogue</td><td>permitAll</td></tr>
         <tr><td>GET</td><td>/api/payment/subscriptions/coach/me</td><td>Coach's subscription</td><td>COACH</td></tr>
         <tr><td>POST</td><td>/api/payment/subscriptions/coach/subscribe</td><td>Subscribe to a paid coach tier</td><td>COACH</td></tr>
@@ -430,8 +431,14 @@ sequenceDiagram
       controller checks that <code>state</code> equals the authenticated coach's id. This prevents CSRF
       account-linking. The final redirect goes through <code>FrontendLinkBuilder.resolve(callbackSuccessUrl)</code>,
       producing an absolute frontend URL with the hash router's <code>#/</code>; on failure,
-      <code>?stripe_error=</code> is appended. The account starts as <code>PENDING</code> and only becomes
-      <code>COMPLETE</code> later, through the <code>account.updated</code> webhook. Charges and transfers
+      <code>?stripe_error=</code> is appended. The account starts as <code>PENDING</code> and becomes
+      <code>COMPLETE</code> (or <code>RESTRICTED</code>) through the <code>account.updated</code> webhook, which
+      Stripe sends only to the Connect endpoint. As a fallback for a missed webhook,
+      <code>StripeOnboardingService</code> calls <code>StripeClient.retrieveAccount</code> right after the
+      OAuth callback and, at most every 30&nbsp;s per coach, when the status is read while not
+      <code>COMPLETE</code>. Both paths go through <code>CoachStripeAccountStatusApplier</code> and respect
+      <code>last_event_created_at</code>: a fetch records its snapshot as 30&nbsp;s before the request, so it
+      never overwrites a newer event. Charges and transfers
       both require <code>COMPLETE</code> with <code>charges_enabled</code>.
     </p>
 
@@ -444,13 +451,13 @@ sequenceDiagram
   participant Idem as stripe_webhook_events
   participant Sub as SubscriptionService
 
-  Stripe->>WH: POST /webhooks/stripe (Stripe-Signature)
-  WH->>Svc: processWebhook(payload, sigHeader)
-  Svc->>Svc: Webhook.constructEvent (outside TX)
+  Stripe->>WH: POST /webhooks/stripe or /webhooks/stripe/connect (Stripe-Signature)
+  WH->>Svc: processWebhook or processConnectWebhook(payload, sigHeader)
+  Svc->>Svc: Webhook.constructEvent with that endpoint's secret (outside TX)
   Svc->>Idem: INSERT eventId ON CONFLICT DO NOTHING (in TX)
   alt duplicate (0 rows)
     Idem-->>Svc: no-op
-  else account.updated
+  else account.updated (Connect endpoint acts on this type only)
     Svc->>Svc: set flags, status COMPLETE or RESTRICTED
     Svc-->>Svc: publish CoachStripeOnboardingCompleteEvent after commit
   else customer.subscription.updated / deleted
@@ -599,9 +606,12 @@ sequenceDiagram
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Never skip webhook signature verification or idempotency.</strong> <code>/api/payment/webhooks/stripe</code>
-      has to be <code>permitAll</code> (Stripe sends no session cookies), so <code>Webhook.constructEvent(...)</code>
+      and <code>/api/payment/webhooks/stripe/connect</code> have to be <code>permitAll</code> (Stripe sends no session cookies), so <code>Webhook.constructEvent(...)</code>
       is the only protection against forged events. Any new handler must go through
-      <code>StripeWebhookService.handleEventAtomically</code>.</p>
+      <code>StripeWebhookService.handleEventAtomically</code> (platform account) or
+      <code>handleConnectEventAtomically</code> (connected accounts). Coaches are Standard accounts, so
+      the Connect stream also carries the coach's own business events; never route those into the
+      platform handlers.</p>
     </div>
     <div class="callout warn">
       <p><strong>Stripe SDK calls stay outside <code>@Transactional</code>, and the split is done with a self-proxy.</strong>
@@ -723,9 +733,9 @@ sequenceDiagram
       <p>Stripe can only deliver webhooks to a publicly reachable URL, and <code>localhost</code> isn't one.
       For local work, use the <a href="https://docs.stripe.com/stripe-cli">Stripe CLI</a> to forward
       test-mode events to your machine:</p>
-      <pre>stripe listen --forward-to localhost:9990/api/payment/webhooks/stripe</pre>
-      <p>The first run prints a <code>whsec_...</code> signing secret. Set it as
-      <code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code>; the CLI signs forwarded events with its own key, which
+      <pre>stripe listen --forward-to localhost:9990/api/payment/webhooks/stripe --forward-connect-to localhost:9990/api/payment/webhooks/stripe/connect</pre>
+      <p>The first run prints a <code>whsec_...</code> signing secret. Set it as both
+      <code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code> and <code>APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET</code>; the CLI signs forwarded events with its own key, which
       differs from any Dashboard secret. Set <code>APP_PAYMENT_STRIPE_API_KEY</code> to a
       <code>sk_test_...</code> key (a live key refuses to boot outside the <code>prod</code> profile). Set
       <code>APP_PAYMENT_STRIPE_PUBLISHABLE_KEY</code> to the matching <code>pk_test_...</code> key, which the
@@ -734,7 +744,8 @@ sequenceDiagram
       <code>invoice.payment_failed</code>, <code>invoice.paid</code>, <code>charge.dispute.created</code>/<code>closed</code> and
       <code>charge.refunded</code>, so trigger those, e.g.
       <code>stripe trigger customer.subscription.updated</code> or <code>stripe trigger charge.dispute.created</code>.
-      A deployed webhook endpoint must be subscribed to all of them.</p>
+      A deployed environment needs two endpoints: <code>account.updated</code> on the Connect endpoint,
+      the rest on the account endpoint.</p>
       <p><strong>Use the standard secret key (<code>sk_test_...</code>), not a Restricted key
       (<code>rk_test_...</code>).</strong> Stripe only accepts <code>OAuth.token</code> (Connect onboarding)
       with the account's standard secret key.</p>

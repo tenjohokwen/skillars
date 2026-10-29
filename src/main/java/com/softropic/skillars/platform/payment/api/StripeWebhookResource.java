@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.function.BiConsumer;
 
 @RestController
 @RequestMapping("/api/payment")
@@ -29,25 +30,43 @@ public class StripeWebhookResource {
 
     private static final int MAX_WEBHOOK_BODY_BYTES = 1_048_576; // 1 MB — Stripe payloads are always small
 
+    /** Platform-account endpoint: signed with {@code app.payment.stripe.webhook-secret}. */
     @PostMapping("/webhooks/stripe")
     @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
     public ResponseEntity<?> handleStripeWebhook(HttpServletRequest request) throws IOException {
+        return receive(request, webhookService::processWebhook);
+    }
+
+    /**
+     * fix/payment-stripe-connect-webhook-endpoint: Connect endpoint ("events on connected accounts"),
+     * signed with its own {@code app.payment.stripe.connect-webhook-secret}. Carries the coaches'
+     * {@code account.updated}, the event that marks Connect onboarding {@code COMPLETE}.
+     */
+    @PostMapping("/webhooks/stripe/connect")
+    @PreAuthorize(SecurityConstants.IS_PERMIT_ALL)
+    public ResponseEntity<?> handleStripeConnectWebhook(HttpServletRequest request) throws IOException {
+        return receive(request, webhookService::processConnectWebhook);
+    }
+
+    private ResponseEntity<?> receive(HttpServletRequest request, BiConsumer<String, String> processor)
+            throws IOException {
         // P25: reject oversized bodies before buffering — IS_PERMIT_ALL endpoint is unauthenticated
         int contentLength = request.getContentLength();
         if (contentLength > MAX_WEBHOOK_BODY_BYTES) {
-            log.warn("[STRIPE_WEBHOOK_OVERSIZED length={}]", contentLength);
+            log.warn("[STRIPE_WEBHOOK_OVERSIZED length={} path={}]", contentLength, request.getRequestURI());
             return ResponseEntity.status(413).build();
         }
         String payload = new String(request.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
         String sigHeader = request.getHeader("Stripe-Signature");
         try {
-            webhookService.processWebhook(payload, sigHeader);
+            processor.accept(payload, sigHeader);
             return ResponseEntity.ok().build();
         } catch (WebhookSignatureException e) {
             return ResponseEntity.badRequest()
                 .body(new ErrorDto(e.getErrorCode(), new ErrorMsg(e.getErrorCode(), e.getErrorCode())));
         } catch (Exception e) {
-            log.error("[STRIPE_WEBHOOK_PROCESSING_FAILED errorMessage={}]", e.getMessage(), e);
+            log.error("[STRIPE_WEBHOOK_PROCESSING_FAILED path={} errorMessage={}]",
+                request.getRequestURI(), e.getMessage(), e);
             return ResponseEntity.internalServerError().build();
         }
     }

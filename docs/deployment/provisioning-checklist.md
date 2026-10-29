@@ -45,22 +45,12 @@ Verified against master `fea08bae` (2026-10-29).
 These items cannot be closed by configuration alone, or they contradict an existing doc. Each
 needs an owner decision or a code or doc fix before PROD serves real users.
 
-- [ ] **Stripe needs two webhook endpoints, but the code verifies only one signing secret.**
-  `StripeWebhookService.verifySignature` checks every delivery against the single
-  `app.payment.stripe.webhook-secret` (`PaymentProperties.webhookSecret`). Coaches connect
-  through OAuth as Standard accounts (`StripeOnboardingService`, `scope=read_write`), so their
-  `account.updated` events are sent only to a **Connect** endpoint ("events on connected
-  accounts"). Every other handled event (subscriptions, invoices, disputes, refunds) belongs to the
-  platform account and goes to an **account** endpoint. Stripe gives each endpoint its own `whsec_`
-  secret, so whichever endpoint's secret is *not* configured gets HTTP 400
-  `payment.webhookSignatureInvalid` on every delivery. Nothing else moves a coach from `PENDING`
-  to `COMPLETE`: the OAuth callback sets `PENDING` (`StripeOnboardingService`), and only
-  `handleAccountUpdated` sets `COMPLETE`/`RESTRICTED`. There is no `Account.retrieve` fallback
-  anywhere. The fix is a code change: accept a second secret (e.g.
-  `app.payment.stripe.connect-webhook-secret`), or try a list of secrets. Until that ships, coach
-  onboarding on PROD cannot complete. `uat-deployment.md` Step 5 tells you to tick "Listen to
-  events on Connected accounts" for `account.updated` only. That is a per-endpoint setting in
-  Stripe, not a per-event one **(confirm in the current Dashboard)**.
+- [x] ~~**Stripe needs two webhook endpoints, but the code verifies only one signing secret.**~~
+  Resolved by `fix/payment-stripe-connect-webhook-endpoint`: the Connect endpoint now has its own
+  path (`/api/payment/webhooks/stripe/connect`) and secret (`APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET`),
+  and the onboarding status is also read from Stripe (`Account.retrieve`) when the coach returns
+  from OAuth and while it is not yet `COMPLETE`. Provision both endpoints as described in
+  [section 4.3](#43-webhook-endpoints-and-exact-event-lists).
 - [ ] **Never seed PROD's JWT signing key from `src/test/resources/sql/secData.sql`.**
   `uat-hostwinds-deployment.md` Step 8 and `local/deployment.md` Step 5 seed `main.sec` from that
   fixture. Its encrypted key is committed to the repository, so anyone with repo access could forge
@@ -212,7 +202,8 @@ Spring `${X:default}` default.
 | `DOMAIN`, `LETSENCRYPT_EMAIL` | required | required | no routing / no TLS | `docker-compose.yml` |
 | `POSTGRES_PASSWORD` | required | required | DB will not init | `docker-compose.yml` |
 | `APP_PAYMENT_STRIPE_API_KEY` | `sk_live_`/`rk_live_` | `sk_test_` only | boot aborts if blank; a live key aborts outside `prod` | `PaymentConfig` |
-| `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` | live `whsec_` | test `whsec_` | every webhook gets 400 (see [section 0](#0-open-issues-found-while-compiling-this-checklist)) | `StripeWebhookService` |
+| `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` | live `whsec_` of the **account** endpoint | test `whsec_` of the account endpoint | every subscription/invoice/dispute/refund webhook gets 400 | `StripeWebhookService.processWebhook` |
+| `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` | live `whsec_` of the **Connect** endpoint | test `whsec_` of the Connect endpoint | every `account.updated` gets 400 (logged `STRIPE_CONNECT_WEBHOOK_SECRET_MISSING` if blank); coach status then moves only through the slower `Account.retrieve` fallback | `StripeWebhookService.processConnectWebhook` |
 | `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` | `pk_live_` | `pk_test_` | card entry, SetupIntent and pack purchase broken | `SessionPackPaymentResource` `/api/payment/stripe/config` |
 | `APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID` | live `ca_` | test `ca_` | coach Connect onboarding broken | `StripeOnboardingService` |
 | `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | `https://<DOMAIN>/api/payment/coaches/me/stripe/callback` | same with UAT host | Stripe rejects the relative compose default. **Compose's relative default overrides `application-uat.yaml`'s absolute one**, so UAT must set it too | `docker-compose.yml`, `application-uat.yaml` |
@@ -493,20 +484,27 @@ Scenarios 4 and 5, `docs/dev-docs/payment/index.html`.
 
 ### 4.3 Webhook endpoints and exact event lists
 
-The only endpoint is `POST /api/payment/webhooks/stripe` (`StripeWebhookResource`, permit-all,
-1 MB body cap, signature checked against `app.payment.stripe.webhook-secret`). Event types
-handled, taken from the `equals("…")` branches in `StripeWebhookService.handleEventAtomically`
-(anything else is logged at DEBUG and acknowledged):
+Stripe needs **two** endpoints per mode, because a connected account's events (coaches are OAuth
+Standard accounts, `StripeOnboardingService`, `scope=read_write`) are delivered only to an endpoint
+that listens to "events on connected accounts", and Stripe gives every endpoint its own `whsec_`
+signing secret. Both paths are served by `StripeWebhookResource` (permit-all, 1 MB body cap) and
+share the idempotency table. Event types handled, taken from the `equals("…")` branches in
+`StripeWebhookService.handleEventAtomically` / `handleConnectEventAtomically` (anything else is
+logged at DEBUG and acknowledged):
 
-| Endpoint (per mode) | URL | Events (exact) |
-|---|---|---|
-| **Account** endpoint ("Your account") | `https://<DOMAIN>/api/payment/webhooks/stripe` | `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` |
-| **Connect** endpoint ("Connected accounts") | same URL | `account.updated` |
+| Endpoint (per mode) | Dashboard setting | URL | Events (exact) | Secret env var |
+|---|---|---|---|---|
+| **Account** endpoint | "Events on your account" | `https://<DOMAIN>/api/payment/webhooks/stripe` | `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` | `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` |
+| **Connect** endpoint | "Events on connected accounts" | `https://<DOMAIN>/api/payment/webhooks/stripe/connect` | `account.updated` (`StripeWebhookService.CONNECT_EVENT_TYPES`) | `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` |
 
-- [ ] Both endpoints created for PROD (live mode) and UAT (test mode).
-- [ ] Signing secret wired: `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` holds **one** `whsec_`. With two
-  endpoints, one of them fails verification until the code accepts two secrets. **Blocker,
-  see [section 0](#0-open-issues-found-while-compiling-this-checklist).**
+- [ ] Both endpoints created for PROD (live mode) and UAT (test mode): four endpoints in total.
+- [ ] Each endpoint's own signing secret copied into its env var (above). Swapping them makes both
+  fail with 400 `payment.webhookSignatureInvalid`.
+- [ ] Do **not** subscribe the Connect endpoint to subscription, invoice, charge or dispute events.
+  For a Standard account those are the coach's own business, not this platform's. The Connect
+  path records and ignores them, so subscribing to them only adds noise.
+- [ ] Do not point the Connect endpoint at `/api/payment/webhooks/stripe` (the old "same URL"
+  advice): that path verifies only the account secret.
 - [ ] Easy to miss:
   - `invoice.paid` returns a recovered `PAST_DUE` subscription to `ACTIVE` and resets the grace
     clock. Without it, a paying subscriber can be cancelled at grace expiry.
@@ -517,7 +515,12 @@ handled, taken from the `equals("…")` branches in `StripeWebhookService.handle
     cut or cancel the payout of a session that completes after a lost one. No new event types.
   - `charge.refunded` covers refunds made in the Dashboard (raises an `EXTERNAL_REFUND` admin
     alert).
-  - `account.updated` is the **only** path that marks a coach's Connect account `COMPLETE`.
+  - `account.updated` (Connect endpoint) is the primary path that marks a coach's Connect account
+    `COMPLETE` or `RESTRICTED` (and records the `transfers` capability that gates payouts). The
+    fallback reads the account from Stripe when the coach returns from OAuth and, at most every
+    30 s per coach, while `GET /api/payment/coaches/me/stripe/status` is called on a non-`COMPLETE`
+    account. Nothing re-reads a `COMPLETE` account, so a later restriction still depends on the
+    webhook.
   - UAT may subscribe to all events (`uat-deployment.md` Step 5). PROD should subscribe to the
     exact list above.
 - [ ] Deliveries are idempotent per event ID (`payment.stripe_webhook_events`,
@@ -813,8 +816,9 @@ Detail: [`deploy-guide.md`](deploy-guide.md), [`rollback.md`](rollback.md), [`ru
 - [ ] End-to-end booking with test card `4242 4242 4242 4242`: a parent books a published coach,
   the coach accepts, and the charge appears in the Stripe Dashboard under **Test mode** only.
 - [ ] Coach Connect onboarding completes: the coach status reaches `COMPLETE` (`GET
-  /api/payment/coaches/me/stripe/status`). This proves `account.updated` is delivered **and**
-  verified ([section 0](#0-open-issues-found-while-compiling-this-checklist)).
+  /api/payment/coaches/me/stripe/status`). The `Account.retrieve` fallback can do this on its own,
+  so also check that the **Connect** endpoint (`/api/payment/webhooks/stripe/connect`) shows an
+  `account.updated` delivery with **200** in the Dashboard.
 - [ ] Stripe Dashboard → Webhooks: each endpoint shows recent deliveries with **200** (green). No
   `400 payment.webhookSignatureInvalid` in `docker compose logs app`.
 - [ ] Optional dispute test: test card `4000 0000 0000 0259` creates a dispute, and an admin
@@ -857,3 +861,9 @@ an operator must now do.
 - 2026-10-29: PR #350 (fix/payment-pack-refund-rounding). There is no new provisioning step. V200 runs
   automatically. Run its post-migration reconciliation query ([3.2](#32-pre-migration-data-checks)) on
   an upgraded UAT/PROD database. V200 joins the "prod is not live" list in section 0.
+- 2026-10-29: PR fix/payment-stripe-connect-webhook-endpoint: clears the section 0 Stripe blocker.
+  New endpoint `POST /api/payment/webhooks/stripe/connect` and env var
+  `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` (all compose files). Create a Connect webhook endpoint
+  ("events on connected accounts", `account.updated`) at that URL in each mode, set its `whsec_`,
+  and repoint any existing Connect endpoint that still targets `/api/payment/webhooks/stripe`. No
+  migration.

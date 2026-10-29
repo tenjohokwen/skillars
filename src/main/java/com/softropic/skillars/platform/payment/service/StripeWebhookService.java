@@ -3,7 +3,6 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
-import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
 import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
 import com.softropic.skillars.platform.payment.contract.exception.WebhookSignatureException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
@@ -31,8 +30,6 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -64,6 +61,9 @@ public class StripeWebhookService {
     // API needs one status per call) instead of duplicating this 3-status literal set a second time.
     static final Set<String> LIVE_SUBSCRIPTION_STATUSES = Set.of("active", "trialing", "past_due");
 
+    /** Event types the Connect endpoint acts on (and the only ones it needs to be subscribed to). */
+    public static final Set<String> CONNECT_EVENT_TYPES = Set.of("account.updated");
+
     // skillars-deferred-133 AC3: subscribeCoach commits a placeholder payment.coach_subscriptions row
     // (coachId set, stripeSubscriptionId null) BEFORE its own Stripe call, then links
     // stripeSubscriptionId in a later, separate transaction (persistCoachSubscription) — a
@@ -83,6 +83,7 @@ public class StripeWebhookService {
     private final StripeCustomerRepository stripeCustomerRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final MeterRegistry meterRegistry;
+    private final CoachStripeAccountStatusApplier accountStatusApplier;
 
     private Counter invoicePaymentFailedCounter;
 
@@ -112,8 +113,54 @@ public class StripeWebhookService {
         if (sigHeader == null || sigHeader.isBlank()) {
             throw new WebhookSignatureException("payment.webhookSignatureInvalid");
         }
-        Event event = verifySignature(payload, sigHeader);
+        Event event = verifySignature(payload, sigHeader, paymentProperties.getWebhookSecret());
         self.handleEventAtomically(event);
+    }
+
+    /**
+     * fix/payment-stripe-connect-webhook-endpoint: entry point for the Stripe <em>Connect</em> webhook
+     * endpoint ("events on connected accounts"). Stripe signs it with that endpoint's own secret
+     * ({@code app.payment.stripe.connect-webhook-secret}), distinct from the platform-account
+     * endpoint's. Only {@link #CONNECT_EVENT_TYPES} are acted on; see {@link #handleConnectEventAtomically}.
+     */
+    public void processConnectWebhook(String payload, String sigHeader) {
+        if (sigHeader == null || sigHeader.isBlank()) {
+            throw new WebhookSignatureException("payment.webhookSignatureInvalid");
+        }
+        String secret = paymentProperties.getConnectWebhookSecret();
+        if (secret == null || secret.isBlank()) {
+            // Fail closed and loud: a 400 keeps Stripe retrying (for days) while the operator sets
+            // APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET, instead of silently accepting forged events.
+            log.error("[STRIPE_CONNECT_WEBHOOK_SECRET_MISSING] app.payment.stripe.connect-webhook-secret is blank; "
+                + "rejecting Connect webhook delivery");
+            throw new WebhookSignatureException("payment.webhookSignatureInvalid");
+        }
+        Event event = verifySignature(payload, sigHeader, secret);
+        self.handleConnectEventAtomically(event);
+    }
+
+    /**
+     * Connect-endpoint counterpart of {@link #handleEventAtomically}, with the same idempotency record
+     * ({@code payment.stripe_webhook_events}, keyed on the globally unique event id) and the same
+     * duplicate handling. Coaches are Standard accounts with their own Stripe business, so the
+     * Connect endpoint can also carry the coach's <em>own</em> subscriptions, invoices, charges and
+     * disputes. Those are not this platform's objects (bookings are charged on the platform account
+     * and paid out by Transfer), so only account-scoped types are processed here; anything else is
+     * recorded and acknowledged.
+     */
+    @Transactional
+    public void handleConnectEventAtomically(Event event) {
+        int inserted = webhookEventRepository.insertIfAbsent(event.getId(), event.getType());
+        if (inserted == 0) {
+            log.debug("[STRIPE_WEBHOOK_DUPLICATE id={}]", event.getId());
+            return;
+        }
+        if ("account.updated".equals(event.getType())) {
+            handleAccountUpdated(event);
+        } else {
+            // Not in CONNECT_EVENT_TYPES: the coach's own business, not this platform's.
+            log.debug("[STRIPE_CONNECT_WEBHOOK_IGNORED_TYPE type={} account={}]", event.getType(), event.getAccount());
+        }
     }
 
     /**
@@ -150,9 +197,9 @@ public class StripeWebhookService {
         }
     }
 
-    private Event verifySignature(String payload, String sigHeader) {
+    private Event verifySignature(String payload, String sigHeader, String secret) {
         try {
-            return Webhook.constructEvent(payload, sigHeader, paymentProperties.getWebhookSecret());
+            return Webhook.constructEvent(payload, sigHeader, secret);
         } catch (SignatureVerificationException e) {
             throw new WebhookSignatureException("payment.webhookSignatureInvalid", e);
         }
@@ -173,47 +220,17 @@ public class StripeWebhookService {
             log.warn("[STRIPE_WEBHOOK_NULL_ACCOUNT type={}]", event.getType());
             return;
         }
+        // A Connect delivery names the connected account in event.account; for account.updated that is
+        // the same id as the payload object. A mismatch is a malformed or misrouted event: ignore it
+        // rather than apply one account's snapshot to another account's row.
+        if (event.getAccount() != null && !event.getAccount().equals(acct.getId())) {
+            log.warn("[STRIPE_ACCOUNT_UPDATED_ACCOUNT_MISMATCH eventId={} eventAccount={} objectId={}] ignored",
+                event.getId(), event.getAccount(), acct.getId());
+            return;
+        }
         Instant eventCreated = event.getCreated() != null ? Instant.ofEpochSecond(event.getCreated()) : null;
-        coachStripeAccountRepository.findByStripeAccountId(acct.getId()).ifPresent(coachAccount -> {
-            // fix/payment-payouts-disputes-webhooks: Stripe does not deliver events in order — a snapshot
-            // older than the one last applied must not overwrite it (same-second events still apply).
-            if (eventCreated != null && coachAccount.getLastEventCreatedAt() != null
-                    && eventCreated.isBefore(coachAccount.getLastEventCreatedAt())) {
-                log.info("[STRIPE_ACCOUNT_UPDATED_STALE stripeAccountId={} eventId={} created={} lastApplied={}] ignored",
-                    acct.getId(), event.getId(), eventCreated, coachAccount.getLastEventCreatedAt());
-                return;
-            }
-            if (eventCreated != null) {
-                coachAccount.setLastEventCreatedAt(eventCreated);
-            }
-            // A Transfer to the account needs its `transfers` capability active (StripePaymentGateway).
-            if (acct.getCapabilities() != null) {
-                coachAccount.setTransfersCapability(acct.getCapabilities().getTransfers());
-            }
-            boolean charges = Boolean.TRUE.equals(acct.getChargesEnabled());
-            boolean payouts = Boolean.TRUE.equals(acct.getPayoutsEnabled());
-            coachAccount.setChargesEnabled(charges);
-            coachAccount.setPayoutsEnabled(payouts);
-            if (charges && payouts) {
-                coachAccount.setOnboardingStatus("COMPLETE");
-                // P23: publish after TX commit so listeners see the persisted COMPLETE status
-                UUID coachIdToNotify = coachAccount.getCoachId();
-                if (TransactionSynchronizationManager.isSynchronizationActive()) {
-                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                        @Override
-                        public void afterCommit() {
-                            eventPublisher.publishEvent(new CoachStripeOnboardingCompleteEvent(coachIdToNotify));
-                        }
-                    });
-                } else {
-                    eventPublisher.publishEvent(new CoachStripeOnboardingCompleteEvent(coachIdToNotify));
-                }
-            } else {
-                coachAccount.setOnboardingStatus("RESTRICTED");
-            }
-            log.info("[STRIPE_ACCOUNT_UPDATED stripeAccountId={} chargesEnabled={} payoutsEnabled={} status={}]",
-                acct.getId(), charges, payouts, coachAccount.getOnboardingStatus());
-        });
+        coachStripeAccountRepository.findByStripeAccountId(acct.getId()).ifPresent(coachAccount ->
+            accountStatusApplier.apply(coachAccount, acct, eventCreated, "webhook:" + event.getId()));
     }
 
     private void handleSubscriptionUpdated(Event event) {

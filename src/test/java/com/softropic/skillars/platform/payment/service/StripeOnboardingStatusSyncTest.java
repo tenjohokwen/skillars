@@ -1,0 +1,208 @@
+package com.softropic.skillars.platform.payment.service;
+
+import com.softropic.skillars.platform.payment.config.PaymentProperties;
+import com.softropic.skillars.platform.payment.contract.CoachStripeStatusResponse;
+import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
+import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
+import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
+import com.stripe.exception.ApiConnectionException;
+import com.stripe.model.Account;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * fix/payment-stripe-connect-webhook-endpoint: the onboarding fallback that retrieves the connected
+ * account from Stripe so a missed {@code account.updated} cannot leave a coach stuck in PENDING.
+ */
+@ExtendWith(MockitoExtension.class)
+class StripeOnboardingStatusSyncTest {
+
+    private static final UUID COACH_ID = UUID.fromString("dddddddd-1111-2222-3333-eeeeeeeeeeee");
+    private static final String ACCT = "acct_sync_1";
+    private static final Instant NOW = Instant.parse("2026-10-29T12:00:00Z");
+
+    @Mock CoachStripeAccountRepository repository;
+    @Mock StripeClient stripeClient;
+    @Mock ApplicationEventPublisher eventPublisher;
+
+    private MutableClock clock;
+    private StripeOnboardingService service;
+
+    @BeforeEach
+    void setUp() {
+        clock = new MutableClock(NOW);
+        service = new StripeOnboardingService(repository, new PaymentProperties(), stripeClient,
+            new CoachStripeAccountStatusApplier(eventPublisher), clock);
+        ReflectionTestUtils.setField(service, "self", service);
+    }
+
+    @Test
+    void getStripeStatus_pending_fetchesAccountAndCompletes() throws Exception {
+        CoachStripeAccount row = row("PENDING");
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+        when(stripeClient.retrieveAccount(ACCT)).thenReturn(account(ACCT, true, true, "active"));
+
+        CoachStripeStatusResponse status = service.getStripeStatus(COACH_ID);
+
+        assertThat(status.onboardingStatus()).isEqualTo("COMPLETE");
+        assertThat(status.chargesEnabled()).isTrue();
+        assertThat(row.getTransfersCapability()).isEqualTo("active");
+        // Conservative snapshot time: the request start minus the skew allowance.
+        assertThat(row.getLastEventCreatedAt())
+            .isEqualTo(NOW.minus(StripeOnboardingService.FETCH_SNAPSHOT_SKEW_ALLOWANCE));
+        verify(eventPublisher).publishEvent(any(CoachStripeOnboardingCompleteEvent.class));
+    }
+
+    @Test
+    void getStripeStatus_complete_doesNotCallStripe() throws Exception {
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row("COMPLETE")));
+
+        assertThat(service.getStripeStatus(COACH_ID).onboardingStatus()).isEqualTo("COMPLETE");
+
+        verify(stripeClient, never()).retrieveAccount(any());
+    }
+
+    @Test
+    void getStripeStatus_notConnected_doesNotCallStripe() throws Exception {
+        when(repository.findById(COACH_ID)).thenReturn(Optional.empty());
+
+        assertThat(service.getStripeStatus(COACH_ID).onboardingStatus()).isEqualTo("NOT_CONNECTED");
+
+        verify(stripeClient, never()).retrieveAccount(any());
+    }
+
+    @Test
+    void getStripeStatus_repeatedPolls_rateLimitedPerCoach() throws Exception {
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row("PENDING")));
+        when(stripeClient.retrieveAccount(ACCT)).thenReturn(account(ACCT, false, false, "inactive"));
+
+        service.getStripeStatus(COACH_ID);
+        clock.advance(Duration.ofSeconds(5));
+        service.getStripeStatus(COACH_ID);
+        verify(stripeClient, times(1)).retrieveAccount(ACCT);
+
+        clock.advance(StripeOnboardingService.STATUS_SYNC_MIN_INTERVAL);
+        service.getStripeStatus(COACH_ID);
+        verify(stripeClient, times(2)).retrieveAccount(ACCT);
+    }
+
+    @Test
+    void getStripeStatus_newerWebhookAlreadyApplied_fetchDoesNotOverwrite() throws Exception {
+        // An account.updated created after the fetch's snapshot point said RESTRICTED: the fetch
+        // (which Stripe may have served from before that change) must not flip it back.
+        CoachStripeAccount row = row("RESTRICTED");
+        Instant newerEvent = NOW.minusSeconds(5);
+        row.setLastEventCreatedAt(newerEvent);
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+        when(stripeClient.retrieveAccount(ACCT)).thenReturn(account(ACCT, true, true, "active"));
+
+        CoachStripeStatusResponse status = service.getStripeStatus(COACH_ID);
+
+        assertThat(status.onboardingStatus()).isEqualTo("RESTRICTED");
+        assertThat(row.getLastEventCreatedAt()).isEqualTo(newerEvent);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void getStripeStatus_stripeUnavailable_returnsStoredStatus() throws Exception {
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row("PENDING")));
+        when(stripeClient.retrieveAccount(ACCT)).thenThrow(new ApiConnectionException("down"));
+
+        assertThat(service.getStripeStatus(COACH_ID).onboardingStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void applyFetchedAccount_rowNowPointsAtDifferentAccount_skipped() {
+        CoachStripeAccount row = row("PENDING");
+        row.setStripeAccountId("acct_reconnected");
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+
+        boolean applied = service.applyFetchedAccount(COACH_ID, account(ACCT, true, true, "active"), NOW);
+
+        assertThat(applied).isFalse();
+        assertThat(row.getOnboardingStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void upsert_existingRow_clearsOrderingMarkerAndOldAccountCapability() {
+        CoachStripeAccount row = row("COMPLETE");
+        row.setLastEventCreatedAt(NOW.minusSeconds(1));
+        row.setTransfersCapability("active");
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+
+        service.upsertCoachStripeAccount(COACH_ID, "acct_new");
+
+        assertThat(row.getOnboardingStatus()).isEqualTo("PENDING");
+        assertThat(row.getLastEventCreatedAt()).isNull();
+        assertThat(row.getTransfersCapability()).isNull();
+        assertThat(row.getStripeAccountId()).isEqualTo("acct_new");
+    }
+
+    private static CoachStripeAccount row(String status) {
+        CoachStripeAccount a = new CoachStripeAccount();
+        a.setCoachId(COACH_ID);
+        a.setStripeAccountId(ACCT);
+        a.setOnboardingStatus(status);
+        a.setChargesEnabled("COMPLETE".equals(status));
+        a.setPayoutsEnabled("COMPLETE".equals(status));
+        return a;
+    }
+
+    private static Account account(String id, boolean charges, boolean payouts, String transfers) {
+        Account a = new Account();
+        a.setId(id);
+        a.setChargesEnabled(charges);
+        a.setPayoutsEnabled(payouts);
+        Account.Capabilities caps = new Account.Capabilities();
+        caps.setTransfers(transfers);
+        a.setCapabilities(caps);
+        return a;
+    }
+
+    /** Settable clock: the rate-limit window is checked against it. */
+    private static final class MutableClock extends Clock {
+        private Instant now;
+
+        MutableClock(Instant now) {
+            this.now = now;
+        }
+
+        void advance(Duration d) {
+            now = now.plus(d);
+        }
+
+        @Override
+        public java.time.ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(java.time.ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+    }
+}

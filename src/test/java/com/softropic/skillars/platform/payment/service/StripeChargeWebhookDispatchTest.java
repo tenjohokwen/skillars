@@ -56,7 +56,8 @@ class StripeChargeWebhookDispatchTest {
         webhookService = new StripeWebhookService(
             coachStripeAccountRepository, webhookEventRepository, new PaymentProperties(), eventPublisher,
             paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
-            stripeCustomerRepository, coachProfileRepository, new SimpleMeterRegistry());
+            stripeCustomerRepository, coachProfileRepository, new SimpleMeterRegistry(),
+            new CoachStripeAccountStatusApplier(eventPublisher));
         ReflectionTestUtils.setField(webhookService, "chargeDisputeWebhookService", chargeDisputeWebhookService);
         webhookService.initializeCounters();
         when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
