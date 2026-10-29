@@ -10,6 +10,8 @@ Follow this guide end-to-end to bring up a live, TLS-enabled production environm
 You will need: SSH access to a fresh server, a secrets file, a registered domain, and cloud provider account.
 All deployment instructions are contained in this repository.
 
+> **Go-live checklist:** work through [`provisioning-checklist.md`](provisioning-checklist.md) alongside this guide. It covers secrets, Stripe, database checks, seed data and smoke tests for PROD and UAT.
+
 ---
 
 ## Prerequisites
