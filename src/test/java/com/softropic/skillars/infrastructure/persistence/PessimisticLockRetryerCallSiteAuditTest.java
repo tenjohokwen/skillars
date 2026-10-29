@@ -73,6 +73,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Now 56 as of feat/payment-forfeit-payouts-and-clawback's {@code RefundClawbackService.rededuct}: a
  * read-only {@code findByIdForUpdate(packId).orElse(null)} on the pack row; the remaining-sessions check
  * and {@code PackSessionService.deductSession} run after {@code withBoundedRetry} returns.
+ * Now 58 as of fix/payment-pack-refund-rounding's {@code PackRefundAllocationService.allocateSessionRefund}
+ * and {@code releaseSessionRefund}: each a read-only {@code findByIdForUpdate(packId).orElse(null)} on the
+ * pack row; the marker insert/delete, the ledger update and {@code save} run after it returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -164,7 +167,7 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 56;
+    private static final int EXPECTED_CALL_SITE_COUNT = 58;
 
     private record CallSite(String file, int line, String argument) {
     }
