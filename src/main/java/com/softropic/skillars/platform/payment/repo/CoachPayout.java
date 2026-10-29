@@ -59,6 +59,41 @@ public class CoachPayout {
     private BigDecimal netAmount;
 
     /**
+     * fix/payment-payout-recovery (V205): the payout as first computed, before any dispute / chargeback cut.
+     * A refund's coach share is computed from it, and an {@code UPHOLD_COACH} restores the payout to it.
+     * Null only on a row written before V205 that the backfill did not reach — read through
+     * {@link #getOriginalNet()} and friends, which fall back to the current amounts.
+     */
+    @Column(name = "original_net_amount", precision = 10, scale = 2)
+    private BigDecimal originalNetAmount;
+
+    @Column(name = "original_gross_amount", precision = 10, scale = 2)
+    private BigDecimal originalGrossAmount;
+
+    @Column(name = "original_commission_amount", precision = 10, scale = 2)
+    private BigDecimal originalCommissionAmount;
+
+    /**
+     * fix/payment-payout-recovery (V205): what {@code UPHOLD_COACH} top-up transfers paid the coach on top of
+     * {@link #stripeTransferId} (whose net was reversed, or released already cut). Informational: the top-up
+     * is folded back into {@code net_amount} / {@code reversed_amount}, so {@link #getEffectiveNetAmount()}
+     * and the reporting queries need no change.
+     */
+    @Column(name = "topup_amount", nullable = false, precision = 10, scale = 2)
+    private BigDecimal topupAmount = BigDecimal.ZERO;
+
+    @Column(name = "topup_transfer_id")
+    private String topupTransferId;
+
+    /**
+     * fix/payment-payout-recovery (V205): the part of the net withheld from this payout's transfer to repay
+     * the coach's debt ({@code coach_payout_debts}). The transfer at Stripe carried
+     * {@code net_amount - debt_offset_amount}; the coach still earned the whole net.
+     */
+    @Column(name = "debt_offset_amount", nullable = false, precision = 10, scale = 2)
+    private BigDecimal debtOffsetAmount = BigDecimal.ZERO;
+
+    /**
      * fix/payment-payouts-disputes-webhooks (V193): what has been reversed from the released transfer
      * so far. A partial reversal keeps the row {@code RELEASED}; the coach's earned net is
      * {@link #getEffectiveNetAmount()}.
@@ -114,6 +149,31 @@ public class CoachPayout {
         BigDecimal reversed = reversedAmount == null ? BigDecimal.ZERO : reversedAmount;
         BigDecimal net = netAmount == null ? BigDecimal.ZERO : netAmount;
         return net.subtract(reversed).max(BigDecimal.ZERO);
+    }
+
+    /** The net as first computed (before any cut); the current net for a pre-V205 row without one. */
+    public BigDecimal getOriginalNet() {
+        return originalNetAmount != null ? originalNetAmount : netAmount;
+    }
+
+    /** The gross as first computed; the current gross for a pre-V205 row without one. */
+    public BigDecimal getOriginalGross() {
+        return originalGrossAmount != null ? originalGrossAmount : grossAmount;
+    }
+
+    /** The commission as first computed; the current commission for a pre-V205 row without one. */
+    public BigDecimal getOriginalCommission() {
+        return originalCommissionAmount != null ? originalCommissionAmount : commissionAmount;
+    }
+
+    /**
+     * What is still sitting in the coach's connected account from this payout's transfers and can be
+     * reversed there: the transfers carried {@code net - debt_offset}, of which {@code reversed} is already
+     * back. Never negative.
+     */
+    public BigDecimal getReversibleAtStripe() {
+        BigDecimal offset = debtOffsetAmount == null ? BigDecimal.ZERO : debtOffsetAmount;
+        return getEffectiveNetAmount().subtract(offset).max(BigDecimal.ZERO);
     }
 
     /** Gross pro rata to the net the coach kept (same formula as the reporting queries). */

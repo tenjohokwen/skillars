@@ -45,6 +45,7 @@ public class CoachPayoutAdjustmentService {
     private final CoachPayoutRepository coachPayoutRepository;
     private final CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     private final CoachPayoutOutboxSupport coachPayoutOutboxSupport;
+    private final CoachPayoutDebtService coachPayoutDebtService;
 
     /** What {@link #applyRefund} did to the payout. */
     public enum RefundOutcome { NONE, REDUCED, CANCELLED, REVERSAL_ENQUEUED }
@@ -105,7 +106,10 @@ public class CoachPayoutAdjustmentService {
 
     /**
      * The coach-side of {@code parentRefund} going back to the payer out of {@code parentPrice} paid for
-     * the session. The coach bears {@code net * parentRefund / parentPrice}:
+     * the session. The coach bears {@code net * parentRefund / parentPrice}, where {@code net} is the payout
+     * as first computed ({@link CoachPayout#getOriginalNet()}) and {@code parentPrice} the full price —
+     * fix/payment-payout-recovery: a second partial refund on a pending payout used to take its share of
+     * the already-cut net, so the coach kept more than when both refunds landed after release:
      * <ul>
      *   <li>RELEASED — a {@code COACH_PAYOUT_REVERSAL} for that share (capped at what is still with the
      *       coach) is enqueued;</li>
@@ -120,7 +124,7 @@ public class CoachPayoutAdjustmentService {
         if (parentRefund == null || parentRefund.signum() <= 0) {
             return RefundOutcome.NONE;
         }
-        BigDecimal share = coachShareOfRefund(row.getNetAmount(), parentRefund, parentPrice);
+        BigDecimal share = coachShareOfRefund(row.getOriginalNet(), parentRefund, parentPrice);
         if (share.signum() <= 0) {
             return RefundOutcome.NONE;
         }
@@ -168,7 +172,15 @@ public class CoachPayoutAdjustmentService {
      *       credit row is always recomputable (from {@code booking_payments}); a pack row only when its pack
      *       share was never allocated ({@link CoachPayoutOutboxSupport#isRecomputable}) — one that settled at
      *       0.00 stays as it is, so the session is never settled twice on the pack ledger;</li>
-     *   <li>anything else — left as it is (only its dispute freeze is lifted).</li>
+     *   <li>fix/payment-payout-recovery — PENDING_RELEASE / HOLD / FROZEN (or CANCELLED with a net) cut by an
+     *       earlier refund — net, gross and commission restored to the payout as first computed before it is
+     *       released (a HOLD keeps its status and pays the restored net once re-driven);</li>
+     *   <li>fix/payment-payout-recovery — RELEASED / REVERSED short of the full net (an earlier refund reversed
+     *       part or all of it, or it released after a pending cut) — the coach's debt for the booking (a
+     *       reversal Stripe refused) is waived, and a {@code COACH_PAYOUT_TOPUP} transfer of what is still
+     *       missing is enqueued ({@link CoachPayoutTopUpHandler});</li>
+     *   <li>anything else (FAILED_PERMANENT, REVERSAL_FAILED with no transfer) — left as it is (only its
+     *       dispute freeze is lifted).</li>
      * </ul>
      *
      * @return the coach's net now owed or paid for the booking (zero when nothing could be computed)
@@ -201,7 +213,29 @@ public class CoachPayoutAdjustmentService {
                 .orElse(BigDecimal.ZERO);
         }
         row.setDisputeFrozen(false);
-        if (CoachPayoutStatus.CANCELLED.equals(row.getStatus())) {
+        String status = row.getStatus();
+        if (CoachPayoutStatus.REVERSAL_FAILED.equals(status) && row.getStripeTransferId() != null) {
+            // A reversal Stripe refused before V205 left the money with the coach — which UPHOLD_COACH now says
+            // is theirs. Back to RELEASED (reported as earned again).
+            row.setStatus(CoachPayoutStatus.RELEASED);
+            log.info("[COACH_PAYOUT_UPHOLD] booking={} — REVERSAL_FAILED payout back to RELEASED", bookingId);
+            status = CoachPayoutStatus.RELEASED;
+        }
+        if (CoachPayoutStatus.RELEASED.equals(status) || CoachPayoutStatus.REVERSED.equals(status)) {
+            return topUpReleased(row);
+        }
+        if (!isUnreleased(status) && !CoachPayoutStatus.CANCELLED.equals(status)) {
+            coachPayoutRepository.save(row);
+            log.warn("[COACH_PAYOUT_UPHOLD] booking={} — payout is {} ({}), not paid automatically; operator follow-up",
+                bookingId, status, row.getLastError());
+            return row.getEffectiveNetAmount();
+        }
+        // fix/payment-payout-recovery: an earlier refund cut this pending payout; the coach is owed the full net.
+        if (restoreOriginal(row)) {
+            log.info("[COACH_PAYOUT_UPHOLD] booking={} — pending payout ({}) restored to its full net {}", bookingId,
+                status, row.getNetAmount());
+        }
+        if (CoachPayoutStatus.CANCELLED.equals(status)) {
             // Reinstate: FROZEN + releaseIfUnfrozen is the one path that re-checks every freeze reason and
             // enqueues exactly one transfer. The hold already ran when the row was first written.
             row.setStatus(CoachPayoutStatus.FROZEN);
@@ -211,6 +245,58 @@ public class CoachPayoutAdjustmentService {
         }
         releaseIfUnfrozen(row);
         return row.getEffectiveNetAmount();
+    }
+
+    /**
+     * fix/payment-payout-recovery: {@code UPHOLD_COACH} on a released payout. Its transfer was reversed in part
+     * or whole by an earlier refund (or it released already cut), so the coach has less than the full net.
+     * <ol>
+     *   <li>the coach's outstanding debt for this booking (a reversal Stripe refused, so the coach still holds
+     *       that money) is waived and comes off {@code reversed_amount};</li>
+     *   <li>what is still missing is paid by a {@code COACH_PAYOUT_TOPUP} transfer — its own Stripe transfer,
+     *       because the booking's {@code transfer-{bookingId}} key and transfer are spent.
+     *       {@link CoachPayoutTopUpHandler} folds it back into the row when it succeeds.</li>
+     * </ol>
+     */
+    private BigDecimal topUpReleased(CoachPayout row) {
+        UUID bookingId = row.getBookingId();
+        BigDecimal waived = coachPayoutDebtService.waiveForBooking(bookingId);
+        if (waived.signum() > 0) {
+            BigDecimal reversed = row.getReversedAmount() == null ? BigDecimal.ZERO : row.getReversedAmount();
+            row.setReversedAmount(reversed.subtract(waived).max(BigDecimal.ZERO));
+            if (CoachPayoutStatus.REVERSED.equals(row.getStatus()) && row.getEffectiveNetAmount().signum() > 0) {
+                row.setStatus(CoachPayoutStatus.RELEASED);
+            }
+        }
+        BigDecimal fullNet = row.getOriginalNet();
+        BigDecimal owed = fullNet.subtract(row.getEffectiveNetAmount());
+        coachPayoutRepository.save(row);
+        if (owed.signum() > 0) {
+            coachPayoutOutboxSupport.enqueueTopUp(bookingId, owed);
+            log.info("[COACH_PAYOUT_UPHOLD] booking={} — payout {} kept {} of the full net {} (debt waived {}); "
+                + "top-up transfer of {} enqueued", bookingId, row.getStatus(), row.getEffectiveNetAmount(), fullNet,
+                waived, owed);
+        } else {
+            log.info("[COACH_PAYOUT_UPHOLD] booking={} — released payout already carries the full net {} (debt "
+                + "waived {})", bookingId, fullNet, waived);
+        }
+        return fullNet;
+    }
+
+    /**
+     * Puts a cut, not-yet-released payout back to its amounts as first computed.
+     *
+     * @return true when anything changed
+     */
+    static boolean restoreOriginal(CoachPayout row) {
+        BigDecimal original = row.getOriginalNet();
+        if (original == null || row.getNetAmount() == null || original.compareTo(row.getNetAmount()) <= 0) {
+            return false;
+        }
+        row.setNetAmount(original);
+        row.setGrossAmount(row.getOriginalGross());
+        row.setCommissionAmount(row.getOriginalCommission());
+        return true;
     }
 
     /**
@@ -290,7 +376,7 @@ public class CoachPayoutAdjustmentService {
             row.setStatus(CoachPayoutStatus.FROZEN);
             row.setLastError(reason);
         }
-        // HOLD stays HOLD (the operator owns it; the flag stops the release once they re-enqueue) and
+        // HOLD stays HOLD (the flag stops the release once CoachPayoutHoldRecoveryService re-drives it) and
         // FROZEN keeps its first reason in last_error.
         coachPayoutRepository.save(row);
     }

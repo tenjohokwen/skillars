@@ -471,31 +471,45 @@ the `booking_id` / `coach_id` / `reason`. A retryable failure never reaches thes
 
 The coach disconnected, closed, or restricted their Stripe connected account between
 `BookingCompletedEvent` and the transfer (or the `transfers` capability is not active). The payout is
-blocked and the handler will not retry on its own (a `HOLD` is a decision, not a transient error).
+blocked. While Stripe is still reviewing the account (`transfers` capability `pending`, or a fresh
+reconnect that has no status yet), the transfer is **retried** with the outbox backoff instead
+(`coach.payout.transfer_retry{reason=ACCOUNT_PENDING}`) and never reaches `HOLD`.
+
+**Recovery is automatic** (fix/payment-payout-recovery): when an `account.updated` webhook or the
+onboarding status sync shows the account can receive transfers again, `CoachPayoutHoldRecoveryService`
+re-drives every `HOLD` payout of that coach. Each payout is re-checked for freezes and gets one transfer
+message (`[COACH_PAYOUT_HOLD_RECOVERY]` log lines). Nothing else is needed after the coach reconnects or
+uploads the documents Stripe asked for.
 
 If the Connect endpoint received `account.application.deauthorized`, there is also one coach-level
 `PAYOUT_HELD` admin alert (reference type `COACH`, reason `STRIPE_DEAUTHORIZED acct_…`), and the
 coach's account row has `onboarding_status = 'RESTRICTED'`, `transfers_capability = 'deauthorized'`.
 The coach's payment-settings page shows a reconnect button; reconnecting clears the sentinel. Mark
-that alert handled once the held payouts below are released.
+that alert handled once the held payouts are released.
 
 1. **Message the coach** (adapt to the channel in use):
    > *"Your Stripe payout account was disconnected before we could release payment for session
-   > {ref}. Please reconnect it at {link}, then reply here — we'll verify and retry automatically."*
-2. When the coach confirms and the account shows `COMPLETE` + `charges_enabled` again, flip the row
-   back and re-enqueue exactly one outbox message:
+   > {ref}. Please reconnect it at {link} — payment is retried automatically once it is active."*
+2. If the payouts are still `HOLD` after the account shows `COMPLETE` (a missed webhook, say), re-drive
+   them from the admin API. Do not use SQL:
 
-   ```sql
-   UPDATE payment.coach_payouts
-      SET status = 'PENDING_RELEASE', last_error = NULL, updated_at = now()
-    WHERE booking_id = '<booking-id>' AND status = 'HOLD';
-
-   INSERT INTO main.outbox_messages (aggregate_type, payload)
-   VALUES ('COACH_PAYOUT_TRANSFER', jsonb_build_object('bookingId', '<booking-id>'));
+   ```bash
+   curl -X POST -H "Authorization: Bearer <admin-token>" \
+     https://<api-host>/api/admin/payment/coaches/<coach-id>/payouts/release-held
+   # -> {"released": n, "stillFrozen": n, "skipped": n}
    ```
 
-   The next drain (≤ 5 min, or trigger the sweep) picks it up. The handler re-checks
-   `status = PENDING_RELEASE` and `release_after`, so a double-insert is harmless.
+   It is safe to repeat. A payout whose account still cannot receive goes back to `HOLD`, or is retried
+   while Stripe is pending. `stillFrozen` counts payouts that an open dispute or safety hold still holds.
+   Their own resolution releases them.
+
+**`last_error` starting `TRANSFER_AMOUNT_MISMATCH` / `TRANSFER_DESTINATION_MISMATCH`** is never re-driven,
+neither automatically nor by the endpoint. A Stripe transfer already exists for this booking
+(`transfer_group` = booking id) for a different amount, or to a different connected account. The usual
+cause is a response lost at Stripe, followed by a dispute that cut the payout or a coach who reconnected
+a different account before the retry. Compare the Stripe transfer with the row and reverse the
+difference in the Stripe Dashboard (or move the row to `RELEASED` with that transfer id when the amounts
+agree). Then mark the alert handled.
 
 ### Stale `FROZEN` / `HOLD` — the safety net
 
@@ -521,22 +535,38 @@ A part already spent or cashed out raises a `CHARGEBACK` alert on the dispute id
 `CREDIT_SHORTFALL ...`: the platform absorbs it, so decide whether to pursue the payer. Won: the credit
 comes back as `CHARGEBACK_CREDIT_RESTORE`. Lost: the reversal stands.
 
-### `REVERSAL_FAILED` — coach withdrew the balance / account closed (B.7.3)
+### Reversal refused — coach debt (B.7.3)
 
-A dispute was upheld after the payout `RELEASED`, a `COACH_PAYOUT_REVERSAL` ran, and
-`Transfer.createReversal` failed non-retryably (the connected-account balance no longer covers it).
-There is no automatic recovery.
+A refund after the payout `RELEASED` ran a `COACH_PAYOUT_REVERSAL`, and Stripe refused it non-retryably.
+Usually the coach's balance was already paid out to their bank (`COACH_BALANCE_INSUFFICIENT`), or the
+account was closed. Since fix/payment-payout-recovery the row is **not** parked in `REVERSAL_FAILED`.
+The reversal is booked on the row (`reversed_amount`, `last_error` starting `REVERSAL_DEBT`), and the
+amount is recorded in `payment.coach_payout_debts` (status `OPEN`). A `PAYOUT_REVERSAL_FAILED` admin alert
+is raised (reason `COACH_DEBT <amount> <reason>`) and `coach.payout.debt_recorded` is incremented. The
+coach's next transfers repay it automatically, oldest debt first (`coach_payouts.debt_offset_amount`,
+`[COACH_PAYOUT_DEBT_OFFSET]`). An `UPHOLD_COACH` on the booking waives it. Part of a net that was withheld
+to repay debt never reached Stripe, so a later refund of it is recorded as debt too
+(`NOTHING_LEFT_AT_STRIPE`).
 
-1. Establish what is actually recoverable in Stripe — partial reversal, negative balance, or the
-   coach must repay out of band.
-2. Record the manual reversal / recovery once done:
+```sql
+SELECT coach_id, booking_id, amount, recovered_amount, status, reason, created_at
+FROM payment.coach_payout_debts WHERE status = 'OPEN' ORDER BY coach_id, created_at;
+```
 
-   ```sql
-   UPDATE payment.coach_payouts
-      SET status = 'REVERSED', reversed_at = now(),
-          last_error = 'manual reversal by <operator>, <ref>', updated_at = now()
-    WHERE booking_id = '<booking-id>' AND status = 'REVERSAL_FAILED';
-   ```
+Act only when a coach has left the platform with debt outstanding: pursue it out of band, then mark it
+`WAIVED`, with a note in `reason`.
+
+`REVERSAL_FAILED` is now written only for a `RELEASED` row with no `stripe_transfer_id`
+(`NO_TRANSFER_ID`, a data error to reconcile by hand), and by releases before this one. A further refund
+on a `REVERSAL_FAILED` row is recorded as coach debt (`AFTER_REVERSAL_FAILED`) and alerted. To close a
+pre-existing `REVERSAL_FAILED` row once it is recovered by hand:
+
+```sql
+UPDATE payment.coach_payouts
+   SET status = 'REVERSED', reversed_at = now(),
+       last_error = 'manual reversal by <operator>, <ref>', updated_at = now()
+ WHERE booking_id = '<booking-id>' AND status = 'REVERSAL_FAILED';
+```
 
 ### `FAILED_PERMANENT` — unrecoverable (operator-only)
 

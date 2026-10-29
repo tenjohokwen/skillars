@@ -21,8 +21,11 @@ package com.softropic.skillars.platform.payment.contract;
  *   PENDING_RELEASE --whole net refunded by a dispute-> CANCELLED  (no money moved)
  *   PENDING_RELEASE --in-app / card dispute opened--> FROZEN      (dispute_frozen / chargeback_frozen)
  *   RELEASED        --reversal of the whole net----> REVERSED     (a partial one stays RELEASED, reversed_amount)
- *   RELEASED        --non-retryable reversal err-> REVERSAL_FAILED
- *   HOLD            --operator "coach reconnected"-> PENDING_RELEASE (re-enqueues one outbox message)
+ *   RELEASED        --non-retryable reversal err-> RELEASED / REVERSED + coach debt (V205, coach_payout_debts)
+ *   RELEASED        --no stripe_transfer_id to reverse-> REVERSAL_FAILED
+ *   RELEASED / REVERSED --UPHOLD_COACH top-up transfer-> RELEASED (net restored, COACH_PAYOUT_TOPUP)
+ *   HOLD            --account can receive again / admin re-drive-> PENDING_RELEASE or FROZEN
+ *                     (CoachPayoutHoldRecoveryService; re-enqueues one outbox message)
  *   HOLD / REVERSAL_FAILED --explicit operator SQL-> FAILED_PERMANENT (unrecoverable; runbook only)
  *   PENDING_RELEASE --coach under CSAM safety hold-> FROZEN       (CoachPayoutFreezeService / transfer handler)
  *   FROZEN          --last freeze reason lifted----> PENDING_RELEASE (re-enqueues one outbox message)

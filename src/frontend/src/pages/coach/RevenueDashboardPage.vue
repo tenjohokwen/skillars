@@ -47,6 +47,10 @@
           <div class="text-caption text-secondary">{{ t('revenue.refunds') }}</div>
           <div class="text-h5 text-warning">€{{ fmt(summary.refundsIssued) }}</div>
         </div>
+        <div v-if="summary.heldCount > 0" class="col summary-card glass-card q-pa-md text-center">
+          <div class="text-caption text-secondary">{{ t('revenue.held') }}</div>
+          <div class="text-h5 text-warning">€{{ fmt(summary.heldAmount) }}</div>
+        </div>
         <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.sessions') }}</div>
           <div class="text-h5">{{ summary.sessionCount }}</div>

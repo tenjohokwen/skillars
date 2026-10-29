@@ -154,16 +154,32 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
                                              @Param("from") Instant from,
                                              @Param("to") Instant to);
 
+    /**
+     * fix/payment-payout-recovery: completed sessions whose payout is FROZEN (dispute / safety hold) or HOLD
+     * (the coach's Stripe account cannot receive yet) — earned but not moving. Dated by {@code created_at}, like
+     * the pending-release line.
+     */
     @Query(value = """
-        SELECT p.booking_id
+        SELECT COALESCE(SUM(p.net_amount), 0)
         FROM payment.coach_payouts p
         WHERE p.coach_id = :coachId
-          AND p.status = 'RELEASED'
-          AND p.released_at BETWEEN :from AND :to
+          AND p.status IN ('FROZEN', 'HOLD')
+          AND p.created_at BETWEEN :from AND :to
         """, nativeQuery = true)
-    List<UUID> findReleasedBookingIdsByCoachAndPeriod(@Param("coachId") UUID coachId,
-                                                      @Param("from") Instant from,
-                                                      @Param("to") Instant to);
+    BigDecimal sumHeldNetByCoachAndPeriod(@Param("coachId") UUID coachId,
+                                          @Param("from") Instant from,
+                                          @Param("to") Instant to);
+
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM payment.coach_payouts p
+        WHERE p.coach_id = :coachId
+          AND p.status IN ('FROZEN', 'HOLD')
+          AND p.created_at BETWEEN :from AND :to
+        """, nativeQuery = true)
+    long countHeldByCoachAndPeriod(@Param("coachId") UUID coachId,
+                                   @Param("from") Instant from,
+                                   @Param("to") Instant to);
 
     /**
      * AC12.1/AC12.2 transaction list: RELEASED and PENDING_RELEASE payouts for a coach, newest
@@ -230,4 +246,35 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
     @Query("SELECT p FROM CoachPayout p WHERE p.status IN ('FROZEN', 'HOLD') AND p.updatedAt < :cutoff "
         + "ORDER BY p.updatedAt, p.bookingId")
     List<CoachPayout> findStaleUnreleased(@Param("cutoff") Instant cutoff, Pageable pageable);
+
+    /**
+     * fix/payment-payout-recovery: the next page of {@link #findStaleUnreleased} after the keyset
+     * {@code (afterUpdatedAt, afterBookingId)}. The scheduler is read-only (it never touches {@code updated_at}),
+     * so re-reading page 0 every run never got past the oldest {@code BATCH_SIZE} rows.
+     */
+    @Query(value = """
+        SELECT p.* FROM payment.coach_payouts p
+        WHERE p.status IN ('FROZEN', 'HOLD') AND p.updated_at < :cutoff
+          AND (p.updated_at, p.booking_id) > (:afterUpdatedAt, :afterBookingId)
+        ORDER BY p.updated_at, p.booking_id
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<CoachPayout> findStaleUnreleasedAfter(@Param("cutoff") Instant cutoff,
+                                               @Param("afterUpdatedAt") Instant afterUpdatedAt,
+                                               @Param("afterBookingId") UUID afterBookingId,
+                                               @Param("limit") int limit);
+
+    /**
+     * fix/payment-payout-recovery: a page of the coach's HOLD payout ids after {@code afterBookingId}
+     * (booking-id keyset), for the HOLD re-drive — each id is then locked and re-driven in its own transaction.
+     * Unlocked on purpose: the per-row transaction re-checks the status under {@link #findByIdForUpdate}.
+     */
+    @Query(value = """
+        SELECT p.booking_id FROM payment.coach_payouts p
+        WHERE p.coach_id = :coachId AND p.status = 'HOLD' AND p.booking_id > :afterBookingId
+        ORDER BY p.booking_id
+        LIMIT :limit
+        """, nativeQuery = true)
+    List<UUID> findHoldIdsByCoachAfter(@Param("coachId") UUID coachId, @Param("afterBookingId") UUID afterBookingId,
+                                       @Param("limit") int limit);
 }

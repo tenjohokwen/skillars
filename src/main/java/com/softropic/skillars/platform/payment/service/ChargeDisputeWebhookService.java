@@ -165,7 +165,8 @@ public class ChargeDisputeWebhookService {
         for (CoachPayout row : coachPayoutRepository.findFundedByPaymentIntentForUpdate(pi)) {
             if (lost) {
                 BigDecimal refund = cardPortion(row).multiply(fraction).setScale(2, RoundingMode.HALF_UP);
-                if (adjustmentService.applyRefund(row, refund, row.getGrossAmount(), "CHARGEBACK_LOST")
+                // fix/payment-payout-recovery: the payout as first computed — a cut row's gross is no longer the price.
+                if (adjustmentService.applyRefund(row, refund, row.getOriginalGross(), "CHARGEBACK_LOST")
                         != CoachPayoutAdjustmentService.RefundOutcome.NONE) {
                     adjusted++;
                 }
@@ -241,7 +242,7 @@ public class ChargeDisputeWebhookService {
     /** What the disputed card charge paid of this payout's session: the pack share, or the booking's card part. */
     private BigDecimal cardPortion(CoachPayout row) {
         if (row.getSessionPackPurchaseId() != null) {
-            return row.getGrossAmount();
+            return row.getOriginalGross();
         }
         return bookingPaymentRepository.findById(row.getBookingId())
             .map(BookingPayment::getStripeCharged)

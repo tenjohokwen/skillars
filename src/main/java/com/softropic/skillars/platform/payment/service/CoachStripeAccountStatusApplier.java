@@ -98,6 +98,12 @@ public class CoachStripeAccountStatusApplier {
             publishOnboardingCompleteAfterCommit(coachAccount.getCoachId());
         } else {
             coachAccount.setOnboardingStatus(STATUS_RESTRICTED);
+            // fix/payment-payout-recovery: a transfer needs only the `transfers` capability (see
+            // StripePaymentGateway.transferReadiness), so an active capability on an otherwise restricted account
+            // must also wake the HOLD re-drive (CoachPayoutHoldRecoveryService), which re-checks readiness itself.
+            if ("active".equalsIgnoreCase(coachAccount.getTransfersCapability())) {
+                publishOnboardingCompleteAfterCommit(coachAccount.getCoachId());
+            }
         }
         log.info("[STRIPE_ACCOUNT_UPDATED stripeAccountId={} source={} chargesEnabled={} payoutsEnabled={} status={}]",
             acct.getId(), source, charges, payouts, coachAccount.getOnboardingStatus());

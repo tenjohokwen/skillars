@@ -24,8 +24,8 @@ import java.util.List;
  * booking. The alert queue keeps one OPEN alert per booking and type, so a payout still stuck on the next
  * run only refreshes the reason. Read-only: it never moves a payout.
  *
- * <p>Daily at 06:30 server time, one instance at a time (ShedLock). At most {@link #BATCH_SIZE} payouts per
- * run, oldest first; the rest are picked up on later runs.
+ * <p>Daily at 06:30 server time, one instance at a time (ShedLock). Reads {@link #BATCH_SIZE} payouts per page,
+ * oldest first, paging by keyset through all of them (at most {@link #MAX_PAGES} pages per run).
  */
 @Slf4j
 @Component
@@ -37,6 +37,8 @@ public class StalePayoutAlertScheduler {
     static final long MIN_DAYS = 1L;
     static final long MAX_DAYS = 365L;
     static final int BATCH_SIZE = 200;
+    /** At most this many pages ({@code MAX_PAGES * BATCH_SIZE} payouts) per run. */
+    static final int MAX_PAGES = 50;
 
     private final CoachPayoutRepository coachPayoutRepository;
     private final ConfigService configService;
@@ -47,25 +49,42 @@ public class StalePayoutAlertScheduler {
     public void alertStalePayouts() {
         long days = configService.getBoundedLong(CONFIG_KEY, DEFAULT_DAYS, MIN_DAYS, MAX_DAYS);
         Instant now = Instant.now();
-        List<CoachPayout> stale = coachPayoutRepository.findStaleUnreleased(now.minus(Duration.ofDays(days)),
-            PageRequest.of(0, BATCH_SIZE));
-        for (CoachPayout row : stale) {
-            long idleDays = row.getUpdatedAt() == null ? days : Duration.between(row.getUpdatedAt(), now).toDays();
-            String reason = "STALE_" + row.getStatus() + " " + idleDays + "d"
-                + (row.getLastError() != null ? " " + row.getLastError() : "");
-            log.warn("[COACH_PAYOUT_STALE] booking={} coach={} status={} net={} unchanged for {}d (last_error={}) — "
-                + "no automatic release, alerting", row.getBookingId(), row.getCoachId(), row.getStatus(),
-                row.getNetAmount(), idleDays, row.getLastError());
-            try {
-                eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
-                    row.getBookingId().toString(), PaymentIntegrityAlertEvent.Reference.BOOKING, reason));
-            } catch (RuntimeException e) {
-                // One alert failing must not stop the others; it is retried on the next run.
-                log.error("[COACH_PAYOUT_STALE] could not raise the alert for booking {}", row.getBookingId(), e);
+        Instant cutoff = now.minus(Duration.ofDays(days));
+        // fix/payment-payout-recovery: keyset pages over (updated_at, booking_id). This job never touches
+        // updated_at, so re-reading the first page every run alerted the same oldest BATCH_SIZE rows forever and
+        // never reached the rest — exactly the mass-HOLD case. Bounded by MAX_PAGES per run.
+        int alerted = 0;
+        List<CoachPayout> page = coachPayoutRepository.findStaleUnreleased(cutoff, PageRequest.of(0, BATCH_SIZE));
+        for (int pages = 1; !page.isEmpty(); pages++) {
+            for (CoachPayout row : page) {
+                alert(row, days, now);
+                alerted++;
             }
+            if (page.size() < BATCH_SIZE || pages >= MAX_PAGES) {
+                break;
+            }
+            CoachPayout last = page.get(page.size() - 1);
+            page = coachPayoutRepository.findStaleUnreleasedAfter(cutoff, last.getUpdatedAt(), last.getBookingId(),
+                BATCH_SIZE);
         }
-        if (!stale.isEmpty()) {
-            log.warn("[COACH_PAYOUT_STALE] {} payout(s) FROZEN/HOLD unchanged for {}+ days", stale.size(), days);
+        if (alerted > 0) {
+            log.warn("[COACH_PAYOUT_STALE] {} payout(s) FROZEN/HOLD unchanged for {}+ days", alerted, days);
+        }
+    }
+
+    private void alert(CoachPayout row, long days, Instant now) {
+        long idleDays = row.getUpdatedAt() == null ? days : Duration.between(row.getUpdatedAt(), now).toDays();
+        String reason = "STALE_" + row.getStatus() + " " + idleDays + "d"
+            + (row.getLastError() != null ? " " + row.getLastError() : "");
+        log.warn("[COACH_PAYOUT_STALE] booking={} coach={} status={} net={} unchanged for {}d (last_error={}) — "
+            + "no automatic release, alerting", row.getBookingId(), row.getCoachId(), row.getStatus(),
+            row.getNetAmount(), idleDays, row.getLastError());
+        try {
+            eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
+                row.getBookingId().toString(), PaymentIntegrityAlertEvent.Reference.BOOKING, reason));
+        } catch (RuntimeException e) {
+            // One alert failing must not stop the others; it is retried on the next run.
+            log.error("[COACH_PAYOUT_STALE] could not raise the alert for booking {}", row.getBookingId(), e);
         }
     }
 }

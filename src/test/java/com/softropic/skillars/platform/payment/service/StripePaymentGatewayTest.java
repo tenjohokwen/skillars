@@ -485,9 +485,10 @@ class StripePaymentGatewayTest {
         account.setTransfersCapability("active");
         when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
         UUID bookingId = UUID.randomUUID();
-        com.stripe.model.Transfer other = new com.stripe.model.Transfer();
-        other.setId("tr_other_dest");
-        other.setDestination("acct_someone_else");
+        com.stripe.model.Transfer otherReversed = new com.stripe.model.Transfer();
+        otherReversed.setId("tr_other_dest");
+        otherReversed.setDestination("acct_someone_else");
+        otherReversed.setReversed(true);
         com.stripe.model.Transfer reversed = new com.stripe.model.Transfer();
         reversed.setId("tr_reversed");
         reversed.setDestination("acct_coach");
@@ -496,13 +497,113 @@ class StripePaymentGatewayTest {
         existing.setId("tr_existing");
         existing.setDestination("acct_coach");
         existing.setReversed(false);
+        existing.setAmount(100L);
         when(stripeClient.listTransfersByGroup(bookingId.toString()))
-            .thenReturn(java.util.List.of(other, reversed, existing));
+            .thenReturn(java.util.List.of(otherReversed, reversed, existing));
 
         assertThat(stripePaymentGateway.transferToCoach(bookingId, COACH_ID, BigDecimal.ONE, "eur"))
             .isEqualTo("tr_existing");
         org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
             .createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class));
+    }
+
+    // --- fix/payment-payout-recovery -------------------------------------------------------------------
+
+    private CoachStripeAccount activeAccount() {
+        CoachStripeAccount account = new CoachStripeAccount();
+        account.setStripeAccountId("acct_coach");
+        account.setTransfersCapability("active");
+        return account;
+    }
+
+    // payouts M4 scenario A: the payout was cut between a lost response and the retry.
+    @Test
+    void transferToCoach_existingTransferForADifferentAmount_isNotAdopted_nonRetryableHold() throws StripeException {
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(activeAccount()));
+        UUID bookingId = UUID.randomUUID();
+        com.stripe.model.Transfer existing = new com.stripe.model.Transfer();
+        existing.setId("tr_existing");
+        existing.setDestination("acct_coach");
+        existing.setAmount(9200L);
+        when(stripeClient.listTransfersByGroup(bookingId.toString())).thenReturn(java.util.List.of(existing));
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(bookingId, COACH_ID, new BigDecimal("46.00"), "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> {
+                    assertThat(e.isRetryable()).isFalse();
+                    assertThat(e.getReason()).isEqualTo(StripePaymentGateway.REASON_AMOUNT_MISMATCH);
+                });
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class));
+    }
+
+    // payouts M4 scenario B: the coach reconnected another account; never a second transfer.
+    @Test
+    void transferToCoach_liveTransferToAnotherAccount_isNonRetryableHold_noSecondTransfer() throws StripeException {
+        when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(activeAccount()));
+        UUID bookingId = UUID.randomUUID();
+        com.stripe.model.Transfer old = new com.stripe.model.Transfer();
+        old.setId("tr_old_account");
+        old.setDestination("acct_previous");
+        old.setAmount(100L);
+        when(stripeClient.listTransfersByGroup(bookingId.toString())).thenReturn(java.util.List.of(old));
+
+        assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(bookingId, COACH_ID, BigDecimal.ONE, "eur"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> assertThat(e.getReason()).isEqualTo(StripePaymentGateway.REASON_DESTINATION_MISMATCH));
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+            .createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class));
+    }
+
+    // payouts H3: Stripe reviewing KYC (`pending`) and a fresh reconnect retry instead of HOLD.
+    @Test
+    void transferToCoach_pendingCapabilityOrFreshReconnect_isRetryable() {
+        CoachStripeAccount pending = new CoachStripeAccount();
+        pending.setStripeAccountId("acct_coach");
+        pending.setOnboardingStatus("COMPLETE");
+        pending.setTransfersCapability("pending");
+        CoachStripeAccount reconnected = new CoachStripeAccount();
+        reconnected.setStripeAccountId("acct_new");
+        reconnected.setOnboardingStatus("PENDING");
+        for (CoachStripeAccount account : java.util.List.of(pending, reconnected)) {
+            when(coachStripeAccountRepository.findById(COACH_ID)).thenReturn(Optional.of(account));
+            assertThatThrownBy(() -> stripePaymentGateway.transferToCoach(UUID.randomUUID(), COACH_ID, BigDecimal.ONE, "eur"))
+                .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                    e -> {
+                        assertThat(e.isRetryable()).isTrue();
+                        assertThat(e.getReason()).isEqualTo("ACCOUNT_PENDING");
+                    });
+        }
+        org.mockito.Mockito.verifyNoInteractions(stripeClient);
+    }
+
+    // stripe L1: a reversal already made (its key forgotten after 24h) is not made again.
+    @Test
+    void reverseTransfer_existingReversalWithTheSameKey_isNotCreatedAgain() throws StripeException {
+        com.stripe.model.TransferReversal done = new com.stripe.model.TransferReversal();
+        done.setMetadata(Map.of("reversalKey", "reversal-tr_9-r1"));
+        when(stripeClient.listTransferReversals("tr_9")).thenReturn(java.util.List.of(done));
+
+        stripePaymentGateway.reverseTransfer("tr_9", new BigDecimal("10.00"), "reversal-tr_9-r1");
+
+        org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never()).createTransferReversal(any(String.class),
+            any(com.stripe.param.TransferReversalCollectionCreateParams.class), any(String.class));
+    }
+
+    // stripe M5: the coach's balance is gone — non-retryable, so the handler records coach debt.
+    @Test
+    void reverseTransfer_balanceInsufficient_isNonRetryable() throws StripeException {
+        when(stripeClient.createTransferReversal(any(String.class),
+                any(com.stripe.param.TransferReversalCollectionCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("insufficient", null, "req_1",
+                "balance_insufficient", 400, null));
+
+        assertThatThrownBy(() -> stripePaymentGateway.reverseTransfer("tr_9", BigDecimal.TEN, "reversal-tr_9-r2"))
+            .isInstanceOfSatisfying(com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException.class,
+                e -> {
+                    assertThat(e.isRetryable()).isFalse();
+                    assertThat(e.getReason()).isEqualTo("COACH_BALANCE_INSUFFICIENT");
+                });
     }
 
     @Test

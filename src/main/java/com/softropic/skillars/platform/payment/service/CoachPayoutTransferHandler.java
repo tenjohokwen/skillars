@@ -19,6 +19,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
 import java.time.Instant;
 
 /**
@@ -49,6 +50,7 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final CoachPayoutDebtService coachPayoutDebtService;
 
     @Override
     public String aggregateType() {
@@ -114,15 +116,23 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
                 + " is held until " + row.getReleaseAfter() + " — deferring");
         }
 
+        // fix/payment-payout-recovery: money a refused reversal left with the coach (coach_payout_debts) is
+        // repaid from this payout first. Planned under the debt rows' lock but written only after the transfer
+        // succeeds, so a HOLD commits without having repaid anything.
+        CoachPayoutDebtService.Offset offset = coachPayoutDebtService.planOffset(row.getCoachId(), row.getNetAmount());
+        BigDecimal toTransfer = row.getNetAmount().subtract(offset.amount());
         try {
-            String transferId = paymentGateway.transferToCoach(
-                row.getBookingId(), row.getCoachId(), row.getNetAmount(), row.getCurrency());
+            String transferId = toTransfer.signum() > 0
+                ? paymentGateway.transferToCoach(row.getBookingId(), row.getCoachId(), toTransfer, row.getCurrency())
+                : null; // the whole net repays coach debt: nothing to send
+            coachPayoutDebtService.applyOffset(row, offset);
+            row.setDebtOffsetAmount(offset.amount());
             row.setStatus(CoachPayoutStatus.RELEASED);
             row.setStripeTransferId(transferId);
             row.setReleasedAt(Instant.now());
             coachPayoutRepository.save(row);
-            log.info("[COACH_PAYOUT] released booking={} coach={} net={} transferId={}",
-                row.getBookingId(), row.getCoachId(), row.getNetAmount(), transferId);
+            log.info("[COACH_PAYOUT] released booking={} coach={} net={} debtOffset={} transferred={} transferId={}",
+                row.getBookingId(), row.getCoachId(), row.getNetAmount(), offset.amount(), toTransfer, transferId);
         } catch (CoachPayoutTransferException e) {
             if (e.isRetryable()) {
                 // AC8.1: throw so the outbox backoff re-drives; [OUTBOX_STUCK] ERROR after 10 attempts.
@@ -137,13 +147,16 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
             // AC8.2: non-retryable — the destination account cannot receive. HOLD the row, emit the
             // disconnect-frequency signal, WARN with the runbook pointer, and do NOT throw (a HOLD is
             // a decision; re-driving every drain would just re-log).
+            // fix/payment-payout-recovery: an account-side HOLD is re-driven automatically once the account can
+            // receive transfers again (CoachPayoutHoldRecoveryService, on account.updated / onboarding complete)
+            // or by an admin; a TRANSFER_*_MISMATCH HOLD is left for the operator.
             row.setStatus(CoachPayoutStatus.HOLD);
             row.setLastError(e.getReason() + ": " + truncate(String.valueOf(e.getCause())));
             row.setAttempts(row.getAttempts() + 1);
             coachPayoutRepository.save(row);
             meterRegistry.counter(METRIC_HELD, "reason", e.getReason()).increment();
-            log.warn("[COACH_PAYOUT_HELD] booking={} coach={} reason={} — payout blocked, operator must "
-                + "reconcile (runbook: COACH_PAYOUT_HELD)", row.getBookingId(), row.getCoachId(), e.getReason());
+            log.warn("[COACH_PAYOUT_HELD] booking={} coach={} reason={} — payout blocked until the account can "
+                + "receive transfers (runbook: COACH_PAYOUT_HELD)", row.getBookingId(), row.getCoachId(), e.getReason());
             // fix/payment-payouts-disputes-webhooks: an admin alert, one OPEN per booking (AFTER_COMMIT).
             eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
                 row.getBookingId().toString(), PaymentIntegrityAlertEvent.Reference.BOOKING, e.getReason()));

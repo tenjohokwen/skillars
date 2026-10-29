@@ -54,7 +54,8 @@ class ChargeDisputeWebhookServiceTest {
     @BeforeEach
     void setUp() {
         CoachPayoutAdjustmentService adjustment = new CoachPayoutAdjustmentService(coachPayoutRepository,
-            coachPayoutFreezeRepository, coachPayoutOutboxSupport);
+            coachPayoutFreezeRepository, coachPayoutOutboxSupport,
+            new com.softropic.skillars.platform.payment.service.CoachPayoutDebtService(org.mockito.Mockito.mock(com.softropic.skillars.platform.payment.repo.CoachPayoutDebtRepository.class), new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), eventPublisher));
         ChargebackCreditReversalService credit = new ChargebackCreditReversalService(ledgerRepository,
             chargeDisputeRepository, creditWalletService, eventPublisher);
         service = new ChargeDisputeWebhookService(chargeDisputeRepository, coachPayoutRepository,

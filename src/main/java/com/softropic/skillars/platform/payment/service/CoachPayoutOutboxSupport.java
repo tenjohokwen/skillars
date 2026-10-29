@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.outbox.service.OutboxService;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutReversalPayload;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
+import com.softropic.skillars.platform.payment.contract.CoachPayoutTopUpPayload;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutTransferPayload;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
@@ -54,6 +55,7 @@ public class CoachPayoutOutboxSupport {
 
     public static final String AGGREGATE_TYPE_TRANSFER = "COACH_PAYOUT_TRANSFER";
     public static final String AGGREGATE_TYPE_REVERSAL = "COACH_PAYOUT_REVERSAL";
+    public static final String AGGREGATE_TYPE_TOPUP = "COACH_PAYOUT_TOPUP";
 
     /** AC10.4 bound: 14 days = disputes.submissionWindowDays, the longest sane hold. */
     private static final long HOLD_HOURS_DEFAULT = 48L;
@@ -340,6 +342,19 @@ public class CoachPayoutOutboxSupport {
         log.info("[COACH_PAYOUT] enqueued reversal for booking {} amount {}", bookingId, amount);
     }
 
+    /**
+     * fix/payment-payout-recovery: an {@code UPHOLD_COACH} on a payout that released short of the coach's
+     * full net — enqueue a {@code COACH_PAYOUT_TOPUP} transfer of the shortfall, in the dispute-resolution
+     * transaction. {@code CoachPayoutTopUpHandler} pays it as its own Stripe transfer (the
+     * one-transfer-per-booking key {@code transfer-{bookingId}} is already spent).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void enqueueTopUp(UUID bookingId, BigDecimal amount) {
+        UUID topUpId = UUID.randomUUID();
+        enqueue(AGGREGATE_TYPE_TOPUP, new CoachPayoutTopUpPayload(bookingId, amount, topUpId), null, bookingId);
+        log.info("[COACH_PAYOUT_TOPUP] enqueued top-up for booking {} amount {} topUpId {}", bookingId, amount, topUpId);
+    }
+
     private void enqueue(String aggregateType, Object payload, Instant notBefore, UUID bookingId) {
         try {
             String json = objectMapper.writeValueAsString(payload);
@@ -386,6 +401,11 @@ public class CoachPayoutOutboxSupport {
         row.setGrossAmount(gross);
         row.setCommissionAmount(commission);
         row.setNetAmount(net);
+        // fix/payment-payout-recovery: stamped before any cut (the chargeback-lost cut below runs after this),
+        // so refund shares and an UPHOLD_COACH restore work from what the coach was first owed.
+        row.setOriginalGrossAmount(gross);
+        row.setOriginalCommissionAmount(commission);
+        row.setOriginalNetAmount(net);
         row.setReleaseAfter(releaseAfter);
         row.setAttempts(0);
         return row;
