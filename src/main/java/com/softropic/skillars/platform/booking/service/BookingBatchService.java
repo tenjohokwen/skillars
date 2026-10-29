@@ -25,8 +25,6 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
-import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
-import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -76,7 +74,6 @@ public class BookingBatchService {
     private final PlatformTransactionManager transactionManager;
     private final PessimisticLockRetryer lockRetryer;
     private final EntityManager entityManager;
-    private final CoachPricingRepository coachPricingRepository;
 
     /**
      * REQUIRES_NEW per booking, mirroring {@code PaymentLifecycleService.perBookingTx}. A failure in
@@ -243,16 +240,13 @@ public class BookingBatchService {
         batch.setRequestedCount(req.slots().size());
         // B2: computed server-side; the client-supplied req.totalAmount() is ignored. Same formula
         // PaymentLifecycleService.onBatchBookingAccepted settles with and BatchPaymentQuoteService
-        // previews: coach_pricing.per_session_price (zero when the coach has no pricing row) times
-        // the number of sessions. Batch bookings never carry a session pack, so no pack pricing.
+        // previews: coach_pricing.per_session_price times the number of sessions. Batch bookings never carry a session pack, so no pack pricing.
         // fix/payment-agreed-price-lock: the same per-session price is locked onto each booking below
-        // (agreed_price) and is what settlement charges; null (no pricing row) is stored as NULL and the
-        // accept then fails unless the coach has priced by then — never a free confirmation.
-        BigDecimal agreedPrice = coachPricingRepository.findByCoachId(req.coachId())
-            .map(CoachPricing::getPerSessionPrice)
-            .orElse(null);
-        batch.setTotalAmount((agreedPrice == null ? BigDecimal.ZERO : agreedPrice)
-            .multiply(BigDecimal.valueOf(req.slots().size())));
+        // (agreed_price) and is what settlement charges. fix/booking-price-and-excused-race: a coach with
+        // no pricing row refuses the batch (COACH_PRICING_UNAVAILABLE) — it used to be stored as NULL, and
+        // whatever price the coach set before accepting was then charged without the parent seeing it.
+        BigDecimal agreedPrice = bookingService.requireRequestTimePrice(req.coachId());
+        batch.setTotalAmount(agreedPrice.multiply(BigDecimal.valueOf(req.slots().size())));
         batchRepository.save(batch);
 
         String canonicalTimezone = coach.getCanonicalTimezone();
@@ -515,6 +509,8 @@ public class BookingBatchService {
 
         // fix/payment-agreed-price-lock: fail this booking's accept (rolled back, reported in the
         // per-booking results) when it has no price at all — settlement used to confirm it for free.
+        // fix/booking-price-and-excused-race: "no price" now means no agreed_price (PRICE_NOT_LOCKED);
+        // the coach's current price is never substituted.
         bookingService.resolveSessionPrice(booking);
 
         // Must be the accept-then-initiate pair, not a bare ACCEPT: PaymentLifecycleService

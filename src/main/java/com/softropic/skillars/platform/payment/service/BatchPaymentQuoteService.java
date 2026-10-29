@@ -16,7 +16,9 @@ import java.util.UUID;
  * {@code coach_pricing.per_session_price}, subtotal over the sessions, then {@link CreditCardSplit} against the
  * payer's wallet balance. fix/payment-agreed-price-lock: that same current price is what {@code createBatch}
  * locks onto each booking ({@code agreed_price}) and settlement charges. With no pricing row the quote shows
- * zero, but the accept then fails rather than confirming for free.
+ * zero; fix/booking-price-and-excused-race: {@code createBatch} then refuses the request
+ * ({@code booking.coachPricingUnavailable}), and the booking page hides this quote for an unpriced coach
+ * ({@code CoachAvailabilityResponse.coachPriced}).
  */
 @Service
 @RequiredArgsConstructor

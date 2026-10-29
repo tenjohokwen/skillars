@@ -76,6 +76,21 @@ class CancellationRefundMatrixTest {
         order.verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_EXCUSED_LIMIT");
     }
 
+    // fix/booking-price-and-excused-race: the per-coach lock is taken before the history insert and the
+    // window count, so two concurrent excused cancels count one at a time (see CancellationRefundIT).
+    @Test
+    void coachCancel_takesPerCoachLock_beforeSavingHistoryAndCounting() {
+        stubExcusedCap(4L);
+        service.onBookingCancelledByCoach(coachEvent(null, "WEATHER", false));
+
+        var order = inOrder(cancellationHistoryRepository, reliabilityStrikeService);
+        order.verify(cancellationHistoryRepository).acquireCoachCancellationLock(COACH_ID.toString());
+        order.verify(cancellationHistoryRepository).save(any());
+        order.verify(cancellationHistoryRepository).countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+            eq(COACH_ID), anyCollection(), any());
+        order.verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_EXCUSED_LIMIT");
+    }
+
     @Test
     void coachCancel_excusedCap_countsOnlyExcusedReasonsInsideTheRollingWindow() {
         stubExcusedCap(0L);

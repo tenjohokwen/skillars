@@ -394,6 +394,21 @@ WHERE status NOT IN ('CAPTURE_PENDING','CAPTURED','CHARGE_FAILED','FROZEN','CAPT
 GROUP BY 1;
 ```
 
+**Release check, no migration (PR #353): non-pack bookings without `agreed_price`.** Since #353,
+accept and batch settlement charge only the price locked at request time, never the coach's current
+price. These rows predate V192, or were requested while the coach had no pricing. They are not
+blocked by a migration. Instead, accept refuses them with `booking.priceNotLocked`: the coach declines
+and the family re-requests. Run this before deploying to an existing database and tell the affected
+coaches and parents. It is informational, so a non-zero result does not block the deploy:
+```sql
+SELECT id, status, coach_id, parent_id, batch_id, created_at
+FROM booking.bookings
+WHERE session_pack_purchase_id IS NULL AND agreed_price IS NULL
+  AND status IN ('REQUESTED', 'PAYMENT_PENDING');
+-- REQUESTED: accept now fails with booking.priceNotLocked (decline, then re-request).
+-- PAYMENT_PENDING with a batch_id: settlement declines it and charges nothing.
+```
+
 **V197: `chk_pcs_status` / `chk_pps_status`** are added `NOT VALID`, so the migration itself
 cannot fail. Run this before anyone adds a later `VALIDATE CONSTRAINT`:
 ```sql
@@ -824,3 +839,6 @@ an operator must now do.
   new daily job `StalePayoutAlertScheduler` (06:30, ShedLock), no new Stripe webhook events. Run the
   V199 pre-migration check, then settle any `HOLD` / `CHARGEBACK_LOST` payouts left by earlier releases
   (section 3.2).
+- 2026-10-29: #353 (fix/booking-price-and-excused-race). Section 3.2 has a new informational check
+  for non-pack bookings with NULL `agreed_price`, which accept now refuses (`booking.priceNotLocked`).
+  No migration and no new config keys.

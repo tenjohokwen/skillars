@@ -17,6 +17,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowR
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
@@ -54,6 +55,8 @@ public class AvailabilityService {
     // Injected instead of ConfigService + CoachPricingRepository: the fallback chain has one
     // definition, shared with BookingService and BookingBatchService.
     private final SessionDurationResolver sessionDurationResolver;
+    // fix/booking-price-and-excused-race: only for CoachAvailabilityResponse.coachPriced.
+    private final CoachPricingRepository coachPricingRepository;
     // Deferred-78 AC1: addWindow/updateWindow/deleteWindow re-lock the coach row before mutating,
     // mirroring BookingService's own two-step requireProfile-then-lock pattern — without this, the
     // per-coach locks that BookingService/BookingBatchService/RescheduleService now take before
@@ -225,7 +228,8 @@ public class AvailabilityService {
         // were actually materialized in, so an unparseable stored value surfaces as the "UTC" the
         // calendar really used instead of echoing back a zone nothing honoured.
         return new CoachAvailabilityResponse(windowResponses, blockResponses, computedSlots, zoneId.getId(),
-            computeAvailabilitySignature(windows, slotLength));
+            computeAvailabilitySignature(windows, slotLength),
+            coachPricingRepository.findByCoachId(coachId).isPresent());
     }
 
     static String computeAvailabilitySignature(List<CoachAvailabilityWindow> windows, Duration slotLength) {

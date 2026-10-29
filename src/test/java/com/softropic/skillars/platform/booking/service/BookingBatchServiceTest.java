@@ -77,8 +77,6 @@ class BookingBatchServiceTest {
     @Mock TransactionStatus transactionStatus;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock EntityManager entityManager;
-    // B2: createBatch computes the batch total server-side from the coach's pricing.
-    @Mock com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository coachPricingRepository;
 
     @InjectMocks BookingBatchService service;
 
@@ -101,6 +99,9 @@ class BookingBatchServiceTest {
         // availability. Lenient because the tests that fail earlier (batch size, ownership,
         // inactive coach) never reach either check.
         lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
+        // B2 / fix/booking-price-and-excused-race: createBatch locks the coach's current price, resolved
+        // (and refused when absent) by BookingService.requireRequestTimePrice. Lenient for the same reason.
+        lenient().when(bookingService.requireRequestTimePrice(COACH_ID)).thenReturn(new BigDecimal("50.00"));
         // skillars-deferred-164 AC2: the boolean check moved behind a void check-and-throw method
         // (requireSlotWithinAvailabilityWindow). A mocked void method is a no-op by default, so
         // "every slot passes availability" is now the default with no stub needed at all — the old
@@ -434,10 +435,6 @@ class BookingBatchServiceTest {
     void createBatch_clientSuppliedTotal_isIgnoredAndComputedFromCoachPricing() {
         when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
-        com.softropic.skillars.platform.marketplace.repo.CoachPricing pricing =
-            new com.softropic.skillars.platform.marketplace.repo.CoachPricing();
-        pricing.setPerSessionPrice(new BigDecimal("50.00"));
-        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
         when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(userRepository.findById(any())).thenReturn(Optional.empty());
@@ -458,22 +455,21 @@ class BookingBatchServiceTest {
     }
 
     @Test
-    void createBatch_coachWithoutPricingRow_totalIsZero_likeTheSettlementPath() {
+    void createBatch_coachWithoutPricing_isRefused_nothingWritten() {
+        // fix/booking-price-and-excused-race: used to store the batch with a zero total and NULL agreed prices,
+        // so the coach could price before accepting and charge the parent a figure they never saw.
         when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
         stubOwnershipAndActiveCoach();
-        when(batchRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(bookingRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(userRepository.findById(any())).thenReturn(Optional.empty());
+        when(bookingService.requireRequestTimePrice(COACH_ID)).thenThrow(new OperationNotAllowedException(
+            "This coach has not set a session price yet", BookingError.COACH_PRICING_UNAVAILABLE));
 
-        service.createBatch(PARENT_ID, new CreateBatchRequest(COACH_ID, PLAYER_ID, buildRequest(2).slots(), null, null));
-
-        org.mockito.ArgumentCaptor<BookingBatch> saved = org.mockito.ArgumentCaptor.forClass(BookingBatch.class);
-        verify(batchRepository).save(saved.capture());
-        assertThat(saved.getValue().getTotalAmount()).isEqualByComparingTo("0");
-        // fix/payment-agreed-price-lock: no price to lock — NULL, never ZERO (accept then fails loudly).
-        org.mockito.ArgumentCaptor<Booking> bookings = org.mockito.ArgumentCaptor.forClass(Booking.class);
-        verify(bookingRepository, org.mockito.Mockito.times(2)).save(bookings.capture());
-        assertThat(bookings.getAllValues()).allSatisfy(b -> assertThat(b.getAgreedPrice()).isNull());
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID,
+                new CreateBatchRequest(COACH_ID, PLAYER_ID, buildRequest(2).slots(), null, null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.COACH_PRICING_UNAVAILABLE);
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
     }
 
     @Test

@@ -144,7 +144,11 @@
       <code>booking.lateCancel.graceMinutes</code> (default 30) after its start (Deferred-64, narrowed by
       fix/booking-cancel-policy-loopholes). A coach's excused cancellations beyond
       <code>coach.excusedCancellations.maxPerWindow</code> (3) per <code>windowDays</code> (90) strike as
-      <code>COACH_CANCELLATION_EXCUSED_LIMIT</code>. That is
+      <code>COACH_CANCELLATION_EXCUSED_LIMIT</code>; the count-and-strike runs under a per-coach
+      transaction-scoped advisory lock (<code>CoachCancellationHistoryRepository.acquireCoachCancellationLock</code>),
+      so two concurrent excused cancels cannot both count before the other commits. It is an advisory lock and not
+      the coach row because <code>ReliabilityStrikeService.issue</code> (<code>REQUIRES_NEW</code>) locks that
+      row on a second connection. That is
       <code>BookingService</code>'s <code>refundEligible</code> flag on the event. A booking paid by card
       or credit is refunded as a <code>BOOKING_REFUND</code> wallet credit for the <em>full session
       price</em>. A pack-funded booking gets its session restored instead. Refunds only ever give back

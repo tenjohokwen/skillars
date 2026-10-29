@@ -655,6 +655,10 @@ export default {
     errors: {
       coachUnavailable: 'Dieser Coach ist derzeit nicht verfügbar.',
       playerNotBookable: 'Für diesen Spieler können keine Termine mehr gebucht werden.',
+      coachPricingUnavailable:
+        'Dieser Coach hat noch keinen Preis pro Einheit festgelegt, daher sind Buchungen per Karte oder Guthaben nicht möglich. Nutzen Sie ein Einheitenpaket oder versuchen Sie es später erneut.',
+      priceNotLocked:
+        'Für diese Anfrage wurde kein Preis vereinbart. Lehnen Sie sie ab und bitten Sie die Familie um eine neue Anfrage.',
       slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
       startTimeInPast:
         'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',

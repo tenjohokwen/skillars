@@ -2,10 +2,13 @@ package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.platform.booking.contract.AdminBookingCancellationOutcome;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.outbox.service.OutboxService;
+import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
+import com.softropic.skillars.platform.payment.service.CancellationRefundService;
 import com.softropic.skillars.platform.payment.service.RefundOutboxSupport;
 import com.softropic.skillars.utils.TestMailManager;
 import org.awaitility.Awaitility;
@@ -21,6 +24,12 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,6 +62,8 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
     @Autowired private BookingService bookingService;
     @Autowired private OutboxService outboxService;
     @Autowired private TestMailManager testMailManager;
+    @Autowired private CancellationRefundService cancellationRefundService;
+    @Autowired private CoachCancellationHistoryRepository cancellationHistoryRepository;
 
     private UUID coachId;
     private UUID packTierId;
@@ -346,6 +357,102 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
             assertThat(jdbcTemplate.queryForList(
                 "SELECT reason FROM marketplace.coach_reliability_strikes WHERE coach_id = ? AND booking_id = ?",
                 String.class, coachId, fourth)).containsExactly("COACH_CANCELLATION_EXCUSED_LIMIT"));
+    }
+
+    // ── fix/booking-price-and-excused-race: concurrent excused cancels by one coach ──
+
+    /**
+     * Two excused cancels landing together, with 2 already in the window: the 3rd is within the cap and the
+     * 4th must strike. Before the per-coach lock each counted the window before the other's history row
+     * committed, both saw 3 and neither struck. The listener is driven directly (it is REQUIRES_NEW) so
+     * both run truly in parallel rather than serialised behind two cancellation transactions.
+     */
+    @Test
+    void twoConcurrentExcusedCancels_crossingTheCap_issueExactlyOneExcusedLimitStrike() throws Exception {
+        seedExcusedHistory(2);
+        UUID first = booking("CANCELLED_COACH", null, base());
+        UUID second = booking("CANCELLED_COACH", null, base());
+
+        CountDownLatch start = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            List<Future<?>> futures = List.of(
+                pool.submit(() -> { awaitQuietly(start); cancellationRefundService.onBookingCancelledByCoach(excusedEvent(first)); }),
+                pool.submit(() -> { awaitQuietly(start); cancellationRefundService.onBookingCancelledByCoach(excusedEvent(second)); }));
+            start.countDown();
+            for (Future<?> f : futures) {
+                f.get(30, TimeUnit.SECONDS);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+
+        assertThat(count("SELECT COUNT(*) FROM payment.coach_cancellation_history WHERE coach_id = ?"))
+            .isEqualTo(4);
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT reason FROM marketplace.coach_reliability_strikes WHERE coach_id = ?", String.class, coachId))
+            .as("the cancel that committed second saw the first and crossed the cap")
+            .containsExactly("COACH_CANCELLATION_EXCUSED_LIMIT");
+    }
+
+    /**
+     * Deterministic proof of the serialisation the race test above relies on: while another transaction holds
+     * this coach's cancellation lock, the listener blocks before writing anything, and finishes once it is
+     * released.
+     */
+    @Test
+    void excusedCancelListener_waitsForThePerCoachCancellationLock() throws Exception {
+        UUID booking = booking("CANCELLED_COACH", null, base());
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        CompletableFuture<Void> holder = CompletableFuture.runAsync(() -> transactionTemplate.executeWithoutResult(s -> {
+            cancellationHistoryRepository.acquireCoachCancellationLock(coachId.toString());
+            held.countDown();
+            awaitQuietly(release);
+        }));
+        try {
+            assertThat(held.await(10, TimeUnit.SECONDS)).isTrue();
+            CompletableFuture<Void> listener = CompletableFuture.runAsync(
+                () -> cancellationRefundService.onBookingCancelledByCoach(excusedEvent(booking)));
+
+            Thread.sleep(1_000);
+            assertThat(listener).as("blocked on the per-coach lock").isNotDone();
+
+            release.countDown();
+            listener.get(30, TimeUnit.SECONDS);
+            assertThat(count("SELECT COUNT(*) FROM payment.coach_cancellation_history WHERE coach_id = ?"))
+                .isEqualTo(1);
+        } finally {
+            release.countDown();
+            holder.get(30, TimeUnit.SECONDS);
+        }
+    }
+
+    private void seedExcusedHistory(int n) {
+        transactionTemplate.execute(s -> {
+            for (int i = 0; i < n; i++) {
+                jdbcTemplate.update("INSERT INTO payment.coach_cancellation_history (id, coach_id, booking_id, "
+                    + "cancel_reason, created_at) VALUES (?, ?, ?, 'WEATHER', now() - interval '10 days')",
+                    UUID.randomUUID(), coachId, UUID.randomUUID());
+            }
+            return null;
+        });
+    }
+
+    private BookingCancelledByCoachEvent excusedEvent(UUID bookingId) {
+        return new BookingCancelledByCoachEvent(this, bookingId, PARENT_ID, coachId, "HEALTH_MEDICAL", null,
+            BigDecimal.ZERO, false, false, PARENT_EMAIL, base, "Europe/Berlin");
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            if (!latch.await(30, TimeUnit.SECONDS)) {
+                throw new IllegalStateException("latch timed out");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     // ── helpers ──

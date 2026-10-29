@@ -28,6 +28,16 @@
       </template>
     </q-banner>
 
+    <!-- fix/booking-price-and-excused-race: a coach with no session price cannot be booked by card or
+         credit (the backend refuses with booking.coachPricingUnavailable); a session pack still works. -->
+    <q-banner
+      v-if="coachUnpriced"
+      class="bg-warning text-white q-mb-md"
+      data-test="coach-pricing-unavailable"
+    >
+      {{ t('booking.errors.coachPricingUnavailable') }}
+    </q-banner>
+
     <q-card flat bordered class="q-mb-md">
       <q-card-section>
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.requests.selectSlot') }}</div>
@@ -192,6 +202,13 @@
               <q-spinner-dots size="24px" />
             </div>
             <div
+              v-else-if="coachUnpriced"
+              class="text-caption text-negative"
+              data-test="batch-quote-unpriced"
+            >
+              {{ t('booking.errors.coachPricingUnavailable') }}
+            </div>
+            <div
               v-else-if="batchQuoteError || !batchQuote"
               class="text-caption"
               style="color: var(--text-secondary)"
@@ -230,7 +247,7 @@
             color="primary"
             :label="t('booking.batch.confirmRequests')"
             :loading="bookingStore.batchSubmitting || refetchingBatchMaxSize"
-            :disable="bookingStore.batchBasketSize === 0 || refetchingBatchMaxSize"
+            :disable="bookingStore.batchBasketSize === 0 || refetchingBatchMaxSize || coachUnpriced"
             @click="submitBatchRequest"
           />
         </q-card-actions>
@@ -358,13 +375,22 @@ const packOptions = computed(() => [
   })),
 ])
 
+// fix/booking-price-and-excused-race: only an explicit false blocks — an unknown (null) state must not
+// disable booking; the backend refusal (booking.coachPricingUnavailable) is the real guard.
+const coachUnpriced = computed(() => bookingStore.coachPriced === false)
+
 const canSubmit = computed(
   // Do NOT gate on hasCredits: AC 3 allows booking via platform credit (Cases A/B) or full
   // Stripe charge (Case C). The backend handles payment failure gracefully (→ DECLINED).
   // playerId IS gated: without it, single-booking submit had no safety net, unlike
   // submitBatchRequest's explicit guard — a self-booking player whose profile hasn't resolved
   // yet (or a malformed query string) must not be able to submit with an undefined playerId.
-  () => selectedSlot.value !== null && !!playerId.value && !submitting.value,
+  // An unpriced coach can still be booked against a session pack (its own locked price), never per session.
+  () =>
+    selectedSlot.value !== null &&
+    !!playerId.value &&
+    !submitting.value &&
+    !(coachUnpriced.value && selectedPackId.value === null),
 )
 
 function selectSlot(slot) {
@@ -615,6 +641,8 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('booking.errors.sessionCrossesMidnight') })
     } else if (errorKey === 'booking.playerNotBookable') {
       $q.notify({ type: 'negative', message: t('booking.errors.playerNotBookable') })
+    } else if (errorKey === 'booking.coachPricingUnavailable') {
+      $q.notify({ type: 'negative', message: t('booking.errors.coachPricingUnavailable') })
     } else if (errorKey === 'MISSING_RIGHTS') {
       // Post-split, MISSING_RIGHTS carries exactly one user-facing meaning on this path: the caller
       // does not own the player profile or the session pack they submitted. The four validation
@@ -709,6 +737,8 @@ async function submitBatchRequest() {
       $q.notify({ message: t('payment.error.coachStripeNotConfigured'), type: 'negative' })
     } else if (errorKey === 'booking.playerNotBookable') {
       $q.notify({ message: t('booking.errors.playerNotBookable'), type: 'negative' })
+    } else if (errorKey === 'booking.coachPricingUnavailable') {
+      $q.notify({ message: t('booking.errors.coachPricingUnavailable'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {

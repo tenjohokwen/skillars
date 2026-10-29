@@ -135,6 +135,11 @@ class BookingServiceTest {
         // platform default. Lenient because the tests that fail before reaching the duration check
         // (unknown player, wrong parent, suspended coach, reversed range) never call it.
         lenient().when(sessionDurationResolver.resolve(COACH_ID)).thenReturn(Duration.ofHours(1));
+        // fix/booking-price-and-excused-race: a card/credit request is refused when the coach has no
+        // pricing, so the create-path fixtures default to a priced coach. Lenient for the same reason as
+        // above; tests that need a different (or no) price override it.
+        lenient().when(coachPricingRepository.findByCoachId(COACH_ID))
+            .thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
         // skillars-deferred-155 AC5: passthrough default — tests exercising the actual redaction/
         // truncation wiring override this explicitly.
         lenient().when(contactDetailSanitizer.sanitize(anyString())).thenAnswer(
@@ -425,6 +430,55 @@ class BookingServiceTest {
 
         assertThat(response).isNotNull();
         verify(bookingRepository).save(any(Booking.class));
+    }
+
+    /** fix/booking-price-and-excused-race: no price to lock → refused, nothing written or announced. */
+    @Test
+    void createBookingRequest_payPerSession_coachWithoutPricing_isRefused() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, window);
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_PRICING_UNAVAILABLE));
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingRequestedEvent.class));
+    }
+
+    @Test
+    void createBookingRequest_payPerSession_locksTheCurrentPriceAsAgreedPrice() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(bookingRepository.save(any(Booking.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("45.00"))));
+
+        bookingService.createBookingRequest(PARENT_ID, makeValidRequest(COACH_ID, PLAYER_ID, window));
+
+        org.mockito.ArgumentCaptor<Booking> saved = org.mockito.ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(saved.capture());
+        assertThat(saved.getValue().getAgreedPrice()).isEqualByComparingTo("45.00");
     }
 
     @Test
@@ -1267,6 +1321,7 @@ class BookingServiceTest {
     @Test
     void acceptBooking_requestedBooking_transitionsToPaymentPending() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        booking.setAgreedPrice(new BigDecimal("50.00"));
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
@@ -1278,7 +1333,6 @@ class BookingServiceTest {
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makePlayer(PLAYER_ID, PARENT_ID)));
-        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
 
         bookingService.acceptBooking(booking.getId(), COACH_USER_ID);
 
@@ -1314,9 +1368,34 @@ class BookingServiceTest {
             .satisfies(e -> assertThat(((BookingAcceptedEvent) e).getSessionPrice()).isEqualByComparingTo("50.00"));
     }
 
+    /**
+     * fix/booking-price-and-excused-race: a REQUESTED booking with no agreed_price (pre-V192, or requested
+     * while the coach had no pricing) is refused — never charged at the coach's current price.
+     */
+    @Test
+    void acceptBooking_requestedWithoutAgreedPrice_isRefused_evenWhenTheCoachHasPricingNow() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.PRICE_NOT_LOCKED));
+        assertThat(booking.getStatus()).isEqualTo("REQUESTED");
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingAcceptedEvent.class));
+    }
+
     @Test
     void acceptBooking_concurrentModification_throwsRetryableException() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        booking.setAgreedPrice(new BigDecimal("50.00"));
         CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
 
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));

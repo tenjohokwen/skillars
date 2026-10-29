@@ -4,7 +4,6 @@ import com.softropic.skillars.platform.booking.contract.BatchBookingAcceptedEven
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
-import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
@@ -46,7 +45,6 @@ public class PaymentLifecycleService {
     private final PaymentGateway paymentGateway;
     private final BookingPaymentRepository bookingPaymentRepository;
     private final BookingRepository bookingRepository;
-    private final CoachPricingRepository coachPricingRepository;
     private final BookingPaymentPersistenceService persistenceService;
     private final PlatformTransactionManager transactionManager;
     private final MeterRegistry meterRegistry;
@@ -341,7 +339,7 @@ public class PaymentLifecycleService {
                 // acceptOneBooking now refuses an unpriceable booking, so this is a backstop: decline it
                 // before any reservation or charge (nothing was taken).
                 Counter.builder(SETTLE_ABORTED_COUNTER).tag("reason", "unpriced").register(meterRegistry).increment();
-                log.error("Batch booking has no agreed price and no coach pricing — declined, nothing charged: "
+                log.error("Batch booking has no agreed price — declined, nothing charged: "
                     + "bookingId={} batchId={}", bookingId, event.getBatchId());
                 declineQuietly(bookingId, event.getBatchId());
                 continue;
@@ -409,8 +407,8 @@ public class PaymentLifecycleService {
         String finalPaymentIntentId = paymentIntentId;
         BigDecimal remainingCredit = creditToUse;
         for (UUID bookingId : reserved) {
-            // fix/payment-agreed-price-lock: the price reserved above (agreed_price, or the legacy
-            // fallback), so the shares always sum to exactly what was debited and charged.
+            // fix/payment-agreed-price-lock: the price reserved above (agreed_price), so the shares
+            // always sum to exactly what was debited and charged.
             BigDecimal price = reservedPrices.get(bookingId);
             BigDecimal bookingCreditShare = remainingCredit.compareTo(BigDecimal.ZERO) > 0
                 ? price.min(remainingCredit) : BigDecimal.ZERO;
@@ -460,15 +458,12 @@ public class PaymentLifecycleService {
 
     /**
      * fix/payment-agreed-price-lock: what a non-pack batch booking settles at — its {@code agreed_price},
-     * else (pre-V192 row) the coach's current price, else null (unpriceable).
+     * else null (unpriceable). fix/booking-price-and-excused-race: the coach's current price is no longer a
+     * fallback (the payer never saw it); acceptOneBooking already refuses such a booking (PRICE_NOT_LOCKED),
+     * so null here is only the backstop's trigger.
      */
     private BigDecimal batchBookingPrice(Booking b) {
-        if (b.getAgreedPrice() != null) {
-            return b.getAgreedPrice();
-        }
-        return coachPricingRepository.findByCoachId(b.getCoachId())
-            .map(p -> p.getPerSessionPrice())
-            .orElse(null);
+        return b.getAgreedPrice();
     }
 
     private void declineQuietly(UUID bookingId, UUID batchId) {

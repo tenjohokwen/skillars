@@ -47,6 +47,11 @@ public class CancellationRefundService {
 
         // Always record cancellation history — ALL coach cancellations (excused AND unexcused)
         String reason = event.getCancelReason() != null ? event.getCancelReason() : "OTHER_UNEXCUSED";
+        // fix/booking-price-and-excused-race: first statement of this transaction, before the history
+        // insert and the window count, so concurrent cancels by one coach count and strike one at a time
+        // (see acquireCoachCancellationLock). Taken for unexcused reasons too: their history rows are not
+        // counted, but one code path keeps the ordering obvious and the lock is held for milliseconds.
+        cancellationHistoryRepository.acquireCoachCancellationLock(event.getCoachId().toString());
         saveCancellationHistory(event.getCoachId(), event.getBookingId(), reason);
 
         if (!EXCUSED_REASONS.contains(reason)) {
@@ -62,7 +67,9 @@ public class CancellationRefundService {
      * fix/booking-cancel-policy-loopholes: excused reasons are self-declared, so without a cap a coach
      * could avoid strikes forever by always picking one. More than {@code maxPerWindow} excused
      * cancellations in the rolling window — counting the one just saved above (same transaction; the
-     * derived count query auto-flushes it) — and this one strikes too. Admins can dismiss it.
+     * derived count query auto-flushes it) — and this one strikes too. Admins can dismiss it. Runs under
+     * the per-coach advisory lock taken in {@link #onBookingCancelledByCoach}, so a concurrent excused
+     * cancel by the same coach is counted only once it has committed.
      */
     private boolean exceedsExcusedCancellationCap(UUID coachId) {
         long maxPerWindow = configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW);

@@ -66,7 +66,12 @@ vi.mock('src/api/payment.api', () => ({
   pauseSessionPack: vi.fn(),
 }))
 
-import { getCoachBookingRequests, acceptAllBatch, createBatch } from 'src/api/booking.api'
+import {
+  getCoachBookingRequests,
+  acceptAllBatch,
+  createBatch,
+  getCoachAvailability,
+} from 'src/api/booking.api'
 import { getMySessionPacks } from 'src/api/payment.api'
 import { useBookingStore } from 'src/stores/booking.store'
 import { i18n } from 'boot/i18n'
@@ -460,5 +465,35 @@ describe('booking.store — coach-request ordering + batch-accept guards (deferr
       expect(store.packsError).not.toBe('Failed to load session packs')
       expect(store.packsLoading).toBe(false)
     })
+  })
+})
+
+describe('booking.store — loadAvailability coachPriced (fix/booking-price-and-excused-race)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+  })
+
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, null],
+  ])('response coachPriced=%s → store coachPriced=%s', async (wire, expected) => {
+    getCoachAvailability.mockResolvedValue({ computedSlots: [], coachPriced: wire })
+    const store = useBookingStore()
+
+    await store.loadAvailability('c1', '2026-03-09')
+
+    expect(store.coachPriced).toBe(expected)
+  })
+
+  it('a failed load resets coachPriced to unknown', async () => {
+    const store = useBookingStore()
+    store.coachPriced = false
+    getCoachAvailability.mockRejectedValue(new Error('boom'))
+
+    await store.loadAvailability('c1', '2026-03-09')
+
+    expect(store.coachPriced).toBeNull()
   })
 })
