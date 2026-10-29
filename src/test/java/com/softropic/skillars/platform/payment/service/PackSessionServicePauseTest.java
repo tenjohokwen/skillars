@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -135,6 +136,40 @@ class PackSessionServicePauseTest {
             .isInstanceOf(BatchRuleViolationException.class)
             .hasMessageContaining("booking.packAlreadyPaused");
 
+        verify(sessionPackPurchaseRepository, never()).save(any());
+    }
+
+    /** fix/pack-status-badges: a pack frozen by an open card dispute cannot be paused. */
+    @Test
+    void pausePack_disputeFrozenPack_isRefused_andNothingIsCancelled() {
+        SessionPackPurchase purchase = buildPurchase();
+        purchase.setDisputeFrozenAt(Instant.now().minus(1, ChronoUnit.HOURS));
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+
+        PausePackRequest req = new PausePackRequest(Instant.now().plus(1, ChronoUnit.DAYS), 14, List.of());
+
+        assertThatThrownBy(() -> packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.packFrozen");
+        assertThat(purchase.getPausedUntil()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any(), any());
+    }
+
+    /** fix/pack-status-badges: a revoked pack cannot be paused — refused with its own reason, not "not active". */
+    @Test
+    void pausePack_revokedPack_isRefusedWithPackRevoked() {
+        SessionPackPurchase purchase = buildPurchase();
+        purchase.setRemainingSessions(0);
+        purchase.setRevokedAt(Instant.now().minus(1, ChronoUnit.HOURS));
+        purchase.setRevokedReason(SessionPackPurchase.REVOKED_CHARGEBACK_LOST);
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+
+        PausePackRequest req = new PausePackRequest(Instant.now().plus(1, ChronoUnit.DAYS), 14, List.of());
+
+        assertThatThrownBy(() -> packSessionService.pausePack(PARENT_ID, PURCHASE_ID, req))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.packRevoked");
         verify(sessionPackPurchaseRepository, never()).save(any());
     }
 

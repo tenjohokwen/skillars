@@ -12,6 +12,19 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 vi.mock('src/boot/axios', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
 }))
+const { notifyMock } = vi.hoisted(() => ({ notifyMock: vi.fn() }))
+vi.mock('quasar', async (importOriginal) => {
+  const actual = await importOriginal()
+  const real = actual.useQuasar
+  return {
+    ...actual,
+    useQuasar: () => {
+      const $q = real()
+      $q.notify = notifyMock
+      return $q
+    },
+  }
+})
 vi.mock('src/api/marketplace.api', () => ({
   getCoachProfile: vi.fn().mockResolvedValue({ displayName: 'Coach Carla' }),
 }))
@@ -147,5 +160,23 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     expect(badge(wrapper).text()).toBe('booking.packs.exhaustedLabel')
     expect(has(wrapper, 'pack-pause-cta')).toBe(false)
     expect(has(wrapper, 'pack-revoked-reason')).toBe(false)
+  })
+
+  // A pack can be frozen or withdrawn between page load and the Pause submit: the server refuses with
+  // payment.packFrozen / payment.packRevoked and the parent sees that reason, not a generic error.
+  it.each([
+    ['payment.packFrozen', 'payment.sessionPack.packFrozen'],
+    ['payment.packRevoked', 'payment.sessionPack.packRevoked'],
+  ])('a %s refusal of the pause is shown as its own message', async (errorKey, message) => {
+    const wrapper = await mountPage([BASE])
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const store = useBookingStore()
+    store.initiatePausePack.mockRejectedValue({ response: { data: { errorMsg: { errorKey } } } })
+    const setup = wrapper.vm.$.setupState
+    setup.openPauseDialog(BASE)
+    setup.pauseForm.startDate = '2099-01-01'
+    await setup.submitPause()
+    await flushPromises()
+    expect(notifyMock).toHaveBeenCalledWith({ message, type: 'negative' })
   })
 })

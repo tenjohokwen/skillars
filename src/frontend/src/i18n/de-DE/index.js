@@ -1542,6 +1542,8 @@ export default {
       packCoachMismatch: 'Dieses Sitzungspaket gilt für einen anderen Coach.',
       packPlayerMismatch: 'Dieses Sitzungspaket gehört einem anderen Spieler.',
       packPaused: 'Dieses Sitzungspaket ist pausiert. Buche erneut, sobald die Pause endet.',
+      packRevoked:
+        'Dieses Sitzungspaket wurde zurückgezogen — die restlichen Einheiten sind nicht mehr verfügbar.',
       packFrozen:
         'Dieses Sitzungspaket ist gesperrt, solange eine Zahlungsreklamation dazu offen ist.',
       packExpired: 'Dieses Sitzungspaket ist abgelaufen.',

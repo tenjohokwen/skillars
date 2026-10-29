@@ -326,6 +326,10 @@ function notifyPauseError(err) {
   const errorKey = err?.response?.data?.errorMsg?.errorKey
   if (errorKey === 'booking.pauseStartInPast') {
     $q.notify({ message: t('booking.packs.pauseStartInPast'), type: 'negative' })
+  } else if (errorKey === 'payment.packFrozen') {
+    $q.notify({ message: t('payment.sessionPack.packFrozen'), type: 'negative' })
+  } else if (errorKey === 'payment.packRevoked') {
+    $q.notify({ message: t('payment.sessionPack.packRevoked'), type: 'negative' })
   } else {
     $q.notify({ message: t('error.generic'), type: 'negative' })
   }

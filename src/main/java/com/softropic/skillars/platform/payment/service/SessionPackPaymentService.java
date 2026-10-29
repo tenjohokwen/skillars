@@ -252,6 +252,12 @@ public class SessionPackPaymentService {
             throw new OperationNotAllowedException("Coach does not own this session pack", SecurityError.MISSING_RIGHTS);
         }
 
+        // fix/pack-status-badges: a revoked pack's remaining sessions were taken away (lost chargeback, outside
+        // refund, coach suspension) — extending its expiry would revive nothing and must not be recorded.
+        if (purchase.isRevoked()) {
+            throw new PaymentGatewayException("payment.packRevoked");
+        }
+
         if (purchase.getExtendedAt() != null) {
             // Already extended by a concurrent request that committed first — 409, not 422:
             // this is a conflict with existing state, not an invalid request. Must be checked

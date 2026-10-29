@@ -2,10 +2,12 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
+import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
@@ -479,6 +481,27 @@ class SessionPackPaymentServiceTest {
         assertThat(statusOf(responses, scheduledPause.getPurchaseId())).isEqualTo("ACTIVE");
         assertThat(responseOf(responses, scheduledPause.getPurchaseId()).pausedFrom())
             .isEqualTo(scheduledPause.getPausedFrom());
+    }
+
+    /** fix/pack-status-badges: a revoked pack cannot be extended — refused before any write. */
+    @Test
+    void extendPack_revokedPack_isRefusedWithPackRevoked() {
+        CoachProfile coach = new CoachProfile();
+        coach.setId(COACH_ID);
+        when(coachProfileRepository.findByUserId(77L)).thenReturn(Optional.of(coach));
+        Instant expiresAt = Instant.now().plus(5, ChronoUnit.DAYS);
+        SessionPackPurchase revoked = purchase(0, expiresAt, null);
+        revoked.setCoachId(COACH_ID);
+        revoked.setRevokedAt(Instant.now().minus(1, ChronoUnit.HOURS));
+        revoked.setRevokedReason(SessionPackPurchase.REVOKED_COACH_SUSPENDED);
+        when(sessionPackPurchaseRepository.findByIdForUpdate(revoked.getPurchaseId())).thenReturn(Optional.of(revoked));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.extendPack(77L, revoked.getPurchaseId()))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.packRevoked");
+        assertThat(revoked.getExpiresAt()).isEqualTo(expiresAt);
+        assertThat(revoked.getExtendedAt()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
     }
 
     @Test

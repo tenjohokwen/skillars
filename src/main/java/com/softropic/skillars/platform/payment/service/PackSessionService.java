@@ -467,6 +467,15 @@ public class PackSessionService {
         if (!Objects.equals(purchase.getParentId(), parentId)) {
             throw new OperationNotAllowedException("Parent does not own this session pack", SecurityError.MISSING_RIGHTS);
         }
+        // fix/pack-status-badges: a revoked pack (its sessions were taken away) or one frozen by an open card
+        // dispute cannot be paused — a pause would cancel bookings and push out the expiry of a pack whose fate
+        // the dispute decides. Checked before the "not active" test so the client gets the specific reason.
+        if (purchase.isRevoked()) {
+            throw new PaymentGatewayException("payment.packRevoked");
+        }
+        if (purchase.isDisputeFrozen()) {
+            throw new PaymentGatewayException("payment.packFrozen");
+        }
         Instant now = Instant.now(ClockProvider.getClock());
         if (purchase.getRemainingSessions() <= 0 || purchase.getExpiresAt().isBefore(now)) {
             throw new OperationNotAllowedException("Pack is not active", SecurityError.MISSING_RIGHTS);

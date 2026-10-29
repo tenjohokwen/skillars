@@ -2308,6 +2308,8 @@ export default {
       packCoachMismatch: 'This session pack is for a different coach.',
       packPlayerMismatch: 'This session pack belongs to a different player.',
       packPaused: 'This session pack is paused. Book again once the pause ends.',
+      packRevoked:
+        'This session pack was withdrawn — its remaining sessions are no longer available.',
       packFrozen: 'This session pack is on hold while a payment dispute on it is open.',
       packExpired: 'This session pack has expired.',
       packExhausted: 'This session pack has no remaining sessions.',

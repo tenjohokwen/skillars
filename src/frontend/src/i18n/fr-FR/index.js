@@ -1969,6 +1969,8 @@ export default {
       packCoachMismatch: 'Ce pack de séances est pour un autre coach.',
       packPlayerMismatch: 'Ce pack de séances appartient à un autre joueur.',
       packPaused: 'Ce pack de séances est en pause. Réservez à nouveau à la fin de la pause.',
+      packRevoked:
+        'Ce pack de séances a été retiré — ses séances restantes ne sont plus disponibles.',
       packFrozen:
         "Ce pack de séances est bloqué tant qu'une contestation de paiement le concernant est ouverte.",
       packExpired: 'Ce pack de séances a expiré.',
