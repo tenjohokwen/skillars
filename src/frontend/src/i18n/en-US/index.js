@@ -110,7 +110,7 @@ export default {
         'Every bookable slot in your calendar will be this long. Leave it on the platform default if you are not sure.',
       step3SessionPacks: 'Session Packs (optional)',
       step3PackHelper:
-        'Offer discounted multi-session packages. Leave empty if you only want per-session pricing.',
+        'Optional: offer discounted multi-session packages. Families can always book single sessions at your per-session price.',
       step3PackEmpty: 'No packs added yet.',
       step3AddPack: 'Add Pack',
       step3PackSessions: 'Sessions',
@@ -415,6 +415,9 @@ export default {
     noReviewsYet: 'No reviews yet',
     signUpToBook: 'Sign up to book',
     bookSession: 'Book a session',
+    notBookable: 'Not bookable yet',
+    notBookableHint:
+      "This coach hasn't set a session price or a session pack yet, so they can't be booked right now.",
     sessionPacksOffered: 'Session packs',
     perSessionFrom: 'From {price}/session',
     sessionsFallbackLabel: '{count} sessions',
@@ -1825,7 +1828,10 @@ export default {
       ownBookingCaption: 'You have already requested this slot',
       notes: 'Notes for coach (optional)',
       confirmRequest: 'Request session',
-      noCreditsWarning: 'Buy a session pack to request a booking',
+      noCreditsWarning:
+        'This coach can only be booked with a session pack. Buy one to request a booking.',
+      perSessionInfo:
+        "No session pack needed: you pay this coach's per-session price when they accept your request (wallet credit first, then your saved card).",
       listTitle: 'My bookings',
       emptyState: 'No bookings yet — book your first session with a coach',
       emptyStateCta: 'Find a coach',

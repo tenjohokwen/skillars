@@ -36,6 +36,7 @@ import CoachPublicProfilePage from 'src/pages/marketplace/CoachPublicProfilePage
 import ReviewFlagAction from 'src/components/marketplace/ReviewFlagAction.vue'
 import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicator.vue'
 import AppealAction from 'src/components/common/AppealAction.vue'
+import { usePlayerStore } from 'src/stores/playerStore'
 
 const mounted = []
 
@@ -71,7 +72,11 @@ const PROFILE = {
 
 let lastRouter = null
 
-async function mountPage(coachId = 'coach-1', role = 'PARENT', { query = '', ...extraState } = {}) {
+async function mountPage(
+  coachId = 'coach-1',
+  role = 'PARENT',
+  { query = '', beforeMount, ...extraState } = {},
+) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
     initialState: { auth: { role }, ...extraState },
@@ -81,11 +86,14 @@ async function mountPage(coachId = 'coach-1', role = 'PARENT', { query = '', ...
     routes: [
       { path: '/marketplace/coaches/:coachId', component: CoachPublicProfilePage },
       { path: '/parent/coaches/:coachId/request-booking', component: { template: '<div />' } },
+      { path: '/parent/coaches/:coachId/purchase-sessions', component: { template: '<div />' } },
+      { path: '/login', component: { template: '<div />' } },
     ],
   })
   router.push(`/marketplace/coaches/${coachId}${query}`)
   await router.isReady()
   lastRouter = router
+  if (beforeMount) beforeMount(pinia)
 
   const wrapper = mount(CoachPublicProfilePage, {
     shallow: true,
@@ -412,5 +420,171 @@ describe('CoachPublicProfilePage.vue — blocked-review appeal', () => {
         enforcedAt: '2026-10-20T10:00:00Z',
       })
     }
+  })
+})
+
+// fix/per-session-booking-cta: the primary CTA no longer forces a pack purchase on a family without
+// credits when the coach has a per-session price.
+describe('CoachPublicProfilePage.vue — booking CTA matrix (per-session booking)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  const PACK = { sessionCount: 5, totalPrice: 180, currency: 'EUR', label: null }
+  const CREDITS = [{ coachId: 'coach-1', status: 'ACTIVE', creditsRemaining: 2, sessionCount: 5 }]
+  const PRICED = { perSessionPrice: 40, currency: 'EUR', sessionPacks: [] }
+  const PRICED_WITH_PACK = { perSessionPrice: 40, currency: 'EUR', sessionPacks: [PACK] }
+  const PACK_ONLY = { perSessionPrice: null, currency: 'EUR', sessionPacks: [PACK] }
+  const NEITHER = { perSessionPrice: null, currency: 'EUR', sessionPacks: [] }
+
+  const parentState = (sessionPacks = []) => ({
+    player: {
+      players: [{ id: '77', name: 'Kid One', ageTier: 'AGE_13_17' }],
+      activePlayerId: '77',
+    },
+    booking: { sessionPacks },
+  })
+  const playerState = (sessionPacks = []) => ({
+    booking: { sessionPacks },
+    beforeMount: (pinia) => usePlayerStore(pinia).fetchSelfPlayerId.mockResolvedValue('91'),
+  })
+
+  async function arrange(pricing, role, state = {}) {
+    getCoachProfile.mockResolvedValue({ ...PROFILE, ...pricing })
+    getMyReviewForCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'reviews.reviewNotFound' } } },
+    })
+    return mountPage('coach-1', role, state)
+  }
+
+  const primary = (w) => w.find('[data-testid="coach-primary-cta"]')
+  const secondary = (w) => w.find('[data-testid="coach-buy-sessions-btn"]')
+
+  it('family with credits: "Book a session" → request-booking, even for a pack-only coach', async () => {
+    const wrapper = await arrange(PACK_ONLY, 'PARENT', parentState(CREDITS))
+
+    expect(wrapper.vm.ctaAction).toBe('request')
+    expect(primary(wrapper).attributes('label')).toBe('marketplace.bookSession')
+    expect(secondary(wrapper).exists()).toBe(false)
+
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/request-booking')
+    expect(lastRouter.currentRoute.value.query).toMatchObject({
+      playerId: '77',
+      coachName: 'Coach A',
+    })
+  })
+
+  it('parent without credits, priced coach: "Book a session" → request-booking, no pack button', async () => {
+    const wrapper = await arrange(PRICED, 'PARENT', {
+      ...parentState(),
+      query: '?slot=2026-11-04T09:30',
+    })
+
+    expect(wrapper.vm.ctaAction).toBe('request')
+    expect(primary(wrapper).attributes('label')).toBe('marketplace.bookSession')
+    expect(secondary(wrapper).exists()).toBe(false)
+
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/request-booking')
+    expect(lastRouter.currentRoute.value.query).toMatchObject({
+      playerId: '77',
+      coachName: 'Coach A',
+      slot: '2026-11-04T09:30',
+    })
+  })
+
+  it('parent without credits, priced coach with a pack: secondary "Buy sessions" → purchase', async () => {
+    const wrapper = await arrange(PRICED_WITH_PACK, 'PARENT', parentState())
+
+    expect(primary(wrapper).attributes('label')).toBe('marketplace.bookSession')
+    expect(secondary(wrapper).exists()).toBe(true)
+    expect(secondary(wrapper).attributes('label')).toBe('booking.packs.buySessions')
+
+    wrapper.vm.handleBuySessions()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/purchase-sessions')
+    expect(lastRouter.currentRoute.value.query.playerId).toBe('77')
+  })
+
+  it('parent without credits, pack-only coach: "Buy sessions" → purchase (with playerId)', async () => {
+    const wrapper = await arrange(PACK_ONLY, 'PARENT', parentState())
+
+    expect(wrapper.vm.ctaAction).toBe('purchase')
+    expect(primary(wrapper).attributes('label')).toBe('booking.packs.buySessions')
+    expect(secondary(wrapper).exists()).toBe(false)
+
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/purchase-sessions')
+    expect(lastRouter.currentRoute.value.query.playerId).toBe('77')
+  })
+
+  it.each(['PARENT', 'PLAYER', null])(
+    'coach with neither price nor pack: disabled "Not bookable yet" + hint (role %s)',
+    async (role) => {
+      const state = role === 'PARENT' ? parentState() : role === 'PLAYER' ? playerState() : {}
+      const wrapper = await arrange(NEITHER, role, state)
+
+      expect(wrapper.vm.ctaAction).toBe('unbookable')
+      expect(primary(wrapper).attributes('label')).toBe('marketplace.notBookable')
+      expect(primary(wrapper).attributes('disable')).toBe('true')
+      expect(wrapper.find('[data-testid="coach-not-bookable-hint"]').exists()).toBe(true)
+      expect(secondary(wrapper).exists()).toBe(false)
+
+      const before = lastRouter.currentRoute.value.fullPath
+      wrapper.vm.handleCta()
+      await flushPromises()
+      expect(lastRouter.currentRoute.value.fullPath).toBe(before)
+    },
+  )
+
+  it('self-booking player without credits, priced coach: request-booking with own id + slot', async () => {
+    const wrapper = await arrange(PRICED_WITH_PACK, 'PLAYER', {
+      ...playerState(),
+      query: '?slot=2026-11-04T09:30',
+    })
+
+    expect(wrapper.vm.ctaAction).toBe('request')
+    expect(primary(wrapper).attributes('label')).toBe('marketplace.bookSession')
+    expect(secondary(wrapper).exists()).toBe(true)
+
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/request-booking')
+    expect(lastRouter.currentRoute.value.query).toMatchObject({
+      playerId: '91',
+      coachName: 'Coach A',
+      slot: '2026-11-04T09:30',
+    })
+  })
+
+  it('self-booking player without credits, pack-only coach: "Buy sessions" → purchase with own id', async () => {
+    const wrapper = await arrange(PACK_ONLY, 'PLAYER', playerState())
+
+    expect(wrapper.vm.ctaAction).toBe('purchase')
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/parent/coaches/coach-1/purchase-sessions')
+    expect(lastRouter.currentRoute.value.query.playerId).toBe('91')
+  })
+
+  it.each([
+    ['priced', PRICED_WITH_PACK],
+    ['pack-only', PACK_ONLY],
+  ])('anonymous viewer, %s coach: "Sign up to book" → login', async (_label, pricing) => {
+    const wrapper = await arrange(pricing, null)
+
+    expect(wrapper.vm.ctaAction).toBe('login')
+    expect(primary(wrapper).attributes('label')).toBe('marketplace.signUpToBook')
+    expect(secondary(wrapper).exists()).toBe(false)
+
+    wrapper.vm.handleCta()
+    await flushPromises()
+    expect(lastRouter.currentRoute.value.path).toBe('/login')
+    expect(lastRouter.currentRoute.value.query.returnUrl).toBe('/marketplace/coaches/coach-1')
   })
 })

@@ -299,7 +299,7 @@ describe('BookingRequestPage.vue — self-booking PLAYER sees their packs', () =
     while (mounted.length) mounted.pop().unmount()
   })
 
-  it("loads the player's own packs and renders the pack tracker + buy-sessions banner", async () => {
+  it("loads the player's own packs; with none, shows the per-session info banner, not the tracker", async () => {
     const { usePlayerStore } = await import('src/stores/playerStore')
     const { wrapper, bookingStore } = await mountPage(
       { computedSlots: [SLOT], coachTimezone: 'UTC', sessionPacks: [] },
@@ -315,9 +315,99 @@ describe('BookingRequestPage.vue — self-booking PLAYER sees their packs', () =
 
     // Was skipped for players (stale UAT.5 gating) — the packs they bought never loaded.
     expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith(SELF_PLAYER_ID)
-    expect(wrapper.find('session-pack-tracker-stub').exists()).toBe(true)
-    // The no-credits banner (with its buy-sessions action) — the only q-banner on this page.
-    expect(wrapper.find('q-banner-stub').exists()).toBe(true)
+    // fix/per-session-booking-cta: no credits → no tracker; per session is the default instead.
+    expect(wrapper.find('session-pack-tracker-stub').exists()).toBe(false)
+    expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="no-credits-warning"]').exists()).toBe(false)
+  })
+})
+
+// fix/per-session-booking-cta: a family with no pack credits books per session by default; only a
+// coach with no per-session price still requires a pack first.
+describe('BookingRequestPage.vue — per-session booking without credits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getBatchConfig.mockResolvedValue({ maxSize: 4 })
+    getBookingRequestConfig.mockResolvedValue({ activeSlotStatuses: ['REQUESTED', 'CONFIRMED'] })
+  })
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  const renderPage = { extraStubs: { QPage: { template: '<div><slot /></div>' } } }
+
+  it.each([true, null])(
+    'no credits, coachPriced=%s: per-session is the default and submittable; info banner, no warning',
+    async (coachPriced) => {
+      const { wrapper, bookingStore } = await mountPage(
+        { computedSlots: [SLOT], coachTimezone: 'UTC', sessionPacks: [], coachPriced },
+        '5',
+        undefined,
+        'PARENT',
+        renderPage,
+      )
+      wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.hasCredits).toBe(false)
+      expect(wrapper.vm.selectedPackId).toBe(null)
+      expect(wrapper.vm.canSubmit).toBe(true)
+      expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="no-credits-warning"]').exists()).toBe(false)
+      expect(wrapper.find('session-pack-tracker-stub').exists()).toBe(false)
+      // A parent paying per session gets the saved-card entry (charged on the coach's accept).
+      expect(wrapper.find('[data-test="payment-card"]').exists()).toBe(true)
+
+      await wrapper.vm.submit()
+      expect(bookingStore.submitBookingRequest).toHaveBeenCalledWith(
+        expect.objectContaining({ coachId: '77', playerId: '5', sessionPackPurchaseId: null }),
+      )
+    },
+  )
+
+  it('no credits, unpriced coach: keeps the buy-a-pack warning and blocks per-session submit', async () => {
+    const { wrapper } = await mountPage(
+      { computedSlots: [SLOT], coachTimezone: 'UTC', sessionPacks: [], coachPriced: false },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="no-credits-warning"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(false)
+    expect(wrapper.vm.canSubmit).toBe(false)
+  })
+
+  it('with credits: tracker shows the real pack size; per session stays selectable', async () => {
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacks: [
+          { id: 'p1', coachId: '77', status: 'ACTIVE', creditsRemaining: 3, sessionCount: 5 },
+        ],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+
+    const tracker = wrapper.find('session-pack-tracker-stub')
+    expect(tracker.exists()).toBe(true)
+    expect(wrapper.vm.activePackSessionTotal).toBe(5)
+    expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(false)
+    expect(wrapper.vm.packOptions[0]).toEqual({ label: 'booking.packs.perSession', value: null })
+    expect(wrapper.vm.selectedPackId).toBe(null)
+    // Choosing the pack hides the parent's per-session card entry.
+    wrapper.vm.selectedPackId = 'p1'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="payment-card"]').exists()).toBe(false)
   })
 })
 
