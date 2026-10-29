@@ -156,6 +156,9 @@ class BookingServiceTest {
         lenient().when(configService.getBoundedLong(
                 com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH))
             .thenReturn(10L);
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES))
+            .thenReturn(15L);
     }
 
     // ---- createBookingRequest tests ----
@@ -1416,7 +1419,7 @@ class BookingServiceTest {
         assertThatThrownBy(() -> bookingService.confirmProposedBooking(booking.getId(), PARENT_ID))
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
-                .isEqualTo(BookingError.START_TIME_IN_PAST));
+                .isEqualTo(BookingError.REQUEST_EXPIRED));
         verify(coachProfileRepository, never()).findByIdForUpdate(any());
     }
 
@@ -1617,6 +1620,34 @@ class BookingServiceTest {
             .isInstanceOf(OperationNotAllowedException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
                 .isEqualTo(BookingError.PRICE_NOT_LOCKED));
+        assertThat(booking.getStatus()).isEqualTo("REQUESTED");
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingAcceptedEvent.class));
+    }
+
+    /**
+     * fix/booking-completion-integrity (H2): a request whose start time has passed is refused — accepting it
+     * charged the parent for a session that was already over.
+     */
+    @Test
+    void acceptBooking_startTimeAlreadyPassed_isRefusedAsExpired() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        booking.setAgreedPrice(new BigDecimal("50.00"));
+        Instant start = Instant.now().minus(5, java.time.temporal.ChronoUnit.HOURS);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plus(1, java.time.temporal.ChronoUnit.HOURS));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.REQUEST_EXPIRED));
         assertThat(booking.getStatus()).isEqualTo("REQUESTED");
         verify(bookingRepository, never()).save(any(Booking.class));
         verify(eventPublisher, never()).publishEvent(any(BookingAcceptedEvent.class));
@@ -2139,23 +2170,26 @@ class BookingServiceTest {
         return capturedParentCancellation();
     }
 
-    @Test
-    void cancelBookingAsParent_pausedSession_isACapturedForfeit() {
-        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAUSED");
+    /**
+     * fix/booking-completion-integrity: a started session (IN_PROGRESS / PAUSED) is not parent-cancellable — a
+     * PAUSED cancel used to be a forfeit that paid the coach for a session they had stopped. Dispute instead.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"IN_PROGRESS", "PAUSED"})
+    void cancelBookingAsParent_startedSession_isRefused_noForfeit(String status) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
         booking.setRequestedStartTime(Instant.now().minus(20, java.time.temporal.ChronoUnit.MINUTES));
         booking.setRequestedEndTime(Instant.now().plus(40, java.time.temporal.ChronoUnit.MINUTES));
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
-        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
-        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
-        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
-        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
 
-        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
-
-        BookingCancelledByParentEvent event = capturedParentCancellation();
-        assertThat(event.isRefundEligible()).isFalse();
-        assertThat(event.isForfeit()).as("a started-then-paused session was paid for; the coach is paid").isTrue();
+        assertThatThrownBy(() -> bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_IN_PROGRESS));
+        assertThat(booking.getStatus()).isEqualTo(status);
+        verify(bookingRepository, never()).save(any(Booking.class));
+        verify(eventPublisher, never()).publishEvent(any(BookingCancelledByParentEvent.class));
     }
 
     @Test
@@ -2425,6 +2459,48 @@ class BookingServiceTest {
                 .isEqualTo(BookingError.NO_SHOW_TOO_EARLY));
 
         verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    /**
+     * fix/booking-completion-integrity (owner decision 2026-10-29): not before start +
+     * booking.playerNoShow.graceMinutes (15 in setUp) — a family a few minutes late is not a no-show.
+     */
+    @Test
+    void recordNoShowPlayer_insideTheGraceAfterStart_throwsNoShowTooEarly() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        Instant start = Instant.now().minus(10, java.time.temporal.ChronoUnit.MINUTES);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plus(1, java.time.temporal.ChronoUnit.HOURS));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowPlayer(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.NO_SHOW_TOO_EARLY));
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    @Test
+    void recordNoShowPlayer_afterTheGrace_isRecorded() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        Instant start = Instant.now().minus(16, java.time.temporal.ChronoUnit.MINUTES);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plus(1, java.time.temporal.ChronoUnit.HOURS));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.recordNoShowPlayer(booking.getId(), COACH_USER_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("NO_SHOW_PLAYER");
     }
 
     // ---- cancelDueToPause tests ----

@@ -25,8 +25,10 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.DateTimeException;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -84,8 +86,12 @@ public class BookingDuplicationService {
         bookingService.requirePlayerBookableUnderLock(original.getPlayerId(),
             "BookingDuplicationService.duplicateNextWeek");
 
-        Instant newStart = original.getRequestedStartTime().plus(7, ChronoUnit.DAYS);
-        Instant newEnd = original.getRequestedEndTime().plus(7, ChronoUnit.DAYS);
+        // fix/booking-completion-integrity: "same time next week" in the booking's own zone, not a fixed
+        // 7 x 24h — across a DST change that landed the duplicate an hour off in local wall-clock time
+        // (and usually outside the coach's availability window).
+        ZoneId zone = bookingZone(original.getCanonicalTimezone());
+        Instant newStart = original.getRequestedStartTime().atZone(zone).plusWeeks(1).toInstant();
+        Instant newEnd = original.getRequestedEndTime().atZone(zone).plusWeeks(1).toInstant();
 
         if (!newStart.isAfter(Instant.now())) {
             throw new OperationNotAllowedException(
@@ -174,5 +180,17 @@ public class BookingDuplicationService {
             .map(SessionPackPurchase::getPurchaseId)
             .findFirst()
             .orElse(null);
+    }
+
+    /** The booking's stamped zone; UTC when it is missing or invalid (pre-validation rows). */
+    private static ZoneId bookingZone(String canonicalTimezone) {
+        if (canonicalTimezone == null || canonicalTimezone.isBlank()) {
+            return ZoneOffset.UTC;
+        }
+        try {
+            return ZoneId.of(canonicalTimezone);
+        } catch (DateTimeException e) {
+            return ZoneOffset.UTC;
+        }
     }
 }

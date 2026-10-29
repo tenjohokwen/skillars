@@ -198,6 +198,8 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
     @Test
     void submitWrapUp_liveMode_returns204AndStatusIsCompleted() {
         setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        // fix/booking-completion-integrity: LIVE is derived server-side from a session the coach started.
+        markStartedLive();
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
 
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
@@ -224,6 +226,40 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             "SELECT what_we_did, whats_next FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
         assertThat(recap.get("what_we_did")).isEqualTo("Worked on first touch");
         assertThat(recap.get("whats_next")).isEqualTo("Continue weak-foot drills");
+    }
+
+    /**
+     * fix/booking-completion-integrity (H1): a coach who quick-completed (never started the session) and then
+     * submits the wrap-up with mode=LIVE does not complete the booking — it stays pending for the parent, and
+     * the row is recorded as QUICK.
+     */
+    @Test
+    void submitWrapUp_clientSaysLiveButSessionWasNeverStarted_staysPendingConfirmation() {
+        setBookingStatus("COMPLETED_PENDING_CONFIRMATION");
+        String coachCookies = loginAndGetCookies(COACH_EMAIL);
+
+        ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/bookings/" + bookingId + "/complete",
+            HttpMethod.POST,
+            Map.of(
+                "playerAttended", true,
+                "effortRating", 4,
+                "focusRating", 3,
+                "techniqueRating", 5,
+                "mode", "LIVE",
+                "recapWhatWeDid", "Worked on first touch",
+                "recapWhatsNext", "Continue weak-foot drills"
+            ),
+            authenticatedHeaders(coachCookies), Void.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM booking.bookings WHERE id = ?", String.class, bookingId))
+            .isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT completion_mode FROM booking.session_completion_data WHERE booking_id = ?", String.class, bookingId))
+            .isEqualTo("QUICK");
     }
 
     // skillars-12-7 AC10/AC13: what went well is stored; a deployed client still sending the removed
@@ -1140,6 +1176,11 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
             Timestamp.from(pastStart), Timestamp.from(pastStart.plusSeconds(3600)),
             Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
         );
+    }
+
+    private void markStartedLive() {
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE booking.bookings SET live_started_at = now() WHERE id = ?", bookingId));
     }
 
     private void setBookingStatus(String status) {

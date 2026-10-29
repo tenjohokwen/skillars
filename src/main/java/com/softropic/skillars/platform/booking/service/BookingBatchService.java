@@ -263,7 +263,9 @@ public class BookingBatchService {
         batch.setTotalAmount(agreedPrice.multiply(BigDecimal.valueOf(req.slots().size())));
         batchRepository.save(batch);
 
-        String canonicalTimezone = coach.getCanonicalTimezone();
+        // fix/booking-completion-integrity: the same UTC fallback as the single-request path — an invalid
+        // stored zone stamped onto the booking crashes the frontend pages that render it.
+        String canonicalTimezone = bookingService.resolveCoachTimezone(coach);
         List<Instant> sessionDates = new ArrayList<>();
 
         for (BatchSlot slot : req.slots()) {
@@ -583,6 +585,8 @@ public class BookingBatchService {
         // per-booking results) when it has no price at all — settlement used to confirm it for free.
         // fix/booking-price-and-excused-race: "no price" now means no agreed_price (PRICE_NOT_LOCKED);
         // the coach's current price is never substituted.
+        // fix/booking-completion-integrity: and never once its start time has passed (REQUEST_EXPIRED).
+        bookingService.requireRequestStartNotPassed(booking);
         bookingService.resolveSessionPrice(booking);
 
         // Must be the accept-then-initiate pair, not a bare ACCEPT: PaymentLifecycleService

@@ -453,7 +453,8 @@ import {
 } from 'src/composables/useStartConversation'
 
 // skillars-deferred-165 AC2: mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX —
-// the server is the real gate.
+// the server is the real gate. fix/booking-completion-integrity: a started (IN_PROGRESS / PAUSED) session is
+// disputable by the parent / player — it cannot be cancelled once the coach has started it.
 const DISPUTE_ELIGIBLE_STATUSES = [
   'COMPLETED',
   'CANCELLED',
@@ -461,6 +462,8 @@ const DISPUTE_ELIGIBLE_STATUSES = [
   'CANCELLED_COACH',
   'NO_SHOW_PLAYER',
   'NO_SHOW_COACH',
+  'IN_PROGRESS',
+  'PAUSED',
 ]
 function isDisputeEligible(status) {
   return DISPUTE_ELIGIBLE_STATUSES.includes(status)
@@ -640,7 +643,7 @@ const PROPOSAL_ERROR_MESSAGES = {
   'booking.notACoachProposal': 'booking.errors.notACoachProposal',
   'booking.slotUnavailable': 'booking.errors.slotUnavailable',
   'booking.coachUnavailable': 'booking.errors.coachUnavailable',
-  'booking.startTimeInPast': 'booking.errors.startTimeInPast',
+  'booking.requestExpired': 'booking.errors.requestExpired',
   'booking.concurrentModification': 'booking.errors.concurrentModification',
   'booking.invalidTransition': 'booking.errors.requestNotPending',
 }

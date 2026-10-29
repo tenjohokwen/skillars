@@ -1191,6 +1191,8 @@ export default {
         'Cette réservation n’a aucun remboursement au parent qui puisse être annulé.',
       alreadyRefunded:
         'Cette réservation a déjà été entièrement remboursée. Choisissez une autre résolution, par exemple aucune action.',
+      bookingNotSettled:
+        'Cette séance n’est pas encore terminée. Résolvez le litige une fois qu’elle est terminée (ou rejetez-le).',
       upholdCoachHelp:
         'À utiliser lorsque la séance a bien eu lieu ou que le remboursement n’était pas dû. Le remboursement est repris sur le portefeuille de crédits du parent (jamais en dessous de zéro) ou la séance restituée au forfait est de nouveau déduite, et le coach reçoit sa part complète. Tout montant non récupérable est pris en charge par Skillars.',
       recoveredAmountLabel: 'Récupéré auprès du parent',
@@ -1257,6 +1259,7 @@ export default {
         PAYOUT_HELD: 'Versement coach en attente',
         PAYOUT_REVERSAL_FAILED: "Échec de l'annulation du versement coach",
         BOOKING_ACTION_REQUIRED: 'Réservation nécessitant une action manuelle',
+        SESSION_NEVER_STARTED: 'Séance terminée sans avoir été démarrée',
       },
     },
     reviewModeration: {
@@ -2475,6 +2478,8 @@ export default {
         "Ce coach n'a pas encore fixé de prix par séance : la réservation par carte ou crédit est impossible. Utilisez un pack de séances ou réessayez plus tard.",
       priceNotLocked:
         "Cette demande n'a pas de prix convenu. Refusez-la et demandez à la famille d'envoyer une nouvelle demande.",
+      requestExpired:
+        'L’heure de début de cette demande est passée, elle ne peut donc plus être acceptée.',
       slotUnavailable: "Ce créneau horaire n'est plus disponible.",
       startTimeInPast: 'Cet horaire est déjà passé. Veuillez choisir un créneau ultérieur.',
       invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',
@@ -2518,7 +2523,8 @@ export default {
       overlappingSlots: 'Deux demandes ou plus dans ce lot se chevauchent.',
       sessionNotYetStarted:
         'Cette séance ne peut pas être démarrée ou terminée avant son heure de début prévue.',
-      noShowTooEarly: 'Une absence ne peut pas être signalée avant le début de la séance.',
+      noShowTooEarly:
+        'L’absence du joueur ne peut être signalée qu’après la période de grâce suivant le début prévu.',
       coachNoShowTooEarly:
         'L’absence du coach ne peut être signalée qu’après la période de grâce suivant le début prévu.',
       recapStillEditableAfterForceComplete:

@@ -162,6 +162,32 @@ class BookingBatchServiceTest {
         verify(bookingRepository, never()).save(any());
     }
 
+    /**
+     * fix/booking-completion-integrity: batch bookings get the single-request path's validated coach zone (UTC
+     * fallback in BookingService.resolveCoachTimezone), never the raw stored value.
+     */
+    @Test
+    void createBatch_stampsTheValidatedCoachTimezone() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        PlayerProfile player = new PlayerProfile();
+        player.setParentId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        CoachProfile coach = buildActiveCoach();
+        coach.setCanonicalTimezone("Not/AZone");
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.resolveCoachTimezone(coach)).thenReturn("UTC");
+        BookingBatch savedBatch = new BookingBatch();
+        savedBatch.setId(BATCH_ID);
+        when(batchRepository.save(any())).thenReturn(savedBatch);
+        org.mockito.ArgumentCaptor<Booking> saved = org.mockito.ArgumentCaptor.forClass(Booking.class);
+        when(bookingRepository.save(saved.capture())).thenAnswer(inv -> inv.getArgument(0));
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        service.createBatch(PARENT_ID, buildRequest(2));
+
+        assertThat(saved.getAllValues()).hasSize(2).allSatisfy(b -> assertThat(b.getCanonicalTimezone()).isEqualTo("UTC"));
+    }
+
     // ---- skillars-deferred-72 AC4: batch-level availability-staleness guard ----
 
     @Test
@@ -926,6 +952,60 @@ class BookingBatchServiceTest {
             assertThat(r.accepted()).isFalse();
             assertThat(r.errorKey()).isEqualTo("booking.slotUnavailable");
         });
+    }
+
+    /**
+     * fix/booking-completion-integrity (H2): a batch booking whose start time has passed is not accepted (it is
+     * reported booking.requestExpired); the others in the batch still are.
+     */
+    @Test
+    void acceptAll_oneBookingStartTimePassed_isReportedExpired_othersAccepted() {
+        BookingBatch batch = new BookingBatch();
+        batch.setId(BATCH_ID);
+        batch.setCoachId(COACH_ID);
+        batch.setParentId(PARENT_ID);
+        batch.setStatus("PENDING");
+        batch.setTotalAmount(BigDecimal.ZERO);
+        when(batchRepository.findById(BATCH_ID)).thenReturn(Optional.of(batch));
+        when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
+
+        CoachProfile coach = buildActiveCoach();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+
+        Instant future = Instant.now().plus(3, ChronoUnit.DAYS);
+        Instant past = Instant.now().minus(2, ChronoUnit.HOURS);
+        Booking upcoming = new Booking();
+        upcoming.setId(UUID.randomUUID());
+        upcoming.setStatus("REQUESTED");
+        upcoming.setRequestedStartTime(future);
+        upcoming.setRequestedEndTime(future.plus(1, ChronoUnit.HOURS));
+        Booking expired = new Booking();
+        expired.setId(UUID.randomUUID());
+        expired.setStatus("REQUESTED");
+        expired.setRequestedStartTime(past);
+        expired.setRequestedEndTime(past.plus(1, ChronoUnit.HOURS));
+        when(bookingRepository.findByBatchIdAndStatus(BATCH_ID, "REQUESTED")).thenReturn(List.of(upcoming, expired));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(), any(), any(), any())).thenReturn(List.of());
+        lenient().doThrow(new OperationNotAllowedException("expired", BookingError.REQUEST_EXPIRED))
+            .when(bookingService).requireRequestStartNotPassed(expired);
+
+        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(bookingInStatus("PAYMENT_PENDING"), expired));
+        when(batchRepository.save(any())).thenReturn(batch);
+        when(userRepository.findById(any())).thenReturn(Optional.empty());
+
+        List<BatchAcceptResult> results = service.acceptAll(BATCH_ID, COACH_USER_ID);
+
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(upcoming.getId());
+            assertThat(r.accepted()).isTrue();
+        });
+        assertThat(results).anySatisfy(r -> {
+            assertThat(r.bookingId()).isEqualTo(expired.getId());
+            assertThat(r.accepted()).isFalse();
+            assertThat(r.errorKey()).isEqualTo("booking.requestExpired");
+        });
+        verify(bookingService, never()).acceptAndInitiatePayment(eq(expired.getId()), any());
     }
 
     /**

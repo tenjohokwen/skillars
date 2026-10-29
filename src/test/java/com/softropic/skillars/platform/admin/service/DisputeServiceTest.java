@@ -394,6 +394,64 @@ class DisputeServiceTest {
         assertThat(payout.isDisputeFrozen()).isTrue();
     }
 
+    /** fix/booking-completion-integrity: the parent can dispute a started session (it cannot be cancelled). */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"IN_PROGRESS", "PAUSED"})
+    void raiseDispute_parentOnALiveSession_isEligible(String status) {
+        Booking booking = buildBooking();
+        booking.setStatus(status);
+        booking.setUpdatedAt(Instant.now());
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
+        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+
+        service.raiseDispute(bookingId, "COACH_NO_SHOW", "started then paused, never coached", 1L, "PARENT");
+
+        verify(disputeRepository).save(any(Dispute.class));
+        assertThat(booking.getStatus()).as("the booking keeps its status").isEqualTo(status);
+    }
+
+    /** fix/booking-completion-integrity: ... but not the coach, who controls the live session. */
+    @Test
+    void raiseDispute_coachOnALiveSession_throwsNotEligible() {
+        Booking booking = buildBooking();
+        booking.setStatus("PAUSED");
+        booking.setUpdatedAt(Instant.now());
+        Long coachUserId = 500L;
+        CoachProfile coachProfile = new CoachProfile();
+        coachProfile.setId(booking.getCoachId());
+        coachProfile.setUserId(coachUserId);
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
+
+        assertThatThrownBy(() -> service.raiseDispute(bookingId, "OTHER", "details", coachUserId, "COACH"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(DisputeError.NOT_ELIGIBLE);
+        verify(disputeRepository, never()).save(any(Dispute.class));
+    }
+
+    /**
+     * fix/booking-completion-integrity: a dispute on a session that has not completed yet is not resolvable —
+     * there is no payout to reconcile a credit against, and the coach would be paid in full on completion.
+     */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"IN_PROGRESS", "PAUSED", "COMPLETED_PENDING_CONFIRMATION"})
+    void resolveDispute_bookingNotSettledYet_isRefusedBeforeAnyWrite(String status) {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        booking.setStatus(status);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining(DisputeError.BOOKING_NOT_SETTLED.getErrorCode());
+        verifyNoInteractions(disputeCreditService);
+        verify(disputeRepository, never()).save(any());
+        assertThat(dispute.getStatus()).isEqualTo("OPEN");
+    }
+
     @Test
     void raiseDispute_releasedPayout_isLeftAsIs() {
         Booking booking = buildBooking();

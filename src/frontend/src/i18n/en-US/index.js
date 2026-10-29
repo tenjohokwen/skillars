@@ -1291,6 +1291,8 @@ export default {
       noRefundToReverse: 'This booking has no refund to the parent that could be reversed.',
       alreadyRefunded:
         'This booking has already been refunded in full. Choose another resolution, such as no action.',
+      bookingNotSettled:
+        'This session has not completed yet. Resolve the dispute once it has completed (or dismiss it).',
       upholdCoachHelp:
         'Use when the session actually took place or the refund was not owed. The refund is taken back from the parent’s credit wallet (never below zero) or the restored pack session is deducted again, and the coach is paid their full share. Any amount that cannot be recovered is absorbed by Skillars.',
       recoveredAmountLabel: 'Recovered from parent',
@@ -1357,6 +1359,7 @@ export default {
         PAYOUT_HELD: 'Coach payout on hold',
         PAYOUT_REVERSAL_FAILED: 'Coach payout reversal failed',
         BOOKING_ACTION_REQUIRED: 'Booking needs manual action',
+        SESSION_NEVER_STARTED: 'Session ended without being started',
       },
     },
     reviewModeration: {
@@ -2019,6 +2022,7 @@ export default {
         "This coach hasn't set a session price yet, so sessions can't be booked by card or credit. Use a session pack, or try again later.",
       priceNotLocked:
         'This request has no agreed price. Decline it and ask the family to send a new request.',
+      requestExpired: 'This request’s start time has passed, so it can no longer be accepted.',
       slotUnavailable: 'This time slot is no longer available.',
       startTimeInPast: 'That time has already passed. Pick a later slot.',
       invalidTimeRange: 'The session end time must be after its start time.',
@@ -2068,7 +2072,8 @@ export default {
       // zero UI callers today (skillars-deferred-63's own documented decision), so this closes a
       // long-standing gap for whenever a parent-facing no-show-report surface is eventually built,
       // not a key this story's own UI wires up.
-      noShowTooEarly: 'A no-show cannot be reported before the session has started.',
+      noShowTooEarly:
+        'A player no-show can only be reported once the grace period after the scheduled start has passed.',
       coachNoShowTooEarly:
         'A coach no-show can only be reported once the grace period after the scheduled start has passed.',
       // skillars-deferred-163 AC2.1/AC2.2: shown when the wrap-up wizard can no longer be submitted

@@ -130,6 +130,12 @@ public class BookingReminderScheduler {
             try {
                 transactionTemplate.executeWithoutResult(status -> {
                     Booking b = bookingRepository.findById(bookingId).orElseThrow();
+                    // fix/booking-completion-integrity: re-checked inside this transaction — a booking
+                    // cancelled (or started) between the id select and here must not get a "starts in 2h"
+                    // email. The @Version on save() catches a change racing this very transaction.
+                    if (!"UPCOMING".equals(b.getStatus()) || b.getSecondaryReminderSentAt() != null) {
+                        return;
+                    }
                     b.setSecondaryReminderSentAt(now);
                     bookingRepository.save(b);
                     eventPublisher.publishEvent(buildReminderEvent(b, "SECONDARY"));

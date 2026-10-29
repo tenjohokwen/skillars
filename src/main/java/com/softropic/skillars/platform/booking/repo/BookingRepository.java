@@ -79,11 +79,18 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<UUID> findIdsByCoachIdAndStatusIn(@Param("coachId") UUID coachId,
                                            @Param("statuses") Collection<String> statuses);
 
+    // fix/booking-completion-integrity: also a request whose start time has passed — it can no longer be
+    // accepted (BookingService.requireRequestStartNotPassed), so it must not hold the slot until
+    // createdAt + expiry. Paged (BookingExpiryScheduler drains page 0 each tick; expired rows leave the
+    // result), deterministic order.
     @Query("""
         SELECT b FROM Booking b
-        WHERE b.status = 'REQUESTED' AND b.createdAt < :threshold
+        WHERE b.status = 'REQUESTED'
+          AND (b.createdAt < :threshold OR b.requestedStartTime <= :now)
+        ORDER BY b.createdAt ASC, b.id ASC
         """)
-    List<Booking> findRequestedBookingsOlderThan(@Param("threshold") Instant threshold);
+    List<Booking> findExpiredRequestedBookings(@Param("threshold") Instant threshold, @Param("now") Instant now,
+                                               Pageable pageable);
 
     // Deferred-15 AC1. updatedAt, not createdAt: createdAt predates the accept by however long the
     // request sat in the coach's inbox, so it says nothing about how long settlement has been stuck.
@@ -384,6 +391,25 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     // several ticks instead of one. (The sibling findPendingQuickCompletes is uncapped but carries an
     // explicit sizing rationale and does strictly less work per row.)
     List<Booking> findStuckCompletionsWithNoSessionData(@Param("cutoff") Instant cutoff, Pageable pageable);
+
+    // fix/booking-completion-integrity: UnresolvedSessionSweeperService — live sessions (IN_PROGRESS /
+    // PAUSED) whose scheduled end is older than the cutoff. Ids only, like findIdsByCoachIdAndStatusIn:
+    // each row is re-checked under its own lock by BookingService.transition.
+    @Query("""
+        SELECT b.id FROM Booking b
+        WHERE b.status IN ('IN_PROGRESS', 'PAUSED') AND b.requestedEndTime < :cutoff
+        ORDER BY b.requestedEndTime ASC, b.id ASC
+        """)
+    List<UUID> findLiveSessionIdsEndedBefore(@Param("cutoff") Instant cutoff, Pageable pageable);
+
+    // fix/booking-completion-integrity: UPCOMING (never started) sessions whose scheduled end is older than
+    // the cutoff and that have not been alerted yet — captured money with nothing settled.
+    @Query("""
+        SELECT b.id FROM Booking b
+        WHERE b.status = 'UPCOMING' AND b.requestedEndTime < :cutoff AND b.unresolvedAlertedAt IS NULL
+        ORDER BY b.requestedEndTime ASC, b.id ASC
+        """)
+    List<UUID> findUnalertedNeverStartedIdsEndedBefore(@Param("cutoff") Instant cutoff, Pageable pageable);
 
     // skillars-12-7 AC8: COMPLETED bookings of this coach, inside the recap edit window, whose
     // session_completion_data row carries no recap text, and whose player has NOT been erased (player

@@ -117,8 +117,10 @@ class BookingDuplicationServiceTest {
         verify(bookingRepository).save(bookingCaptor.capture());
         Booking saved = bookingCaptor.getValue();
 
-        Instant expectedStart = originalStart.plus(7, ChronoUnit.DAYS);
-        Instant expectedEnd = expectedStart.plus(1, ChronoUnit.HOURS);
+        // fix/booking-completion-integrity: "next week" in the booking's zone (differs from +7x24h across DST).
+        java.time.ZoneId berlin = java.time.ZoneId.of("Europe/Berlin");
+        Instant expectedStart = originalStart.atZone(berlin).plusWeeks(1).toInstant();
+        Instant expectedEnd = originalStart.plus(1, ChronoUnit.HOURS).atZone(berlin).plusWeeks(1).toInstant();
         // Deferred-50 AC3: verify the actual duplicated-slot times were passed, not (for example)
         // the original booking's pre-duplication times — an argument-swap regression. Also pins
         // the exact message/detail-map wording this call site must keep (skillars-deferred-164 AC2).
@@ -139,6 +141,31 @@ class BookingDuplicationServiceTest {
         verify(eventPublisher).publishEvent(eventCaptor.capture());
         assertThat(eventCaptor.getValue().getParentEmail()).isEqualTo("parent@test.com");
         assertThat(eventCaptor.getValue().getCoachDisplayName()).isEqualTo("Test Coach");
+    }
+
+    /**
+     * fix/booking-completion-integrity: across the spring-forward change (Europe/Berlin, 2027-03-28) the
+     * duplicate keeps the local wall-clock time (10:00 → 10:00), i.e. one hour less than a fixed 7 x 24h.
+     */
+    @Test
+    void duplicateNextWeek_acrossADstChange_keepsTheLocalWallClockTime() {
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any())).thenReturn(List.of());
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+        when(bookingRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        Instant originalStart = Instant.parse("2027-03-22T09:00:00Z"); // 10:00 CET
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+
+        service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
+
+        ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(saved.capture());
+        assertThat(saved.getValue().getRequestedStartTime()).isEqualTo(Instant.parse("2027-03-29T08:00:00Z")); // 10:00 CEST
+        assertThat(saved.getValue().getRequestedEndTime()).isEqualTo(Instant.parse("2027-03-29T09:00:00Z"));
     }
 
     @Test
@@ -391,8 +418,8 @@ class BookingDuplicationServiceTest {
 
         verify(bookingRepository).findOverlappingBookings(
             eq(COACH_ID),
-            eq(originalStart.plus(7, ChronoUnit.DAYS)),
-            eq(originalStart.plus(1, ChronoUnit.HOURS).plus(7, ChronoUnit.DAYS)),
+            eq(originalStart.atZone(java.time.ZoneId.of("Europe/Berlin")).plusWeeks(1).toInstant()),
+            eq(originalStart.plus(1, ChronoUnit.HOURS).atZone(java.time.ZoneId.of("Europe/Berlin")).plusWeeks(1).toInstant()),
             eq(BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED),
             isNull());
         verify(bookingRepository, never()).save(any());

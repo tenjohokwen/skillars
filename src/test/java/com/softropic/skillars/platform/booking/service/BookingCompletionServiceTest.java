@@ -104,9 +104,13 @@ class BookingCompletionServiceTest {
         booking.setRequestedStartTime(Instant.now().minusSeconds(1));
         booking.setCanonicalTimezone("Europe/Berlin");
         booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        // fix/booking-completion-integrity: submitWrapUp derives the mode server-side — LIVE needs a session the
+        // coach actually started. Most wrap-up tests here are LIVE ones; the QUICK ones clear this.
+        booking.setLiveStartedAt(Instant.now().minusSeconds(3600));
 
         lenient().when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         lenient().when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(booking);
+        lenient().when(bookingService.lockBookingForUpdate(BOOKING_ID)).thenReturn(booking);
     }
 
     @Test
@@ -283,6 +287,7 @@ class BookingCompletionServiceTest {
     }
 
     private SessionCompletionData submitQuickWrapUp() {
+        booking.setLiveStartedAt(null); // quick-completed: never started
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         User parent = new User();
         parent.setEmail("parent@test.com");
@@ -411,6 +416,7 @@ class BookingCompletionServiceTest {
 
     @Test
     void submitWrapUp_quickMode_doesNotTransitionStatusAndPublishesConfirmationEvent() {
+        booking.setLiveStartedAt(null); // quick-completed: never started
         when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
         WrapUpRequest req = new WrapUpRequest(true, 3, 4, 4, List.of(), "QUICK",
             "Worked on passing accuracy", "Focus on finishing next session", null);
@@ -433,6 +439,83 @@ class BookingCompletionServiceTest {
         assertThat(event.getBookingId()).isEqualTo(BOOKING_ID);
         assertThat(event.getParentEmail()).isEqualTo("parent@test.com");
         assertThat(event.getPlayerName()).isEqualTo("Test Player");
+    }
+
+    /**
+     * fix/booking-completion-integrity (H1): a quick-completed session (never started) wrapped up with a
+     * client-sent mode=LIVE is still QUICK — it stays pending for the parent, no QUICK_COMPLETE, no
+     * BookingCompletedEvent (which would release the payout).
+     */
+    @Test
+    void submitWrapUp_clientSendsLiveForANeverStartedSession_isTreatedAsQuick() {
+        booking.setLiveStartedAt(null);
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(new User()));
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(new PlayerProfile()));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID,
+            new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE", "did", "next", null));
+
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.QUICK_COMPLETE), any());
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+        verify(eventPublisher).publishEvent(any(QuickCompleteConfirmationRequiredEvent.class));
+        ArgumentCaptor<SessionCompletionData> scd = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scd.capture());
+        assertThat(scd.getValue().getCompletionMode()).isEqualTo("QUICK");
+    }
+
+    /**
+     * fix/booking-completion-integrity: a live session the sweeper ended (autoEndedAt) wraps up as QUICK too —
+     * the coach abandoned it, so the parent's confirm / dispute window applies.
+     */
+    @Test
+    void submitWrapUp_sessionAutoEndedBySweeper_isTreatedAsQuick() {
+        booking.setAutoEndedAt(Instant.now().minusSeconds(60));
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(new User()));
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(new PlayerProfile()));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID,
+            new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE", "did", "next", null));
+
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.QUICK_COMPLETE), any());
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+    }
+
+    /**
+     * fix/booking-completion-integrity: a client-sent mode=QUICK for a session the coach started and ended is
+     * still LIVE (the server's derivation either way).
+     */
+    @Test
+    void submitWrapUp_clientSendsQuickForALiveSession_isTreatedAsLive() {
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID,
+            new WrapUpRequest(true, 4, 3, 5, List.of(), "QUICK", "did", "next", null));
+
+        verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.QUICK_COMPLETE), any(TransitionContext.class));
+        verify(eventPublisher).publishEvent(any(BookingCompletedEvent.class));
+    }
+
+    /**
+     * fix/booking-completion-integrity (payouts L4): the booking row is locked first, so a duplicate QUICK
+     * submit sees the first one's row and is a no-op — no second save, no second parent email.
+     */
+    @Test
+    void submitWrapUp_duplicateQuickSubmit_isANoOpUnderTheBookingLock() {
+        booking.setLiveStartedAt(null);
+        SessionCompletionData first = new SessionCompletionData();
+        first.setBookingId(BOOKING_ID);
+        first.setPlayerAttended(true);
+        first.setWhatWeDid("did");
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(first));
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID,
+            new WrapUpRequest(true, 4, 3, 5, List.of(), "QUICK", "did", "next", null));
+
+        verify(bookingService).lockBookingForUpdate(BOOKING_ID);
+        verify(completionDataRepository, never()).save(any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test

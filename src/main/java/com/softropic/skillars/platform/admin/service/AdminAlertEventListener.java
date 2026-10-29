@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.contract.DisputeRaisedEvent;
 import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
+import com.softropic.skillars.platform.booking.contract.SessionNeverStartedEvent;
 import com.softropic.skillars.platform.messaging.contract.ConversationReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEvent;
 import com.softropic.skillars.platform.messaging.contract.ModerationFailureEvent;
@@ -230,6 +231,19 @@ public class AdminAlertEventListener {
             return;
         }
         insertAlert(type, event.getReferenceId(), referenceType, reason);
+    }
+
+    /**
+     * fix/booking-completion-integrity: an UPCOMING session ended without being started (captured money,
+     * nothing settled). Same isolation as {@link #onPaymentIntegrityAlert}; the publisher stamps the booking
+     * so this fires once per booking.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onSessionNeverStarted(SessionNeverStartedEvent event) {
+        insertAlert(AdminAlertType.SESSION_NEVER_STARTED,
+            event.getBookingId().toString(),
+            AdminAlertReferenceType.BOOKING);
     }
 
     private static String truncateReason(String reason) {

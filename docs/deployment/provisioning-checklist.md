@@ -74,7 +74,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
   product decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206 and V208 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208 and V209 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -332,6 +332,22 @@ FROM payment.session_pack_purchases
 WHERE amount_charged IS NOT NULL
   AND payout_gross_allocated + refund_gross_issued > amount_charged;
 ```
+
+**V209: booking completion integrity** (`V209__booking_completion_integrity.sql`). Two nullable columns on
+`booking.bookings` (`auto_ended_at`, `unresolved_alerted_at`) and the `admin_alerts_type_check` rebuilt with
+`SESSION_NEVER_STARTED`. Nothing to check before it runs (the CHECK only widens). After deploy, the new
+`UnresolvedSessionSweeperService` picks up sessions that already ended unsettled, 200 per 5-minute tick:
+live sessions (IN_PROGRESS / PAUSED) whose end is more than `booking.unresolvedSession.graceMinutes` (120)
+ago move to COMPLETED_PENDING_CONFIRMATION, and ended never-started UPCOMING sessions each raise one
+`SESSION_NEVER_STARTED` alert (payment-integrity bucket). To see that backlog before deploying:
+```sql
+SELECT status, count(*) FROM booking.bookings
+WHERE status IN ('IN_PROGRESS', 'PAUSED', 'UPCOMING')
+  AND requested_end_time < now() - interval '120 minutes'
+GROUP BY 1;
+```
+The booking expiry job now also declines REQUESTED bookings whose start time has passed (not only those
+older than `booking.request_expiry_hours`), so the first run after deploy can expire a backlog of them.
 
 **V198: `uq_pcl_booking_refund_reversal`** (`V198__forfeit_payouts_and_dispute_clawback.sql`). The
 type is new in V198, so this can only fail if rows were hand-inserted:
@@ -713,6 +729,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `OutboxPollerScheduler` / `DeletionSchedulerService` (filestorage) | 5 s | `app.storage.poller.fixed-delay-ms` |
 | `ConfigService` cache refresh | 300 s | `app.config.cache-ttl-seconds`: config edits take up to 5 min to apply |
 | `BookingExpiryScheduler`, `BookingReminderScheduler`, `QuickCompleteTimeoutService`, `StuckCompletionSweeperService` | 5 min | hard-coded |
+| `UnresolvedSessionSweeperService` | 5 min | hard-coded; grace `booking.unresolvedSession.graceMinutes` (120). Ends live sessions left open past their end (to COMPLETED_PENDING_CONFIRMATION) and raises one `SESSION_NEVER_STARTED` alert per ended, never-started session |
 | `PaymentPendingSweeper` | 15 min | hard-coded |
 | `ChargeOutcomeReconciler` | 10 min | hard-coded cadence; age threshold `booking.payment.charge_reconcile_after_minutes` (10). Settles or declines booking charges whose Stripe response was lost; ERROR tags `[CHARGE_RECONCILE_AMOUNT_MISMATCH]` / `[CHARGE_RECONCILE_BOOKING_MOVED]` need an operator |
 | `CashOutReconciliationService` | 15 min | hard-coded |
@@ -770,6 +787,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `platform.admin_alert_email` | **blank** | V139 | **Must set** on PROD and UAT. While blank, admin alerts are dropped (`runbook.md` → "Admin alert recipient") |
 | `subscription.*.priceId` (7 keys) | **blank** | V139 | **Must set** ([section 4.4](#44-subscription-products-and-price-ids)) |
 | `booking.lateCancel.graceMinutes` | 30 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-28: 30 |
+| `booking.playerNoShow.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V209 | Owner decision 2026-10-29: 15. Minutes after the start before a coach may report a player no-show |
+| `booking.unresolvedSession.graceMinutes` | 120 (code default, range 30–10080) | `ConfigBounds`, V209 | Keep. Minutes after a session's end before `UnresolvedSessionSweeperService` acts on it |
 | `coach.excusedCancellations.maxPerWindow` | 3 (code default, 0–100) | `ConfigBounds` | Keep unless policy changes |
 | `coach.excusedCancellations.windowDays` | 90 (code default, 1–3650) | `ConfigBounds` | Keep |
 | `booking.request.maxPendingPerCoach` | 10 (code default, range 1–100) | `ConfigBounds` | Keep. A parent's own requests awaiting one coach's answer at once (single and batch; coach proposals not counted). Raise only if `booking.batch.maxSize` is raised above it |
@@ -973,3 +992,9 @@ an operator must now do.
   that stay cashable. New admin alert type `BOOKING_ACTION_REQUIRED` (payment-integrity bucket): an admin
   cancel whose refund amount is unknown, or a booking a coach suspension could not cancel. Finish it by
   hand and mark it handled.
+- 2026-10-29: fix/booking-completion-integrity (V209): new config keys `booking.playerNoShow.graceMinutes`
+  (15) and `booking.unresolvedSession.graceMinutes` (120), both code defaults with no seed row. New 5-minute
+  job `UnresolvedSessionSweeperService` (ShedLock) and a new admin alert type `SESSION_NEVER_STARTED`
+  (payment-integrity bucket). `BookingExpiryScheduler` now also expires REQUESTED bookings past their start
+  time. V209 is additive. Run its backlog query (section 3.2) to see what the first sweeps will touch, and
+  V209 joins the "prod is not live" list in section 0.

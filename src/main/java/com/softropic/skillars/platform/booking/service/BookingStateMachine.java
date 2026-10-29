@@ -71,16 +71,17 @@ public class BookingStateMachine {
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
             BookingEvent.DISPUTE,          BookingStatus.DISPUTED
         ));
-        // CANCEL_COACH/CANCEL_PARENT from PAUSED (not IN_PROGRESS): a live session cannot be cancelled
-        // mid-flight, but a paused one can be called off. Only the coach (CANCEL_COACH) or the parent
-        // (CANCEL_PARENT) can fire these — BookingService.EVENT_ROLES grants neither to ADMIN or SYSTEM,
-        // and CANCEL_ADMIN is deliberately absent here, so there is no admin/system path out of PAUSED.
+        // CANCEL_COACH from PAUSED (not IN_PROGRESS): a live session cannot be cancelled mid-flight, but
+        // the coach can call off a paused one (a refund to the parent). CANCEL_ADMIN is deliberately
+        // absent. fix/booking-completion-integrity: CANCEL_PARENT was removed — a parent cancel of a
+        // PAUSED session was a forfeit that paid the coach for a session they had stopped. The parent
+        // disputes a live session instead; COMPLETE_PENDING (SYSTEM, UnresolvedSessionSweeperService)
+        // ends one left open past its scheduled end.
         t.put(BookingStatus.PAUSED, Map.of(
             BookingEvent.RESUME,           BookingStatus.IN_PROGRESS,
             BookingEvent.COMPLETE_PENDING, BookingStatus.COMPLETED_PENDING_CONFIRMATION,
             BookingEvent.DISPUTE,          BookingStatus.DISPUTED,
-            BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH,
-            BookingEvent.CANCEL_PARENT,    BookingStatus.CANCELLED_PARENT
+            BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH
         ));
         t.put(BookingStatus.COMPLETED_PENDING_CONFIRMATION, Map.of(
             BookingEvent.COMPLETE,       BookingStatus.COMPLETED,

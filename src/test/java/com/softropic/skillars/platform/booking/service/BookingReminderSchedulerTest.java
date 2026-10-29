@@ -107,4 +107,22 @@ class BookingReminderSchedulerTest {
         verify(eventPublisher).publishEvent(captor.capture());
         assertThat(captor.getValue().getParentEmail()).isEqualTo("parent@example.com");
     }
+    /**
+     * fix/booking-completion-integrity: a booking cancelled between the 2h-window id select and its own
+     * transaction gets no "starts in 2h" email and no stamp.
+     */
+    @Test
+    void secondaryReminder_bookingNoLongerUpcoming_isNotSent() {
+        Booking booking = buildBooking();
+        booking.setStatus("CANCELLED_PARENT");
+        when(bookingRepository.findConfirmedForUpcomingTransition(any())).thenReturn(List.of());
+        when(bookingRepository.findUpcomingWithin2hWindow(any(), any())).thenReturn(List.of(booking));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        scheduler.processReminderWindows();
+
+        verify(eventPublisher, org.mockito.Mockito.never()).publishEvent(any());
+        verify(bookingRepository, org.mockito.Mockito.never()).save(any());
+        assertThat(booking.getSecondaryReminderSentAt()).isNull();
+    }
 }
