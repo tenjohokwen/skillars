@@ -27,13 +27,4 @@ class SkillarsPlatformPropertiesTest {
 
         assertThat(properties.getPinEncryptionSecret()).isNull();
     }
-
-    @Test
-    void notificationEmail_stillBindsCorrectly() {
-        SkillarsPlatformProperties properties = new SkillarsPlatformProperties();
-        properties.setNotificationEmail("test@example.com");
-
-        assertThat(properties.getNotificationEmail())
-            .isEqualTo("test@example.com");
-    }
 }

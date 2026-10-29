@@ -140,23 +140,6 @@ describe('AdminUsersPage.vue', () => {
     expect(adminApi.suspendUser).toHaveBeenCalledWith('9171000010', 'Policy', false)
   })
 
-  it('a coach suspension refused for a payment in flight shows the retry hint (C2)', async () => {
-    adminApi.getUser.mockResolvedValue({ ...DETAIL, role: 'COACH' })
-    adminApi.suspendUser.mockRejectedValue({
-      response: { status: 409, data: { errorMsg: { message: 'admin.coaches.paymentInProgress' } } },
-    })
-    const wrapper = await mountPage()
-    await wrapper.vm.openDetail('9171000010')
-
-    wrapper.vm.openAction('suspend')
-    wrapper.vm.actionReason = 'Policy'
-    await wrapper.vm.submitAction()
-
-    expect(notifySpy).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'negative', message: 'admin.coaches.paymentInProgress' }),
-    )
-  })
-
   it('suspending a non-coach shows no session-cancellation option', async () => {
     adminApi.getUser.mockResolvedValue({ ...DETAIL, role: 'PARENT' })
     const wrapper = await mountPage()

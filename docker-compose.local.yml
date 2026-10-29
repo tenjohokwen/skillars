@@ -57,6 +57,11 @@ services:
       # chain, breaking every upload. Keep this block in step with application-dev.yaml.
       - APP_STORAGE_S3_ACCESS_KEY=minioadmin
       - APP_STORAGE_S3_SECRET_KEY=minioadmin123
+      # The base file defaults the bucket to skillars-prod; local storage-init creates skillars-dev.
+      - APP_STORAGE_BUCKET=skillars-dev
+      # Base passes these with a prod-safe default (false / none), which overrides application-dev.yaml.
+      - APP_BOOTSTRAP_JWT_SECRET_ENABLED=${APP_BOOTSTRAP_JWT_SECRET_ENABLED:-true}
+      - ALLOWED_CLIENTS=${ALLOWED_CLIENTS:-myClientId,hisClientId,herClientId,ourClientId}
       # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
       # there), so listing it in the base file makes it present-and-blank under compose —
       # overriding application-dev.yaml's ${APP_SES_FROM_ADDRESS:dev@localhost} fallback the

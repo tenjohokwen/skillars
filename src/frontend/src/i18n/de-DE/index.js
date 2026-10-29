@@ -1834,8 +1834,6 @@ export default {
       alreadySuspended: 'Dieser Trainer war bereits gesperrt — es wurde nichts geändert.',
       suspendSuccess:
         'Trainer gesperrt. Abgesagte Sitzungen: {count} (bereits bezahlte werden vollständig erstattet).',
-      paymentInProgress:
-        'Eine Zahlung für eine Sitzung dieses Trainers wird gerade verarbeitet. Versuchen Sie es gleich noch einmal oder entfernen Sie das Häkchen bei der Sitzungsabsage, um sofort zu sperren.',
       notifyCoachLabel: 'Trainer per E-Mail benachrichtigen',
       actionSuccess: 'Erledigt.',
       actionFailed: 'Die Aktion ist fehlgeschlagen. Bitte erneut versuchen.',
@@ -1988,6 +1986,20 @@ export default {
       coachPendingAmount: 'Ausstehende Freigabe',
       coachPendingCount: 'Einheiten mit ausstehender Freigabe',
       coachStrikes: 'Zuverlässigkeitsverwarnungen (30 Tage)',
+      releaseHeld: 'Zurückgehaltene Auszahlungen freigeben',
+      releaseHeldTitle: 'Zurückgehaltene Auszahlungen freigeben?',
+      releaseHeldRecheck:
+        'Jede zurückgehaltene Auszahlung dieses Coaches wird erneut auf Sperren geprüft (offene Streitfälle, Sicherheitssperren); eine weiterhin gesperrte Auszahlung bleibt gesperrt.',
+      releaseHeldNotBefore:
+        'Die übrigen werden zur Überweisung eingeplant, jedoch nicht vor ihrem ursprünglichen Freigabedatum. Kann das Stripe-Konto weiterhin keine Überweisungen empfangen, werden sie erneut zurückgehalten.',
+      releaseHeldMismatch:
+        'Auszahlungen, die zurückgehalten werden, weil eine bestehende Stripe-Überweisung einen anderen Betrag oder ein anderes Konto hat, werden übersprungen und müssen manuell bearbeitet werden.',
+      releaseHeldRepeat: 'Dieser Vorgang kann gefahrlos wiederholt werden.',
+      releaseHeldAction: 'Freigeben',
+      releaseHeldDone:
+        'Zurückgehaltene Auszahlungen: {released} zur Überweisung eingeplant, {stillFrozen} weiterhin gesperrt, {skipped} übersprungen',
+      releaseHeldNone: 'Dieser Coach hat keine zurückgehaltenen Auszahlungen',
+      releaseHeldFailed: 'Zurückgehaltene Auszahlungen konnten nicht freigegeben werden',
     },
     bookings: {
       title: 'Buchungssuche',

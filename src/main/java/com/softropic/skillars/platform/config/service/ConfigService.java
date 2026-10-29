@@ -40,6 +40,16 @@ public class ConfigService {
 
     private static final String MISCONFIGURED_COUNTER = "config.value.misconfigured";
 
+    /** Read by the player, parent and coach registration services and by {@code AuthService}. */
+    public static final String PHONE_OTP_REQUIRED_KEY = "security.registration.phone-otp-required";
+
+    /**
+     * fix/prod-readiness-gaps: false while {@code SmsRegistrationStrategy} is a stub that sends nothing.
+     * Turning {@link #PHONE_OTP_REQUIRED_KEY} on then blocks every registration and every login of an
+     * unverified phone, so the write path refuses it. Flip this when an SMS gateway is integrated.
+     */
+    static final boolean SMS_GATEWAY_AVAILABLE = false;
+
     private final PlatformConfigRepository configRepository;
     private final ConfigProperties configProperties;
     private final ConfigMapper configMapper;
@@ -346,6 +356,7 @@ public class ConfigService {
         }
         rejectOutOfRange(key, newValue);
         rejectReviewEligibilityWindowOrdering(key, newValue);
+        rejectPhoneOtpWithoutSmsGateway(key, newValue);
 
         if (existing.isPresent()) {
             PlatformConfig entity = existing.get();
@@ -456,6 +467,15 @@ public class ConfigService {
                     + ConfigBounds.MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS + " days less than reviews.updateCooldownDays ("
                     + updateCooldownDays + ") — the cooldown would be silently superseded by the "
                     + "maturity floor");
+        }
+    }
+
+    /** See {@link #SMS_GATEWAY_AVAILABLE}. */
+    private void rejectPhoneOtpWithoutSmsGateway(String key, String newValue) {
+        if (!SMS_GATEWAY_AVAILABLE && PHONE_OTP_REQUIRED_KEY.equals(key) && "true".equalsIgnoreCase(newValue.trim())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                PHONE_OTP_REQUIRED_KEY + " cannot be enabled: no SMS gateway is integrated, so no OTP would ever "
+                    + "be delivered and every registration would be blocked");
         }
     }
 

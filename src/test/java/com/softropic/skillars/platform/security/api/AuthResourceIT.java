@@ -263,8 +263,11 @@ class AuthResourceIT extends AbstractIntegrationTest {
     @Test
     void login_unverifiedUser_returns403WithAccountNotVerifiedCode() {
         // Phone-OTP enforcement is disabled by default (security.registration.phone-otp-required=false);
-        // force it on here to verify the enforcement path itself still works when enabled.
-        configService.updateConfig(PHONE_OTP_REQUIRED_KEY, "true");
+        // force it on here to verify the enforcement path itself still works when enabled. Written
+        // straight to the table: ConfigService.updateConfig refuses "true" while no SMS gateway exists.
+        transactionTemplate.executeWithoutResult(status -> jdbcTemplate.update(
+            "UPDATE main.platform_config SET value = 'true', updated_at = NOW() WHERE key = ?", PHONE_OTP_REQUIRED_KEY));
+        configService.invalidate();
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT,

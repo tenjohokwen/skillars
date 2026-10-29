@@ -165,7 +165,7 @@ class ConfigResourceIT extends AbstractIntegrationTest {
         transactionTemplate.execute(status -> {
             // Reset any config rows modified during tests back to seed values
             jdbcTemplate.update(
-                "UPDATE main.platform_config SET value = '0.08', updated_at = NOW() WHERE key = 'platform.commission_rate'");
+                "UPDATE main.platform_config SET value = '0.08', updated_at = NOW() WHERE key = 'platform.commission.rate'");
 
             // Remove non-admin test user
             jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = " + NONADMIN_USER_ID);
@@ -207,7 +207,7 @@ class ConfigResourceIT extends AbstractIntegrationTest {
 
     @Test
     void putAsAdmin_updatesValue_subsequentGetReturnsNewValue() {
-        String key = "platform.commission_rate";
+        String key = "platform.commission.rate";
         String url = "http://localhost:" + port + "/api/config/values/" + key;
 
         UpdateConfigRequest updateRequest = new UpdateConfigRequest("0.10");
@@ -283,7 +283,7 @@ class ConfigResourceIT extends AbstractIntegrationTest {
 
     @Test
     void putAsNonAdmin_returns403() {
-        String url = "http://localhost:" + port + "/api/config/values/platform.commission_rate";
+        String url = "http://localhost:" + port + "/api/config/values/platform.commission.rate";
 
         UpdateConfigRequest updateRequest = new UpdateConfigRequest("0.99");
 

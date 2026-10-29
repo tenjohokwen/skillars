@@ -180,6 +180,12 @@ export const adminApi = {
     })
   },
 
+  // fix/payment-payout-recovery: put the coach's HOLD payouts back on the release path. Safe to repeat.
+  // Returns { released, stillFrozen, skipped }.
+  releaseHeldPayouts(coachId) {
+    return api.post(`/api/admin/payment/coaches/${coachId}/payouts/release-held`)
+  },
+
   // Stuck-booking force-complete (AdminBookingResource).
   getAdminBooking(bookingId) {
     return api.get(`/api/admin/bookings/${bookingId}`)

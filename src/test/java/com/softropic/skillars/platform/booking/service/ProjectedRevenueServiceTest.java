@@ -40,7 +40,7 @@ class ProjectedRevenueServiceTest {
     @BeforeEach
     void setUp() {
         service = new ProjectedRevenueService(bookingRepository, coachPricingRepository, configService);
-        when(configService.getString("platform.commission_rate")).thenReturn("0.08");
+        when(configService.getString("platform.commission.rate")).thenReturn("0.08");
     }
 
     @Test

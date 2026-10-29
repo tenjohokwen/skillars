@@ -218,7 +218,47 @@
           <div class="text-meta q-mt-sm">{{ t('admin.finance.coachRevenueNote') }}</div>
         </q-card-section>
         <q-card-actions align="right">
+          <q-btn
+            flat
+            color="primary"
+            :label="t('admin.finance.releaseHeld')"
+            :disable="!revenue"
+            data-testid="finance-release-held-btn"
+            @click="releaseConfirmOpen = true"
+          />
           <q-btn flat :label="t('common.close')" v-close-popup />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Release held payouts confirmation -->
+    <q-dialog v-model="releaseConfirmOpen">
+      <q-card
+        data-testid="finance-release-held-dialog"
+        style="min-width: 320px; max-width: 560px; width: 100%"
+      >
+        <q-card-section>
+          <div class="text-h6">{{ t('admin.finance.releaseHeldTitle') }}</div>
+          <div class="text-meta">{{ selectedCoachName || selectedCoachId }}</div>
+        </q-card-section>
+        <q-card-section>
+          <ul class="q-my-none q-pl-md">
+            <li>{{ t('admin.finance.releaseHeldRecheck') }}</li>
+            <li>{{ t('admin.finance.releaseHeldNotBefore') }}</li>
+            <li>{{ t('admin.finance.releaseHeldMismatch') }}</li>
+            <li>{{ t('admin.finance.releaseHeldRepeat') }}</li>
+          </ul>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="primary"
+            :label="t('admin.finance.releaseHeldAction')"
+            :loading="releasing"
+            data-testid="finance-release-held-submit-btn"
+            @click="submitReleaseHeld"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -228,10 +268,12 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
 import { isUuid } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
+const $q = useQuasar()
 
 const fromDate = ref('')
 const toDate = ref('')
@@ -257,6 +299,8 @@ const revenueError = ref('')
 const revenue = ref(null)
 const selectedCoachId = ref(null)
 const selectedCoachName = ref('')
+const releaseConfirmOpen = ref(false)
+const releasing = ref(false)
 
 // The backend defaults a missing 'from' to the start of the CURRENT month, so 'to' alone (e.g. the
 // end of last month) would silently query an empty range and show zeros. Require 'from' with 'to'.
@@ -449,6 +493,34 @@ async function loadRevenue() {
         : t('admin.finance.coachRevenueLoadError')
   } finally {
     if (token === revenueToken) revenueLoading.value = false
+  }
+}
+
+// fix/payment-payout-recovery: puts the coach's HOLD payouts back on the release path (replaces the
+// COACH_PAYOUT_HELD runbook SQL). Not period-bound, and safe to repeat.
+async function submitReleaseHeld() {
+  releasing.value = true
+  try {
+    const resp = await adminApi.releaseHeldPayouts(selectedCoachId.value)
+    releaseConfirmOpen.value = false
+    const counts = {
+      released: resp?.released ?? 0,
+      stillFrozen: resp?.stillFrozen ?? 0,
+      skipped: resp?.skipped ?? 0,
+    }
+    const none = counts.released + counts.stillFrozen + counts.skipped === 0
+    $q.notify({
+      message: none
+        ? t('admin.finance.releaseHeldNone')
+        : t('admin.finance.releaseHeldDone', counts),
+      type: none ? 'info' : 'positive',
+    })
+    // Released payouts move into "pending release".
+    if (counts.released > 0) await loadRevenue()
+  } catch {
+    $q.notify({ message: t('admin.finance.releaseHeldFailed'), type: 'negative' })
+  } finally {
+    releasing.value = false
   }
 }
 

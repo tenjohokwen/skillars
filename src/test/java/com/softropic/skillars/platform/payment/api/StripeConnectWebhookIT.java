@@ -1,11 +1,14 @@
 package com.softropic.skillars.platform.payment.api;
 
 import com.softropic.skillars.platform.payment.BasePaymentIT;
+import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
+import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.test.web.servlet.MockMvc;
@@ -41,6 +44,7 @@ class StripeConnectWebhookIT extends BasePaymentIT {
 
     // MockMvc comes from @AutoConfigureMockMvc on AbstractIntegrationTest.
     @Autowired MockMvc mockMvc;
+    @Autowired CoachStripeAccountRepository coachStripeAccountRepository;
 
     private UUID coachId;
     private String stripeAccountId;
@@ -87,6 +91,29 @@ class StripeConnectWebhookIT extends BasePaymentIT {
         // Stripe redelivery of the same event: acknowledged, recorded once.
         postSigned(CONNECT_URL, payload, CONNECT_SECRET).andExpect(status().isOk());
         assertThat(eventRows()).isEqualTo(1);
+    }
+
+    /**
+     * fix/prod-readiness-gaps: the keyset query behind CoachStripeAccountResyncScheduler, against real
+     * Postgres uuid ordering. The nil-UUID start finds a COMPLETE account; a disconnected one is skipped.
+     */
+    @Test
+    void resyncQuery_findsConnectedCompleteAccounts_skipsDeauthorized() {
+        transactionTemplate.execute(status -> jdbcTemplate.update("UPDATE payment.coach_stripe_accounts "
+            + "SET onboarding_status = 'COMPLETE', transfers_capability = 'active' WHERE coach_id = ?", coachId));
+
+        assertThat(resyncCandidates()).contains(coachId);
+
+        transactionTemplate.execute(status -> jdbcTemplate.update("UPDATE payment.coach_stripe_accounts "
+            + "SET transfers_capability = 'deauthorized' WHERE coach_id = ?", coachId));
+
+        assertThat(resyncCandidates()).doesNotContain(coachId);
+    }
+
+    private java.util.List<UUID> resyncCandidates() {
+        return coachStripeAccountRepository.findConnectedByStatusAfter("COMPLETE", "deauthorized",
+                new UUID(0L, 0L), PageRequest.of(0, 1000))
+            .stream().map(CoachStripeAccount::getCoachId).toList();
     }
 
     @Test

@@ -51,29 +51,34 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   and the onboarding status is also read from Stripe (`Account.retrieve`) when the coach returns
   from OAuth and while it is not yet `COMPLETE`. Provision both endpoints as described in
   [section 4.3](#43-webhook-endpoints-and-exact-event-lists).
-- [ ] **Never seed PROD's JWT signing key from `src/test/resources/sql/secData.sql`.**
+- [ ] **Never seed PROD's JWT signing key from `src/test/resources/sql/secData.sql`.** The passthrough
+  gap is fixed by `fix/prod-readiness-gaps`: `APP_BOOTSTRAP_JWT_SECRET_ENABLED` (default `false`) is now
+  in `docker-compose.yml`, so the `.env` procedure in `secrets-reference.md` → "JWT signing key" works.
+  Use it for one boot of a fresh PROD database, then remove it. The rest of this item still applies.
   `uat-hostwinds-deployment.md` Step 8 and `local/deployment.md` Step 5 seed `main.sec` from that
   fixture. Its encrypted key is committed to the repository, so anyone with repo access could forge
   tokens for an environment seeded from it. The supported generator, `JwtSecretBootstrapRunner`
   (`app.bootstrap.jwt-secret.enabled`), is meant for local use only. It does accept the private
-  compose-network address, but `APP_BOOTSTRAP_JWT_SECRET_ENABLED` is **not** in the `app`
-  service's `environment:` block in any compose file. Setting it in `.env`, as
-  `secrets-reference.md` → "JWT signing key" tells you to, therefore has no effect. Decide how PROD
-  gets a unique `(v1, jot)` row **(confirm)**: a one-off compose override that passes the flag, or
-  hand-written Jasypt SQL. Then verify with the query in [section 8](#8-accounts-and-seed-data).
+  compose-network address, so a PROD boot with the flag set creates a unique `(v1, jot)` row. Verify
+  it with the query in [section 8](#8-accounts-and-seed-data).
 - [x] ~~**Production object storage has no service in `docker-compose.yml`.**~~ Resolved by
   `infra/prod-seaweedfs-storage`: `docker-compose.yml` now runs single-node SeaweedFS (`storage` +
   one-shot `storage-init`) on `STORAGE_DOMAIN`, with data on the Hetzner Volume. See
   [section 5 → Object storage](#object-storage-filestorage-module-over-infrastructureblobstore).
   Moving to a managed provider later: `runbook.md` → "Moving object storage to a managed provider".
-- [ ] **Deploys take no pre-migration backup.** `deploy.yml` takes
-  no database dump before `up -d`, and its auto-revert reverts the image only. After a migration
-  has run, an image-only revert is unsafe (`rollback.md` → "Rollback After Migrations Have Run"). Take
-  a manual dump before every release that carries a migration (see [section 9](#9-release-and-post-deploy-smoke-tests)).
+- [x] ~~**Deploys take no pre-migration backup.**~~ Resolved by `fix/prod-readiness-gaps`: `deploy.yml`
+  now runs `deploy/backup/pg-backup.sh` on the node before pulling the image (step "Pre-deploy database
+  dump"). A failed dump stops the deploy, and the dump's object key is printed in the run summary as the
+  rollback pointer. The auto-revert still swaps the image only; after a migration, restore from that
+  dump (`rollback.md` → "Rollback After Migrations Have Run"). The `skip_backup` input skips it (emergency
+  only). The dump needs the `HOS_*` backup variables in `/opt/skillars/.env` and an `SSH_USER` that can
+  read that file and run `docker`.
 - [ ] **No SMS gateway exists.** `SmsRegistrationStrategy` sends nothing (it is a TODO stub), and
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
-  product decision)**.
+  product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
+  (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
+  `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
 - [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209 and V210 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
@@ -208,20 +213,21 @@ Spring `${X:default}` default.
 | `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` | live `whsec_` of the **Connect** endpoint | test `whsec_` of the Connect endpoint | every `account.updated` gets 400 (logged `STRIPE_CONNECT_WEBHOOK_SECRET_MISSING` if blank); coach status then moves only through the slower `Account.retrieve` fallback | `StripeWebhookService.processConnectWebhook` |
 | `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` | `pk_live_` | `pk_test_` | card entry, SetupIntent and pack purchase broken | `SessionPackPaymentResource` `/api/payment/stripe/config` |
 | `APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID` | live `ca_` | test `ca_` | coach Connect onboarding broken | `StripeOnboardingService` |
-| `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | `https://<DOMAIN>/api/payment/coaches/me/stripe/callback` | same with UAT host | Stripe rejects the relative compose default. **Compose's relative default overrides `application-uat.yaml`'s absolute one**, so UAT must set it too | `docker-compose.yml`, `application-uat.yaml` |
+| `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | `https://<DOMAIN>/api/payment/coaches/me/stripe/callback` | same with UAT host (**required**: the UAT compose files use `:?`) | Stripe rejects the relative compose default, which would also override `application-uat.yaml`'s absolute one | `docker-compose.yml`, `application-uat.yaml` |
 | `APP_SES_FROM_ADDRESS` | required (`transport: ses`) | n/a (`transport: smtp`) | `SesPropertiesValidator` aborts boot | `application-prod.yaml` |
-| `GMX_PASSWORD`, `GMAIL_PASSWORD` | not checked (SES) | **both required** | `ProviderConfigsValidator` aborts boot. Compose passes `${X:-}` (blank), which overrides the `dev_*` defaults in `application-uat.yaml` | `application-uat.yaml`, `docker-compose.uat.yml` |
+| `GMX_PASSWORD`, `GMAIL_PASSWORD` | not checked (SES) | **both required** | the UAT compose files require both (`:?`), so `docker compose up` stops with a message instead of a boot loop in `ProviderConfigsValidator` | `application-uat.yaml`, `docker-compose.uat.yml`, `docker-compose.uat-hostwinds.yml` |
 | `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | required | required | `RegistrationVerificationTokenService` aborts boot | `application.yaml` |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | required; rotating it invalidates stored PINs | required | fail-fast | `application.yaml` |
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | required (base64, ≥ 32 bytes) | required | fail-fast | `application.yaml` |
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | required | required | fail-fast | `application.yaml` |
 | `BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME` | required for video | test library | compose defaults the library ID to the placeholder `123456` | `docker-compose.yml` |
-| `APP_STORAGE_BUCKET` | set it (e.g. `skillars-prod`) | set it | compose default is `skillars-dev` | `docker-compose.yml` |
+| `APP_STORAGE_BUCKET` | set it (compose default `skillars-prod`) | set it | the UAT compose files pass it without a default | `docker-compose.yml` |
 | `APP_STORAGE_ENDPOINT_URL` | not from `.env`: compose sets `https://${STORAGE_DOMAIN}` | same (override) | n/a | `docker-compose.yml`, `docker-compose.uat.yml` |
 | `APP_STORAGE_S3_ACCESS_KEY`/`SECRET_KEY`, `APP_STORAGE_S3_PATH_STYLE_ACCESS` | not from `.env`: compose sets `STORAGE_ROOT_USER`/`PASSWORD` and `true` | same | uploads fail | `docker-compose.yml`, `application.yaml` |
 | `STORAGE_ROOT_USER`, `STORAGE_ROOT_PASSWORD`, `STORAGE_DOMAIN` | required | required | `storage` refuses to start on blank credentials; no `STORAGE_DOMAIN` means no certificate and broken presigned URLs | `docker-compose.yml` |
-| `APP_FRONTEND_URL` | defaults to `https://skillars.com` | **must set**: the compose default overrides `application-uat.yaml` | email links point at PROD | `docker-compose.yml` |
-| `ENVIRONMENT` | `prod` (default) | **must set `uat`**: same override problem | logs and Loki labelled `prod` | `docker-compose.yml` |
+| `APP_FRONTEND_URL` | defaults to `https://skillars.com` | **required**: the UAT compose files use `:?` (the base default would override `application-uat.yaml`) | email links point at PROD | `docker-compose.yml`, `docker-compose.uat*.yml` |
+| `ENVIRONMENT` | `prod` (default) | `uat` (the UAT compose files now default it) | logs and Loki labelled `prod` | `docker-compose.yml`, `docker-compose.uat*.yml` |
+| `ALLOWED_CLIENTS` | blank (no machine client) unless a real integration needs one | set it if testers call the API with `X-Client-Id` (`uat-deployment.md` 8.3) | a request with an unlisted `X-Client-Id` gets 403 | `application.yaml` `allowed.clients`, `docker-compose.yml` |
 | `GF_SECURITY_ADMIN_PASSWORD`, `MONITORING_DOMAIN` | required | required where Grafana runs | compose `:?` error | `docker-compose.yml` |
 | `GF_ALERT_NOTIFY_EMAIL` or `GF_SLACK_WEBHOOK_URL` | at least one | at least one where Grafana runs | `provision.sh` exits 1 | `deploy/provision.sh` |
 | Backup `HOS_*` / `S3_BACKUP_*` | required | n/a | no off-site backups | `deploy/backup/*.sh` |
@@ -237,8 +243,10 @@ Spring `${X:default}` default.
 ### 2.3 Placeholders in `application*.yaml` that are missing from `secrets-reference.md`
 
 Found by grepping every `${...}` in `src/main/resources/application*.yaml` and the compose files
-and diffing against `secrets-reference.md`. None of these is passed through `docker-compose.yml`,
-so on PROD they can only take their yaml defaults until someone adds them to the `app` service.
+and diffing against `secrets-reference.md`. Since `fix/prod-readiness-gaps` each one is documented in
+`secrets-reference.md` → "Optional application variables", and all but `APP_STORAGE_LOCAL_BASE_DIR`
+(unused by the S3 backend PROD runs) are passed through `docker-compose.yml` with defaults that mirror
+`application.yaml`.
 
 | Placeholder | Default | Note |
 |---|---|---|
@@ -248,11 +256,8 @@ so on PROD they can only take their yaml defaults until someone adds them to the
 | `APP_STORAGE_LOCAL_BASE_DIR` | `/tmp/skillars-storage` | Only used when `app.storage.provider=local` |
 | `ARACHNID_API_BASE_URL` | `https://api.c3p.ca` | Only with `features.toggles.arachnid-enabled` (`ARACHNID_API_KEY` is documented) |
 | `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH` | blank | Only with `features.toggles.videointel-enabled` |
-| `PLATFORM_NOTIFICATION_EMAIL` | **a personal address** (`application.yaml` → `skillars.platform.notification-email`) | `SkillarsPlatformProperties.getNotificationEmail()` has no caller today. Remove the personal default or document it **(confirm)** |
-
-Also undocumented as a passthrough: `APP_BOOTSTRAP_JWT_SECRET_ENABLED` is described in
-`secrets-reference.md` → "JWT signing key" as an `.env` setting, but no compose file passes it (see
-[section 0](#0-open-issues-found-while-compiling-this-checklist)).
+| ~~`PLATFORM_NOTIFICATION_EMAIL`~~ | removed | The property had no reader and a personal default; `fix/prod-readiness-gaps` deleted it. Setting it does nothing |
+| `APP_BOOTSTRAP_JWT_SECRET_ENABLED` | `false` | Now passed through compose (see [section 0](#0-open-issues-found-while-compiling-this-checklist)) |
 
 ---
 
@@ -600,8 +605,8 @@ logged at DEBUG and acknowledged):
     `COMPLETE` or `RESTRICTED` (and records the `transfers` capability that gates payouts). The
     fallback reads the account from Stripe when the coach returns from OAuth and, at most every
     30 s per coach, while `GET /api/payment/coaches/me/stripe/status` is called on a non-`COMPLETE`
-    account. Nothing re-reads a `COMPLETE` account, so a later restriction still depends on the
-    webhook.
+    account. `CoachStripeAccountResyncScheduler` (daily 07:00) re-reads every connected `COMPLETE`
+    account, so a missed `account.updated` that restricts a coach is applied within a day.
   - `account.application.deauthorized` (Connect endpoint): the coach disconnected Skillars from their
     Stripe account. The account becomes `RESTRICTED`, not payable (`transfers_capability =
     'deauthorized'`), and one coach-level `PAYOUT_HELD` admin alert is raised (reason
@@ -717,8 +722,10 @@ logged at DEBUG and acknowledged):
 - [ ] No third-party login (no OAuth2 client, no social login) and no maps or analytics SDK in
   backend or frontend. The only OAuth flow is Stripe Connect ([section 4.2](#42-connect-platform-settings)).
 - [ ] API client allowlist: `allowed.clients` (`application.yaml`, read by
-  `SecurityConfiguration.allowedClients`, header `X-Client-Id`) still holds placeholder values
-  (`myClientId,...`). Confirm what PROD clients send and override if needed **(confirm)**.
+  `SecurityConfiguration.allowedClients`, header `X-Client-Id`) is now `${ALLOWED_CLIENTS:}`: no
+  machine client is accepted unless the environment lists one. Only the dev profile keeps the old
+  placeholders (`myClientId,...`). The browser SPA does not send the header. If a real integration
+  needs one, set a long random id in `.env` **(confirm)**.
 
 ---
 
@@ -751,6 +758,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
 | `StripeSubscriptionReconciliationScheduler` | daily 05:00 | hard-coded |
 | `GdprErasureRetryScheduler` | daily 06:00 | hard-coded |
+| `CoachStripeAccountResyncScheduler` | daily 07:00 | hard-coded; re-reads each connected `COMPLETE` Stripe account (`Account.retrieve`, 200 per page, at most 25 pages per run) and applies it like `account.updated` |
 | `StalePayoutAlertScheduler` | daily 06:30 | hard-coded cron; age threshold `payment.payout.stale_alert_days` (14). Alerts only (`PAYOUT_HELD` for FROZEN/HOLD payouts unchanged that long). Pages through every stale row (200 per page, at most 50 pages per run) |
 | `MessageRetentionScheduler` | daily 02:00 | hard-coded; deletes per `platform.message_retention_months` |
 | `InAppNotificationRetentionScheduler` | daily 03:30 | `platform.notification.in-app-retention-days` (90) |
@@ -795,8 +803,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 
 | Key | Default | Source | PROD action |
 |---|---|---|---|
-| `platform.admin_alert_email` | **blank** | V139 | **Must set** on PROD and UAT. While blank, admin alerts are dropped (`runbook.md` → "Admin alert recipient") |
-| `subscription.*.priceId` (7 keys) | **blank** | V139 | **Must set** ([section 4.4](#44-subscription-products-and-price-ids)) |
+| `platform.admin_alert_email` | **blank** | V139 | **Must set** on PROD and UAT. While blank, admin alerts are dropped (`runbook.md` → "Admin alert recipient"). Outside `dev`, every boot logs an ERROR while it is blank (`config.value.misconfigured`, reason `launch_blank`) |
+| `subscription.*.priceId` (7 keys) | **blank** | V139 | **Must set** ([section 4.4](#44-subscription-products-and-price-ids)). Same boot ERROR while blank |
 | `booking.lateCancel.graceMinutes` | 30 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-28: 30 |
 | `booking.playerNoShow.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V209 | Owner decision 2026-10-29: 15. Minutes after the start before a coach may report a player no-show |
 | `booking.unresolvedSession.graceMinutes` | 120 (code default, range 30–10080) | `ConfigBounds`, V209 | Keep. Minutes after a session's end before `UnresolvedSessionSweeperService` acts on it |
@@ -806,7 +814,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.request.maxHorizonDays` | 120 (code default, range 1–730) | `ConfigBounds` | Keep. How many days ahead a session can be requested |
 | `payment.payout.hold_hours` | 48 (seed; code default 48, range 0–336) | V139, `CoachPayoutOutboxSupport` | Keep at or above the dispute window you are comfortable with **(confirm)** |
 | `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
-| `platform.commission.rate` **and** `platform.commission_rate` | 0.08 each | V139 | Two keys for one concept. Payments read `platform.commission.rate`; `ProjectedRevenueService` reads `platform.commission_rate`. Change both together |
+| `platform.commission.rate` | 0.08 | V139 | Set to the agreed rate. The only commission key since V211 (`fix/prod-readiness-gaps` deleted the duplicate `platform.commission_rate`; `ProjectedRevenueService` now reads this one too) |
 | `payment.stripe.feeRate` / `feeFixed` | 0.025 / 0.25 | V139 | Match the Stripe contract **(confirm)** |
 | `platform.payment.currency` | `eur` | V139 | Keep; it must match the Stripe prices |
 | `disputes.submissionWindowDays` | 14 | V139 | Keep |
@@ -823,7 +831,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `reliability.strike.visibilityThreshold` / `suspensionThreshold` | 3 / 5 | V139 | Keep |
 | `platform.strike_threshold.admin_alert` / `auto_suspension` | 3 / 5 | V139 | Keep |
 | `security.login.max-attempts` / `lock-window-minutes` | 5 / 15 | V139 | Keep |
-| `security.registration.phone-otp-required` | `false` | V139 (code fallback `true`) | Keep `false` until SMS exists |
+| `security.registration.phone-otp-required` | `false` | V139 (code fallback `true`) | Keep `false` until SMS exists. `PUT /api/config` rejects `true` while no gateway exists |
 | `security.age-policy.*` | u10 9, young-teen 12, teen 17 | V139 | Keep |
 | `platform.message_retention_months` | 24 (failFast) | V139 | Legal/GDPR decision **(confirm)** |
 | `gdpr.export.urlExpiryHours` | 48 | V139 | Keep |
@@ -902,14 +910,14 @@ Detail: [`deploy-guide.md`](deploy-guide.md), [`rollback.md`](rollback.md), [`ru
   `docker-compose.yml` (pull the new compose file onto the node first).
 - [ ] Pre-migration checks from [section 3.2](#32-pre-migration-data-checks) run for every pending
   migration, ideally as a rehearsal on a restored dump.
-- [ ] **Take a fresh dump** before a release that carries a migration:
-  `bash /opt/skillars/app/deploy/backup/pg-backup.sh`, which must end with `Upload verified`.
-  `deploy.yml` does not do this, and its auto-revert does not undo migrations.
+- [ ] **Fresh dump before the deploy:** `deploy.yml` step "Pre-deploy database dump" runs
+  `deploy/backup/pg-backup.sh` and fails the deploy if the upload is not verified. Do not tick
+  `skip_backup` for a release that carries a migration. The auto-revert does not undo migrations.
 - [ ] The candidate image is validated on UAT first (`deploy-guide.md` → "Before Step 2: UAT
   Validation").
 - [ ] **Rollback pointer recorded**: the image currently running (`deploy.yml` step "Capture
-  pre-deploy image" prints it; also `grep APP_IMAGE /opt/skillars/.env`) and the dump key from the
-  step above. Procedure: [`rollback.md`](rollback.md), including "Rollback After Migrations Have Run".
+  pre-deploy image" prints it; also `grep APP_IMAGE /opt/skillars/.env`) and the dump key (the run
+  summary shows it as "Pre-deploy dump (rollback pointer)"). Procedure: [`rollback.md`](rollback.md), including "Rollback After Migrations Have Run".
 
 ### UAT smoke tests (Stripe test mode)
 
@@ -1014,3 +1022,22 @@ an operator must now do.
   `PACK_SUSPENSION_REFUND` (enqueued by a coach suspension / safety hold, drained by the existing outbox
   drain and sweep). No new config keys, scheduled jobs, env vars or Stripe webhook events (it reacts to
   the already-subscribed `charge.dispute.created` / `charge.dispute.closed` / `charge.refunded`).
+- 2026-10-29: fix/prod-readiness-gaps (V211). Operators must now:
+  - UAT: set `APP_FRONTEND_URL`, `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL`, `GMX_PASSWORD` and `GMAIL_PASSWORD`
+    in `.env.uat`. The UAT compose files refuse to start without them. `ENVIRONMENT` now defaults to `uat`.
+  - Set `ALLOWED_CLIENTS` wherever a tester or integration sends `X-Client-Id`. The placeholder ids are dev-only now.
+  - PROD: set `APP_STORAGE_BUCKET`. The compose default changed from `skillars-dev` to `skillars-prod`.
+  - Make sure `deploy.yml`'s `SSH_USER` can run `deploy/backup/pg-backup.sh`. Each deploy now dumps the
+    database first and stops if the dump fails.
+
+  Other changes:
+  - V211 deletes the duplicate `platform.commission_rate` key. It is data-only, so there is no
+    pre-migration check.
+  - New daily job `CoachStripeAccountResyncScheduler` (07:00, ShedLock).
+  - New passthroughs: `APP_BOOTSTRAP_JWT_SECRET_ENABLED`, `APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL`,
+    `APP_BOOTSTRAP_ADMIN_FIRST_NAME`/`_LAST_NAME`, `APP_STORAGE_BACKUP_*`, `ARACHNID_API_BASE_URL`,
+    `VIDEOINTEL_*` and `ALLOWED_CLIENTS`.
+  - `PLATFORM_NOTIFICATION_EMAIL` was removed.
+  - `phone-otp-required=true` is now refused while no SMS gateway exists.
+  - Blank launch keys log an ERROR at boot.
+  - No new Stripe webhook events.

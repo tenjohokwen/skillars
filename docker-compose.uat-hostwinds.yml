@@ -83,8 +83,15 @@ services:
       # explanation. Boot's own mail health contributor is @ConditionalOnBean(JavaMailSenderImpl),
       # a bean nothing in this codebase creates now that spring.mail.host is gone. Kept per AC7.
       - MANAGEMENT_HEALTH_MAIL_ENABLED=${MANAGEMENT_HEALTH_MAIL_ENABLED:-false}
-      - GMAIL_PASSWORD=${GMAIL_PASSWORD:-}
-      - GMX_PASSWORD=${GMX_PASSWORD:-}
+      # UAT runs app.email.transport=smtp, and ProviderConfigsValidator aborts the boot on a blank
+      # password. Set both in .env.uat; compose refuses to start without them instead of a crash loop.
+      - GMAIL_PASSWORD=${GMAIL_PASSWORD:?set GMAIL_PASSWORD in .env.uat (UAT sends mail over SMTP)}
+      - GMX_PASSWORD=${GMX_PASSWORD:?set GMX_PASSWORD in .env.uat (UAT sends mail over SMTP)}
+      # docker-compose.yml gives these PROD defaults (https://skillars.com, prod, a relative callback),
+      # which beat application-uat.yaml. Restated here so UAT never links to or reports as production.
+      - ENVIRONMENT=${ENVIRONMENT:-uat}
+      - APP_FRONTEND_URL=${APP_FRONTEND_URL:?set APP_FRONTEND_URL in .env.uat, e.g. https://<DOMAIN>}
+      - APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL=${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:?set APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL in .env.uat, e.g. https://<DOMAIN>/api/payment/coaches/me/stripe/callback}
     # Makes `http://${DOMAIN}:9500/...` (the value baked into every presigned URL, above)
     # resolve straight to this Docker host's gateway from inside the container, instead of
     # a real DNS lookup + round-trip out to the public internet and back in on the same

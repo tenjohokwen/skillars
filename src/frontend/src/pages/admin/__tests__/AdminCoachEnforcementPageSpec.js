@@ -189,9 +189,9 @@ describe('AdminCoachEnforcementPage.vue', () => {
     )
   })
 
-  it('a suspend refused because a payment is in flight shows the retry hint (C2)', async () => {
+  it('a suspend refused with a 409 shows the conflict message and keeps the dialog open', async () => {
     adminApi.suspendCoach.mockRejectedValue({
-      response: { status: 409, data: { errorMsg: { message: 'admin.coaches.paymentInProgress' } } },
+      response: { status: 409, data: { errorMsg: { message: 'some.other.reason' } } },
     })
     const wrapper = await mountPage()
     await wrapper.vm.openProfile(COACH_ID)
@@ -201,10 +201,7 @@ describe('AdminCoachEnforcementPage.vue', () => {
     await wrapper.vm.submitAction()
 
     expect(notifySpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'negative',
-        message: 'admin.coaches.paymentInProgress',
-      }),
+      expect.objectContaining({ type: 'negative', message: 'admin.coaches.actionConflict' }),
     )
     expect(wrapper.vm.actionDialogOpen).toBe(true)
   })

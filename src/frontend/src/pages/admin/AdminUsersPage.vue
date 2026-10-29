@@ -395,8 +395,6 @@ function errorMessage(err) {
   if (key === 'admin.users.cannotSuspendSelf') return t('admin.users.cannotSuspendSelf')
   if (key === 'admin.users.erased') return t('admin.users.erased')
   if (key === 'admin.users.safetyHold') return t('admin.users.safetyHold')
-  // C2: suspending a coach account also cancels their sessions; a capture in flight refuses it (409).
-  if (key === 'admin.coaches.paymentInProgress') return t('admin.coaches.paymentInProgress')
   return t('admin.users.actionFailed')
 }
 

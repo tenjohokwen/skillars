@@ -75,3 +75,7 @@ skillars:
 # application.yaml declares no group for the log transport, which is the correct shape. Do not replace this with
 # `include: ""` - a blank include means "every contributor" in Boot, not "no group".
 # TransportHealthGroupConsistencyTest pins transport <-> include for dev/uat/prod.
+
+# Placeholder machine-client ids for local curl/Postman use only (application.yaml defaults to none).
+allowed:
+  clients: ${ALLOWED_CLIENTS:myClientId,hisClientId,herClientId,ourClientId}

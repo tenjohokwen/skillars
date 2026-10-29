@@ -45,13 +45,13 @@ public class ProjectedRevenueService {
         BigDecimal gross = perSessionPrice.multiply(BigDecimal.valueOf(bookings.size()));
         BigDecimal commissionRate;
         try {
-            String rateStr = configService.getString("platform.commission_rate");
+            String rateStr = configService.getString("platform.commission.rate");
             if (rateStr == null || rateStr.isBlank()) {
                 throw new NumberFormatException("blank");
             }
             commissionRate = new BigDecimal(rateStr);
         } catch (NumberFormatException e) {
-            log.error("Invalid or missing config 'platform.commission_rate'; defaulting to 0 commission");
+            log.error("Invalid or missing config 'platform.commission.rate'; defaulting to 0 commission");
             commissionRate = BigDecimal.ZERO;
         }
         BigDecimal commission = gross.multiply(commissionRate).setScale(2, RoundingMode.HALF_UP);
