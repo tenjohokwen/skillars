@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.stripe.exception.StripeException;
+import com.stripe.model.Account;
 import com.stripe.model.Customer;
 import com.stripe.model.Invoice;
 import com.stripe.model.PaymentIntent;
@@ -34,6 +35,14 @@ import java.time.Instant;
  */
 @Component
 public class StripeClient {
+
+    /**
+     * Retrieves a connected account (charges/payouts enabled, capabilities). Used by the onboarding
+     * fallback sync when the {@code account.updated} webhook may have been missed.
+     */
+    public Account retrieveAccount(String stripeAccountId) throws StripeException {
+        return Account.retrieve(stripeAccountId);
+    }
 
     /**
      * Creates a Stripe PaymentIntent. The idempotency key must be caller-supplied (this method only

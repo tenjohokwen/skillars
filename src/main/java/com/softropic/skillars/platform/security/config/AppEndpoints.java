@@ -48,6 +48,7 @@ public final class AppEndpoints {
         "/api/reviews/coaches/**",       // public review listing (method-level @PreAuthorize guards coach-only paths)
         "/api/video/webhooks/**",         // HMAC signature is the auth mechanism; no session required
         "/api/payment/webhooks/stripe",   // Stripe signature is the auth mechanism; no JWT available
+        "/api/payment/webhooks/stripe/connect", // Connect endpoint, own Stripe signing secret; no JWT available
         "/api/notifications/unsubscribe"  // RFC 8058 one-click unsubscribe: the HMAC-signed token is the auth mechanism
     );
     // "/manage/health/smoke" is a distinct exact path from "/manage/health" (Ant/PathPattern exact

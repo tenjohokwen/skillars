@@ -9,7 +9,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ConfigurationProperties(prefix = "app.payment.stripe")
 public class PaymentProperties {
     private String apiKey = "";
+    /** Signing secret of the platform-account webhook endpoint ({@code /api/payment/webhooks/stripe}). */
     private String webhookSecret = "";
+    /**
+     * Signing secret of the separate Connect webhook endpoint ({@code /api/payment/webhooks/stripe/connect},
+     * "events on connected accounts"). Stripe delivers a connected account's {@code account.updated}
+     * only there, and gives that endpoint its own {@code whsec_} secret.
+     */
+    private String connectWebhookSecret = "";
     private String oauthClientId = "";
     /** URL Stripe redirects to after OAuth authorisation — must be the backend callback endpoint. */
     private String oauthCallbackUrl = "/api/payment/coaches/me/stripe/callback";

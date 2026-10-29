@@ -23,7 +23,12 @@ public class PaymentIntegrityAlertEvent extends ApplicationEvent {
     }
 
     /** What {@link #getReferenceId()} names. */
-    public enum Reference { BOOKING, PAYMENT_INTENT }
+    public enum Reference {
+        BOOKING,
+        PAYMENT_INTENT,
+        /** A coach_profiles id: a condition of the coach's Connect account, not of one booking. */
+        COACH
+    }
 
     private final Kind kind;
     private final String referenceId;

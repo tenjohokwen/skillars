@@ -220,8 +220,11 @@ public class AdminAlertEventListener {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onPaymentIntegrityAlert(PaymentIntegrityAlertEvent event) {
         AdminAlertType type = AdminAlertType.valueOf(event.getKind().name());
-        AdminAlertReferenceType referenceType = event.getReference() == PaymentIntegrityAlertEvent.Reference.BOOKING
-            ? AdminAlertReferenceType.BOOKING : AdminAlertReferenceType.PAYMENT_INTENT;
+        AdminAlertReferenceType referenceType = switch (event.getReference()) {
+            case BOOKING -> AdminAlertReferenceType.BOOKING;
+            case PAYMENT_INTENT -> AdminAlertReferenceType.PAYMENT_INTENT;
+            case COACH -> AdminAlertReferenceType.COACH;
+        };
         String reason = truncateReason(event.getReason());
         if (adminAlertRepository.updateOpenAlertReason(event.getReferenceId(), type.name(), reason) > 0) {
             return;

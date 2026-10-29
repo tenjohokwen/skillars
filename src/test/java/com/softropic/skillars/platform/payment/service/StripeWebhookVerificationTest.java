@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
 import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
 import com.softropic.skillars.platform.payment.contract.event.CoachSubscriptionOrphanedEvent;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.exception.WebhookSignatureException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
@@ -47,6 +48,7 @@ import static org.mockito.Mockito.when;
 class StripeWebhookVerificationTest {
 
     private static final String WEBHOOK_SECRET = "whsec_test_secret_for_unit_tests_only";
+    private static final String CONNECT_WEBHOOK_SECRET = "whsec_test_connect_secret_for_unit_tests_only";
     private static final UUID COACH_ID = UUID.fromString("aaaaaaaa-1111-2222-3333-bbbbbbbbbbbb");
     private static final String STRIPE_ACCOUNT_ID = "acct_test123";
 
@@ -70,11 +72,13 @@ class StripeWebhookVerificationTest {
     void setUp() {
         paymentProperties = new PaymentProperties();
         paymentProperties.setWebhookSecret(WEBHOOK_SECRET);
+        paymentProperties.setConnectWebhookSecret(CONNECT_WEBHOOK_SECRET);
         meterRegistry = new SimpleMeterRegistry();
         webhookService = new StripeWebhookService(
             coachStripeAccountRepository, webhookEventRepository, paymentProperties, eventPublisher,
             paymentCoachSubscriptionRepository, paymentPlayerSubscriptionRepository,
-            stripeCustomerRepository, coachProfileRepository, meterRegistry);
+            stripeCustomerRepository, coachProfileRepository, meterRegistry,
+            new CoachStripeAccountStatusApplier(eventPublisher));
         // Wire the self-reference so @Transactional dispatch works in unit tests without a Spring context
         ReflectionTestUtils.setField(webhookService, "self", webhookService);
         // subscriptionService is @Autowired @Lazy field injection, not constructor injection —
@@ -502,6 +506,237 @@ class StripeWebhookVerificationTest {
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         String sig = HexFormat.of().formatHex(mac.doFinal(signedPayload.getBytes(StandardCharsets.UTF_8)));
         return "t=" + timestamp + ",v1=" + sig;
+    }
+
+    // ─── fix/payment-stripe-connect-webhook-endpoint: signature routing ─────────────────────────
+
+    @Test
+    void processConnectWebhook_signedWithConnectSecret_appliesAccountUpdated() throws Exception {
+        String payload = buildConnectAccountUpdatedPayload("evt_connect_001", STRIPE_ACCOUNT_ID, STRIPE_ACCOUNT_ID,
+            true, true, "active", 1_800_000_000L);
+        CoachStripeAccount account = buildAccount(COACH_ID, STRIPE_ACCOUNT_ID, "PENDING", false, false);
+        when(webhookEventRepository.insertIfAbsent("evt_connect_001", "account.updated")).thenReturn(1);
+        when(coachStripeAccountRepository.findByStripeAccountId(STRIPE_ACCOUNT_ID)).thenReturn(Optional.of(account));
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        assertThat(account.getOnboardingStatus()).isEqualTo("COMPLETE");
+        assertThat(account.getTransfersCapability()).isEqualTo("active");
+        assertThat(account.getLastEventCreatedAt()).isEqualTo(Instant.ofEpochSecond(1_800_000_000L));
+        verify(eventPublisher).publishEvent(any(CoachStripeOnboardingCompleteEvent.class));
+    }
+
+    @Test
+    void processConnectWebhook_signedWithPlatformSecret_rejected() throws Exception {
+        String payload = buildAccountUpdatedPayload(STRIPE_ACCOUNT_ID, true, true);
+
+        assertThatThrownBy(() -> webhookService.processConnectWebhook(
+                payload, buildStripeSignature(WEBHOOK_SECRET, payload)))
+            .isInstanceOf(WebhookSignatureException.class);
+        verify(webhookEventRepository, never()).insertIfAbsent(any(), any());
+    }
+
+    @Test
+    void processWebhook_signedWithConnectSecret_rejected() throws Exception {
+        String payload = buildAccountUpdatedPayload(STRIPE_ACCOUNT_ID, true, true);
+
+        assertThatThrownBy(() -> webhookService.processWebhook(
+                payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload)))
+            .isInstanceOf(WebhookSignatureException.class);
+        verify(webhookEventRepository, never()).insertIfAbsent(any(), any());
+    }
+
+    @Test
+    void processConnectWebhook_connectSecretNotConfigured_failsClosed() throws Exception {
+        paymentProperties.setConnectWebhookSecret("");
+        String payload = buildAccountUpdatedPayload(STRIPE_ACCOUNT_ID, true, true);
+        String sigHeader = buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload);
+
+        assertThatThrownBy(() -> webhookService.processConnectWebhook(payload, sigHeader))
+            .isInstanceOf(WebhookSignatureException.class);
+        verify(webhookEventRepository, never()).insertIfAbsent(any(), any());
+    }
+
+    @Test
+    void processConnectWebhook_missingSignatureHeader_rejected() {
+        assertThatThrownBy(() -> webhookService.processConnectWebhook("{}", " "))
+            .isInstanceOf(WebhookSignatureException.class);
+    }
+
+    @Test
+    void processConnectWebhook_duplicateEventId_notReapplied() throws Exception {
+        String payload = buildConnectAccountUpdatedPayload("evt_connect_dup", STRIPE_ACCOUNT_ID, STRIPE_ACCOUNT_ID,
+            true, true, "active", 1_800_000_000L);
+        when(webhookEventRepository.insertIfAbsent("evt_connect_dup", "account.updated")).thenReturn(0);
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        verify(coachStripeAccountRepository, never()).findByStripeAccountId(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void processConnectWebhook_coachOwnBusinessEvent_recordedButNotProcessed() throws Exception {
+        // A coach's own invoice on their Standard account: it must not reach SubscriptionService,
+        // even if its subscription id happened to match one of ours.
+        String payload = """
+            {
+              "id": "evt_connect_invoice",
+              "object": "event",
+              "type": "invoice.paid",
+              "account": "%s",
+              "created": 1800000000,
+              "data": { "object": { "id": "in_coach_own", "object": "invoice", "subscription": "sub_coach_own" } }
+            }
+            """.formatted(STRIPE_ACCOUNT_ID);
+        when(webhookEventRepository.insertIfAbsent("evt_connect_invoice", "invoice.paid")).thenReturn(1);
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        verify(webhookEventRepository).insertIfAbsent("evt_connect_invoice", "invoice.paid");
+        verify(subscriptionService, never()).handleSubscriptionWebhook(any(), any(), any());
+    }
+
+    @Test
+    void processConnectWebhook_eventAccountDiffersFromObject_ignored() throws Exception {
+        String payload = buildConnectAccountUpdatedPayload("evt_connect_mismatch", "acct_other", STRIPE_ACCOUNT_ID,
+            true, true, "active", 1_800_000_000L);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        verify(coachStripeAccountRepository, never()).findByStripeAccountId(any());
+    }
+
+    @Test
+    void processConnectWebhook_olderThanLastApplied_ignored() throws Exception {
+        String payload = buildConnectAccountUpdatedPayload("evt_connect_stale", STRIPE_ACCOUNT_ID, STRIPE_ACCOUNT_ID,
+            false, false, "inactive", 1_800_000_000L);
+        CoachStripeAccount account = buildAccount(COACH_ID, STRIPE_ACCOUNT_ID, "COMPLETE", true, true);
+        account.setLastEventCreatedAt(Instant.ofEpochSecond(1_800_000_100L));
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(coachStripeAccountRepository.findByStripeAccountId(STRIPE_ACCOUNT_ID)).thenReturn(Optional.of(account));
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        assertThat(account.getOnboardingStatus()).isEqualTo("COMPLETE");
+        assertThat(account.getLastEventCreatedAt()).isEqualTo(Instant.ofEpochSecond(1_800_000_100L));
+    }
+
+    // ─── account.application.deauthorized ──────────────────────────────────────────────────────
+
+    @Test
+    void processConnectWebhook_deauthorized_marksAccountNotPayable_andRaisesCoachAlert() throws Exception {
+        String payload = buildDeauthorizedPayload("evt_deauth_1", STRIPE_ACCOUNT_ID, 1_800_000_200L);
+        CoachStripeAccount account = buildAccount(COACH_ID, STRIPE_ACCOUNT_ID, "COMPLETE", true, true);
+        account.setTransfersCapability("active");
+        account.setLastEventCreatedAt(Instant.ofEpochSecond(1_800_000_100L));
+        when(webhookEventRepository.insertIfAbsent("evt_deauth_1", "account.application.deauthorized")).thenReturn(1);
+        when(coachStripeAccountRepository.findByStripeAccountId(STRIPE_ACCOUNT_ID)).thenReturn(Optional.of(account));
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        assertThat(account.getOnboardingStatus()).isEqualTo("RESTRICTED");
+        assertThat(account.isChargesEnabled()).isFalse();
+        assertThat(account.isPayoutsEnabled()).isFalse();
+        assertThat(account.getTransfersCapability()).isEqualTo(CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED);
+        assertThat(account.getLastEventCreatedAt()).isEqualTo(Instant.ofEpochSecond(1_800_000_200L));
+        ArgumentCaptor<PaymentIntegrityAlertEvent> alert = ArgumentCaptor.forClass(PaymentIntegrityAlertEvent.class);
+        verify(eventPublisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().getKind()).isEqualTo(PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD);
+        assertThat(alert.getValue().getReference()).isEqualTo(PaymentIntegrityAlertEvent.Reference.COACH);
+        assertThat(alert.getValue().getReferenceId()).isEqualTo(COACH_ID.toString());
+        assertThat(alert.getValue().getReason()).startsWith("STRIPE_DEAUTHORIZED");
+    }
+
+    @Test
+    void processConnectWebhook_deauthorizedRedelivery_isDeduplicated() throws Exception {
+        String payload = buildDeauthorizedPayload("evt_deauth_dup", STRIPE_ACCOUNT_ID, 1_800_000_200L);
+        when(webhookEventRepository.insertIfAbsent("evt_deauth_dup", "account.application.deauthorized")).thenReturn(0);
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        verify(coachStripeAccountRepository, never()).findByStripeAccountId(any());
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void processConnectWebhook_deauthorizedOlderThanReconnect_ignored() throws Exception {
+        // The coach reconnected (marker = connect time) after the deauthorization was created.
+        String payload = buildDeauthorizedPayload("evt_deauth_stale", STRIPE_ACCOUNT_ID, 1_800_000_000L);
+        CoachStripeAccount account = buildAccount(COACH_ID, STRIPE_ACCOUNT_ID, "COMPLETE", true, true);
+        account.setTransfersCapability("active");
+        account.setLastEventCreatedAt(Instant.ofEpochSecond(1_800_000_050L));
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(coachStripeAccountRepository.findByStripeAccountId(STRIPE_ACCOUNT_ID)).thenReturn(Optional.of(account));
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        assertThat(account.getOnboardingStatus()).isEqualTo("COMPLETE");
+        assertThat(account.getTransfersCapability()).isEqualTo("active");
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void processConnectWebhook_deauthorizedUnknownAccount_noOp() throws Exception {
+        String payload = buildDeauthorizedPayload("evt_deauth_unknown", "acct_unknown", 1_800_000_000L);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(coachStripeAccountRepository.findByStripeAccountId("acct_unknown")).thenReturn(Optional.empty());
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    @Test
+    void processConnectWebhook_accountUpdatedAfterDeauthorization_doesNotReenable() throws Exception {
+        String payload = buildConnectAccountUpdatedPayload("evt_after_deauth", STRIPE_ACCOUNT_ID, STRIPE_ACCOUNT_ID,
+            true, true, "active", 1_800_000_300L);
+        CoachStripeAccount account = buildAccount(COACH_ID, STRIPE_ACCOUNT_ID, "RESTRICTED", false, false);
+        account.setTransfersCapability(CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED);
+        account.setLastEventCreatedAt(Instant.ofEpochSecond(1_800_000_200L));
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(coachStripeAccountRepository.findByStripeAccountId(STRIPE_ACCOUNT_ID)).thenReturn(Optional.of(account));
+
+        webhookService.processConnectWebhook(payload, buildStripeSignature(CONNECT_WEBHOOK_SECRET, payload));
+
+        assertThat(account.getOnboardingStatus()).isEqualTo("RESTRICTED");
+        assertThat(account.getTransfersCapability()).isEqualTo(CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED);
+    }
+
+    private static String buildDeauthorizedPayload(String eventId, String account, long created) {
+        return """
+            {
+              "id": "%s",
+              "object": "event",
+              "type": "account.application.deauthorized",
+              "account": "%s",
+              "created": %d,
+              "data": { "object": { "id": "ca_platform", "object": "application", "name": "Skillars" } }
+            }
+            """.formatted(eventId, account, created);
+    }
+
+    private static String buildConnectAccountUpdatedPayload(String eventId, String eventAccount, String objectId,
+            boolean chargesEnabled, boolean payoutsEnabled, String transfers, long created) {
+        return """
+            {
+              "id": "%s",
+              "object": "event",
+              "type": "account.updated",
+              "account": "%s",
+              "created": %d,
+              "data": {
+                "object": {
+                  "id": "%s",
+                  "object": "account",
+                  "charges_enabled": %b,
+                  "payouts_enabled": %b,
+                  "capabilities": { "transfers": "%s" }
+                }
+              }
+            }
+            """.formatted(eventId, eventAccount, created, objectId, chargesEnabled, payoutsEnabled, transfers);
     }
 
     private static String buildAccountUpdatedPayload(String accountId, boolean chargesEnabled, boolean payoutsEnabled) {

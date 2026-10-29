@@ -2190,6 +2190,8 @@ export default {
       payoutsEnabled: 'Payouts enabled',
       setupPending: 'Setup pending — follow Stripe instructions',
       setupRestricted: 'Account restricted — contact Stripe support',
+      disconnected:
+        'Your Stripe account is disconnected from Skillars. Reconnect it to receive payouts.',
     },
     error: {
       coachStripeNotConfigured: 'This coach has not completed their payment setup yet',

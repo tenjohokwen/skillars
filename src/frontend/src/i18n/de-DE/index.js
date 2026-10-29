@@ -1432,6 +1432,8 @@ export default {
       payoutsEnabled: 'Auszahlungen aktiviert',
       setupPending: 'Einrichtung ausstehend — folgen Sie den Stripe-Anweisungen',
       setupRestricted: 'Konto eingeschränkt — kontaktieren Sie den Stripe-Support',
+      disconnected:
+        'Ihr Stripe-Konto ist von Skillars getrennt. Verbinden Sie es erneut, um Auszahlungen zu erhalten.',
     },
     error: {
       coachStripeNotConfigured:

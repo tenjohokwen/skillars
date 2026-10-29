@@ -87,6 +87,25 @@
           </div>
         </div>
 
+        <!-- Disconnected: the coach revoked Skillars' access in Stripe; offer a reconnect -->
+        <div
+          v-else-if="stripeStatus.disconnected"
+          class="column q-gutter-md"
+          data-testid="stripe-disconnected"
+        >
+          <div class="row items-center q-gutter-sm">
+            <q-icon name="mdi-link-off" color="negative" size="sm" />
+            <span class="text-negative">{{ t('payment.stripe.disconnected') }}</span>
+          </div>
+          <q-btn
+            :label="t('payment.stripe.connectCta')"
+            style="background: var(--color-accent-primary, #f5a623); color: white"
+            :loading="connectingStripe"
+            data-testid="stripe-reconnect-btn"
+            @click="connectStripe"
+          />
+        </div>
+
         <!-- Restricted state -->
         <div
           v-else-if="stripeStatus.onboardingStatus === 'RESTRICTED'"

@@ -529,11 +529,13 @@ registered webhook endpoint to exercise Stripe from a laptop.**
 - The Stripe CLI forwards webhooks over an outbound tunnel it opens itself:
 
   ```bash
-  stripe listen --forward-to localhost:9990/api/payment/webhooks/stripe
+  stripe listen --forward-to localhost:9990/api/payment/webhooks/stripe \
+    --forward-connect-to localhost:9990/api/payment/webhooks/stripe/connect
   ```
 
-  It prints a `whsec_...` signing secret; set it as
-  `APP_PAYMENT_STRIPE_WEBHOOK_SECRET`. `StripeWebhookResource` is `permitAll()`,
+  It prints a `whsec_...` signing secret; set it as both
+  `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` and `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET`
+  (the CLI signs both streams with the same key). `StripeWebhookResource` is `permitAll()`,
   so nothing else is in the way.
 
 So if you later want the card flows, set a real `sk_test_...` key plus the

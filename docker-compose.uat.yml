@@ -9,6 +9,7 @@ services:
       # webhook endpoint against this box's public domain.
       - APP_PAYMENT_STRIPE_API_KEY=${APP_PAYMENT_STRIPE_API_KEY}
       - APP_PAYMENT_STRIPE_WEBHOOK_SECRET=${APP_PAYMENT_STRIPE_WEBHOOK_SECRET}
+      - APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET=${APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET}
       - APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID=${APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID}
       # Same VideoProviderConfig gotcha documented in docker-compose.local.yml /
       # local/deployment.md: app.video.bunny.library-id is eagerly validated as numeric

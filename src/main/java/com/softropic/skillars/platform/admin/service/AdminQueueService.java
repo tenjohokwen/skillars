@@ -126,6 +126,9 @@ public class AdminQueueService {
         return o == null ? null : Instant.parse(o.toString());
     }
 
+    /** Must match {@code CoachStripeAccountStatusApplier.DEAUTHORIZED_ALERT_REASON}'s prefix. */
+    static final String STRIPE_DEAUTHORIZED_REASON = "STRIPE_DEAUTHORIZED";
+
     private String buildSummary(AdminAlertType type, String referenceId, String reason) {
         return switch (type) {
             case MESSAGE_REPORT -> {
@@ -221,7 +224,13 @@ public class AdminQueueService {
             case EXTERNAL_REFUND -> "Payment " + referenceId + " refunded outside the app"
                 + (reason != null ? " (" + reason + ")" : "")
                 + " — no credit or payout was adjusted; reconcile the booking and coach payout by hand";
-            case PAYOUT_HELD -> "Coach payout for booking " + referenceId + " is on HOLD"
+            // fix/payment-stripe-connect-webhook-endpoint: account.application.deauthorized raises one
+            // coach-level alert (referenceId = coach_profiles id), ahead of the per-booking HOLDs.
+            case PAYOUT_HELD -> reason != null && reason.startsWith(STRIPE_DEAUTHORIZED_REASON)
+                ? "Coach " + referenceId + " disconnected the platform from their Stripe account ("
+                    + reason + ") — payouts to them go to HOLD until they reconnect in payment settings;"
+                    + " then release the held payouts (runbook COACH_PAYOUT_HELD)"
+                : "Coach payout for booking " + referenceId + " is on HOLD"
                 + (reason != null ? " (" + reason + ")" : "")
                 + " — the transfer cannot be made; see runbook COACH_PAYOUT_HELD";
             case PAYOUT_REVERSAL_FAILED -> "Coach payout reversal failed for booking " + referenceId

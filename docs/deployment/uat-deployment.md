@@ -228,7 +228,7 @@ but the point is to not rely on that backstop.
 
 ---
 
-## Step 5: Register the Stripe webhook endpoint
+## Step 5: Register the Stripe webhook endpoints
 
 Because this server is publicly reachable, Stripe can deliver webhooks
 directly — no local forwarding tool needed here (that's only for iterating
@@ -236,29 +236,41 @@ on your own machine before deploying; see the note in
 [`docs/dev-docs/payment/index.html`](../dev-docs/payment/index.html#running-stripe-listen-locally)
 if you want to test webhook-driven flows without touching UAT at all).
 
+You need **two** endpoints. Coaches are connected (Standard) accounts, and
+Stripe sends their events only to an endpoint that listens to events on
+connected accounts. Each endpoint has its own signing secret.
+
 1. In the Stripe Dashboard, with **Test mode** still on, go to
    **Developers → Webhooks → Add endpoint**
-2. Endpoint URL: `https://<DOMAIN>/api/payment/webhooks/stripe`
-   (e.g. `https://uat.skillars.com/api/payment/webhooks/stripe`)
-3. Select the events this app handles (`StripeWebhookService`), or select
-   **all events** for a UAT box since correctness matters more than noise here:
-   - `account.updated` — tick **Listen to events on Connected accounts** for
-     this one (it is a coach's connected account changing, not the platform's)
-   - `customer.subscription.updated`, `customer.subscription.deleted`,
-     `invoice.payment_failed`, `invoice.paid` — `invoice.paid` returns a
-     recovered past-due subscription to ACTIVE and resets its grace clock;
-     without it a paying subscriber can be cancelled at grace expiry if the
-     matching `customer.subscription.updated` is lost
-   - `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` —
-     card disputes freeze the coach payouts the charge funded; a refund made
-     in the Dashboard raises an admin alert. Without these a chargeback is
-     invisible to the app and the coach is paid anyway
-4. After creating the endpoint, click it and copy the **Signing secret**
-   (`whsec_...`) — this is `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` in `.env.uat`
+2. **Account endpoint** ("events on your account"):
+   - URL: `https://<DOMAIN>/api/payment/webhooks/stripe`
+     (e.g. `https://uat.skillars.com/api/payment/webhooks/stripe`)
+   - Events (`StripeWebhookService.handleEventAtomically`), or **all events**
+     on a UAT box since correctness matters more than noise here:
+     - `customer.subscription.updated`, `customer.subscription.deleted`,
+       `invoice.payment_failed`, `invoice.paid` — `invoice.paid` returns a
+       recovered past-due subscription to ACTIVE and resets its grace clock;
+       without it a paying subscriber can be cancelled at grace expiry if the
+       matching `customer.subscription.updated` is lost
+     - `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` —
+       card disputes freeze the coach payouts the charge funded; a refund made
+       in the Dashboard raises an admin alert. Without these a chargeback is
+       invisible to the app and the coach is paid anyway
+   - Copy its **Signing secret** (`whsec_...`) into
+     `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` in `.env.uat`
+3. **Connect endpoint** ("events on connected accounts"): add a second endpoint
+   - URL: `https://<DOMAIN>/api/payment/webhooks/stripe/connect`
+   - Events (the only Connect events the app acts on):
+     - `account.updated` — marks a coach's onboarding `COMPLETE` or `RESTRICTED`
+     - `account.application.deauthorized` — the coach disconnected Skillars in
+       Stripe: the account becomes not payable, payouts go to `HOLD`, an admin
+       `PAYOUT_HELD` alert is raised, and the coach is offered a reconnect
+   - Copy its **Signing secret** into
+     `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` in `.env.uat`
 
 The signature check happens in `StripeWebhookService` — an endpoint
 registered against the wrong domain, or a `.env.uat` with the wrong signing
-secret, fails closed (`payment.webhookSignatureInvalid` / HTTP 400), not
+secret (including the two secrets swapped), fails closed (`payment.webhookSignatureInvalid` / HTTP 400), not
 open, so a misconfiguration here is loud rather than silently accepting
 forged events.
 

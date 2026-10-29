@@ -1894,6 +1894,8 @@ export default {
       payoutsEnabled: 'Versements activés',
       setupPending: 'Configuration en attente — suivez les instructions de Stripe',
       setupRestricted: 'Compte restreint — contactez le support Stripe',
+      disconnected:
+        'Votre compte Stripe est déconnecté de Skillars. Reconnectez-le pour recevoir vos versements.',
     },
     error: {
       coachStripeNotConfigured: "Ce coach n'a pas encore terminé la configuration de son paiement",

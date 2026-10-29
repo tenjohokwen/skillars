@@ -55,6 +55,19 @@ class PaymentIntegrityAlertListenerTest {
     }
 
     @Test
+    void coachReference_mapsToCoachReferenceType() {
+        // fix/payment-stripe-connect-webhook-endpoint: account.application.deauthorized
+        listener.onPaymentIntegrityAlert(new PaymentIntegrityAlertEvent(this,
+            PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD, "coach-1", PaymentIntegrityAlertEvent.Reference.COACH,
+            "STRIPE_DEAUTHORIZED acct_1"));
+
+        ArgumentCaptor<AdminAlert> c = ArgumentCaptor.forClass(AdminAlert.class);
+        verify(adminAlertRepository).saveAndFlush(c.capture());
+        assertThat(c.getValue().getReferenceType()).isEqualTo(AdminAlertReferenceType.COACH);
+        assertThat(c.getValue().getReferenceId()).isEqualTo("coach-1");
+    }
+
+    @Test
     void laterEvent_refreshesTheOpenAlertsReason_noSecondAlert() {
         when(adminAlertRepository.updateOpenAlertReason("pi_1", "CHARGEBACK", "LOST 50.00 eur")).thenReturn(1);
 
