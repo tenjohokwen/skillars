@@ -2,10 +2,12 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
+import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
@@ -445,6 +447,63 @@ class SessionPackPaymentServiceTest {
         assertThat(statusOf(responses, expired.getPurchaseId())).isEqualTo("EXPIRED");
     }
 
+    /**
+     * fix/pack-status-badges: a revoked pack reads REVOKED (not EXHAUSTED, though its sessions were zeroed) and
+     * carries its reason; a pack under an open card dispute reads FROZEN (even while paused); a pause scheduled
+     * for later leaves the pack ACTIVE with its pausedFrom exposed.
+     */
+    @Test
+    void getPacksForParent_reportsRevokedFrozenAndScheduledPause() {
+        Instant now = Instant.now();
+        SessionPackPurchase revoked = purchase(0, now.plus(10, ChronoUnit.DAYS), null);
+        revoked.setRevokedAt(now.minus(1, ChronoUnit.HOURS));
+        revoked.setRevokedReason(SessionPackPurchase.REVOKED_CHARGEBACK_LOST);
+        SessionPackPurchase frozen = purchase(3, now.plus(10, ChronoUnit.DAYS), null);
+        frozen.setDisputeFrozenAt(now.minus(1, ChronoUnit.HOURS));
+        SessionPackPurchase frozenWhilePaused = purchase(3, now.plus(10, ChronoUnit.DAYS),
+            now.plus(5, ChronoUnit.DAYS));
+        frozenWhilePaused.setDisputeFrozenAt(now.minus(1, ChronoUnit.HOURS));
+        SessionPackPurchase scheduledPause = purchase(3, now.plus(10, ChronoUnit.DAYS),
+            now.plus(8, ChronoUnit.DAYS));
+        scheduledPause.setPausedFrom(now.plus(2, ChronoUnit.DAYS));
+
+        when(sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(PARENT_ID))
+            .thenReturn(List.of(revoked, frozen, frozenWhilePaused, scheduledPause));
+        when(sessionPackTierRepository.findAllById(any())).thenReturn(List.of());
+
+        List<SessionPackPurchaseResponse> responses = sessionPackPaymentService.getPacksForParent(PARENT_ID, null);
+
+        assertThat(statusOf(responses, revoked.getPurchaseId())).isEqualTo("REVOKED");
+        assertThat(responseOf(responses, revoked.getPurchaseId()).revokedReason()).isEqualTo("CHARGEBACK_LOST");
+        assertThat(statusOf(responses, frozen.getPurchaseId())).isEqualTo("FROZEN");
+        assertThat(responseOf(responses, frozen.getPurchaseId()).revokedReason()).isNull();
+        assertThat(statusOf(responses, frozenWhilePaused.getPurchaseId())).isEqualTo("FROZEN");
+        assertThat(statusOf(responses, scheduledPause.getPurchaseId())).isEqualTo("ACTIVE");
+        assertThat(responseOf(responses, scheduledPause.getPurchaseId()).pausedFrom())
+            .isEqualTo(scheduledPause.getPausedFrom());
+    }
+
+    /** fix/pack-status-badges: a revoked pack cannot be extended — refused before any write. */
+    @Test
+    void extendPack_revokedPack_isRefusedWithPackRevoked() {
+        CoachProfile coach = new CoachProfile();
+        coach.setId(COACH_ID);
+        when(coachProfileRepository.findByUserId(77L)).thenReturn(Optional.of(coach));
+        Instant expiresAt = Instant.now().plus(5, ChronoUnit.DAYS);
+        SessionPackPurchase revoked = purchase(0, expiresAt, null);
+        revoked.setCoachId(COACH_ID);
+        revoked.setRevokedAt(Instant.now().minus(1, ChronoUnit.HOURS));
+        revoked.setRevokedReason(SessionPackPurchase.REVOKED_COACH_SUSPENDED);
+        when(sessionPackPurchaseRepository.findByIdForUpdate(revoked.getPurchaseId())).thenReturn(Optional.of(revoked));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.extendPack(77L, revoked.getPurchaseId()))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.packRevoked");
+        assertThat(revoked.getExpiresAt()).isEqualTo(expiresAt);
+        assertThat(revoked.getExtendedAt()).isNull();
+        verify(sessionPackPurchaseRepository, never()).save(any());
+    }
+
     @Test
     void getPacksForParent_filtersByCoachId() {
         Instant now = Instant.now();
@@ -531,6 +590,10 @@ class SessionPackPaymentServiceTest {
             .findFirst()
             .orElseThrow()
             .status();
+    }
+
+    private SessionPackPurchaseResponse responseOf(List<SessionPackPurchaseResponse> responses, UUID purchaseId) {
+        return responses.stream().filter(r -> r.purchaseId().equals(purchaseId)).findFirst().orElseThrow();
     }
 
     private SessionPackPurchase purchase(int remainingSessions, Instant expiresAt, Instant pausedUntil) {

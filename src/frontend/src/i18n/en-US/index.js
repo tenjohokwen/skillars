@@ -1920,6 +1920,17 @@ export default {
       exhaustedLabel: 'Exhausted',
       expiredLabel: 'Expired',
       pausedStatus: 'Paused',
+      frozenStatus: 'Frozen',
+      frozenNotice:
+        'A card payment dispute is open on this pack — its sessions can’t be booked or used until it is resolved.',
+      revokedStatus: 'Withdrawn',
+      revokedChargebackLost:
+        'Withdrawn: the card payment was reversed after a chargeback, so the remaining sessions were removed.',
+      revokedExternalRefund:
+        'Withdrawn: the payment was refunded outside the app, so the remaining sessions were removed.',
+      revokedCoachSuspended:
+        'Withdrawn: the coach is no longer available — the unused sessions were refunded to your wallet.',
+      revokedOther: 'Withdrawn: the remaining sessions are no longer available.',
       creditsRemainingLabel: '{remaining} / {total} sessions remaining',
       expiresLabel: 'Expires {date}',
       pausedUntilLabel: 'Paused until {date}',
@@ -2297,6 +2308,8 @@ export default {
       packCoachMismatch: 'This session pack is for a different coach.',
       packPlayerMismatch: 'This session pack belongs to a different player.',
       packPaused: 'This session pack is paused. Book again once the pause ends.',
+      packRevoked:
+        'This session pack was withdrawn — its remaining sessions are no longer available.',
       packFrozen: 'This session pack is on hold while a payment dispute on it is open.',
       packExpired: 'This session pack has expired.',
       packExhausted: 'This session pack has no remaining sessions.',
@@ -2337,6 +2350,16 @@ export default {
         PAUSED: 'Paused',
         EXPIRED: 'Expired',
         EXHAUSTED: 'Used up',
+        FROZEN: 'Frozen',
+        REVOKED: 'Withdrawn',
+      },
+      packStatusNote: {
+        frozenNote: 'Card dispute open — the pack can’t be used until it is resolved',
+        revokedChargebackLost: 'Withdrawn: the buyer won a card chargeback',
+        revokedExternalRefund: 'Withdrawn: refunded outside the app',
+        revokedCoachSuspended:
+          'Withdrawn: unused sessions refunded to the buyer while your account is suspended',
+        revokedOther: 'Withdrawn: the remaining sessions were removed',
       },
       pageTitle: 'My Session Pack Offer',
       currentOffer: 'Your current offer',

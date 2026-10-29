@@ -252,6 +252,12 @@ public class SessionPackPaymentService {
             throw new OperationNotAllowedException("Coach does not own this session pack", SecurityError.MISSING_RIGHTS);
         }
 
+        // fix/pack-status-badges: a revoked pack's remaining sessions were taken away (lost chargeback, outside
+        // refund, coach suspension) — extending its expiry would revive nothing and must not be recorded.
+        if (purchase.isRevoked()) {
+            throw new PaymentGatewayException("payment.packRevoked");
+        }
+
         if (purchase.getExtendedAt() != null) {
             // Already extended by a concurrent request that committed first — 409, not 422:
             // this is a conflict with existing state, not an invalid request. Must be checked
@@ -418,7 +424,8 @@ public class SessionPackPaymentService {
             purchase.getCoachId(),
             purchase.getPausedUntil(),
             computeStatus(purchase),
-            purchase.getPausedFrom()
+            purchase.getPausedFrom(),
+            purchase.getRevokedReason()
         );
     }
 
@@ -429,10 +436,22 @@ public class SessionPackPaymentService {
     /**
      * Status precedence shared with {@link CoachSoldPackQueryService} (feat/coach-workflow-gaps A20) so the
      * coach's sold-pack list and the buyer's pack view can never disagree.
+     *
+     * <p>fix/pack-status-badges: {@code REVOKED} (the remaining sessions were taken away — see
+     * {@code revokedReason}) outranks {@code EXHAUSTED}, which a revocation also produces by zeroing the
+     * sessions; {@code FROZEN} (an open card dispute on the pack's charge — nothing can be booked or spent)
+     * outranks the pause and expiry states. Neither is {@code ACTIVE}, so every "usable pack" filter on the
+     * client excludes them.
      */
     static String computeStatus(SessionPackPurchase purchase, Instant now) {
+        if (purchase.isRevoked()) {
+            return "REVOKED";
+        }
         if (purchase.getRemainingSessions() == 0) {
             return "EXHAUSTED";
+        }
+        if (purchase.isDisputeFrozen()) {
+            return "FROZEN";
         }
         // fix/payment-pack-integrity: paused over [pausedFrom, pausedUntil) only — a pause scheduled for later
         // leaves the pack ACTIVE until it starts.

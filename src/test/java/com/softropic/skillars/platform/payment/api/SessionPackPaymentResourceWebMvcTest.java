@@ -96,7 +96,7 @@ class SessionPackPaymentResourceWebMvcTest {
             new com.softropic.skillars.platform.payment.contract.CoachSoldPackDto(
                 java.util.UUID.randomUUID(), "Pat Parent", 7L, "Kid", "5 pack", 5, 2,
                 java.time.Instant.parse("2026-11-01T00:00:00Z"), null, java.time.Instant.parse("2026-09-01T00:00:00Z"),
-                "ACTIVE", true, true);
+                "ACTIVE", true, true, null);
         when(coachSoldPackQueryService.getSoldPacks(org.mockito.ArgumentMatchers.eq(coachId), org.mockito.ArgumentMatchers.any()))
             .thenReturn(new org.springframework.data.domain.PageImpl<>(java.util.List.of(dto)));
 
@@ -327,7 +327,7 @@ class SessionPackPaymentResourceWebMvcTest {
                 org.mockito.ArgumentMatchers.isNull()))
             .thenReturn(new SessionPackPurchaseResponse(
                 java.util.UUID.randomUUID(), packTierId, "Starter", 5, 5, new BigDecimal("20.00"),
-                Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE", null));
+                Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE", null, null));
 
         mockMvc.perform(post("/api/payment/session-packs/purchase")
                 .contentType(MediaType.APPLICATION_JSON)

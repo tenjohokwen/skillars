@@ -42,13 +42,39 @@
                   })
                 }}
               </div>
-              <div v-if="pack.expiresAt" class="text-caption q-mt-xs" :class="expiryClass(pack)">
+              <div
+                v-if="pack.expiresAt && pack.status !== 'REVOKED'"
+                class="text-caption q-mt-xs"
+                :class="expiryClass(pack)"
+              >
                 {{ t('booking.packs.expiresLabel', { date: formatDate(pack.expiresAt) }) }}
               </div>
-              <div v-if="isPaused(pack)" class="text-caption q-mt-xs text-warning">
+              <div
+                v-if="pack.status === 'REVOKED'"
+                class="text-caption q-mt-xs text-grey-8"
+                data-test="pack-revoked-reason"
+              >
+                {{ packRevokedReasonText(pack, t) }}
+              </div>
+              <div
+                v-if="pack.status === 'FROZEN'"
+                class="text-caption q-mt-xs text-deep-orange"
+                data-test="pack-frozen-notice"
+              >
+                {{ t('booking.packs.frozenNotice') }}
+              </div>
+              <div
+                v-if="pack.status === 'PAUSED'"
+                class="text-caption q-mt-xs text-warning"
+                data-test="pack-paused-until"
+              >
                 {{ t('booking.packs.pausedUntilLabel', { date: formatDate(pack.pausedUntil) }) }}
               </div>
-              <div v-else-if="isPauseScheduled(pack)" class="text-caption q-mt-xs text-warning">
+              <div
+                v-else-if="isUsableOrFrozen(pack) && isPauseScheduled(pack)"
+                class="text-caption q-mt-xs text-warning"
+                data-test="pack-pause-scheduled"
+              >
                 {{
                   t('booking.packs.pauseScheduledLabel', {
                     from: formatDate(pack.pausedFrom),
@@ -63,6 +89,7 @@
                 size="sm"
                 color="primary"
                 class="q-mt-xs q-px-none"
+                data-test="pack-pause-cta"
                 :label="t('booking.packs.pauseCta')"
                 @click="openPauseDialog(pack)"
               />
@@ -75,7 +102,11 @@
                 {{ t('booking.packs.alreadyPausedLabel') }}
               </div>
             </div>
-            <q-badge :color="packBadgeColor(pack)" :label="packBadgeLabel(pack)" />
+            <q-badge
+              :color="packBadgeColor(pack)"
+              :label="packBadgeLabel(pack, t)"
+              data-test="pack-status-badge"
+            />
           </div>
         </q-card-section>
       </q-card>
@@ -163,6 +194,12 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getCoachProfile } from 'src/api/marketplace.api'
+import {
+  isPauseScheduled,
+  packBadgeColor,
+  packBadgeLabel,
+  packRevokedReasonText,
+} from 'src/utils/packStatus'
 
 const route = useRoute()
 const { t, locale } = useI18n()
@@ -215,19 +252,11 @@ function formatDateTime(isoString, timezone) {
   })
 }
 
-// fix/payment-pack-integrity: a pause covers [pausedFrom, pausedUntil) — a pause scheduled for a later
-// date leaves the pack usable until it starts. A pause recorded before pausedFrom existed has none.
-function isPaused(pack) {
-  const now = new Date()
-  return (
-    !!pack.pausedUntil &&
-    new Date(pack.pausedUntil) > now &&
-    (!pack.pausedFrom || new Date(pack.pausedFrom) <= now)
-  )
-}
-
-function isPauseScheduled(pack) {
-  return !!pack.pausedFrom && new Date(pack.pausedFrom) > new Date()
+// fix/pack-status-badges: the badge and notes follow the server-computed status (PAUSED only inside
+// [pausedFrom, pausedUntil); FROZEN while a card dispute is open; REVOKED once withdrawn). A pause scheduled
+// for a later date leaves the pack ACTIVE — or FROZEN — with a "pause scheduled" note.
+function isUsableOrFrozen(pack) {
+  return pack.status === 'ACTIVE' || pack.status === 'FROZEN'
 }
 
 // The pause must start in the future (the server refuses today or earlier): tomorrow at the earliest.
@@ -249,20 +278,6 @@ function expiryClass(pack) {
   if (daysUntilExpiry <= 7) return 'text-negative'
   if (daysUntilExpiry <= 30) return 'text-warning'
   return 'text-grey'
-}
-
-function packBadgeColor(pack) {
-  if (pack.status === 'ACTIVE' && isPaused(pack)) return 'warning'
-  if (pack.status === 'EXPIRED') return 'negative'
-  if (pack.status === 'EXHAUSTED') return 'grey'
-  return 'positive'
-}
-
-function packBadgeLabel(pack) {
-  if (pack.status === 'ACTIVE' && isPaused(pack)) return t('booking.packs.pausedStatus')
-  if (pack.status === 'EXPIRED') return t('booking.packs.expiredLabel')
-  if (pack.status === 'EXHAUSTED') return t('booking.packs.exhaustedLabel')
-  return t('booking.packs.activeStatus')
 }
 
 function openPauseDialog(pack) {
@@ -311,6 +326,10 @@ function notifyPauseError(err) {
   const errorKey = err?.response?.data?.errorMsg?.errorKey
   if (errorKey === 'booking.pauseStartInPast') {
     $q.notify({ message: t('booking.packs.pauseStartInPast'), type: 'negative' })
+  } else if (errorKey === 'payment.packFrozen') {
+    $q.notify({ message: t('payment.sessionPack.packFrozen'), type: 'negative' })
+  } else if (errorKey === 'payment.packRevoked') {
+    $q.notify({ message: t('payment.sessionPack.packRevoked'), type: 'negative' })
   } else {
     $q.notify({ message: t('error.generic'), type: 'negative' })
   }

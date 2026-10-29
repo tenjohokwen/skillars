@@ -267,6 +267,50 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     expect(rows[1].find('[data-test="extend-pack"]').exists()).toBe(false)
   })
 
+  // fix/pack-status-badges: a pack frozen by an open card dispute and a withdrawn (revoked) pack get their own
+  // badge and a one-line reason; a withdrawn pack never offers Extend.
+  it.each([
+    [
+      'FROZEN',
+      null,
+      'payment.myTiers.packStatus.FROZEN',
+      'payment.myTiers.packStatusNote.frozenNote',
+    ],
+    [
+      'REVOKED',
+      'CHARGEBACK_LOST',
+      'payment.myTiers.packStatus.REVOKED',
+      'payment.myTiers.packStatusNote.revokedChargebackLost',
+    ],
+    [
+      'REVOKED',
+      'EXTERNAL_REFUND',
+      'payment.myTiers.packStatus.REVOKED',
+      'payment.myTiers.packStatusNote.revokedExternalRefund',
+    ],
+    [
+      'REVOKED',
+      'COACH_SUSPENDED',
+      'payment.myTiers.packStatus.REVOKED',
+      'payment.myTiers.packStatusNote.revokedCoachSuspended',
+    ],
+  ])('a %s pack (%s) shows its badge and reason', (status, revokedReason, badge, note) => {
+    const wrapper = mountWithSold([{ ...SOLD_EXTENDABLE, status, revokedReason }])
+    const row = wrapper.find('[data-test="sold-pack"]')
+    expect(row.find('[data-test="sold-pack-status"]').text()).toBe(badge)
+    expect(row.find('[data-test="sold-pack-status-note"]').text()).toBe(note)
+    expect(row.find('[data-test="extend-pack"]').exists()).toBe(status !== 'REVOKED')
+  })
+
+  it('an active pack shows the Active badge and no status note', () => {
+    const wrapper = mountWithSold([SOLD_EXTENDABLE])
+    const row = wrapper.find('[data-test="sold-pack"]')
+    expect(row.find('[data-test="sold-pack-status"]').text()).toBe(
+      'payment.myTiers.packStatus.ACTIVE',
+    )
+    expect(row.find('[data-test="sold-pack-status-note"]').exists()).toBe(false)
+  })
+
   it('Extend calls the existing extend endpoint for that row and re-reads the list', async () => {
     const wrapper = mountWithSold([SOLD_EXTENDABLE])
     const store = storeOf(wrapper)

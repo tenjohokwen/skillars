@@ -138,11 +138,23 @@
                       · {{ t('payment.myTiers.alreadyExtended') }}
                     </template>
                   </q-item-label>
+                  <q-item-label
+                    v-if="statusNote(pack)"
+                    caption
+                    class="text-deep-orange"
+                    data-test="sold-pack-status-note"
+                  >
+                    {{ statusNote(pack) }}
+                  </q-item-label>
                 </q-item-section>
                 <q-item-section side class="items-end q-gutter-xs">
-                  <q-badge :color="statusColor(pack.status)" :label="statusLabel(pack.status)" />
+                  <q-badge
+                    :color="statusColor(pack.status)"
+                    :label="statusLabel(pack.status)"
+                    data-test="sold-pack-status"
+                  />
                   <q-btn
-                    v-if="pack.extendable"
+                    v-if="pack.extendable && pack.status !== 'REVOKED'"
                     no-caps
                     dense
                     color="primary"
@@ -348,14 +360,41 @@ function statusLabel(status) {
       return t('payment.myTiers.packStatus.EXPIRED')
     case 'EXHAUSTED':
       return t('payment.myTiers.packStatus.EXHAUSTED')
+    case 'FROZEN':
+      return t('payment.myTiers.packStatus.FROZEN')
+    case 'REVOKED':
+      return t('payment.myTiers.packStatus.REVOKED')
     default:
       return status
   }
 }
 
+// fix/pack-status-badges: why a sold pack is frozen (open card dispute) or withdrawn (revokedReason).
+function statusNote(pack) {
+  if (pack.status === 'FROZEN') return t('payment.myTiers.packStatusNote.frozenNote')
+  if (pack.status !== 'REVOKED') return null
+  switch (pack.revokedReason) {
+    case 'CHARGEBACK_LOST':
+      return t('payment.myTiers.packStatusNote.revokedChargebackLost')
+    case 'EXTERNAL_REFUND':
+      return t('payment.myTiers.packStatusNote.revokedExternalRefund')
+    case 'COACH_SUSPENDED':
+      return t('payment.myTiers.packStatusNote.revokedCoachSuspended')
+    default:
+      return t('payment.myTiers.packStatusNote.revokedOther')
+  }
+}
+
 function statusColor(status) {
   return (
-    { ACTIVE: 'positive', PAUSED: 'info', EXPIRED: 'grey-7', EXHAUSTED: 'grey-6' }[status] ?? 'grey'
+    {
+      ACTIVE: 'positive',
+      PAUSED: 'info',
+      FROZEN: 'deep-orange',
+      REVOKED: 'grey-8',
+      EXPIRED: 'grey-7',
+      EXHAUSTED: 'grey-6',
+    }[status] ?? 'grey'
   )
 }
 

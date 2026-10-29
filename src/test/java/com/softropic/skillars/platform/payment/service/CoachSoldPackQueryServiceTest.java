@@ -117,6 +117,25 @@ class CoachSoldPackQueryServiceTest {
         verify(userRepository, times(1)).findAllById(anyList());
     }
 
+    /** fix/pack-status-badges: the coach's sold-pack row reports a revoked pack as REVOKED with its reason. */
+    @Test
+    void toDto_revokedPack_reportsRevokedWithReason() {
+        Instant now = Instant.now();
+        SessionPackPurchase revoked = purchase(10L, 100L, UUID.randomUUID(), 0, now.plus(5, ChronoUnit.DAYS), null);
+        revoked.setRevokedAt(now.minus(1, ChronoUnit.HOURS));
+        revoked.setRevokedReason(SessionPackPurchase.REVOKED_COACH_SUSPENDED);
+        SessionPackPurchase frozen = purchase(10L, 100L, UUID.randomUUID(), 3, now.plus(30, ChronoUnit.DAYS), null);
+        frozen.setDisputeFrozenAt(now.minus(1, ChronoUnit.HOURS));
+
+        CoachSoldPackDto revokedRow = CoachSoldPackQueryService.toDto(revoked, null, null, null, now);
+        CoachSoldPackDto frozenRow = CoachSoldPackQueryService.toDto(frozen, null, null, null, now);
+
+        assertThat(revokedRow.status()).isEqualTo("REVOKED");
+        assertThat(revokedRow.revokedReason()).isEqualTo("COACH_SUSPENDED");
+        assertThat(frozenRow.status()).isEqualTo("FROZEN");
+        assertThat(frozenRow.revokedReason()).isNull();
+    }
+
     @Test
     void emptyPage_skipsLookups() {
         when(purchaseRepository.findByCoachIdOrderByExpiresAtDesc(COACH, PageRequest.of(0, 20)))

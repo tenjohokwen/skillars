@@ -557,6 +557,17 @@ export default {
       exhaustedLabel: 'Aufgebraucht',
       expiredLabel: 'Abgelaufen',
       pausedStatus: 'Pausiert',
+      frozenStatus: 'Eingefroren',
+      frozenNotice:
+        'Zu diesem Paket ist eine Kartenzahlungs-Rückbuchung offen — seine Einheiten können bis zur Klärung nicht gebucht oder genutzt werden.',
+      revokedStatus: 'Zurückgezogen',
+      revokedChargebackLost:
+        'Zurückgezogen: Die Kartenzahlung wurde per Rückbuchung erstattet, daher wurden die restlichen Einheiten entfernt.',
+      revokedExternalRefund:
+        'Zurückgezogen: Die Zahlung wurde außerhalb der App erstattet, daher wurden die restlichen Einheiten entfernt.',
+      revokedCoachSuspended:
+        'Zurückgezogen: Der Coach ist nicht mehr verfügbar — die ungenutzten Einheiten wurden deinem Guthaben erstattet.',
+      revokedOther: 'Zurückgezogen: Die restlichen Einheiten sind nicht mehr verfügbar.',
       creditsRemainingLabel: '{remaining} / {total} Sitzungen verbleibend',
       expiresLabel: 'Läuft ab am {date}',
       pausedUntilLabel: 'Pausiert bis {date}',
@@ -1531,6 +1542,8 @@ export default {
       packCoachMismatch: 'Dieses Sitzungspaket gilt für einen anderen Coach.',
       packPlayerMismatch: 'Dieses Sitzungspaket gehört einem anderen Spieler.',
       packPaused: 'Dieses Sitzungspaket ist pausiert. Buche erneut, sobald die Pause endet.',
+      packRevoked:
+        'Dieses Sitzungspaket wurde zurückgezogen — die restlichen Einheiten sind nicht mehr verfügbar.',
       packFrozen:
         'Dieses Sitzungspaket ist gesperrt, solange eine Zahlungsreklamation dazu offen ist.',
       packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
@@ -1573,6 +1586,16 @@ export default {
         PAUSED: 'Pausiert',
         EXPIRED: 'Abgelaufen',
         EXHAUSTED: 'Aufgebraucht',
+        FROZEN: 'Eingefroren',
+        REVOKED: 'Zurückgezogen',
+      },
+      packStatusNote: {
+        frozenNote: 'Rückbuchung offen — das Paket kann bis zur Klärung nicht genutzt werden',
+        revokedChargebackLost: 'Zurückgezogen: Der Käufer hat eine Kartenrückbuchung gewonnen',
+        revokedExternalRefund: 'Zurückgezogen: außerhalb der App erstattet',
+        revokedCoachSuspended:
+          'Zurückgezogen: ungenutzte Einheiten wurden dem Käufer erstattet, während dein Konto gesperrt ist',
+        revokedOther: 'Zurückgezogen: Die restlichen Einheiten wurden entfernt',
       },
       pageTitle: 'Mein Sitzungspaket-Angebot',
       currentOffer: 'Ihr aktuelles Angebot',
