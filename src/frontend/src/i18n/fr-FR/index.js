@@ -2151,6 +2151,7 @@ export default {
     releasedNote:
       '« Versé » signifie que le transfert vers votre compte Stripe a été initié. Stripe procède ensuite au paiement vers votre banque selon son propre calendrier.',
     refunds: 'Remboursements',
+    held: 'En attente',
     sessions: 'Séances',
     transactions: 'Transactions',
     net: 'Net',

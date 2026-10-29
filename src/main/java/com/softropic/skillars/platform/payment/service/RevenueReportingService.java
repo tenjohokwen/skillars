@@ -93,20 +93,39 @@ public class RevenueReportingService {
         // "net minus estimated Stripe fee" understated the coach's actual payout.
         BigDecimal netPayout = netFromLedger;
 
-        List<UUID> bookingIds = coachPayoutRepository
-            .findReleasedBookingIdsByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
-        BigDecimal refundsIssued = bookingIds.isEmpty()
-            ? BigDecimal.ZERO
-            : parentCreditLedgerRepository.sumRefundsByBookingIds(bookingIds);
+        // fix/payment-payout-recovery: every refund on the coach's bookings in the period, read from the ledger
+        // joined to bookings. It used to sum only refunds on bookings whose payout was still RELEASED, which left
+        // out exactly the fully refunded sessions (REVERSED, or pending then CANCELLED), and passed every
+        // released booking id of the period as an IN (...) list.
+        BigDecimal refundsIssued = parentCreditLedgerRepository
+            .sumRefundsByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
 
         // AC12.2: completed-but-not-yet-released sessions are a separate line, never folded in.
         BigDecimal pendingReleaseAmount = coachPayoutRepository
             .sumPendingReleaseNetByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
         long pendingReleaseCount = coachPayoutRepository
             .countPendingReleaseByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        // fix/payment-payout-recovery: FROZEN / HOLD payouts — earned, not moving — were in no figure at all.
+        BigDecimal heldAmount = coachPayoutRepository.sumHeldNetByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
+        long heldCount = coachPayoutRepository.countHeldByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
 
         return new RevenueSummaryDto(grossEarnings, commissionDeducted, netPayout,
-            sessionCount, refundsIssued, "EUR", pendingReleaseAmount, pendingReleaseCount);
+            sessionCount, refundsIssued, platformCurrency(), pendingReleaseAmount, pendingReleaseCount,
+            heldAmount, heldCount);
+    }
+
+    /**
+     * fix/payment-payout-recovery: the platform currency ({@code platform.payment.currency}, the one payouts are
+     * stamped with), upper-case; was hard-coded "EUR".
+     */
+    private String platformCurrency() {
+        String raw;
+        try {
+            raw = configService.getString("platform.payment.currency");
+        } catch (IllegalStateException e) {
+            raw = null;
+        }
+        return raw == null || raw.isBlank() ? "EUR" : raw.strip().toUpperCase(java.util.Locale.ROOT);
     }
 
     public Page<TransactionDto> getCoachTransactions(UUID coachId, Instant from, Instant to, Pageable pageable) {
@@ -340,7 +359,9 @@ public class RevenueReportingService {
             summary.currency(),
             reliabilityStrikeCount,
             summary.pendingReleaseAmount(),
-            summary.pendingReleaseCount()
+            summary.pendingReleaseCount(),
+            summary.heldAmount(),
+            summary.heldCount()
         );
     }
 

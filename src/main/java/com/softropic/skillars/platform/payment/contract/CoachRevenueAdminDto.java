@@ -19,5 +19,7 @@ public record CoachRevenueAdminDto(
     String currency,
     int reliabilityStrikeCount,
     BigDecimal pendingReleaseAmount,
-    long pendingReleaseCount
+    long pendingReleaseCount,
+    BigDecimal heldAmount,
+    long heldCount
 ) {}

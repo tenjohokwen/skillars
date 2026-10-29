@@ -30,6 +30,7 @@ import java.math.RoundingMode;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Currency;
+import java.util.List;
 import java.util.Locale;
 import java.util.UUID;
 
@@ -39,6 +40,12 @@ import java.util.UUID;
 public class StripePaymentGateway implements PaymentGateway {
 
     private static final Duration IDEMPOTENCY_KEY_WINDOW = Duration.ofMinutes(1);
+
+    /** fix/payment-payout-recovery: reversal metadata naming its idempotency key, matched before re-creating. */
+    static final String REVERSAL_KEY_METADATA = "reversalKey";
+    /** fix/payment-payout-recovery: HOLD reasons the automatic HOLD re-drive leaves to an operator. */
+    public static final String REASON_AMOUNT_MISMATCH = "TRANSFER_AMOUNT_MISMATCH";
+    public static final String REASON_DESTINATION_MISMATCH = "TRANSFER_DESTINATION_MISMATCH";
 
     private final CoachStripeAccountRepository coachStripeAccountRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
@@ -176,7 +183,7 @@ public class StripePaymentGateway implements PaymentGateway {
     @Override
     public String transferToCoach(UUID transferGroupId, UUID coachId, BigDecimal netAmount, String currency) {
         String coachStripeAccountId = resolveTransferDestination(coachId);
-        String existing = findExistingTransfer(transferGroupId, coachStripeAccountId);
+        String existing = findExistingTransfer(transferGroupId, coachStripeAccountId, toCents(netAmount));
         if (existing != null) {
             log.warn("Stripe transfer already exists for transferGroup={} coach={} — adopting transferId={} "
                 + "instead of creating another", transferGroupId, coachId, existing);
@@ -200,19 +207,46 @@ public class StripePaymentGateway implements PaymentGateway {
         }
     }
 
-    /** A transfer already made for this group to this destination, not fully reversed; null if none. */
-    private String findExistingTransfer(UUID transferGroupId, String destination) {
+    /**
+     * A transfer already made for this group, not fully reversed; null if none.
+     *
+     * <p>fix/payment-payout-recovery: adopted only when it went to the current destination for the amount now
+     * due. The key {@code transfer-{group}} does not depend on the amount, so after a lost response the payout
+     * may have been cut (a dispute resolved between attempts) or the coach may have reconnected a different
+     * account; adopting blindly recorded the cut net while the coach kept the full transfer, or (another
+     * destination, key expired) made a second transfer. Either mismatch is a non-retryable HOLD with its
+     * PAYOUT_HELD alert, for an operator to reconcile — never re-driven automatically.
+     */
+    private String findExistingTransfer(UUID transferGroupId, String destination, long expectedCents) {
+        final List<Transfer> live;
         try {
-            return stripeClient.listTransfersByGroup(transferGroupId.toString()).stream()
-                .filter(t -> destination.equals(t.getDestination()))
+            live = stripeClient.listTransfersByGroup(transferGroupId.toString()).stream()
                 .filter(t -> !Boolean.TRUE.equals(t.getReversed()))
-                .map(Transfer::getId)
-                .findFirst()
-                .orElse(null);
+                .toList();
         } catch (StripeException e) {
             // Unknown whether one exists: do not create blind — retry (the key still dedupes inside 24h).
             throw classifiedTransferFailure(transferGroupId, null, e);
         }
+        if (live.isEmpty()) {
+            return null;
+        }
+        Transfer existing = live.stream().filter(t -> destination.equals(t.getDestination())).findFirst().orElse(null);
+        if (existing == null) {
+            Transfer elsewhere = live.get(0);
+            log.error("[COACH_PAYOUT_TRANSFER_MISMATCH] transferGroup={} already has transfer {} to {} — the coach's "
+                + "account is now {}; not creating another", transferGroupId, elsewhere.getId(),
+                elsewhere.getDestination(), destination);
+            throw new CoachPayoutTransferException("payment.coachTransferFailed", false, REASON_DESTINATION_MISMATCH,
+                new IllegalStateException("existing transfer " + elsewhere.getId() + " to " + elsewhere.getDestination()));
+        }
+        if (existing.getAmount() != null && existing.getAmount() != expectedCents) {
+            log.error("[COACH_PAYOUT_TRANSFER_MISMATCH] transferGroup={} existing transfer {} is {} cents, {} due — "
+                + "not adopting", transferGroupId, existing.getId(), existing.getAmount(), expectedCents);
+            throw new CoachPayoutTransferException("payment.coachTransferFailed", false, REASON_AMOUNT_MISMATCH,
+                new IllegalStateException("existing transfer " + existing.getId() + " amount=" + existing.getAmount()
+                    + " expected=" + expectedCents));
+        }
+        return existing.getId();
     }
 
     private CoachPayoutTransferException classifiedTransferFailure(UUID transferGroupId, UUID coachId, StripeException e) {
@@ -235,16 +269,46 @@ public class StripePaymentGateway implements PaymentGateway {
             throw new CoachPayoutTransferException("payment.coachStripeNotConfigured", false, "NO_ACCOUNT",
                 new IllegalStateException("coach has no connected Stripe account"));
         }
-        String capability = account.getTransfersCapability();
-        boolean usable = capability != null
-            ? "active".equalsIgnoreCase(capability)
-            : "COMPLETE".equals(account.getOnboardingStatus()) && account.isPayoutsEnabled();
-        if (!usable) {
-            throw new CoachPayoutTransferException("payment.coachStripeNotConfigured", false, "ACCOUNT_NOT_READY",
-                new IllegalStateException("onboarding=" + account.getOnboardingStatus() + " transfers="
-                    + capability + " payoutsEnabled=" + account.isPayoutsEnabled()));
+        TransferReadiness readiness = transferReadiness(account);
+        if (readiness == TransferReadiness.READY) {
+            return account.getStripeAccountId();
         }
-        return account.getStripeAccountId();
+        IllegalStateException detail = new IllegalStateException("onboarding=" + account.getOnboardingStatus()
+            + " transfers=" + account.getTransfersCapability() + " payoutsEnabled=" + account.isPayoutsEnabled());
+        // fix/payment-payout-recovery: Stripe parks a Standard account in `transfers: pending` while it reviews
+        // KYC documents, and an OAuth (re)connect starts with no status at all until the first account.updated
+        // / fallback sync. Both resolve on their own within minutes to days: retry with the outbox backoff
+        // instead of parking the payout in HOLD.
+        boolean retryable = readiness == TransferReadiness.PENDING;
+        throw new CoachPayoutTransferException("payment.coachStripeNotConfigured", retryable,
+            retryable ? "ACCOUNT_PENDING" : "ACCOUNT_NOT_READY", detail);
+    }
+
+    /** Whether a transfer to the account can be made now, soon (Stripe is still deciding), or not without the coach. */
+    enum TransferReadiness { READY, PENDING, NOT_READY }
+
+    /**
+     * fix/payment-payout-recovery: the single transfer-readiness rule, shared with
+     * {@code CoachPayoutHoldRecoveryService}. READY: the {@code transfers} capability is {@code active}, or —
+     * before any {@code account.updated} reported it — onboarding COMPLETE with payouts enabled. PENDING:
+     * capability {@code pending}, or no capability yet on an account still in onboarding PENDING (a fresh or
+     * re-connect). Anything else (inactive, RESTRICTED, disconnected) needs the coach: NOT_READY.
+     */
+    static TransferReadiness transferReadiness(CoachStripeAccount account) {
+        if (account == null || account.getStripeAccountId() == null) {
+            return TransferReadiness.NOT_READY;
+        }
+        String capability = account.getTransfersCapability();
+        if (capability != null) {
+            if ("active".equalsIgnoreCase(capability)) {
+                return TransferReadiness.READY;
+            }
+            return "pending".equalsIgnoreCase(capability) ? TransferReadiness.PENDING : TransferReadiness.NOT_READY;
+        }
+        if ("COMPLETE".equals(account.getOnboardingStatus()) && account.isPayoutsEnabled()) {
+            return TransferReadiness.READY;
+        }
+        return "PENDING".equals(account.getOnboardingStatus()) ? TransferReadiness.PENDING : TransferReadiness.NOT_READY;
     }
 
     /**
@@ -255,13 +319,26 @@ public class StripePaymentGateway implements PaymentGateway {
     public void reverseTransfer(String stripeTransferId, BigDecimal amount, String idempotencyKey) {
         TransferReversalCollectionCreateParams params = TransferReversalCollectionCreateParams.builder()
             .setAmount(toCents(amount))
+            .putMetadata(REVERSAL_KEY_METADATA, idempotencyKey)
             .build();
         try {
+            // fix/payment-payout-recovery: Stripe forgets the idempotency key after 24h. A reversal whose DB
+            // commit kept failing for longer would be made a second time (the coach clawed back twice) — so
+            // look for it on the transfer first, the way transferToCoach adopts an existing transfer.
+            boolean exists = stripeClient.listTransferReversals(stripeTransferId).stream()
+                .anyMatch(r -> r.getMetadata() != null && idempotencyKey.equals(r.getMetadata().get(REVERSAL_KEY_METADATA)));
+            if (exists) {
+                log.warn("Stripe transfer reversal already exists: transferId={} key={} — not reversing again",
+                    stripeTransferId, idempotencyKey);
+                return;
+            }
             stripeClient.createTransferReversal(stripeTransferId, params, idempotencyKey);
             log.info("Stripe transfer reversal created: transferId={} amount={} key={}", stripeTransferId, amount,
                 idempotencyKey);
         } catch (StripeException e) {
-            StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classify(e);
+            // fix/payment-payout-recovery: reversal-specific classification — balance_insufficient here means the
+            // COACH's balance is gone (it never tops up by itself), not the platform's.
+            StripeTransferErrorClassifier.Decision d = StripeTransferErrorClassifier.classifyReversal(e);
             log.error("Stripe transfer reversal failed: transferId={} retryable={} reason={} error={}",
                 stripeTransferId, d.retryable(), d.reason(), e.getMessage());
             throw new CoachPayoutTransferException("payment.coachTransferReversalFailed", d.retryable(), d.reason(), e);

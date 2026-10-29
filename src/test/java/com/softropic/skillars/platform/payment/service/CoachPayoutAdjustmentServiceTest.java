@@ -2,6 +2,8 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
+import com.softropic.skillars.platform.payment.repo.CoachPayoutDebt;
+import com.softropic.skillars.platform.payment.repo.CoachPayoutDebtRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -29,6 +31,8 @@ class CoachPayoutAdjustmentServiceTest {
     @Mock CoachPayoutRepository coachPayoutRepository;
     @Mock CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock CoachPayoutOutboxSupport coachPayoutOutboxSupport;
+    @Mock CoachPayoutDebtRepository debtRepository;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private CoachPayoutAdjustmentService service;
     private final UUID bookingId = UUID.randomUUID();
@@ -37,7 +41,8 @@ class CoachPayoutAdjustmentServiceTest {
     @BeforeEach
     void setUp() {
         service = new CoachPayoutAdjustmentService(coachPayoutRepository, coachPayoutFreezeRepository,
-            coachPayoutOutboxSupport);
+            coachPayoutOutboxSupport, new CoachPayoutDebtService(debtRepository,
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), eventPublisher));
     }
 
     private CoachPayout row(String status) {
@@ -248,5 +253,113 @@ class CoachPayoutAdjustmentServiceTest {
         assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
         verify(coachPayoutRepository).delete(nothing);
         verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
+    }
+    // ── fix/payment-payout-recovery ──
+
+    /** A 50.00 / 45.00-net payout as first computed, already cut to {@code net}. */
+    private CoachPayout cutRow(String status, String net, String gross) {
+        CoachPayout r = row(status);
+        r.setOriginalGrossAmount(new BigDecimal("50.00"));
+        r.setOriginalCommissionAmount(new BigDecimal("5.00"));
+        r.setOriginalNetAmount(new BigDecimal("45.00"));
+        r.setNetAmount(new BigDecimal(net));
+        r.setGrossAmount(new BigDecimal(gross));
+        r.setCommissionAmount(new BigDecimal(gross).subtract(new BigDecimal(net)));
+        return r;
+    }
+
+    // M6: two 50% refunds on a pending payout cost the coach the whole net, as they would after release.
+    @Test
+    void stackedPartialRefunds_onPending_takeTheirShareOfTheOriginalNet_notOfTheCutOne() {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE);
+        r.setOriginalNetAmount(new BigDecimal("45.00"));
+        r.setOriginalGrossAmount(new BigDecimal("50.00"));
+        r.setOriginalCommissionAmount(new BigDecimal("5.00"));
+
+        service.applyRefund(r, new BigDecimal("25.00"), new BigDecimal("50.00"), "T1");
+        assertThat(r.getNetAmount()).isEqualByComparingTo("22.50");
+
+        assertThat(service.applyRefund(r, new BigDecimal("25.00"), new BigDecimal("50.00"), "T2"))
+            .as("22.50 share of the original 45.00 = all that is left")
+            .isEqualTo(CoachPayoutAdjustmentService.RefundOutcome.CANCELLED);
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.CANCELLED);
+    }
+
+    // H1: UPHOLD_COACH on a pending payout an earlier refund cut — restored to the full net and released.
+    @Test
+    void payInFull_cutPendingPayout_isRestoredToTheFullNet() {
+        CoachPayout r = cutRow(CoachPayoutStatus.PENDING_RELEASE, "27.00", "30.00");
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        assertThat(r.getNetAmount()).isEqualByComparingTo("45.00");
+        assertThat(r.getGrossAmount()).isEqualByComparingTo("50.00");
+        assertThat(r.getCommissionAmount()).isEqualByComparingTo("5.00");
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
+        verify(coachPayoutOutboxSupport, never()).enqueueTopUp(any(), any());
+    }
+
+    // H1: UPHOLD_COACH after a FULL_CREDIT reversed the released payout — a top-up transfer of the whole net.
+    @Test
+    void payInFull_reversedPayout_enqueuesATopUpOfTheWholeNet() {
+        CoachPayout r = row(CoachPayoutStatus.REVERSED);
+        r.setReversedAmount(new BigDecimal("45.00"));
+        r.setStripeTransferId("tr_1");
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        verify(coachPayoutOutboxSupport).enqueueTopUp(bookingId, new BigDecimal("45.00"));
+    }
+
+    // H1: released after a pending cut (27.00), then partly reversed (9.00) — tops up to 45.00.
+    @Test
+    void payInFull_releasedShortOfTheFullNet_topsUpTheDifference() {
+        CoachPayout r = cutRow(CoachPayoutStatus.RELEASED, "27.00", "30.00");
+        r.setReversedAmount(new BigDecimal("9.00"));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+
+        service.payInFull(bookingId, coachId);
+
+        verify(coachPayoutOutboxSupport).enqueueTopUp(bookingId, new BigDecimal("27.00"));
+    }
+
+    @Test
+    void payInFull_releasedWithTheFullNet_noTopUp() {
+        CoachPayout r = row(CoachPayoutStatus.RELEASED);
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        verify(coachPayoutOutboxSupport, never()).enqueueTopUp(any(), any());
+    }
+
+    // M5 + H1: a reversal Stripe refused left the money with the coach as debt — UPHOLD_COACH waives the debt
+    // (no top-up needed for it); only what the coach already repaid is topped up.
+    @Test
+    void payInFull_reversalRecordedAsDebt_waivesTheDebt_topsUpOnlyWhatWasRepaid() {
+        CoachPayout r = row(CoachPayoutStatus.REVERSED);
+        r.setReversedAmount(new BigDecimal("45.00"));
+        r.setStripeTransferId("tr_1");
+        CoachPayoutDebt debt = CoachPayoutDebt.open(coachId, bookingId, new BigDecimal("45.00"), "COACH_BALANCE_INSUFFICIENT");
+        debt.recover(new BigDecimal("10.00"));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        when(debtRepository.findOpenByBookingIdForUpdate(bookingId)).thenReturn(java.util.List.of(debt));
+
+        service.payInFull(bookingId, coachId);
+
+        assertThat(debt.getStatus()).isEqualTo(CoachPayoutDebt.STATUS_WAIVED);
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
+        assertThat(r.getReversedAmount()).isEqualByComparingTo("10.00");
+        verify(coachPayoutOutboxSupport).enqueueTopUp(bookingId, new BigDecimal("10.00"));
+    }
+
+    @Test
+    void payInFull_legacyReversalFailedWithATransfer_backToReleased() {
+        CoachPayout r = row(CoachPayoutStatus.REVERSAL_FAILED);
+        r.setStripeTransferId("tr_1");
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+
+        assertThat(service.payInFull(bookingId, coachId)).isEqualByComparingTo("45.00");
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
+        verify(coachPayoutOutboxSupport, never()).enqueueTopUp(any(), any());
     }
 }

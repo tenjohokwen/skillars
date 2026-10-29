@@ -70,4 +70,33 @@ class StalePayoutAlertSchedulerTest {
 
         verify(eventPublisher, never()).publishEvent(any());
     }
+
+    // fix/payment-payout-recovery (payouts L1): every stale row is reached, not just the oldest page.
+    @Test
+    void pagesPastTheFirstBatch_byKeyset() {
+        StalePayoutAlertScheduler scheduler = new StalePayoutAlertScheduler(coachPayoutRepository, configService,
+            eventPublisher);
+        when(configService.getBoundedLong(any(), eq(14L), eq(1L), eq(365L))).thenReturn(14L);
+        java.util.List<CoachPayout> first = new java.util.ArrayList<>();
+        Instant t = Instant.now().minus(Duration.ofDays(30));
+        for (int i = 0; i < StalePayoutAlertScheduler.BATCH_SIZE; i++) {
+            CoachPayout r = new CoachPayout();
+            r.setBookingId(UUID.randomUUID());
+            r.setStatus(CoachPayoutStatus.HOLD);
+            r.setUpdatedAt(t.plusSeconds(i));
+            first.add(r);
+        }
+        CoachPayout last = first.get(first.size() - 1);
+        CoachPayout beyond = new CoachPayout();
+        beyond.setBookingId(UUID.randomUUID());
+        beyond.setStatus(CoachPayoutStatus.HOLD);
+        beyond.setUpdatedAt(t.plusSeconds(10_000));
+        when(coachPayoutRepository.findStaleUnreleased(any(), any(Pageable.class))).thenReturn(first);
+        when(coachPayoutRepository.findStaleUnreleasedAfter(any(), eq(last.getUpdatedAt()), eq(last.getBookingId()),
+            eq(StalePayoutAlertScheduler.BATCH_SIZE))).thenReturn(List.of(beyond));
+
+        scheduler.alertStalePayouts();
+
+        verify(eventPublisher, org.mockito.Mockito.times(StalePayoutAlertScheduler.BATCH_SIZE + 1)).publishEvent(any());
+    }
 }

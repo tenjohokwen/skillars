@@ -2315,6 +2315,7 @@ export default {
     releasedNote:
       '"Released" means the transfer to your Stripe account has been initiated. Stripe then pays out to your bank on its own schedule.',
     refunds: 'Refunds',
+    held: 'On hold',
     sessions: 'Sessions',
     transactions: 'Transactions',
     net: 'Net',

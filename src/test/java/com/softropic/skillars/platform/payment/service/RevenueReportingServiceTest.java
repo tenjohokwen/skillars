@@ -90,8 +90,10 @@ class RevenueReportingServiceTest {
         when(coachPayoutRepository.sumReleasedCommissionByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("10.00"));
         when(coachPayoutRepository.sumReleasedNetByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("90.00"));
         when(coachPayoutRepository.countReleasedByCoachAndPeriod(coachId, from, to)).thenReturn(1L);
-        when(coachPayoutRepository.findReleasedBookingIdsByCoachAndPeriod(coachId, from, to)).thenReturn(List.of());
+        when(parentCreditLedgerRepository.sumRefundsByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("50.00"));
         when(coachPayoutRepository.sumPendingReleaseNetByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("15.00"));
+        when(coachPayoutRepository.sumHeldNetByCoachAndPeriod(coachId, from, to)).thenReturn(new BigDecimal("45.00"));
+        when(coachPayoutRepository.countHeldByCoachAndPeriod(coachId, from, to)).thenReturn(1L);
         when(coachPayoutRepository.countPendingReleaseByCoachAndPeriod(coachId, from, to)).thenReturn(2L);
 
         RevenueSummaryDto dto = service.getCoachRevenueSummary(coachId, from, to);
@@ -105,6 +107,10 @@ class RevenueReportingServiceTest {
         assertThat(dto.currency()).isEqualTo("EUR");
         assertThat(dto.pendingReleaseAmount()).isEqualByComparingTo("15.00");
         assertThat(dto.pendingReleaseCount()).isEqualTo(2L);
+        // fix/payment-payout-recovery (payouts L2): refunds on every booking of the coach, and held money.
+        assertThat(dto.refundsIssued()).isEqualByComparingTo("50.00");
+        assertThat(dto.heldAmount()).isEqualByComparingTo("45.00");
+        assertThat(dto.heldCount()).isEqualTo(1L);
     }
 
     @Test
@@ -113,7 +119,7 @@ class RevenueReportingServiceTest {
         when(coachPayoutRepository.sumReleasedCommissionByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
         when(coachPayoutRepository.sumReleasedNetByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
         when(coachPayoutRepository.countReleasedByCoachAndPeriod(coachId, from, to)).thenReturn(0L);
-        when(coachPayoutRepository.findReleasedBookingIdsByCoachAndPeriod(coachId, from, to)).thenReturn(List.of());
+        when(parentCreditLedgerRepository.sumRefundsByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
         when(coachPayoutRepository.sumPendingReleaseNetByCoachAndPeriod(coachId, from, to)).thenReturn(BigDecimal.ZERO);
         when(coachPayoutRepository.countPendingReleaseByCoachAndPeriod(coachId, from, to)).thenReturn(0L);
 

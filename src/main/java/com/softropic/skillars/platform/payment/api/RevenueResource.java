@@ -57,7 +57,7 @@ public class RevenueResource {
             @RequestParam(defaultValue = "20") int size) {
         UUID coachId = resolveCoachId();
         return ResponseEntity.ok(revenueReportingService.getCoachTransactions(
-            coachId, toStartInstant(from), toEndInstant(to), PageRequest.of(page, size)));
+            coachId, toStartInstant(from), toEndInstant(to), pageRequest(page, size)));
     }
 
     @GetMapping("/coaches/bookings/{bookingId}/receipt")
@@ -89,7 +89,18 @@ public class RevenueResource {
             @RequestParam(defaultValue = "20") int size) {
         Long parentId = resolveParentId();
         return ResponseEntity.ok(revenueReportingService.getCreditStatement(
-            parentId, toStartInstant(from), toEndInstant(to), PageRequest.of(page, size)));
+            parentId, toStartInstant(from), toEndInstant(to), pageRequest(page, size)));
+    }
+
+    /** fix/payment-payout-recovery: the largest page these endpoints serve. */
+    static final int MAX_PAGE_SIZE = 100;
+
+    /**
+     * fix/payment-payout-recovery: {@code PageRequest.of} with the raw parameters bypassed Spring's
+     * {@code max-page-size} — {@code size=1000000} loaded everything, and a negative page was a 500. Clamped.
+     */
+    static PageRequest pageRequest(int page, int size) {
+        return PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), MAX_PAGE_SIZE));
     }
 
     private UUID resolveCoachId() {

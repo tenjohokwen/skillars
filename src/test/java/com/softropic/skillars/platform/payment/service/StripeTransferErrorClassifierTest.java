@@ -90,4 +90,17 @@ class StripeTransferErrorClassifierTest {
             StripeTransferErrorClassifier.classify(invalidRequest("some_new_code_stripe_added", 400));
         assertThat(d.retryable()).isTrue();
     }
+
+    // fix/payment-payout-recovery (stripe M5): on a REVERSAL, balance_insufficient is the coach's balance — it
+    // never tops up by itself, so it is not retried forever.
+    @Test
+    void reversal_balanceInsufficient_isNonRetryable_otherwiseSameMatrix() {
+        StripeTransferErrorClassifier.Decision d =
+            StripeTransferErrorClassifier.classifyReversal(invalidRequest("balance_insufficient", 400));
+        assertThat(d.retryable()).isFalse();
+        assertThat(d.reason()).isEqualTo("COACH_BALANCE_INSUFFICIENT");
+        assertThat(StripeTransferErrorClassifier.classifyReversal(apiException(503)).retryable()).isTrue();
+        assertThat(StripeTransferErrorClassifier.classify(invalidRequest("balance_insufficient", 400)).retryable())
+            .as("a transfer still waits for the platform balance").isTrue();
+    }
 }

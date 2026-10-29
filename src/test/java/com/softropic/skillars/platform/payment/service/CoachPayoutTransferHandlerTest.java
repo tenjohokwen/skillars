@@ -7,6 +7,8 @@ import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTransferException;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
+import com.softropic.skillars.platform.payment.repo.CoachPayoutDebt;
+import com.softropic.skillars.platform.payment.repo.CoachPayoutDebtRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,6 +44,7 @@ class CoachPayoutTransferHandlerTest {
     @Mock com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock PaymentGateway paymentGateway;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock CoachPayoutDebtRepository debtRepository;
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -53,7 +56,8 @@ class CoachPayoutTransferHandlerTest {
     @BeforeEach
     void setUp() {
         handler = new CoachPayoutTransferHandler(coachPayoutRepository, coachPayoutFreezeRepository, paymentGateway,
-            meterRegistry, objectMapper, eventPublisher);
+            meterRegistry, objectMapper, eventPublisher,
+            new CoachPayoutDebtService(debtRepository, meterRegistry, eventPublisher));
     }
 
     private String payload() throws Exception {
@@ -86,6 +90,59 @@ class CoachPayoutTransferHandlerTest {
         assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
         assertThat(r.getStripeTransferId()).isEqualTo("tr_1");
         assertThat(r.getReleasedAt()).isNotNull();
+    }
+
+    // fix/payment-payout-recovery (M5): an open coach debt is repaid from the next transfer, oldest first.
+    @Test
+    void openCoachDebt_isWithheldFromTheTransfer_andMarkedRepaid() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        CoachPayoutDebt older = CoachPayoutDebt.open(coachId, UUID.randomUUID(), new BigDecimal("10.00"), "X");
+        CoachPayoutDebt newer = CoachPayoutDebt.open(coachId, UUID.randomUUID(), new BigDecimal("20.00"), "Y");
+        when(debtRepository.findOpenByCoachIdForUpdate(coachId)).thenReturn(java.util.List.of(older, newer));
+        when(paymentGateway.transferToCoach(bookingId, coachId, new BigDecimal("15.00"), "eur")).thenReturn("tr_1");
+
+        handler.handle(payload());
+
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
+        assertThat(r.getDebtOffsetAmount()).isEqualByComparingTo("30.00");
+        assertThat(r.getNetAmount()).as("the coach still earned the whole net").isEqualByComparingTo("45.00");
+        assertThat(older.getStatus()).isEqualTo(CoachPayoutDebt.STATUS_RECOVERED);
+        assertThat(newer.getStatus()).isEqualTo(CoachPayoutDebt.STATUS_RECOVERED);
+    }
+
+    @Test
+    void debtCoveringTheWholeNet_releasesWithoutAStripeTransfer() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        CoachPayoutDebt big = CoachPayoutDebt.open(coachId, UUID.randomUUID(), new BigDecimal("60.00"), "X");
+        when(debtRepository.findOpenByCoachIdForUpdate(coachId)).thenReturn(java.util.List.of(big));
+
+        handler.handle(payload());
+
+        verify(paymentGateway, never()).transferToCoach(any(), any(), any(), any());
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
+        assertThat(r.getStripeTransferId()).isNull();
+        assertThat(r.getDebtOffsetAmount()).isEqualByComparingTo("45.00");
+        assertThat(big.getOutstanding()).isEqualByComparingTo("15.00");
+        assertThat(big.getStatus()).isEqualTo(CoachPayoutDebt.STATUS_OPEN);
+    }
+
+    @Test
+    void holdAfterPlannedOffset_repaysNothing() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        CoachPayoutDebt debt = CoachPayoutDebt.open(coachId, UUID.randomUUID(), new BigDecimal("10.00"), "X");
+        when(debtRepository.findOpenByCoachIdForUpdate(coachId)).thenReturn(java.util.List.of(debt));
+        when(paymentGateway.transferToCoach(any(), any(), any(), any()))
+            .thenThrow(new CoachPayoutTransferException("payment.coachStripeNotConfigured", false, "ACCOUNT_NOT_READY",
+                new IllegalStateException("x")));
+
+        handler.handle(payload());
+
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.HOLD);
+        assertThat(r.getDebtOffsetAmount()).isEqualByComparingTo("0");
+        assertThat(debt.getOutstanding()).isEqualByComparingTo("10.00");
     }
 
     @Test

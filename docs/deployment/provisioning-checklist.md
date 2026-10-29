@@ -74,7 +74,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
   product decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199 and V200 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200 and V205 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -306,6 +306,20 @@ WHERE stripe_payment_intent_id IS NOT NULL
 GROUP BY 1 HAVING count(*) > 1;
 -- non-zero: deduplicate the double-inserted packs for the same PaymentIntent first
 ```
+
+**V205: payout recovery** (`V205__payout_recovery.sql`). Additive only: new nullable
+`original_*_amount` columns plus defaulted `topup_amount` / `debt_offset_amount` on
+`payment.coach_payouts`, and a new empty `payment.coach_payout_debts` table. Nothing to check before it
+runs. It backfills `original_*` from the current amounts, so a payout already cut by a dispute before
+this release keeps that cut as its "original" (an `UPHOLD_COACH` on it restores only to the cut net). To
+list those rows after the migration:
+```sql
+SELECT booking_id, status, net_amount, last_error
+FROM payment.coach_payouts
+WHERE last_error LIKE 'DISPUTE_RESOLVED_%' OR last_error LIKE 'CHARGEBACK_LOST -%';
+```
+Rows in `REVERSAL_FAILED` from before this release are not converted to coach debt; settle them as the
+runbook says (Scenario 5).
 
 **V200: pack refund settlement** (`V200__pack_refund_settlement.sql`). It adds no constraint to an
 existing table, so there is nothing to check before it runs. It backfills `payment.pack_session_refunds`
@@ -671,7 +685,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
 | `StripeSubscriptionReconciliationScheduler` | daily 05:00 | hard-coded |
 | `GdprErasureRetryScheduler` | daily 06:00 | hard-coded |
-| `StalePayoutAlertScheduler` | daily 06:30 | hard-coded cron; age threshold `payment.payout.stale_alert_days` (14). Alerts only (`PAYOUT_HELD` for FROZEN/HOLD payouts unchanged that long) |
+| `StalePayoutAlertScheduler` | daily 06:30 | hard-coded cron; age threshold `payment.payout.stale_alert_days` (14). Alerts only (`PAYOUT_HELD` for FROZEN/HOLD payouts unchanged that long). Pages through every stale row (200 per page, at most 50 pages per run) |
 | `MessageRetentionScheduler` | daily 02:00 | hard-coded; deletes per `platform.message_retention_months` |
 | `InAppNotificationRetentionScheduler` | daily 03:30 | `platform.notification.in-app-retention-days` (90) |
 | `UserAdminService` cleanup | daily 01:00 | hard-coded |
@@ -891,3 +905,10 @@ an operator must now do.
   `APP_STORAGE_ENDPOINT_URL` and `APP_STORAGE_S3_*` are now set by compose, not `.env`. New property
   `app.storage.s3.path-style-access` (`APP_STORAGE_S3_PATH_STYLE_ACCESS`, default `false`; compose
   sets `true`). No migration.
+- 2026-10-29: fix/payment-payout-recovery (V205). Run the V205 post-migration listing (section 3.2) on
+  an upgraded database. New outbox aggregate type `COACH_PAYOUT_TOPUP` (an `UPHOLD_COACH` top-up
+  transfer). New admin endpoint `POST /api/admin/payment/coaches/{coachId}/payouts/release-held`, which
+  replaces the runbook's manual `UPDATE ... SET status = 'PENDING_RELEASE'` for `HOLD` payouts. `HOLD`
+  payouts are also re-driven automatically when `account.updated` (or the onboarding sync) shows that the
+  coach's account can receive transfers, so the Connect webhook endpoint (section 4.3) must deliver
+  `account.updated`. No new config keys and no new scheduled jobs.

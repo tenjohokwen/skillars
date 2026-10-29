@@ -19,13 +19,20 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
     Optional<BigDecimal> sumByParentId(@Param("parentId") Long parentId);
 
     /**
-     * Refunds credited for these bookings, net of what an {@code UPHOLD_COACH} dispute took back
-     * ({@code BOOKING_REFUND_REVERSAL}, negative) — feat/payment-forfeit-payouts-and-clawback.
+     * fix/payment-payout-recovery: refunds credited in {@code [from, to]} for the coach's bookings, net of what
+     * an {@code UPHOLD_COACH} dispute took back ({@code BOOKING_REFUND_REVERSAL}, negative) — whatever happened
+     * to the payout, so a fully refunded session counts too. Native: joins the booking module's table.
      */
-    @Query("SELECT COALESCE(SUM(l.amount), 0) FROM ParentCreditLedger l WHERE l.type IN ('"
-        + CreditLedgerEntryType.BOOKING_REFUND + "', '" + CreditLedgerEntryType.BOOKING_REFUND_REVERSAL
-        + "') AND l.referenceId IN :bookingIds")
-    BigDecimal sumRefundsByBookingIds(@Param("bookingIds") List<UUID> bookingIds);
+    @Query(value = """
+        SELECT COALESCE(SUM(l.amount), 0)
+        FROM payment.parent_credit_ledger l
+        JOIN booking.bookings b ON b.id = l.reference_id
+        WHERE b.coach_id = :coachId
+          AND l.type IN ('BOOKING_REFUND', 'BOOKING_REFUND_REVERSAL')
+          AND l.created_at BETWEEN :from AND :to
+        """, nativeQuery = true)
+    BigDecimal sumRefundsByCoachAndPeriod(@Param("coachId") UUID coachId, @Param("from") java.time.Instant from,
+                                          @Param("to") java.time.Instant to);
 
     @Query("SELECT l FROM ParentCreditLedger l WHERE l.parentId = :parentId AND l.createdAt BETWEEN :from AND :to ORDER BY l.createdAt DESC, l.txId DESC")
     Page<ParentCreditLedger> findByParentAndPeriod(@Param("parentId") Long parentId,

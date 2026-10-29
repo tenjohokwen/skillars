@@ -26,6 +26,7 @@ import com.stripe.param.SubscriptionUpdateParams;
 import com.stripe.param.TransferCreateParams;
 import com.stripe.param.TransferListParams;
 import com.stripe.param.TransferReversalCollectionCreateParams;
+import com.stripe.param.TransferReversalCollectionListParams;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -122,6 +123,17 @@ public class StripeClient {
      * post-payout dispute path. Deterministic key {@code reversal-{stripeTransferId}} so a re-driven
      * {@code COACH_PAYOUT_REVERSAL} outbox row replays rather than double-reversing.
      */
+    /**
+     * fix/payment-payout-recovery: the reversals already made on a transfer (a handful at most — one per refund
+     * on the booking), checked before creating one because Stripe forgets an idempotency key after 24h.
+     */
+    public java.util.List<TransferReversal> listTransferReversals(String transferId) throws StripeException {
+        TransferReversalCollectionListParams params = TransferReversalCollectionListParams.builder()
+            .setLimit(100L)
+            .build();
+        return Transfer.retrieve(transferId).getReversals().list(params).getData();
+    }
+
     public TransferReversal createTransferReversal(String transferId,
                                                    TransferReversalCollectionCreateParams params,
                                                    String idempotencyKey) throws StripeException {

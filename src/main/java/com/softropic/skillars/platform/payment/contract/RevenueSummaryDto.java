@@ -11,6 +11,11 @@ import java.math.BigDecimal;
  * revenue. fix/payment-money-integrity: {@code netPayout} is the ledger net actually transferred
  * (gross − commission); the coach pays no Stripe fee under separate charges &amp; transfers, so the
  * former estimated {@code stripeFees} line (subtracted from the net) was removed.
+ *
+ * <p>fix/payment-payout-recovery: {@code heldAmount} / {@code heldCount} are completed sessions whose payout
+ * is FROZEN (a dispute or safety hold) or HOLD (the Stripe account cannot receive yet) — money the coach has
+ * earned but cannot see moving, previously invisible. {@code refundsIssued} is every refund on the coach's
+ * bookings in the period (fully refunded sessions included), and {@code currency} the platform currency.
  */
 public record RevenueSummaryDto(
     BigDecimal grossEarnings,
@@ -20,5 +25,7 @@ public record RevenueSummaryDto(
     BigDecimal refundsIssued,
     String currency,
     BigDecimal pendingReleaseAmount,
-    long pendingReleaseCount
+    long pendingReleaseCount,
+    BigDecimal heldAmount,
+    long heldCount
 ) {}

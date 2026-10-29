@@ -31,7 +31,7 @@ import java.util.Locale;
  *   <tr><td>{@link RateLimitException} / HTTP 429</td><td>retryable</td><td>back off and re-drive</td></tr>
  *   <tr><td>HTTP 5xx ({@link ApiException} or any status &ge; 500)</td><td>retryable</td><td>Stripe-side, transient</td></tr>
  *   <tr><td>{@link IdempotencyException}</td><td>retryable</td><td>mismatched replay — surface via {@code [OUTBOX_STUCK]}</td></tr>
- *   <tr><td>{@code balance_insufficient}</td><td>retryable</td><td>platform balance tops up as charges settle</td></tr>
+ *   <tr><td>{@code balance_insufficient}</td><td>retryable</td><td>platform balance tops up as charges settle (transfers only — a reversal's is HOLD, see {@link #classifyReversal})</td></tr>
  *   <tr><td>{@link InvalidRequestException} — bad destination
  *       ({@code account_invalid}, {@code account_closed}, {@code insufficient_capabilities_for_transfer},
  *       …)</td><td>HOLD</td><td>the coach's connected account cannot receive — operator reconciles</td></tr>
@@ -97,6 +97,20 @@ final class StripeTransferErrorClassifier {
         // Unmapped: retryable on purpose (AC8.1) — better a human sees it via [OUTBOX_STUCK] than it
         // sitting silently in HOLD.
         return Decision.retryable("UNMAPPED");
+    }
+
+    /**
+     * fix/payment-payout-recovery: {@code Transfer.createReversal}. Same matrix as {@link #classify}, except
+     * {@code balance_insufficient}: on a reversal it is the coach's connected account that cannot cover it (the
+     * coach paid the balance out to their bank), which does not fix itself — retrying hourly forever only hid
+     * it behind {@code [OUTBOX_STUCK]}. Non-retryable, so the reversal handler records the coach debt and alerts.
+     */
+    static Decision classifyReversal(StripeException e) {
+        String code = e.getCode() == null ? "" : e.getCode().toLowerCase(Locale.ROOT);
+        if ("balance_insufficient".equals(code) && !(e instanceof ApiConnectionException)) {
+            return Decision.hold("COACH_BALANCE_INSUFFICIENT");
+        }
+        return classify(e);
     }
 
     private static boolean is(Integer actual, int expected) {

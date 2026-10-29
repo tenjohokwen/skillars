@@ -2315,6 +2315,7 @@ export default {
     releasedNote:
       '„Ausgezahlt“ bedeutet, dass die Überweisung an Ihr Stripe-Konto veranlasst wurde. Stripe zahlt anschließend nach eigenem Zeitplan an Ihre Bank aus.',
     refunds: 'Erstattungen',
+    held: 'Zurückgehalten',
     sessions: 'Einheiten',
     transactions: 'Transaktionen',
     net: 'Netto',

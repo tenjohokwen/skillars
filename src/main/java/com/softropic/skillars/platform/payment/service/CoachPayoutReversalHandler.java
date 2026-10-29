@@ -34,6 +34,12 @@ import java.time.Instant;
  * counts {@code net - reversed_amount}); only once the whole net is reversed does the row become
  * {@code REVERSED}. Each reversal message carries its own id, so the Stripe key
  * {@code reversal-{transferId}-{reversalId}} lets a transfer be partially reversed more than once.
+ *
+ * <p>fix/payment-payout-recovery: the row is locked ({@code findByIdForUpdate}); a reversal Stripe refuses
+ * non-retryably, and any part of the net that never reached Stripe ({@code debt_offset_amount}), become coach
+ * debt ({@link CoachPayoutDebtService}) repaid from the coach's next transfers. {@code REVERSAL_FAILED} is
+ * now only a RELEASED row with no transfer id to reverse (and pre-V205 rows); a further reversal arriving on
+ * one is recorded as debt and alerted rather than ignored.
  */
 @Slf4j
 @Component
@@ -47,6 +53,7 @@ public class CoachPayoutReversalHandler implements OutboxMessageHandler {
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
+    private final CoachPayoutDebtService coachPayoutDebtService;
 
     @Override
     public String aggregateType() {
@@ -62,14 +69,40 @@ public class CoachPayoutReversalHandler implements OutboxMessageHandler {
             throw new UncheckedIOException(e);
         }
 
-        CoachPayout row = coachPayoutRepository.findById(p.bookingId()).orElse(null);
+        // fix/payment-payout-recovery: locked read, like CoachPayoutTransferHandler (EC-4). Two reversal messages
+        // for one booking (an in-app credit and a lost card dispute) are different outbox rows the drain can run
+        // in parallel; unlocked, both read reversed_amount=0 and the second write lost the first's.
+        CoachPayout row = coachPayoutRepository.findByIdForUpdate(p.bookingId()).orElse(null);
         if (row == null) {
             log.info("[COACH_PAYOUT] no coach_payouts row for booking {} — reversal re-drive is a no-op", p.bookingId());
+            return;
+        }
+        if (CoachPayoutStatus.REVERSAL_FAILED.equals(row.getStatus())) {
+            // fix/payment-payout-recovery: a further refund on a payout whose reversal already failed used to be
+            // an INFO no-op, so the operator reconciled only the first amount. It is coach debt too.
+            BigDecimal more = p.amount() == null ? BigDecimal.ZERO : p.amount().min(row.getEffectiveNetAmount());
+            coachPayoutDebtService.recordDebt(row, more, "AFTER_REVERSAL_FAILED");
             return;
         }
         if (!CoachPayoutStatus.RELEASED.equals(row.getStatus())) {
             log.info("[COACH_PAYOUT] booking {} payout is {} (not RELEASED) — reversal re-drive is a no-op",
                 p.bookingId(), row.getStatus());
+            return;
+        }
+        BigDecimal requested = p.amount() == null ? BigDecimal.ZERO : p.amount().min(row.getEffectiveNetAmount());
+        if (requested.signum() <= 0) {
+            log.info("[COACH_PAYOUT] booking {} has nothing left to reverse (net {} reversed {}) — no-op",
+                p.bookingId(), row.getNetAmount(), row.getReversedAmount());
+            return;
+        }
+        // fix/payment-payout-recovery: part of the net may never have reached Stripe (withheld to repay coach
+        // debt, debt_offset_amount) — that part cannot be reversed there and becomes coach debt again.
+        BigDecimal atStripe = requested.min(row.getReversibleAtStripe());
+        BigDecimal notAtStripe = requested.subtract(atStripe);
+        if (atStripe.signum() <= 0) {
+            recordReversed(row, requested);
+            coachPayoutRepository.save(row);
+            coachPayoutDebtService.recordDebt(row, notAtStripe, "NOTHING_LEFT_AT_STRIPE");
             return;
         }
         if (row.getStripeTransferId() == null) {
@@ -83,38 +116,43 @@ public class CoachPayoutReversalHandler implements OutboxMessageHandler {
             return;
         }
 
-        BigDecimal amount = p.amount() == null ? BigDecimal.ZERO : p.amount().min(row.getEffectiveNetAmount());
-        if (amount.signum() <= 0) {
-            log.info("[COACH_PAYOUT] booking {} has nothing left to reverse (net {} reversed {}) — no-op",
-                p.bookingId(), row.getNetAmount(), row.getReversedAmount());
-            return;
-        }
         try {
-            paymentGateway.reverseTransfer(row.getStripeTransferId(), amount, reversalKey(row.getStripeTransferId(), p));
-            BigDecimal reversed = (row.getReversedAmount() == null ? BigDecimal.ZERO : row.getReversedAmount()).add(amount);
-            row.setReversedAmount(reversed);
-            row.setReversedAt(Instant.now());
-            if (reversed.compareTo(row.getNetAmount()) >= 0) {
-                row.setStatus(CoachPayoutStatus.REVERSED);
-            }
+            paymentGateway.reverseTransfer(row.getStripeTransferId(), atStripe, reversalKey(row.getStripeTransferId(), p));
+            recordReversed(row, requested);
             coachPayoutRepository.save(row);
             log.info("[COACH_PAYOUT] reversed booking={} coach={} amount={} totalReversed={} status={} transferId={}",
-                row.getBookingId(), row.getCoachId(), amount, reversed, row.getStatus(), row.getStripeTransferId());
+                row.getBookingId(), row.getCoachId(), atStripe, row.getReversedAmount(), row.getStatus(),
+                row.getStripeTransferId());
+            coachPayoutDebtService.recordDebt(row, notAtStripe, "NOTHING_LEFT_AT_STRIPE");
         } catch (CoachPayoutTransferException e) {
             if (e.isRetryable()) {
                 throw e;
             }
-            // AC8.3: non-retryable — coach withdrew the balance / account closed. REVERSAL_FAILED,
-            // metric + ERROR carrying bookingId + coachId, operator follow-up.
-            row.setStatus(CoachPayoutStatus.REVERSAL_FAILED);
-            row.setLastError(e.getReason() + ": " + truncate(String.valueOf(e.getCause())));
+            // AC8.3: non-retryable — the coach withdrew the balance / the account closed.
+            // fix/payment-payout-recovery: the platform already refunded the payer, so the coach's share is
+            // recorded as coach debt (deducted from the coach's next transfers, alerted) instead of the row
+            // going REVERSAL_FAILED with nothing following it up. The row books the reversal as done
+            // (reversed_amount), so reporting stops counting money the coach now owes back, and a later refund
+            // on the booking is still handled.
+            recordReversed(row, requested);
+            row.setLastError(truncate("REVERSAL_DEBT " + e.getReason() + ": " + e.getCause()));
             row.setAttempts(row.getAttempts() + 1);
             coachPayoutRepository.save(row);
             meterRegistry.counter(METRIC_REVERSAL_FAILED, "reason", e.getReason()).increment();
-            log.error("[COACH_PAYOUT_REVERSAL] booking={} coach={} reason={} — reversal failed, manual "
-                + "follow-up required (runbook: COACH_PAYOUT_REVERSAL)",
-                row.getBookingId(), row.getCoachId(), e.getReason());
-            alertReversalFailed(row, e.getReason());
+            log.error("[COACH_PAYOUT_REVERSAL] booking={} coach={} reason={} — Stripe refused the reversal of {}, "
+                + "recorded as coach debt (runbook: COACH_PAYOUT_REVERSAL)",
+                row.getBookingId(), row.getCoachId(), e.getReason(), atStripe);
+            coachPayoutDebtService.recordDebt(row, requested, e.getReason());
+        }
+    }
+
+    /** Books {@code amount} as clawed back from the coach; the whole net clawed back makes the row REVERSED. */
+    private static void recordReversed(CoachPayout row, BigDecimal amount) {
+        BigDecimal reversed = (row.getReversedAmount() == null ? BigDecimal.ZERO : row.getReversedAmount()).add(amount);
+        row.setReversedAmount(reversed);
+        row.setReversedAt(Instant.now());
+        if (reversed.compareTo(row.getNetAmount()) >= 0) {
+            row.setStatus(CoachPayoutStatus.REVERSED);
         }
     }
 
