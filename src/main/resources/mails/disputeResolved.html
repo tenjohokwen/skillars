@@ -9,7 +9,11 @@
     <p>A Skillars administrator has resolved the dispute you raised about the session with <strong th:text="${map.coachDisplayName}">Coach</strong> on <strong th:text="${map.requestedStartTime}">date</strong>.</p>
     <p th:if="${map.resolution == 'COACH_WARNING'}">The coach has received a formal warning.</p>
     <p th:if="${map.creditAmount != null and map.creditAmount != ''}">A credit of <strong th:text="${map.creditAmount}">0.00</strong> has been added to the credit wallet of the account that paid for this session.</p>
-    <p th:unless="${map.creditAmount != null and map.creditAmount != ''}">No credit was issued as part of this decision.</p>
+    <p th:unless="${(map.creditAmount != null and map.creditAmount != '') or map.resolution == 'UPHOLD_COACH'}">No credit was issued as part of this decision.</p>
+    <!-- feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH — the refund is reversed, the coach paid in full. -->
+    <th:block th:if="${map.resolution == 'UPHOLD_COACH'}">
+        <th:block th:replace="~{fragments/disputeUpheldOutcome :: outcome}"></th:block>
+    </th:block>
     <p th:if="${map.resolutionNote != null and map.resolutionNote != ''}">Note from the administrator: <span th:text="${map.resolutionNote}">note</span></p>
     <p>If you disagree with this decision you can appeal it within 14 days from your bookings page.</p>
 </body>

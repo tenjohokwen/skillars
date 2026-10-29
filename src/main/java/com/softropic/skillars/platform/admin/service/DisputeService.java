@@ -10,11 +10,13 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertStatus;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.contract.CoachCancellationHistoryEntryDto;
 import com.softropic.skillars.platform.admin.contract.CoachWarningIssuedEvent;
+import com.softropic.skillars.platform.admin.contract.DisputeCoachUpheldEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeDismissedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeError;
 import com.softropic.skillars.platform.admin.contract.DisputeRaisedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeResolvedEvent;
 import com.softropic.skillars.platform.admin.contract.DisputeResponse;
+import com.softropic.skillars.platform.admin.contract.UpholdCoachOutcome;
 import com.softropic.skillars.platform.admin.repo.AdminActionLog;
 import com.softropic.skillars.platform.admin.repo.AdminActionLogRepository;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
@@ -35,6 +37,7 @@ import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import com.softropic.skillars.platform.payment.service.CoachPayoutAdjustmentService;
 import com.softropic.skillars.platform.payment.service.CreditWalletService;
+import com.softropic.skillars.platform.payment.service.RefundClawbackService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -64,6 +67,9 @@ public class DisputeService {
     private static final List<String> ELIGIBLE_STATUSES = List.of(
         "COMPLETED", "CANCELLED", "CANCELLED_PARENT", "CANCELLED_COACH", "NO_SHOW_PLAYER", "NO_SHOW_COACH");
 
+    /** feat/payment-forfeit-payouts-and-clawback: the refund was not owed — claw it back, pay the coach in full. */
+    static final String UPHOLD_COACH = "UPHOLD_COACH";
+
     private static final List<String> VALID_REASONS = List.of(
         "COACH_NO_SHOW", "SESSION_QUALITY", "SAFETY_CONCERN", "UNAUTHORISED_CHARGE", "OTHER");
 
@@ -81,6 +87,7 @@ public class DisputeService {
     private final ApplicationEventPublisher eventPublisher;
     private final PlayerProfileRepository playerProfileRepository;
     private final AdminNotificationRecipientResolver recipientResolver;
+    private final RefundClawbackService refundClawbackService;
 
     @Transactional
     public UUID raiseDispute(UUID bookingId, String reason, String details, Long raisedBy, String raisedByRole) {
@@ -220,7 +227,7 @@ public class DisputeService {
             dispute.getCreatedAt(), dispute.getResolvedAt(), dispute.getResolvedBy(),
             booking.getCoachId(), coachName, booking.getRequestedStartTime(), booking.getStatus(),
             creditDebited, stripeCharged, sessionPrice,
-            cancellationHistory);
+            cancellationHistory, dispute.getRecoveredAmount(), dispute.getAbsorbedAmount());
     }
 
     @Transactional
@@ -249,6 +256,7 @@ public class DisputeService {
         // B6: what was actually credited, for the raiser's notice — never the requested outcome alone
         // (FULL_CREDIT on a sessionPrice=0 booking credits nothing, and the email must say so).
         BigDecimal credited = BigDecimal.ZERO;
+        RefundClawbackService.RefundClawback clawback = null;
 
         switch (resolution) {
             case "FULL_CREDIT" -> {
@@ -287,6 +295,7 @@ public class DisputeService {
                     new CoachWarningIssuedEvent(this, booking.getCoachId(), disputeId, dispute.getReason(),
                         recipientResolver.forCoach(booking.getCoachId()).orElse(null)));
             }
+            case UPHOLD_COACH -> clawback = clawBackRefund(booking);
             default -> throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid resolution");
         }
 
@@ -298,25 +307,57 @@ public class DisputeService {
         //   - payout PENDING_RELEASE / HOLD / FROZEN -> cut the pending net by that share (cancel only when
         //     it is the whole net), then lift the dispute freeze so it releases unless another freeze holds it
         //   - no row (session not completed, or nothing charged) -> nothing on the coach side
-        reconcileCoachPayout(dispute.getBookingId(), resolution, creditAmount, sessionPrice);
+        //   - UPHOLD_COACH -> the coach is paid in full instead (below, once this dispute is no longer open)
+        if (clawback == null) {
+            reconcileCoachPayout(dispute.getBookingId(), resolution, creditAmount, sessionPrice);
+        }
 
         Instant now = Instant.now();
         dispute.setStatus("RESOLVED");
         dispute.setResolution(resolution);
         dispute.setResolutionNote(resolutionNote);
-        dispute.setCreditAmount(creditAmount);
+        dispute.setCreditAmount(clawback == null ? creditAmount : null);
         dispute.setResolvedAt(now);
         dispute.setResolvedBy(adminId);
-        disputeRepository.save(dispute);
+        UpholdCoachOutcome upholdOutcome = null;
+        if (clawback != null) {
+            dispute.setRecoveredAmount(clawback.recovered());
+            dispute.setAbsorbedAmount(clawback.absorbed());
+            // feat/payment-forfeit-payouts-and-clawback: flushed RESOLVED first — the new payout's
+            // existsOpenDisputeForBooking check must not freeze it for this very dispute.
+            disputeRepository.saveAndFlush(dispute);
+            BigDecimal coachNet = coachPayoutAdjustmentService.payInFull(booking.getId(), booking.getCoachId());
+            upholdOutcome = new UpholdCoachOutcome(clawback.refunded(), clawback.recovered(), clawback.absorbed(),
+                coachNet, clawback.packSession(), clawback.sessionRededucted());
+            log.info("UPHOLD_COACH disputeId={} bookingId={} refunded={} recovered={} absorbed={} coachNet={}",
+                disputeId, booking.getId(), clawback.refunded(), clawback.recovered(), clawback.absorbed(), coachNet);
+        } else {
+            disputeRepository.save(dispute);
+        }
 
         resolveDisputeAlert(dispute.getBookingId(), adminId, now);
-        logAdminAction(adminId, AdminActionType.DISPUTE_RESOLVE, disputeId.toString(), resolutionNote);
+        logAdminAction(adminId, AdminActionType.DISPUTE_RESOLVE, disputeId.toString(),
+            upholdOutcome == null ? resolutionNote : upholdAuditNote(resolutionNote, upholdOutcome));
 
         // B6: the raiser is told the outcome (AdminOutcomeEmailListener, BEFORE_COMMIT in this transaction).
+        UpholdCoachOutcome.Audience raiserSide = "COACH".equals(dispute.getRaisedByRole())
+            ? UpholdCoachOutcome.Audience.COACH : UpholdCoachOutcome.Audience.PARENT;
+        String coachName = coachDisplayName(booking);
         eventPublisher.publishEvent(
             new DisputeResolvedEvent(this, disputeId, dispute.getBookingId(), resolution, dispute.getRaisedBy(),
-                credited, resolutionNote, coachDisplayName(booking), booking.getRequestedStartTime(),
-                recipientResolver.forUser(dispute.getRaisedBy()).orElse(null)));
+                credited, resolutionNote, coachName, booking.getRequestedStartTime(),
+                recipientResolver.forUser(dispute.getRaisedBy()).orElse(null),
+                upholdOutcome, upholdOutcome == null ? null : raiserSide));
+        if (upholdOutcome != null) {
+            // feat/payment-forfeit-payouts-and-clawback: the other side hears it too — the payer whose refund
+            // was reversed, or the coach who is now paid.
+            boolean toCoach = raiserSide == UpholdCoachOutcome.Audience.PARENT;
+            eventPublisher.publishEvent(new DisputeCoachUpheldEvent(disputeId, booking.getId(),
+                toCoach ? UpholdCoachOutcome.Audience.COACH : UpholdCoachOutcome.Audience.PARENT, upholdOutcome,
+                coachName, booking.getRequestedStartTime(),
+                (toCoach ? recipientResolver.forCoach(booking.getCoachId())
+                    : recipientResolver.forUser(booking.getParentId())).orElse(null)));
+        }
 
         log.info("Dispute resolved: disputeId={} resolution={} adminId={}", disputeId, resolution, adminId);
     }
@@ -353,6 +394,27 @@ public class DisputeService {
             recipientResolver.forUser(dispute.getRaisedBy()).orElse(null)));
 
         log.info("Dispute dismissed: disputeId={} adminId={}", disputeId, adminId);
+    }
+
+    /**
+     * feat/payment-forfeit-payouts-and-clawback: {@code UPHOLD_COACH} — only for a booking whose payer was
+     * actually refunded (a wallet {@code BOOKING_REFUND}, or a restored pack session), and only once per
+     * booking; otherwise 400 before anything is written.
+     */
+    private RefundClawbackService.RefundClawback clawBackRefund(Booking booking) {
+        if (disputeRepository.existsByBookingIdAndResolution(booking.getId(), UPHOLD_COACH)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, DisputeError.NO_REFUND_TO_REVERSE.getErrorCode());
+        }
+        return refundClawbackService.clawBack(booking.getId(), booking.getSessionPackPurchaseId())
+            .orElseThrow(() -> new ResponseStatusException(
+                HttpStatus.BAD_REQUEST, DisputeError.NO_REFUND_TO_REVERSE.getErrorCode()));
+    }
+
+    private static String upholdAuditNote(String resolutionNote, UpholdCoachOutcome outcome) {
+        // Amounts first: admin_action_log.reason is varchar(500), so a long note is what gets cut.
+        String note = "[UPHOLD_COACH refunded=" + outcome.refunded() + " recovered=" + outcome.recovered()
+            + " absorbed=" + outcome.absorbed() + " coachNet=" + outcome.coachNet() + "] " + resolutionNote;
+        return note.length() > 500 ? note.substring(0, 500) : note;
     }
 
     /**

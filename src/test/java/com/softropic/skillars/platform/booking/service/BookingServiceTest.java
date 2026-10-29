@@ -1768,6 +1768,79 @@ class BookingServiceTest {
             .isTrue();
     }
 
+    // ---- feat/payment-forfeit-payouts-and-clawback: forfeit flag + coach no-show grace ----
+
+    @Test
+    void cancelBookingAsParent_capturedLessThan24hOut_isAForfeitThatPaysTheCoach() {
+        cancelConfirmedAsParent(Instant.now().plus(2, java.time.temporal.ChronoUnit.HOURS), null);
+        BookingCancelledByParentEvent event = capturedParentCancellation();
+        assertThat(event.isPaymentCaptured()).isTrue();
+        assertThat(event.isForfeit()).isTrue();
+    }
+
+    @Test
+    void cancelBookingAsParent_refundEligible_isNotAForfeit() {
+        cancelConfirmedAsParent(Instant.now().plus(5, java.time.temporal.ChronoUnit.DAYS), null);
+        assertThat(capturedParentCancellation().isForfeit()).isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_pausedSession_isACapturedForfeit() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAUSED");
+        booking.setRequestedStartTime(Instant.now().minus(20, java.time.temporal.ChronoUnit.MINUTES));
+        booking.setRequestedEndTime(Instant.now().plus(40, java.time.temporal.ChronoUnit.MINUTES));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        BookingCancelledByParentEvent event = capturedParentCancellation();
+        assertThat(event.isRefundEligible()).isFalse();
+        assertThat(event.isForfeit()).as("a started-then-paused session was paid for; the coach is paid").isTrue();
+    }
+
+    @Test
+    void cancelBookingAsParent_paymentPending_isNotAForfeit() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAYMENT_PENDING");
+        booking.setRequestedStartTime(Instant.now().plus(2, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedEndTime(Instant.now().plus(3, java.time.temporal.ChronoUnit.HOURS));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.empty());
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(capturedParentCancellation().isForfeit()).as("nothing captured, nothing paid").isFalse();
+    }
+
+    @Test
+    void recordNoShowCoach_insideTheLateCancelGrace_throwsNoShowTooEarly() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        // 29 minutes after start, grace is 30 (setUp): the coach can still press Start.
+        booking.setRequestedStartTime(Instant.now().minus(29, java.time.temporal.ChronoUnit.MINUTES));
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.NO_SHOW_TOO_EARLY));
+        verify(eventPublisher, never()).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    @Test
+    void coachNoShowReportableAt_isStartPlusTheLateCancelGrace() {
+        Instant start = Instant.parse("2026-10-28T12:00:00Z");
+        assertThat(bookingService.coachNoShowReportableAt(start)).isEqualTo(Instant.parse("2026-10-28T12:30:00Z"));
+    }
+
     private boolean cancelConfirmedAsParent(Instant start, Instant originalStart) {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
         booking.setRequestedStartTime(start);

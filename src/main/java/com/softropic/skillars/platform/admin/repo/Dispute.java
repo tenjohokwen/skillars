@@ -56,6 +56,14 @@ public class Dispute {
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt = Instant.now();
 
+    /** feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH — the part of the payer's refund taken back. */
+    @Column(name = "recovered_amount", precision = 10, scale = 2)
+    private BigDecimal recoveredAmount;
+
+    /** feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH — the part of the refund the platform absorbed. */
+    @Column(name = "absorbed_amount", precision = 10, scale = 2)
+    private BigDecimal absorbedAmount;
+
     @Column(name = "resolved_at")
     private Instant resolvedAt;
 

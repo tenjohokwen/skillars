@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<!-- feat/payment-forfeit-payouts-and-clawback: the UPHOLD_COACH outcome lines shared by disputeResolved.html and
+     disputeCoachUpheld.html. A fragment only — no EmailTemplate renders this file on its own. -->
+<html xmlns:th="http://www.thymeleaf.org">
+<body>
+<th:block th:fragment="outcome">
+    <p th:text="#{email.admin.dispute_upheld.finding}">The administrator found that the session took place and the refund issued for it was not owed.</p>
+    <th:block th:if="${map.audience == 'PARENT'}">
+        <th:block th:if="${map.packSession == 'true'}">
+            <p th:if="${map.sessionRededucted == 'true'}" th:text="#{email.admin.dispute_upheld.parent_pack_rededucted}">The session was deducted again.</p>
+            <p th:unless="${map.sessionRededucted == 'true'}" th:text="#{email.admin.dispute_upheld.parent_pack_not_rededucted}">The session could not be deducted again.</p>
+        </th:block>
+        <th:block th:unless="${map.packSession == 'true'}">
+            <p th:if="${map.recoveredAmount != null and map.recoveredAmount != ''}" th:text="#{email.admin.dispute_upheld.parent_wallet_recovered(${map.recoveredAmount}, ${map.refundedAmount})}">0.00 of the 0.00 refunded has been deducted from your credit wallet.</p>
+            <p th:if="${map.absorbedAmount != null and map.absorbedAmount != ''}" th:text="#{email.admin.dispute_upheld.parent_wallet_absorbed(${map.absorbedAmount})}">0.00 of the refund will not be recovered from you.</p>
+        </th:block>
+    </th:block>
+    <p th:if="${map.audience == 'COACH' and map.coachPayoutAmount != null and map.coachPayoutAmount != ''}" th:text="#{email.admin.dispute_upheld.coach_paid(${map.coachPayoutAmount})}">You will be paid your full share for this session.</p>
+</th:block>
+</body>
+</html>

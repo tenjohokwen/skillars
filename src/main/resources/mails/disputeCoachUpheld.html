@@ -1,0 +1,12 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.admin.dispute_coach_upheld.title}">A Dispute Was Resolved in the Coach's Favour</title>
+</head>
+<body>
+    <h2 th:text="#{email.admin.dispute_coach_upheld.title}">A Dispute Was Resolved in the Coach's Favour</h2>
+    <p th:text="#{email.admin.dispute_coach_upheld.intro(${map.coachDisplayName}, ${map.requestedStartTime})}">A Skillars administrator has resolved a dispute about the session in the coach's favour.</p>
+    <th:block th:replace="~{fragments/disputeUpheldOutcome :: outcome}"></th:block>
+</body>
+</html>

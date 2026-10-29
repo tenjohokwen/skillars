@@ -694,6 +694,8 @@ export default {
       sessionNotYetStarted:
         'Diese Einheit kann nicht vor ihrem geplanten Beginn gestartet oder abgeschlossen werden.',
       noShowTooEarly: 'Ein Nichterscheinen kann nicht vor Beginn der Einheit gemeldet werden.',
+      coachNoShowTooEarly:
+        'Ein Nichterscheinen des Coaches kann erst nach Ablauf der Karenzzeit nach dem geplanten Beginn gemeldet werden.',
       recapStillEditableAfterForceComplete:
         'Diese Einheit wurde bereits abgeschlossen, aber Ihr Bericht wurde unten übernommen — Sie können ihn weiterhin speichern.',
     },
@@ -975,6 +977,7 @@ export default {
       PARTIAL_CREDIT: 'Teilweise Gutschrift',
       NO_ACTION: 'Keine Maßnahme',
       COACH_WARNING: 'Verwarnung des Coaches',
+      UPHOLD_COACH: 'Coach bestätigen (Erstattung zurückbuchen)',
     },
   },
   session: {
@@ -1631,6 +1634,12 @@ export default {
       dismissFailed: 'Streitfall konnte nicht abgewiesen werden. Bitte versuchen Sie es erneut.',
       alreadyResolved: 'Dieser Streitfall wurde bereits gelöst.',
       invalidCreditAmount: 'Bitte geben Sie einen gültigen Gutschriftbetrag ein.',
+      noRefundToReverse:
+        'Für diese Buchung gibt es keine Erstattung an die Eltern, die zurückgebucht werden könnte.',
+      upholdCoachHelp:
+        'Verwenden, wenn die Sitzung tatsächlich stattgefunden hat oder die Erstattung nicht geschuldet war. Die Erstattung wird vom Guthaben der Eltern zurückgebucht (nie unter null) bzw. die zurückgegebene Paket-Sitzung erneut abgezogen, und der Coach erhält seinen vollen Anteil. Nicht einziehbare Beträge trägt Skillars.',
+      recoveredAmountLabel: 'Von den Eltern zurückgebucht',
+      absorbedAmountLabel: 'Von Skillars getragen',
     },
     moderation: {
       title: 'Moderation',
@@ -2181,6 +2190,7 @@ export default {
       'Bestätige, dass der Coach zu dieser Sitzung nicht erschienen ist. Die Sitzung wird erstattet und der Coach erhält eine Zuverlässigkeitsverwarnung. Dies kann nicht rückgängig gemacht werden.',
     noShowCoachFailed:
       'Das Nichterscheinen konnte nicht gemeldet werden. Bitte versuche es erneut.',
+    noShowCoachAvailableFrom: 'Du kannst ein Nichterscheinen des Coaches ab {time} melden.',
     title: 'Sitzung stornieren',
     selectReason: 'Stornierungsgrund auswählen',
     confirmCancel: 'Stornierung bestätigen',
@@ -2596,6 +2606,8 @@ export default {
       COACH_WARNING_ISSUED: 'Sie haben nach einer Beschwerde eine förmliche Verwarnung erhalten.',
       DISPUTE_RESOLVED: 'Ihre Beschwerde zur Sitzung am {requestedStartTime} wurde entschieden.',
       DISPUTE_DISMISSED: 'Ihre Beschwerde zur Sitzung am {requestedStartTime} wurde abgewiesen.',
+      DISPUTE_COACH_UPHELD:
+        'Eine Beschwerde zur Sitzung am {requestedStartTime} wurde zugunsten des Coaches entschieden.',
       GDPR_EXPORT_READY: 'Ihr Datenexport kann bis {expiresAt} heruntergeladen werden.',
       REVIEW_APPROVED: 'Ihre Bewertung von {coachDisplayName} wurde veröffentlicht.',
       REVIEW_BLOCKED: 'Ihre Bewertung von {coachDisplayName} wurde nicht veröffentlicht.',

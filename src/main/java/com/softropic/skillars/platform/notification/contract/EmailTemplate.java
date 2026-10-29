@@ -114,6 +114,11 @@ public enum EmailTemplate {
     DISPUTE_RESOLVED("email.admin.dispute_resolved.title"),
     /** The raiser's dispute was dismissed. */
     DISPUTE_DISMISSED("email.admin.dispute_dismissed.title"),
+    /**
+     * feat/payment-forfeit-payouts-and-clawback (V198): a dispute was resolved in the coach's favour — to the
+     * party that did not raise it (the payer whose refund was reversed, or the coach now paid).
+     */
+    DISPUTE_COACH_UPHELD("email.admin.dispute_coach_upheld.title"),
     /** The requester's GDPR data export is ready to download. */
     GDPR_EXPORT_READY("email.admin.gdpr_export_ready.title"),
     /** The author's review was approved and is now public. */

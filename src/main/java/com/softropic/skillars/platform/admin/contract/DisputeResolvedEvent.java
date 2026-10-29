@@ -24,6 +24,9 @@ public class DisputeResolvedEvent extends ApplicationEvent {
     private final Instant sessionStart;
     /** Null when the raiser has no reachable address — the listener then skips the email. */
     private final AdminNotificationRecipient recipient;
+    /** feat/payment-forfeit-payouts-and-clawback: UPHOLD_COACH only (else null) — what it did, and who reads it. */
+    private final UpholdCoachOutcome upholdOutcome;
+    private final UpholdCoachOutcome.Audience audience;
 
     public DisputeResolvedEvent(Object source, UUID disputeId, UUID bookingId, String resolution, Long raisedBy) {
         this(source, disputeId, bookingId, resolution, raisedBy, null, null, null, null, null);
@@ -33,6 +36,15 @@ public class DisputeResolvedEvent extends ApplicationEvent {
     public DisputeResolvedEvent(Object source, UUID disputeId, UUID bookingId, String resolution, Long raisedBy,
                                 BigDecimal creditAmount, String resolutionNote, String coachDisplayName,
                                 Instant sessionStart, AdminNotificationRecipient recipient) {
+        this(source, disputeId, bookingId, resolution, raisedBy, creditAmount, resolutionNote, coachDisplayName,
+            sessionStart, recipient, null, null);
+    }
+
+    @SuppressWarnings("java:S107") // an immutable event: one field per fact the email states
+    public DisputeResolvedEvent(Object source, UUID disputeId, UUID bookingId, String resolution, Long raisedBy,
+                                BigDecimal creditAmount, String resolutionNote, String coachDisplayName,
+                                Instant sessionStart, AdminNotificationRecipient recipient,
+                                UpholdCoachOutcome upholdOutcome, UpholdCoachOutcome.Audience audience) {
         super(source);
         this.disputeId = disputeId;
         this.bookingId = bookingId;
@@ -43,6 +55,8 @@ public class DisputeResolvedEvent extends ApplicationEvent {
         this.coachDisplayName = coachDisplayName;
         this.sessionStart = sessionStart;
         this.recipient = recipient;
+        this.upholdOutcome = upholdOutcome;
+        this.audience = audience;
     }
 
     public UUID getDisputeId() { return disputeId; }
@@ -54,4 +68,6 @@ public class DisputeResolvedEvent extends ApplicationEvent {
     public String getCoachDisplayName() { return coachDisplayName; }
     public Instant getSessionStart() { return sessionStart; }
     public AdminNotificationRecipient getRecipient() { return recipient; }
+    public UpholdCoachOutcome getUpholdOutcome() { return upholdOutcome; }
+    public UpholdCoachOutcome.Audience getAudience() { return audience; }
 }

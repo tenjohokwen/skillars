@@ -97,6 +97,12 @@
             <div v-if="detail.creditAmount != null">
               {{ t('admin.disputes.creditAmountLabel') }}: {{ fmt(detail.creditAmount) }}
             </div>
+            <div v-if="detail.recoveredAmount != null" data-testid="dispute-recovered-amount">
+              {{ t('admin.disputes.recoveredAmountLabel') }}: {{ fmt(detail.recoveredAmount) }}
+            </div>
+            <div v-if="detail.absorbedAmount != null" data-testid="dispute-absorbed-amount">
+              {{ t('admin.disputes.absorbedAmountLabel') }}: {{ fmt(detail.absorbedAmount) }}
+            </div>
             <div v-if="detail.resolutionNote">{{ detail.resolutionNote }}</div>
 
             <div
@@ -155,6 +161,13 @@
             dense
             class="q-mb-md"
           />
+          <div
+            v-if="resolution === 'UPHOLD_COACH'"
+            class="text-caption q-mb-md"
+            data-testid="dispute-uphold-coach-help"
+          >
+            {{ t('admin.disputes.upholdCoachHelp') }}
+          </div>
           <q-input
             v-if="takesCreditAmount"
             v-model.number="creditAmount"
@@ -278,6 +291,8 @@ const resolutionOptions = [
   { label: t('disputes.resolutionValue.PARTIAL_CREDIT'), value: 'PARTIAL_CREDIT' },
   { label: t('disputes.resolutionValue.NO_ACTION'), value: 'NO_ACTION' },
   { label: t('disputes.resolutionValue.COACH_WARNING'), value: 'COACH_WARNING' },
+  // feat/payment-forfeit-payouts-and-clawback: reverse the parent's refund, pay the coach in full.
+  { label: t('disputes.resolutionValue.UPHOLD_COACH'), value: 'UPHOLD_COACH' },
 ]
 
 // COACH_WARNING takes an OPTIONAL credit (DisputeService.resolveDispute); PARTIAL_CREDIT requires one.
@@ -372,6 +387,8 @@ async function submitResolve() {
       await closeStaleDispute()
     } else if (message === 'disputes.invalidCreditAmount') {
       $q.notify({ message: t('admin.disputes.invalidCreditAmount'), type: 'negative' })
+    } else if (message === 'disputes.noRefundToReverse') {
+      $q.notify({ message: t('admin.disputes.noRefundToReverse'), type: 'negative' })
     } else {
       $q.notify({ message: t('admin.disputes.resolveFailed'), type: 'negative' })
     }

@@ -98,6 +98,13 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     int insertRestoreMarker(@Param("bookingId") UUID bookingId, @Param("purchaseId") UUID purchaseId,
                             @Param("reason") String reason);
 
+    /**
+     * feat/payment-forfeit-payouts-and-clawback: the booking's pack session was given back (its V195 restore
+     * marker exists) — what an {@code UPHOLD_COACH} dispute resolution re-deducts.
+     */
+    @Query(nativeQuery = true, value = "SELECT EXISTS (SELECT 1 FROM payment.pack_session_restores WHERE booking_id = :bookingId)")
+    boolean existsRestoreMarker(@Param("bookingId") UUID bookingId);
+
     /** Pack purchases in the period that went through a Stripe charge — the Stripe-fee estimate's count. */
     @Query("SELECT COUNT(p) FROM SessionPackPurchase p WHERE p.stripePaymentIntentId IS NOT NULL AND p.createdAt BETWEEN :from AND :to")
     long countChargedForPeriod(@Param("from") Instant from, @Param("to") Instant to);

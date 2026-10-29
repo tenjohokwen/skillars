@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCompletedEvent;
+import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +29,17 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * same way is consistent — but it is real money movement for a session nobody actively confirmed
  * happened, which is why skillars-deferred-153 AC1 discloses it explicitly rather than leaving it an
  * implicit side effect of adding a fourth/fifth publisher here.
+ *
+ * <p>feat/payment-forfeit-payouts-and-clawback (owner decision: forfeits pay the coach): money the payer
+ * forfeits is paid to the coach exactly like a completed session — the same row, net at the rate locked at
+ * capture / pack purchase, the same release hold, enqueued BEFORE_COMMIT in the forfeiting transaction:
+ * <ul>
+ *   <li>a player no-show ({@code BookingService.recordNoShowPlayer}; NO_SHOW_PLAYER only leaves UPCOMING,
+ *       so the payment was always captured);</li>
+ *   <li>a parent cancellation of a captured booking that is not refund-eligible
+ *       ({@link BookingCancelledByParentEvent#isForfeit()}) — a pack session stays consumed.</li>
+ * </ul>
+ * Nothing captured, nothing paid. A dispute on either still freezes the payout ({@code DisputeService}).
  */
 @Slf4j
 @Service
@@ -38,5 +51,17 @@ public class CoachPayoutEnqueueListener {
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCompleted(BookingCompletedEvent event) {
         coachPayoutOutboxSupport.enqueuePayout(event.getBookingId(), event.getCoachId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onPlayerNoShow(PlayerNoShowEvent event) {
+        coachPayoutOutboxSupport.enqueuePayout(event.getBookingId(), event.getCoachId());
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
+        if (event.isForfeit()) {
+            coachPayoutOutboxSupport.enqueuePayout(event.getBookingId(), event.getCoachId());
+        }
     }
 }

@@ -161,6 +161,51 @@ public class CoachPayoutAdjustmentService {
     }
 
     /**
+     * feat/payment-forfeit-payouts-and-clawback: an {@code UPHOLD_COACH} dispute resolution — the coach is
+     * paid their full net for the booking, whatever was recovered from the payer (the platform absorbs the
+     * gap). The caller must already have marked its dispute resolved and flushed it, so the new payout is not
+     * frozen for that dispute.
+     * <ul>
+     *   <li>no row (a refunded booking never completed) — a new payout through
+     *       {@link CoachPayoutOutboxSupport#enqueuePayout}, with its usual hold and freeze checks;</li>
+     *   <li>CANCELLED with a net (a dispute refund cut it to nothing) — reinstated and released now, unless
+     *       a safety hold or an open card dispute still freezes it;</li>
+     *   <li>CANCELLED with nothing computed (a skip reason) — replaced by a freshly computed payout;</li>
+     *   <li>anything else — left as it is (only its dispute freeze is lifted).</li>
+     * </ul>
+     *
+     * @return the coach's net now owed or paid for the booking (zero when nothing could be computed)
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal payInFull(UUID bookingId, UUID coachId) {
+        CoachPayout row = coachPayoutRepository.findByIdForUpdate(bookingId).orElse(null);
+        if (row != null && CoachPayoutStatus.CANCELLED.equals(row.getStatus())
+                && (row.getNetAmount() == null || row.getNetAmount().signum() <= 0)) {
+            coachPayoutRepository.delete(row);
+            coachPayoutRepository.flush();
+            row = null;
+        }
+        if (row == null) {
+            coachPayoutOutboxSupport.enqueuePayout(bookingId, coachId);
+            return coachPayoutRepository.findById(bookingId)
+                .filter(p -> !CoachPayoutStatus.CANCELLED.equals(p.getStatus()))
+                .map(CoachPayout::getEffectiveNetAmount)
+                .orElse(BigDecimal.ZERO);
+        }
+        row.setDisputeFrozen(false);
+        if (CoachPayoutStatus.CANCELLED.equals(row.getStatus())) {
+            // Reinstate: FROZEN + releaseIfUnfrozen is the one path that re-checks every freeze reason and
+            // enqueues exactly one transfer. The hold already ran when the row was first written.
+            row.setStatus(CoachPayoutStatus.FROZEN);
+            row.setReleaseAfter(Instant.now());
+            log.info("[COACH_PAYOUT_UPHOLD] booking={} — cancelled payout (net {}) reinstated", bookingId,
+                row.getNetAmount());
+        }
+        releaseIfUnfrozen(row);
+        return row.getEffectiveNetAmount();
+    }
+
+    /**
      * A FROZEN payout with no freeze reason left goes back to PENDING_RELEASE and gets one transfer
      * message, not before its original {@code release_after}. Reads the safety-hold freeze row
      * {@code FOR SHARE} after the payout row lock — the {@code CoachPayoutTransferHandler} lock order.

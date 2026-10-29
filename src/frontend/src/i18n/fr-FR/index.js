@@ -522,6 +522,7 @@ export default {
       PARTIAL_CREDIT: 'Crédit partiel',
       NO_ACTION: 'Aucune action',
       COACH_WARNING: 'Avertissement au coach',
+      UPHOLD_COACH: 'Donner raison au coach (annuler le remboursement)',
     },
   },
   session: {
@@ -1186,6 +1187,12 @@ export default {
       dismissFailed: 'Impossible de rejeter le litige. Veuillez réessayer.',
       alreadyResolved: 'Ce litige a déjà été résolu.',
       invalidCreditAmount: 'Veuillez saisir un montant de crédit valide.',
+      noRefundToReverse:
+        'Cette réservation n’a aucun remboursement au parent qui puisse être annulé.',
+      upholdCoachHelp:
+        'À utiliser lorsque la séance a bien eu lieu ou que le remboursement n’était pas dû. Le remboursement est repris sur le portefeuille de crédits du parent (jamais en dessous de zéro) ou la séance restituée au forfait est de nouveau déduite, et le coach reçoit sa part complète. Tout montant non récupérable est pris en charge par Skillars.',
+      recoveredAmountLabel: 'Récupéré auprès du parent',
+      absorbedAmountLabel: 'Pris en charge par Skillars',
     },
     moderation: {
       title: 'Modération',
@@ -2175,6 +2182,7 @@ export default {
     noShowCoachConfirmBody:
       'Confirmez que le coach ne s’est pas présenté à cette séance. La séance est remboursée et le coach reçoit un avertissement de fiabilité. Cette action est irréversible.',
     noShowCoachFailed: 'Impossible de signaler l’absence. Veuillez réessayer.',
+    noShowCoachAvailableFrom: 'Vous pourrez signaler l’absence du coach à partir de {time}.',
     title: 'Annuler la séance',
     selectReason: "Sélectionner un motif d'annulation",
     confirmCancel: "Confirmer l'annulation",
@@ -2461,6 +2469,8 @@ export default {
       sessionNotYetStarted:
         'Cette séance ne peut pas être démarrée ou terminée avant son heure de début prévue.',
       noShowTooEarly: 'Une absence ne peut pas être signalée avant le début de la séance.',
+      coachNoShowTooEarly:
+        'L’absence du coach ne peut être signalée qu’après la période de grâce suivant le début prévu.',
       recapStillEditableAfterForceComplete:
         'Cette séance a déjà été terminée, mais votre bilan a été reporté ci-dessous — vous pouvez toujours l’enregistrer.',
     },
@@ -2572,6 +2582,8 @@ export default {
       COACH_WARNING_ISSUED: 'Vous avez reçu un avertissement formel à la suite d’un litige.',
       DISPUTE_RESOLVED: 'Votre litige concernant la séance du {requestedStartTime} a été traité.',
       DISPUTE_DISMISSED: 'Votre litige concernant la séance du {requestedStartTime} a été rejeté.',
+      DISPUTE_COACH_UPHELD:
+        'Un litige concernant la séance du {requestedStartTime} a été tranché en faveur du coach.',
       GDPR_EXPORT_READY: 'Votre export de données peut être téléchargé jusqu’au {expiresAt}.',
       REVIEW_APPROVED: 'Votre avis sur {coachDisplayName} a été publié.',
       REVIEW_BLOCKED: 'Votre avis sur {coachDisplayName} n’a pas été publié.',

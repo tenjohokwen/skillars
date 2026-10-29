@@ -1154,14 +1154,16 @@ public class BookingService {
 
         boolean paymentWasCaptured = statusBeforeCancel == BookingStatus.CONFIRMED
             || statusBeforeCancel == BookingStatus.UPCOMING;
+        // feat/payment-forfeit-payouts-and-clawback: a PAUSED session was captured too (it was started), but is
+        // never refund-eligible here — cancelling it is a forfeit that pays the coach, like a <24h cancel.
+        boolean moneyTaken = paymentWasCaptured || statusBeforeCancel == BookingStatus.PAUSED;
         // Deferred-64 AC4: a parent cancellation arriving after the booking's own start time has
         // already passed is refund-eligible too — refund-only, no coach reliability strike, no
         // BookingStateMachine/event-type change. Stays entirely on the ordinary CANCEL_PARENT path.
         // fix/booking-cancel-policy-loopholes: narrowed by a grace window and a reschedule anchor —
         // see isParentCancelRefundEligible.
         boolean refundEligible = paymentWasCaptured && isParentCancelRefundEligible(
-            booking.getRequestedStartTime(), booking.getOriginalStartTime(), Instant.now(),
-            Duration.ofMinutes(configService.getBoundedLong(ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES)));
+            booking.getRequestedStartTime(), booking.getOriginalStartTime(), Instant.now(), lateCancelGrace());
         // C6: the refund is what the payer actually paid (resolveAmountPaid), not the coach's current
         // price; nothing is owed — and no price lookup can fail the cancel — before capture.
         BigDecimal sessionPrice = paymentWasCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
@@ -1174,7 +1176,7 @@ public class BookingService {
             this, bookingId, parentUserId, booking.getCoachId(),
             booking.getSessionPackPurchaseId(), hoursBeforeSession, refundEligible,
             sessionPrice, parentEmail, coachEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken
         ));
     }
 
@@ -1307,10 +1309,13 @@ public class BookingService {
         // Deferred-63 AC4: without this, a parent could report a no-show before the session's own
         // scheduled start time — before there was anything to fail to show up to — and still trigger
         // the same automatic full-refund + coach-strike consequence a genuine no-show gets.
-        if (Instant.now().isBefore(booking.getRequestedStartTime())) {
+        // feat/payment-forfeit-payouts-and-clawback: and not at start+0s either — a coach a few minutes
+        // late is not a no-show. The same grace as the late-cancel refund rule (isParentCancelRefundEligible).
+        Instant reportableAt = coachNoShowReportableAt(booking.getRequestedStartTime());
+        if (Instant.now().isBefore(reportableAt)) {
             throw new OperationNotAllowedException(
-                "Cannot report a no-show before the booking's scheduled start time",
-                Map.of("requested start time", booking.getRequestedStartTime()), BookingError.NO_SHOW_TOO_EARLY);
+                "Cannot report a coach no-show before the grace period after the scheduled start has passed",
+                Map.of("reportable at", reportableAt), BookingError.NO_SHOW_TOO_EARLY);
         }
         // C6: NO_SHOW_COACH only leaves UPCOMING, so payment was always captured — refund what the payer
         // actually paid, not the coach's current price.
@@ -1336,6 +1341,18 @@ public class BookingService {
             packExpired, parentEmail,
             booking.getRequestedStartTime(), booking.getCanonicalTimezone()
         ));
+    }
+
+    /**
+     * feat/payment-forfeit-payouts-and-clawback: the earliest instant a parent may report a coach no-show —
+     * {@code start + booking.lateCancel.graceMinutes}, the window in which the coach can still press Start.
+     */
+    Instant coachNoShowReportableAt(Instant requestedStartTime) {
+        return requestedStartTime.plus(lateCancelGrace());
+    }
+
+    private Duration lateCancelGrace() {
+        return Duration.ofMinutes(configService.getBoundedLong(ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES));
     }
 
     private String resolveCoachEmail(UUID coachId, UUID bookingId) {
@@ -1552,7 +1569,8 @@ public class BookingService {
             batchId,
             batchSize,
             b.getPlayerRequest(),
-            receiptAvailable
+            receiptAvailable,
+            b.getRequestedStartTime() == null ? null : coachNoShowReportableAt(b.getRequestedStartTime())
         );
     }
 }
