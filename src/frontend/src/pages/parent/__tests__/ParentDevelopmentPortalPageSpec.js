@@ -204,3 +204,27 @@ describe('ParentDevelopmentPortalPage.vue — baseline toggle and skill trends (
     expect(panel.props('trends')).toEqual([{ skillCode: 'PAC', direction: 'UP' }])
   })
 })
+
+// fix/pack-status-badges: a non-ACTIVE pack says what state it is in next to its tracker — a withdrawn
+// (revoked) pack would otherwise read as a plain "exhausted" tracker. An ACTIVE pack shows no badge.
+describe('ParentDevelopmentPortalPage.vue — session pack status badges', () => {
+  it('badges paused, frozen and withdrawn packs but not active ones', async () => {
+    const pack = (id, status) => ({ id, status, creditsRemaining: 2, sessionCount: 5 })
+    const { wrapper } = await mountPageForContributions(LARGE_PLAYER_ID, {
+      booking: {
+        sessionPacks: [
+          pack('a', 'ACTIVE'),
+          pack('p', 'PAUSED'),
+          pack('f', 'FROZEN'),
+          pack('r', 'REVOKED'),
+        ],
+      },
+    })
+    const badges = wrapper.findAll('[data-test="pack-status-badge"]').map((b) => b.text())
+    expect(badges).toEqual([
+      'booking.packs.pausedStatus',
+      'booking.packs.frozenStatus',
+      'booking.packs.revokedStatus',
+    ])
+  })
+})

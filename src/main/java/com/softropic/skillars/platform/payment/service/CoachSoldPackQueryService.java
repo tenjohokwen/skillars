@@ -94,7 +94,8 @@ public class CoachSoldPackQueryService {
             p.getCreatedAt(),
             status,
             expiringSoon,
-            extendable
+            extendable,
+            p.getRevokedReason()
         );
     }
 

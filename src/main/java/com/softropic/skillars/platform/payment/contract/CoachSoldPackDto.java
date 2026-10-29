@@ -26,5 +26,7 @@ public record CoachSoldPackDto(
     Instant createdAt,
     String status,
     boolean expiringSoon,
-    boolean extendable
+    boolean extendable,
+    /* fix/pack-status-badges: why a REVOKED pack was revoked (SessionPackPurchase.REVOKED_*); null unless revoked. */
+    String revokedReason
 ) {}

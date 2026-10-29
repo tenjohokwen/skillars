@@ -2011,6 +2011,18 @@ export default {
         PAUSED: 'En pause',
         EXPIRED: 'Expiré',
         EXHAUSTED: 'Épuisé',
+        FROZEN: 'Gelé',
+        REVOKED: 'Retiré',
+      },
+      packStatusNote: {
+        frozenNote:
+          'Contestation de carte en cours — le pack est inutilisable jusqu’à sa résolution',
+        revokedChargebackLost:
+          'Retiré : l’acheteur a obtenu gain de cause sur une contestation de carte',
+        revokedExternalRefund: 'Retiré : remboursé en dehors de l’application',
+        revokedCoachSuspended:
+          'Retiré : séances non utilisées remboursées à l’acheteur pendant la suspension de votre compte',
+        revokedOther: 'Retiré : les séances restantes ont été supprimées',
       },
       pageTitle: 'Mon offre de pack de séances',
       currentOffer: 'Votre offre actuelle',
@@ -2375,6 +2387,17 @@ export default {
       exhaustedLabel: 'Épuisé',
       expiredLabel: 'Expiré',
       pausedStatus: 'En pause',
+      frozenStatus: 'Gelé',
+      frozenNotice:
+        'Une contestation de paiement par carte est en cours sur ce pack — ses séances ne peuvent pas être réservées ni utilisées avant sa résolution.',
+      revokedStatus: 'Retiré',
+      revokedChargebackLost:
+        'Retiré : le paiement par carte a été annulé suite à une contestation, les séances restantes ont donc été supprimées.',
+      revokedExternalRefund:
+        'Retiré : le paiement a été remboursé en dehors de l’application, les séances restantes ont donc été supprimées.',
+      revokedCoachSuspended:
+        'Retiré : le coach n’est plus disponible — les séances non utilisées ont été remboursées sur votre portefeuille.',
+      revokedOther: 'Retiré : les séances restantes ne sont plus disponibles.',
       creditsRemainingLabel: '{remaining} / {total} séances restantes',
       expiresLabel: 'Expire le {date}',
       pausedUntilLabel: "En pause jusqu'au {date}",

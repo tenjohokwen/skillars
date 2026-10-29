@@ -56,6 +56,15 @@
               <q-item-label>{{ pack.coachDisplayName }}</q-item-label>
             </q-item-section>
             <q-item-section side>
+              <!-- fix/pack-status-badges: a paused/frozen/withdrawn/expired pack says so — the tracker
+                   alone would read a withdrawn pack as plain "exhausted". -->
+              <q-badge
+                v-if="pack.status && pack.status !== 'ACTIVE'"
+                :color="packBadgeColor(pack)"
+                :label="packBadgeLabel(pack, $t)"
+                class="q-mb-xs"
+                data-test="pack-status-badge"
+              />
               <SessionPackTracker
                 :credits-remaining="pack.creditsRemaining"
                 :session-count="pack.sessionCount"
@@ -170,6 +179,7 @@ import PlayerTimelinePanel from 'src/components/development/PlayerTimelinePanel.
 import SkillTrendsPanel from 'src/components/development/SkillTrendsPanel.vue'
 import { TIMELINE_ANCHORS } from 'src/utils/timelineLinks'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
+import { packBadgeColor, packBadgeLabel } from 'src/utils/packStatus'
 
 const route = useRoute()
 const router = useRouter()

@@ -18,5 +18,8 @@ public record SessionPackPurchaseResponse(
     Instant pausedUntil,
     String status,
     /* fix/payment-pack-integrity: when the pause starts (null for no pause, or a pre-V210 pause). */
-    Instant pausedFrom
+    Instant pausedFrom,
+    /* fix/pack-status-badges: why a REVOKED pack was revoked (CHARGEBACK_LOST, EXTERNAL_REFUND,
+       COACH_SUSPENDED — SessionPackPurchase.REVOKED_*); null unless revoked. */
+    String revokedReason
 ) {}

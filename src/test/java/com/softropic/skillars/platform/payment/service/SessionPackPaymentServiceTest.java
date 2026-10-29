@@ -445,6 +445,42 @@ class SessionPackPaymentServiceTest {
         assertThat(statusOf(responses, expired.getPurchaseId())).isEqualTo("EXPIRED");
     }
 
+    /**
+     * fix/pack-status-badges: a revoked pack reads REVOKED (not EXHAUSTED, though its sessions were zeroed) and
+     * carries its reason; a pack under an open card dispute reads FROZEN (even while paused); a pause scheduled
+     * for later leaves the pack ACTIVE with its pausedFrom exposed.
+     */
+    @Test
+    void getPacksForParent_reportsRevokedFrozenAndScheduledPause() {
+        Instant now = Instant.now();
+        SessionPackPurchase revoked = purchase(0, now.plus(10, ChronoUnit.DAYS), null);
+        revoked.setRevokedAt(now.minus(1, ChronoUnit.HOURS));
+        revoked.setRevokedReason(SessionPackPurchase.REVOKED_CHARGEBACK_LOST);
+        SessionPackPurchase frozen = purchase(3, now.plus(10, ChronoUnit.DAYS), null);
+        frozen.setDisputeFrozenAt(now.minus(1, ChronoUnit.HOURS));
+        SessionPackPurchase frozenWhilePaused = purchase(3, now.plus(10, ChronoUnit.DAYS),
+            now.plus(5, ChronoUnit.DAYS));
+        frozenWhilePaused.setDisputeFrozenAt(now.minus(1, ChronoUnit.HOURS));
+        SessionPackPurchase scheduledPause = purchase(3, now.plus(10, ChronoUnit.DAYS),
+            now.plus(8, ChronoUnit.DAYS));
+        scheduledPause.setPausedFrom(now.plus(2, ChronoUnit.DAYS));
+
+        when(sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(PARENT_ID))
+            .thenReturn(List.of(revoked, frozen, frozenWhilePaused, scheduledPause));
+        when(sessionPackTierRepository.findAllById(any())).thenReturn(List.of());
+
+        List<SessionPackPurchaseResponse> responses = sessionPackPaymentService.getPacksForParent(PARENT_ID, null);
+
+        assertThat(statusOf(responses, revoked.getPurchaseId())).isEqualTo("REVOKED");
+        assertThat(responseOf(responses, revoked.getPurchaseId()).revokedReason()).isEqualTo("CHARGEBACK_LOST");
+        assertThat(statusOf(responses, frozen.getPurchaseId())).isEqualTo("FROZEN");
+        assertThat(responseOf(responses, frozen.getPurchaseId()).revokedReason()).isNull();
+        assertThat(statusOf(responses, frozenWhilePaused.getPurchaseId())).isEqualTo("FROZEN");
+        assertThat(statusOf(responses, scheduledPause.getPurchaseId())).isEqualTo("ACTIVE");
+        assertThat(responseOf(responses, scheduledPause.getPurchaseId()).pausedFrom())
+            .isEqualTo(scheduledPause.getPausedFrom());
+    }
+
     @Test
     void getPacksForParent_filtersByCoachId() {
         Instant now = Instant.now();
@@ -531,6 +567,10 @@ class SessionPackPaymentServiceTest {
             .findFirst()
             .orElseThrow()
             .status();
+    }
+
+    private SessionPackPurchaseResponse responseOf(List<SessionPackPurchaseResponse> responses, UUID purchaseId) {
+        return responses.stream().filter(r -> r.purchaseId().equals(purchaseId)).findFirst().orElseThrow();
     }
 
     private SessionPackPurchase purchase(int remainingSessions, Instant expiresAt, Instant pausedUntil) {
