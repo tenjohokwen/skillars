@@ -490,12 +490,14 @@ public class BookingBatchService {
     }
 
     /**
-     * Hands an ACCEPTING batch back after a run that did not reach (or failed in) the trailing transaction:
-     * PENDING while any booking is still REQUESTED, so the coach can retry; otherwise the computed status.
-     * A batch some other writer already moved on is left alone. Never throws — it runs on the way out of a
-     * failure, which must reach the caller unchanged. If it cannot run (crash), the batch stays ACCEPTING
-     * until {@link #updateBatchStatusFromBooking} rewrites it, which the next individual accept, decline or
-     * expiry of its remaining bookings triggers.
+     * Hands an ACCEPTING batch back to PENDING — exactly what the claim found — after a run that did not
+     * reach (or failed in) the trailing transaction. Deliberately NOT a computed status: a rejected
+     * acceptAll must leave the batch as it was (BookingBatchResourceIT's "must not silently mark the batch
+     * processed" contract, e.g. a PENDING batch whose bookings were all declined individually); the
+     * status the bookings imply is {@link #updateBatchStatusFromBooking}'s job, on the next booking status
+     * change. A batch some other writer already moved on is left alone. Never throws — it runs on the way
+     * out of a failure, which must reach the caller unchanged. If it cannot run (crash), the batch stays
+     * ACCEPTING until updateBatchStatusFromBooking rewrites it once none of its bookings is REQUESTED.
      */
     private void releaseAcceptClaim(UUID batchId) {
         try {
@@ -505,9 +507,7 @@ public class BookingBatchService {
                     if (!BATCH_ACCEPTING.equals(fresh.getStatus())) {
                         return;
                     }
-                    List<Booking> all = bookingRepository.findByBatchId(batchId);
-                    boolean anyRequested = all.stream().anyMatch(b -> "REQUESTED".equals(b.getStatus()));
-                    fresh.setStatus(anyRequested ? "PENDING" : computeBatchStatus(all));
+                    fresh.setStatus("PENDING");
                     batchRepository.save(fresh);
                 }));
         } catch (RuntimeException e) {

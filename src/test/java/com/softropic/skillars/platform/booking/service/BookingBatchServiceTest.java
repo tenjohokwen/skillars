@@ -1122,9 +1122,8 @@ class BookingBatchServiceTest {
         // Every per-booking accept dies on the slot-collision guard inside acceptOneBooking, and the
         // loop's catch swallows it — acceptedIds ends up empty. Never reaches acceptAll's trailing
         // transaction; the locked read is the fix/booking-request-consent claim (PENDING -> ACCEPTING)
-        // and its release (back to PENDING: the booking is still REQUESTED).
+        // and its release (back to PENDING, what the claim found — never a computed status).
         when(batchRepository.findByIdForUpdate(BATCH_ID)).thenReturn(Optional.of(batch));
-        when(bookingRepository.findByBatchId(BATCH_ID)).thenReturn(List.of(requested));
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any()))
             .thenReturn(List.of(bookingInStatus("CONFIRMED")));
 
