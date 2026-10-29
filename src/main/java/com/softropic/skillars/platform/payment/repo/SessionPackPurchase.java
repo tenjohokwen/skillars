@@ -86,7 +86,7 @@ public class SessionPackPurchase {
     private BigDecimal payoutGrossAllocated = BigDecimal.ZERO;
 
     /**
-     * fix/payment-pack-refund-rounding (V199): how many of this pack's sessions have been refunded to the
+     * fix/payment-pack-refund-rounding (V200): how many of this pack's sessions have been refunded to the
      * payer as money (a wallet {@code BOOKING_REFUND} for a booking on an expired pack), and the gross
      * refunded so far. Written only under this row's lock, by {@code PackRefundAllocationService}, with a
      * per-booking {@code pack_session_refunds} marker. Together with the payout columns above they are

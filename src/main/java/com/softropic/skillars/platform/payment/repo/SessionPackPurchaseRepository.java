@@ -106,7 +106,7 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     boolean existsRestoreMarker(@Param("bookingId") UUID bookingId);
 
     /**
-     * fix/payment-pack-refund-rounding: claims the per-booking money-refund marker (V199) for a pack session
+     * fix/payment-pack-refund-rounding: claims the per-booking money-refund marker (V200) for a pack session
      * refunded to the payer. 1 when this call claimed it (the caller records the refund on the locked pack
      * row in the same transaction), 0 when this booking's session was already refunded.
      */
@@ -119,7 +119,7 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     int insertRefundMarker(@Param("bookingId") UUID bookingId, @Param("purchaseId") UUID purchaseId,
                            @Param("amount") BigDecimal amount);
 
-    /** fix/payment-pack-refund-rounding: the amount a booking's pack session was refunded at (its V199 marker). */
+    /** fix/payment-pack-refund-rounding: the amount a booking's pack session was refunded at (its V200 marker). */
     @Query(nativeQuery = true, value = "SELECT amount FROM payment.pack_session_refunds WHERE booking_id = :bookingId")
     Optional<BigDecimal> findRefundMarkerAmount(@Param("bookingId") UUID bookingId);
 
