@@ -126,7 +126,7 @@
       <tr><td><code>api</code></td><td><code>ReviewResource</code> (all player, parent and coach endpoints under <code>/api/reviews</code>) and <code>ReviewApiAdvice</code>, a <code>@RestControllerAdvice</code> scoped to this package <em>and</em> <code>admin.api.AdminReviewResource</code>. It maps <code>OperationNotAllowedException</code>/<code>ReviewErrorCode</code> to HTTP status and turns bean-validation failures into <code>reviews.bodyTooLong</code>/<code>reviews.responseTooLong</code>/<code>reviews.validationError</code>.</td></tr>
       <tr><td><code>contract</code></td><td>Request and response records (<code>SubmitReviewRequest</code>, <code>ReviewFlagRequest</code>, <code>CoachResponseRequest</code>, <code>BlockReviewRequest</code>, <code>ReviewEligibilityDto</code>, DTOs and paged list responses), enums (<code>AuthorRole</code>, <code>ReviewModerationStatus</code>, <code>HeldReason</code>, <code>ReviewFlagReason</code>), <code>ReviewErrorCode</code>, and three events (<code>ReviewSubmittedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>ReviewModerationResolvedEvent</code>). <code>AdminReviewQueueEntryDto</code>/<code>ReviewFlagDto</code>/<code>BlockReviewRequest</code> live here so <code>admin</code> can use this module's shapes.</td></tr>
       <tr><td><code>repo</code></td><td>JPA entities <code>CoachReview</code> and <code>ReviewFlag</code> with their repositories, including the locked reads, the aggregate query and the GDPR delete/anonymise queries.</td></tr>
-      <tr><td><code>service</code></td><td><code>ReviewSubmissionService</code> (submit, update, coach response, eligibility), <code>ReviewModerationService</code> (async AI moderation), <code>ReviewFlagService</code> (flagging and auto-hold), <code>ReviewQueryService</code> (read-only listings), and <code>CoachRatingService</code> (aggregate recompute, shared with <code>admin</code>). No scheduled jobs.</td></tr>
+      <tr><td><code>service</code></td><td><code>ReviewSubmissionService</code> (submit, update, coach response, eligibility), <code>ReviewModerationService</code> (async AI moderation), <code>ReviewFlagService</code> (flagging and auto-hold), <code>ReviewQueryService</code> (read-only listings), <code>CoachRatingService</code> (aggregate recompute, shared with <code>admin</code>), and the one scheduled job, <code>ReviewModerationSweeper</code> (holds reviews stranded in <code>PENDING</code>).</td></tr>
     </table>
 
     <h3 id="key-entities-tables">Key entities &amp; tables</h3>
@@ -154,7 +154,7 @@
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
       <tr><td>GET</td><td><code>/api/reviews/coaches/me</code></td><td>The coach's own reviews in any moderation status, <code>?page</code></td><td><code>HAS_COACH_ROLE</code></td></tr>
       <tr><td>GET</td><td><code>/api/reviews/coaches/{coachId}</code></td><td>Public paged list of a coach's <code>APPROVED</code> reviews. <code>?page</code> (size 10), <code>?sort=newest|highest|lowest</code>; an unknown value falls back to newest.</td><td>Public (<code>IS_PERMIT_ALL</code>)</td></tr>
-      <tr><td>GET</td><td><code>/api/reviews/coaches/{coachId}/eligibility</code></td><td>Pre-check for the "Write a review" button. Returns <code>{eligible, reasonCode}</code>, where <code>reasonCode</code> is <code>reviews.noQualifyingSession</code>, <code>reviews.activeDispute</code> or null. Answers the <em>write</em> question only (it does not check whether you already have a review).</td><td><code>HAS_PARENT_OR_PLAYER_ROLE</code></td></tr>
+      <tr><td>GET</td><td><code>/api/reviews/coaches/{coachId}/eligibility</code></td><td>Pre-check for the "Write a review" button. Returns <code>{eligible, reasonCode}</code>, where <code>reasonCode</code> is <code>reviews.noQualifyingSession</code>, <code>reviews.activeDispute</code>, <code>reviews.authorRoleNotAllowed</code> (the caller is the coach's own user) or null. Answers the <em>write</em> question only (it does not check whether you already have a review).</td><td><code>HAS_PARENT_OR_PLAYER_ROLE</code></td></tr>
       <tr><td>POST</td><td><code>/api/reviews/coaches/{coachId}</code></td><td>Submit a new review. Returns <code>201 {reviewId}</code>.</td><td><code>HAS_PARENT_OR_PLAYER_ROLE</code></td></tr>
       <tr><td>PATCH</td><td><code>/api/reviews/{reviewId}</code></td><td>Update your own review (moves it back into moderation and clears the coach response). Returns <code>204</code>.</td><td>Authenticated, author only (otherwise <code>403 authorMismatch</code>)</td></tr>
       <tr><td>GET</td><td><code>/api/reviews/me/coaches/{coachId}</code></td><td>Your own review for one coach, any status (<code>403 reviewNotFound</code> if there is none)</td><td>Authenticated</td></tr>
@@ -223,8 +223,8 @@ sequenceDiagram
   U->>RR: GET /api/reviews/coaches/{coachId}/eligibility
   RR-->>U: {eligible, reasonCode}
   U->>RR: POST /api/reviews/coaches/{coachId} {rating, body}
-  RR->>RS: submitReview(coachId, authorId, role, rating, body) [REQUIRES_NEW]
-  RS->>RS: evaluateEligibility (matured COMPLETED booking, parent/self, no author dispute)
+  RR->>RS: submitReview(coachId, authorId, rating, body) [REQUIRES_NEW]
+  RS->>RS: evaluateEligibility (not own profile, matured COMPLETED booking, parent/self, no author dispute) derives authorRole
   RS->>DB: existsByAuthorIdAndCoachId?
   alt already reviewed
     RS-->>RR: 409 reviews.alreadySubmitted
@@ -425,8 +425,9 @@ sequenceDiagram
         <code>AdminAlertEventListener</code> (<code>ReviewFlaggedEvent</code>), <code>DisputeRepository</code> (eligibility
         gate), and GDPR export and erasure.</li>
       <li><a href="../config/index.html">Config</a> &mdash; <code>reviews.minSessionAgeDays</code>,
-        <code>reviews.updateCooldownDays</code> and <code>reviews.autoHoldFlagThreshold</code> through <code>ConfigService</code> and
-        <code>ConfigBounds</code>.</li>
+        <code>reviews.updateCooldownDays</code>, <code>reviews.autoHoldFlagThreshold</code> and <code>reviews.moderationOrphanGraceMinutes</code>
+        through <code>ConfigService</code> and the <code>ConfigBounds</code> <code>BoundedKey</code> overloads (key, default and bounds all
+        come from the registry entry).</li>
       <li><a href="../messaging/index.html">Messaging</a> &mdash; this module reuses its <code>ModerationVerdict</code> enum.</li>
       <li><a href="../security/index.html">Security</a> &mdash; <code>PlayerProfileRepository</code> for parent/self ownership,
         the <code>Principal</code>/<code>SecurityUtil</code> identity, and <code>OperationNotAllowedException</code>.</li>
@@ -435,7 +436,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

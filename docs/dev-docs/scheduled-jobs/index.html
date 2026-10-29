@@ -61,10 +61,11 @@
       A large amount of Skillars' correctness does not happen in a request thread. Bookings that nobody
       actions expire on a timer; a booking stranded mid-payment is swept back out; a coach who abandons the
       wrap-up wizard has the session force-completed; a message or review whose moderation verdict never landed is
-      escalated to a human; packs forfeit at expiry; outboxes drain; failed GDPR erasures are retried; local
-      subscriptions are reconciled against Stripe. There are <strong>43 <code>@Scheduled</code> methods in
-      41 classes across 12 platform modules plus <code>infrastructure</code></strong>, and
-      <strong>33 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
+      escalated to a human; a live session the coach never ended is auto-ended; a card charge whose outcome
+      was lost is settled from Stripe's answer; packs forfeit at expiry; outboxes drain; failed GDPR erasures
+      are retried; local subscriptions are reconciled against Stripe. There are <strong>46
+      <code>@Scheduled</code> methods in 44 classes across 12 platform modules plus
+      <code>infrastructure</code></strong>, and <strong>36 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
       crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
       "why is this record stuck".
     </p>
@@ -72,7 +73,10 @@
       Re-inventory with
       <code>grep -rn '@Scheduled(' src/main/java --include='*.java'</code> and
       <code>grep -rn '@SchedulerLock(' src/main/java --include='*.java'</code> — the table below was rebuilt from
-      exactly that on the current master.
+      exactly that on the current master. A bare <code>grep -c</code> over-counts: two hits are Javadoc
+      mentions (<code>SchedulingConfig</code>, <code>ConfigResource</code>), and one <code>@SchedulerLock(</code>
+      hit is a comment, so anchor the pattern to the start of the line (<code>'^\s*@Scheduled('</code>) to get
+      the real 46 and 36.
     </p>
 
     <h2 id="how-scheduling-is-wired">How Scheduling Is Wired</h2>
@@ -93,7 +97,7 @@
       long-lived Spring contexts: a job with a 5-minute delay never fires in a context that lives 90 seconds,
       and that accidental protection disappeared. Worse, the per-test reset backdates every ShedLock row,
       making every guarded job eligible on every test method.</p>
-      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 24 of the 43
+      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 27 of the 46
       <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder. Meanwhile
       <code>@EnableSchedulerLock</code> stays unconditional because tests invoke scheduled methods directly
       through the Spring proxy, so the lock advisor must still apply — that is the behaviour
@@ -114,7 +118,8 @@
 
     <h2 id="the-job-catalogue">The Job Catalogue</h2>
     <p>
-      <span class="tag">🔒</span> = ShedLock-guarded; the value after it is <code>lockAtMostFor</code>.
+      <span class="tag">🔒</span> = ShedLock-guarded; the value after it is <code>lockAtMostFor</code> (lock names and
+      <code>lockAtLeastFor</code> are in <a href="#shedlock-names-and-lock-windows">the lock table</a> below).
       <em>(cfg)</em> = schedule bound to a property placeholder (key shown, default in brackets). Classes are
       relative to <code>com.softropic.skillars.platform</code> unless noted. Unguarded jobs run on every
       instance — the list after the tables explains why each is safe.
@@ -124,18 +129,20 @@
     <table>
       <thead><tr><th>Job</th><th>Schedule</th><th>What it recovers</th></tr></thead>
       <tbody>
-        <tr><td><code>payment.PaymentPendingSweeper.sweepStrandedPayments</code> 🔒 PT30M</td><td>every 15 min</td><td>Bookings stranded in <code>PAYMENT_PENDING</code> when the AFTER_COMMIT settlement listener never completed. <strong>Pack-funded only</strong> — see <a href="../payment/index.html">Payment</a> for why the Stripe path is deliberately excluded.</td></tr>
+        <tr><td><code>payment.PaymentPendingSweeper.sweepStrandedPayments</code> 🔒 PT30M</td><td>every 15 min</td><td>Bookings stranded in <code>PAYMENT_PENDING</code> when the AFTER_COMMIT settlement listener never completed. The decision is made on the <code>booking_payments</code> row, not the funding type: <strong>no row</strong> proves no Stripe call was attempted, so the booking is declined; a <code>CAPTURE_PENDING</code> row (money may be at Stripe) or a terminal row is only reported. A <code>CAPTURE_PENDING</code> row with a charge key is resolved by <code>ChargeOutcomeReconciler</code> (below); one without needs an operator — see <a href="../payment/index.html">Payment</a>.</td></tr>
+        <tr><td><code>payment.ChargeOutcomeReconciler.reconcile</code> 🔒 PT20M</td><td>every 10 min</td><td>Resolves <code>CAPTURE_PENDING</code> reservations whose Stripe charge outcome is unknown (timeout, 5xx, lost connection, JVM death) and that carry a <code>charge_idempotency_key</code> (V207), once older than <code>booking.payment.charge_reconcile_after_minutes</code> (runtime config, 5–1440, default 10). Looks the PaymentIntent up by key: <em>succeeded</em> → settle as the listener would have (or decline and credit the card share to the wallet if it can no longer settle); <em>processing</em> → next run; anything else / none → decline with a zeroed <code>CHARGE_FAILED</code> row. Pages of 100, at most 1,000 rows/run, one transaction per booking; compensation runs after that transaction.</td></tr>
         <tr><td><code>messaging.MessageModerationSweeper.sweep</code> 🔒 PT20M</td><td>every 10 min</td><td>Messages stranded in <code>PENDING</code> when a moderation verdict never landed. Fails closed to <code>UNDER_REVIEW</code>; never approves, never retries Gemini. Capped at <code>MAX_BATCH = 500</code>/run.</td></tr>
         <tr><td><code>reviews.ReviewModerationSweeper.sweep</code> 🔒 PT20M</td><td>every 10 min</td><td>Reviews stranded in <code>PENDING</code> when the AFTER_COMMIT moderation write never landed (it swallows its own failures). Holds them as <code>UNDER_REVIEW/MODERATION_TIMEOUT</code> after <code>reviews.moderationOrphanGraceMinutes</code> (5–1440, default 30) so they reach the admin queue; atomic conditional UPDATE per row; never approves, never retries Gemini. Capped at 500/run.</td></tr>
         <tr><td><code>booking.QuickCompleteTimeoutService.processExpiredQuickCompletes</code> 🔒 PT15M</td><td>every 5 min</td><td>Quick-Complete sessions the parent never confirmed; force-completes after <code>booking.quick_complete_timeout_hours</code> (runtime config, 1–168h).</td></tr>
-        <tr><td><code>booking.StuckCompletionSweeperService.processStuckCompletions</code> 🔒 PT15M</td><td>every 5 min</td><td>Bookings in <code>COMPLETED_PENDING_CONFIRMATION</code> with <em>no</em> <code>SessionCompletionData</code> row (coach abandoned <code>WrapUpSequence.vue</code> before step 5) — the case the Quick-Complete sweeper cannot see. Batch of 200/tick.</td></tr>
-        <tr><td><code>booking.BookingExpiryScheduler.expireStaleRequests</code> 🔒 PT15M</td><td>every 5 min</td><td>Auto-declines <code>REQUESTED</code> bookings the coach never actioned (<code>booking.request_expiry_hours</code>, default 48h).</td></tr>
+        <tr><td><code>booking.StuckCompletionSweeperService.processStuckCompletions</code> 🔒 PT15M</td><td>every 5 min</td><td>Bookings in <code>COMPLETED_PENDING_CONFIRMATION</code> with <em>no</em> <code>SessionCompletionData</code> row (coach abandoned <code>WrapUpSequence.vue</code> before step 5) — the case the Quick-Complete sweeper cannot see. Timeout <code>booking.stuck_completion_timeout_hours</code> (6–720, default 72). Batch of 200/tick.</td></tr>
+        <tr><td><code>booking.UnresolvedSessionSweeperService.sweep</code> 🔒 PT15M</td><td>every 5 min</td><td>Sessions nothing else settles once their scheduled end is past by <code>booking.unresolvedSession.graceMinutes</code> (30–10080, default 120). <code>IN_PROGRESS</code>/<code>PAUSED</code> (coach started and never ended) → <code>COMPLETED_PENDING_CONFIRMATION</code> with <code>auto_ended_at</code> stamped, so the later wrap-up is a QUICK one. <code>UPCOMING</code> (never started) → one <code>SESSION_NEVER_STARTED</code> admin alert per booking (<code>unresolved_alerted_at</code>, V209); never auto-paid or auto-refunded. Pages of 200, one transaction per booking.</td></tr>
+        <tr><td><code>booking.BookingExpiryScheduler.expireStaleRequests</code> 🔒 PT15M</td><td>every 5 min</td><td>Auto-declines <code>REQUESTED</code> bookings the coach never actioned (<code>booking.request_expiry_hours</code>, default 48h) <em>and</em> requests whose start time has already passed. Pages of 200/tick.</td></tr>
         <tr><td><code>admin.GdprErasureRetryScheduler.retryFailedErasures</code> 🔒 PT30M</td><td>daily 06:00</td><td>Re-drives <code>FAILED</code> GDPR erasure requests (delegates to <code>GdprErasureService.retryFailedErasures</code>); skips users that already have a PENDING/PROCESSING erasure.</td></tr>
         <tr><td><code>video.QuotaReservationTimeoutService.expireStaleReservations</code> 🔒 PT10M</td><td>(cfg) <code>app.video.reservation-check-interval-ms</code> [60s]</td><td>Releases video quota reservations whose upload never completed.</td></tr>
         <tr><td><code>video.UploadSessionExpiryScheduler.processExpired</code></td><td>(cfg) <code>app.video.upload.expiry-scheduler-delay-ms</code> [30s]</td><td>Expires abandoned upload sessions. Unguarded: rows are claimed with <code>FOR UPDATE SKIP LOCKED</code> (<code>UploadSessionRepository</code>).</td></tr>
         <tr><td><code>video.ReconciliationWorkerScheduler.reconcile</code></td><td>(cfg) <code>app.video.reconciliation.fixed-delay-ms</code> [60s]</td><td>Reconciles non-terminal videos against the provider (HTTP outside any transaction), recording <code>ReconciliationIncident</code> rows for drift. Unguarded: <code>VideoRepository.findNonTerminalForUpdate</code> locks the batch.</td></tr>
         <tr><td><code>video.ReconciliationWorkerScheduler.sweepOrphanedProviderAssets</code> 🔒 PT10M</td><td>(cfg) <code>app.video.orphan-asset.sweep-delay-ms</code> [5 min]</td><td>Deletes provider assets left behind by a rolled-back <code>initializeUpload</code> (<code>pending_provider_asset</code> rows older than <code>app.video.orphan-asset.ttl</code>, default 30 min, with no matching video). <code>lockAtLeastFor = PT0S</code>.</td></tr>
-        <tr><td><code>video.ModerationSlaMonitorService.detectSlaViolations</code></td><td>(cfg) <code>app.video.moderation.sla-monitor-delay-ms</code> [5 min]</td><td>Flags video moderation scans breaching their SLA. Unguarded: <code>SELECT … FOR UPDATE SKIP LOCKED</code> in a short <code>TransactionTemplate</code>.</td></tr>
+        <tr><td><code>video.ModerationSlaMonitorService.detectSlaViolations</code></td><td>(cfg) <code>app.video.moderation.sla-monitor-delay-ms</code> [5 min; 60s in <code>application-dev.yaml</code>]</td><td>Flags video moderation scans breaching their SLA. Unguarded: <code>SELECT … FOR UPDATE SKIP LOCKED</code> in a short <code>TransactionTemplate</code>.</td></tr>
       </tbody>
     </table>
 
@@ -150,7 +157,7 @@
         <tr><td><code>development.RadarCompositeDlqProcessor.process</code> 🔒 PT10M</td><td>(cfg) <code>platform.development.radar_composite_dlq.poll_delay_ms</code> [60s]</td><td>Replays radar-composite recalculations that failed after the original <code>@Async</code> listener. Same claim/backoff shape as the video deletion outbox; terminal writes are guarded on <code>status = 'CLAIMED' AND claimed_at = :claimedAt</code>, runs bounded to 8 min.</td></tr>
         <tr><td><code>video.WebhookEventProcessorScheduler.processPending</code></td><td>(cfg) <code>app.video.webhook.processor-delay-ms</code> [5s]</td><td>Pending provider webhook events; also publishes queue-depth metrics. Unguarded: <code>FOR UPDATE SKIP LOCKED</code>.</td></tr>
         <tr><td><code>video.VideoSubscriptionLifecycleListener.processOutbox</code> 🔒 PT1H</td><td>every 60s</td><td>Subscription-lifecycle outbox gating video features by tier.</td></tr>
-        <tr><td><code>notification.infrastructure.EmailRetryScheduler.retryFailedEmails</code> 🔒 PT10M</td><td>(cfg) <code>email.retry.interval-ms</code> [60s]</td><td>Failed email envelopes; retries until the attempt cap, then <code>ATTEMPTS_EXHAUSTED</code> (or <code>DEADLINE_EXPIRED</code>). <code>@Transactional(timeout = 600)</code>.</td></tr>
+        <tr><td><code>notification.infrastructure.EmailRetryScheduler.retryFailedEmails</code> 🔒 PT10M</td><td>(cfg) <code>email.retry.interval-ms</code> [60s]</td><td>Failed email envelopes; retries until the attempt cap, then <code>ATTEMPTS_EXHAUSTED</code> (or <code>DEADLINE_EXPIRED</code>). <code>@Transactional(timeout = 600)</code>. The bean only exists when <code>email.retry.enabled</code> is true (default when absent; prod sets it explicitly).</td></tr>
       </tbody>
     </table>
 
@@ -160,10 +167,10 @@
       <tbody>
         <tr><td><code>booking.BookingReminderScheduler.processReminderWindows</code> 🔒 PT15M</td><td>every 5 min</td><td>Transitions <code>CONFIRMED → UPCOMING</code> and sends primary/secondary reminder emails.</td></tr>
         <tr><td><code>payment.CashOutReconciliationService.recheckOpenCashOuts</code> 🔒 PT30M</td><td>every 15 min</td><td>Retries the Stripe refund of an unconfirmed credit cash-out (<code>cash_out_reconciliations</code> <code>UNKNOWN</code>, or <code>PENDING</code> for more than 15 min) under its original <code>cashout-{id}</code> key, 15 rows per run (15 × ~110s worst-case Stripe call fits the lock), only within 23h of the cash-out; older open rows are escalated for a human.</td></tr>
-        <tr><td><code>payment.SessionPackForfeitureScheduler.forfeitExpiredPacks</code> 🔒 PT15M</td><td>hourly</td><td>Forfeits packs past <code>expiresAt</code>, stamps <code>expiredNotifiedAt</code>, publishes <code>SessionPackExpiredEvent</code>.</td></tr>
+        <tr><td><code>payment.SessionPackForfeitureScheduler.forfeitExpiredPacks</code> 🔒 PT15M</td><td>hourly</td><td>Forfeits packs past <code>expiresAt</code>, stamps <code>expiredNotifiedAt</code>, publishes <code>SessionPackExpiredEvent</code>. Keyset-paged by purchase id, 200 per page (a pack with a missing coach is deliberately left unstamped, so it pages rather than looping "until empty").</td></tr>
         <tr><td><code>payment.SessionPackExpiryNotifier.notifyExpiringPacks</code> 🔒 PT15M</td><td>daily 08:00</td><td>Warns about packs expiring within 14 days; stamps <code>expiryWarnedAt</code> to dedupe across the window.</td></tr>
         <tr><td><code>payment.SubscriptionChangeApplicator.applyPendingChanges</code> 🔒 PT30M</td><td>daily 02:00</td><td>Applies tier downgrades scheduled for period end.</td></tr>
-        <tr><td><code>payment.SubscriptionGracePeriodChecker.checkGracePeriods</code> 🔒 PT30M</td><td>daily 03:00</td><td>Downgrades <code>PAST_DUE</code> subscriptions past their grace period.</td></tr>
+        <tr><td><code>payment.SubscriptionGracePeriodChecker.checkGracePeriods</code> 🔒 PT30M</td><td>daily 03:00</td><td>Downgrades <code>PAST_DUE</code>, <code>UNPAID</code> and <code>PAUSED</code> subscriptions past their grace period (an expired row also gets one idempotent Stripe cancel).</td></tr>
         <tr><td><code>payment.SubscriptionTierReconciliationScheduler.reconcileMarketplaceTiers</code> 🔒 PT30M</td><td>daily 04:00</td><td>Compares every ACTIVE/TRIALING payment-side coach subscription with its <code>marketplace.coach_subscriptions</code> projection and corrects drift via <code>SubscriptionService.syncMarketplaceTier</code> (heals upgrades deferred by lock contention).</td></tr>
         <tr><td><code>payment.StalePayoutAlertScheduler.alertStalePayouts</code> 🔒 PT15M</td><td>daily 06:30</td><td>Raises a <code>PAYOUT_HELD</code> admin alert for each coach payout in <code>FROZEN</code> or <code>HOLD</code> unchanged for <code>payment.payout.stale_alert_days</code> (runtime config, default 14). <strong>Alerts only</strong>, never moves a payout.</td></tr>
         <tr><td><code>payment.StripeSubscriptionReconciliationScheduler.reconcileStripeSubscriptions</code> 🔒 PT15M</td><td>daily 05:00</td><td>Lists live Stripe subscriptions and runs them through the webhook resolution chain; <strong>alerts only, never auto-heals</strong>.</td></tr>
@@ -204,8 +211,8 @@
       <thead><tr><th>Module</th><th><code>@Scheduled</code></th><th>🔒</th></tr></thead>
       <tbody>
         <tr><td>video</td><td>10</td><td>6</td></tr>
-        <tr><td>payment</td><td>8</td><td>8</td></tr>
-        <tr><td>booking</td><td>4</td><td>4</td></tr>
+        <tr><td>payment</td><td>10</td><td>10</td></tr>
+        <tr><td>booking</td><td>5</td><td>5</td></tr>
         <tr><td>notification</td><td>4</td><td>2</td></tr>
         <tr><td>security</td><td>3</td><td>3</td></tr>
         <tr><td>development</td><td>3</td><td>3</td></tr>
@@ -216,14 +223,65 @@
         <tr><td>outbox</td><td>1</td><td>1</td></tr>
         <tr><td>config</td><td>1</td><td>0</td></tr>
         <tr><td><code>infrastructure</code></td><td>2</td><td>0</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>43</strong></td><td><strong>33</strong></td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>46</strong></td><td><strong>36</strong></td></tr>
+      </tbody>
+    </table>
+
+    <h3 id="shedlock-names-and-lock-windows">ShedLock names and lock windows</h3>
+    <p>
+      All 36 guarded jobs, with the exact <code>@SchedulerLock</code> <code>name</code> (the
+      <code>main.shedlock</code> row and the <code>lock_name</code> tag on <code>scheduler.lock.skipped</code>) and
+      both bounds. Names do <em>not</em> all follow <code>ClassName_method</code> — several use a short verb
+      (<code>_sweep</code>, <code>_expire</code>, <code>_remind</code>, <code>_reset</code>, <code>_warn</code>), so copy
+      the name from here or the source when calling <code>releaseSchedulerLock</code>. Property-bound bounds show
+      the key and its default in brackets; none of those keys is overridden in any <code>application-*.yaml</code>.
+    </p>
+    <table>
+      <thead><tr><th>Job</th><th>Lock name</th><th><code>lockAtMostFor</code></th><th><code>lockAtLeastFor</code></th></tr></thead>
+      <tbody>
+        <tr><td><code>AuthCleanupService.purgeExpiredRefreshTokens</code></td><td><code>AuthCleanupService_purgeExpiredRefreshTokens</code></td><td><code>PT10M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>AuthCleanupService.purgeOldLoginAttempts</code></td><td><code>AuthCleanupService_purgeOldLoginAttempts</code></td><td><code>PT5M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>BandwidthResetService.resetMonthlyBandwidth</code></td><td><code>BandwidthResetService_reset</code></td><td><code>PT30M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>BookingExpiryScheduler.expireStaleRequests</code></td><td><code>BookingExpiryScheduler_expire</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>BookingReminderScheduler.processReminderWindows</code></td><td><code>BookingReminderScheduler_remind</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>CashOutReconciliationService.recheckOpenCashOuts</code></td><td><code>CashOutReconciliationService_recheck</code></td><td><code>PT30M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>ChargeOutcomeReconciler.reconcile</code></td><td><code>ChargeOutcomeReconciler_reconcile</code></td><td><code>PT20M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>DeletionSchedulerService.processDeletions</code></td><td><code>DeletionSchedulerService_processDeletions</code></td><td><code>PT5M</code></td><td><code>app.storage.deletion.lock-at-least</code> [PT2S]</td></tr>
+        <tr><td><code>EmailRetryScheduler.retryFailedEmails</code></td><td><code>EmailRetryScheduler_retryFailedEmails</code></td><td><code>PT10M</code></td><td><code>email.retry.lock-at-least</code> [PT10S]</td></tr>
+        <tr><td><code>GdprErasureRetryScheduler.retryFailedErasures</code></td><td><code>GdprErasureRetryScheduler_retryFailedErasures</code></td><td><code>PT30M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>InAppNotificationRetentionScheduler.purge</code></td><td><code>InAppNotificationRetentionScheduler_purge</code></td><td><code>PT30M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>MessageModerationSweeper.sweep</code></td><td><code>MessageModerationSweeper_sweep</code></td><td><code>PT20M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>MessageRetentionScheduler.runRetention</code></td><td><code>MessageRetentionScheduler_runRetention</code></td><td><code>PT30M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>NeglectedSkillDetectionService.detectNeglectedSkills</code></td><td><code>NeglectedSkillDetectionService_detect</code></td><td><code>app.development.neglected-detection.lock-at-most</code> [PT30M]</td><td><code>app.development.neglected-detection.lock-at-least</code> [PT5M]</td></tr>
+        <tr><td><code>OutboxPollerScheduler.pollAndProcess</code></td><td><code>OutboxPollerScheduler_pollAndProcess</code></td><td><code>PT10M</code></td><td><code>app.storage.poller.lock-at-least</code> [PT2S]</td></tr>
+        <tr><td><code>OutboxService.sweep</code></td><td><code>OutboxService_sweep</code></td><td><code>PT10M</code></td><td><code>app.outbox.lock-at-least</code> [PT1M]</td></tr>
+        <tr><td><code>PaymentPendingSweeper.sweepStrandedPayments</code></td><td><code>PaymentPendingSweeper_sweep</code></td><td><code>PT30M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>QuickCompleteTimeoutService.processExpiredQuickCompletes</code></td><td><code>QuickCompleteTimeoutService_processExpiredQuickCompletes</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>QuotaReservationTimeoutService.expireStaleReservations</code></td><td><code>QuotaReservationTimeoutService_expire</code></td><td><code>PT10M</code></td><td><code>app.video.reservation-lock-at-least</code> [PT1M]</td></tr>
+        <tr><td><code>RadarCompositeDlqProcessor.process</code></td><td><code>RadarCompositeDlqProcessor_process</code></td><td><code>PT10M</code></td><td><code>platform.development.radar_composite_dlq.lock_at_least</code> [PT30S]</td></tr>
+        <tr><td><code>ReconciliationWorkerScheduler.sweepOrphanedProviderAssets</code></td><td><code>ReconciliationWorkerScheduler_sweepOrphanedProviderAssets</code></td><td><code>PT10M</code></td><td><code>PT0S</code></td></tr>
+        <tr><td><code>ReviewModerationSweeper.sweep</code></td><td><code>ReviewModerationSweeper_sweep</code></td><td><code>PT20M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>SessionPackExpiryNotifier.notifyExpiringPacks</code></td><td><code>SessionPackExpiryNotifier_warn</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>SessionPackForfeitureScheduler.forfeitExpiredPacks</code></td><td><code>SessionPackForfeitureScheduler_expire</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>SluSnapshotAppliedRetentionService.prune</code></td><td><code>SluSnapshotAppliedRetentionService_prune</code></td><td><code>app.slu.snapshot-applied.lock-at-most</code> [PT15M]</td><td><code>app.slu.snapshot-applied.lock-at-least</code> [PT1M]</td></tr>
+        <tr><td><code>StalePayoutAlertScheduler.alertStalePayouts</code></td><td><code>StalePayoutAlertScheduler_alertStalePayouts</code></td><td><code>PT15M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>StripeSubscriptionReconciliationScheduler.reconcileStripeSubscriptions</code></td><td><code>StripeSubscriptionReconciliationScheduler_reconcileStripeSubscriptions</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>StuckCompletionSweeperService.processStuckCompletions</code></td><td><code>StuckCompletionSweeperService_processStuckCompletions</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>SubscriptionChangeApplicator.applyPendingChanges</code></td><td><code>SubscriptionChangeApplicator_applyPendingChanges</code></td><td><code>PT30M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>SubscriptionGracePeriodChecker.checkGracePeriods</code></td><td><code>SubscriptionGracePeriodChecker_checkGracePeriods</code></td><td><code>PT30M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>SubscriptionTierReconciliationScheduler.reconcileMarketplaceTiers</code></td><td><code>SubscriptionTierReconciliationScheduler_reconcileMarketplaceTiers</code></td><td><code>PT30M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>UnresolvedSessionSweeperService.sweep</code></td><td><code>UnresolvedSessionSweeperService_sweep</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>UserAdminService.removeNotActivatedUsers</code></td><td><code>UserAdminService_removeNotActivatedUsers</code></td><td><code>PT1H</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>VideoDeletionOutboxProcessor.process</code></td><td><code>VideoDeletionOutboxProcessor_process</code></td><td><code>PT15M</code> (constant <code>LOCK_AT_MOST_FOR</code>)</td><td><code>platform.video.deletion.outbox_lock_at_least</code> [PT30S]</td></tr>
+        <tr><td><code>VideoLifecycleScheduler.runLifecycleJob</code></td><td><code>VideoLifecycleScheduler_runLifecycleJob</code></td><td><code>app.video.lifecycle.lock-at-most</code> [PT12H]</td><td><code>app.video.lifecycle.lock-at-least</code> [PT30S]</td></tr>
+        <tr><td><code>VideoSubscriptionLifecycleListener.processOutbox</code></td><td><code>VideoSubscriptionLifecycleListener_processOutbox</code></td><td><code>PT1H</code></td><td><code>PT30S</code></td></tr>
       </tbody>
     </table>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
 
     <div class="callout warn">
-      <p><strong>10 of the 43 jobs are unguarded, and each has a reason.</strong> Six are per-instance by
+      <p><strong>10 of the 46 jobs are unguarded, and each has a reason.</strong> Six are per-instance by
       design (<code>ConfigService</code>, <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>,
       <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>, <code>InstanceHeartbeatMonitor</code>) — they
       touch only in-memory state, this instance's metrics/connections, or (the heartbeat) this instance's own row. The other four (<code>UploadSessionExpiryScheduler</code>,
@@ -257,7 +315,8 @@
     <div class="callout">
       <p><strong>Batch per row, in its own transaction, when the batch is user-visible.</strong>
       <code>SessionPackForfeitureScheduler</code>, <code>SessionPackExpiryNotifier</code>,
-      <code>QuickCompleteTimeoutService</code> and <code>StuckCompletionSweeperService</code> wrap each item in its
+      <code>QuickCompleteTimeoutService</code>, <code>StuckCompletionSweeperService</code>,
+      <code>UnresolvedSessionSweeperService</code> and <code>ChargeOutcomeReconciler</code> wrap each item in its
       own <code>transactionTemplate.execute</code> and catch per item, so one bad row cannot abort the whole run.
       Retention jobs do the same per <em>batch</em> so no single transaction holds a long lock. Follow that shape
       for anything that emails users or raises alerts.</p>
@@ -275,7 +334,8 @@
       <p><strong>Daily crons are deliberately staggered.</strong> 01:00 unactivated users · 02:00 subscription
       changes + message retention · 03:00 grace periods + video lifecycle · 03:30 in-app &amp; SLU-marker
       retention · 04:00 tier reconciliation · 05:00 Stripe reconciliation · 06:00 GDPR erasure retry (and
-      Monday neglected-skill detection) · 08:00 pack expiry warnings. The payment crons are ordered so a coach
+      Monday neglected-skill detection) · 06:30 stale-payout alerts · 08:00 pack expiry warnings · 00:00 UTC on
+      the 1st, monthly bandwidth reset. The payment crons are ordered so a coach
       touched by 02:00/03:00 is not redundantly reconciled at 04:00. Check this list before picking a slot.</p>
     </div>
 
@@ -294,7 +354,7 @@
         thin scheduler class that delegates to a service method (e.g. <code>GdprErasureRetryScheduler</code> →
         <code>GdprErasureService.retryFailedErasures</code>) so tests can call the service directly.</li>
       <li>Prefer <code>fixedDelayString</code>/<code>cron</code> bound to a property so the value is tunable
-        without a rebuild. (22 existing jobs don't do this; don't add a 23rd.)</li>
+        without a rebuild. (27 existing jobs don't do this; don't add a 28th.)</li>
       <li>Add <code>@SchedulerLock</code> with a unique <code>name</code> (convention:
         <code>ClassName_method</code>) and a <code>lockAtMostFor</code> of ~2× the delay, unless the job only
         touches per-instance state or claims rows with <code>SKIP LOCKED</code>.</li>
@@ -316,7 +376,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

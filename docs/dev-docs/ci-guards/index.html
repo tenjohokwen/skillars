@@ -95,7 +95,7 @@
       covered by:</p>
 <pre>
 # backend guards (from the repo root; drop -o on the very first run)
-mvn -o test -DskipFrontend -Dtest='IntegrationTestConventionTest,MigrationConventionLintTest,PessimisticLockRetryerCallSiteAuditTest,NativeModifyingVersionAuditTest,MessageBundleParityTest,MessageCodeBaseBundleCompletenessTest,EmailTemplateSubjectKeyParityTest,AppEndpointsConventionTest,AsyncExecutorQualifierTest'
+mvn -o test -DskipFrontend -Dtest='IntegrationTestConventionTest,MigrationConventionLintTest,PessimisticLockRetryerCallSiteAuditTest,NativeModifyingVersionAuditTest,MessageBundleParityTest,MessageCodeBaseBundleCompletenessTest,EmailTemplateSubjectKeyParityTest,EmailTemplateFileParityTest,AppEndpointsConventionTest,AsyncExecutorQualifierTest'
 
 # frontend gates (from src/frontend, after npm ci)
 npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore
@@ -119,7 +119,7 @@ npx vitest run src/i18n/__tests__
       <li><a href="#bundles">MessageBundleParityTest</a></li>
       <li><a href="#envelope">EnvelopeEntitySchemaIT</a></li>
       <li><a href="#emaillisteners">EmailListenerAnnotationCoverageTest + EmailDataRoundTripContractTest</a></li>
-      <li><a href="#subjectkeys">EmailTemplateSubjectKeyParityTest + MessageCodeBaseBundleCompletenessTest</a></li>
+      <li><a href="#subjectkeys">EmailTemplateSubjectKeyParityTest + MessageCodeBaseBundleCompletenessTest + EmailTemplateFileParityTest</a></li>
       <li><a href="#appendpoints">AppEndpointsConventionTest</a></li>
       <li><a href="#version">NativeModifyingVersionAuditTest</a></li>
       <li><a href="#partialindex">StatusScopedPartialIndexConventionIT</a></li>
@@ -249,7 +249,7 @@ npx vitest run src/i18n/__tests__
       <li><strong>Protects:</strong> <code>PessimisticLockRetryer.withBoundedRetry</code> re-runs its supplier after rolling back to a savepoint, so a write
         inside it can execute twice (skillars-deferred-117; the scan's first run found <code>DrillUploadService.initiateUpload/deleteVideo</code>
         writing and publishing inside the lambda). Also: a NOWAIT lock with no retry wrapper turns ordinary contention into errors.</li>
-      <li><strong>Checks:</strong> exactly <code>EXPECTED_CALL_SITE_COUNT</code> (55 at the time of writing) <code>.withBoundedRetry(</code> sites; no
+      <li><strong>Checks:</strong> exactly <code>EXPECTED_CALL_SITE_COUNT</code> (64 at the time of writing) <code>.withBoundedRetry(</code> sites; no
         <code>.save(</code>, <code>.saveAndFlush(</code>, <code>.delete(</code>, <code>.deleteAll</code>, <code>publishEvent(</code>,
         <code>new …Event(</code>, <code>.send(</code>, <code>RestTemplate</code>, <code>.enqueue(</code> inside a retried lambda; every file calling a
         lock method listed in <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> also contains a <code>.withBoundedRetry(</code>; and every
@@ -258,7 +258,7 @@ npx vitest run src/i18n/__tests__
         <code>SessionRepository</code> register their scalar <code>lockByIdForUpdate</code>, and
         <code>NOWAIT_DELEGATING_DEFAULT_METHODS</code> keeps the <code>default findByIdForUpdate</code> that wraps it in the unwrapped-call scan.</li>
       <li><strong>Trips it:</strong> adding or removing a call site (every new lock site does); writing inside the lambda.</li>
-      <li><strong>Looks like:</strong> <code>[expected exactly 55 real .withBoundedRetry( call sites under src/main/java. If this count changed … Found: [CallSite[file=…, line=…, argument=…], …]]</code>,
+      <li><strong>Looks like:</strong> <code>[expected exactly 64 real .withBoundedRetry( call sites under src/main/java. If this count changed … Found: [CallSite[file=…, line=…, argument=…], …]]</code>,
         or <code>Foo.java:123 — matched '\.save\(' inside the retried lambda: …</code>.</li>
       <li><strong>Fix:</strong> move writes after <code>withBoundedRetry</code> returns (the row lock lasts until commit). For a new site, bump the
         count <em>and</em> append a sentence to the Javadoc history naming the method. New NOWAIT repository → add it to the map (the completeness check fails until you do).</li>
@@ -347,7 +347,7 @@ npx vitest run src/i18n/__tests__
     </ul>
 
     <!-- ================================================================ -->
-    <h2 id="subjectkeys">11. EmailTemplateSubjectKeyParityTest + MessageCodeBaseBundleCompletenessTest <span class="tag">build · unit phase</span></h2>
+    <h2 id="subjectkeys">11. EmailTemplateSubjectKeyParityTest + MessageCodeBaseBundleCompletenessTest + EmailTemplateFileParityTest <span class="tag">build · unit phase</span></h2>
     <ul>
       <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/i18n/</code>.</li>
       <li><strong>Protects:</strong> enum ↔ bundle drift that <code>MessageBundleParityTest</code> (bundles vs each other) cannot see. The first asserts
@@ -355,9 +355,16 @@ npx vitest run src/i18n/__tests__
         <em>string-literal</em> message code in <code>src/main</code> — a dotted literal passed to <code>.getMessage(</code>, a bean-validation
         <code>message = "{key}"</code>, an <code>EmailTemplate</code> subject key — exists in base <code>messages.properties</code>. Dynamic keys are
         out of its reach by design.</li>
-      <li><strong>Trips it:</strong> a new email template or <code>@NotBlank(message = "{x.y}")</code> without the bundle entry.</li>
+      <li><strong>Also:</strong> <code>EmailTemplateFileParityTest</code> (<code>platform/notification/service/</code>) asserts every <code>EmailTemplate</code>
+        constant has its Thymeleaf body at <code>src/main/resources/mails/&lt;lowerCamelName&gt;.html</code>, the exact name
+        <code>EmailContentRenderer</code> asks for. A missing body throws <code>TemplateInputException</code>, which <code>MailManager</code> treats as
+        retryable, so the envelope was retried every minute until <code>DEADLINE_EXPIRED</code> and the email silently never went out (four
+        booking cancel/no-show templates shipped like that). Exemptions live in its <code>EXEMPT</code> map (<code>NONE</code>, no-producer and
+        deprecated video-approval constants) and are pinned both ways: an exempt constant that gains a file fails too.</li>
+      <li><strong>Trips it:</strong> a new email template or <code>@NotBlank(message = "{x.y}")</code> without the bundle entry, or a new
+        <code>EmailTemplate</code> constant without its <code>mails/*.html</code> body.</li>
       <li><strong>Looks like:</strong> <code>[These message codes are resolved as string literals in src/main but are missing from src/main/resources/i18n/messages.properties …] Expecting empty but was: [x.y]</code></li>
-      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='EmailTemplateSubjectKeyParityTest,MessageCodeBaseBundleCompletenessTest'</code></li>
+      <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='EmailTemplateSubjectKeyParityTest,MessageCodeBaseBundleCompletenessTest,EmailTemplateFileParityTest'</code></li>
     </ul>
 
     <!-- ================================================================ -->
@@ -550,7 +557,7 @@ npx vitest run src/i18n/__tests__
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

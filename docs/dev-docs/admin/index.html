@@ -77,9 +77,12 @@
     </p>
     <p>
       <strong>1. Unified moderation queue.</strong> Reported messages and conversations, AI-moderation holds, flagged
-      reviews, coach strike thresholds, raised disputes, GDPR erasure deadline overruns and orphaned Stripe
-      subscriptions all originate in other modules (or in admin itself). <code>AdminAlertEventListener</code> (plus
-      <code>GdprErasureService</code> directly) turns each into one deduplicated <code>AdminAlert</code> row, and
+      reviews, coach strike thresholds, raised disputes, GDPR erasure deadline overruns, orphaned Stripe
+      subscriptions, unconfirmed credit cash-outs, safety-hold bookings and the <em>payment-integrity</em> alerts
+      (chargebacks, refunds made outside the app, held or unreversed coach payouts, bookings an automatic path could
+      not finish, sessions that ended without being started) all originate in other modules (or in admin itself).
+      <code>AdminAlertEventListener</code> (plus <code>GdprErasureService</code> and
+      <code>AdminCoachEnforcementService</code> directly) turns each into one deduplicated <code>AdminAlert</code> row, and
       <code>AdminQueueService</code> serves a single paginated, type-filterable queue over that table. Only
       <code>status=OPEN</code> is exposed — the API rejects any other status filter.
     </p>
@@ -96,15 +99,19 @@
       <code>REDUCED</code>; crossing <code>reliability.strike.suspensionThreshold</code> (default 5) sets
       <code>PENDING_REVIEW</code> and publishes <code>StrikeThresholdReachedEvent</code>, which lands in the admin
       queue. There is no automatic suspension — an admin inspects the coach's strike and cancellation history, then
-      suspends (auto-cancelling their <code>REQUESTED</code> bookings and, unless the admin opts out, their upcoming ones with full refunds), reinstates, or issues/deletes strikes. Admins
+      suspends (auto-cancelling their <code>REQUESTED</code> bookings and, unless the admin opts out, their upcoming ones with full refunds,
+      one transaction per booking; a booking still busy after one retry becomes a <code>BOOKING_ACTION_REQUIRED</code> alert), reinstates, or issues/deletes strikes. Admins
       also set the coach's marketplace verification tier (<code>BASIC</code>/<code>TRUSTED</code>/<code>FEATURED</code>).
     </p>
     <p>
       <strong>4. Dispute resolution.</strong> A Parent, a self-registered Player, or the booking's (non-suspended)
-      Coach can raise a dispute on a terminal booking within <code>disputes.submissionWindowDays</code> (default 14).
-      An admin reviews it alongside the payment breakdown and coach cancellation history, then resolves it with
-      <code>FULL_CREDIT</code>, <code>PARTIAL_CREDIT</code>, <code>NO_ACTION</code> or <code>COACH_WARNING</code>,
-      or dismisses it. Resolution also reconciles the coach's payout.
+      Coach can raise a dispute on a terminal booking within <code>disputes.submissionWindowDays</code> (default 14);
+      the parent/player side may also dispute a live (<code>IN_PROGRESS</code>/<code>PAUSED</code>) session. Raising
+      freezes the not-yet-released coach payout. An admin reviews it alongside the payment breakdown and coach
+      cancellation history, then resolves it with <code>FULL_CREDIT</code>, <code>PARTIAL_CREDIT</code>,
+      <code>NO_ACTION</code>, <code>COACH_WARNING</code> or <code>UPHOLD_COACH</code> (V198: the payer's earlier refund
+      was not owed — claw it back and pay the coach in full), or dismisses it. Resolution also reconciles the coach's
+      payout and lifts the freeze.
     </p>
     <p>
       <strong>5. Appeals</strong> (<code>AppealService</code>, V172, FR-ADM-004 / FR-TSC-003). A user subject to an
@@ -144,7 +151,7 @@
     <table>
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td><code>admin.api</code></td><td>11 REST controllers: admin-only moderation, users, coach enforcement, disputes, appeals, bookings and GDPR listing; plus three end-user controllers (<code>DisputeResource</code>, <code>AppealResource</code>, <code>GdprResource</code>).</td></tr>
+        <tr><td><code>admin.api</code></td><td>11 REST controllers: eight admin-only (moderation queue, reviews, users, coach enforcement, disputes, appeals, bookings, GDPR listing) plus three end-user controllers (<code>DisputeResource</code>, <code>AppealResource</code>, <code>GdprResource</code>).</td></tr>
         <tr><td><code>admin.service</code></td><td>Alert ingestion and queue, message/conversation/review moderation, account and coach enforcement, disputes, appeals, booking force-complete, GDPR intake/export/erasure and the erasure retry scheduler. Also <code>DisputeRecapLockLookup</code>, admin's implementation of booking's <code>BookingDisputeLookup</code> port.</td></tr>
         <tr><td><code>admin.repo</code></td><td>JPA entities and repositories: audit log, alerts, disputes, appeals, GDPR requests, review moderation log.</td></tr>
         <tr><td><code>admin.contract</code></td><td>Request/response DTOs, enums (alert/action/appeal types and statuses), and the domain events this module publishes.</td></tr>
@@ -156,9 +163,9 @@
     <table>
       <thead><tr><th>Entity</th><th>Table</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td><code>AdminActionLog</code></td><td><code>admin.admin_action_log</code></td><td>Immutable audit trail (admin id, <code>AdminActionType</code>, reference id, reason). <code>action_type</code> is CHECK-constrained; last widened by V171 (<code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>), before that V162 (<code>BOOKING_FORCE_COMPLETE</code>).</td></tr>
-        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) V153 (<code>SUBSCRIPTION_ORPHANED</code>) V185 (<code>SAFETY_HOLD_BOOKING</code>, reference type <code>BOOKING</code>) and V186 (<code>CASH_OUT_UNRESOLVED</code> / <code>CASH_OUT</code>).</td></tr>
-        <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute from raise to RESOLVED/DISMISSED; optimistic-locked (<code>@Version</code>).</td></tr>
+        <tr><td><code>AdminActionLog</code></td><td><code>admin.admin_action_log</code></td><td>Immutable audit trail (admin id, <code>AdminActionType</code>, reference id, reason). <code>action_type</code> is CHECK-constrained (20 values); last widened by V189 (<code>BOOKING_ADMIN_CANCEL</code>), before that V183 (<code>DISPUTE_DISMISS</code>, <code>APPEAL_UPHOLD</code>, <code>APPEAL_OVERTURN</code>, <code>COACH_SAFETY_HOLD</code>), V171 (<code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>) and V162 (<code>BOOKING_FORCE_COMPLETE</code>).</td></tr>
+        <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) V153 (<code>SUBSCRIPTION_ORPHANED</code>) V185 (<code>SAFETY_HOLD_BOOKING</code>, reference type <code>BOOKING</code>), V186 (<code>CASH_OUT_UNRESOLVED</code> / <code>CASH_OUT</code>), V193 (<code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, reference type <code>PAYMENT_INTENT</code>), V208 (<code>BOOKING_ACTION_REQUIRED</code>) and V209 (<code>SESSION_NEVER_STARTED</code>). Those last six form <code>AdminAlertType.PAYMENT_INTEGRITY</code>: one queue bucket, one resolve action.</td></tr>
+        <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute from raise to RESOLVED/DISMISSED; optimistic-locked (<code>@Version</code>). V198 added <code>recovered_amount</code> / <code>absorbed_amount</code> (what an <code>UPHOLD_COACH</code> took back from the payer, and what the platform absorbed) and widened <code>disputes_resolution_check</code> with <code>UPHOLD_COACH</code>.</td></tr>
         <tr><td><code>Appeal</code></td><td><code>admin.appeals</code> (V172)</td><td>One appeal against one enforcement action: <code>subject_type</code> + <code>subject_id</code> + <code>enforced_at</code>, status OPEN/UPHELD/OVERTURNED, <code>reversal_applied</code>. Unique <code>uq_appeals_per_enforcement</code> and partial unique <code>uq_appeals_one_open_per_subject</code>; CHECK <code>appeals_decision_consistent</code>. Deliberately no <code>@Version</code>.</td></tr>
         <tr><td><code>GdprRequest</code></td><td><code>admin.gdpr_requests</code></td><td>One EXPORT or ERASURE request: PENDING → PROCESSING → COMPLETED/FAILED, signed <code>download_url</code> + <code>expires_at</code> for exports, <code>retry_count</code> + <code>failed_at</code> (V154) for the retry sweep, and nullable <code>player_id</code> (V172) — non-null means a parent-requested, child-scoped request where <code>user_id</code> is the <em>parent</em>. Partial unique indexes <code>idx_gdpr_requests_unique_active_self</code> / <code>_player</code> allow one active request per type per subject.</td></tr>
         <tr><td><code>ReviewModerationLog</code></td><td><code>reviews.review_moderation_log</code></td><td>Audit trail for review approve/block. Lives in <code>admin.repo</code> but is mapped into the <code>reviews</code> schema.</td></tr>
@@ -169,13 +176,13 @@
     <table>
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
-        <tr><td><code>AdminAlertEventListener</code></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, <code>MessageHeldForReviewEvent</code>, <code>MessagesPurgedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>StrikeThresholdReachedEvent</code>, <code>DisputeRaisedEvent</code>, <code>CoachSubscriptionOrphanedEvent</code>. Every insert runs in its own <code>REQUIRES_NEW</code> <code>TransactionTemplate</code> with <code>saveAndFlush</code>; see gotchas.</td></tr>
-        <tr><td><code>AdminQueueService</code></td><td>Paginated OPEN queue (filter by type or <code>ALL</code>) and per-type open counts, resolving a human-readable summary per alert type from the source record.</td></tr>
+        <tr><td><code>AdminAlertEventListener</code></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, <code>MessageHeldForReviewEvent</code>, <code>MessagesPurgedEvent</code>, <code>ReviewFlaggedEvent</code>, <code>StrikeThresholdReachedEvent</code>, <code>DisputeRaisedEvent</code>, <code>CoachSubscriptionOrphanedEvent</code>, <code>ModerationFailureEvent</code>, <code>CashOutRefundUnresolvedEvent</code> / <code>CashOutRefundResolvedEvent</code>, <code>PaymentIntegrityAlertEvent</code> and <code>SessionNeverStartedEvent</code>. Every insert runs in its own <code>REQUIRES_NEW</code> <code>TransactionTemplate</code> with <code>saveAndFlush</code>; see gotchas.</td></tr>
+        <tr><td><code>AdminQueueService</code></td><td>Paginated OPEN queue (filter by type or <code>ALL</code>) and per-type open counts (the six payment-integrity types summed into <code>paymentIntegrity</code>), resolving a human-readable summary per alert type from the source record. <code>resolveSafetyHoldBookingAlert</code> / <code>resolvePaymentIntegrityAlert</code> mark the workflow-less alerts handled (atomic conditional UPDATE, 404 if not open).</td></tr>
         <tr><td><code>AdminMessageService</code> / <code>AdminConversationService</code></td><td>Message detail with surrounding context, approve/block a message, unblock a conversation, resolve the related reports/alerts, push live SSE updates via <code>MessagingEmitterRegistry</code>.</td></tr>
         <tr><td><code>AdminReviewService</code></td><td>Review moderation queue; approve/block flagged reviews, write <code>ReviewModerationLog</code>, call <code>CoachRatingService.recompute</code>, publish <code>ReviewModerationResolvedEvent</code>.</td></tr>
         <tr><td><code>AdminUserService</code></td><td>User search (LIKE-escaped, 20/page), user detail with failed-login count and last 50 user actions, suspend/reactivate under <code>UserRepository.findByIdForUpdate</code>, login unlock. Never acts on ADMIN/LTD_ADMIN accounts or on yourself.</td></tr>
-        <tr><td><code>AdminCoachEnforcementService</code></td><td>Enforcement profile and list (REPEATABLE_READ snapshots), suspend, reinstate, manual strike issue/delete with three-tier status re-evaluation, verification tier. Every status writer takes <code>coachProfileRepository.findByIdForUpdate</code> via <code>PessimisticLockRetryer</code>.</td></tr>
-        <tr><td><code>DisputeService</code></td><td>Raise (reason, owner, status and window checks), owner/admin views, OPEN queue, resolve (credit-wallet ledger entries + coach payout reconciliation) and dismiss.</td></tr>
+        <tr><td><code>AdminCoachEnforcementService</code></td><td>Enforcement profile and list (REPEATABLE_READ snapshots), suspend, reinstate, manual strike issue/delete with three-tier status re-evaluation, verification tier. Every status writer takes <code>coachProfileRepository.findByIdForUpdate</code> via <code>PessimisticLockRetryer</code>. <code>suspendCoach</code> is not <code>@Transactional</code>: <code>applyAdminSuspension</code> commits the status, then <code>cancelBookingForSuspension</code> (<code>REQUIRES_NEW</code>, via <code>self</code>) runs once per booking.</td></tr>
+        <tr><td><code>DisputeService</code></td><td>Raise (reason, owner, status and window checks; freezes the payout via <code>CoachPayoutAdjustmentService.freezeForDispute</code>), owner/admin views, OPEN queue, resolve (credit through payment's <code>DisputeCreditService</code>, capped per booking; <code>UPHOLD_COACH</code> through <code>RefundClawbackService</code> + <code>CoachPayoutAdjustmentService.payInFull</code>; otherwise <code>applyRefund</code> on the coach payout) and dismiss (lifts the freeze only).</td></tr>
         <tr><td><code>AppealService</code></td><td>Submit (ownership, still-enforced, 14-day window), list mine, admin queue/detail, decide (atomic <code>AppealRepository.decideIfOpen</code> conditional UPDATE + reversal in the same transaction).</td></tr>
         <tr><td><code>AdminBookingCompletionService</code></td><td>Read-only booking lookup for the force-complete page and <code>forceComplete</code>, which audits <code>BOOKING_FORCE_COMPLETE</code> with the <code>ForceCompleteOutcome</code> in the reason (so a no-op is not recorded as a completion).</td></tr>
         <tr><td><code>AdminBookingCancellationService</code></td><td>C6: cancels one booking through <code>BookingService.cancelBookingAsAdmin</code> (reason <code>ADMIN_SUPPORT</code>), resolves its open <code>SAFETY_HOLD_BOOKING</code> alert on success, and audits every attempt as <code>BOOKING_ADMIN_CANCEL</code> with the outcome.</td></tr>
@@ -194,6 +201,7 @@
         <tr><td>GET</td><td><code>/api/admin/queue</code></td><td>Unified moderation queue (<code>type</code>, <code>status=OPEN</code> only, <code>page</code>)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/queue/summary</code></td><td>Open-alert counts by type</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/queue/safety-hold-alerts/{alertId}/resolve</code></td><td>Mark an urgent <code>SAFETY_HOLD_BOOKING</code> alert handled (404 if not open)</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/queue/payment-alerts/{alertId}/resolve</code></td><td>Mark a payment-integrity alert (any of the six <code>PAYMENT_INTEGRITY</code> types) handled (404 if not open)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/messages/{messageId}</code></td><td>Message detail with surrounding conversation context</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/approve</code></td><td>Approve a held message</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/block</code></td><td>Block a message</td><td>ADMIN</td></tr>
@@ -216,7 +224,7 @@
         <tr><td>PATCH</td><td><code>/api/admin/coaches/{coachId}/verification-tier</code></td><td>Set BASIC / TRUSTED / FEATURED</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/disputes/queue</code></td><td>OPEN disputes, oldest first (<code>status=OPEN</code> only)</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/disputes/{disputeId}</code></td><td>Dispute detail (booking, payment split, coach history)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/resolve</code></td><td>Resolve with a credit/warning outcome</td><td>ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/resolve</code></td><td>Resolve: <code>FULL_CREDIT</code> / <code>PARTIAL_CREDIT</code> / <code>NO_ACTION</code> / <code>COACH_WARNING</code> / <code>UPHOLD_COACH</code> (409 <code>disputes.bookingNotSettled</code> while the session is unsettled)</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/dismiss</code></td><td>Dismiss with a reason</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/appeals/queue</code></td><td>Appeals by status (default OPEN), oldest first</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td><code>/api/admin/appeals/{appealId}</code></td><td>Appeal detail with a subject summary</td><td>ADMIN</td></tr>
@@ -241,7 +249,7 @@
     <p>
       Frontend: admin console pages <code>AdminModerationPage</code>, <code>AdminUsersPage</code>,
       <code>AdminCoachEnforcementPage</code>, <code>AdminDisputesPage</code>, <code>AdminAppealsPage</code>,
-      <code>AdminBookingsPage</code> (force-complete) and <code>AdminGdprRequestsPage</code> (30-day overdue flag is
+      <code>AdminBookingsPage</code> (force-complete and cancel) and <code>AdminGdprRequestsPage</code> (30-day overdue flag is
       computed client-side) in <code>src/frontend/src/pages/admin/</code>. End-user surfaces:
       <code>components/booking/DisputeAction.vue</code>, <code>components/common/AppealAction.vue</code>,
       <code>components/profile/PrivacyDataSection.vue</code> (on <code>ProfilePage</code> and, for children,
@@ -261,12 +269,14 @@
         <tr><td><code>ReviewFlaggedEvent</code></td><td>Consumed (from <code>reviews</code>)</td><td>REVIEW_FLAG alert.</td></tr>
         <tr><td><code>StrikeThresholdReachedEvent</code></td><td>Consumed (from <code>payment</code>; also re-published by <code>reinstateCoach</code>)</td><td>STRIKE_THRESHOLD alert.</td></tr>
         <tr><td><code>CoachSubscriptionOrphanedEvent</code></td><td>Consumed (from <code>payment</code>'s Stripe webhook handling)</td><td>SUBSCRIPTION_ORPHANED alert (reference type COACH).</td></tr>
-        <tr><td><code>CashOutRefundUnresolvedEvent</code></td><td>Consumed (from <code>payment</code>'s cash-out reconciliation)</td><td>CASH_OUT_UNRESOLVED alert (reference type CASH_OUT, reference id = cash-out id): a credit cash-out's Stripe refund was not confirmed and the wallet stays debited.</td></tr>
+        <tr><td><code>CashOutRefundUnresolvedEvent</code></td><td>Consumed (from <code>payment</code>'s cash-out reconciliation)</td><td>CASH_OUT_UNRESOLVED alert (reference type CASH_OUT, reference id = cash-out id): a credit cash-out's Stripe refund was not confirmed and the wallet stays debited. <code>CashOutRefundResolvedEvent</code> closes that alert automatically once the cash-out settles.</td></tr>
+        <tr><td><code>PaymentIntegrityAlertEvent</code></td><td>Consumed (from <code>payment</code>, and from admin's own suspension sweep)</td><td><code>AFTER_COMMIT</code> (<code>fallbackExecution</code>) + <code>REQUIRES_NEW</code>. Its <code>Kind</code> maps 1:1 to <code>CHARGEBACK</code> / <code>EXTERNAL_REFUND</code> / <code>PAYOUT_HELD</code> / <code>PAYOUT_REVERSAL_FAILED</code> / <code>BOOKING_ACTION_REQUIRED</code>. A later event on the same open (reference, type) only refreshes the alert's <code>reason</code>. Publishers include <code>ChargeDisputeWebhookService</code>, <code>CoachPayoutTransferHandler</code>, <code>CoachPayoutReversalHandler</code>, <code>CoachStripeAccountStatusApplier</code> (one coach-level <code>PAYOUT_HELD</code> on Connect deauthorisation), <code>StalePayoutAlertScheduler</code> and <code>RefundEnqueueListener</code> (<code>REFUND_AMOUNT_UNKNOWN</code>).</td></tr>
+        <tr><td><code>SessionNeverStartedEvent</code></td><td>Consumed (from <code>booking</code>'s <code>UnresolvedSessionSweeperService</code>)</td><td><code>SESSION_NEVER_STARTED</code> alert (reference type BOOKING): an UPCOMING session ended unstarted with money captured. Raised once per booking (V209 <code>bookings.unresolved_alerted_at</code>).</td></tr>
         <tr><td><code>DisputeRaisedEvent</code></td><td>Published &amp; consumed (internal)</td><td>DISPUTE_RAISED alert, keyed on the booking id.</td></tr>
-        <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>payment</code>)</td><td>Published by <code>booking.BookingService.cancelBookingAsAdmin</code>, one per booking a coach suspension / safety hold cancels. Carries the amount actually paid, <code>refundEligible</code> (payment was captured) and the neutral-notice data; consumed by <code>RefundEnqueueListener</code> (wallet refund), <code>CancellationRefundService</code> (pack restore, no strike) and <code>BookingEmailListener</code> (<code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>).</td></tr>
+        <tr><td><code>BookingCancelledByAdminEvent</code></td><td>Published (to <code>payment</code>)</td><td>Published by <code>booking.BookingService.cancelBookingAsAdmin</code>, one per booking a coach suspension / safety hold / admin single-booking cancel cancels. Carries the amount actually paid, the refund kind (wallet refund or pack restore, only when payment was captured), the cancel reason and the neutral-notice data; consumed by <code>RefundEnqueueListener</code> (<code>BEFORE_COMMIT</code>: wallet refund or pack-restore outbox row, no strike) and <code>BookingEmailListener</code> (<code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code> to the parent, plus <code>BOOKING_CANCELLED_BY_SKILLARS</code> to the coach for <code>ADMIN_SUPPORT</code>).</td></tr>
         <tr><td><code>GdprExportRequestedEvent</code>, <code>GdprErasureRequestedEvent</code></td><td>Published &amp; consumed (internal, <code>AFTER_COMMIT</code>)</td><td>Carry <code>requestId</code>, <code>userId</code> and nullable <code>playerId</code>.</td></tr>
         <tr><td><code>UserErasedEvent</code>, <code>AccountDeletionRequestedEvent</code></td><td>Published (to <code>security</code> and cascades)</td><td>Consumed by <code>UserErasedEventListener</code> and <code>AccountDeletionCascadeListener</code>.</td></tr>
-        <tr><td><code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code>, <code>CoachWarningIssuedEvent</code>, <code>DisputeResolvedEvent</code>, <code>DisputeDismissedEvent</code>, <code>GdprExportReadyEvent</code>, <code>ReviewModerationResolvedEvent</code> (class in <code>reviews</code>)</td><td>Published (to <code>notification</code>)</td><td>Admin-outcome notices. Each carries an <code>AdminNotificationRecipient</code> (email + language) resolved by the publisher in its own transaction by <code>AdminNotificationRecipientResolver</code>; <code>notification.AdminOutcomeEmailListener</code> (<code>BEFORE_COMMIT</code>) turns it into an outbox email + inbox row. See the gotcha below.</td></tr>
+        <tr><td><code>CoachSuspensionNotificationEvent</code>, <code>CoachReinstatedEvent</code>, <code>CoachWarningIssuedEvent</code>, <code>DisputeResolvedEvent</code>, <code>DisputeCoachUpheldEvent</code>, <code>DisputeDismissedEvent</code>, <code>GdprExportReadyEvent</code>, <code>ReviewModerationResolvedEvent</code> (class in <code>reviews</code>)</td><td>Published (to <code>notification</code>)</td><td>Admin-outcome notices. Each carries an <code>AdminNotificationRecipient</code> (email + language) resolved by the publisher in its own transaction by <code>AdminNotificationRecipientResolver</code>; <code>notification.AdminOutcomeEmailListener</code> (<code>BEFORE_COMMIT</code>) turns it into an outbox email + inbox row. See the gotcha below.</td></tr>
         <tr><td><code>CoachSuspendedEvent</code></td><td>Published</td><td>The always-published domain fact (also for a safety hold, <code>adminId</code> null). Deliberately not emailed — the "notify coach" choice lives on <code>CoachSuspensionNotificationEvent</code>.</td></tr>
         <tr><td><code>AccountSuspensionRequestedEvent</code></td><td>Consumed (from <code>video</code>, CSAM match)</td><td><code>CoachSafetySuspensionListener</code>: when <code>ownerId</code> is a <code>CoachProfile</code> UUID, suspends the marketplace profile (<code>suspendCoachForSafetyHold</code>). The account side is <code>security.AccountSuspensionEventListener</code>.</td></tr>
         <tr><td><code>ModerationFailureEvent</code></td><td>Consumed (from <code>messaging</code>)</td><td>Re-stamps the message's OPEN <code>MODERATION_UNRESOLVED</code> alert reason as <code>MODERATION_PROVIDER_FAILED</code> (the classifier call failed, nothing assessed the content). Creates no alert.</td></tr>
@@ -277,8 +287,10 @@
       <code>playerOwnershipGuard</code>); <strong>booking</strong> (bookings disputed, cancelled, force-completed or
       blocking erasure; admin implements booking's <code>BookingDisputeLookup</code> port);
       <strong>marketplace</strong> (coach profiles, pricing, verification tier; photo and gallery media scrubbed on erasure);
-      <strong>payment</strong> (strikes, credit wallet, coach payouts and the payout outbox, cancellation history,
-      session packs, subscriptions); <strong>messaging</strong> and <strong>reviews</strong> (moderated content);
+      <strong>payment</strong> (strikes, cancellation history, session packs, subscriptions, and for disputes
+      <code>DisputeCreditService</code>, <code>RefundClawbackService</code> and <code>CoachPayoutAdjustmentService</code>,
+      which own the wallet and payout writes); the booking module's <code>SessionNeverStartedEvent</code> and payment's
+      <code>PaymentIntegrityAlertEvent</code> feed the queue; <strong>messaging</strong> and <strong>reviews</strong> (moderated content);
       <strong>development</strong> and <strong>session</strong> (erasure cascade incl. the coach-branding logo, and child export);
       <strong>filestorage</strong> and the blob-deletion outbox (export ZIP, erased blobs); <strong>config</strong>
       (windows, thresholds, lock timeouts). From <code>infrastructure</code>: security constants,
@@ -303,14 +315,18 @@ sequenceDiagram
   Admin->>Enforce: GET /api/admin/coaches/{coachId}/enforcement
   Enforce-->>Admin: status, tier, strikes, cancellation history
   Admin->>Enforce: POST /api/admin/coaches/{coachId}/suspend
+  Note over Enforce: TX 1 - applyAdminSuspension
   Enforce->>Enforce: findByIdForUpdate (bounded retry), no-op if already SUSPENDED
-  Enforce->>Booking: findByCoachIdAndStatusIn(REQUESTED, plus ACCEPTED to UPCOMING unless opted out)
-  Enforce->>Booking: cancelBookingAsAdmin per booking (booking row lock, CANCEL_ADMIN, BookingStatusChangedEvent)
-  Booking-->>Payment: BookingCancelledByAdminEvent (refund if captured, neutral parent notice, no strike)
-  Note over Enforce: a capture in flight (CAPTURE_PENDING) fails the whole suspension - 409 admin.coaches.paymentInProgress
-  Enforce->>Enforce: CoachSuspendedEvent (+ CoachSuspensionNotificationEvent if notifyCoach)
+  Enforce->>Enforce: SUSPENDED, CoachSuspendedEvent (+ CoachSuspensionNotificationEvent if notifyCoach)
   Enforce->>Alerts: AdminActionLog(COACH_SUSPEND)
-  Note over Enforce: notifyCoach - AdminOutcomeEmailListener enqueues COACH_SUSPENDED (BEFORE_COMMIT)
+  Enforce->>Booking: findIdsByCoachIdAndStatusIn(REQUESTED, plus ACCEPTED to UPCOMING unless opted out)
+  loop one REQUIRES_NEW TX per booking
+    Enforce->>Booking: cancelBookingForSuspension - cancelBookingAsAdmin (row lock, CANCEL_ADMIN)
+    Booking-->>Payment: BookingCancelledByAdminEvent (refund if captured, neutral parent notice, no strike)
+  end
+  Enforce->>Booking: retry busy ones once (row lock held or capture in flight)
+  Enforce->>Alerts: still busy - PaymentIntegrityAlertEvent BOOKING_ACTION_REQUIRED
+  Note over Enforce: notifyCoach - AdminOutcomeEmailListener enqueues COACH_SUSPENDED (BEFORE_COMMIT of TX 1)
     </pre>
     <p>
       <strong>Safety hold.</strong> A CSAM match on a coach's video publishes <code>AccountSuspensionRequestedEvent</code>
@@ -351,11 +367,15 @@ sequenceDiagram
       <code>BookingStatusChangedEvent</code>; a booking whose fresh status (re-read under its row lock) is no longer
       cancellable is skipped. Its <code>BookingCancelledByAdminEvent</code> refunds the payer in full when payment was
       captured (card/credit to the credit wallet, pack session restored, expired pack refunded to the wallet), issues
-      no reliability strike, and sends the parent a neutral "the coach is unavailable" notice. A
-      <code>PAYMENT_PENDING</code> booking with a capture in flight fails the whole suspension with a retryable
-      <code>409 admin.coaches.paymentInProgress</code> (all-or-nothing). Live sessions are left to finish. No payout
-      freeze for an ordinary suspension. The coach-profile row lock matters: the booking accept paths re-check SUSPENDED
-      under the same lock, so a suspension cannot slip in between their check and write. <code>reinstateCoach</code>
+      no reliability strike, and sends the parent a neutral "the coach is unavailable" notice. Since #361 (fix/payment-wallet-dispute-integrity) the suspension
+      is <strong>not</strong> all-or-nothing: the profile goes SUSPENDED and commits first (so every accept path rejects
+      from then on), then each booking is cancelled in its own <code>REQUIRES_NEW</code> transaction, its refund and
+      notices committing with it. A booking whose row lock is held or whose capture is in flight is retried once after the
+      rest; one still busy is skipped with a <code>BOOKING_ACTION_REQUIRED</code> alert (reason
+      <code>SUSPENSION_CANCEL_SKIPPED …</code>) and counted in <code>alertedBookings</code>. The old
+      <code>409 admin.coaches.paymentInProgress</code> is no longer thrown (the admin pages still map it). Live sessions
+      are left to finish. No payout freeze for an ordinary suspension. The coach-profile row lock matters: the booking
+      accept paths re-check SUSPENDED under the same lock, so a suspension cannot slip in between their check and write. <code>reinstateCoach</code>
       runs <code>CoachProfileService.validateReadyForActivation</code> first and falls back to <code>DRAFT</code> if
       the profile is incomplete, ensures a SCOUT <code>coach_subscriptions</code> row exists, and then re-checks the
       in-window strike count: below the visibility threshold it resolves the STRIKE_THRESHOLD alert, otherwise it
@@ -382,6 +402,9 @@ sequenceDiagram
   Svc->>Users: AdminActionLog(USER_SUSPEND)
     </pre>
     <p>
+      The coach's status step joins this transaction (a failure there rolls the account suspension back), while each
+      booking cancellation of the sweep still commits on its own — the sweep never writes the user or coach row this
+      transaction holds, so the <code>REQUIRES_NEW</code> steps do not wait on it.
       Every authentication path already enforces <code>locked</code>. The residual window is a still-valid JWT on the
       filter's no-DB fast path until its next DB re-auth (5 min). Suspend is idempotent (an already-locked account
       writes no second audit row but still makes sure the coach profile is suspended). Reactivating the account does
@@ -399,30 +422,60 @@ sequenceDiagram
   participant DisputeSvc as DisputeService
   participant Listener as AdminAlertEventListener
   participant Admin as Admin (console)
-  participant Wallet as payment.CreditWalletService
-  participant Payout as payment.coach_payouts
+  participant Wallet as payment.DisputeCreditService
+  participant Payout as payment.CoachPayoutAdjustmentService
   Party->>DisputeApi: POST /api/disputes {bookingId, reason, details}
   DisputeApi->>DisputeSvc: raiseDispute(...)
-  DisputeSvc->>DisputeSvc: reason, owner, terminal status, window, no open dispute
+  DisputeSvc->>DisputeSvc: reason, owner, eligible status, window, no open dispute
+  DisputeSvc->>Payout: freezeForDispute(bookingId)
   DisputeSvc-->>Listener: DisputeRaisedEvent
   Listener->>Listener: DISPUTE_RAISED alert (referenceId = bookingId)
   Admin->>DisputeSvc: GET /api/admin/disputes/queue, then /{disputeId}
   Admin->>DisputeSvc: POST /api/admin/disputes/{disputeId}/resolve
-  DisputeSvc->>Wallet: writeLedgerEntry(BOOKING_REFUND) for credit outcomes
-  DisputeSvc->>Payout: findByIdForUpdate: RELEASED enqueue reversal, PENDING_RELEASE/HOLD cancel
+  DisputeSvc->>DisputeSvc: 409 if booking IN_PROGRESS, PAUSED or COMPLETED_PENDING_CONFIRMATION
+  alt FULL_CREDIT, PARTIAL_CREDIT, COACH_WARNING or NO_ACTION
+    DisputeSvc->>Wallet: remainingRefundable, then credit(DISPUTE_CREDIT) unless NO_ACTION
+    DisputeSvc->>Payout: applyRefund (reversal if RELEASED, pro-rata cut if not), lift dispute freeze
+  else UPHOLD_COACH
+    DisputeSvc->>Wallet: RefundClawbackService.clawBack (BOOKING_REFUND_REVERSAL)
+    DisputeSvc->>Payout: payInFull(bookingId, coachId)
+  end
   DisputeSvc->>DisputeSvc: RESOLVED, resolve alert, AdminActionLog(DISPUTE_RESOLVE)
   DisputeSvc-->>Party: DisputeResolvedEvent - DISPUTE_RESOLVED email + inbox row (BEFORE_COMMIT)
     </pre>
     <p>
       Eligible reasons are <code>COACH_NO_SHOW</code>, <code>SESSION_QUALITY</code>, <code>SAFETY_CONCERN</code>,
       <code>UNAUTHORISED_CHARGE</code>, <code>OTHER</code>; eligible booking statuses are <code>COMPLETED</code>,
-      <code>CANCELLED*</code> and <code>NO_SHOW_*</code>. The submission window is measured from
+      <code>CANCELLED*</code> and <code>NO_SHOW_*</code>, plus <code>IN_PROGRESS</code> / <code>PAUSED</code> when the parent or
+      player raises it (e.g. a coach who pressed Start, then Pause, and never coached; the coach cannot dispute a live
+      session). Such a dispute can only be <em>resolved</em> once the booking has settled — while it is
+      <code>IN_PROGRESS</code>, <code>PAUSED</code> or <code>COMPLETED_PENDING_CONFIRMATION</code> resolve answers
+      <code>409 disputes.bookingNotSettled</code> (no payout exists yet to reconcile); dismissing stays possible. The submission window is measured from
       <code>Booking.getStatusAnchor()</code> (when the booking reached that status, V178 <code>status_changed_at</code>;
       <code>updated_at</code> only while that is NULL), so a later unrelated write to the booking cannot reopen it. Ownership resolves the player through
       <code>PlayerProfile.userId</code> (<code>Booking.playerId</code> is a profile id) and the coach through
       <code>CoachProfile.userId</code>. Credit is computed only from a <code>CAPTURED</code>
       <code>BookingPayment</code> (credit debited + Stripe charged); otherwise <code>FULL_CREDIT</code> issues nothing
-      and logs a warning. The coach's payout share of a partial refund is proportional. Dismissal is audited as
+      and logs a warning. Credits are capped <em>per booking</em> by <code>DisputeCreditService.remainingRefundable</code>
+      (price minus the cancellation refund, pending or written, minus earlier dispute credits): <code>FULL_CREDIT</code>
+      credits the remainder, or answers <code>409 disputes.alreadyRefunded</code> when nothing is left;
+      <code>PARTIAL_CREDIT</code> / <code>COACH_WARNING</code> above the remainder are a 400. The credit is its own
+      ledger kind, <code>DISPUTE_CREDIT</code> (V208, reference = booking id). The coach's payout is cut by its
+      proportional share of what was actually credited — reversed if already RELEASED, cut pro rata if still
+      PENDING_RELEASE / HOLD / FROZEN (cancelled only when the cut is the whole net) — and the dispute freeze is lifted,
+      so the payout releases unless another freeze (safety hold, chargeback) still holds it.
+    </p>
+    <p>
+      <strong><code>UPHOLD_COACH</code></strong> (V198) is for a booking whose payer <em>was</em> refunded (wallet
+      <code>BOOKING_REFUND</code> or <code>DISPUTE_CREDIT</code>, or a restored pack session) when the refund was not owed.
+      <code>RefundClawbackService.clawBack</code> takes it back as one <code>BOOKING_REFUND_REVERSAL</code> (capped at
+      the wallet balance; the rest is absorbed by the platform, and a restored pack session may be re-deducted), the
+      dispute is flushed RESOLVED with <code>recovered_amount</code> / <code>absorbed_amount</code>, and then
+      <code>CoachPayoutAdjustmentService.payInFull</code> pays the coach (flushing first keeps the new payout from being
+      frozen by this very dispute). Once per booking: a second one, or a booking never refunded, is
+      <code>400 disputes.noRefundToReverse</code>. The audit reason is prefixed with the amounts, and besides the
+      raiser's <code>DisputeResolvedEvent</code> the other side gets <code>DisputeCoachUpheldEvent</code>
+      (<code>DISPUTE_COACH_UPHELD</code>). Dismissal lifts the dispute freeze only, and is audited as
       <code>DISPUTE_DISMISS</code> (V183; before that it was logged as <code>DISPUTE_RESOLVE</code>, so older dismissal
       rows still carry that type — the dispute's own status tells them apart). Both outcomes notify the raiser
       (<code>DISPUTE_RESOLVED</code> / <code>DISPUTE_DISMISSED</code>; a minor player raiser's parent instead), and a
@@ -528,9 +581,9 @@ sequenceDiagram
     <div class="callout warn">
       <p><strong>Admin outcomes are notified through the outbox, with the recipient resolved by the publisher.</strong>
       Suspension (only when the admin ticks "notify coach"), reinstatement, dispute warning, dispute resolved /
-      dismissed, GDPR export ready and review approved / blocked each publish an event carrying an
-      <code>AdminNotificationRecipient</code>; <code>notification.AdminOutcomeEmailListener</code> enqueues the email and
-      inbox row <code>BEFORE_COMMIT</code> in the decision's transaction (all eight templates are transactional, never
+      dismissed, the upheld-coach notice to the non-raising party, GDPR export ready and review approved / blocked each
+      publish an event carrying an <code>AdminNotificationRecipient</code>; <code>notification.AdminOutcomeEmailListener</code>
+      enqueues the email and inbox row <code>BEFORE_COMMIT</code> in the decision's transaction (all nine templates are transactional, never
       opt-out-able). The exception is <code>GdprExportReadyEvent</code>: handled <code>AFTER_COMMIT</code> in its own
       transaction, so a failed notice can never roll the export back to PENDING. <code>DisputeResolvedEvent</code>
       carries the amount actually credited (zero for a <code>FULL_CREDIT</code> on a zero-price booking), not the
@@ -562,9 +615,12 @@ sequenceDiagram
     <div class="callout">
       <p><strong>Adding an <code>AdminAlertType</code>, <code>AdminAlertReferenceType</code> or
       <code>AdminActionType</code> needs a migration.</strong> All three columns carry CHECK constraints; JPA will
-      happily write a value the CHECK rejects, failing at INSERT time. V152/V153 (alerts) and V162/V171 (action log)
-      are the worked examples — drop and recreate the constraint with <code>SET LOCAL lock_timeout</code>. New alert
-      types also need a summary case in <code>AdminQueueService</code> and a count in the queue summary.</p>
+      happily write a value the CHECK rejects, failing at INSERT time. V193/V208/V209 (alerts) and V183/V189 (action log)
+      are the recent worked examples — drop and recreate the constraint as the <em>union</em> of every value allowed so
+      far, with <code>SET LOCAL lock_timeout</code> (parallel branches widening the same CHECK conflict on merge). New
+      alert types also need a summary case in <code>AdminQueueService</code> and a count in the queue summary; a
+      workflow-less one usually just joins <code>AdminAlertType.PAYMENT_INTEGRITY</code>, which gives it the bucket and the
+      resolve endpoint for free.</p>
     </div>
     <div class="callout">
       <p><strong>Queues expose OPEN only.</strong> <code>/api/admin/queue</code> and
@@ -608,7 +664,7 @@ sequenceDiagram
       <div class="card"><h4><a href="../security/index.html">Security</a></h4><p>Principal/roles, user lock and session invalidation, refresh tokens, login-attempt rate limit, player ownership guard.</p></div>
       <div class="card"><h4><a href="../booking/index.html">Booking</a></h4><p>Bookings disputed, cancelled on suspension, force-completed, or blocking erasure; recap lock via <code>BookingDisputeLookup</code>.</p></div>
       <div class="card"><h4><a href="../marketplace/index.html">Marketplace</a></h4><p>Coach profiles, status, verification tier and gallery media acted on here.</p></div>
-      <div class="card"><h4><a href="../payment/index.html">Payment</a></h4><p>Strike engine, credit wallet, coach payouts/reversals, refunds on admin cancellation; also hosts the admin finance overview API.</p></div>
+      <div class="card"><h4><a href="../payment/index.html">Payment</a></h4><p>Strike engine, dispute credits and refund clawback, coach payout freezes/cuts/reversals, refunds on admin cancellation, payment-integrity alerts; also hosts the admin finance overview API.</p></div>
       <div class="card"><h4><a href="../messaging/index.html">Messaging</a></h4><p>Reported and held messages/conversations moderated through the queue.</p></div>
       <div class="card"><h4><a href="../reviews/index.html">Reviews</a></h4><p>Flagged reviews moderated here; rating recompute on approve/block; review-block appeals.</p></div>
       <div class="card"><h4><a href="../video/index.html">Video</a></h4><p>Hosts the admin video review queue and video moderation actions (not appealable through this module).</p></div>
@@ -621,7 +677,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>7a950883</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

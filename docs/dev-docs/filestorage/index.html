@@ -81,7 +81,8 @@
       <li><strong>Parents, players and admins</strong> get GDPR export ZIPs that <code>admin.GdprExportService</code> stores with
         <code>storeBytes</code> (key <code>gdpr/exports/{requestId}.zip</code>) and shares with a time-limited
         <code>signedDownloadUrl(key, Duration)</code>. <code>admin.GdprErasureService</code> deletes a user's blobs (exports,
-        child and coach report PDFs, gallery images) through <code>BlobDeletionOutboxSupport</code>.</li>
+        child and coach report PDFs, gallery images, and since C4 the coach's profile photo and report-branding logo — only
+        keys that are the coach's own uploads) through <code>BlobDeletionOutboxSupport</code>.</li>
       <li>The old booking wrap-up voice note is gone (story 12.7, D3). Legacy <code>audio/webm</code> objects tagged
         <code>entity=booking</code> may still exist, unread and unlinked. Clean-up is tracked in
         <code>_bmad-output/implementation-artifacts/deferred-work.md</code>.</li>
@@ -127,7 +128,7 @@
     </table>
 
     <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
-    <p>All three tables are in the <code>main</code> schema, defined in <code>V138__baseline_schema.sql</code>. No later migration changes them.</p>
+    <p>All three tables are in the <code>main</code> schema, defined in <code>V138__baseline_schema.sql</code>. The only later change is <code>V147__file_storage_objects_auditing_columns.sql</code>, which adds the seven <code>AbstractAuditingEntity</code> columns (<code>created_by</code>, <code>created_date</code>, <code>last_modified_by</code>, <code>last_modified_date</code>, <code>request_id</code>, <code>session_id</code>, <code>status</code>) to <code>file_storage_objects</code> that Hibernate had been adding outside Flyway.</p>
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
       <tr><td><code>FileStorageObject</code></td><td><code>main.file_storage_objects</code></td><td>The record of a <strong>confirmed browser upload</strong>: <code>key</code>, <code>owner_id</code> (the confirmer's business id), original filename, content type and size (taken from <code>HeadObject</code>, not the client), checksum, JSON <code>tags</code>, provider and bucket, <code>upload_confirmed_at</code>, plus <code>deleted_at</code>/<code>physical_deleted_at</code> for the two-stage delete. Extends <code>AbstractAuditingEntity</code>. <code>createdBy</code> (the login) is what <code>softDelete</code> authorizes against. Files written with <code>storeBytes</code> have <strong>no</strong> row here.</td></tr>
@@ -203,8 +204,8 @@ sequenceDiagram
   participant Listener as CoachProfilePhotoEventListener
 
   Browser->>Resource: POST /api/storage/sign/upload {entity, entityId, contentType, extension, fileSizeBytes, checksum}
-  Resource->>Resource: owner-bound entity? entityId must equal caller
   Resource->>Service: signUpload(request)
+  Service->>Service: owner-bound entity? entityId must equal caller (403)
   Service->>Chain: validate(request)
   Chain-->>Service: OK (or StorageValidationException, 422)
   Service->>DB: sumSizeBytesByOwnerId (QuotaExceededException, 429)
@@ -223,8 +224,9 @@ sequenceDiagram
     Service->>Service: key must have the StorageKeyGenerator shape (404)
     Service->>S3: HeadObject(key)
     S3-->>Service: contentType, contentLength, eTag
-    Service->>Service: declared type/size must match, ETag present, real size within max size and quota
-    Service->>DB: TX: save FileStorageObject (+ OutboxReplicationJob REPLICATE if replication on), commit
+    Service->>Service: declared type/size must match, ETag present, real size within max size
+    Service->>DB: TX: pg_advisory_xact_lock(owner), re-check key, sum usage vs quota (429)
+    Service->>DB: save FileStorageObject (+ OutboxReplicationJob REPLICATE if replication on), commit
     Service->>Listener: publish StorageObjectConfirmedEvent (after commit, no TX)
     Service-->>Browser: 200 ConfirmUploadResponse
   end
@@ -368,8 +370,10 @@ sequenceDiagram
       <p><strong>The quota is soft.</strong> <code>signUpload()</code> sums <code>size_bytes</code> of the owner's
       non-deleted FSOs (<code>deleted_at IS NULL</code>), so a soft delete frees quota immediately even though the bytes stay
       in the bucket for the retention window. The quota and max size are checked at sign time against the
-      declared size and again at confirm time against the real size. There is still a time-of-check/time-of-use gap: the confirm-time sum is not taken under a lock, so
-      several concurrent confirms by one owner can each pass. Do not treat the quota as a hard, race-proof limit.</p>
+      declared size and again at confirm time against the real size. Since C5 the confirm-time check runs under the owner's
+      advisory lock (see the first gotcha), so parallel confirms can no longer overshoot it; the sign-time check is still
+      advisory only. Server-written <code>storeBytes</code> objects never count, and there is one global limit
+      (<code>platform.filestorage.quota.default-bytes</code>), not a per-tier one.</p>
     </div>
     <div class="callout">
       <p><strong>Entity-level ownership checks are opt-in; record ownership is not.</strong> "entityId must equal the
@@ -414,7 +418,7 @@ sequenceDiagram
         <code>signedDownloadUrl</code> for downloads.</li>
       <li><a href="../admin/index.html">Admin</a> — <code>GdprExportService</code> (<code>storeBytes</code> +
         <code>signedDownloadUrl(key, Duration)</code> for export ZIPs) and <code>GdprErasureService</code>
-        (<code>BlobDeletionOutboxSupport.enqueue</code> for export, child-report, coach-report and gallery keys).</li>
+        (<code>BlobDeletionOutboxSupport.enqueue</code> for export, child-report, coach-report, gallery, coach-photo and branding-logo keys).</li>
       <li><a href="../booking/index.html">Booking</a> — no live dependency. Legacy wrap-up voice-note objects
         (<code>entity=booking</code>) may still exist.</li>
       <li><a href="../security/index.html">Security</a> — <code>SecurityUtil</code> (business id for owner and quota, login for
@@ -426,7 +430,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

@@ -83,7 +83,7 @@
 
     <h2 id="a">A</h2>
     <h3 id="admin-alert">Admin alert / moderation queue</h3>
-    <p>The admin back office's single work queue. Events from other modules (reported messages, AI-moderation holds, flagged reviews, strike thresholds, disputes, GDPR deadline overruns, orphaned subscriptions) become one de-duplicated <code>OPEN</code> alert row each, served at <code>/admin/moderation</code>.</p>
+    <p>The admin back office's single work queue. Events from other modules (reported messages, AI-moderation holds, flagged reviews, strike thresholds, disputes, GDPR deadline overruns, orphaned subscriptions) become one de-duplicated <code>OPEN</code> alert row each, served at <code>/admin/moderation</code>. Payment problems (<code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code>, <code>SESSION_NEVER_STARTED</code>) are grouped into one <a href="#payment-integrity-alert">payment-integrity</a> bucket.</p>
     <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>AdminAlertEventListener</code>, <code>AdminQueueService</code>, table <code>admin.admin_alerts</code></p>
 
     <h3 id="age-tier">Age tier</h3>
@@ -124,9 +124,21 @@
     <p>The coach profile's IANA zone. Availability windows and the "no booking across local midnight" rule are evaluated in it, and each booking copies it at creation (UTC fallback) so later profile edits don't shift existing bookings.</p>
     <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>CoachProfile.canonicalTimezone</code>, <code>Booking.canonicalTimezone</code></p>
 
+    <h3 id="charge-idempotency-key">Charge idempotency key</h3>
+    <p>The Stripe idempotency key a card charge is sent under, written to the <code>CAPTURE_PENDING</code> reservation <em>before</em> the call (<code>booking_payments.charge_idempotency_key</code>, V207). If the charge's outcome is unknown (timeout, 5xx, crash), <code>ChargeOutcomeReconciler</code> later asks Stripe what happened and settles or declines; an unknown outcome is never treated as a decline. See <a href="../decisions/index.html#adr-capture-pending">ADR 8</a>.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>BookingPaymentPersistenceService.reserveCapture</code>, <code>ChargeOutcomeReconciler</code></p>
+
     <h3 id="coach-access-window">Coach access window</h3>
     <p>How long after the last attended session a coach may still read and write a player's development data (and play their videos). Development uses <code>development.timeline.coachAccessExpiryDays</code> (90); video uses <code>platform.video.access.coach_window_days</code> (90).</p>
     <p><strong>See</strong> <a href="../development/index.html">Development</a>, <a href="../video/index.html">Video</a> · <strong>Code</strong> <code>CoachAccessWindow</code>, <code>CoachPlayerAuthorizationService</code>, <code>VideoAccessGuard</code></p>
+
+    <h3 id="coach-payout-debt">Coach payout debt</h3>
+    <p>What a coach owes back when Stripe refuses, non-retryably, to reverse a transfer for the coach's share of a refund. The refused amount is recorded as a debt row and raises a <code>PAYOUT_REVERSAL_FAILED</code> alert, instead of being silently lost. See <a href="../decisions/index.html#adr-forfeit-clawback">ADR 21</a>.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>CoachPayoutDebtService.recordDebt</code>, table <code>payment.coach_payout_debts</code> (V205)</p>
+
+    <h3 id="coach-proposal">Coach proposal</h3>
+    <p>A booking the coach creates for a family (duplicate-next-week): a <code>REQUESTED</code> booking with <code>proposedByCoach = true</code> (V206). The coach cannot accept it; the parent or player confirms it (which charges) or declines it. Any <code>REQUESTED</code> booking, proposed or not, can be withdrawn by the family: <code>REQUESTED</code> &rarr; <code>CANCELLED_PARENT</code> with no money moved.</p>
+    <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingService</code>, <code>PUT /api/bookings/requests/{id}/confirm</code>, <code>PUT /api/bookings/requests/{id}/withdraw</code>, column <code>bookings.proposed_by_coach</code></p>
 
     <h3 id="coach-status">Coach status</h3>
     <p>The marketplace state of a coach profile: <code>DRAFT</code> (profile builder not published), <code>ACTIVE</code> (listed and bookable), <code>REDUCED</code> (bookable but with reduced search visibility after reaching the strike visibility threshold), <code>PENDING_REVIEW</code> (strike suspension threshold reached, waiting for an admin), <code>SUSPENDED</code> (admin action, cannot accept bookings) and <code>DEACTIVATED</code>. New requests are allowed for <code>ACTIVE</code>, <code>REDUCED</code> and <code>PENDING_REVIEW</code>. There is no automatic suspension.</p>
@@ -145,13 +157,13 @@
     <p><strong>See</strong> <a href="../infrastructure/index.html">Infrastructure</a> · <strong>Code</strong> <code>infrastructure.sanitizer.ContactDetailSanitizer</code></p>
 
     <h3 id="credit-wallet">Credit wallet</h3>
-    <p>A booker's euro balance on the platform. Refunds never go back to a card: they land here as credit, which is spent first on later bookings. A parent can cash credit out to their card minus a Stripe fee. The balance is the sum of an append-only ledger (UPDATE/DELETE are rejected by triggers) whose entry types are <code>BOOKING_DEDUCTION</code>, <code>BOOKING_DEDUCTION_REVERSAL</code>, <code>BOOKING_REFUND</code>, <code>CASH_OUT_DEBIT</code>, <code>STRIPE_FEE_DEBIT</code> and <code>CASH_OUT_REVERSAL</code>.</p>
+    <p>A booker's euro balance on the platform. Refunds never go back to a card: they land here as credit, which is spent first on later bookings. A parent can cash credit out to their card minus a Stripe fee. The balance is the sum of an append-only ledger (UPDATE/DELETE are rejected by triggers) with eleven entry types: <code>BOOKING_DEDUCTION</code>, <code>BOOKING_DEDUCTION_REVERSAL</code>, <code>BOOKING_REFUND</code>, <code>BOOKING_REFUND_REVERSAL</code>, <code>CASH_OUT_DEBIT</code>, <code>STRIPE_FEE_DEBIT</code>, <code>CASH_OUT_REVERSAL</code>, <code>CHARGEBACK_CREDIT_REVERSAL</code>, <code>CHARGEBACK_CREDIT_RESTORE</code>, <code>DISPUTE_CREDIT</code> and <code>BATCH_SHARE_REFUND</code>. Part of the balance can be <a href="#spend-only-credit">spend-only</a>; only the cashable part can be cashed out.</p>
     <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>CreditWalletService</code>, <code>ParentCreditLedger</code>, table <code>payment.parent_credit_ledger</code>, view <code>payment.parent_credit_balance</code></p>
 
     <h2 id="d">D</h2>
     <h3 id="dispute">Dispute</h3>
-    <p>A complaint about a terminal booking, raised by the booker or the coach within <code>disputes.submissionWindowDays</code> (14). An admin resolves it with <code>FULL_CREDIT</code>, <code>PARTIAL_CREDIT</code>, <code>NO_ACTION</code> or <code>COACH_WARNING</code>, or dismisses it. A resolution that credits the booker also reaches the coach in the same transaction: a payout still inside the <a href="#payout-hold">hold</a> is set to <code>CANCELLED</code>, and an already released one gets a proportional transfer reversal through the outbox. A dispute also locks the booking's recap.</p>
-    <p><strong>See</strong> <a href="../admin/index.html">Admin</a>, <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>DisputeService</code>, <code>/api/disputes</code>, table <code>admin.disputes</code></p>
+    <p>A complaint about a booking, raised by the booker or the coach within <code>disputes.submissionWindowDays</code> (14); the booker can also dispute a session that is <code>IN_PROGRESS</code> or <code>PAUSED</code>. Raising one freezes the coach's payout. An admin resolves it, once the booking has settled, with <code>FULL_CREDIT</code>, <code>PARTIAL_CREDIT</code>, <code>NO_ACTION</code>, <code>COACH_WARNING</code> or <code>UPHOLD_COACH</code>, or dismisses it (which only lifts the freeze). Credits are <code>DISPUTE_CREDIT</code> ledger rows capped at what is still refundable for the booking, and cost the coach the same pro-rata share of the payout whether it is still pending or already released (a transfer reversal). <code>UPHOLD_COACH</code> claws the refunded credit back from the booker's wallet and pays the coach the full net (<a href="../decisions/index.html#adr-forfeit-clawback">ADR 21</a>). A dispute also locks the booking's recap.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a>, <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>DisputeService</code>, <code>DisputeCreditService</code>, <code>RefundClawbackService</code>, <code>/api/disputes</code>, table <code>admin.disputes</code></p>
 
     <h3 id="drill">Drill (PLATFORM vs PRIVATE)</h3>
     <p>A training exercise with JSONB metadata (skills, weighting, intensity, equipment, coaching points). <code>PLATFORM</code> drills are curated and owner-less (20 are seeded); <code>PRIVATE</code> drills belong to one coach, either authored from scratch or cloned from a platform drill. A coach may use every platform drill and their own private ones, never another coach's. Older comments say <code>COACH</code>; the DB value is <code>PRIVATE</code>.</p>
@@ -231,8 +243,12 @@
     <p><strong>See</strong> <a href="../outbox/index.html">Outbox</a> · <strong>Code</strong> <code>OutboxService</code>, <code>OutboxMessageHandler</code>, table <code>main.outbox_messages</code></p>
 
     <h2 id="p">P</h2>
+    <h3 id="payment-integrity-alert">Payment-integrity alert</h3>
+    <p>The admin-queue bucket for money problems a human must settle: <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code> (a payout stuck in <code>FROZEN</code>/<code>HOLD</code> longer than <code>payment.payout.stale_alert_days</code>), <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code> (a booking a coach suspension could not cancel) and <code>SESSION_NEVER_STARTED</code>. They share one resolve action.</p>
+    <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>PaymentIntegrityAlertEvent</code>, <code>AdminQueueService.resolvePaymentIntegrityAlert</code>, <code>POST /api/admin/queue/payment-alerts/{alertId}/resolve</code></p>
+
     <h3 id="payout-hold">Payout hold</h3>
-    <p>The delay between session completion and paying the coach. Completion writes a <code>PENDING_RELEASE</code> payout row with <code>release_after = now + payment.payout.hold_hours</code> (48, bounded 0–336) and an outbox transfer message not due before then, so a dispute can stop the payout before money reaches the coach. A non-retryable Stripe error moves the row to <code>HOLD</code>, which needs manual follow-up. Card, wallet-credit and pack-funded sessions all pay through it: a pack session pays its share of what the pack was charged (the last session takes the remainder), at the commission rate stamped at pack purchase. While the coach is under a CSAM safety hold the row is <code>FROZEN</code> instead, until an admin reinstates the coach.</p>
+    <p>The delay between session completion and paying the coach. Completion writes a <code>PENDING_RELEASE</code> payout row with <code>release_after = now + payment.payout.hold_hours</code> (48, bounded 0–336) and an outbox transfer message not due before then, so a dispute can stop the payout before money reaches the coach. A non-retryable Stripe error moves the row to <code>HOLD</code>, which needs manual follow-up. Card, wallet-credit and pack-funded sessions all pay through it: a pack session pays its share of what the pack was charged (the last session takes the remainder), at the commission rate stamped at pack purchase. While the coach is under a CSAM safety hold the row is <code>FROZEN</code> instead, until an admin reinstates the coach. An open dispute on the booking or a card dispute on its charge also blocks release (<code>dispute_frozen</code> / <code>chargeback_frozen</code>, V193); a payout releases only when none of the three stands. Forfeited sessions (player no-show, late parent cancel) pay the coach through the same row.</p>
     <p><strong>See</strong> <a href="../payment/index.html">Payment</a>, <a href="../outbox/index.html">Outbox</a> · <strong>Code</strong> <code>CoachPayoutEnqueueListener</code>, <code>CoachPayoutOutboxSupport</code>, <code>CoachPayoutTransferHandler</code>, <code>CoachPayoutFreezeService</code>, table <code>payment.coach_payouts</code></p>
 
     <h3 id="platform-config">platform_config</h3>
@@ -270,7 +286,7 @@
     <p><strong>See</strong> <a href="../session/index.html">Session</a> · <strong>Code</strong> <code>SessionDnaCalculator</code>, column <code>session.sessions.session_dna</code></p>
 
     <h3 id="session-pack">Session pack</h3>
-    <p>A coach-defined bundle of prepaid sessions at a fixed per-session price. Bookings funded by a pack decrement its remaining count instead of charging. Packs expire after 60 days, can be extended once by 30 days within the last 14, paused once, and unused sessions are forfeited at expiry. Packs live entirely in <code>payment</code>; booking only stores <code>sessionPackPurchaseId</code>.</p>
+    <p>A coach-defined bundle of prepaid sessions at a fixed per-session price. Bookings funded by a pack decrement its remaining count instead of charging. Packs expire after 60 days, can be extended once by 30 days within the last 14, paused once (only over <code>[paused_from, paused_until)</code>, V210), and unused sessions are forfeited at expiry. While a card dispute on the pack's charge is open the pack is <em>dispute-frozen</em>: no requests or deductions against it. A pack is <em>revoked</em> (<code>revoked_reason</code> <code>CHARGEBACK_LOST</code>, <code>EXTERNAL_REFUND</code> or <code>COACH_SUSPENDED</code>; the last refunds unused sessions to the wallet). Packs live entirely in <code>payment</code>; booking only stores <code>sessionPackPurchaseId</code>.</p>
     <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>PackSessionService</code>, <code>SessionPackPaymentService</code>, <code>SessionPackTier</code>, <code>SessionPackPurchase</code> (<code>payment.session_pack_purchases</code>)</p>
 
     <h3 id="session-plan">Session plan</h3>
@@ -282,11 +298,11 @@
     <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>SessionPrepService</code>, <code>SessionFocusThreadCalculator</code></p>
 
     <h3 id="shadow-profile">Shadow (player) profile</h3>
-    <p>A <code>PlayerProfile</code> a parent creates for their child. It is not a <code>User</code> and has no login. It is owned through <code>parent_id</code> and linked by <code>ParentPlayerLink</code>, and a minor's profile requires explicit parental consent at creation. Every minor on the platform is a shadow profile; the parent books, pays, approves videos and exercises GDPR rights on the child's behalf.</p>
+    <p>A <code>PlayerProfile</code> a parent creates for their child. It is not a <code>User</code> and has no login. It is owned through <code>parent_id</code> and linked by <code>ParentPlayerLink</code>, and a minor's profile requires explicit parental consent at creation. Every minor on the platform is a shadow profile; the parent books, pays, confirms coach proposals and exercises GDPR rights on the child's behalf.</p>
     <p><strong>See</strong> <a href="../security/index.html">Security</a> · <strong>Code</strong> <code>ShadowAccountService.createPlayerProfile</code>, <code>ParentPlayerLink</code>, table <code>main.player_profiles</code> (CHECK <code>chk_pp_owner</code>)</p>
 
     <h3 id="shedlock">ShedLock</h3>
-    <p>The library that makes a <code>@Scheduled</code> job run on only one instance at a time. Methods annotated with <code>@SchedulerLock(name = …)</code> take a row lock in <code>main.shedlock</code>, using DB time. 33 of the 43 scheduled methods use it; the rest are safe per instance by design (per-node caches, or <code>SKIP LOCKED</code> claims). Scheduling is off under the test profile.</p>
+    <p>The library that makes a <code>@Scheduled</code> job run on only one instance at a time. Methods annotated with <code>@SchedulerLock(name = …)</code> take a row lock in <code>main.shedlock</code>, using DB time. 36 of the 46 scheduled methods use it; the rest are safe per instance by design (per-node caches, or <code>SKIP LOCKED</code> claims). Scheduling is off under the test profile.</p>
     <p><strong>See</strong> <a href="../scheduled-jobs/index.html">Scheduled Jobs</a> · <strong>Code</strong> <code>infrastructure.config.ShedLockConfig</code>, table <code>main.shedlock</code></p>
 
     <h3 id="signed-playback">Signed playback</h3>
@@ -304,6 +320,10 @@
     <h3 id="slu">SLU (Skill Load Units)</h3>
     <p>An objective training-volume metric computed per skill and drill when a session completes: rep density &times; skill weight &times; scaled intensity, pressure and match realism &times; duration. It is only computed for attended sessions with a saved or completed plan. Detail rows are append-only, and weekly snapshots feed the exposure dashboard and <a href="#neglected-skill">neglected-skill</a> detection. It measures volume, not ability.</p>
     <p><strong>See</strong> <a href="../development/index.html">Development</a> · <strong>Code</strong> <code>SluFormula</code>, <code>SluCalculationService</code>, tables <code>development.player_skill_stats</code>, <code>development.player_slu_weekly_snapshot</code></p>
+
+    <h3 id="spend-only-credit">Spend-only credit</h3>
+    <p>Wallet credit that can pay for bookings but can never be cashed out (V208). A refund-eligible (more than 24h) cancellation of a booking drawn on an <em>expired</em> pack is refunded this way at the locked price. Each ledger row carries a <code>spend_only_amount</code>; the wallet balance is split into <code>cashableBalance</code> and <code>spendOnlyBalance</code>, and a cash-out larger than the cashable part fails with <code>payment.cashOutExceedsCashable</code>.</p>
+    <p><strong>See</strong> <a href="../payment/index.html">Payment</a> · <strong>Code</strong> <code>CreditWalletService.getWalletBalance</code>, column <code>parent_credit_ledger.spend_only_amount</code> (CHECK <code>chk_ledger_spend_only</code>)</p>
 
     <h2 id="t">T</h2>
     <h3 id="template">Template</h3>
@@ -336,7 +356,7 @@
     <p>The coach's end-of-session form: attendance, effort/focus/technique ratings, up to two homework drills, the recap, and the <a href="#live-vs-quick">LIVE or QUICK</a> mode. Submitting it completes the booking (or moves it to pending confirmation) and publishes <code>BookingCompletedEvent</code>. That event starts the payout hold, SLU, timeline, homework and plan completion. Abandoned wrap-ups are <a href="#force-complete">force-completed</a>.</p>
     <p><strong>See</strong> <a href="../booking/index.html">Booking</a> · <strong>Code</strong> <code>BookingCompletionService.submitWrapUp</code>, <code>WrapUpRequest</code>, <code>POST /api/bookings/{id}/complete</code>, <code>WrapUpSequence.vue</code></p>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

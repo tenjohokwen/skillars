@@ -68,7 +68,10 @@
     <p>
       The seed data lives in the baseline <code>V139__baseline_seed_data.sql</code> (120 rows; the historical
       per-feature migrations were squashed into <code>V138</code>/<code>V139</code>), plus later migrations such as
-      <code>V156__reviews_eligibility_config_rework.sql</code>. Four broad categories of value live here:
+      <code>V156__reviews_eligibility_config_rework.sql</code> and <code>V199</code> (seeds <code>payment.payout.stale_alert_days</code>=14).
+      Many newer keys have no seed row at all: they are <code>HAS_CODE_DEFAULT</code> keys whose default lives in
+      <code>ConfigBounds</code> (e.g. <code>V191</code> and <code>V209</code> say so explicitly for the booking cancel, no-show and
+      unresolved-session grace keys). Four broad categories of value live here:
     </p>
     <ul>
       <li><strong>Per-tier feature gates</strong> &mdash; e.g. <code>coach.tier.scout.video_upload</code>,
@@ -121,18 +124,21 @@
         <code>getString</code>/<code>getLong(key)</code> (throw <code>IllegalStateException</code> if missing or
         non-numeric), <code>getLong(key, default)</code>/<code>getInt(key, default)</code> (WARN + default),
         <code>getBoundedLong(key, default, min, max)</code>/<code>getBoundedInt(...)</code> (out-of-range &rarr; WARN +
-        default), <code>getBoundedInt(BoundedKey)</code> (same, with key, default and range all taken from the
+        default), <code>getBoundedInt(BoundedKey)</code>/<code>getBoundedLong(BoundedKey)</code> (same, with key, default and range all taken from the
         <code>ConfigBounds</code> entry; <code>HAS_CODE_DEFAULT</code> keys only), <code>getBoundedLong(key, min, max)</code> (missing still throws; out-of-range is <em>clamped</em> to
         the nearest bound), <code>getBoolean(key)</code> (missing or non-boolean &rarr; <code>false</code> + WARN +
         <code>config.value.misconfigured</code> metric), <code>getBoolean(key, default)</code>, <code>find(key)</code>.
         Write/admin side: <code>updateConfig</code>, <code>findResponse</code>, <code>listForAdmin</code>,
         <code>invalidate</code>.</td></tr>
       <tr><td><code>ConfigBounds</code></td><td>Static registry of <code>BoundedKey(key, min, max, failFast, note, defaultValue)</code>:
-        ~34 named keys (pack pause, dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
+        41 named keys (pack pause, dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
         TTL, timeline/roster windows, GDPR export TTL and erase lock timeout, message retention, batch sizes, review
-        eligibility and moderation-orphan grace, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows) plus generated
+        eligibility and moderation-orphan grace, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows,
+        and the booking-integrity keys <code>booking.lateCancel.graceMinutes</code> (30), <code>booking.playerNoShow.graceMinutes</code> (15),
+        <code>booking.unresolvedSession.graceMinutes</code> (120), <code>coach.excusedCancellations.maxPerWindow</code> (3) /
+        <code>windowDays</code> (90), <code>booking.request.maxPendingPerCoach</code> (10) and <code>booking.request.maxHorizonDays</code> (120)) plus generated
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
-        <code>HAS_CODE_DEFAULT</code> (24 keys) marks keys whose call site has a code default. Also holds
+        <code>HAS_CODE_DEFAULT</code> (31 keys) marks keys whose call site has a code default. Also holds
         <code>MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code> (7), the one definition of the review-window gap.
         Since C5 every <code>HAS_CODE_DEFAULT</code> key is read straight from its <code>BoundedKey</code>
         (<code>getBoundedLong/Int(BoundedKey)</code>), so its default and range live only here. Only the no-code-default
@@ -315,9 +321,9 @@ sequenceDiagram
     <h2 id="related-modules">Related Modules</h2>
     <ul>
       <li><a href="../security/index.html">Security</a> &mdash; age-policy cutoffs (<code>security.age-policy.*</code>).</li>
-      <li><a href="../booking/index.html">Booking</a> &mdash; reminder intervals, pack pause, batch size, quick-complete/stuck-completion timeouts, recap edit window, session duration.</li>
+      <li><a href="../booking/index.html">Booking</a> &mdash; reminder intervals, pack pause, batch size, quick-complete/stuck-completion timeouts, recap edit window, session duration, parent late-cancel grace, player no-show grace, unresolved-session grace (<code>UnresolvedSessionSweeperService</code>), and the per-coach pending-request quota and booking horizon.</li>
       <li><a href="../video/index.html">Video</a> &mdash; per-tier quotas, per-type size/duration caps, moderation SLA/retries/lock timeout, lifecycle windows, playback URL TTL, coach access window.</li>
-      <li><a href="../payment/index.html">Payment</a> &mdash; <code>platform.commission_rate</code>, reliability-strike thresholds (<code>ReliabilityStrikeConfig</code>), subscription grace period.</li>
+      <li><a href="../payment/index.html">Payment</a> &mdash; <code>platform.commission_rate</code>, reliability-strike thresholds (<code>ReliabilityStrikeConfig</code>), subscription grace period, the excused coach-cancellation cap (<code>CancellationRefundService</code>), and <code>payment.payout.stale_alert_days</code> (<code>StalePayoutAlertScheduler</code>).</li>
       <li><a href="../marketplace/index.html">Marketplace</a> &mdash; coach-tier capability gates.</li>
       <li><a href="../admin/index.html">Admin</a> &mdash; dispute window, GDPR export TTL and erase lock timeout; hosts the unrelated <code>admin.config.PlatformConfig</code>.</li>
       <li><a href="../development/index.html">Development</a>, <a href="../reviews/index.html">Reviews</a>, <a href="../messaging/index.html">Messaging</a>, <a href="../notification/index.html">Notification</a> &mdash; roster/correlation/radar settings, review eligibility and auto-hold, message retention, alert thresholds.</li>
@@ -326,7 +332,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

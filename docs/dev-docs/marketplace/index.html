@@ -112,7 +112,7 @@
       <tr><td><code>marketplace.api</code></td><td><code>CoachMarketplaceResource</code> (public search/profile + own tier) and <code>ProfileBuilderResource</code> (wizard, own profile, photo delete, gallery, timezone list).</td></tr>
       <tr><td><code>marketplace.service</code></td><td>Search, profile state machine and public-profile assembly, gallery, city/timezone validation, capability badges, a filestorage listener, and <code>PlayerProfileService</code> lookups.</td></tr>
       <tr><td><code>marketplace.repo</code></td><td>JPA entities and repositories under the <code>marketplace</code> schema, plus <code>CoachPublicProfileFactsRepository</code> (one <code>UNION ALL</code> query for public-profile facts).</td></tr>
-      <tr><td><code>marketplace.contract</code></td><td>DTOs/records, per-step request records, enums (<code>CoachProfileStatus</code>, <code>CoachSubscriptionTier</code>), <code>MarketplaceException</code>, <code>CoachProfileNotFoundException</code>, <code>CoachProfileMapper</code>.</td></tr>
+      <tr><td><code>marketplace.contract</code></td><td>DTOs/records, per-step request records, enums (<code>CoachProfileStatus</code>, <code>CoachSubscriptionTier</code>), <code>MarketplaceException</code>, <code>CoachProfileNotFoundException</code>, <code>CoachProfileMapper</code>, and the <code>CoachSubscriptionEntitlementPort</code> interface (implemented in <code>payment</code>).</td></tr>
       <tr><td><code>marketplace.config</code></td><td>Empty <code>MarketplaceConfig</code> placeholder.</td></tr>
     </table>
 
@@ -126,7 +126,7 @@
       <tr><td><code>SessionPack</code></td><td><code>session_packs</code></td><td>Advertised bundles (N sessions for a total price + label), 0..5 per coach, <code>uq_session_pack (coach_id, session_count)</code>. Purchasable pack tiers live in <code>payment</code>.</td></tr>
       <tr><td><code>CoachAvailabilityWindow</code></td><td><code>coach_availability_windows</code></td><td>Recurring weekly windows (day, start/end, timezone). At least one row = "available" on the public profile.</td></tr>
       <tr><td><code>CoachMediaItem</code></td><td><code>coach_media</code></td><td>Gallery entries (<code>file_url</code> = <code>coach_gallery/…</code> storage key or a legacy absolute URL, <code>media_type</code>, <code>display_order</code>). Written by <code>CoachGalleryService</code>; max 6.</td></tr>
-      <tr><td><code>CoachSubscription</code></td><td><code>coach_subscriptions</code></td><td>PK <code>coach_id</code>; tier <code>SCOUT</code>/<code>INSTRUCTOR</code>/<code>ACADEMY</code>. Also written by <code>payment.SubscriptionService</code>. A missing row reads as <code>SCOUT</code>.</td></tr>
+      <tr><td><code>CoachSubscription</code></td><td><code>coach_subscriptions</code></td><td>PK <code>coach_id</code>; tier <code>SCOUT</code>/<code>INSTRUCTOR</code>/<code>ACADEMY</code>. A projection that <code>payment.SubscriptionService</code> syncs. A missing row reads as <code>SCOUT</code>, and a paid tier is only honoured while the payment-side subscription is entitled (see <code>getCoachSubscriptionTier</code>).</td></tr>
       <tr><td><code>CoachReliabilityStrike</code></td><td><code>coach_reliability_strikes</code></td><td>Issued by <code>payment.ReliabilityStrikeService</code>, deleted by <code>admin.AdminCoachEnforcementService</code>; marketplace only counts the last 90 days for cards and profiles.</td></tr>
     </table>
 
@@ -135,7 +135,7 @@
       <tr><th>Service</th><th>Orchestrates</th></tr>
       <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code> and paginates in the DB. A <code>language</code> is resolved to the city's matching ids by a native <code>ANY(languages)</code> query and ANDed into the paged query as <code>id IN (…)</code>. Batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
       <tr><td><code>CoachSearchSpecification</code></td><td>Composable predicates: status ACTIVE/REDUCED, city, district, skill, age group, min/max price (<code>EXISTS</code> subqueries on <code>coach_pricing</code>), and <code>averageRating &gt;= minRating</code> when <code>minRating &gt; 0</code>.</td></tr>
-      <tr><td><code>CoachProfileService</code></td><td>Wizard steps 1–5 + publish, <code>getOwnProfile</code> (DRAFT-safe full profile), <code>deletePhoto</code>, <code>getPublicProfile</code> (4 queries, guarded by <code>CoachPublicProfileQueryCountIT</code>), <code>getSupportedTimezones</code>, and lookups used across the platform (<code>getCoachIdByUserId</code>, <code>getCoachSubscriptionTier</code>, <code>getDisplayNamesByIds</code>, <code>validateReadyForActivation</code> for admin reinstatement).</td></tr>
+      <tr><td><code>CoachProfileService</code></td><td>Wizard steps 1–5 + publish, <code>getOwnProfile</code> (DRAFT-safe full profile), <code>deletePhoto</code>, <code>getPublicProfile</code> (4 queries, guarded by <code>CoachPublicProfileQueryCountIT</code>), <code>getSupportedTimezones</code>, and lookups used across the platform (<code>getCoachIdByUserId</code>, <code>getCoachSubscriptionTier</code>, <code>getDisplayNamesByIds</code>, <code>validateReadyForActivation</code> for admin reinstatement). <code>getCoachSubscriptionTier</code> returns <code>SCOUT</code> instead of a projected paid tier when <code>CoachSubscriptionEntitlementPort.isPaidTierEntitled</code> is false. That port is implemented by <code>payment.adapter.CoachSubscriptionEntitlementAdapter</code>: false only when a payment-side subscription row exists and its status is not <code>ACTIVE</code>/<code>TRIALLING</code>/<code>PAST_DUE</code> (<code>payment.contract.SubscriptionEntitlement</code>), so admin-provisioned rows with no payment row keep their tier. This one method gates the tier checks in <code>development</code>, <code>session</code>, <code>video</code> quotas and <code>GET /me/tier</code>.</td></tr>
       <tr><td><code>CoachGalleryService</code></td><td>The coach's own gallery (#312): list, add an uploaded image, delete. Re-validates the confirmed storage object server-side and serialises adds/deletes on the profile row lock.</td></tr>
       <tr><td><code>CityTimezoneValidator</code></td><td>Package-private plausibility check for Step 1 (small hand-maintained city&rarr;region map, fail-open).</td></tr>
       <tr><td><code>CoachCapabilityService</code></td><td>Badge scaffold (single + batch); reads <code>marketplace.capability.badge.activity.window.days</code> (default 90) for future use.</td></tr>
@@ -182,7 +182,7 @@
       <code>StorageObjectConfirmedEvent</code>), <code>security</code> (<code>AgeTier</code>, <code>SecurityUtil</code>,
       <code>PlayerProfileRepository</code>/<code>UserRepository</code>), <code>booking.contract.BookingError</code>
       (Step 4 suspended-coach error), <code>reviews</code> (<code>ReviewQueryService</code>,
-      <code>ReviewListResponse</code>) and <code>config.ConfigService</code>. In the other direction, admin, booking,
+      <code>ReviewListResponse</code>) and <code>config.ConfigService</code>. <code>payment</code> is reached only through the <code>CoachSubscriptionEntitlementPort</code> interface marketplace owns (no compile dependency on payment). In the other direction, admin, booking,
       development, messaging, payment, reviews, security, session and video all import marketplace classes —
       mostly <code>CoachProfileService</code>/<code>CoachProfileRepository</code>.</p>
     </div>
@@ -391,8 +391,8 @@ sequenceDiagram
     <ul>
       <li><a href="../reviews/index.html">Reviews</a> — supplies the review list on the public profile and writes the rating aggregate back onto <code>CoachProfile</code>.</li>
       <li><a href="../booking/index.html">Booking</a> — reads profiles, pricing, availability and the profile timezone; locks the profile row to serialise per-coach booking writes.</li>
-      <li><a href="../payment/index.html">Payment</a> — issues reliability strikes (and the resulting PENDING_REVIEW/REDUCED status), manages <code>CoachSubscription</code> tiers and purchasable pack tiers.</li>
-      <li><a href="../admin/index.html">Admin</a> — coach enforcement (suspend/reinstate, strike deletion), verification tier, GDPR erasure of coach profile text, gallery and recap data.</li>
+      <li><a href="../payment/index.html">Payment</a> — issues reliability strikes (and the resulting PENDING_REVIEW/REDUCED status), manages <code>CoachSubscription</code> tiers and purchasable pack tiers, and implements <code>CoachSubscriptionEntitlementPort</code> (status-gated paid tiers).</li>
+      <li><a href="../admin/index.html">Admin</a> — coach enforcement (suspend/reinstate, strike deletion), verification tier, GDPR erasure of coach profile text, profile photo (key cleared, blob deleted via the outbox), gallery and recap data.</li>
       <li><a href="../filestorage/index.html">Filestorage</a> — owns the photo and gallery upload pipeline (<code>coach_profile</code>, <code>coach_gallery</code> entities) and signed download URLs.</li>
       <li><a href="../security/index.html">Security</a> — <code>AgeTier</code>, <code>SecurityUtil</code>, and player/parent data behind <code>PlayerProfileService</code>.</li>
       <li><a href="../session/index.html">Session</a>, <a href="../development/index.html">Development</a>, <a href="../video/index.html">Video</a>, <a href="../messaging/index.html">Messaging</a> — resolve coach ids, tiers and display names through <code>CoachProfileService</code>.</li>
@@ -400,7 +400,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
