@@ -161,7 +161,7 @@
         <tr><td>POST</td><td>/conversations</td><td>Start a conversation, or fetch the existing one for this (coach, player) pair, whatever its status, BLOCKED included. Body: <code>{coachId?, playerId}</code>. <code>coachId</code> is optional only for a COACH caller (otherwise <code>400 messaging.coachIdRequired</code>). <code>playerId</code> is a PlayerProfile id. Returns <code>200</code> with a <code>ConversationSummaryDto</code>.</td><td>Authenticated. The caller must be the coach, the player's parent, or the player themselves.</td></tr>
         <tr><td>GET</td><td>/conversations</td><td>The caller's non-BLOCKED conversations for the resolved role, newest <code>lastMessageAt</code> first. Parents only see tiers where they have access, and players only see SUPERVISED/UNRESTRICTED threads.</td><td>Authenticated</td></tr>
         <tr><td>POST</td><td>/conversations/{conversationId}/messages</td><td>Send a message. It is saved PENDING, moderated synchronously, and the final <code>MessageDto</code> is returned with <code>202 Accepted</code>.</td><td>Authenticated party allowed by the age tier</td></tr>
-        <tr><td>GET</td><td>/conversations/{conversationId}/messages</td><td>Paged history: <code>page</code> (default 0), <code>size</code> (default 20, max 100), newest first (<code>createdAt DESC, id DESC</code>). Soft-deleted rows are excluded. Updates the caller role's <code>*_last_read_at</code>.</td><td>Authenticated party</td></tr>
+        <tr><td>GET</td><td>/conversations/{conversationId}/messages</td><td>Paged history: <code>page</code> (default 0), <code>size</code> (default 20, max 100), newest first (<code>createdAt DESC, id DESC</code>). Soft-deleted rows are excluded. Updates the caller role's <code>*_last_read_at</code> to now, capped 1&nbsp;&micro;s below the oldest still-<code>PENDING</code> message from someone else (<code>findOldestPendingCreatedAtFromOthers</code>), so a message whose content was hidden from the caller still counts as unread once approved.</td><td>Authenticated party</td></tr>
         <tr><td>GET</td><td>/players/{playerId}/conversations</td><td>Parental oversight: <strong>all</strong> of the child's conversations, including BLOCKED ones.</td><td><code>HAS_PARENT_ROLE</code>, must own the player (403, never 404), tier must not be UNRESTRICTED</td></tr>
         <tr><td>GET</td><td>/players/{playerId}/conversations/{conversationId}/messages</td><td>Parental oversight: read-only history. Does <strong>not</strong> update any last-read timestamp.</td><td>Same as above</td></tr>
         <tr><td>DELETE</td><td>/conversations/{conversationId}/messages/{messageId}</td><td>Soft-delete your own message. Refused while it is UNDER_REVIEW/BLOCKED (<code>moderationPending</code>), and a second delete returns <code>409 alreadyDeleted</code>.</td><td>Authenticated, original sender only</td></tr>
@@ -175,7 +175,7 @@
       (first 60 chars of the latest APPROVED message), lastMessageAt, unreadCount, status, canSend, parentObserver}</code>.
       <code>canSend</code> is advisory for the UI only and repeats the send gates (not BLOCKED, tier allows the role).
       <code>sendMessage</code> checks every rule again. <code>MessageDto.content</code> is <code>null</code> when the status is
-      BLOCKED or UNDER_REVIEW.
+      BLOCKED or UNDER_REVIEW, and for a PENDING message viewed by anyone but its sender.
     </p>
 
     <h3 id="error-mapping-messagingapiadvice">Error mapping (<code>MessagingApiAdvice</code>)</h3>
@@ -328,7 +328,7 @@ sequenceDiagram
       <code>moderationStatus: PENDING</code>, and the frontend renders the "held for review" notice. This covers the
       Gemini call and a stranded message's up-to-30-minute sweep grace. The SSE path never carried content: it pushes ids
       only, and <code>NEW_MESSAGE</code> fires only after an APPROVED verdict commits. Unread counts and list previews count
-      only <code>APPROVED</code> rows. (Before <code>fix/content-consistency-and-lost-updates</code>, PENDING content went
+      only <code>APPROVED</code> rows, and <code>getMessages</code> never moves the caller's last-read mark past a PENDING message it could not see. (Before <code>fix/content-consistency-and-lost-updates</code>, PENDING content went
       to every party.)</p>
     </div>
     <div class="callout warn">
@@ -407,7 +407,7 @@ sequenceDiagram
         <tr><td><a href="../booking/index.html">Booking</a></td><td>A booking in CONFIRMED/UPCOMING/IN_PROGRESS/COMPLETED between coach and player is required before any conversation can be created.</td></tr>
         <tr><td><a href="../marketplace/index.html">Marketplace</a></td><td><code>CoachProfileRepository</code> for coach identity and display names, and <code>PlayerProfileService</code> for batched player names.</td></tr>
         <tr><td><a href="../security/index.html">Security</a></td><td>Player and parent profiles, the age-tier <code>AgePolicyService</code>, and <code>Principal</code>/<code>SecurityUtil</code> identity resolution.</td></tr>
-        <tr><td><a href="../config/index.html">Config</a></td><td><code>ConfigService</code> supplies the retention window and the moderation-sweep grace period.</td></tr>
+        <tr><td><a href="../config/index.html">Config</a></td><td><code>ConfigService</code> supplies the retention window (read through the <code>ConfigBounds.MESSAGE_RETENTION_MONTHS</code> <code>BoundedKey</code> overload) and the moderation-sweep grace period (a literal-bounds <code>getBoundedLong</code>, not in <code>ConfigBounds</code>).</td></tr>
         <tr><td><a href="../admin/index.html">Admin</a></td><td>Consumes <code>MessageReportedEvent</code>, <code>ConversationReportedEvent</code>, <code>MessageHeldForReviewEvent</code>, <code>MessagesPurgedEvent</code> and <code>ModerationFailureEvent</code>. It also owns the message and conversation moderation actions (<code>AdminMessageService</code>, <code>AdminConversationService</code>) and the GDPR export and erasure of messages.</td></tr>
         <tr><td><a href="../infrastructure/index.html">Infrastructure</a></td><td><code>infrastructure.gemini.GeminiClient</code> for LLM content moderation.</td></tr>
         <tr><td><a href="../reviews/index.html">Reviews</a></td><td>Reuses this module's <code>contract.ModerationVerdict</code> enum.</td></tr>
@@ -415,7 +415,7 @@ sequenceDiagram
     </table>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>b5851405</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

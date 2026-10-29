@@ -75,8 +75,8 @@
         <strong>Credit wallet</strong>
         <p>Refunds for cancellations never go back to a card. They land in an append-only
         <code>parent_credit_ledger</code> as euro credit. A payer spends that credit first on later bookings.
-        A parent (not a player) can also "cash out" credit back to their card, minus a Stripe processing
-        fee.</p>
+        A parent (not a player) can also "cash out" <em>cashable</em> credit back to a card, minus a Stripe
+        processing fee. Some credit is <em>spend-only</em> (bookable, never cashed out, V208).</p>
       </div>
       <div class="card">
         <strong>Subscriptions &amp; session packs</strong>
@@ -135,15 +135,51 @@
       pack or credit sessions were never paid and are not paid retroactively.</p>
     </div>
     <div class="callout">
+      <p><strong>Forfeits pay the coach</strong> (feat/payment-forfeit-payouts-and-clawback, owner decision).
+      <code>CoachPayoutEnqueueListener</code> writes the same payout row, at the same locked rate and with the
+      same hold, BEFORE_COMMIT in the forfeiting transaction for a <code>PlayerNoShowEvent</code> and for a
+      <code>BookingCancelledByParentEvent</code> whose <code>isForfeit()</code> is true (captured money the
+      parent doesn't get back, a pack session stays consumed). Nothing captured, nothing paid. An open dispute
+      still freezes these payouts.</p>
+    </div>
+    <div class="callout">
+      <p><strong>A refund costs the coach the same share whatever the timing.</strong>
+      <code>CoachPayoutAdjustmentService.applyRefund</code> (in-app dispute credit or lost card dispute) cuts a
+      pending payout's net by <code>refund / price</code> of its <em>original</em> net
+      (<code>original_net_amount</code>, V205) and releases it, or enqueues a reversal of that share of a
+      released one. Only a cut of the whole net cancels. A partial reversal keeps the row <code>RELEASED</code>
+      and adds to <code>reversed_amount</code> (V193); reporting counts <code>net − reversed</code>.
+      An admin <code>UPHOLD_COACH</code> pays the coach the full original net: a cut pending payout is
+      restored, a released or reversed one gets a <code>COACH_PAYOUT_TOPUP</code> transfer for the shortfall,
+      and the booking's coach debt is waived.</p>
+    </div>
+    <div class="callout">
       <p><strong>Cash-out fees.</strong> The fee on a cash-out is <code>amount × payment.stripe.feeRate +
       payment.stripe.feeFixed</code>. Both values are <code>platform_config</code> keys read through
       <code>ConfigService</code>, with seeded values 0.025 and 0.25 (there are no <code>application.yaml</code>
       equivalents). The fee comes <em>out of</em> the requested amount: the wallet is debited exactly
       the amount asked for (<code>CASH_OUT_DEBIT</code> = net + <code>STRIPE_FEE_DEBIT</code> = fee) and
       the card gets the net. The cash-out is refused with <code>payment.cashOutTooSmall</code> if the
-      net would be ≤ 0, and with <code>payment.cashOutExceedsRefundable</code> if the net is more than
-      the payer's last PaymentIntent has left to refund. The same two keys produce the
-      <em>estimated</em> Stripe-fee line on the admin finance overview.</p>
+      net would be ≤ 0, <code>payment.insufficientCredit</code> if the wallet total is short,
+      <code>payment.cashOutExceedsCashable</code> if the <em>cashable</em> pool is short (spend-only credit
+      never leaves as cash), and <code>payment.cashOutBlockedByDispute</code> while a card dispute on one of
+      the payer's charges or an in-app dispute on one of their bookings is open. The refund goes onto a
+      charge that funded the payer's cashable refund credit and still has the headroom
+      (<code>ParentCreditLedgerRepository.findCashOutRefundTargets</code>, newest first), so the funding
+      charge's disputable amount drops. Only if none fits does it fall back to the payer's last PaymentIntent,
+      refused with <code>payment.cashOutExceedsRefundable</code> if that charge has too little left. The fee
+      keys also produce the <em>estimated</em> Stripe-fee line on the admin finance overview.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Spend-only credit</strong> (V208, owner decision 2026-10-29). A parent's refund-eligible
+      (&gt;24h) cancellation of a booking drawn on an <em>expired</em> pack is refunded at the locked price as
+      spend-only credit. Each ledger row records its own <code>spend_only_amount</code> (same sign, never
+      larger than <code>amount</code>, <code>chk_ledger_spend_only</code>). The spend-only balance is
+      <code>SUM(spend_only_amount)</code> clamped to <code>[0, total]</code>; cashable is total − spend-only
+      (<code>CreditWalletService.getWalletBalance</code>, returned by <code>GET /credits/balance</code> as
+      <code>cashableBalance</code> / <code>spendOnlyBalance</code>). <code>BOOKING_DEDUCTION</code> consumes
+      the spend-only pool first. Reversals and restores put money back into the pool it came from. Every other
+      refund (card or credit bookings, coach/admin/no-show refunds, suspended-coach pack refunds) is cashable.</p>
     </div>
     <div class="callout">
       <p><strong>Cancellation refund matrix.</strong> A parent cancellation is refund-eligible if the
@@ -161,8 +197,12 @@
       <code>BookingService</code>'s <code>refundEligible</code> flag on the event. A booking paid by card
       or credit is refunded as a <code>BOOKING_REFUND</code> wallet credit for the <em>full session
       price</em>. A pack-funded booking gets its session restored instead, unless the pack has expired:
-      then the session's value is credited to the wallet, settled on the pack ledger
-      (<code>PackRefundAllocationService</code>), as for the coach, admin, no-show and pause paths. Refunds only ever give back
+      then the session's value is credited to the wallet as <em>spend-only</em> credit, settled on the pack
+      ledger (<code>PackRefundAllocationService</code>), as for the coach, admin, no-show and pause paths (whose
+      refunds stay cashable). Pack restores run off the outbox (<code>PACK_SESSION_RESTORE</code>, once per
+      booking): a restore that lands on a pack which expired meanwhile (coach, admin or no-show reason) or
+      was revoked for a coach suspension is refunded to the wallet instead, and one that lands on a pack
+      revoked for a chargeback or external refund gives nothing back. Refunds only ever give back
       money actually taken: a card booking is charged, and a pack booking's session deducted, only at
       settle, so nothing is owed before <code>CONFIRMED</code>. A coach cancellation refunds only a captured
       booking (<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>PAUSED</code>; the event's
@@ -178,7 +218,9 @@
       or was suspended, the refund goes to the wallet instead of the pack. Coach cancellations and
       no-shows also issue a reliability strike, unless the cancel reason is <code>MUTUAL_AGREEMENT</code>,
       <code>HEALTH_MEDICAL</code>, <code>FAMILY_EMERGENCY</code> or <code>WEATHER</code>. No-shows always
-      get a strike. A player no-show forfeits the fee, with no refund and no strike.</p>
+      get a strike. A player no-show forfeits the fee, with no refund and no strike, and the coach is paid.
+      An admin cancellation that owes a refund whose amount is unknown enqueues nothing and raises a
+      <code>BOOKING_ACTION_REQUIRED</code> admin alert (V208) for a manual refund.</p>
     </div>
     <div class="callout">
       <p><strong>Reliability thresholds.</strong> Strikes are counted over the trailing 30 days. Reaching
@@ -203,13 +245,35 @@
     <div class="callout">
       <p><strong>A pack can be paused exactly once in its lifetime.</strong> <code>pausePack</code> refuses
       if <code>pausedUntil</code> is already set. The pause length must be between 1 and
-      <code>pack.pause.maxDays</code> days. The pause must start today or later in the <em>coach's</em>
-      timezone, and before the pack expires. Pausing pushes <code>expiresAt</code> out by the pause length.
-      Any of the payer's bookings with that coach inside the pause window are handled by a deliberate
+      <code>pack.pause.maxDays</code> days. The pause must start strictly in the future
+      (<code>booking.pauseStartInPast</code>) and before the pack expires. Pausing pushes
+      <code>expiresAt</code> out by the pause length and stores both ends (<code>paused_from</code>, V210), so
+      the pack counts as paused only over <code>[paused_from, paused_until)</code>
+      (<code>SessionPackPurchase.isPausedAt</code>): a pause scheduled for later leaves the pack usable until
+      it starts. A pre-V210 pause has no <code>paused_from</code> and keeps the old meaning. Only
+      bookings drawn on <em>this</em> pack inside the window conflict, and they are handled by a deliberate
       two-step confirm flow, not an error. The first call returns them without applying the pause
       (<code>PauseConflictResponse.applied = false</code>). The client then re-submits with
       <code>confirmedCancellationIds</code>, which must cover <em>every</em> conflict. If it covers only
-      some of them, the server returns the conflict list again (skillars-deferred-136).</p>
+      some of them, the server returns the conflict list again (skillars-deferred-136). A paid
+      (<code>CONFIRMED</code>/<code>UPCOMING</code>) booking inside the 24h notice window can't be cancelled
+      by a pause: the pause is refused with that booking flagged not cancellable, whatever the client confirmed.
+      A cancelled captured booking gets its pack session restored (or the amount paid as wallet credit),
+      with no coach strike.</p>
+    </div>
+    <div class="callout">
+      <p><strong>A paused, dispute-frozen or revoked pack can't be spent.</strong>
+      <code>deductSession</code> refuses <code>payment.packPaused</code> inside the pause window and
+      <code>payment.packFrozen</code> while a card dispute on the pack's charge is open
+      (<code>dispute_frozen_at</code>, V210). A lost dispute or a full refund made outside the app revokes the
+      remaining sessions (<code>revoked_reason</code> <code>CHARGEBACK_LOST</code> /
+      <code>EXTERNAL_REFUND</code>). A coach suspension or safety hold (<code>CoachSuspendedEvent</code>)
+      enqueues <code>PACK_SUSPENSION_REFUND</code>: every unexpired, unfrozen pack of that coach has its unused
+      sessions refunded to the payer's wallet at the locked price (cashable, one <code>BOOKING_REFUND</code>
+      with reference = the pack id, settled on the pack ledger) and is revoked as
+      <code>COACH_SUSPENDED</code>. The handler is a no-op if the coach was reinstated meanwhile.
+      <code>purchasePack</code> refuses a coach who can't be booked before charging
+      (<code>BookingService.requireBookableCoachStatus</code>).</p>
     </div>
     <div class="callout">
       <p><strong>Unused sessions are forfeited at expiry, not refunded.</strong>
@@ -221,9 +285,20 @@
       Stripe proration. Downgrades are written to <code>*_subscription_changes</code> and applied at the end
       of the billing period by a nightly job. A newer downgrade voids the older one by setting
       <code>voided_at</code>. Player SEMI_PRO/PRO tiers are billed yearly only: the tier catalogue returns no
-      monthly price for them. A <code>PAST_DUE</code> subscription is downgraded once
-      <code>subscription.pastDue.gracePeriodDays</code> has passed (coach → SCOUT, status
-      <code>CANCELLED</code>).</p>
+      monthly price for them. A <code>PAST_DUE</code>, <code>UNPAID</code> or <code>PAUSED</code>
+      subscription is cancelled once <code>subscription.pastDue.gracePeriodDays</code> has passed: the Stripe
+      subscription is cancelled first (a Stripe failure leaves the row for tomorrow's run), then the tier is
+      revoked locally and the Stripe link cleared.</p>
+      <p>Since fix/payment-subscription-entitlements a stored paid tier is <em>granted</em> only while the
+      status is <code>ACTIVE</code>, <code>TRIALLING</code> or <code>PAST_DUE</code>
+      (<code>SubscriptionEntitlement</code>; marketplace reads it through
+      <code>CoachSubscriptionEntitlementPort</code>). Tier changes need an <code>ACTIVE</code>/<code>TRIALLING</code>
+      subscription. Upgrades charge the proration immediately (<code>always_invoice</code> +
+      <code>error_if_incomplete</code>) and are granted only once that charge succeeds. A paid downgrade moves
+      the Stripe price now with no proration and the local tier follows at period end; a downgrade to SCOUT
+      is a cancel-at-period-end. Subscribe writes a short-lived <code>subscribe_attempt_key</code> under the
+      row lock first (V207), so a double submit gets <code>payment.subscription.inProgress</code> instead of
+      a second Stripe subscription.</p>
     </div>
 
     <h2 id="technical-overview">Technical Overview</h2>
@@ -232,32 +307,35 @@
       <thead><tr><th>Package</th><th>Purpose</th></tr></thead>
       <tbody>
         <tr><td><code>payment.api</code></td><td>8 REST controllers (including <code>AdminFinanceResource</code> under <code>/api/admin/payment</code>) plus <code>PaymentApiAdvice</code>, which maps <code>PaymentGatewayException</code> to HTTP 422.</td></tr>
-        <tr><td><code>payment.service</code></td><td>All business logic: Stripe integration, capture and settlement, coach payouts, refund outbox, subscriptions, credit wallet, session packs, reliability strikes, revenue reporting, and 7 scheduled jobs.</td></tr>
+        <tr><td><code>payment.service</code></td><td>All business logic: Stripe integration, capture and settlement, coach payouts, refund outbox, subscriptions, credit wallet, session packs, reliability strikes, revenue reporting, card-dispute handling, coach-payout adjustment/debt/recovery, and 10 scheduled jobs.</td></tr>
         <tr><td><code>payment.repo</code></td><td>JPA entities (schema <code>payment</code>) and Spring Data repositories.</td></tr>
         <tr><td><code>payment.contract</code></td><td>Request/response DTOs, the <code>PaymentGateway</code> port, outbox payload records, and string-constant "enums" (<code>BookingPaymentStatus</code>, <code>CoachPayoutStatus</code>, <code>CreditLedgerEntryType</code>). <code>BillingInterval</code>/<code>SubscriptionStatus</code> are real enums.</td></tr>
-        <tr><td><code>payment.contract.event</code></td><td>Events this module publishes: Stripe onboarding complete, strike threshold reached, coach visibility reduced, subscription expired, coach subscription orphaned.</td></tr>
-        <tr><td><code>payment.contract.exception</code></td><td><code>PaymentGatewayException</code> (422), <code>WebhookSignatureException</code> (400, handled inline by the webhook resource), and <code>CoachPayoutTransferException</code>, which carries a retryable-vs-HOLD decision from <code>StripeTransferErrorClassifier</code>.</td></tr>
-        <tr><td><code>payment.adapter</code></td><td><code>PlayerSubscriptionQueryAdapter</code> implements the <code>video</code> module's <code>PlayerSubscriptionQueryPort</code> (<code>hasActiveYearlySubscription</code>, <code>hasAnyActiveSubscription</code>).</td></tr>
-        <tr><td><code>payment.config</code></td><td><code>PaymentConfig</code> bootstraps the Stripe SDK. It refuses to start on a blank key, and on any <code>sk_live_</code>/<code>rk_live_</code> key unless the <code>prod</code> profile is active. <code>PaymentProperties</code> binds <code>app.payment.stripe.*</code> (api key, webhook secret, OAuth client id/callback, success URL, publishable key).</td></tr>
+        <tr><td><code>payment.contract.event</code></td><td>Events this module publishes: Stripe onboarding complete, strike threshold reached, coach visibility reduced, subscription expired, coach subscription orphaned, cash-out refund unresolved/resolved, and <code>PaymentIntegrityAlertEvent</code> (kinds <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code>).</td></tr>
+        <tr><td><code>payment.contract.exception</code></td><td><code>PaymentGatewayException</code> (422), its subtype <code>ChargeOutcomeUnknownException</code> (the card <em>may</em> have been charged: never a decline), <code>WebhookSignatureException</code> (400, handled inline by the webhook resource), and <code>CoachPayoutTransferException</code>, which carries a retryable-vs-HOLD decision and a reason from <code>StripeTransferErrorClassifier</code>.</td></tr>
+        <tr><td><code>payment.adapter</code></td><td><code>PlayerSubscriptionQueryAdapter</code> implements the <code>video</code> module's <code>PlayerSubscriptionQueryPort</code> (<code>hasActiveYearlySubscription</code>, <code>hasAnyActiveSubscription</code>). <code>CoachSubscriptionEntitlementAdapter</code> implements marketplace's <code>CoachSubscriptionEntitlementPort</code> (<code>isPaidTierEntitled</code>; no row counts as entitled).</td></tr>
+        <tr><td><code>payment.config</code></td><td><code>PaymentConfig</code> bootstraps the Stripe SDK. It refuses to start on a blank key, and on any <code>sk_live_</code>/<code>rk_live_</code> key unless the <code>prod</code> profile is active, and sets the SDK connect/read timeouts and network retries. <code>PaymentProperties</code> binds <code>app.payment.stripe.*</code> (api key, webhook secret, Connect webhook secret, OAuth client id/callback, success URL, publishable key, <code>connect-timeout-ms</code> 10000, <code>read-timeout-ms</code> 30000, <code>max-network-retries</code> 2).</td></tr>
       </tbody>
     </table>
 
     <h3 id="key-entities-db-tables">Key entities &amp; DB tables</h3>
-    <p>The <code>payment</code> schema is created by the V138 pre-production baseline (<code>V138__baseline_schema.sql</code>, skillars-deferred-112). The pre-squash V02–V137 files no longer exist, so look at V138 for the current DDL rather than older migration numbers in code comments. No later migration changes payment tables. The payment-related <code>platform_config</code> rows are seeded in <code>V139__baseline_seed_data.sql</code>.</p>
+    <p>The <code>payment</code> schema is created by the V138 pre-production baseline (<code>V138__baseline_schema.sql</code>, skillars-deferred-112). The pre-squash V02–V137 files no longer exist, so look at V138 for the baseline DDL rather than older migration numbers in code comments. Later migrations that change payment tables: V181 (pack <code>amount_charged</code>), V186 (pack/credit payouts, payout freezes, cash-out reconciliation), V192 (<code>REFUNDED_TO_CREDIT</code>), V193 (payout dispute columns, <code>charge_disputes</code>, Connect account capability), V195 (<code>pack_session_restores</code>, unique pack PaymentIntent), V197 (subscription <code>version</code> / <code>last_stripe_event_at</code>, widened status CHECKs), V198 (<code>BOOKING_REFUND_REVERSAL</code>), V199 (chargeback credit trace), V200 (<code>pack_session_refunds</code>), V205 (payout recovery, <code>coach_payout_debts</code>), V207 (charge idempotency keys, subscribe attempt marker), V208 (spend-only credit, <code>DISPUTE_CREDIT</code> / <code>BATCH_SHARE_REFUND</code>) and V210 (pack <code>paused_from</code>, dispute freeze, revocation). The payment-related <code>platform_config</code> rows are seeded in <code>V139__baseline_seed_data.sql</code>, plus <code>payment.payout.stale_alert_days</code> (V199).</p>
     <table>
       <thead><tr><th>Entity</th><th>Table (schema <code>payment</code>)</th><th>Purpose</th></tr></thead>
       <tbody>
-        <tr><td>BookingPayment</td><td>booking_payments</td><td>One row per booking (PK <code>booking_id</code>). Holds the credit/card split, the PaymentIntent id, <code>reserved_at</code>, and <code>commission_rate</code> locked at capture. <code>status</code> is one of <code>CAPTURE_PENDING</code>, <code>CAPTURED</code>, <code>CHARGE_FAILED</code>, <code>FROZEN</code> or <code>CAPTURE_ABANDONED</code> (<code>chk_bp_status</code>). Only <code>CAPTURE_PENDING</code> is non-terminal.</td></tr>
-        <tr><td>CoachPayout</td><td>coach_payouts</td><td>The coach-payout ledger, one row per booking (PK <code>booking_id</code>). Holds gross/commission/net, <code>release_after</code>, the Stripe transfer and reversal ids, attempts and last error. <code>status</code> is one of eight <code>CoachPayoutStatus</code> values (<code>chk_coach_payouts_status</code>, <code>FROZEN</code> added by V186); <code>session_pack_purchase_id</code> names the funding pack for a pack payout.</td></tr>
+        <tr><td>BookingPayment</td><td>booking_payments</td><td>One row per booking (PK <code>booking_id</code>). Holds the credit/card split, the PaymentIntent id, <code>reserved_at</code>, <code>commission_rate</code> locked at capture, and <code>charge_idempotency_key</code> (V207, written onto the reservation before the Stripe call). <code>status</code> is one of <code>CAPTURE_PENDING</code>, <code>CAPTURED</code>, <code>CHARGE_FAILED</code>, <code>FROZEN</code>, <code>CAPTURE_ABANDONED</code> or <code>REFUNDED_TO_CREDIT</code> (V192: a batch booking charged and then declined, its share credited back; keeps the real amounts, not revenue) (<code>chk_bp_status</code>). Only <code>CAPTURE_PENDING</code> is non-terminal.</td></tr>
+        <tr><td>CoachPayout</td><td>coach_payouts</td><td>The coach-payout ledger, one row per booking (PK <code>booking_id</code>). Holds gross/commission/net, <code>release_after</code>, the Stripe transfer and reversal ids, attempts and last error. <code>status</code> is one of eight <code>CoachPayoutStatus</code> values (<code>chk_coach_payouts_status</code>, <code>FROZEN</code> added by V186); <code>session_pack_purchase_id</code> names the funding pack for a pack payout. V193 adds <code>reversed_amount</code> and the per-payout freeze flags <code>dispute_frozen</code> / <code>chargeback_frozen</code>. V205 adds <code>original_net/gross/commission_amount</code> (the payout before any cut), <code>topup_amount</code> / <code>topup_transfer_id</code> and <code>debt_offset_amount</code> (net withheld to repay coach debt).</td></tr>
+        <tr><td>ChargeDispute</td><td>charge_disputes</td><td>One row per Stripe card dispute on a platform PaymentIntent (PK <code>stripe_dispute_id</code>, V193). <code>status</code> <code>OPEN</code>/<code>WON</code>/<code>LOST</code>; V199 adds <code>credit_reversal_target</code> (wallet credit taken back so far) and <code>payout_loss_fraction</code> (applied to payouts of sessions completing after a lost close).</td></tr>
+        <tr><td>CoachPayoutDebt</td><td>coach_payout_debts</td><td>Money refunded to a payer that a transfer reversal could not take back from the coach (V205). <code>OPEN</code> debts are deducted from the coach's next transfers, oldest first (<code>RECOVERED</code>); an <code>UPHOLD_COACH</code> on the booking makes it <code>WAIVED</code>.</td></tr>
         <tr><td>StripeCustomer</td><td>stripe_customers</td><td>User id → Stripe Customer id, default payment method, and last PaymentIntent (used for cash-out refunds). Despite the column name, <code>parent_id</code> is the paying user's own id: a parent, a self-registered player, or a coach (coach subscriptions use it too).</td></tr>
-        <tr><td>CoachStripeAccount</td><td>coach_stripe_accounts</td><td>Coach → connected account id (unique), onboarding status (PENDING/COMPLETE/RESTRICTED), and charges/payouts-enabled flags.</td></tr>
+        <tr><td>CoachStripeAccount</td><td>coach_stripe_accounts</td><td>Coach → connected account id (unique), onboarding status (PENDING/COMPLETE/RESTRICTED), charges/payouts-enabled flags, and (V193) <code>transfers_capability</code> (<code>active</code>/<code>inactive</code>/<code>pending</code>, or the local sentinel <code>deauthorized</code>) and <code>last_event_created_at</code>.</td></tr>
         <tr><td>StripeWebhookEvent</td><td>stripe_webhook_events</td><td>Idempotency ledger: one row per processed Stripe event id, inserted with <code>ON CONFLICT DO NOTHING</code>.</td></tr>
-        <tr><td>ParentCreditLedger</td><td>parent_credit_ledger</td><td>Append-only credit movements; balance = SUM(amount). There are 6 types (<code>chk_ledger_type</code>), and <code>chk_ledger_amount_sign</code> forces debits negative and everything else positive. The partial unique index <code>uq_pcl_booking_refund</code> allows only one <code>BOOKING_REFUND</code> per <code>reference_id</code>. The <code>payment.parent_credit_balance</code> view aggregates it.</td></tr>
-        <tr><td>PaymentCoachSubscription</td><td>coach_subscriptions</td><td>The coach's current subscription tier, status, Stripe subscription id, period end and <code>pastDueSince</code>. This is the source of truth; <code>marketplace.coach_subscriptions</code> is a projection that <code>syncMarketplaceTier</code> writes.</td></tr>
-        <tr><td>PaymentPlayerSubscription</td><td>player_subscriptions</td><td>The player's current tier, billing interval and status. The player id is a BIGINT TSID (<code>PlayerProfile</code> PK), not a UUID.</td></tr>
+        <tr><td>ParentCreditLedger</td><td>parent_credit_ledger</td><td>Append-only credit movements; balance = SUM(amount). There are 11 types (<code>chk_ledger_type</code>, last rebuilt by V208): <code>BOOKING_DEDUCTION</code>, <code>BOOKING_DEDUCTION_REVERSAL</code>, <code>BOOKING_REFUND</code>, <code>BOOKING_REFUND_REVERSAL</code>, <code>CASH_OUT_DEBIT</code>, <code>STRIPE_FEE_DEBIT</code>, <code>CASH_OUT_REVERSAL</code>, <code>CHARGEBACK_CREDIT_REVERSAL</code>, <code>CHARGEBACK_CREDIT_RESTORE</code>, <code>DISPUTE_CREDIT</code>, <code>BATCH_SHARE_REFUND</code>. <code>chk_ledger_amount_sign</code> forces <code>BOOKING_DEDUCTION</code>, <code>CASH_OUT_DEBIT</code>, <code>STRIPE_FEE_DEBIT</code>, <code>BOOKING_REFUND_REVERSAL</code> and <code>CHARGEBACK_CREDIT_REVERSAL</code> negative and everything else positive. Partial unique indexes: one <code>BOOKING_REFUND</code> (<code>uq_pcl_booking_refund</code>), one <code>BOOKING_REFUND_REVERSAL</code> and one <code>BATCH_SHARE_REFUND</code> per <code>reference_id</code>, and one chargeback reversal and one restore per (reference, payer). Extra columns: <code>source_payment_intent_id</code> / <code>source_card_amount</code> (V199, the charge a refund credit came from) and <code>spend_only_amount</code> (V208). The <code>payment.parent_credit_balance</code> view aggregates it.</td></tr>
+        <tr><td>PaymentCoachSubscription</td><td>coach_subscriptions</td><td>The coach's current subscription tier, status, Stripe subscription id, period end and <code>pastDueSince</code>; <code>version</code> and <code>last_stripe_event_at</code> (V197); <code>subscribe_attempt_key</code>/<code>_at</code> (V207). Status CHECK (V197): <code>ACTIVE</code>, <code>PAST_DUE</code>, <code>CANCELLED</code>, <code>TRIALLING</code>, <code>INCOMPLETE</code>, <code>UNPAID</code>, <code>PAUSED</code>. This is the source of truth; <code>marketplace.coach_subscriptions</code> is a projection that <code>syncMarketplaceTier</code> writes.</td></tr>
+        <tr><td>PaymentPlayerSubscription</td><td>player_subscriptions</td><td>The player's current tier, billing interval and status, with the same V197/V207 columns and status CHECK as the coach table. The player id is a BIGINT TSID (<code>PlayerProfile</code> PK), not a UUID.</td></tr>
         <tr><td>CoachSubscriptionChange / PlayerSubscriptionChange</td><td>coach_subscription_changes / player_subscription_changes</td><td>Scheduled downgrades, applied at <code>effective_at</code>. Pending means <code>applied = false AND voided_at IS NULL</code>.</td></tr>
         <tr><td>SessionPackTier</td><td>session_pack_tiers</td><td>A pack a coach offers: label, session count, total price, per-session price. <code>idx_spt_one_active_per_coach</code> allows only one active tier per coach.</td></tr>
-        <tr><td>SessionPackPurchase</td><td>session_pack_purchases</td><td>A pack a payer bought, and the platform's <strong>only</strong> pack table. Holds <code>amount_charged</code> (what was charged at purchase, V181; the tier price is coach-editable afterwards), <code>session_count</code> and <code>commission_rate</code> (stamped at purchase, V186) and the payout allocation counters <code>payout_sessions_allocated</code> / <code>payout_gross_allocated</code> and refund counters <code>refund_sessions_issued</code> / <code>refund_gross_issued</code> (V200), remaining sessions (<code>chk_spp_remaining_non_negative</code>), <code>expires_at</code>, <code>extended_at</code>, <code>paused_until</code>, <code>expiry_warned_at</code>, <code>expired_notified_at</code> and an optimistic <code>version</code>. <code>parent_id</code> is the payer's user id.</td></tr>
+        <tr><td>SessionPackPurchase</td><td>session_pack_purchases</td><td>A pack a payer bought, and the platform's <strong>only</strong> pack table. Holds <code>amount_charged</code> (what was charged at purchase, V181; the tier price is coach-editable afterwards), <code>session_count</code> and <code>commission_rate</code> (stamped at purchase, V186) and the payout allocation counters <code>payout_sessions_allocated</code> / <code>payout_gross_allocated</code> and refund counters <code>refund_sessions_issued</code> / <code>refund_gross_issued</code> (V200), remaining sessions (<code>chk_spp_remaining_non_negative</code>), <code>expires_at</code>, <code>extended_at</code>, <code>paused_from</code> (V210) / <code>paused_until</code>, <code>dispute_frozen_at</code>, <code>revoked_at</code> / <code>revoked_reason</code> (V210: <code>CHARGEBACK_LOST</code>, <code>EXTERNAL_REFUND</code>, <code>COACH_SUSPENDED</code>), <code>expiry_warned_at</code>, <code>expired_notified_at</code> and an optimistic <code>version</code>. <code>uq_spp_stripe_payment_intent_id</code> (V195) lets one charge fund at most one pack. <code>parent_id</code> is the payer's user id.</td></tr>
+        <tr><td>(no entity)</td><td>pack_session_restores / pack_session_refunds</td><td>Per-booking idempotency markers (PK <code>booking_id</code>), written through native queries on <code>SessionPackPurchaseRepository</code>. <code>pack_session_restores</code> (V195): a session given back to its pack, inserted with the increment. <code>pack_session_refunds</code> (V200): a pack session refunded to the wallet and its amount, so it settles once and an <code>UPHOLD_COACH</code> clawback can un-settle exactly that.</td></tr>
         <tr><td>CoachPayoutFreeze</td><td>coach_payout_freezes</td><td>One row per coach whose payouts are frozen by a CSAM safety hold (V186). Active while <code>lifted_at</code> is null; an admin reinstatement lifts it.</td></tr>
         <tr><td>CashOutReconciliation</td><td>cash_out_reconciliations</td><td>One row per credit cash-out (V186), written <code>PENDING</code> in the same transaction as the wallet debit, then <code>COMPLETED</code> / <code>REVERSED</code> / <code>UNKNOWN</code> (operator: <code>RESOLVED</code>). Its Stripe key is always <code>cashout-{cashOutId}</code>.</td></tr>
         <tr><td>StripeRefundFailure</td><td>stripe_refund_failures</td><td>A durable record for when a pack purchase's compensating refund could not be issued (unique per <code>payment_intent_id</code>; <code>attempts</code>, <code>resolved_at</code>). An operator refunds manually.</td></tr>
@@ -271,15 +349,22 @@
       <thead><tr><th>Service</th><th>Orchestrates</th></tr></thead>
       <tbody>
         <tr><td>StripeClient</td><td>Thin, mockable wrapper around static Stripe SDK calls: PaymentIntent, Refund, SetupIntent, Customer, PaymentMethod, Subscription, Transfer, TransferReversal, and the paginated subscription list. It is the only class that calls the Stripe Java SDK, apart from <code>StripeOnboardingService</code>'s OAuth calls and the webhook signature check.</td></tr>
-        <tr><td>StripePaymentGateway</td><td>Implements <code>PaymentGateway</code>. <code>chargeAndCapture</code> charges the platform account and sets <code>transfer_group</code> = reference id. Before charging it fails fast if the coach's Connect account isn't ready. <code>transferToCoach</code> (Stripe key <code>transfer-{bookingId}</code>), <code>reverseTransfer</code> (key <code>reversal-{transferId}</code>), <code>refund</code> (caller-supplied key: <code>refund-{paymentIntentId}</code> for pack-purchase compensation, <code>cashout-{cashOutId}</code> for a cash-out), <code>getRefundableAmount</code> (latest charge's captured minus refunded), SetupIntent, and customer creation.</td></tr>
-        <tr><td>PaymentLifecycleService</td><td>AFTER_COMMIT listener for <code>BookingAcceptedEvent</code>/<code>BatchBookingAcceptedEvent</code>. Decides pack vs credit vs card, reserves a capture before every Stripe call, charges, and hands off to persistence. Batch bookings settle in a separate <code>REQUIRES_NEW</code> transaction per booking.</td></tr>
-        <tr><td>BookingPaymentPersistenceService</td><td><code>reserveCapture</code> writes a <code>CAPTURE_PENDING</code> row in its own <code>REQUIRES_NEW</code> transaction under a booking-row lock. <code>persistPaymentSuccess</code> atomically writes the <code>BOOKING_DEDUCTION</code>, the <code>CAPTURED</code> row and stamped commission rate, the booking transition, and <code>BookingConfirmedEvent</code>. Also handles failure, decline and batch confirm. Its <code>REQUIRES_NEW</code> paths are routed to a dedicated connection pool (see gotchas).</td></tr>
-        <tr><td>CoachPayoutEnqueueListener / CoachPayoutOutboxSupport</td><td>A BEFORE_COMMIT listener for <code>BookingCompletedEvent</code>. Writes the <code>coach_payouts</code> row (<code>PENDING_RELEASE</code>, <code>release_after = now + payment.payout.hold_hours</code>, bounded 0–336) and a <code>COACH_PAYOUT_TRANSFER</code> outbox message with <code>notBefore = release_after</code>, atomically with the completion write. <code>enqueueReversal</code> is called by admin's <code>DisputeService</code>.</td></tr>
-        <tr><td>CoachPayoutTransferHandler / CoachPayoutReversalHandler</td><td>Outbox handlers. The transfer handler takes a locked read of the payout row, acts only on <code>PENDING_RELEASE</code> after <code>release_after</code>, and moves the row to <code>RELEASED</code>. A non-retryable Stripe error moves it to <code>HOLD</code> and increments the <code>coach.payout.held</code> metric. The reversal handler acts only on <code>RELEASED</code> and moves the row to <code>REVERSED</code>, or <code>REVERSAL_FAILED</code> plus <code>coach.payout.reversal_failed</code>.</td></tr>
-        <tr><td>StripeTransferErrorClassifier</td><td>Sorts <code>StripeException</code>s from transfers and reversals into retryable (outbox backoff) and non-retryable (HOLD / REVERSAL_FAILED).</td></tr>
-        <tr><td>CancellationRefundService</td><td>AFTER_COMMIT, <code>REQUIRES_NEW</code> listeners for cancellations and no-shows. Restores pack sessions, records cancellation history, and issues strikes. A <code>PessimisticLockingFailureException</code> from strike issuance is caught here so it can't affect anything else. This class <em>no longer writes refunds</em>; see the next row.</td></tr>
-        <tr><td>RefundEnqueueListener / RefundOutboxSupport / CreditWalletRefundOutboxHandler</td><td>A BEFORE_COMMIT listener that enqueues a <code>CREDIT_WALLET_REFUND</code> outbox message in the same transaction that writes the booking as CANCELLED. The handler writes the <code>BOOKING_REFUND</code> ledger row and does nothing if one already exists for the booking. <code>uq_pcl_booking_refund</code> is the backstop if two run concurrently.</td></tr>
-        <tr><td>CreditWalletService</td><td>Balance (<code>sumByParentId</code>, empty → 0) and <code>writeLedgerEntry</code>, which rejects a zero amount.</td></tr>
+        <tr><td>StripePaymentGateway</td><td>Implements <code>PaymentGateway</code>. <code>chargeAndCapture</code> charges the platform account under the caller's per-attempt key (also stored on the PaymentIntent's <code>chargeKey</code> metadata) and sets <code>transfer_group</code> = reference id. Before charging it fails fast if the coach's Connect account isn't ready. Only a <code>succeeded</code> PaymentIntent counts; a connection failure, 5xx, 409/<code>IdempotencyException</code> or <code>processing</code> throws <code>ChargeOutcomeUnknownException</code>. Also <code>findChargeByIdempotencyKey</code> / <code>retrieveCharge</code> (for reconciliation), <code>minimumCardCharge</code> (Stripe's per-currency minimum, default 0.50), <code>transferToCoach</code> (key <code>transfer-{group}</code>; adopts an existing transfer in the group only if destination and amount match, else a non-retryable <code>TRANSFER_*_MISMATCH</code> HOLD), <code>reverseTransfer</code> (caller's key, skipped if a reversal with that key is already on the transfer), <code>refund</code> (caller-supplied key: <code>refund-{paymentIntentId}</code> for pack-purchase compensation, <code>cashout-{cashOutId}</code> for a cash-out), <code>getRefundableAmount</code> (latest charge's captured minus refunded), SetupIntent, and customer creation.</td></tr>
+        <tr><td>PaymentLifecycleService</td><td>AFTER_COMMIT listener for <code>BookingAcceptedEvent</code>/<code>BatchBookingAcceptedEvent</code>. Decides pack vs credit vs card, reserves a capture (with its charge key) before every Stripe call, charges, and hands off to persistence. A settle that fails after a successful charge declines the booking and credits the card share back to the wallet (<code>declineBookingAfterCharge</code>); an unknown charge outcome leaves the reservation for <code>ChargeOutcomeReconciler</code>. Batch bookings settle in a separate <code>REQUIRES_NEW</code> transaction per booking.</td></tr>
+        <tr><td>ChargeOutcomeReconciler</td><td>Scheduled. Resolves <code>CAPTURE_PENDING</code> rows that carry a <code>charge_idempotency_key</code> and are older than <code>booking.payment.charge_reconcile_after_minutes</code> (default 10, bounded 5–1440; not seeded). Looks the PaymentIntent up by key: <code>succeeded</code> settles the booking (or, if it can't be settled any more, declines it and credits the card share to the wallet), <code>processing</code> waits for the next run, anything else or no PaymentIntent declines with a zeroed <code>CHARGE_FAILED</code> row. Stripe unreachable or an amount mismatch leaves the row alone. Counter <code>booking.payment.charge_reconciled</code>.</td></tr>
+        <tr><td>BookingPaymentPersistenceService</td><td><code>reserveCapture</code> writes a <code>CAPTURE_PENDING</code> row (with <code>charge_idempotency_key</code>) in its own <code>REQUIRES_NEW</code> transaction under a booking-row lock. <code>recordChargeIntent</code> stores the PaymentIntent id on the reservation right after the charge. <code>persistPaymentSuccess</code> atomically writes the <code>BOOKING_DEDUCTION</code>, the <code>CAPTURED</code> row and stamped commission rate, the booking transition, and <code>BookingConfirmedEvent</code>. Also handles failure, decline, post-charge decline with refund to credit, batch confirm and <code>refundBatchShareToCredit</code> (<code>BATCH_SHARE_REFUND</code>). Its <code>REQUIRES_NEW</code> paths are routed to a dedicated connection pool (see gotchas).</td></tr>
+        <tr><td>CoachPayoutEnqueueListener / CoachPayoutOutboxSupport</td><td>BEFORE_COMMIT listeners for <code>BookingCompletedEvent</code>, <code>PlayerNoShowEvent</code> and forfeiting <code>BookingCancelledByParentEvent</code>. Writes the <code>coach_payouts</code> row (<code>PENDING_RELEASE</code>, <code>release_after = now + payment.payout.hold_hours</code>, bounded 0–336) and a <code>COACH_PAYOUT_TRANSFER</code> outbox message with <code>notBefore = release_after</code>, atomically with the completion or forfeit write. The row starts <code>FROZEN</code> if a safety hold, an open in-app dispute or an open card dispute already applies, and is cut (or cancelled, <code>CHARGEBACK_LOST</code>) if its charge already lost a card dispute. <code>enqueueReversal</code> / <code>enqueueTopUp</code> are called by <code>CoachPayoutAdjustmentService</code>.</td></tr>
+        <tr><td>CoachPayoutTransferHandler / CoachPayoutReversalHandler / CoachPayoutTopUpHandler</td><td>Outbox handlers. The transfer handler takes a locked read of the payout row, acts only on <code>PENDING_RELEASE</code> after <code>release_after</code>, re-checks the dispute flags and safety hold (→ <code>FROZEN</code>), repays any open coach debt from the net first (<code>CoachPayoutDebtService.planOffset</code>), and moves the row to <code>RELEASED</code>. A retryable error (including a Connect account still <code>pending</code>) is re-driven; a non-retryable one moves it to <code>HOLD</code>, increments <code>coach.payout.held{reason}</code> and raises a <code>PAYOUT_HELD</code> alert. The reversal handler locks the row and acts on <code>RELEASED</code>: a partial reversal stays <code>RELEASED</code> (adds to <code>reversed_amount</code>), the whole net makes it <code>REVERSED</code>; a non-retryable refusal books the reversal and records the amount as coach debt (<code>coach.payout.reversal_failed</code>, <code>PAYOUT_REVERSAL_FAILED</code> alert). The top-up handler pays an <code>UPHOLD_COACH</code> shortfall (key <code>transfer-{topUpId}</code>) and folds it back into the row (a <code>REVERSED</code> row becomes <code>RELEASED</code> again).</td></tr>
+        <tr><td>CoachPayoutAdjustmentService</td><td>The one place a payout is frozen, unfrozen or cut because money went back to the payer, in the caller's transaction (<code>MANDATORY</code>) on a row the caller locked. Three freeze reasons (safety hold, <code>dispute_frozen</code>, <code>chargeback_frozen</code>); <code>releaseIfUnfrozen</code> releases only when none stands and enqueues exactly one transfer. <code>applyRefund</code> cuts or reverses pro rata; <code>payInFull</code> serves <code>UPHOLD_COACH</code>.</td></tr>
+        <tr><td>CoachPayoutDebtService / CoachPayoutHoldRecoveryService / StalePayoutAlertScheduler</td><td>Debt: records, offsets and waives <code>coach_payout_debts</code> rows (<code>MANDATORY</code>, payout row locked first). Hold recovery: on <code>CoachStripeOnboardingCompleteEvent</code> (account ready) or the admin <code>release-held</code> endpoint, re-drives each <code>HOLD</code> payout in its own <code>REQUIRES_NEW</code> transaction through <code>releaseIfUnfrozen</code>; <code>TRANSFER_*_MISMATCH</code> holds are left for an operator. Stale alert: a daily read-only job that raises <code>PAYOUT_HELD</code> for a <code>FROZEN</code>/<code>HOLD</code> payout unchanged for <code>payment.payout.stale_alert_days</code> (default 14, bounded 1–365).</td></tr>
+        <tr><td>StripeTransferErrorClassifier</td><td>Sorts <code>StripeException</code>s from transfers (<code>classify</code>) and reversals (<code>classifyReversal</code>: <code>balance_insufficient</code> there means the coach's balance is gone, so it is non-retryable) into retryable (outbox backoff) and non-retryable.</td></tr>
+        <tr><td>CancellationRefundService</td><td>Coach-side consequences only. On <code>BookingCancelledByCoachEvent</code> (BEFORE_COMMIT, joining the cancellation's transaction) it takes the per-coach advisory lock, writes <code>coach_cancellation_history</code> and decides the strike; the strike itself runs after commit. On <code>CoachNoShowEvent</code> (AFTER_COMMIT, <code>REQUIRES_NEW</code>) it issues the strike. A <code>PessimisticLockingFailureException</code> from strike issuance is caught. It writes <em>no</em> refunds and restores no pack sessions; see the next row.</td></tr>
+        <tr><td>RefundEnqueueListener / RefundOutboxSupport / CreditWalletRefundOutboxHandler</td><td>A BEFORE_COMMIT listener on parent, coach, admin and pause cancellations and coach no-shows. In the same transaction that writes the booking as CANCELLED it enqueues a <code>CREDIT_WALLET_REFUND</code> (wallet refund; expired-pack amounts settled first through <code>PackRefundAllocationService</code>) and/or a <code>PACK_SESSION_RESTORE</code>. The refund handler writes the ledger row of the payload's type (<code>BOOKING_REFUND</code>, or <code>BATCH_SHARE_REFUND</code>), with its source charge and spend-only part, does nothing if that type already exists for the booking, and hands the credit to the chargeback trace. <code>uq_pcl_booking_refund</code> is the backstop if two run concurrently.</td></tr>
+        <tr><td>PackRestoreOutboxSupport / PackSessionRestoreOutboxHandler</td><td>Durable pack-session restore: <code>PackSessionService.restoreSessionForBooking</code> claims the <code>pack_session_restores</code> marker and increments <code>remaining_sessions</code> in one transaction, or refunds to the wallet if the pack expired (coach/admin/no-show reasons) or was revoked for a suspension.</td></tr>
+        <tr><td>SuspendedCoachPackRefundOutbox / SuspendedCoachPackRefundOutboxHandler</td><td>BEFORE_COMMIT on admin's <code>CoachSuspendedEvent</code>: enqueues <code>PACK_SUSPENSION_REFUND</code>. The handler calls <code>PackSessionService.refundUnusedSessionsForSuspendedCoach</code> (see the pack business rules).</td></tr>
+        <tr><td>CreditWalletService</td><td>Balance (<code>sumByParentId</code>, empty → 0), <code>getWalletBalance</code> (total / spend-only / cashable), <code>lockAndGetBalance</code>, <code>debitForBooking</code> (spend-only first), <code>restoreBookingDeduction</code>, <code>debitForCashOut</code>, <code>debitRefundReversal</code> (<code>UPHOLD_COACH</code>, capped at the balance), <code>debitChargebackCredit</code> / <code>restoreChargebackCredit</code>, and <code>writeLedgerEntry</code>, which rejects a zero amount.</td></tr>
+        <tr><td>ChargeDisputeWebhookService / ChargebackCreditReversalService</td><td>Card disputes and external refunds from the platform webhook (see the webhook flow). The credit service traces wallet credit a disputed charge funded (<code>findCreditFundedByPaymentIntent</code>) and takes up to the disputed amount back (<code>CHARGEBACK_CREDIT_REVERSAL</code>, capped at each payer's balance; the shortfall is a <code>CHARGEBACK</code> alert), gives it back if the dispute is won (<code>CHARGEBACK_CREDIT_RESTORE</code>), and on a lost dispute also takes back credit the charge funds later. Lock order: dispute row, then the payer's wallet lock.</td></tr>
+        <tr><td>DisputeCreditService / RefundClawbackService</td><td>Payer side of admin dispute resolutions, called by admin's <code>DisputeService</code>. A credit resolution writes a <code>DISPUTE_CREDIT</code> capped at what was paid minus what already went back (<code>remainingRefundable</code>) and runs it through the chargeback trace. <code>UPHOLD_COACH</code> takes the booking's <code>BOOKING_REFUND</code> and <code>DISPUTE_CREDIT</code> back from the wallet (<code>BOOKING_REFUND_REVERSAL</code>, capped at the balance) or re-deducts a restored pack session.</td></tr>
         <tr><td>CashOutService</td><td>Not transactional. Fee/net → refundable-amount check on the payer's <code>lastPaymentIntentId</code> → <code>CreditWalletService.debitForCashOut</code> (locked balance check, <code>CASH_OUT_DEBIT</code> net + <code>STRIPE_FEE_DEBIT</code> fee, both tagged with a fresh cash-out id) → Stripe refund of the net under key <code>cashout-{cashOutId}</code>. If Stripe <em>rejects</em> the refund (4xx), it writes compensating <code>CASH_OUT_REVERSAL</code> rows with the same id in one transaction. If the outcome is <em>unknown</em> (network failure, 5xx, 409 idempotency conflict), it retries under the same key and then keeps the debit and marks the reconciliation record <code>UNKNOWN</code> (<code>payment.refundOutcomeUnknown</code>, admin alert) rather than restore credit for a refund that may have gone through. See the cash-out gotcha below.</td></tr>
         <tr><td>CashOutReconciliationService</td><td>Owns the <code>cash_out_reconciliations</code> transitions (each a short transaction under the row lock, only from an open status, so credit is restored at most once) and the re-check job that retries open refunds under their original key.</td></tr>
         <tr><td>CoachPayoutFreezeService</td><td>The safety-hold payout freeze: on <code>AccountSuspensionRequestedEvent</code> for a coach, activates the freeze and flips <code>PENDING_RELEASE</code> payouts to <code>FROZEN</code>; on <code>CoachReinstatedEvent</code> (BEFORE_COMMIT), lifts it and re-enqueues each frozen payout not before its <code>release_after</code>.</td></tr>
@@ -304,17 +389,18 @@
       <tbody>
         <tr><td>GET</td><td>/api/admin/payment/overview?from&amp;to</td><td>Platform finance overview: gross volume (bookings + packs), commission (released coach payouts), refunds credited, cash-outs, estimated Stripe fees, active subscriptions by tier</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td>/api/admin/payment/coaches/{coachId}/revenue?from&amp;to</td><td>Per-coach revenue (same figures as the coach's own summary) plus 30-day strike count</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td>/api/payment/credits/balance</td><td>Caller's credit wallet balance</td><td>PARENT|PLAYER</td></tr>
+        <tr><td>POST</td><td>/api/admin/payment/coaches/{coachId}/payouts/release-held</td><td>Re-drive the coach's <code>HOLD</code> payouts (<code>CoachPayoutHoldRecoveryService.redriveHeld</code>); returns released / still-frozen / skipped counts. Safe to repeat. No frontend caller yet</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td>/api/payment/credits/balance</td><td>Caller's credit wallet: <code>balance</code>, <code>cashableBalance</code>, <code>spendOnlyBalance</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>GET</td><td>/api/payment/credits/batch-quote?coachId&amp;sessionCount</td><td>Batch cost preview: per-session price, total, balance, credit applied, card charge. <code>sessionCount</code> must be 1–10, otherwise 400</td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/credits/cashout</td><td>Convert credit to a Stripe refund (minus fee)</td><td>PARENT only</td></tr>
         <tr><td>GET</td><td>/api/payment/credits/statement?from&amp;to&amp;page&amp;size</td><td>Paged ledger statement with running balance</td><td>PARENT|PLAYER</td></tr>
         <tr><td>GET</td><td>/api/payment/parents/bookings/{bookingId}/receipt</td><td>Payer receipt (card + credit portions). Ownership comes from <code>findByIdAndParentId</code></td><td>PARENT|PLAYER</td></tr>
-        <tr><td>GET</td><td>/api/payment/coaches/me/revenue?from&amp;to</td><td>Coach revenue summary: released gross/commission/net, estimated fees, refunds, and a separate pending-release amount and count</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/revenue?from&amp;to</td><td>Coach revenue summary: released gross/commission/net (net of partial reversals), refunds on the coach's bookings, and separate pending-release and held (<code>FROZEN</code>/<code>HOLD</code>) amounts and counts</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/transactions?from&amp;to&amp;page&amp;size</td><td>Paged coach payouts (RELEASED and PENDING_RELEASE)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/bookings/{bookingId}/receipt</td><td>Coach receipt (requires a RELEASED payout)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/strikes</td><td>Paged reliability strike history</td><td>COACH</td></tr>
         <tr><td>PUT</td><td>/api/payment/coaches/strikes/{strikeId}/acknowledge</td><td>Acknowledge a strike</td><td>COACH</td></tr>
-        <tr><td>POST</td><td>/api/payment/session-packs/purchase</td><td>Buy a coach's active pack tier for a player the caller owns (or is)</td><td>PARENT|PLAYER</td></tr>
+        <tr><td>POST</td><td>/api/payment/session-packs/purchase</td><td>Buy a coach's active pack tier for a player the caller owns (or is). Optional <code>Idempotency-Key</code> header names the attempt (else a server UUID); Stripe key <code>pack-{parentId}-{attemptKey}</code>, so a double submit returns the same pack. 409 <code>payment.idempotencyKeyReused</code> for a key reused on a different purchase</td><td>PARENT|PLAYER</td></tr>
         <tr><td>GET</td><td>/api/payment/session-packs?coachId</td><td>Caller's purchased packs, optionally filtered by coach</td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/pause</td><td>Pause a pack. Returns the conflicts first; applies on a re-submit with <code>confirmedCancellationIds</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/extend</td><td>One-time 30-day extension within the 14-day pre-expiry window</td><td>COACH (owner)</td></tr>
@@ -330,7 +416,7 @@
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/onboard</td><td>Connect OAuth authorize URL</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/callback</td><td>OAuth redirect target. Validates <code>state</code>, exchanges the code, and redirects to the frontend settings page (with <code>?stripe_error=…</code> on failure)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/status</td><td>Onboarding/charges/payouts status</td><td>COACH</td></tr>
-        <tr><td>POST</td><td>/api/payment/webhooks/stripe</td><td>Stripe webhook receiver for the platform account (<code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code>): 413 above 1&nbsp;MB, 400 on a bad signature, 500 on a processing failure so Stripe retries</td><td>permitAll</td></tr>
+        <tr><td>POST</td><td>/api/payment/webhooks/stripe</td><td>Stripe webhook receiver for the platform account (<code>APP_PAYMENT_STRIPE_WEBHOOK_SECRET</code>): 413 above 1&nbsp;MB (chunked bodies included), 400 on a bad signature, 500 on a processing failure so Stripe retries</td><td>permitAll</td></tr>
         <tr><td>POST</td><td>/api/payment/webhooks/stripe/connect</td><td>Stripe Connect endpoint ("events on connected accounts", own secret <code>APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET</code>). Acts on <code>account.updated</code> and <code>account.application.deauthorized</code> only; same idempotency table and status codes</td><td>permitAll</td></tr>
         <tr><td>GET</td><td>/api/payment/subscriptions/coach/tiers</td><td>Coach tier catalogue</td><td>permitAll</td></tr>
         <tr><td>GET</td><td>/api/payment/subscriptions/coach/me</td><td>Coach's subscription</td><td>COACH</td></tr>
@@ -365,15 +451,19 @@
       <tbody>
         <tr><td>BookingAcceptedEvent / BatchBookingAcceptedEvent</td><td>Consumed (from <code>booking</code>)</td><td><code>PaymentLifecycleService</code>, AFTER_COMMIT + <code>REQUIRES_NEW</code>.</td></tr>
         <tr><td>BookingCompletedEvent</td><td>Consumed (from <code>booking</code>)</td><td><code>CoachPayoutEnqueueListener</code>, <strong>BEFORE_COMMIT</strong>. Fired from wrap-up, parent confirm, quick-complete timeout, the stuck-completion sweeper, and admin force-complete (#314). Force-completed sessions therefore release payout too, which is deliberate (skillars-deferred-153).</td></tr>
-        <tr><td>BookingCancelledByParent/ByCoach/ByAdminEvent, CoachNoShowEvent</td><td>Consumed (from <code>booking</code>)</td><td>Two listeners each: <code>RefundEnqueueListener</code> (BEFORE_COMMIT, writes the refund outbox row) and <code>CancellationRefundService</code> (AFTER_COMMIT + <code>REQUIRES_NEW</code>, handles pack restore, history and strike).</td></tr>
-        <tr><td>PlayerNoShowEvent</td><td>Consumed (from <code>booking</code>)</td><td>Log only. The fee is forfeited.</td></tr>
+        <tr><td>BookingCancelledByParent/ByCoach/ByAdmin/DueToPauseEvent, CoachNoShowEvent</td><td>Consumed (from <code>booking</code>)</td><td><code>RefundEnqueueListener</code> (BEFORE_COMMIT) enqueues the wallet refund and/or pack restore for all five. <code>CancellationRefundService</code> handles ByCoach (BEFORE_COMMIT history, post-commit strike) and CoachNoShow (AFTER_COMMIT strike). <code>CoachPayoutEnqueueListener</code> pays the coach for a forfeiting ByParent.</td></tr>
+        <tr><td>PlayerNoShowEvent</td><td>Consumed (from <code>booking</code>)</td><td><code>CoachPayoutEnqueueListener</code> (BEFORE_COMMIT) pays the coach; the fee is forfeited. <code>CancellationRefundService</code> only logs.</td></tr>
+        <tr><td>CoachSuspendedEvent</td><td>Consumed (from <code>admin</code>)</td><td><code>SuspendedCoachPackRefundOutbox</code> (BEFORE_COMMIT) enqueues <code>PACK_SUSPENSION_REFUND</code>. Published for admin suspensions and safety holds.</td></tr>
+        <tr><td>AccountSuspensionRequestedEvent / CoachReinstatedEvent</td><td>Consumed</td><td><code>CoachPayoutFreezeService</code>: safety-hold payout freeze (AFTER_COMMIT) and its lift (BEFORE_COMMIT).</td></tr>
         <tr><td>BookingConfirmedEvent / BookingDeclinedEvent</td><td>Published (classes in <code>booking.contract</code>)</td><td>After settlement succeeds or fails. <code>PaymentPendingSweeper</code> also fires <code>BookingDeclinedEvent</code> when it declines a stuck booking that has no payment row.</td></tr>
         <tr><td>BookingPaymentUnresolvedEvent</td><td>Published (class in <code>booking.contract</code>)</td><td>Fired by <code>PaymentPendingSweeper</code> on <code>CAPTURE_ABANDONED</code> instead of Declined, because the "your credits were not affected" wording would be false. Consumed by <code>notification</code>'s <code>BookingEmailListener</code>.</td></tr>
         <tr><td>SessionPackExpiryWarningEvent / SessionPackExpiredEvent / PackPausedEvent</td><td>Published (classes in <code>booking.contract</code>)</td><td>Consumed by <code>notification.infrastructure.listener.SessionPackEmailListener</code> (BEFORE_COMMIT → notification outbox, parent email only). They also appear in the in-app inbox through <code>NotificationCatalog</code> (warning → REMINDER, expired/paused → SESSION_PACK).</td></tr>
         <tr><td>SessionPackExhaustedEvent</td><td>Published (class in <code>booking.contract</code>)</td><td>Fired when a pack reaches zero sessions. <strong>No listener today.</strong></td></tr>
         <tr><td>StrikeThresholdReachedEvent</td><td>Published</td><td>Consumed by <code>admin.service.AdminAlertEventListener</code> (admin alert); <code>AdminCoachEnforcementService</code> also publishes it for manual strikes.</td></tr>
         <tr><td>CoachVisibilityReducedEvent</td><td>Published</td><td>No listener today. The REDUCED status change itself is the effect.</td></tr>
-        <tr><td>CoachStripeOnboardingCompleteEvent</td><td>Published</td><td>Published after the webhook transaction commits, once charges and payouts are both enabled. No listener today.</td></tr>
+        <tr><td>CoachStripeOnboardingCompleteEvent</td><td>Published</td><td>Published after commit by <code>CoachStripeAccountStatusApplier</code> (webhook or fallback sync) when the account is ready. Consumed by <code>CoachPayoutHoldRecoveryService.onAccountReady</code>, which re-drives the coach's <code>HOLD</code> payouts.</td></tr>
+        <tr><td>PaymentIntegrityAlertEvent</td><td>Published</td><td>Consumed by <code>AdminAlertEventListener</code> → admin alerts <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code> (V193) and <code>BOOKING_ACTION_REQUIRED</code> (V208). Admin's <code>AdminCoachEnforcementService</code> also publishes it.</td></tr>
+        <tr><td>CashOutRefundUnresolvedEvent / CashOutRefundResolvedEvent</td><td>Published</td><td>By <code>CashOutReconciliationService</code>; <code>AdminAlertEventListener</code> opens and auto-resolves the <code>CASH_OUT_UNRESOLVED</code> alert.</td></tr>
         <tr><td>CoachSubscriptionOrphanedEvent</td><td>Published</td><td>Consumed by <code>AdminAlertEventListener</code> → <code>AdminAlertType.SUBSCRIPTION_ORPHANED</code> (V153).</td></tr>
         <tr><td>SubscriptionExpiredEvent</td><td>Published</td><td>Consumed by <code>video.service.VideoSubscriptionLifecycleListener</code> for feature gating.</td></tr>
       </tbody>
@@ -384,25 +474,31 @@
     <table>
       <thead><tr><th>Aggregate type</th><th>Enqueued by</th><th>Handler</th><th>Idempotency anchor</th></tr></thead>
       <tbody>
-        <tr><td><code>CREDIT_WALLET_REFUND</code></td><td><code>RefundEnqueueListener</code> (BEFORE_COMMIT of the cancellation)</td><td><code>CreditWalletRefundOutboxHandler</code></td><td>An existing <code>BOOKING_REFUND</code> for the booking, backed by <code>uq_pcl_booking_refund</code></td></tr>
-        <tr><td><code>COACH_PAYOUT_TRANSFER</code></td><td><code>CoachPayoutEnqueueListener</code> (BEFORE_COMMIT of completion), <code>notBefore = release_after</code></td><td><code>CoachPayoutTransferHandler</code></td><td><code>coach_payouts</code> row must be <code>PENDING_RELEASE</code>; Stripe key <code>transfer-{bookingId}</code>. Also re-enqueued by <code>CoachPayoutFreezeService</code> on reinstatement</td></tr>
-        <tr><td><code>COACH_PAYOUT_REVERSAL</code></td><td><code>DisputeService.reconcileCoachPayout</code> (admin) via <code>enqueueReversal</code></td><td><code>CoachPayoutReversalHandler</code></td><td>Row must be <code>RELEASED</code>; Stripe key <code>reversal-{transferId}</code></td></tr>
+        <tr><td><code>CREDIT_WALLET_REFUND</code></td><td><code>RefundEnqueueListener</code> (BEFORE_COMMIT of the cancellation); <code>BookingPaymentPersistenceService</code> for post-charge declines and batch-share refunds</td><td><code>CreditWalletRefundOutboxHandler</code></td><td>An existing ledger row of the payload's type for the booking, backed by <code>uq_pcl_booking_refund</code> / <code>uq_pcl_batch_share_refund</code></td></tr>
+        <tr><td><code>PACK_SESSION_RESTORE</code></td><td><code>RefundEnqueueListener</code> (BEFORE_COMMIT of the cancellation / no-show / pause)</td><td><code>PackSessionRestoreOutboxHandler</code></td><td><code>pack_session_restores</code> marker (PK <code>booking_id</code>)</td></tr>
+        <tr><td><code>PACK_SUSPENSION_REFUND</code></td><td><code>SuspendedCoachPackRefundOutbox</code> (BEFORE_COMMIT of the suspension)</td><td><code>SuspendedCoachPackRefundOutboxHandler</code></td><td>A revoked pack is skipped; one <code>BOOKING_REFUND</code> per pack id</td></tr>
+        <tr><td><code>COACH_PAYOUT_TRANSFER</code></td><td><code>CoachPayoutEnqueueListener</code> (BEFORE_COMMIT of completion or forfeit), <code>notBefore = release_after</code></td><td><code>CoachPayoutTransferHandler</code></td><td><code>coach_payouts</code> row must be <code>PENDING_RELEASE</code>; Stripe key <code>transfer-{bookingId}</code>. Also re-enqueued by <code>CoachPayoutAdjustmentService.releaseIfUnfrozen</code> (freeze lifted, hold re-driven)</td></tr>
+        <tr><td><code>COACH_PAYOUT_REVERSAL</code></td><td><code>CoachPayoutAdjustmentService.applyRefund</code> (admin dispute resolution, lost card dispute) via <code>enqueueReversal</code></td><td><code>CoachPayoutReversalHandler</code></td><td>Row must be <code>RELEASED</code>; Stripe key <code>reversal-{transferId}-{reversalId}</code> (one per reversal, so a transfer can be partially reversed more than once)</td></tr>
+        <tr><td><code>COACH_PAYOUT_TOPUP</code></td><td><code>CoachPayoutAdjustmentService.payInFull</code> (<code>UPHOLD_COACH</code>) via <code>enqueueTopUp</code></td><td><code>CoachPayoutTopUpHandler</code></td><td>What is still owed is re-derived from the locked row; Stripe key <code>transfer-{topUpId}</code></td></tr>
+        <tr><td><code>SUBSCRIPTION_PAYMENT_METHOD_SYNC</code></td><td><code>PaymentMethodSyncOutboxSupport</code> (same transaction as <code>POST /save-payment-method</code>)</td><td><code>PaymentMethodSyncOutboxHandler</code></td><td>Skipped if the saved card changed since enqueue; per-subscription Stripe keys</td></tr>
       </tbody>
     </table>
 
     <h3 id="scheduled-jobs">Scheduled jobs</h3>
-    <p>All eight are ShedLock-guarded (<code>@SchedulerLock</code>), and each processes one row per transaction so a single bad row can't abort the run.</p>
+    <p>All ten are ShedLock-guarded (<code>@SchedulerLock</code>), and each processes one row per transaction so a single bad row can't abort the run.</p>
     <table>
       <thead><tr><th>Class</th><th>Schedule</th><th>Lock name</th><th>Does</th></tr></thead>
       <tbody>
         <tr><td>PaymentPendingSweeper</td><td>every 15 min (fixedDelay)</td><td>PaymentPendingSweeper_sweep (PT30M)</td><td>Recovers stuck <code>PAYMENT_PENDING</code> bookings older than <code>booking.payment_pending_sweep_grace_minutes</code> (default 120, bounded 15–10080).</td></tr>
+        <tr><td>ChargeOutcomeReconciler</td><td>every 10 min (fixedDelay)</td><td>ChargeOutcomeReconciler_reconcile (PT20M)</td><td>Resolves <code>CAPTURE_PENDING</code> reservations with a charge key older than <code>booking.payment.charge_reconcile_after_minutes</code> (default 10) by asking Stripe for the PaymentIntent: settle, decline, or wait. Keyset-paged, at most 1000 rows per run, one Stripe lookup per key.</td></tr>
         <tr><td>CashOutReconciliationService</td><td>every 15 min (fixedDelay)</td><td>CashOutReconciliationService_recheck (PT30M)</td><td>Retries the refund of an <code>UNKNOWN</code> cash-out, or of a <code>PENDING</code> one older than 15 min (its request died), under the original <code>cashout-{id}</code> key, up to 15 rows per run. Stops at 23h (Stripe prunes keys after ~24h) and escalates anything still open to <code>UNKNOWN</code> for a human.</td></tr>
-        <tr><td>SessionPackForfeitureScheduler</td><td>every 60 min (fixedDelay)</td><td>SessionPackForfeitureScheduler_expire (PT15M)</td><td>Forfeits expired packs that still have sessions. Re-fetches each pack and re-checks it first, because an extend or pause may have committed since the batch was read.</td></tr>
+        <tr><td>SessionPackForfeitureScheduler</td><td>every 60 min (fixedDelay)</td><td>SessionPackForfeitureScheduler_expire (PT15M)</td><td>Forfeits expired packs that still have sessions, keyset-paged by purchase id (200 per page). Re-fetches each pack and re-checks it first, because an extend or pause may have committed since the page was read.</td></tr>
         <tr><td>SessionPackExpiryNotifier</td><td>08:00 daily</td><td>SessionPackExpiryNotifier_warn (PT15M)</td><td>Sends the 14-day expiry warning: stamps <code>expiryWarnedAt</code> and publishes the event in the same transaction.</td></tr>
         <tr><td>SubscriptionChangeApplicator</td><td>02:00 daily</td><td>SubscriptionChangeApplicator_applyPendingChanges (PT30M)</td><td>Applies due scheduled downgrades.</td></tr>
-        <tr><td>SubscriptionGracePeriodChecker</td><td>03:00 daily</td><td>SubscriptionGracePeriodChecker_checkGracePeriods (PT30M)</td><td>Downgrades <code>PAST_DUE</code> subscriptions once the grace period has passed.</td></tr>
-        <tr><td>SubscriptionTierReconciliationScheduler</td><td>04:00 daily</td><td>…_reconcileMarketplaceTiers</td><td>Corrects drift from payment's coach subscription to <code>marketplace.coach_subscriptions</code>.</td></tr>
+        <tr><td>SubscriptionGracePeriodChecker</td><td>03:00 daily</td><td>SubscriptionGracePeriodChecker_checkGracePeriods (PT30M)</td><td>Cancels (at Stripe, then locally) <code>PAST_DUE</code>/<code>UNPAID</code>/<code>PAUSED</code> subscriptions once the grace period has passed.</td></tr>
+        <tr><td>SubscriptionTierReconciliationScheduler</td><td>04:00 daily</td><td>…_reconcileMarketplaceTiers (PT30M)</td><td>Corrects drift from payment's coach subscription to <code>marketplace.coach_subscriptions</code>; a non-entitled status projects as SCOUT.</td></tr>
         <tr><td>StripeSubscriptionReconciliationScheduler</td><td>05:00 daily</td><td>…_reconcileStripeSubscriptions (PT15M)</td><td>Lists live Stripe subscriptions and alerts (but doesn't heal) when a coach has no local row.</td></tr>
+        <tr><td>StalePayoutAlertScheduler</td><td>06:30 daily</td><td>StalePayoutAlertScheduler_alertStalePayouts (PT15M)</td><td>Raises a <code>PAYOUT_HELD</code> admin alert (one open per booking) for each <code>FROZEN</code>/<code>HOLD</code> payout unchanged for <code>payment.payout.stale_alert_days</code>. Read-only.</td></tr>
       </tbody>
     </table>
 
@@ -448,8 +544,13 @@ sequenceDiagram
       <code>account.application.deauthorized</code> leaves the row <code>RESTRICTED</code> with the local
       <code>transfers_capability</code> sentinel <code>deauthorized</code>: transfers go to <code>HOLD</code>,
       later <code>account.updated</code> snapshots are ignored, and the status response reports
-      <code>disconnected: true</code> so the coach is offered a reconnect. Charges and transfers
-      both require <code>COMPLETE</code> with <code>charges_enabled</code>.
+      <code>disconnected: true</code> so the coach is offered a reconnect. A <em>charge</em> requires
+      <code>COMPLETE</code> with <code>charges_enabled</code>. A <em>transfer</em> uses
+      <code>StripePaymentGateway.transferReadiness</code>: ready when <code>transfers_capability</code> is
+      <code>active</code> (or, before any event reported it, <code>COMPLETE</code> with payouts enabled);
+      <em>pending</em> (capability <code>pending</code>, or a fresh reconnect still <code>PENDING</code>) is
+      retried with outbox backoff; anything else goes to <code>HOLD</code>. When the account becomes ready,
+      <code>CoachStripeOnboardingCompleteEvent</code> re-drives the coach's held payouts.
     </p>
 
     <h3 id="stripe-webhook-idempotent-signature-verified-event">Stripe webhook: idempotent, signature-verified event processing</h3>
@@ -483,8 +584,9 @@ sequenceDiagram
   else charge.dispute.created / closed
     Svc->>Svc: freeze (or, if lost, cut / reverse pro rata) the coach payouts the charge funded, admin alert
     Svc->>Svc: take back wallet credit the charge funded (restored if won), cash-out refused while open
+    Svc->>Svc: freeze a pack bought with the charge (won lifts it, lost revokes its sessions)
   else charge.refunded
-    Svc->>Svc: refund not issued by the app: admin alert only
+    Svc->>Svc: refund not issued by the app: admin alert, a full refund of a pack charge revokes the pack
   end
   WH-->>Stripe: 200 (500 on failure so Stripe retries)
     </pre>
@@ -516,61 +618,99 @@ sequenceDiagram
     Life->>Life: PackSessionService.deductSession (row lock)
     Life->>Persist: persistPaymentSuccess(0, 0)
   else credit / card
-    Life->>Wallet: getBalance(payerId)
-    Life->>Life: credit = min(balance, price), card = price - credit
+    Life->>Wallet: lockAndGetBalance(payerId) if the payer has credit
+    Life->>Life: CreditCardSplit.of(balance, price, minimumCardCharge)
     opt card > 0
-      Life->>Persist: reserveCapture (REQUIRES_NEW, payment pool): CAPTURE_PENDING row
-      Life->>Gateway: chargeAndCapture (platform account, transfer_group = bookingId)
+      Life->>Persist: reserveCapture (REQUIRES_NEW, payment pool): CAPTURE_PENDING row + key pi-booking-id
+      Life->>Gateway: chargeAndCapture (platform account, same key, transfer_group = bookingId)
+      alt outcome unknown (timeout, 5xx, 409, processing)
+        Life->>Life: keep CAPTURE_PENDING for ChargeOutcomeReconciler, decline nothing
+      else declined (4xx)
+        Life->>Persist: persistPaymentFailure
+      end
+      Life->>Persist: recordChargeIntent (own TX)
     end
-    Life->>Persist: persistPaymentSuccess(credit, card, intentId)
+    Life->>Persist: persistPaymentSuccess(credit, card, intentId), own TX after a charge
+    Persist->>Persist: BOOKING_DEDUCTION + CAPTURED row + commission_rate
+    Persist->>Booking: transition(PAYMENT_CAPTURED)
+    Persist-->>Booking: BookingConfirmedEvent
+    opt settle failed after the charge
+      Life->>Persist: declineBookingAfterCharge: card share back as wallet credit
+    end
   end
-  Persist->>Persist: BOOKING_DEDUCTION + CAPTURED row + commission_rate
-  Persist->>Booking: transition(PAYMENT_CAPTURED)
-  Persist-->>Booking: BookingConfirmedEvent
     </pre>
     <p>
       Credit is applied first, and only the remainder is charged to the card. A booking fully covered by
       credit or a pack <strong>never reserves</strong>. That keeps the UAT.3 invariant: <em>for a booking
       in PAYMENT_PENDING, no <code>booking_payments</code> row proves no Stripe call was attempted</em>.
-      The Stripe call is made outside any local transaction. If it throws, <code>persistPaymentFailure</code>
-      marks the booking failed and no credit is debited. While a <code>CAPTURE_PENDING</code> row exists,
-      <code>BookingService</code> refuses a parent cancel with 409 <code>booking.paymentInProgress</code>.
+      The Stripe call is made outside any local transaction, under a key that was committed onto the
+      reservation <em>before</em> the call (<code>ChargeKeys</code>, V207). A Stripe rejection (4xx, or a
+      PaymentIntent that isn't <code>succeeded</code> or <code>processing</code>) makes
+      <code>persistPaymentFailure</code> mark the booking failed, with no credit debited. An <em>unknown</em>
+      outcome (<code>ChargeOutcomeUnknownException</code>) declines nothing: the row stays
+      <code>CAPTURE_PENDING</code> and <code>ChargeOutcomeReconciler</code> finds the PaymentIntent by its
+      <code>chargeKey</code> metadata and settles or declines it. A card share below Stripe's currency
+      minimum is re-balanced (the card takes the minimum, the credit part shrinks). While a
+      <code>CAPTURE_PENDING</code> row exists, <code>BookingService</code> refuses a parent cancel with 409
+      <code>booking.paymentInProgress</code>. The price charged is <code>booking.bookings.agreed_price</code>,
+      locked at request time (V192); a booking with no price at all is refused at accept rather than confirmed
+      for free. A settle that fails after the charge declines the booking with its real amounts as
+      <code>REFUNDED_TO_CREDIT</code> and credits the card share back as a <code>BOOKING_REFUND</code>
+      (<code>declineBookingAfterCharge</code>); if that fails too, the reconciler retries the settle.
+    </p>
+    <p>
       For batch bookings, every card-funded booking is reserved first, then priced over the reserved set,
-      using <code>CreditCardSplit</code> against the wallet. There is one batch <code>BOOKING_DEDUCTION</code>
-      and one Stripe charge for the batch. Each booking is then confirmed in its own <code>REQUIRES_NEW</code>
-      transaction. If the charge fails, the credit is restored with <code>BOOKING_DEDUCTION_REVERSAL</code>
-      and every reserved booking is declined.
+      using <code>CreditCardSplit</code> against the wallet. Each booking's credit and card share is decided
+      once and committed onto the reservations with the batch key
+      <code>pi-batch-{batchId}-{hash of the reserved ids}</code>, so two concurrent accepts of one batch can't
+      share a key. There is one Stripe charge for the batch. Each booking is then confirmed in its own
+      <code>REQUIRES_NEW</code> transaction that also writes <em>its own</em> <code>BOOKING_DEDUCTION</code>
+      (spend-only credit first), so no credit leaves the wallet before the charge outcome is known. If the
+      charge is rejected, every reserved booking is declined. A booking whose confirm fails after the charge
+      goes through the same <code>declineBookingAfterCharge</code> (<code>REFUNDED_TO_CREDIT</code>). A reserved
+      booking that turns out to be settled elsewhere keeps its payment row, and its charged card share is
+      credited back as a <code>BATCH_SHARE_REFUND</code> (<code>refundBatchShareToCredit</code>).
     </p>
 
     <h3 id="coach-payout-lifecycle-completion-gated-transfer">Coach payout lifecycle (completion-gated transfer)</h3>
     <pre class="mermaid">
 stateDiagram-v2
-  [*] --> PENDING_RELEASE: BookingCompletedEvent, card plus credit or pack share above 0
-  [*] --> CANCELLED: nothing charged (NOTHING_CHARGED, PACK_FULLY_ALLOCATED)
-  [*] --> FROZEN: coach already under a safety hold
-  PENDING_RELEASE --> FROZEN: CSAM safety hold (freeze or release-time check)
-  FROZEN --> PENDING_RELEASE: admin reinstates coach, one message re-enqueued
-  FROZEN --> CANCELLED: dispute upheld
+  [*] --> PENDING_RELEASE: completion or forfeit, card plus credit or pack share above 0
+  [*] --> CANCELLED: nothing charged, pack fully allocated, or whole net lost to a chargeback
+  [*] --> FROZEN: safety hold or open dispute already applies
+  PENDING_RELEASE --> FROZEN: safety hold, in-app dispute or card dispute opened
+  FROZEN --> PENDING_RELEASE: last freeze reason lifted, one message re-enqueued
+  FROZEN --> CANCELLED: whole net refunded
+  PENDING_RELEASE --> PENDING_RELEASE: partial refund cuts the net
   PENDING_RELEASE --> RELEASED: transfer ok after release_after
   PENDING_RELEASE --> HOLD: non-retryable transfer error
-  PENDING_RELEASE --> CANCELLED: dispute upheld inside hold
-  HOLD --> CANCELLED: dispute upheld
-  HOLD --> PENDING_RELEASE: operator, coach reconnected
-  RELEASED --> REVERSED: dispute upheld, reversal ok
-  RELEASED --> REVERSAL_FAILED: non-retryable reversal error
+  PENDING_RELEASE --> CANCELLED: whole net refunded
+  HOLD --> PENDING_RELEASE: account ready again or admin release-held
+  HOLD --> FROZEN: re-drive finds a freeze reason
+  RELEASED --> RELEASED: partial reversal, or reversal refused and booked as coach debt
+  RELEASED --> REVERSED: whole net reversed
+  REVERSED --> RELEASED: UPHOLD_COACH top-up transfer
+  RELEASED --> REVERSAL_FAILED: no stripe_transfer_id to reverse
   HOLD --> FAILED_PERMANENT: operator SQL only
   REVERSAL_FAILED --> FAILED_PERMANENT: operator SQL only
     </pre>
     <p>
       The row is written in the completion transaction. The outbox message is delayed to
       <code>release_after</code>. If it fires early, the handler throws so the outbox retries later.
-      <code>DisputeService.reconcileCoachPayout</code> (admin) takes the same <code>PESSIMISTIC_WRITE</code>
-      lock as the transfer handler (<code>findByIdForUpdate</code>). A dispute and a transfer happening at
-      once therefore can't both win: the handler re-reads <code>CANCELLED</code> and does nothing. After
-      release, a dispute reverses the coach's proportional share of the parent's refund. Nothing moves a row
-      to <code>FAILED_PERMANENT</code> automatically. HOLD and REVERSAL_FAILED are resolved by hand per
-      <code>docs/deployment/runbook.md</code> Scenario 5 (watch the <code>coach.payout.held</code> and
-      <code>coach.payout.reversal_failed</code> metrics).
+      Admin's <code>DisputeService</code> and the card-dispute webhook lock the row with the same
+      <code>PESSIMISTIC_WRITE</code> lock as the transfer handler (<code>findByIdForUpdate</code>, or
+      <code>findFundedByPaymentIntentForUpdate</code>) before calling <code>CoachPayoutAdjustmentService</code>.
+      A dispute and a transfer happening at once therefore can't both win: the handler re-reads the new
+      status and does nothing. Raising an in-app dispute freezes the payout; resolving or dismissing it
+      clears that freeze. After release, a refund reverses the coach's proportional share. A reversal Stripe
+      refuses (the coach withdrew the balance) is booked as done and the amount becomes coach debt, repaid
+      from the coach's next transfers (<code>debt_offset_amount</code>). Nothing moves a row to
+      <code>FAILED_PERMANENT</code> automatically. An account-side <code>HOLD</code> recovers by itself once
+      the account can receive transfers, or through the admin <code>release-held</code> endpoint; a
+      <code>TRANSFER_*_MISMATCH</code> hold and <code>REVERSAL_FAILED</code> need an operator per
+      <code>docs/deployment/runbook.md</code>. <code>StalePayoutAlertScheduler</code> alerts on anything
+      stuck in <code>FROZEN</code>/<code>HOLD</code> (watch the <code>coach.payout.held</code> and
+      <code>coach.payout.reversal_failed</code> metrics too).
     </p>
     <p>
       <strong>Safety-hold freeze.</strong> Only a CSAM safety hold freezes payouts (normal suspensions don't).
@@ -590,7 +730,7 @@ stateDiagram-v2
       <thead><tr><th>Payment row</th><th>Action</th></tr></thead>
       <tbody>
         <tr><td>None</td><td>No money moved, whatever the funding type. Writes <code>CHARGE_FAILED</code>, transitions <code>PAYMENT_FAILED</code>, publishes <code>BookingDeclinedEvent</code>, and frees the coach's slot.</td></tr>
-        <tr><td><code>CAPTURE_PENDING</code>, younger than <code>booking.payment_pending.capture_pending_max_hours</code> (default 72, bounded 6–720) or without <code>reserved_at</code></td><td>ERROR log + <code>booking.payment_pending.unrecoverable{reason=CAPTURE_UNCONFIRMED}</code>. The booking is left alone for an operator to reconcile against Stripe (runbook Scenario 4).</td></tr>
+        <tr><td><code>CAPTURE_PENDING</code>, younger than <code>booking.payment_pending.capture_pending_max_hours</code> (default 72, bounded 6–720) or without <code>reserved_at</code></td><td>ERROR log + <code>booking.payment_pending.unrecoverable{reason=CAPTURE_UNCONFIRMED}</code>. The booking is left alone. A row with a <code>charge_idempotency_key</code> (V207) is resolved automatically by <code>ChargeOutcomeReconciler</code> long before this; a row without one (pre-V207, or a credit-only batch confirm that died) needs an operator to reconcile against Stripe (runbook Scenario 4).</td></tr>
         <tr><td><code>CAPTURE_PENDING</code>, older than that</td><td>Moved to <code>CAPTURE_ABANDONED</code> (keeping <code>stripe_charged</code>), the booking is released, <code>BookingPaymentUnresolvedEvent</code> is published, and <code>{reason=CAPTURE_TIMEOUT}</code> is counted. An operator still reconciles the Stripe side.</td></tr>
         <tr><td>Any terminal status</td><td><code>{reason=PAYMENT_ROW_PRESENT}</code>: a data-integrity error, not a stuck booking.</td></tr>
       </tbody>
@@ -607,13 +747,15 @@ sequenceDiagram
 
   Booking->>Booking: transition CANCELLED, publish BookingCancelledBy...Event
   Booking->>Enq: BEFORE_COMMIT
-  Enq->>Outbox: CREDIT_WALLET_REFUND (same TX as CANCELLED)
-  Booking-->>CRS: AFTER_COMMIT (REQUIRES_NEW): pack restore, history, strike
+  Enq->>Outbox: CREDIT_WALLET_REFUND and/or PACK_SESSION_RESTORE (same TX as CANCELLED)
+  Booking->>CRS: BEFORE_COMMIT (coach cancel only): advisory lock, cancellation history
+  Booking-->>CRS: after commit: reliability strike (REQUIRES_NEW)
   Outbox->>H: drain (REQUIRES_NEW, retried with backoff)
-  H->>H: BOOKING_REFUND already exists? no-op
-  H->>H: writeLedgerEntry(BOOKING_REFUND, +sessionPrice)
+  H->>H: row of this type already exists for the booking? no-op
+  H->>H: writeLedgerEntry(BOOKING_REFUND, amount paid, source charge, spend-only part)
+  H->>H: chargeback trace: credit funded by a lost-dispute charge is taken back
     </pre>
-    <p>If the enqueue fails, the cancellation itself rolls back, so a committed cancellation always has its refund recorded (skillars-deferred-101). Pack-session restores still run inline in the AFTER_COMMIT listener, without retry.</p>
+    <p>If an enqueue fails, the cancellation itself rolls back, so a committed cancellation always has its refund and pack restore recorded (skillars-deferred-101, fix/payment-session-pack-integrity). Pack restores used to run inline in an AFTER_COMMIT listener without retry; they are now <code>PACK_SESSION_RESTORE</code> outbox rows applied once per booking.</p>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
@@ -649,20 +791,30 @@ sequenceDiagram
       <code>payment-requires-new-pool</code> in <code>infrastructure.config.DataSourceConfig</code>.</p>
     </div>
     <div class="callout">
-      <p><strong>Stripe idempotency keys.</strong> Charges use <code>pi-{referenceId}-{payerId}-{1-minute bucket}</code>.
-      The bucket exists because pack purchases pass the <em>tier</em> id as <code>referenceId</code>, so
-      without it a parent's second purchase of the same tier would replay the first. Transfers, reversals
-      and refunds use deterministic keys (<code>transfer-{bookingId}</code>, <code>reversal-{transferId}</code>,
-      <code>refund-{paymentIntentId}</code> for a pack purchase's compensating refund), so a re-run outbox
-      row repeats the original operation instead of performing a second one. A key names <em>one
-      logical operation</em>: a cash-out uses <code>cashout-{cashOutId}</code>, because a payer can cash
-      out several times against the same PaymentIntent and a shared key would make Stripe replay the
-      first refund instead of issuing the second.</p>
+      <p><strong>Stripe idempotency keys name one attempt and are persisted before the call.</strong>
+      Booking charges use <code>pi-booking-{bookingId}</code>, batch charges
+      <code>pi-batch-{batchId}-{first 16 hex of sha256(sorted reserved ids)}</code> (<code>ChargeKeys</code>),
+      written onto the <code>CAPTURE_PENDING</code> rows and the PaymentIntent's <code>chargeKey</code> metadata,
+      so a lost response can be looked up later. Pack purchases use <code>pack-{parentId}-{attemptKey}</code>.
+      The old <code>pi-{referenceId}-{payer}-{1-minute bucket}</code> key survives only on the unused 4-arg
+      <code>chargeAndCapture</code> overload. Transfers, reversals and refunds use deterministic keys
+      (<code>transfer-{bookingId}</code>, <code>transfer-{topUpId}</code>,
+      <code>reversal-{transferId}-{reversalId}</code>, <code>refund-{paymentIntentId}</code> for a pack
+      purchase's compensating refund), so a re-run outbox row repeats the original operation instead of
+      performing a second one. Stripe forgets keys after 24h, so transfers and reversals also look for an
+      existing one (by <code>transfer_group</code>, or <code>reversalKey</code> metadata) before creating. A
+      key names <em>one logical operation</em>: a cash-out uses <code>cashout-{cashOutId}</code>, because a
+      payer can cash out several times against the same PaymentIntent and a shared key would make Stripe
+      replay the first refund instead of issuing the second.</p>
     </div>
     <div class="callout">
       <p><strong>The credit ledger is append-only.</strong> Rows are never updated or deleted. A failed
       operation is undone by writing a new row (<code>CASH_OUT_REVERSAL</code>,
-      <code>BOOKING_DEDUCTION_REVERSAL</code>). The ledger type and sign CHECKs reject anything else. Type
+      <code>BOOKING_DEDUCTION_REVERSAL</code>, <code>BOOKING_REFUND_REVERSAL</code>,
+      <code>CHARGEBACK_CREDIT_REVERSAL</code> / <code>_RESTORE</code>), and each row carries its own
+      spend-only split. A clawback or chargeback reversal is capped at the balance read under the wallet
+      lock, so the wallet never goes below zero; the shortfall is absorbed by the platform. The ledger type
+      and sign CHECKs reject anything else. Type
       names are constants in <code>CreditLedgerEntryType</code>; JPQL in
       <code>ParentCreditLedgerRepository</code> concatenates them rather than repeating literals.</p>
     </div>
@@ -696,11 +848,14 @@ sequenceDiagram
       Any new reader must do the same. <code>CreditWalletZeroHistoryBalanceIT</code> pins this behaviour.</p>
     </div>
     <div class="callout">
-      <p><strong>A coach can't be charged for, or paid out, until Stripe onboarding is COMPLETE.</strong>
-      <code>StripePaymentGateway.resolveCoachStripeAccountId</code> throws <code>payment.coachStripeNotConfigured</code>
-      (422) unless <code>onboarding_status = COMPLETE</code> and <code>charges_enabled</code> is true. It runs
-      at charge time as a fail-fast check and again at transfer time, where the error is non-retryable and
-      moves the payout to HOLD. This is the most common "why did payment fail" support case.</p>
+      <p><strong>A coach can't be charged for until Stripe onboarding is COMPLETE, nor paid out until the account can receive transfers.</strong>
+      At charge time <code>StripePaymentGateway.resolveCoachStripeAccountId</code> throws
+      <code>payment.coachStripeNotConfigured</code> (422) unless <code>onboarding_status = COMPLETE</code> and
+      <code>charges_enabled</code> is true (fail fast). At transfer time <code>resolveTransferDestination</code>
+      applies <code>transferReadiness</code>: no account, an inactive capability, <code>RESTRICTED</code> or
+      disconnected is a non-retryable <code>HOLD</code> (<code>NO_ACCOUNT</code> / <code>ACCOUNT_NOT_READY</code>),
+      while <code>ACCOUNT_PENDING</code> retries. This is the most common "why did payment fail" support
+      case.</p>
     </div>
     <div class="callout">
       <p><strong>Pack deduction, restore, extend and pause lock the purchase row.</strong> They read with
@@ -723,14 +878,19 @@ sequenceDiagram
       <p><strong>Admin finance figures.</strong> <code>getAdminOverview</code> calculates:</p>
       <ul>
         <li>gross volume as <code>SUM(stripe_charged + credit_debited)</code> over <code>CAPTURED</code> booking rows (booking value before refunds, which are a separate line; wallet credit spent on a booking counts too, so this is not cash charged to cards) plus <code>session_pack_purchases.amount_charged</code> (stamped at purchase, V181; legacy rows were backfilled from the tier's current price);</li>
-        <li>commission as the sum of <code>coach_payouts.commission_amount</code> over payouts <code>RELEASED</code> in the period (dated by <code>released_at</code>): what was actually deducted from coach transfers, for card, wallet-credit and pack sessions alike, at the rate stamped on each row. Pending, held and frozen payouts haven't earned it yet. Cancelled or reversed ones (a dispute refunded the parent) earned none. A partially reversed payout drops its whole commission, which errs on the conservative side;</li>
+        <li>commission as the sum of <code>coach_payouts.commission_amount</code> over payouts <code>RELEASED</code> in the period (dated by <code>released_at</code>): what was actually deducted from coach transfers, for card, wallet-credit and pack sessions alike, at the rate stamped on each row. Pending, held and frozen payouts haven't earned it yet. Fully reversed or cancelled ones (a dispute refunded the parent) earned none. A partially reversed payout stays <code>RELEASED</code> and counts its commission pro rata to the net it kept;</li>
+        <li>refunds credited as the sum of <code>BOOKING_REFUND</code>, <code>DISPUTE_CREDIT</code> and <code>BATCH_SHARE_REFUND</code> rows, net of <code>BOOKING_REFUND_REVERSAL</code>s in the period;</li>
         <li>Stripe fees as an <em>estimate</em> from config over card money only (card-charged booking money and pack purchases), with one fixed fee per distinct charge;</li>
         <li>cash-outs as <code>CASH_OUT_DEBIT</code> rows not reversed by a <code>CASH_OUT_REVERSAL</code> with the same <code>reference_id</code>. Rows from before the fix hold the gross requested amount and have no reference id.</li>
       </ul>
       <p>There is no subscription-revenue figure, because no subscription price amounts are stored
-      locally. The coach summary's <code>netPayout</code> is the ledger net that was actually
-      transferred. It carries no Stripe-fee line, because under separate charges the platform pays the
-      processing fee, not the coach.</p>
+      locally. The overview also carries <code>unresolvedCashOutCount</code> / <code>Amount</code> (not
+      period-bound). The coach summary's <code>netPayout</code> is the released ledger net minus
+      <code>reversed_amount</code>. It carries no Stripe-fee line, because under separate charges the
+      platform pays the processing fee, not the coach. Its <code>refundsIssued</code> is every
+      <code>BOOKING_REFUND</code> / <code>DISPUTE_CREDIT</code> (net of reversals) on the coach's bookings in
+      the period, and <code>heldAmount</code> / <code>heldCount</code> cover <code>FROZEN</code> and
+      <code>HOLD</code> payouts.</p>
     </div>
     <div class="callout">
       <p><strong>String status constants, not enums.</strong> <code>BookingPaymentStatus</code>,
@@ -769,20 +929,20 @@ sequenceDiagram
 
     <h2 id="related-modules">Related Modules</h2>
     <ul>
-      <li><a href="../booking/index.html">Booking</a>: payment listens for accept, cancel, no-show and <code>BookingCompletedEvent</code>, and calls back into <code>BookingService.transition(...)</code>. Booking reads <code>BookingPaymentStatus</code> for its cancel interlock. The pack lifecycle events and <code>BookingPaymentUnresolvedEvent</code> are declared in <code>booking.contract</code> but published by payment.</li>
+      <li><a href="../booking/index.html">Booking</a>: payment listens for accept, cancel, no-show and <code>BookingCompletedEvent</code>, and calls back into <code>BookingService.transition(...)</code>. Booking reads <code>BookingPaymentStatus</code> for its cancel interlock. The pack lifecycle events and <code>BookingPaymentUnresolvedEvent</code> are declared in <code>booking.contract</code> but published by payment. Payment also calls <code>BookingService.cancelDueToPause</code>, <code>requireBookableCoachStatus</code> (pack purchase) and <code>hasCancellationNotice</code> (pause), and <code>ChargeOutcomeReconciler</code> settles or declines bookings through <code>BookingService</code>.</li>
       <li><a href="../outbox/index.html">Outbox</a>: carries the durable refund, payout-transfer and payout-reversal messages listed above.</li>
-      <li><a href="../marketplace/index.html">Marketplace</a>: payment writes <code>CoachProfile.status</code> (REDUCED/PENDING_REVIEW), the <code>CoachSubscription</code> tier projection, and <code>CoachReliabilityStrike</code> rows. It reads <code>CoachPricing</code> for batch pricing and <code>PlayerProfile</code> for ownership checks.</li>
-      <li><a href="../admin/index.html">Admin</a>: <code>DisputeService</code> cancels or reverses coach payouts; <code>AdminAlertEventListener</code> consumes the strike and orphaned-subscription events; <code>AdminCoachEnforcementService</code> issues and deletes strikes; <code>AdminBookingCompletionService</code> force-completes bookings, which releases the payout; <code>GdprExportService</code> exports payment data. The admin finance UI reads <code>AdminFinanceResource</code>.</li>
+      <li><a href="../marketplace/index.html">Marketplace</a>: payment writes <code>CoachProfile.status</code> (REDUCED/PENDING_REVIEW), the <code>CoachSubscription</code> tier projection, and <code>CoachReliabilityStrike</code> rows. It reads <code>CoachPricing</code> for batch pricing and <code>PlayerProfile</code> for ownership checks, and implements marketplace's <code>CoachSubscriptionEntitlementPort</code>.</li>
+      <li><a href="../admin/index.html">Admin</a>: <code>DisputeService</code> freezes, cuts, reverses or tops up coach payouts through <code>CoachPayoutAdjustmentService</code>, credits payers through <code>DisputeCreditService</code> and claws refunds back through <code>RefundClawbackService</code>; <code>AdminAlertEventListener</code> consumes the strike, orphaned-subscription, cash-out and <code>PaymentIntegrityAlertEvent</code> events; <code>AdminCoachEnforcementService</code> issues and deletes strikes and publishes <code>CoachSuspendedEvent</code> (pack refunds); <code>AdminBookingCompletionService</code> force-completes bookings, which releases the payout; <code>GdprExportService</code> exports payment data. The admin finance UI reads <code>AdminFinanceResource</code>.</li>
       <li><a href="../notification/index.html">Notification</a>: <code>SessionPackEmailListener</code> and <code>BookingEmailListener</code> turn payment-published events into outbox emails and in-app inbox entries.</li>
       <li><a href="../security/index.html">Security</a>: <code>SecurityUtil.requireCurrentUserId</code> resolves the payer id, and <code>playerOwnershipGuard</code> protects player subscriptions.</li>
-      <li><a href="../config/index.html">Config</a>: <code>ConfigService</code> provides commission rate, currency, cash-out fee rate and fixed fee, payout hold hours, sweeper graces, pack pause max days, strike thresholds, PAST_DUE grace days, subscription price ids and tier feature lists. <code>ConfigStartupAssertion</code> refuses to boot if a bounded key has a bad value.</li>
+      <li><a href="../config/index.html">Config</a>: <code>ConfigService</code> provides commission rate, currency, cash-out fee rate and fixed fee, payout hold hours, stale-payout alert days, sweeper graces and the charge-reconcile delay, pack pause max days, strike thresholds, PAST_DUE grace days, subscription price ids and tier feature lists. <code>ConfigStartupAssertion</code> refuses to boot if a bounded key has a bad value.</li>
       <li><a href="../video/index.html">Video</a>: <code>VideoSubscriptionLifecycleListener</code> consumes <code>SubscriptionExpiredEvent</code>, and <code>PlayerSubscriptionQueryAdapter</code> implements video's <code>PlayerSubscriptionQueryPort</code>.</li>
       <li><a href="../infrastructure/index.html">Infrastructure</a>: <code>PessimisticLockRetryer</code>, the routing datasource and payment pool, <code>FrontendLinkBuilder</code>, and the shared exception and <code>ErrorDto</code> types.</li>
-      <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a>: the cross-module catalogue that includes this module's eight jobs.</li>
+      <li><a href="../scheduled-jobs/index.html">Scheduled Jobs</a>: the cross-module catalogue that includes this module's ten jobs.</li>
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>fa9928ce</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

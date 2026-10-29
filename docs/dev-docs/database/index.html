@@ -73,7 +73,7 @@
         <tr><td><code>booking</code></td><td><a href="../booking/index.html">booking</a></td><td><code>bookings</code>, <code>booking_batches</code>, <code>booking_reschedule_requests</code>, <code>coach_availability_blocks</code>, <code>session_completion_data</code></td></tr>
         <tr><td><code>session</code></td><td><a href="../session/index.html">session</a></td><td><code>drills</code>, <code>drill_tags</code>, <code>drill_video_refs</code>, <code>sessions</code>, <code>session_templates</code>, <code>homework_assignments</code>, <code>homework_completions</code></td></tr>
         <tr><td><code>development</code></td><td><a href="../development/index.html">development</a></td><td><code>radar_assessment_entries</code>, <code>player_radar_composites</code>, <code>player_radar_baselines</code>, <code>radar_composite_dlq</code>, <code>player_slu_weekly_snapshot</code>(<code>_applied</code>), <code>player_slu_targets</code>, <code>player_timeline_events</code>, <code>performance_reports</code>, <code>neglected_skill_flags</code>, <code>skill_definitions</code>, <code>coach_branding</code></td></tr>
-        <tr><td><code>payment</code></td><td><a href="../payment/index.html">payment</a></td><td><code>booking_payments</code>, <code>parent_credit_ledger</code>, <code>coach_subscriptions</code>/<code>player_subscriptions</code> (+ <code>_changes</code>), <code>session_pack_tiers</code>, <code>session_pack_purchases</code>, <code>coach_payouts</code>, <code>coach_stripe_accounts</code>, <code>stripe_customers</code>, <code>stripe_webhook_events</code>, <code>stripe_refund_failures</code></td></tr>
+        <tr><td><code>payment</code></td><td><a href="../payment/index.html">payment</a></td><td><code>booking_payments</code>, <code>parent_credit_ledger</code>, <code>coach_subscriptions</code>/<code>player_subscriptions</code> (+ <code>_changes</code>), <code>session_pack_tiers</code>, <code>session_pack_purchases</code>, <code>coach_payouts</code>, <code>coach_payout_freezes</code> (V186), <code>coach_payout_debts</code> (V205), <code>cash_out_reconciliations</code> (V186), <code>charge_disputes</code> (V193), <code>pack_session_restores</code> (V195), <code>pack_session_refunds</code> (V200), <code>coach_stripe_accounts</code>, <code>stripe_customers</code>, <code>stripe_webhook_events</code>, <code>stripe_refund_failures</code></td></tr>
         <tr><td><code>messaging</code></td><td><a href="../messaging/index.html">messaging</a></td><td><code>conversations</code>, <code>messages</code>, <code>message_reports</code>, <code>conversation_reports</code></td></tr>
         <tr><td><code>reviews</code></td><td><a href="../reviews/index.html">reviews</a></td><td><code>coach_reviews</code>, <code>review_flags</code>, <code>review_moderation_log</code></td></tr>
         <tr><td><code>admin</code></td><td><a href="../admin/index.html">admin</a></td><td><code>admin_alerts</code>, <code>admin_action_log</code>, <code>disputes</code>, <code>gdpr_requests</code>, <code>appeals</code> (V172)</td></tr>
@@ -124,8 +124,10 @@
       into two generated files: <code>V138__baseline_schema.sql</code> (pure DDL from
       <code>pg_dump --schema-only</code>) and <code>V139__baseline_seed_data.sql</code> (160 seed rows:
       <code>platform_config</code>, authorities, <code>skill_definitions</code>, platform drills). There are
-      currently <strong>37 files, <code>V138</code>–<code>V175</code></strong>; <code>V174</code> was never
-      used, which Flyway does not mind. Older migration numbers you'll see quoted in code comments
+      currently <strong>61 files, <code>V138</code>–<code>V210</code></strong>, with gaps — <code>V174</code>,
+      <code>V176</code>–<code>V177</code>, <code>V179</code>–<code>V180</code>, <code>V190</code>, <code>V194</code>,
+      <code>V196</code> and <code>V201</code>–<code>V204</code> were never used, which Flyway does not mind —
+      but never back-fill a gap: always take a number above the current latest. Older migration numbers you'll see quoted in code comments
       (<code>V59</code>, <code>V87</code>, <code>V128</code> …) refer to the deleted history — recover any of
       them with <code>git show 4a3f218d:src/main/resources/db/migration/&lt;file&gt;</code> (the last pre-squash
       commit).
@@ -170,12 +172,18 @@
         column) and uses <code>ON CONFLICT (key) DO NOTHING</code> — see <code>V156</code>.</li>
     </ul>
     <p>
-      Several recent migrations (<code>V169</code>, <code>V173</code>) take a documented "same-release
-      exception" (index ships with the code that needs it) justified by "no production deployment yet". That
-      justification expires with the first production deploy.
+      Many recent migrations take a documented "same-release exception" justified by "no production
+      deployment yet / prod is not live": <code>V169</code> and <code>V173</code> ship an index with the code
+      that needs it, and almost every migration from <code>V182</code> to <code>V210</code> skips
+      <code>NOT VALID</code>/<code>VALIDATE</code> (marker <code>allow-validating-constraint</code>), builds a
+      plain index (<code>allow-blocking-index</code>), runs a single-transaction backfill
+      (<code>allow-full-table-dml</code>, <code>V178</code>) or ships a CHECK widening together with its first write
+      (rule 5). <strong>That justification expires with the first production deploy</strong> — after it, copy
+      the conventions, not these precedents. (<code>V197</code> is the exception that already does it properly:
+      its status CHECKs are re-added <code>NOT VALID</code>.)
     </p>
 
-    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V175)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V210)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -191,12 +199,24 @@
         <tr><td><code>V160</code>, <code>V161</code>, <code>V169</code></td><td><code>player_timeline_events.coach_id</code> + coach lookup index; partial unique index <code>uq_pte_session_completed_per_booking</code> backing <code>PlayerTimelineRepository.insertSessionCompletedIfAbsent</code>'s <code>ON CONFLICT</code> (a replayed <code>BookingCompletedEvent</code> no longer double-counts).</td></tr>
         <tr><td><code>V162</code>, <code>V171</code></td><td><code>admin_action_log.action_type</code> CHECK widened: <code>BOOKING_FORCE_COMPLETE</code>; <code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>. <code>V171</code> also adds <code>login_attempts.subject_hash</code> + index so an admin can clear a user's login rate-limit.</td></tr>
         <tr><td><code>V166</code></td><td><code>marketplace.coach_profiles.recap_data_erased_at</code> — sticky tombstone set inside the GDPR coach scrub's inner <code>REQUIRES_NEW</code> transaction; <code>BookingCompletionService.recapEditability</code> checks it after locking the completion row. Deliberately <em>not</em> mapped on <code>CoachProfile</code>.</td></tr>
-        <tr><td><code>V188</code></td><td><code>version bigint NOT NULL DEFAULT 0</code> on <code>marketplace.coach_profiles</code> and <code>session.sessions</code> — <code>@Version</code> for <code>CoachProfile</code>/<code>Session</code> (C5).</td></tr>
         <tr><td><code>V168</code></td><td>Adds <code>SES_CUTOVER_PREFLIGHT</code> to <code>envelope_entity_email_template_check</code>. <code>EnvelopeEntitySchemaIT</code> now pins <code>EmailTemplate</code> ↔ CHECK parity — <strong>a new email template needs a migration</strong>.</td></tr>
         <tr><td><code>V172</code></td><td><code>gdpr_requests.player_id</code> (parent requests scoped to a child; no FK) with two scoped partial unique indexes replacing <code>idx_gdpr_requests_unique_active</code>; new <code>admin.appeals</code> (one appeal per enforcement action — <code>uq_appeals_per_enforcement</code>, <code>uq_appeals_one_open_per_subject</code>).</td></tr>
         <tr><td><code>V173</code></td><td>Private-drill uniqueness indexes (<code>idx_drills_coach_name_unique_active</code>, <code>idx_drills_clone_uniqueness_active</code>) scoped to <code>ACTIVE</code> rows, since deleting a private drill is a soft delete (<code>ARCHIVED</code>).</td></tr>
         <tr><td><code>V175</code></td><td>Notification centre: <code>main.user_notifications</code> (inbox; UUID PK, <code>recipient_user_id</code> FK to <code>"user"</code> with <code>ON DELETE CASCADE</code>, <code>params jsonb</code>, unique on recipient + <code>source_send_id</code>) and <code>main.notification_email_preferences</code> (sparse opt-out rows, written with <code>INSERT … ON CONFLICT DO UPDATE</code>). No CHECK on <code>category</code>/<code>type</code> by design.</td></tr>
         <tr><td><code>V187</code></td><td><code>main.app_instance_heartbeat</code> — one row per running app instance, upserted every minute by <code>InstanceHeartbeatMonitor</code> to WARN on an unsupported second instance (decisions ADR 20).</td></tr>
+        <tr><td><code>V178</code></td><td><code>bookings.status_changed_at</code> — when the booking entered its <em>current</em> status, stamped by <code>Booking.setStatus</code>. The dispute window and review maturity are measured from it instead of <code>updated_at</code> (which every recap edit or reminder stamp bumped). Deliberately no default; terminal rows backfilled from <code>updated_at</code>, readers <code>COALESCE</code> to <code>updated_at</code> while NULL.</td></tr>
+        <tr><td><code>V181</code>, <code>V186</code></td><td>Pack money locked at purchase on <code>session_pack_purchases</code>: <code>amount_charged</code>, <code>commission_rate</code>, <code>session_count</code>, plus running <code>payout_sessions_allocated</code>/<code>payout_gross_allocated</code> (the last session takes the remainder). <code>V186</code> also adds <code>coach_payouts.session_pack_purchase_id</code>, payout status <code>FROZEN</code>, <code>payment.coach_payout_freezes</code> (per-coach safety-hold freeze) and <code>payment.cash_out_reconciliations</code> (durable record per credit cash-out, open rows indexed by <code>idx_cash_out_reconciliations_open</code>).</td></tr>
+        <tr><td><code>V182</code>, <code>V183</code>, <code>V185</code>, <code>V189</code>, <code>V198</code></td><td><code>envelope_entity_email_template_check</code> widenings (video approval, admin-outcome notices, <code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>, <code>BOOKING_CANCELLED_BY_SKILLARS</code>, <code>DISPUTE_COACH_UPHELD</code>). Each one rebuilds the <em>whole</em> list as the union of the previous one plus its own — see the merge note under <a href="#enum-columns-carry-check-constraints">Enum columns</a>. <code>V182</code> also adds <code>ADMIN_DELETION</code> to the <code>video_deletion_log</code>/<code>_outbox</code> <code>triggered_by</code> CHECKs; <code>V183</code>/<code>V189</code> add <code>DISPUTE_DISMISS</code>, <code>APPEAL_UPHOLD</code>, <code>APPEAL_OVERTURN</code>, <code>COACH_SAFETY_HOLD</code>, <code>BOOKING_ADMIN_CANCEL</code> to <code>admin_action_log_action_type_check</code>.</td></tr>
+        <tr><td><code>V184</code></td><td><code>videos.subject_booking_id</code>/<code>subject_player_id</code> (both or neither — <code>chk_videos_subject_pair</code>; partial index <code>idx_videos_subject_player</code>) so a coach video names the session and child it shows. <code>main.video_approval_requests</code> lost its last reader but is deliberately not dropped yet (a later guarded <code>DROP</code> with <code>drop-prepared-in: V184</code>).</td></tr>
+        <tr><td><code>V185</code>, <code>V186</code>, <code>V193</code>, <code>V208</code>, <code>V209</code></td><td><code>admin_alerts_type_check</code> widenings: <code>SAFETY_HOLD_BOOKING</code>, <code>CASH_OUT_UNRESOLVED</code>, <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code>, <code>SESSION_NEVER_STARTED</code> (16 types now); <code>admin_alerts_reference_type_check</code> gains <code>CASH_OUT</code> and <code>PAYMENT_INTENT</code>.</td></tr>
+        <tr><td><code>V188</code>, <code>V197</code></td><td><code>version bigint NOT NULL DEFAULT 0</code> — <code>@Version</code> for <code>CoachProfile</code>/<code>Session</code> (C5), then <code>coach_subscriptions</code>/<code>player_subscriptions</code>. <code>V197</code> also adds <code>last_stripe_event_at</code> (a late, older Stripe event can't overwrite newer state) and widens <code>chk_pcs_status</code>/<code>chk_pps_status</code> with <code>INCOMPLETE</code>, <code>UNPAID</code>, <code>PAUSED</code>.</td></tr>
+        <tr><td><code>V191</code>, <code>V192</code>, <code>V206</code></td><td>Booking request integrity: <code>bookings.original_start_time</code> (the 24h refund window is measured from the earlier of it and the current start), <code>bookings.agreed_price</code> (non-pack price locked at request time; <code>chk_bp_status</code> gains <code>REFUNDED_TO_CREDIT</code>), <code>bookings.proposed_by_coach</code> (a coach-created booking needs the parent's confirmation) and batch status <code>ACCEPTING</code> (serialises concurrent accept-all).</td></tr>
+        <tr><td><code>V193</code></td><td>Payout/dispute/webhook integrity: <code>coach_payouts.reversed_amount</code>, <code>dispute_frozen</code>, <code>chargeback_frozen</code> (a <code>FROZEN</code> payout is released only when no freeze reason stands); <code>coach_stripe_accounts.transfers_capability</code>, <code>last_event_created_at</code>; new <code>payment.charge_disputes</code> (PK = Stripe dispute id, status <code>OPEN</code>/<code>WON</code>/<code>LOST</code>).</td></tr>
+        <tr><td><code>V195</code>, <code>V200</code>, <code>V210</code></td><td>Session-pack integrity: partial unique <code>uq_spp_stripe_payment_intent_id</code> (one charge funds at most one pack); <code>payment.pack_session_restores</code> and <code>payment.pack_session_refunds</code> (per-booking idempotency markers, PK <code>booking_id</code>, FK to the purchase); <code>refund_sessions_issued</code>/<code>refund_gross_issued</code>; then <code>paused_from</code>, <code>dispute_frozen_at</code>, <code>revoked_at</code>, <code>revoked_reason</code> with <code>chk_spp_pause_window</code> and <code>chk_spp_revoked_reason</code> (<code>CHARGEBACK_LOST</code>, <code>EXTERNAL_REFUND</code>, <code>COACH_SUSPENDED</code>).</td></tr>
+        <tr><td><code>V198</code>, <code>V199</code>, <code>V208</code></td><td>Parent credit ledger: new types <code>BOOKING_REFUND_REVERSAL</code>, <code>CHARGEBACK_CREDIT_REVERSAL</code>, <code>CHARGEBACK_CREDIT_RESTORE</code>, <code>DISPUTE_CREDIT</code>, <code>BATCH_SHARE_REFUND</code> (11 in all) — all but <code>DISPUTE_CREDIT</code> get a partial unique index (<code>uq_pcl_*</code>) so a replayed webhook or retried write cannot double-post; <code>source_payment_intent_id</code>/<code>source_card_amount</code>; <code>spend_only_amount</code> with <code>chk_ledger_spend_only</code> (credit usable for bookings but never cashed out). <code>V198</code> also adds <code>disputes.recovered_amount</code>/<code>absorbed_amount</code> and resolution <code>UPHOLD_COACH</code>; <code>V199</code> adds <code>charge_disputes.credit_reversal_target</code>/<code>payout_loss_fraction</code> and seeds <code>payment.payout.stale_alert_days</code> (14).</td></tr>
+        <tr><td><code>V205</code></td><td><code>coach_payouts.original_*_amount</code>, <code>topup_amount</code>/<code>topup_transfer_id</code>, <code>debt_offset_amount</code>; new <code>payment.coach_payout_debts</code> (money a failed transfer reversal could not recover, <code>OPEN</code>/<code>RECOVERED</code>/<code>WAIVED</code>, deducted from the coach's next transfers oldest first).</td></tr>
+        <tr><td><code>V207</code>, <code>V208</code></td><td><code>booking_payments.charge_idempotency_key</code> (persisted before the Stripe call, partial index <code>idx_bp_charge_key_pending</code> — read by <code>ChargeOutcomeReconciler</code>); <code>subscribe_attempt_key</code>/<code>_at</code> on both subscription tables; <code>idx_bp_stripe_payment_intent</code>.</td></tr>
+        <tr><td><code>V209</code></td><td><code>bookings.auto_ended_at</code> and <code>unresolved_alerted_at</code>, written by <code>UnresolvedSessionSweeperService</code>.</td></tr>
       </tbody>
     </table>
 
@@ -224,7 +244,8 @@
       <li><strong>IDs are TSIDs</strong> (<code>@Id @Tsid</code> <code>Long</code> on <code>BaseEntity</code>) —
         time-sortable and cheaper to index than a random UUID. Column type is <code>BIGINT</code>. Many newer
         tables (<code>session_pack_purchases</code>, video tables, <code>user_notifications</code>,
-        <code>appeals</code>) use <code>UUID</code> keys and some outbox tables use identity columns; check the
+        <code>appeals</code>, <code>coach_payout_debts</code>) use <code>UUID</code> keys, some use a natural key
+        (<code>charge_disputes</code> by Stripe dispute id, <code>pack_session_refunds</code> by booking id) and some outbox tables use identity columns; check the
         entity before assuming.</li>
       <li><strong>Auditing columns</strong> — <code>created_by</code>/<code>created_date</code>/
         <code>last_modified_by</code>/<code>last_modified_date</code>, plus <code>status</code>,
@@ -237,8 +258,9 @@
         <code>hibernate.connection.provider_disables_autocommit: true</code>). Anything not inside a Spring
         transaction does not commit — see the test notes below.</li>
       <li><strong>Optimistic locking (<code>@Version</code>)</strong> on rows several paths full-row save
-        (<code>Booking</code>, <code>Video</code>, <code>Dispute</code>, <code>Drill</code>, pack purchases/tiers, tokens, and
-        since V188 <code>CoachProfile</code> and <code>Session</code>). A new version column is
+        (<code>Booking</code>, <code>Video</code>, <code>Dispute</code>, <code>Drill</code>, <code>EnvelopeEntity</code>,
+        <code>CoachStripeAccount</code>, <code>LoginAttempt</code>, pack purchases/tiers, tokens, since V188
+        <code>CoachProfile</code> and <code>Session</code>, and since V197 <code>PaymentCoachSubscription</code>/<code>PaymentPlayerSubscription</code>). A new version column is
         <code>bigint NOT NULL DEFAULT 0</code> (metadata-only on Postgres, no backfill). A losing save throws
         <code>ObjectOptimisticLockingFailureException</code>, which <code>ApiAdvice</code> maps to 409. Every
         <code>@Modifying</code> UPDATE against such a table must <code>SET version = version + 1</code> or be allow-listed with
@@ -251,7 +273,7 @@
     <h2 id="locking-conventions">Locking Conventions</h2>
     <p>
       Rows that more than one request can mutate concurrently (bookings, batches, reschedule requests, pack
-      purchases, player and coach profiles, drills, videos, reviews) are locked with
+      purchases, player and coach profiles, sessions, drills, videos, reviews, users, Stripe customers) are locked with
       <code>findByIdForUpdate</code> — a <code>@Lock(PESSIMISTIC_WRITE)</code> query carrying
       <code>@QueryHints(jakarta.persistence.lock.timeout = "0")</code>, i.e. <strong><code>FOR UPDATE NOWAIT</code></strong>.
       A NOWAIT lock fails instantly on contention, so every such call is wrapped in
@@ -261,7 +283,11 @@
       <thead><tr><th>Piece</th><th>Behaviour</th></tr></thead>
       <tbody>
         <tr><td><code>PessimisticLockRetryer</code></td><td>Flushes, takes a JDBC savepoint via <code>Session.doWork</code> (declarative <code>NESTED</code> is unavailable — <code>DefaultJpaDialect</code> has no savepoint support), runs the supplier, and on <code>PessimisticLockingFailureException</code> rolls back to the savepoint and retries with jittered backoff. Defaults <code>app.locking.retry.max-attempts=8</code>, <code>app.locking.retry.initial-backoff-ms=100</code> (≈3.2s worst case, <em>holding the pooled connection</em>). Exhaustion rethrows the exception, which <code>ApiAdvice</code> maps to a 409. Metrics: <code>persistence.lock_retry</code> timer and <code>.retries</code>/<code>.exhausted</code> counters, tagged <code>lock</code> and <code>outcome</code>.</td></tr>
-        <tr><td><code>PessimisticLockRetryerCallSiteAuditTest</code> (<code>src/test/.../infrastructure/persistence/</code>)</td><td>Source-text scan of <code>src/main/java</code>. (1) Pins <code>EXPECTED_CALL_SITE_COUNT = 50</code> <code>.withBoundedRetry(</code> sites and fails if any retried lambda contains a write (<code>.save(</code>, <code>.delete(</code>, <code>publishEvent(</code>, <code>new …Event(</code>, <code>.send(</code>, <code>.enqueue(</code>, <code>RestTemplate</code>) — the supplier can run more than once, so it must be a read (lock + optional <code>entityManager.refresh</code>); writes go after it returns. (2) Fails if a file calls a NOWAIT lock method (map <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code>) with no <code>withBoundedRetry</code> in the file. (3) Fails if a repository method with <code>lock.timeout = "0"</code> is missing from that map. <strong>Adding a call site means bumping the count and adding a line to its Javadoc history.</strong></td></tr>
+        <tr><td><code>PessimisticLockRetryerCallSiteAuditTest</code> (<code>src/test/.../infrastructure/persistence/</code>)</td><td>Source-text scan of <code>src/main/java</code>. (1) Pins <code>EXPECTED_CALL_SITE_COUNT = 64</code> <code>.withBoundedRetry(</code> sites and fails if any retried lambda contains a write (<code>.save(</code>, <code>.delete(</code>, <code>publishEvent(</code>, <code>new …Event(</code>, <code>.send(</code>, <code>.enqueue(</code>, <code>RestTemplate</code>) — the supplier can run more than once, so it must be a read (lock + optional <code>entityManager.refresh</code>); writes go after it returns. (2) Fails if a file calls a NOWAIT lock method (map <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code>) with no <code>withBoundedRetry</code> in the file. (3) Fails if a repository method with <code>lock.timeout = "0"</code> is missing from that map. For
+          <code>CoachProfileRepository</code> and <code>SessionRepository</code> the registered NOWAIT method is
+          <code>lockByIdForUpdate</code> (a scalar id lock); <code>findByIdForUpdate</code> there is a
+          <code>default</code> method that calls it and then <code>findById</code>, and the scan
+          (<code>NOWAIT_DELEGATING_DEFAULT_METHODS</code>) treats both names as the NOWAIT lock. <strong>Adding a call site means bumping the count and adding a line to its Javadoc history.</strong></td></tr>
         <tr><td>Deliberately blocking locks</td><td><code>VideoQuotaRepository</code>, <code>CoachPayoutRepository</code>, <code>MessageRepository</code> and <code>CoachReviewRepository.findByIdForUpdate</code> (as opposed to its <code>findByIdForUpdateNoWait</code>) have no NOWAIT hint and no retry wrapper, by design.</td></tr>
         <tr><td>Claim-style queues</td><td>Schedulers and outbox drainers use <code>FOR UPDATE SKIP LOCKED</code> batch claims (often with a run-scoped <code>claimed_at</code>) instead — see <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</td></tr>
       </tbody>
@@ -285,7 +311,13 @@
       over the committed statuses — so no two live bookings can hold overlapping time for the same coach,
       including from <code>BookingBatchService</code> and <code>RescheduleService</code>, which skip the
       application-layer pre-check. Partial unique indexes play the same role for "at most one active X"
-      rules (<code>V172</code>, <code>V173</code>, <code>V169</code>). Violations surface as
+      rules (<code>V172</code>, <code>V173</code>, <code>V169</code>), and per-type partial unique indexes on
+      <code>payment.parent_credit_ledger</code> (<code>uq_pcl_booking_refund</code>, <code>uq_pcl_booking_refund_reversal</code>,
+      <code>uq_pcl_batch_share_refund</code>, <code>uq_pcl_chargeback_credit_*</code>) make money-moving writes idempotent.
+      That ledger is also <strong>append-only</strong>: <code>trg_ledger_no_update</code>/<code>trg_ledger_no_delete</code>
+      (<code>payment.enforce_ledger_append_only()</code>) reject any <code>UPDATE</code> or <code>DELETE</code>, so a
+      ledger column can never be backfilled — <code>V208</code> adds <code>spend_only_amount</code> with no backfill for
+      exactly that reason. Violations surface as
       <code>DataIntegrityViolationException</code> and are mapped by <code>platform.security.api.ApiAdvice</code>'s
       <code>CONSTRAINT_MAPPINGS</code>/<code>CONFLICT_CONSTRAINTS</code> to a clean 409 rather than a 500.
     </p>
@@ -300,10 +332,16 @@
       Enums persisted as <code>@Enumerated(EnumType.STRING)</code> are frequently backed by a
       <code>CHECK (col = ANY (ARRAY[...]))</code>. JPA will happily write a value the CHECK rejects, so adding an
       enum constant without a migration fails at <em>INSERT</em> time, not at startup —
-      <code>V152</code>/<code>V153</code> (<code>admin_alerts_type_check</code>), <code>V162</code>/<code>V171</code>
-      (<code>admin_action_log_action_type_check</code>) and <code>V168</code> (<code>envelope_entity_email_template_check</code>)
-      are the worked examples: drop and recreate the constraint with the widened list. Grep for the
-      constraint name before adding a constant. The opposite choice — no CHECK at all, for an enum expected to
+      <code>admin_alerts_type_check</code> (<code>V152</code>/<code>V153</code> … <code>V209</code>),
+      <code>admin_action_log_action_type_check</code> (<code>V162</code>/<code>V171</code>/<code>V183</code>/<code>V189</code>),
+      <code>envelope_entity_email_template_check</code> (<code>V168</code> … <code>V198</code>) and
+      <code>chk_ledger_type</code> (<code>V198</code>/<code>V199</code>/<code>V208</code>) are the worked examples: drop and
+      recreate the constraint with the widened list in one <code>ALTER TABLE</code>. Grep for the constraint name before
+      adding a constant, and take the list from the <em>latest</em> migration that rebuilt it. <strong>Merge
+      hazard:</strong> because every widening restates the full list, two branches that each widen the same CHECK
+      both merge cleanly and the later migration silently drops the other's value — the migrations carry a
+      "MERGE NOTE: re-union the list" comment for this. Parity ITs (<code>EnvelopeEntitySchemaIT</code>,
+      <code>AdminQueueIT</code>, the admin action-log IT) catch the enum side. The opposite choice — no CHECK at all, for an enum expected to
       grow fast — is <code>V175</code>'s.
     </p>
 
@@ -414,7 +452,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

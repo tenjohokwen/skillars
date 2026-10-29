@@ -59,7 +59,7 @@
     <div class="callout">
       <p><strong>How to read this.</strong> Paths are relative to the repo root; <code>…/</code> abbreviates
       <code>src/main/java/com/softropic/skillars/</code> and <code>test…/</code> abbreviates
-      <code>src/test/java/com/softropic/skillars/</code>. Line numbers are as of master <code>e8239b0e</code>.
+      <code>src/test/java/com/softropic/skillars/</code>. Line numbers are as of master <code>4db90562</code>.
       Every guard named here is described, with its error message and how to run it alone, on
       <a href="../ci-guards/index.html">CI Guards</a>. The module pages hold the "why"; this page is the "where".</p>
     </div>
@@ -105,7 +105,7 @@
         </ul></li>
       <li><strong>Public (unauthenticated) endpoint?</strong> Add the exact path to
         <code>AppEndpoints.PUBLIC_ENDPOINTS</code> (<code>…/platform/security/config/AppEndpoints.java:30</code>), consumed by
-        <code>SecurityConfiguration.configureRequestMatching</code> (line 212). Use an exact path, or a
+        <code>SecurityConfiguration.configureRequestMatching</code> (line 186). Use an exact path, or a
         <code>/</code>-preceded trailing <code>/**</code> — never <code>foo**</code>. Guard: <code>AppEndpointsConventionTest</code>.
         Also add <code>@PreAuthorize(SecurityConstants.IS_PERMIT_ALL)</code> on the method and document what authenticates the
         call instead (signature, HMAC token).</li>
@@ -119,8 +119,8 @@
         (<code>BookingApiAdvice</code>, <code>PaymentApiAdvice</code>, <code>SessionApiAdvice</code>, <code>ReviewApiAdvice</code>,
         <code>MessagingApiAdvice</code>, <code>VideoApiAdvice</code>). The response body is
         <code>ErrorDto(helpCode, ErrorMsg(errorKey, message))</code>; the frontend looks <code>errorKey</code> up as an i18n key.
-        If you add a unique/check constraint a user can trip, add it to <code>CONSTRAINT_MAPPINGS</code> (line 136) and, for a
-        retryable race, <code>CONFLICT_CONSTRAINTS</code> (line 163) — otherwise it surfaces as a generic 400.</li>
+        If you add a unique/check constraint a user can trip, add it to <code>CONSTRAINT_MAPPINGS</code> (line 135) and, for a
+        retryable race, <code>CONFLICT_CONSTRAINTS</code> (line 162) — otherwise it surfaces as a generic 400.</li>
       <li><strong>Message keys</strong> for new error keys go in all four backend bundles
         (<code>messages.properties</code>, <code>_en</code>, <code>_de</code>, <code>_fr</code>; guard: <code>MessageBundleParityTest</code>)
         and, if the SPA shows them, in the three frontend locales.</li>
@@ -140,7 +140,7 @@
       <a href="../database/index.html">Database</a> and <code>docs/deployment/migration-conventions.md</code>.</p>
     <ol>
       <li><strong>Name</strong> <code>src/main/resources/db/migration/V&lt;next&gt;__&lt;schema&gt;_&lt;table&gt;_&lt;what&gt;.sql</code>.
-        Check the highest number on <em>master</em> right before you push (currently <code>V175</code>; <code>V174</code> is unused) —
+        Check the highest number on <em>master</em> right before you push (currently <code>V210</code>; the sequence has unused gaps such as <code>V174</code> and <code>V201</code>–<code>V204</code>, so always take highest + 1) —
         two open PRs picking the same number is the usual collision. Never edit a migration that has run anywhere.</li>
       <li><strong>Header comment</strong> explaining why, and any "same-release exception" you are taking.</li>
       <li><strong>Schema</strong>: put the table in its owning module's schema (<code>booking</code>, <code>payment</code>,
@@ -198,24 +198,30 @@
 
     <!-- ===================================================================== -->
     <h2 id="rowlock">4. A row lock on a hot row</h2>
-    <p><strong>Copy:</strong> <code>UserRepository.findByIdForUpdate</code> (<code>…/platform/security/repo/UserRepository.java:176-179</code>)
-      and its caller <code>AdminUserService.lockAndLoad</code> (<code>…/platform/admin/service/AdminUserService.java:261-265</code>), commit
+    <p><strong>Copy:</strong> <code>UserRepository.findByIdForUpdate</code> (<code>…/platform/security/repo/UserRepository.java:192-195</code>)
+      and its caller <code>AdminUserService.lockAndLoad</code> (<code>…/platform/admin/service/AdminUserService.java:270-274</code>), commit
       <code>91a34b43</code>. Background: <a href="../database/index.html">Database → Locking Conventions</a>.</p>
     <ol>
       <li><strong>Finder</strong>: a JPQL query with <code>@Lock(LockModeType.PESSIMISTIC_WRITE)</code> and
         <code>@QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "0"))</code> (= <code>FOR UPDATE NOWAIT</code>).
         Not a native <code>FOR UPDATE NOWAIT</code>: that failure marks the transaction rollback-only and every contended call
         ends in <code>UnexpectedRollbackException</code>. Not a finite timeout either — on this Postgres/Hibernate pair it is
-        silently ignored and the query blocks forever.</li>
+        silently ignored and the query blocks forever.
+        <strong>If the entity has <code>@Version</code></strong> and callers may already hold it unlocked, lock a scalar id
+        projection instead and then <code>findById</code>: copy <code>CoachProfileRepository.findByIdForUpdate</code> /
+        <code>lockByIdForUpdate</code> (<code>…/platform/marketplace/repo/CoachProfileRepository.java:54-62</code>, also
+        <code>SessionRepository</code>). A locked entity query on an already-managed <code>@Version</code> instance makes Hibernate
+        version-check the stale snapshot and throw <code>StaleObjectStateException</code> (a 409) on exactly the race the lock and
+        <code>entityManager.refresh</code> exist to absorb.</li>
       <li><strong>Wrap the call</strong> in <code>lockRetryer.withBoundedRetry("&lt;lockName&gt;", () -&gt; repo.findByIdForUpdate(id).orElseThrow(…))</code>
         (<code>…/infrastructure/persistence/PessimisticLockRetryer.java:150</code>), inside a <code>@Transactional</code> method.</li>
       <li><strong>Only reads inside the lambda</strong> (lock, <code>orElseThrow</code>, optionally <code>entityManager.refresh</code>). The
         supplier can run several times; every <code>save</code>/<code>delete</code>/<code>publishEvent</code>/<code>enqueue</code>/
         <code>send</code> goes after <code>withBoundedRetry</code> returns — the row lock is held until commit anyway.</li>
       <li><strong>Bump the pin</strong>: <code>EXPECTED_CALL_SITE_COUNT</code> in
-        <code>test…/infrastructure/persistence/PessimisticLockRetryerCallSiteAuditTest.java:149</code> (50 today) and add a line to its
+        <code>test…/infrastructure/persistence/PessimisticLockRetryerCallSiteAuditTest.java:185</code> (64 today) and add a line to its
         Javadoc history saying which method you added.</li>
-      <li><strong>New repository type?</strong> Add it to <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> (same file, line 243) so the
+      <li><strong>New repository type?</strong> Add it to <code>NOWAIT_LOCK_METHODS_BY_REPOSITORY_TYPE</code> (same file, line 336) so the
         "unwrapped NOWAIT call" check covers it.</li>
       <li><strong>Inner <code>REQUIRES_NEW</code>?</strong> Don't NOWAIT-lock a row the outer transaction already wrote — Postgres
         <code>55P03</code> every time, surfacing as a 409 the retryer cannot fix.</li>
@@ -256,7 +262,7 @@
     <h2 id="event">6. A domain event + listener</h2>
     <p><strong>Copy:</strong> producer side <code>…/platform/booking/contract/BookingStatusChangedEvent.java</code>; listener side
       <code>…/platform/payment/service/RefundEnqueueListener.java</code> (<code>BEFORE_COMMIT</code>) and
-      <code>…/platform/payment/service/CancellationRefundService.java:34-35</code> (<code>AFTER_COMMIT</code> +
+      <code>…/platform/payment/service/CancellationRefundService.java:106-107</code> (<code>onCoachNoShow</code>, <code>AFTER_COMMIT</code> +
       <code>REQUIRES_NEW</code>).</p>
     <ol>
       <li><strong>Declare the event in the producer's <code>contract</code> package</strong>
@@ -313,15 +319,20 @@
         optionally a delivery deadline and breaker name.</li>
       <li><strong>Subject key</strong> in all four <code>src/main/resources/i18n/messages*.properties</code>
         (guards: <code>EmailTemplateSubjectKeyParityTest</code>, <code>MessageBundleParityTest</code>).</li>
-      <li><strong>Thymeleaf template</strong> <code>src/main/resources/mails/&lt;lowerCamelCase&gt;.html</code>. If the category is
-        opt-out-able, include <code>&lt;div th:replace="~{fragments/unsubscribeFooter :: footer}"&gt;&lt;/div&gt;</code>
+      <li><strong>Thymeleaf template</strong> <code>src/main/resources/mails/&lt;lowerCamelCase&gt;.html</code> — exactly the
+        <code>UPPER_UNDERSCORE</code> → <code>lowerCamel</code> form of the constant (<code>BOOKING_REMINDER</code> →
+        <code>bookingReminder.html</code>), the name <code>EmailContentRenderer</code> asks for. Guard:
+        <code>EmailTemplateFileParityTest</code> (unit phase) fails for any <code>EmailTemplate</code> without that file, unless it is in
+        the test's <code>EXEMPT</code> map with a reason; it exists because four booking templates once shipped with a subject key and
+        no body, and every send failed and was retried until its deadline. If the category is opt-out-able, include
+        <code>&lt;div th:replace="~{fragments/unsubscribeFooter :: footer}"&gt;&lt;/div&gt;</code>
         (see <code>bookingReminder.html:11</code>).</li>
       <li><strong>CHECK migration</strong> widening <code>main.envelope_entity.envelope_entity_email_template_check</code> — drop and re-add
-        with the new value (copy <code>V168</code>). Guard: <code>EnvelopeEntitySchemaIT</code>. Without it the first real insert fails;
+        with the new value (copy <code>V168</code>, or the most recent widening, <code>V198</code>: the re-added list must carry every existing value). Guard: <code>EnvelopeEntitySchemaIT</code>. Without it the first real insert fails;
         unit tests and <code>TestMailManager</code> never write an envelope, so nothing else notices.</li>
-      <li><strong><code>NotificationCatalog</code></strong> case (<code>…/platform/notification/service/NotificationCatalog.java:66</code>):
+      <li><strong><code>NotificationCatalog</code></strong> case (<code>…/platform/notification/service/NotificationCatalog.java:68</code>):
         the switch is exhaustive, so a missing case is a compile error. Choose <code>emailOnly(category)</code> or
-        <code>inApp(category, coachLink, parentLink)</code>; add any new display params to <code>PARAM_WHITELIST</code> (line 32).</li>
+        <code>inApp(category, coachLink, parentLink)</code>; add any new display params to <code>PARAM_WHITELIST</code> (line 34).</li>
       <li><strong>Category / opt-out</strong>: map it to an existing <code>NotificationCategory</code> (only <code>REMINDER</code> and
         <code>DEVELOPMENT</code> are opt-out-able). A <em>new</em> opt-out-able category needs the enum constant, a <code>LABELS</code>
         entry in <code>src/frontend/src/components/notification/NotificationPreferencesSection.vue:43</code> and
@@ -331,8 +342,8 @@
         fails — the inbox just shows <code>notifications.typeFallback</code>).</li>
       <li><strong>Producer</strong>: enqueue via <code>NotificationOutboxSupport.enqueueEmail(…)</code> (<code>MANDATORY</code>) from a
         <code>BEFORE_COMMIT</code> listener. A new handler on <code>BookingEmailListener</code>/<code>SessionPackEmailListener</code>
-        means bumping the pinned counts in <code>EmailListenerAnnotationCoverageTest</code> (20 / 3) and
-        <code>EmailDataRoundTripContractTest</code> ("all 23 on*(Event) handlers"). Put only <code>String</code>s (or lists of them) in the
+        (or <code>AdminOutcomeEmailListener</code>) means bumping the pinned counts in <code>EmailListenerAnnotationCoverageTest</code>
+        (22 / 3 / 8) and, for the first two, <code>EmailDataRoundTripContractTest</code> ("all 25 on*(Event) handlers"). Put only <code>String</code>s (or lists of them) in the
         data map — an <code>Instant</code> or <code>BigDecimal</code> changes type through the outbox JSON.</li>
       <li>Links into the SPA: build with <code>FrontendLinkBuilder</code> (hash routes), never concatenate.</li>
     </ol>
@@ -348,13 +359,17 @@
         — no <code>id</code> column (it is an identity; guard: <code>MigrationConventionLintTest</code> <code>PLATFORM_CONFIG_EXPLICIT_ID</code>).
         Skip the seed only if the call site has a code default and the key goes in <code>HAS_CODE_DEFAULT</code>.</li>
       <li><strong>Bound it</strong> (any numeric key): a <code>BoundedKey(key, min, max, failFast, note, defaultValue)</code> constant in
-        <code>…/platform/config/service/ConfigBounds.java</code> (record at line 80), added to <code>ALL</code> (line 458), and to
-        <code>HAS_CODE_DEFAULT</code> (line 432) if the call site has a default. Without it the admin <code>PUT</code> accepts any string and
+        <code>…/platform/config/service/ConfigBounds.java</code> (record at line 77), added to <code>ALL</code> (declared at line 552), and to
+        <code>HAS_CODE_DEFAULT</code> (line 518) if the call site has a default. Without it the admin <code>PUT</code> accepts any string and
         <code>ConfigStartupAssertion</code> never checks the key. <code>failFast = true</code> blocks production boot on a bad value — only for
         keys whose misconfiguration loses data or halts a core flow.</li>
-      <li><strong>Read it</strong> with the getter matching the failure mode: <code>getBoundedLong/Int(key, default, min, max)</code> (WARN +
-        default), <code>getBoundedLong(key, min, max)</code> (missing throws, out-of-range clamps), <code>getBoolean(key, default)</code>.
-        Pass the same <code>[min, max]</code> as <code>ConfigBounds</code> — the two are not linked by code.</li>
+      <li><strong>Read it</strong> with the getter matching the failure mode. For a <code>HAS_CODE_DEFAULT</code> key prefer
+        <code>getBoundedLong/Int(ConfigBounds.X)</code>, which takes the key, default and <code>[min, max]</code> from the registry entry so
+        the call site cannot drift (as <code>BookingService.requireRequestQuota</code> reads
+        <code>ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH</code>); it throws for a key without a code default. Otherwise
+        <code>getBoundedLong/Int(key, default, min, max)</code> (WARN + default), <code>getBoundedLong(key, min, max)</code> (missing throws,
+        out-of-range clamps), <code>getBoolean(key, default)</code> — and with the string forms, pass the same <code>[min, max]</code> as
+        <code>ConfigBounds</code> by hand.</li>
       <li><strong>Per-tier / per-video-type key?</strong> Templated keys are generated from enum segments in <code>ConfigBounds</code>;
         a new <code>CoachSubscriptionTier</code>/<code>VideoType</code> constant needs its segment there (guard:
         <code>ConfigBoundsEnumCoverageTest</code>).</li>
@@ -402,7 +417,7 @@
         (type <em>and field name</em> count), <code>@TestPropertySource</code>, <code>@DynamicPropertySource</code>, class-level
         <code>@Import</code>, nested <code>@TestConfiguration</code>. Prefer the base's inherited spies
         (<code>paymentGateway</code>, <code>coachProfileRepository</code>, …) or copy a peer's mock set with identical field names
-        (e.g. <code>videoProviderAdapter</code> + <code>fileStorageService</code>, shared by 25 classes). If you really need a fork, bump
+        (e.g. <code>videoProviderAdapter</code> + <code>fileStorageService</code>, shared by 27 classes). If you really need a fork, bump
         <code>EXPECTED_DISTINCT_CONTEXT_KEYS</code> (<code>test…/config/IntegrationTestConventionTest.java:109</code>, 14 today) or
         <code>EXPECTED_TEST_PROPERTY_SOURCE_COUNT</code> (line 89) with a <code>// context-fork:</code> reason — and remember the CI ceiling
         is 17 contexts total.</li>
@@ -433,9 +448,9 @@
       <li><strong>Route</strong> in <code>src/frontend/src/router/routes.js</code> with a lazy <code>component: () =&gt; import(…)</code> and
         <code>meta</code>: <code>requiresAuth: true</code> plus one of <code>requiresCoach: true</code>, <code>role: 'PARENT'</code>,
         <code>role: 'PLAYER'</code>, or <code>roles: [...]</code> for dual-role pages. The guard is
-        <code>src/frontend/src/router/index.js:40-100</code>; a public page has no <code>meta</code> (see <code>unsubscribe</code>).</li>
+        <code>src/frontend/src/router/index.js:40-96</code>; a public page has no <code>meta</code> (see <code>unsubscribe</code>).</li>
       <li><strong>Drawer entry</strong> in <code>src/frontend/src/layouts/MainLayout.vue</code> inside the role's
-        <code>&lt;template v-if="authStore.isCoach|isParent|isPlayer|isAdmin"&gt;</code> block (lines 156 / 293 / 372 / 459). A route
+        <code>&lt;template v-if="authStore.isCoach|isParent|isPlayer|isAdmin"&gt;</code> block (lines 156 / 293 / 363 / 450). A route
         without a drawer entry is unreachable — this has happened several times.</li>
       <li><strong>API method</strong> in <code>src/frontend/src/api/&lt;module&gt;.api.js</code> using
         <code>import { api } from 'src/boot/axios'</code>. The response interceptor already unwraps <code>response.data</code>.</li>
@@ -472,15 +487,15 @@
         <code>@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)</code> (admits <code>ROLE_ADMIN</code> and <code>ROLE_LTD_ADMIN</code>).
         Queues are paged.</li>
       <li><strong>Audit mutating actions</strong>: add a constant to <code>…/platform/admin/contract/AdminActionType.java</code>
-        <em>and</em> a migration widening <code>admin_action_log</code>'s <code>action_type</code> CHECK (copy <code>V171</code>) — the
+        <em>and</em> a migration widening <code>admin_action_log</code>'s <code>action_type</code> CHECK (copy <code>V171</code>; the most recent widening is <code>V189</code>, and the re-added list must carry every existing value) — the
         CHECK rejects the insert otherwise.</li>
       <li><strong>Backend tests</strong>: an <code>*IT</code> in <code>test…/platform/admin/api/</code> (e.g. <code>AdminDisputeQueueIT</code>),
         including a non-admin → 403 case.</li>
       <li><strong>API</strong>: add methods to <code>adminApi</code> in <code>src/frontend/src/api/admin.api.js</code>.</li>
-      <li><strong>Route</strong>: a child of the <code>path: 'admin'</code> block in <code>routes.js</code> (line 410) with
+      <li><strong>Route</strong>: a child of the <code>path: 'admin'</code> block in <code>routes.js</code> (line 406) with
         <code>meta: { requiresAuth: true, roles: ['ADMIN'] }</code>.</li>
       <li><strong>Drawer</strong>: a <code>&lt;q-item clickable to="/admin/…"&gt;</code> in the <code>authStore.isAdmin</code> block of
-        <code>MainLayout.vue</code> (from line 459), label <code>$t('nav.admin&lt;X&gt;')</code>.</li>
+        <code>MainLayout.vue</code> (from line 450), label <code>$t('nav.admin&lt;X&gt;')</code>.</li>
       <li><strong>Page</strong>: <code>q-table</code> + <code>q-pagination</code> + detail <code>q-dialog</code>, a
         <code>loadError</code> banner, <code>useQuasar().notify</code> on actions, keys under <code>admin.&lt;x&gt;.*</code> in three locales.
         Enum-valued cells use dynamic keys → register them in <code>DYNAMIC_KEY_CALL_SITES</code> (AdminDisputesPage's lines 27/30/81/84/95
@@ -499,7 +514,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>e8239b0e</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

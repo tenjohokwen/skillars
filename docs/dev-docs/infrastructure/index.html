@@ -71,7 +71,7 @@
       The architectural rule this layer enforces is: <strong>platform modules consume infrastructure through its public
       API, they never reach past a sibling platform module into its private wiring</strong>. The canonical example is
       <code>filestorage</code> and <code>blobstore</code>: every other platform module that needs to store a file
-      (profile photos, drill videos, chat attachments) calls <code>platform.filestorage</code>'s contract — it never
+      (coach profile photos and gallery images, branding logos, report PDFs, GDPR export ZIPs) calls <code>platform.filestorage</code>'s contract — it never
       imports <code>infrastructure.blobstore.service.StorageService</code> directly. <code>filestorage</code> itself is
       the only platform module allowed to depend on <code>blobstore</code>, because it adds the business rules
       (quota, ownership, soft-delete/retention, DB-backed metadata) that raw blob storage doesn't know about. The same
@@ -129,12 +129,42 @@
       are the return-type contracts, and <code>StorageObjectNotFoundException</code>/<code>StorageProviderException</code>
       are the two checked failure modes, both mapped centrally in <code>ApiAdvice</code>. <code>BlobstoreProperties</code>
       (<code>app.storage.*</code>) configures the bucket, presign/upload TTLs, retry policy, and a whole
-      <code>replication</code> sub-tree for cross-region backup. <strong>The only consumer is
+      <code>replication</code> sub-tree for cross-region backup (off in every profile). <strong>The only consumer is
       <code>platform.filestorage</code></strong> — its <code>ReplicatedStorageService</code>, <code>FileStorageService</code>,
       <code>DeletionSchedulerService</code>, and <code>StorageMigrationService</code> all depend on
       <code>infrastructure.blobstore.service.StorageService</code>, and its <code>FileStorageConfig</code> wires up
-      the primary/backup <code>StorageService</code> beans by qualifier. Nothing outside <code>filestorage</code>
-      imports this package.
+      the primary/backup <code>StorageService</code> beans by qualifier. Outside <code>filestorage</code> the only imports
+      of this package are its exception/error-code types (<code>ApiAdvice</code>, <code>CoachProfileService</code>,
+      <code>CoachGalleryService</code>).
+    </p>
+    <p>
+      <strong>S3 client wiring.</strong> <code>BlobstoreConfig</code> builds the <code>S3Client</code>,
+      <code>S3AsyncClient</code> and <code>S3Presigner</code> (all <code>@ConditionalOnProperty(app.storage.provider=s3, matchIfMissing = true)</code>)
+      against <code>app.storage.endpoint-url</code> with <code>app.storage.s3.path-style-access</code> (new in #356,
+      env <code>APP_STORAGE_S3_PATH_STYLE_ACCESS</code>, default <code>false</code> = virtual-hosted
+      <code>{bucket}.host</code>; dev and uat pin it to <code>true</code>, production compose sets it to <code>true</code>).
+      Credentials are static when both <code>app.storage.s3.access-key</code> and <code>secret-key</code> are non-blank,
+      otherwise the AWS <code>DefaultCredentialsProvider</code> chain. A <code>backupS3Client</code> exists only when
+      <code>app.storage.replication.enabled=true</code>.
+    </p>
+    <p>
+      <strong>Where the bytes live.</strong> Every environment runs single-node <strong>SeaweedFS</strong>
+      (<code>chrislusf/seaweedfs:3.97</code>) serving the S3 API — dev via <code>docker-compose.local.yml</code>, UAT via
+      <code>docker-compose.uat.yml</code>, and since #356 production via the <code>storage</code> service in
+      <code>docker-compose.yml</code> (production previously had no storage service). Production details: S3 API on port
+      9500, routed by Traefik on its own <code>STORAGE_DOMAIN</code> with a Let's Encrypt certificate because browsers
+      PUT/GET presigned URLs against it directly; data on the Hetzner volume at <code>/opt/skillars/data/storage</code>
+      (so <code>deploy/backup/volume-backup.sh</code> already covers it); <code>-volume.max=0</code> (the default 8 volumes
+      × 1&nbsp;GB would cap the store at 8&nbsp;GB) and <code>-volume.minFreeSpace=10</code> (read-only at 10% free
+      rather than filling the volume Postgres shares); the entrypoint writes the S3 identity file from
+      <code>STORAGE_ROOT_USER</code>/<code>STORAGE_ROOT_PASSWORD</code> and refuses to start if either is blank. The
+      one-shot <code>storage-init</code> (<code>amazon/aws-cli</code>) creates the bucket and sets its CORS rule (origin
+      <code>https://${DOMAIN}</code>, GET/PUT/POST/HEAD, exposes <code>ETag</code>) on every <code>up</code>. The app gets
+      <code>APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}</code> (the public domain, because <code>S3Presigner</code>
+      bakes the endpoint into every URL), static keys from <code>STORAGE_ROOT_*</code> (never the AWS default chain it
+      shares with SES) and path-style addressing. Moving to a managed S3 provider is a runbook procedure
+      (<code>docs/deployment/runbook.md</code>): repoint <code>APP_STORAGE_*</code>, copy the bucket, drop
+      <code>storage</code> + <code>storage-init</code>.
     </p>
 
     <h3 id="security">security</h3>
@@ -190,8 +220,7 @@
       (<code>createdBy</code>/<code>createdDate</code>/<code>lastModifiedBy</code>/<code>lastModifiedDate</code> via
       <code>@CreatedBy</code>/<code>@CreatedDate</code>), Hibernate Envers (<code>@Audited</code>), a <code>status</code>
       column (<code>EntityStatus</code>), plus <code>requestId</code>/<code>sessionId</code> columns populated by
-      <code>RequestIdAuditEntityListener</code> and <code>SessionIdAuditEntityListener</code> (in
-      <code>infrastructure.security</code>) so every row can be traced back to the request/session that wrote it.
+      <code>persistence.RequestIdAuditEntityListener</code> and <code>security.SessionIdAuditEntityListener</code> so every row can be traced back to the request/session that wrote it.
       <code>DbUtil.generateDbRandom()</code> is the TSID factory entry point used wherever a sortable random id is
       needed outside JPA's own generator. <code>DbSchemaChecker</code> fails app startup if Flyway detects pending
       migrations (only active when <code>custom.flyway.check-schema=true</code>, which base <code>application.yaml</code>
@@ -205,7 +234,7 @@
       retries with jittered backoff (<code>app.locking.retry.max-attempts</code>, default 8, ≈3.2s worst case) before
       rethrowing, which <code>ApiAdvice</code> maps to 409. The supplier may run more than once, so it must only
       lock and read; <code>PessimisticLockRetryerCallSiteAuditTest</code> scans <code>src/main/java</code>, pins the
-      call-site count (currently 50) and fails on any write inside a retried lambda or any NOWAIT lock without a
+      call-site count (currently 64) and fails on any write inside a retried lambda or any NOWAIT lock without a
       wrapper. See <a href="../database/index.html">Database &amp; Migrations</a> → Locking Conventions.
     </p>
     <p>
@@ -379,7 +408,8 @@
       own <code>baseurl:server.port</code>; and the Quasar router runs in <strong>hash mode</strong>, so every route
       lives after <code>/#/</code> (a query string appended to <code>route(...)</code> correctly lands inside the
       fragment). Used by <code>MailService</code>, <code>InAppNotificationService</code> (deep links), the booking and
-      account email listeners, <code>StripeOnboardingResource</code>, <code>ReportGenerationService</code> and the
+      account email listeners, <code>AdminOutcomeEmailListener</code>, <code>AccountManagementFacade</code>,
+      <code>StripeOnboardingResource</code>, <code>PaymentProperties</code>, <code>ReportGenerationService</code> and the
       registration strategies. Don't concatenate a frontend URL by hand.
     </p>
 
@@ -417,27 +447,38 @@
     <h3 id="storing-a-file-platform-module-filestorage-blobstore">Storing a file: platform module → filestorage → blobstore</h3>
     <pre class="mermaid">
 sequenceDiagram
-  participant M as Platform module (e.g. video, security)
+  participant M as Platform module (e.g. development, admin)
   participant FS as platform.filestorage.FileStorageService
-  participant SS as infrastructure.blobstore.StorageService
-  participant P as S3 / LocalFileSystem
+  participant SDK as blobstore S3Client / S3Presigner
+  participant SS as blobstore StorageService
+  participant P as SeaweedFS (S3 API)
 
-  M->>FS: signUpload(request) / confirmUpload(key, meta)
-  FS->>FS: check quota, validate content type/size
-  FS->>SS: put(key, data, contentLength, contentType)
-  SS->>P: upload (retries on SdkException, exponential backoff)
-  P-->>SS: success / NoSuchKeyException
-  SS-->>FS: void or StorageObjectNotFoundException / StorageProviderException
-  FS->>FS: persist FileStorageObject row (key, owner, status)
-  FS-->>M: StorageObjectDto
+  Note over M,P: browser upload (photo, gallery, logo)
+  M->>FS: signUpload(request)
+  FS->>FS: validation chain, quota check
+  FS->>SDK: presign PUT
+  FS-->>M: key + uploadUrl (browser PUTs directly to P)
+  M->>FS: confirmUpload(key, meta)
+  FS->>SDK: HeadObject(key)
+  FS->>FS: owner quota lock, persist FileStorageObject
+  Note over M,P: server-generated file (report PDF, GDPR ZIP)
+  M->>FS: storeBytes(bytes, key, contentType)
+  FS->>SDK: putObject (no FSO row, no quota)
+  SDK->>P: PUT
+  Note over FS,SS: StorageService is used by DeletionSchedulerService, replication and migration
+  FS->>SS: delete(key) after retention
+  SS->>P: DeleteObject (retries on SdkException)
     </pre>
     <p>
       No platform module other than <code>filestorage</code> ever imports
-      <code>infrastructure.blobstore.service.StorageService</code> directly — <code>filestorage</code> is where
+      <code>infrastructure.blobstore.service.StorageService</code> or the S3 SDK beans — <code>filestorage</code> is where
       quota checks, content-type/size validation, ownership, and the DB-backed <code>FileStorageObject</code> record
-      live, all of which raw blob storage knows nothing about. If a new module needs to store an image or video, it
-      should depend on <code>platform.filestorage</code>'s contract, not add a new dependency on
-      <code>infrastructure.blobstore</code>. Both <code>StorageObjectNotFoundException</code> and
+      live, all of which raw blob storage knows nothing about. Note that <code>FileStorageService</code> itself talks to
+      <code>S3Client</code>/<code>S3Presigner</code> directly (presigning is S3-specific); the portable
+      <code>StorageService</code> interface is used only by the deletion scheduler, replication and migration. If a new
+      module needs to store an image or document, it should depend on <code>platform.filestorage</code>'s contract, not
+      add a new dependency on <code>infrastructure.blobstore</code> (video is the exception: it goes to Bunny Stream through
+      <code>infrastructure.video</code>). Both <code>StorageObjectNotFoundException</code> and
       <code>StorageProviderException</code> bubble up through <code>filestorage</code> unchanged and are mapped to
       404/502 centrally in <code>platform.security.api.ApiAdvice</code>.
     </p>
@@ -514,8 +555,8 @@ sequenceDiagram
       <code>false</code>. This exists because consolidating the integration suite onto a few long-lived Spring
       contexts removed the accidental protection short-lived contexts used to give (a job with a 5-minute delay never
       fires in a context that lives 90 seconds). Overriding each job's delay in test config <em>cannot</em> substitute:
-      24 of the 43 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
-      <code>@EnableSchedulerLock</code> deliberately stays on <code>AsyncConfig</code> and is <em>not</em> gated —
+      27 of the 46 <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder.
+      <code>@EnableSchedulerLock</code> deliberately stays on <code>platform.notification.config.AsyncConfig</code> and is <em>not</em> gated —
       tests invoke scheduled methods directly through the Spring proxy, so the lock advisor must still apply.
       See <a href="../scheduled-jobs/index.html">Scheduled Jobs</a>.</p>
     </div>
@@ -556,7 +597,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

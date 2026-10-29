@@ -200,7 +200,8 @@
     <p>
       <code>AppEndpoints</code> is the URL-level source of truth: <code>PUBLIC_ENDPOINTS</code> (exact paths; a bare
       trailing <code>**</code> is forbidden by <code>AppEndpointsConventionTest</code>) also opens marketplace/review
-      browsing, the video and Stripe webhooks, and <code>/api/notifications/unsubscribe</code> (HMAC-token one-click
+      browsing, the video webhooks, both Stripe webhooks (<code>/api/payment/webhooks/stripe</code> and, since #354, the
+      Connect endpoint <code>/api/payment/webhooks/stripe/connect</code> with its own signing secret), and <code>/api/notifications/unsubscribe</code> (HMAC-token one-click
       unsubscribe, V175). <code>PUBLIC_MGMT_ENDPOINTS</code> opens <code>/manage/health</code>, <code>/manage/health/smoke</code>,
       <code>/manage/info</code> and <code>/manage/prometheus</code>; the rest of <code>/manage/**</code> needs ADMIN.
       Everything under <code>/v1/**</code> and <code>/api/**</code> otherwise needs one of the six authorities, with
@@ -433,9 +434,10 @@ sequenceDiagram
       <code>AuthService.ensureAccountIsLive</code> (login and refresh) and <code>Principal.instanceFrom</code>
       (<code>accountNonLocked</code>, so the legacy login and the JWT filter's DB re-auth) treat it as locked, whatever
       <code>phone-otp-required</code> says. The admin console's reactivate refuses a <code>SUSPENDED</code> account
-      (<code>409 admin.users.safetyHold</code>): lifting a child-safety hold is not a one-click action. A suspended
-      coach's marketplace profile is <em>not</em> suspended by this path (the admin suspend does that via
-      <code>AdminCoachEnforcementService</code>, which the security module cannot call).</p>
+      (<code>409 admin.users.safetyHold</code>): lifting a child-safety hold is not a one-click action. This listener
+      does <em>not</em> suspend a coach's marketplace profile (the security module cannot call
+      <code>AdminCoachEnforcementService</code>); admin's own <code>CoachSafetySuspensionListener</code> does that for the
+      same event, and the admin console's user suspend does it for an ordinary suspension.</p>
     </div>
     <div class="callout warn">
       <p><strong>Minors never get a standalone login.</strong> A minor's <code>PlayerProfile</code> has <code>parent_id</code>
@@ -522,7 +524,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

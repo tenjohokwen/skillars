@@ -393,8 +393,10 @@ sequenceDiagram
       cannot roll back drill 1, and the <code>HomeworkAssignedEvent</code> is published from a <code>finally</code> so
       drill 1 is still announced. The timeline consumer keeps one <code>HOMEWORK_ASSIGNED</code> row per
       (player, booking) and merges a later event's drill ids into it, under the same erasure-guard lock.
-      In the Locker Room, assignments from a coach whose pack with the family has lapsed are hidden though the rows
-      remain. Completion is idempotent and race-safe via <code>insertIfAbsent</code> (native
+      In the Locker Room, assignments are shown only for coaches with whom the player has an active pack
+      (<code>PackSessionService.hasActivePackForAnyOf</code>: sessions left, unexpired, not inside a
+      <code>[paused_from, paused_until)</code> pause window, not frozen by an open card dispute — V210); the other rows
+      remain but are hidden. Completion is idempotent and race-safe via <code>insertIfAbsent</code> (native
       <code>ON CONFLICT (assignment_id) DO NOTHING</code>), which avoids a caught flush failure poisoning the
       transaction.
     </p>
@@ -486,7 +488,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>deefa90f</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

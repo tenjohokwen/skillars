@@ -74,7 +74,7 @@
         <tr><td><a href="#adr-rebaseline">5</a></td><td>Flyway history squashed into V138 + V139</td><td>deferred-112 (<code>7db0c3b7</code>, PR #191)</td></tr>
         <tr><td><a href="#adr-hash-router">6</a></td><td>Hash-mode router, so backend links go through <code>FrontendLinkBuilder</code></td><td>PR #307 (<code>513fa082</code>)</td></tr>
         <tr><td><a href="#adr-payouts">7</a></td><td>Platform charges + completion-gated payouts, not destination charges</td><td>deferred-106 (PR #163)</td></tr>
-        <tr><td><a href="#adr-capture-pending">8</a></td><td><code>CAPTURE_PENDING</code> reservation written before every Stripe charge</td><td>UAT.3 (<code>63862bcd</code>), deferred-91 AC5</td></tr>
+        <tr><td><a href="#adr-capture-pending">8</a></td><td><code>CAPTURE_PENDING</code> reservation and idempotency key written before every Stripe charge; an unknown outcome is reconciled, never declined</td><td>UAT.3 (<code>63862bcd</code>), deferred-91 AC5, C3 (<code>51f48b6f</code>, PR #359)</td></tr>
         <tr><td><a href="#adr-slot">9</a></td><td>Slot exclusivity: per-coach row lock + DB exclusion constraint</td><td>V87, Deferred-14, -78, -79</td></tr>
         <tr><td><a href="#adr-legacy-auth">10</a></td><td>One password login: the legacy <code>/authenticate</code> → <code>/otp</code> stack was removed</td><td>skillars-1.5, chore/auth-legacy-removal</td></tr>
         <tr><td><a href="#adr-filestorage">11</a></td><td><code>filestorage</code> is the only gateway to the blobstore (video excepted)</td><td>project-context, file-storage architecture</td></tr>
@@ -83,10 +83,11 @@
         <tr><td><a href="#adr-inbox">14</a></td><td>In-app inbox written <code>BEFORE_COMMIT</code> in a savepoint, no push channel</td><td>PR #313 (<code>e350d169</code>)</td></tr>
         <tr><td><a href="#adr-it-base">15</a></td><td><code>AbstractIntegrationTest</code> inheritance + a pinned context count</td><td>deferred-19 (<code>b1d8c831</code>), deferred-160 (<code>4869338a</code>)</td></tr>
         <tr><td><a href="#adr-tenant">16</a></td><td>The <code>tenant</code> module was removed</td><td><code>a170e69d</code> (PR #37)</td></tr>
-        <tr><td><a href="#adr-suspension-cancels">17</a></td><td>A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</td><td>Owner decision 2026-10-28 (item 2), chunk C2</td></tr>
+        <tr><td><a href="#adr-suspension-cancels">17</a></td><td>A coach suspension / safety hold cancels upcoming bookings with a full refund and no strike</td><td>Owner decision 2026-10-28 (item 2), chunk C2, C6 (<code>22c86f25</code>, PR #361)</td></tr>
         <tr><td><a href="#adr-minors-never-upload">18</a></td><td>Minors never upload; coach videos of a child are linked to the session</td><td>Product decision 2026-10-28, V184</td></tr>
-        <tr><td><a href="#adr-pack-credit-payouts">19</a></td><td>Pack- and credit-funded sessions paid per completed session; payouts frozen during a CSAM safety hold</td><td>owner decisions 2026-10-28 (items 2 + 3), feat/coach-payouts-pack-and-credit (V186)</td></tr>
+        <tr><td><a href="#adr-pack-credit-payouts">19</a></td><td>Pack- and credit-funded sessions paid per completed session; a payout releases only when no safety, dispute or chargeback freeze stands</td><td>owner decisions 2026-10-28 (items 2 + 3), feat/coach-payouts-pack-and-credit (V186)</td></tr>
         <tr><td><a href="#adr-single-instance">20</a></td><td>Single instance until SSE fan-out exists — use Postgres <code>LISTEN/NOTIFY</code> when scaling out</td><td>Owner decision 2026-10-28 (item 4), chore/auth-legacy-removal (V187)</td></tr>
+        <tr><td><a href="#adr-forfeit-clawback">21</a></td><td>Forfeits pay the coach; a refund costs the coach the same share before or after release; a refused reversal becomes coach debt</td><td>Owner decisions 2026-10-28, PR #339 (<code>fea08bae</code>), PR #357 (<code>c5403f2d</code>)</td></tr>
       </tbody>
     </table>
 
@@ -122,7 +123,7 @@
       locked reads may go inside the lambda. A plain <code>UPDATE</code> still ignores NOWAIT, which is why the payment
       <code>REQUIRES_NEW</code> code carries explicit deadlock warnings.</p>
     <p><strong>Where enforced.</strong> <code>infrastructure/persistence/PessimisticLockRetryer.java</code>;
-      <code>PessimisticLockRetryerCallSiteAuditTest</code> (pins 50 call sites); <code>ApiAdvice.pessimisticLockExceptionHandler</code>;
+      <code>PessimisticLockRetryerCallSiteAuditTest</code> (pins 64 call sites); <code>ApiAdvice.pessimisticLockExceptionHandler</code>;
       <code>docs/persistence/pessimistic-lock-retry.md</code>.</p>
 
     <h2 id="adr-shedlock">3. ShedLock on shared-state jobs, ten deliberately unguarded</h2>
@@ -130,7 +131,7 @@
       deploy), and every <code>@Scheduled</code> method runs on each instance. A job that writes shared rows without a row claim
       would do its work once per instance.</p>
     <p><strong>Decision.</strong> Every job that writes shared state without a row claim carries <code>@SchedulerLock</code>
-      (33 of 43). The ten unguarded ones are deliberate: six touch only per-instance state (<code>ConfigService</code>,
+      (36 of 46). The ten unguarded ones are deliberate: six touch only per-instance state (<code>ConfigService</code>,
       <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>, <code>MessagingEmitterRegistry</code>,
       <code>RateLimitingService</code>, and <code>InstanceHeartbeatMonitor</code>, which must write its own heartbeat row on every
       instance — <a href="#adr-single-instance">ADR 20</a>), and four claim rows with <code>FOR UPDATE [SKIP LOCKED]</code> instead
@@ -208,11 +209,18 @@
     <p><strong>Decision.</strong> Before calling Stripe, <code>reserveCapture</code> commits a <code>CAPTURE_PENDING</code>
       <code>booking_payments</code> row in its own <code>REQUIRES_NEW</code> transaction. Invariant: for a <code>PAYMENT_PENDING</code>
       booking, no row means no Stripe call was attempted. Pack-funded and fully credit-covered settlements deliberately do not reserve.</p>
+    <p>The reservation also carries the Stripe idempotency key the charge is sent under (<code>booking_payments.charge_idempotency_key</code>,
+      V207), committed <em>before</em> the call and copied onto the PaymentIntent's <code>chargeKey</code> metadata. A charge whose outcome is
+      unknown (timeout, lost connection, 5xx, idempotency conflict: <code>ChargeOutcomeUnknownException</code>) is no longer declined on the
+      spot: <code>ChargeOutcomeReconciler</code> asks Stripe once the reservation is older than
+      <code>booking.payment.charge_reconcile_after_minutes</code> (10) and settles, declines or waits. A charge that succeeded but cannot be
+      settled is compensated (card share to the wallet), never kept.</p>
     <p><strong>Consequences.</strong> A duplicate event landing on a reserved row is escalated (<code>CAPTURE_UNCONFIRMED</code>,
       reconcile by hand), never re-charged. Stale reservations exit via <code>CAPTURE_ABANDONED</code> (deferred-91 Part A). The
       caller must hold no lock or write on the booking row, or the second connection self-deadlocks.</p>
     <p><strong>Where enforced.</strong> <code>platform/payment/service/BookingPaymentPersistenceService.java</code> (javadoc on
-      <code>reserveCapture</code>), <code>PaymentLifecycleService.java</code>, <code>PaymentPendingSweeper</code>.</p>
+      <code>reserveCapture</code>), <code>PaymentLifecycleService.java</code>, <code>ChargeOutcomeReconciler</code>, <code>PaymentPendingSweeper</code>;
+      <code>ChargeIdempotencyIT</code>.</p>
 
     <h2 id="adr-slot">9. Slot exclusivity: per-coach row lock + DB exclusion constraint</h2>
     <p><strong>Context.</strong> Two parents booking the same coach slot, a coach accepting two overlapping requests, or a window
@@ -338,14 +346,17 @@
       a neutral notice (<code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>, "the coach is unavailable") that never names
       the reason. An admin suspension does this by default with an opt-out (<code>cancelUpcomingBookings</code>); a
       safety hold always does it (after committing the takedown on its own, so booking contention cannot undo it), and raises an urgent <code>SAFETY_HOLD_BOOKING</code> alert per booking it cannot
-      cancel. A capture in flight fails an admin suspension (409, all-or-nothing) but never a safety hold. Only the
+      cancel. Since C6 (PR #361) an admin suspension is not all-or-nothing either: the suspension commits first, then
+      each booking is cancelled in its own <code>REQUIRES_NEW</code> transaction; a booking that is busy (capture in flight, row locked)
+      gets one retry and then becomes a <code>BOOKING_ACTION_REQUIRED</code> alert instead of failing the suspension with a 409. Only the
       safety hold freezes payouts (payment module).</p>
     <p><strong>Consequences.</strong> Families are never left holding a session with a coach who cannot deliver it.
       Card portions are refunded as wallet credit, as for a coach cancellation (cash-out turns it back into a card
-      refund). Live sessions and in-flight captures still need a human: the alerts carry the parent contact in the
-      queue summary, but there is no single-booking admin cancel tool yet.</p>
+      refund). Live sessions and busy bookings still need a human: the alerts carry the parent contact in the
+      queue summary, and the admin cancels them one by one with the single-booking cancel
+      (<code>POST /api/admin/bookings/{id}/cancel</code>).</p>
     <p><strong>Where enforced.</strong> <code>BookingStateMachine</code>, <code>BookingService.cancelBookingAsAdmin</code>,
-      <code>AdminCoachEnforcementService.applySuspension</code>, <code>RefundEnqueueListener</code> /
+      <code>AdminCoachEnforcementService.applyAdminSuspension</code> / <code>cancelBookingForSuspension</code>, <code>RefundEnqueueListener</code> /
       <code>CancellationRefundService.onBookingCancelledByAdmin</code>; <code>CoachSuspensionCancelsUpcomingBookingsIT</code>,
       <code>BookingStateMachineTest</code>.</p>
 
@@ -385,13 +396,15 @@
       down, the last session takes the remainder) at the rate stamped at <em>pack purchase</em>, allocated under the pack row
       lock so the total never exceeds what the pack was charged. Unused sessions of an expired pack are not paid out: the
       platform keeps that money. While a coach is under a CSAM safety hold their payouts are <code>FROZEN</code> and are
-      released only when an admin reinstates the coach. Normal suspensions do not freeze payouts.</p>
+      released only when an admin reinstates the coach. Normal suspensions do not freeze payouts. Two per-payout freezes
+      were added later (V193): <code>dispute_frozen</code> while a dispute on the booking is open, and <code>chargeback_frozen</code>
+      while a card dispute on its charge is open. A payout releases only when none of the three stands.</p>
     <p><strong>Consequences.</strong> A dispute on a pack session treats the pack share as the session price. Credit-funded
       transfers have no charge behind them and draw on the platform's available balance (<code>BALANCE_INSUFFICIENT</code>
       is retried). The admin finance commission figure is computed from <code>coach_payouts.commission_amount</code>, so it covers card, credit and pack sessions.
       Sessions completed before V186 are not paid retroactively.</p>
     <p><strong>Where enforced.</strong> <code>CoachPayoutOutboxSupport.enqueuePayout</code> / <code>allocatePackShare</code>,
-      <code>CoachPayoutFreezeService</code>, the freeze check in <code>CoachPayoutTransferHandler</code>,
+      <code>CoachPayoutFreezeService</code>, <code>CoachPayoutAdjustmentService.freezeForDispute</code>, the freeze check in <code>CoachPayoutTransferHandler</code>,
       <code>DisputeService.paidForSession</code>; <code>CoachPayoutPackCreditIT</code>.</p>
 
     <h2 id="adr-single-instance">20. Single instance until SSE fan-out exists</h2>
@@ -412,6 +425,25 @@
       <code>InstanceHeartbeatMonitorIT</code>; <code>docs/deployment/deploy-guide.md</code> ("Single instance only") and the runbook scenario
       "More than one application instance".</p>
 
+    <h2 id="adr-forfeit-clawback">21. Forfeits pay the coach; refunds cost the coach the same share; refused reversals become debt</h2>
+    <p><strong>Context.</strong> The 2026-10-28 payment audit found the platform kept 100% of a forfeited session (player no-show,
+      parent cancel inside 24h), a dispute could only ever take money from the coach, and the coach's share of a refund depended on
+      timing: a refund before payout release cut the pending row, one after release reversed a transfer, and two partial refunds on a
+      pending payout cut less than the same refunds after release. A reversal Stripe refused was left as an alert with nothing owed.</p>
+    <p><strong>Decision.</strong> (Owner, 2026-10-28.) A forfeit pays the coach the normal net through the usual
+      completion-gated payout. A refund of <code>r</code> out of price <code>p</code> costs the coach <code>originalNet × r / p</code>
+      whatever the payout's state: a pending/held/frozen payout is cut pro rata, a released one gets a <code>COACH_PAYOUT_REVERSAL</code> for that share.
+      A dispute resolved <code>UPHOLD_COACH</code> claws the refunded credit back from the payer's wallet (up to the current balance,
+      never negative) and pays the coach the full net (a top-up transfer if the payout was already cut); the platform absorbs any gap.
+      A reversal Stripe refuses non-retryably is recorded as coach debt (<code>payment.coach_payout_debts</code>, V205) and alerted.</p>
+    <p><strong>Consequences.</strong> Refund paths must go through <code>CoachPayoutAdjustmentService.applyRefund</code>, never adjust
+      <code>coach_payouts</code> directly. Dispute credits are capped per booking (<code>DisputeCreditService</code>,
+      <code>DISPUTE_CREDIT</code> ledger type) and a dispute can only be resolved once the booking has settled
+      (<code>409 disputes.bookingNotSettled</code>).</p>
+    <p><strong>Where enforced.</strong> <code>CoachPayoutEnqueueListener</code> (<code>onPlayerNoShow</code>, forfeit parent cancels),
+      <code>CoachPayoutAdjustmentService</code> (<code>applyRefund</code>, <code>payInFull</code>), <code>RefundClawbackService</code>,
+      <code>CoachPayoutDebtService.recordDebt</code>, <code>CoachPayoutOutboxSupport.enqueueTopUp</code>; <code>ForfeitPayoutAndClawbackIT</code>.</p>
+
     <h2 id="related">Related</h2>
     <ul>
       <li><a href="../walkthrough/index.html">Anatomy of a request</a> — several of these decisions seen in one booking flow.</li>
@@ -419,7 +451,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>187fd9a4</code> (2026-10-28).</footer>
+    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
