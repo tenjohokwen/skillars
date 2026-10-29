@@ -63,9 +63,9 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li><strong>CAPTURE_PENDING</strong> ({@code reason=CAPTURE_UNCONFIRMED}) — an attempt reserved
  *       and never finished. Money may already be at Stripe with nothing recording it. A row that
- *       carries a {@code charge_idempotency_key} (V203) is resolved automatically by
+ *       carries a {@code charge_idempotency_key} (V207) is resolved automatically by
  *       {@code ChargeOutcomeReconciler}, which asks Stripe for the PaymentIntent; one without a key
- *       (pre-V203, or a credit-only batch confirm that died) has no automated exit: an operator must
+ *       (pre-V207, or a credit-only batch confirm that died) has no automated exit: an operator must
  *       search Stripe by the booking or batch id and settle or decline the row by hand. See
  *       {@code docs/deployment/runbook.md}.</li>
  *   <li><strong>Any terminal status</strong> ({@code reason=PAYMENT_ROW_PRESENT}) — a settled

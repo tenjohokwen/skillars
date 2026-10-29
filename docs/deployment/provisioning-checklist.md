@@ -944,7 +944,7 @@ an operator must now do.
   for the parent's confirmation. Run the V206 pre-migration check and review its informational follow-up
   query ([3.2](#32-pre-migration-data-checks)). V206 joins the "prod is not live" list in section 0. No new
   job, webhook or env var.
-- 2026-10-29: fix/payment-charge-idempotency (V203). V203 runs automatically (additive nullable
+- 2026-10-29: fix/payment-charge-idempotency (V207). V207 runs automatically (additive nullable
   columns on `payment.booking_payments`, `coach_subscriptions`, `player_subscriptions` plus a partial
   index on a new all-NULL column; no pre-migration check). New job `ChargeOutcomeReconciler` (10 min,
   ShedLock `ChargeOutcomeReconciler_reconcile`), new code-default config key

@@ -63,11 +63,11 @@ public class BookingPayment {
     private BigDecimal commissionRate;
 
     /**
-     * fix/payment-charge-idempotency (V203): the Stripe idempotency key this reservation's charge is sent
+     * fix/payment-charge-idempotency (V207): the Stripe idempotency key this reservation's charge is sent
      * under, written BEFORE the Stripe call and also carried on the PaymentIntent's {@code chargeKey}
      * metadata. Shared by every row of one batch charge. {@code ChargeOutcomeReconciler} uses it to find
      * the PaymentIntent of a charge whose response was lost. Null for rows that never reach Stripe
-     * (pack / credit-only) and for rows from before V203.
+     * (pack / credit-only) and for rows from before V207.
      */
     @Column(name = "charge_idempotency_key", length = 128)
     private String chargeIdempotencyKey;
