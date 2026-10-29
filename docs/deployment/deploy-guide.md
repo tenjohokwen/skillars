@@ -3,6 +3,8 @@
 This guide covers the full release cycle: from a merged PR to a live production deploy.
 A developer unfamiliar with the last deploy can complete the full cycle in ≤ 30 minutes using only this document.
 
+> **Before each release**, run the "Before each release" and smoke-test sections of [`provisioning-checklist.md`](provisioning-checklist.md) (pre-migration data checks, pre-deploy dump, rollback pointer).
+
 ---
 
 ## Prerequisites
