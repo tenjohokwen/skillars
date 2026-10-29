@@ -147,13 +147,7 @@ public class CoachPayoutAdjustmentService {
             return RefundOutcome.CANCELLED;
         }
         BigDecimal oldNet = row.getNetAmount();
-        BigDecimal newNet = oldNet.subtract(share);
-        BigDecimal newGross = row.getGrossAmount()
-            .subtract(row.getGrossAmount().multiply(share).divide(oldNet, 2, RoundingMode.HALF_UP))
-            .max(newNet);
-        row.setNetAmount(newNet);
-        row.setGrossAmount(newGross);
-        row.setCommissionAmount(newGross.subtract(newNet));
+        BigDecimal newNet = cutNet(row, share);
         row.setLastError(truncate(tag + " -" + share + " (net was " + oldNet + ")"));
         coachPayoutRepository.save(row);
         log.info("{} on booking {}: pending coach payout ({}) cut by {} to net {}", tag, bookingId, status, share, newNet);
@@ -245,6 +239,24 @@ public class CoachPayoutAdjustmentService {
             return CoachPayoutFreezeService.REASON_SAFETY_HOLD;
         }
         return null;
+    }
+
+    /**
+     * Cuts {@code share} (less than the net) off a not-yet-released payout: the net by {@code share}, the
+     * gross by the same proportion (never below the new net), and the commission to the difference.
+     *
+     * @return the new net
+     */
+    static BigDecimal cutNet(CoachPayout row, BigDecimal share) {
+        BigDecimal oldNet = row.getNetAmount();
+        BigDecimal newNet = oldNet.subtract(share);
+        BigDecimal newGross = row.getGrossAmount()
+            .subtract(row.getGrossAmount().multiply(share).divide(oldNet, 2, RoundingMode.HALF_UP))
+            .max(newNet);
+        row.setNetAmount(newNet);
+        row.setGrossAmount(newGross);
+        row.setCommissionAmount(newGross.subtract(newNet));
+        return newNet;
     }
 
     /** The proportional coach share of a refund; the whole net when the whole price is refunded. */

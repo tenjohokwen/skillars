@@ -1920,6 +1920,8 @@ export default {
       noPaymentMethod: "Aucun moyen de paiement enregistré. Ajoutez d'abord une carte.",
       cashOutTooSmall:
         'Ce montant est trop faible pour être retiré une fois les frais de traitement déduits.',
+      cashOutBlockedByDispute:
+        "Les retraits sont suspendus tant qu'une contestation de paiement par carte est en cours sur l'un de vos paiements. Vous pourrez de nouveau retirer votre crédit une fois celle-ci résolue.",
       cashOutExceedsRefundable:
         'Les retraits sont remboursés sur votre dernier paiement par carte, qui ne peut pas recevoir ce montant. Essayez un montant plus petit.',
       refundFailed: 'Le remboursement sur votre carte a échoué. Votre crédit a été restauré.',

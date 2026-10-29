@@ -404,6 +404,26 @@ SELECT 'player', status, count(*) FROM payment.player_subscriptions
  WHERE status NOT IN ('ACTIVE','PAST_DUE','CANCELLED','TRIALLING','INCOMPLETE','UNPAID','PAUSED') GROUP BY 2;
 ```
 
+**V199: `chk_ledger_type` / `chk_ledger_amount_sign` and the chargeback-credit unique indexes**
+(`V199__chargeback_credit_trace_and_lost_dispute_payouts.sql`). Both CHECKs are rebuilt as validating
+supersets of V198 (adding `CHARGEBACK_CREDIT_REVERSAL`, negative, and `CHARGEBACK_CREDIT_RESTORE`,
+positive). The V198 check above still covers every existing row. The two new types are new in V199, so
+the unique indexes can only fail if rows were hand-inserted:
+```sql
+SELECT reference_id, parent_id, type, count(*) FROM payment.parent_credit_ledger
+WHERE type IN ('CHARGEBACK_CREDIT_REVERSAL','CHARGEBACK_CREDIT_RESTORE')
+GROUP BY 1, 2, 3 HAVING count(*) > 1;
+```
+
+**V199 follow-up (not a migration blocker): payouts parked by a dispute lost before completion.** Before
+this release, a session that completed after its charge lost a card dispute was written `HOLD` /
+`CHARGEBACK_LOST` and nothing released or cancelled it. These rows are not migrated. Settle each one by
+hand (cut or cancel it, `runbook.md` Scenario 5):
+```sql
+SELECT booking_id, coach_id, net_amount, updated_at FROM payment.coach_payouts
+WHERE status = 'HOLD' AND last_error = 'CHARGEBACK_LOST';
+```
+
 V187, V188, V191 and V193's new columns and tables are additive (new tables, `NOT NULL DEFAULT`
 constants, nullable columns) and need no data check. V186's backfill `UPDATE` of
 `session_pack_purchases.session_count` cannot violate a constraint.
@@ -465,6 +485,9 @@ handled, taken from the `equals("…")` branches in `StripeWebhookService.handle
     clock. Without it, a paying subscriber can be cancelled at grace expiry.
   - `charge.dispute.created` / `charge.dispute.closed` freeze and unfreeze the coach payouts the
     charge funded (`ChargeDisputeWebhookService`, `payment.charge_disputes`, V193).
+    Since V199 they also take back wallet credit the disputed charge had funded (a booking refunded
+    to credit), refuse cash-out while the dispute is open, restore the credit on a won dispute, and
+    cut or cancel the payout of a session that completes after a lost one. No new event types.
   - `charge.refunded` covers refunds made in the Dashboard (raises an `EXTERNAL_REFUND` admin
     alert).
   - `account.updated` is the **only** path that marks a coach's Connect account `COMPLETE`.
@@ -602,6 +625,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
 | `StripeSubscriptionReconciliationScheduler` | daily 05:00 | hard-coded |
 | `GdprErasureRetryScheduler` | daily 06:00 | hard-coded |
+| `StalePayoutAlertScheduler` | daily 06:30 | hard-coded cron; age threshold `payment.payout.stale_alert_days` (14). Alerts only (`PAYOUT_HELD` for FROZEN/HOLD payouts unchanged that long) |
 | `MessageRetentionScheduler` | daily 02:00 | hard-coded; deletes per `platform.message_retention_months` |
 | `InAppNotificationRetentionScheduler` | daily 03:30 | `platform.notification.in-app-retention-days` (90) |
 | `UserAdminService` cleanup | daily 01:00 | hard-coded |
@@ -637,7 +661,7 @@ Source: `git grep -n "@Scheduled(" src/main/java`.
 
 ## 7. Application config and policy keys
 
-Business policy lives in `main.platform_config` (seeded by `V139`, `V156`, `V158`). It is edited at
+Business policy lives in `main.platform_config` (seeded by `V139`, `V156`, `V158`, `V199`). It is edited at
 runtime with `PUT /api/config/values/{key}` (admin) and cached for 300 s. Bounds and code defaults
 are in `ConfigBounds`. `ConfigStartupAssertion` refuses to boot (outside `dev`) on an out-of-range
 `failFast` key (`monitoring.md` → "Platform config value ranges"). "Code default" means no seed
@@ -651,6 +675,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `coach.excusedCancellations.maxPerWindow` | 3 (code default, 0–100) | `ConfigBounds` | Keep unless policy changes |
 | `coach.excusedCancellations.windowDays` | 90 (code default, 1–3650) | `ConfigBounds` | Keep |
 | `payment.payout.hold_hours` | 48 (seed; code default 48, range 0–336) | V139, `CoachPayoutOutboxSupport` | Keep at or above the dispute window you are comfortable with **(confirm)** |
+| `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
 | `platform.commission.rate` **and** `platform.commission_rate` | 0.08 each | V139 | Two keys for one concept. Payments read `platform.commission.rate`; `ProjectedRevenueService` reads `platform.commission_rate`. Change both together |
 | `payment.stripe.feeRate` / `feeFixed` | 0.025 / 0.25 | V139 | Match the Stripe contract **(confirm)** |
 | `platform.payment.currency` | `eur` | V139 | Keep; it must match the Stripe prices |
@@ -795,3 +820,7 @@ an operator must now do.
 - 2026-10-29: initial consolidated checklist (docs/provisioning-checklist). It records the
   Stripe dual-endpoint/single-secret blocker, the JWT fixture risk, the missing prod object-storage
   service, the env vars missing from `secrets-reference.md`, and pre-migration checks for V185–V198.
+- 2026-10-29: PR #352 (V199): new config key `payment.payout.stale_alert_days` (default 14, seeded),
+  new daily job `StalePayoutAlertScheduler` (06:30, ShedLock), no new Stripe webhook events. Run the
+  V199 pre-migration check, then settle any `HOLD` / `CHARGEBACK_LOST` payouts left by earlier releases
+  (section 3.2).

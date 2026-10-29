@@ -444,19 +444,28 @@ public class BookingPaymentPersistenceService {
      * fix/payment-agreed-price-lock: credits a batch booking's already-charged share back to the wallet
      * when the booking can no longer be settled (settled elsewhere or gone after the batch charge). Its
      * own transaction so the {@code MANDATORY} outbox enqueue has one; touches no booking row.
+     *
+     * <p>fix/payment-dispute-credit-trace-and-lost-dispute: the booking's {@code booking_payments} row
+     * belongs to whatever settled it, so the credit records the batch charge itself and its card part
+     * ({@code paymentIntentId} / {@code cardShare}) — a later card dispute on the batch charge finds it.
      */
-    public void refundBatchShareToCredit(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount) {
+    public void refundBatchShareToCredit(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount,
+                                         String paymentIntentId, BigDecimal cardShare) {
         RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
         try {
-            self.refundBatchShareToCreditTransactional(parentId, bookingId, batchId, amount);
+            self.refundBatchShareToCreditTransactional(parentId, bookingId, batchId, amount, paymentIntentId,
+                cardShare);
         } finally {
             RoutingDataSourceContext.clear();
         }
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void refundBatchShareToCreditTransactional(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount) {
+    public void refundBatchShareToCreditTransactional(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount,
+                                                      String paymentIntentId, BigDecimal cardShare) {
+        boolean card = paymentIntentId != null && cardShare != null && cardShare.signum() > 0;
         refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId,
-            "Batch booking could not be confirmed - payment returned as credit (batch " + batchId + ")");
+            "Batch booking could not be confirmed - payment returned as credit (batch " + batchId + ")",
+            card ? paymentIntentId : null, card ? cardShare : null);
     }
 }

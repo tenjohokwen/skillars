@@ -38,6 +38,10 @@ import java.util.List;
  *       another freeze holds it). Lost: the coach bears their share of the disputed amount, pro rata —
  *       cut from a pending payout (cancelled when it is all of it) or reversed from a released one — and
  *       an alert.</li>
+ *   <li>fix/payment-dispute-credit-trace-and-lost-dispute: wallet credit the charge had funded (a booking
+ *       refunded to credit) is taken back when the dispute opens, given back if it is won and kept if it is
+ *       lost ({@link ChargebackCreditReversalService}). A lost dispute's payout share is recorded
+ *       ({@code payout_loss_fraction}) so a session completing after the close is cut the same way.</li>
  *   <li>{@code charge.refunded} — a refund the app did not issue (e.g. from the Stripe Dashboard): an
  *       alert only, no money is moved.</li>
  * </ul>
@@ -57,6 +61,7 @@ public class ChargeDisputeWebhookService {
     private final CoachPayoutRepository coachPayoutRepository;
     private final BookingPaymentRepository bookingPaymentRepository;
     private final CoachPayoutAdjustmentService adjustmentService;
+    private final ChargebackCreditReversalService creditReversalService;
     private final ApplicationEventPublisher eventPublisher;
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -77,8 +82,15 @@ public class ChargeDisputeWebhookService {
             return;
         }
         if (record == null) {
-            chargeDisputeRepository.save(newRecord(dispute, pi, ChargeDispute.STATUS_OPEN));
+            ChargeDispute fresh = newRecord(dispute, pi, ChargeDispute.STATUS_OPEN);
+            ChargeDispute saved = chargeDisputeRepository.save(fresh);
+            record = saved != null ? saved : fresh;
         }
+
+        // fix/payment-dispute-credit-trace-and-lost-dispute: money this charge paid that was already given back
+        // as wallet credit is taken back now, so the parent cannot recover it twice.
+        ChargebackCreditReversalService.Outcome credit = creditReversalService.reverseOnOpen(record);
+        chargeDisputeRepository.save(record);
 
         if (!isKnownIntent(pi)) {
             log.error("[STRIPE_CHARGE_DISPUTE] dispute={} on unknown payment intent {} — alerting", dispute.getId(), pi);
@@ -97,7 +109,7 @@ public class ChargeDisputeWebhookService {
         log.error("[STRIPE_CHARGE_DISPUTE] dispute={} intent={} amount={} — {} payout(s) frozen, {} already released "
             + "(not reversed automatically)", dispute.getId(), pi, amountOf(dispute), frozen, released);
         alert(PaymentIntegrityAlertEvent.Kind.CHARGEBACK, pi,
-            "OPENED " + amountOf(dispute) + " frozen=" + frozen + " released=" + released);
+            "OPENED " + amountOf(dispute) + " frozen=" + frozen + " released=" + released + creditNote(credit));
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -127,6 +139,19 @@ public class ChargeDisputeWebhookService {
         }
         record.setStripeStatus(dispute.getStatus());
         record.setClosedAt(Instant.now());
+        // fix/payment-dispute-credit-trace-and-lost-dispute: won — the platform keeps the charge, so credit
+        // reversed when the dispute opened is given back; lost — the reversal stands (topped up).
+        ChargebackCreditReversalService.Outcome credit = ChargebackCreditReversalService.Outcome.NONE;
+        BigDecimal restored = BigDecimal.ZERO;
+        if (lost) {
+            credit = creditReversalService.reverseOnLost(record);
+        } else {
+            restored = creditReversalService.restoreOnWon(record);
+        }
+        BigDecimal fraction = lost ? lostFraction(pi, record) : BigDecimal.ZERO;
+        if (lost) {
+            record.setPayoutLossFraction(fraction);
+        }
         chargeDisputeRepository.saveAndFlush(record);
 
         if (!isKnownIntent(pi)) {
@@ -136,7 +161,6 @@ public class ChargeDisputeWebhookService {
             return;
         }
         boolean otherOpen = chargeDisputeRepository.existsByPaymentIntentIdAndStatus(pi, ChargeDispute.STATUS_OPEN);
-        BigDecimal fraction = lost ? lostFraction(pi, record.getAmount()) : BigDecimal.ZERO;
         int adjusted = 0;
         for (CoachPayout row : coachPayoutRepository.findFundedByPaymentIntentForUpdate(pi)) {
             if (lost) {
@@ -158,7 +182,8 @@ public class ChargeDisputeWebhookService {
                 dispute.getId(), pi, dispute.getStatus(), otherOpen ? " (another dispute still open)" : "");
         }
         alert(PaymentIntegrityAlertEvent.Kind.CHARGEBACK, pi,
-            outcome + " " + amountOf(dispute) + (lost ? " adjusted=" + adjusted : ""));
+            outcome + " " + amountOf(dispute) + (lost ? " adjusted=" + adjusted : "") + creditNote(credit)
+                + (restored.signum() > 0 ? " restored=" + restored : ""));
     }
 
     /** An app-issued refund is recognised by its idempotency key; anything else is alerted on. */
@@ -185,13 +210,32 @@ public class ChargeDisputeWebhookService {
             || !chargeDisputeRepository.findPackPurchaseIdsByPaymentIntent(pi).isEmpty();
     }
 
-    /** disputed / charged, at most 1 — a batch or pack charge disputed in part costs each payout that part. */
-    private BigDecimal lostFraction(String pi, BigDecimal disputed) {
+    /**
+     * The share of each funded payout's card portion the coach bears for a lost dispute. The disputed
+     * amount is first set against the wallet credit the charge funded (taken back from the payer, see
+     * {@link ChargebackCreditReversalService}); the rest is spread over what the charge paid for sessions:
+     * {@code (disputed - creditTarget) / (charged - creditTraced)}, between 0 and 1. With no credit traced
+     * this is {@code disputed / charged} — a batch or pack charge disputed in part costs each payout that part.
+     */
+    private BigDecimal lostFraction(String pi, ChargeDispute record) {
+        BigDecimal disputed = record.getAmount() == null ? BigDecimal.ZERO : record.getAmount();
+        BigDecimal target = record.getCreditReversalTarget() == null ? BigDecimal.ZERO : record.getCreditReversalTarget();
         BigDecimal charged = chargeDisputeRepository.sumChargedByPaymentIntent(pi);
-        if (charged == null || charged.signum() <= 0 || disputed == null || disputed.compareTo(charged) >= 0) {
+        BigDecimal traced = target.signum() > 0 ? creditReversalService.tracedCredit(pi) : BigDecimal.ZERO;
+        BigDecimal remaining = disputed.subtract(target);
+        if (remaining.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal base = (charged == null ? BigDecimal.ZERO : charged).subtract(traced);
+        if (base.signum() <= 0 || remaining.compareTo(base) >= 0) {
             return BigDecimal.ONE;
         }
-        return disputed.divide(charged, 6, RoundingMode.HALF_UP);
+        return remaining.divide(base, 6, RoundingMode.HALF_UP);
+    }
+
+    private static String creditNote(ChargebackCreditReversalService.Outcome credit) {
+        return credit.recovered().signum() > 0 || credit.shortfall().signum() > 0
+            ? " credit=-" + credit.recovered() : "";
     }
 
     /** What the disputed card charge paid of this payout's session: the pack share, or the booking's card part. */

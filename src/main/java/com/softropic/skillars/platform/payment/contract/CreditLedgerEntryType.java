@@ -1,8 +1,8 @@
 package com.softropic.skillars.platform.payment.contract;
 
 /**
- * The seven values currently written to {@code payment.parent_credit_ledger.type}, enforced by the
- * {@code chk_ledger_type} CHECK constraint ({@code V138__baseline_schema.sql}). Kept here, in
+ * The nine values currently written to {@code payment.parent_credit_ledger.type}, enforced by the
+ * {@code chk_ledger_type} CHECK constraint (V138, rebuilt by V198 and V199). Kept here, in
  * {@code payment.contract}, rather than beside the writing service because
  * {@code platform.admin.service.DisputeService} writes {@link #BOOKING_REFUND} too — a cross-module
  * read of this constants holder is the point.
@@ -47,6 +47,17 @@ public final class CreditLedgerEntryType {
      * time (never below zero), {@code reference_id} = the booking id (V198: at most one per booking).
      */
     public static final String BOOKING_REFUND_REVERSAL = "BOOKING_REFUND_REVERSAL";
+
+    /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute: a card dispute opened on a charge whose money had
+     * been given back as wallet credit (a booking refunded to credit) — the unspent part of that credit
+     * taken back, negative, capped at the wallet's balance (never below zero). {@code reference_id} = a
+     * name-based UUID of the Stripe dispute id; V199 allows one per (reference, payer).
+     */
+    public static final String CHARGEBACK_CREDIT_REVERSAL = "CHARGEBACK_CREDIT_REVERSAL";
+
+    /** The {@link #CHARGEBACK_CREDIT_REVERSAL} given back when the dispute is won; positive, one per (reference, payer). */
+    public static final String CHARGEBACK_CREDIT_RESTORE = "CHARGEBACK_CREDIT_RESTORE";
 
     /** A booking's session price, debited on settlement ({@code BookingPaymentPersistenceService}/{@code PaymentLifecycleService}). */
     public static final String BOOKING_DEDUCTION = "BOOKING_DEDUCTION";

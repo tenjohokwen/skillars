@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.CashOutReconciliation;
 import com.softropic.skillars.platform.payment.repo.CashOutReconciliationRepository;
+import com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedger;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
@@ -26,6 +27,7 @@ public class CreditWalletService {
     private final StripeCustomerRepository stripeCustomerRepository;
     private final PessimisticLockRetryer lockRetryer;
     private final CashOutReconciliationRepository cashOutReconciliationRepository;
+    private final ChargeDisputeRepository chargeDisputeRepository;
 
     public BigDecimal getBalance(Long parentId) {
         return ledgerRepository.sumByParentId(parentId).orElse(BigDecimal.ZERO);
@@ -59,6 +61,13 @@ public class CreditWalletService {
             () -> stripeCustomerRepository.findByIdForUpdate(parentId)
                 .orElseThrow(() -> new PaymentGatewayException("payment.noPaymentMethod")));
 
+        // fix/payment-dispute-credit-trace-and-lost-dispute: while a card dispute is open on one of the
+        // payer's charges, the dispute may still take wallet credit back (credit funded by that charge
+        // written after the dispute opened is reversed when it is lost), so nothing leaves as cash. Read
+        // under the wallet lock, which the dispute webhook's reversal also takes.
+        if (chargeDisputeRepository.existsOpenDisputeForPayer(parentId)) {
+            throw new PaymentGatewayException("payment.cashOutBlockedByDispute");
+        }
         BigDecimal requested = netAmount.add(feeAmount);
         BigDecimal balance = ledgerRepository.sumByParentId(parentId).orElse(BigDecimal.ZERO);
         if (balance.compareTo(requested) < 0) {
@@ -119,6 +128,52 @@ public class CreditWalletService {
     }
 
     /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute: takes back up to {@code amount} of wallet credit a
+     * now-disputed card charge had funded, as a {@code CHARGEBACK_CREDIT_REVERSAL} under {@code reference}.
+     * Capped at the balance read under the per-payer wallet lock — never below zero. A no-op when this
+     * payer already has a reversal under {@code reference} (V199 {@code uq_pcl_chargeback_credit_reversal}
+     * backstops it).
+     *
+     * @return what was actually taken back (zero to {@code amount})
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal debitChargebackCredit(Long parentId, UUID reference, BigDecimal amount, String description) {
+        if (amount == null || amount.signum() <= 0
+                || ledgerRepository.existsByReferenceIdAndParentIdAndType(reference, parentId,
+                    CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL)) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal balance = lockAndGetBalance(parentId).max(BigDecimal.ZERO);
+        BigDecimal recovered = amount.min(balance);
+        if (recovered.signum() <= 0) {
+            log.info("Chargeback credit reversal {}: payer {} has no wallet balance — nothing recovered", reference, parentId);
+            return BigDecimal.ZERO;
+        }
+        writeLedgerEntry(parentId, recovered.negate(), CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL, reference,
+            description);
+        return recovered;
+    }
+
+    /**
+     * The card dispute was won: gives back what {@link #debitChargebackCredit} took under {@code reference},
+     * as one {@code CHARGEBACK_CREDIT_RESTORE}. A no-op when it was already restored (V199
+     * {@code uq_pcl_chargeback_credit_restore}).
+     *
+     * @return true when a restore row was written
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean restoreChargebackCredit(Long parentId, UUID reference, BigDecimal amount) {
+        if (amount == null || amount.signum() <= 0
+                || ledgerRepository.existsByReferenceIdAndParentIdAndType(reference, parentId,
+                    CreditLedgerEntryType.CHARGEBACK_CREDIT_RESTORE)) {
+            return false;
+        }
+        writeLedgerEntry(parentId, amount, CreditLedgerEntryType.CHARGEBACK_CREDIT_RESTORE, reference,
+            "Card dispute resolved in Skillars' favour — credit restored");
+        return true;
+    }
+
+    /**
      * Compensation for a cash-out whose Stripe refund failed: restores the debited net and fee as
      * two {@code CASH_OUT_REVERSAL} rows tagged with the same {@code cashOutId}, in ONE transaction —
      * two separate {@code writeLedgerEntry} calls could commit the net and lose the fee.
@@ -136,6 +191,17 @@ public class CreditWalletService {
     @Transactional
     public void writeLedgerEntry(Long parentId, BigDecimal amount, String type,
                                   UUID referenceId, String description) {
+        writeLedgerEntry(parentId, amount, type, referenceId, description, null, null);
+    }
+
+    /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute: as {@link #writeLedgerEntry(Long, BigDecimal, String,
+     * UUID, String)}, also recording the card charge a refund credit came from and its card part (V199), for
+     * a refund whose booking's own {@code booking_payments} row does not name that charge.
+     */
+    @Transactional
+    public void writeLedgerEntry(Long parentId, BigDecimal amount, String type, UUID referenceId,
+                                 String description, String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) == 0) {
             throw new IllegalArgumentException("Ledger entry amount must be non-zero");
         }
@@ -145,6 +211,8 @@ public class CreditWalletService {
         entry.setType(type);
         entry.setReferenceId(referenceId);
         entry.setDescription(description);
+        entry.setSourcePaymentIntentId(sourcePaymentIntentId);
+        entry.setSourceCardAmount(sourceCardAmount);
         ledgerRepository.save(entry);
         log.debug("Credit ledger entry written: parentId={} type={} amount={}", parentId, type, amount);
     }

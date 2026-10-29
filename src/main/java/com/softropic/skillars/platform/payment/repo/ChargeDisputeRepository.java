@@ -55,4 +55,34 @@ public interface ChargeDisputeRepository extends JpaRepository<ChargeDispute, St
         WHERE b.id = :bookingId AND sp.stripe_payment_intent_id IS NOT NULL
         """, nativeQuery = true)
     List<String> findFundingPaymentIntents(@Param("bookingId") java.util.UUID bookingId);
+
+    // --- fix/payment-dispute-credit-trace-and-lost-dispute (V199) ---
+
+    /** The disputes in {@code status} on any of {@code paymentIntentIds}. */
+    List<ChargeDispute> findByPaymentIntentIdInAndStatus(List<String> paymentIntentIds, String status);
+
+    /** The disputes in one of {@code statuses} on any of {@code paymentIntentIds}, locked in id order. */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT d FROM ChargeDispute d WHERE d.paymentIntentId IN :paymentIntentIds AND d.status IN :statuses "
+        + "ORDER BY d.stripeDisputeId")
+    List<ChargeDispute> findByPaymentIntentsAndStatusesForUpdate(
+        @Param("paymentIntentIds") List<String> paymentIntentIds, @Param("statuses") List<String> statuses);
+
+    /**
+     * A card dispute is open on a charge this payer made — a booking's, a pack's, or the charge a credit
+     * row names as its source. Cash-out is refused meanwhile (the dispute may still take credit back).
+     */
+    @Query(value = """
+        SELECT EXISTS (
+          SELECT 1 FROM payment.charge_disputes d
+          WHERE d.status = 'OPEN' AND (
+                EXISTS (SELECT 1 FROM payment.booking_payments bp
+                        JOIN booking.bookings b ON b.id = bp.booking_id
+                        WHERE bp.stripe_payment_intent_id = d.payment_intent_id AND b.parent_id = :parentId)
+             OR EXISTS (SELECT 1 FROM payment.session_pack_purchases sp
+                        WHERE sp.stripe_payment_intent_id = d.payment_intent_id AND sp.parent_id = :parentId)
+             OR EXISTS (SELECT 1 FROM payment.parent_credit_ledger l
+                        WHERE l.source_payment_intent_id = d.payment_intent_id AND l.parent_id = :parentId)))
+        """, nativeQuery = true)
+    boolean existsOpenDisputeForPayer(@Param("parentId") Long parentId);
 }

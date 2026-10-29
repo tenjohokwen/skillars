@@ -1455,6 +1455,8 @@ export default {
         'Keine Zahlungsmethode gespeichert. Bitte fügen Sie zuerst eine Karte hinzu.',
       cashOutTooSmall:
         'Dieser Betrag ist nach Abzug der Bearbeitungsgebühr zu klein für eine Auszahlung.',
+      cashOutBlockedByDispute:
+        'Auszahlungen sind ausgesetzt, solange eine Rückbuchung zu einer Ihrer Kartenzahlungen offen ist. Sobald sie geklärt ist, können Sie wieder auszahlen.',
       cashOutExceedsRefundable:
         'Auszahlungen werden auf Ihre letzte Kartenzahlung erstattet, die diesen Betrag nicht aufnehmen kann. Bitte wählen Sie einen kleineren Betrag.',
       refundFailed:

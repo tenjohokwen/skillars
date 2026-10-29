@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
+import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.stripe.model.Charge;
 import com.stripe.model.Dispute;
 import com.stripe.model.Event;
@@ -28,6 +29,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -42,6 +44,8 @@ class ChargeDisputeWebhookServiceTest {
     @Mock CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     @Mock ApplicationEventPublisher eventPublisher;
+    @Mock ParentCreditLedgerRepository ledgerRepository;
+    @Mock CreditWalletService creditWalletService;
 
     private ChargeDisputeWebhookService service;
     private final UUID bookingA = UUID.randomUUID();
@@ -51,8 +55,10 @@ class ChargeDisputeWebhookServiceTest {
     void setUp() {
         CoachPayoutAdjustmentService adjustment = new CoachPayoutAdjustmentService(coachPayoutRepository,
             coachPayoutFreezeRepository, coachPayoutOutboxSupport);
+        ChargebackCreditReversalService credit = new ChargebackCreditReversalService(ledgerRepository,
+            chargeDisputeRepository, creditWalletService, eventPublisher);
         service = new ChargeDisputeWebhookService(chargeDisputeRepository, coachPayoutRepository,
-            bookingPaymentRepository, adjustment, eventPublisher);
+            bookingPaymentRepository, adjustment, credit, eventPublisher);
     }
 
     private static Dispute dispute(String status, long amountCents) {
@@ -102,7 +108,7 @@ class ChargeDisputeWebhookServiceTest {
         assertThat(released.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
         verify(coachPayoutOutboxSupport, never()).enqueueReversal(any(), any());
         ArgumentCaptor<ChargeDispute> saved = ArgumentCaptor.forClass(ChargeDispute.class);
-        verify(chargeDisputeRepository).save(saved.capture());
+        verify(chargeDisputeRepository, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
         assertThat(saved.getValue().getStatus()).isEqualTo(ChargeDispute.STATUS_OPEN);
         assertThat(saved.getValue().getAmount()).isEqualByComparingTo("100.00");
         PaymentIntegrityAlertEvent alert = capturedAlert();
@@ -202,6 +208,134 @@ class ChargeDisputeWebhookServiceTest {
         service.onDisputeCreated(dispute("needs_response", 5_000));
 
         verify(coachPayoutRepository, never()).findFundedByPaymentIntentForUpdate(any());
+    }
+
+    // ── fix/payment-dispute-credit-trace-and-lost-dispute: wallet credit the disputed charge funded ──
+
+    private static ParentCreditLedgerRepository.TracedCredit traced(long parentId, String amount) {
+        return new ParentCreditLedgerRepository.TracedCredit() {
+            @Override public Long getParentId() { return parentId; }
+            @Override public BigDecimal getAmount() { return new BigDecimal(amount); }
+        };
+    }
+
+    private List<PaymentIntegrityAlertEvent> capturedAlerts() {
+        ArgumentCaptor<PaymentIntegrityAlertEvent> c = ArgumentCaptor.forClass(PaymentIntegrityAlertEvent.class);
+        verify(eventPublisher, org.mockito.Mockito.atLeastOnce()).publishEvent(c.capture());
+        return c.getAllValues();
+    }
+
+    @Test
+    void created_reversesTheUnspentCreditTheChargeFunded_andAlertsTheSpentPart() {
+        batchOfTwo();
+        when(ledgerRepository.findCreditFundedByPaymentIntent("pi_1")).thenReturn(List.of(traced(7L, "30.00")));
+        UUID ref = ChargebackCreditReversalService.reference("dp_1");
+        when(creditWalletService.debitChargebackCredit(eq(7L), eq(ref), eq(new BigDecimal("30.00")), any()))
+            .thenReturn(new BigDecimal("20.00"));
+
+        service.onDisputeCreated(dispute("needs_response", 10_000));
+
+        ArgumentCaptor<ChargeDispute> saved = ArgumentCaptor.forClass(ChargeDispute.class);
+        verify(chargeDisputeRepository, org.mockito.Mockito.atLeastOnce()).save(saved.capture());
+        assertThat(saved.getValue().getCreditReversalTarget()).isEqualByComparingTo("30.00");
+        List<PaymentIntegrityAlertEvent> alerts = capturedAlerts();
+        assertThat(alerts).anySatisfy(a -> {
+            assertThat(a.getReferenceId()).isEqualTo("dp_1");
+            assertThat(a.getReason()).isEqualTo("CREDIT_SHORTFALL OPENED 10.00 of 30.00");
+        });
+        assertThat(alerts).anySatisfy(a -> {
+            assertThat(a.getReferenceId()).isEqualTo("pi_1");
+            assertThat(a.getReason()).startsWith("OPENED").endsWith("credit=-20.00");
+        });
+    }
+
+    @Test
+    void created_redelivered_doesNotDebitAgain() {
+        ChargeDispute open = new ChargeDispute();
+        open.setStripeDisputeId("dp_1");
+        open.setPaymentIntentId("pi_1");
+        open.setAmount(new BigDecimal("100.00"));
+        open.setStatus(ChargeDispute.STATUS_OPEN);
+        open.setCreditReversalTarget(new BigDecimal("30.00"));
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.of(open));
+
+        service.onDisputeCreated(dispute("needs_response", 10_000));
+
+        verify(creditWalletService, never()).debitChargebackCredit(any(), any(), any(), any());
+    }
+
+    @Test
+    void closedWon_restoresTheReversedCredit() {
+        batchOfTwo();
+        ChargeDispute open = new ChargeDispute();
+        open.setStripeDisputeId("dp_1");
+        open.setPaymentIntentId("pi_1");
+        open.setAmount(new BigDecimal("100.00"));
+        open.setStatus(ChargeDispute.STATUS_OPEN);
+        open.setCreditReversalTarget(new BigDecimal("30.00"));
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.of(open));
+        UUID ref = ChargebackCreditReversalService.reference("dp_1");
+        com.softropic.skillars.platform.payment.repo.ParentCreditLedger reversal =
+            new com.softropic.skillars.platform.payment.repo.ParentCreditLedger();
+        reversal.setParentId(7L);
+        reversal.setAmount(new BigDecimal("-20.00"));
+        when(ledgerRepository.findByReferenceIdAndTypeOrderByParentId(ref,
+            com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL))
+            .thenReturn(List.of(reversal));
+        when(creditWalletService.restoreChargebackCredit(7L, ref, new BigDecimal("20.00"))).thenReturn(true);
+
+        service.onDisputeClosed(dispute("won", 10_000));
+
+        verify(creditWalletService).restoreChargebackCredit(7L, ref, new BigDecimal("20.00"));
+        assertThat(capturedAlert().getReason()).startsWith("WON").endsWith("restored=20.00");
+    }
+
+    @Test
+    void closedLost_disputedAmountCoveredByTheReversedCredit_leavesThePayoutWhole() {
+        batchOfTwo();
+        ChargeDispute open = new ChargeDispute();
+        open.setStripeDisputeId("dp_1");
+        open.setPaymentIntentId("pi_1");
+        open.setAmount(new BigDecimal("50.00"));
+        open.setStatus(ChargeDispute.STATUS_OPEN);
+        open.setCreditReversalTarget(new BigDecimal("50.00"));
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.of(open));
+        // One booking of the 100.00 batch was refunded to credit (50.00), and exactly that was disputed.
+        when(ledgerRepository.findCreditFundedByPaymentIntent("pi_1")).thenReturn(List.of(traced(7L, "50.00")));
+        when(chargeDisputeRepository.sumChargedByPaymentIntent("pi_1")).thenReturn(new BigDecimal("100.00"));
+        CoachPayout frozen = payout(bookingA, CoachPayoutStatus.FROZEN);
+        frozen.setChargebackFrozen(true);
+        when(coachPayoutRepository.findFundedByPaymentIntentForUpdate("pi_1")).thenReturn(List.of(frozen));
+
+        service.onDisputeClosed(dispute("lost", 5_000));
+
+        assertThat(open.getPayoutLossFraction()).isEqualByComparingTo("0");
+        assertThat(frozen.getNetAmount()).isEqualByComparingTo("45.00");
+        assertThat(frozen.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
+        verify(creditWalletService, never()).debitChargebackCredit(any(), any(), any(), any());
+    }
+
+    @Test
+    void closedLost_beforeCreated_tracesAndReversesTheCredit_thenCutsTheRestProRata() {
+        batchOfTwo();
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.empty());
+        when(ledgerRepository.findCreditFundedByPaymentIntent("pi_1")).thenReturn(List.of(traced(7L, "50.00")));
+        UUID ref = ChargebackCreditReversalService.reference("dp_1");
+        when(creditWalletService.debitChargebackCredit(eq(7L), eq(ref), eq(new BigDecimal("50.00")), any()))
+            .thenReturn(new BigDecimal("50.00"));
+        when(chargeDisputeRepository.sumChargedByPaymentIntent("pi_1")).thenReturn(new BigDecimal("100.00"));
+        CoachPayout frozen = payout(bookingA, CoachPayoutStatus.FROZEN);
+        frozen.setChargebackFrozen(true);
+        when(coachPayoutRepository.findFundedByPaymentIntentForUpdate("pi_1")).thenReturn(List.of(frozen));
+        BookingPayment card = new BookingPayment();
+        card.setStripeCharged(new BigDecimal("50.00"));
+        when(bookingPaymentRepository.findById(bookingA)).thenReturn(Optional.of(card));
+
+        // 75.00 disputed: 50.00 is set against the credit, the other 25.00 against the 50.00 that paid for sessions.
+        service.onDisputeClosed(dispute("lost", 7_500));
+
+        assertThat(frozen.getNetAmount()).isEqualByComparingTo("22.50");
+        assertThat(frozen.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
     }
 
     private static Event eventWithKey(String key) {

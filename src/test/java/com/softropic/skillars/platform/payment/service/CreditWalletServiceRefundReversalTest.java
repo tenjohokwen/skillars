@@ -33,6 +33,7 @@ class CreditWalletServiceRefundReversalTest {
     @Mock StripeCustomerRepository stripeCustomerRepository;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock CashOutReconciliationRepository cashOutReconciliationRepository;
+    @Mock com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository chargeDisputeRepository;
 
     private CreditWalletService service;
     private final UUID bookingId = UUID.randomUUID();
@@ -40,7 +41,7 @@ class CreditWalletServiceRefundReversalTest {
     @BeforeEach
     void setUp() {
         service = new CreditWalletService(ledgerRepository, stripeCustomerRepository, lockRetryer,
-            cashOutReconciliationRepository);
+            cashOutReconciliationRepository, chargeDisputeRepository);
         when(stripeCustomerRepository.findByIdForUpdateWaiting(5L)).thenReturn(Optional.of(new StripeCustomer()));
     }
 

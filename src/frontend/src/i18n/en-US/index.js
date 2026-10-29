@@ -2210,6 +2210,8 @@ export default {
       insufficientCredit: 'Insufficient credit balance for this withdrawal',
       noPaymentMethod: 'No payment method saved. Add a card first.',
       cashOutTooSmall: 'This amount is too small to cash out once the processing fee is deducted.',
+      cashOutBlockedByDispute:
+        'Cash-outs are paused while a card dispute on one of your payments is open. You can cash out again once it is resolved.',
       cashOutExceedsRefundable:
         'Cash-outs are refunded to your most recent card payment, which cannot take this much. Try a smaller amount.',
       refundFailed: 'The refund to your card failed. Your credit has been restored.',
