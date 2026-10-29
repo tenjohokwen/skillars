@@ -1784,6 +1784,7 @@ export default {
   booking: {
     requests: {
       statusRequested: 'Awaiting coach response',
+      statusProposedByCoach: 'Awaiting your confirmation',
       statusAccepted: 'Accepted',
       statusConfirmed: 'Confirmed',
       statusUpcoming: 'Upcoming',
@@ -1953,6 +1954,22 @@ export default {
       declineFailed: 'Could not decline reschedule. Please try again.',
       proposeNewTime: 'Propose New Time',
     },
+    proposal: {
+      proposedLabel: 'Your coach proposed this session. Nothing is charged until you confirm.',
+      confirm: 'Confirm',
+      decline: 'Decline',
+      withdraw: 'Withdraw request',
+      withdrawProposal: 'Withdraw proposal',
+      awaitingParent: 'Proposed by you — awaiting parent confirmation',
+      confirmTitle: 'Confirm this session?',
+      confirmBody:
+        'Confirming books this session. Payment is taken now, from your session pack if the coach used one, otherwise from your credit and saved card.',
+      confirmed: 'Session confirmed',
+      confirmFailed: 'Could not confirm this session. Please try again.',
+      declined: 'Proposal declined',
+      withdrawn: 'Request withdrawn',
+      withdrawFailed: 'Could not withdraw this request. Please try again.',
+    },
     cancel: {
       cta: 'Cancel',
       dialogTitle: 'Cancel this session?',
@@ -2011,6 +2028,12 @@ export default {
         "This coach's availability changed since you loaded this page. Please pick a new time.",
       weekStartOutOfRange: 'That week is too far in the past or future to view.',
       batchAlreadyProcessed: 'These requests have already been handled.',
+      requestNotPending: 'This request has already been answered.',
+      notACoachProposal: 'Only a session your coach proposed can be confirmed here.',
+      parentConfirmationRequired: 'You proposed this session, so only the family can confirm it.',
+      tooManyPendingRequests:
+        'You already have the maximum number of requests waiting for this coach. Wait for an answer or withdraw one first.',
+      beyondBookingHorizon: 'That date is too far ahead to book yet. Pick an earlier date.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',
       notReschedulable: 'This session can no longer be rescheduled.',
       rescheduleAlreadyPending:

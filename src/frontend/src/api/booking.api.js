@@ -31,6 +31,14 @@ export const declineBooking = (id) =>
 
 export const getParentBookings = () => api.get('/api/bookings/requests')
 
+// fix/booking-request-consent: the parent confirms a coach-proposed booking (accepts and charges it, so
+// the same 20s budget as acceptBooking) or withdraws any of their bookings still REQUESTED — their own
+// request, or a coach proposal they decline.
+export const confirmProposedBooking = (id) =>
+  api.put(`/api/bookings/requests/${id}/confirm`, undefined, { timeout: 20000 })
+
+export const withdrawBookingRequest = (id) => api.put(`/api/bookings/requests/${id}/withdraw`)
+
 export const getBookingRequestConfig = () => api.get('/api/bookings/requests/config')
 
 // skillars-deferred-39: scoped to this call only (not the shared `api` instance) — 20s is generous

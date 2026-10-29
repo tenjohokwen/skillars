@@ -643,6 +643,11 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('booking.errors.playerNotBookable') })
     } else if (errorKey === 'booking.coachPricingUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.coachPricingUnavailable') })
+    } else if (errorKey === 'booking.tooManyPendingRequests') {
+      // fix/booking-request-consent (M2): per-parent pending-request cap and booking horizon.
+      $q.notify({ type: 'negative', message: t('booking.errors.tooManyPendingRequests') })
+    } else if (errorKey === 'booking.beyondBookingHorizon') {
+      $q.notify({ type: 'negative', message: t('booking.errors.beyondBookingHorizon') })
     } else if (errorKey === 'MISSING_RIGHTS') {
       // Post-split, MISSING_RIGHTS carries exactly one user-facing meaning on this path: the caller
       // does not own the player profile or the session pack they submitted. The four validation
@@ -739,6 +744,10 @@ async function submitBatchRequest() {
       $q.notify({ message: t('booking.errors.playerNotBookable'), type: 'negative' })
     } else if (errorKey === 'booking.coachPricingUnavailable') {
       $q.notify({ message: t('booking.errors.coachPricingUnavailable'), type: 'negative' })
+    } else if (errorKey === 'booking.tooManyPendingRequests') {
+      $q.notify({ message: t('booking.errors.tooManyPendingRequests'), type: 'negative' })
+    } else if (errorKey === 'booking.beyondBookingHorizon') {
+      $q.notify({ message: t('booking.errors.beyondBookingHorizon'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {

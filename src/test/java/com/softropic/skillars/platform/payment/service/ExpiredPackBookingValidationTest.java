@@ -103,6 +103,16 @@ class ExpiredPackBookingValidationTest {
     void setUp() {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        // fix/booking-request-consent (M2): createBookingRequest now checks the booking horizon and the
+        // per-parent pending-request cap under the coach lock, before the pack validation under test. An
+        // unstubbed mock returns 0 (a 0-day horizon refuses every request), so stub the coded defaults —
+        // these fixtures book tomorrow with nothing else pending, inside both limits.
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_HORIZON_DAYS))
+            .thenReturn(com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_HORIZON_DAYS.defaultValue());
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH))
+            .thenReturn(com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH.defaultValue());
     }
 
     @Test

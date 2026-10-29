@@ -100,10 +100,13 @@ import java.util.stream.Collectors;
 public class BookingService {
 
     private static final Map<BookingEvent, Set<ActorRole>> EVENT_ROLES = Map.ofEntries(
-        Map.entry(BookingEvent.ACCEPT,            EnumSet.of(ActorRole.COACH)),
+        // fix/booking-request-consent: PARENT fires ACCEPT / INITIATE_PAYMENT only by confirming a
+        // coach-proposed booking (confirmProposedBooking); acceptAndInitiatePayment pins which actor may
+        // accept which booking (the coach never a proposal of their own, the parent only a proposal).
+        Map.entry(BookingEvent.ACCEPT,            EnumSet.of(ActorRole.COACH, ActorRole.PARENT)),
         Map.entry(BookingEvent.DECLINE,           EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.SCHEDULE_UPCOMING, EnumSet.of(ActorRole.SYSTEM)),
-        Map.entry(BookingEvent.INITIATE_PAYMENT, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
+        Map.entry(BookingEvent.INITIATE_PAYMENT, EnumSet.of(ActorRole.COACH, ActorRole.PARENT, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.PAYMENT_CAPTURED, EnumSet.of(ActorRole.COACH, ActorRole.SYSTEM)),
         Map.entry(BookingEvent.PAYMENT_FAILED,   EnumSet.of(ActorRole.SYSTEM)),
         Map.entry(BookingEvent.CANCEL_PARENT,    EnumSet.of(ActorRole.PARENT)),
@@ -432,6 +435,7 @@ public class BookingService {
         });
         requireBookableCoachStatus(lockedCoach, metaData);
         requirePlayerBookableUnderLock(req.playerId(), "BookingService.createBookingRequest");
+        requireRequestQuota(parentId, req.coachId(), List.of(req.requestedStartTime()));
 
         List<CoachAvailabilityWindow> windows = coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(req.coachId());
         if (req.availabilitySignature() != null) {
@@ -689,6 +693,7 @@ public class BookingService {
      */
     @Transactional
     public void acceptAndInitiatePayment(UUID bookingId, TransitionContext context) {
+        requireConsentingAcceptor(lockBookingForUpdate(bookingId), context);
         transitionInternal(bookingId, BookingEvent.ACCEPT, context, false);
         transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, context, true);
     }
@@ -766,6 +771,170 @@ public class BookingService {
             coach.getDisplayName(), booking.getRequestedStartTime(),
             booking.getCanonicalTimezone()
         ));
+    }
+
+    /**
+     * fix/booking-request-consent (H3): the parent confirms a booking the coach proposed ("repeat next
+     * week"). This is the consent step a coach-created booking used to skip — the coach could accept their
+     * own proposal and charge the parent's saved card (or draw a pack session) for a session nobody asked
+     * for. Runs the same accept pipeline as {@link #acceptBooking}: coach row lock, suspension and slot
+     * re-checks, the locked price, ACCEPT + INITIATE_PAYMENT, then {@link BookingAcceptedEvent}, whose
+     * AFTER_COMMIT payment listener charges exactly as for a coach accept.
+     *
+     * <p>Authorization is on {@code Booking.parentId} (a user id: the parent, or a self-booking adult
+     * player), never on {@code playerId} (a PlayerProfile PK). Lock order matches the coach accept
+     * paths: coach row, then booking row (inside {@link #acceptAndInitiatePayment}).
+     */
+    @Transactional
+    public BookingResponse confirmProposedBooking(UUID bookingId, Long parentUserId) {
+        // Unlocked read + ownership first (cancelBookingAsParent's order): an unauthorised caller must not
+        // be able to pin the coach or booking row before receiving their 403.
+        Booking booking = getBookingOrThrow(bookingId);
+        if (!Objects.equals(booking.getParentId(), parentUserId)) {
+            throw new OperationNotAllowedException("Parent does not own this booking",
+                Map.of("submitted booking id", bookingId), SecurityError.MISSING_RIGHTS);
+        }
+        if (!booking.isProposedByCoach()) {
+            throw new OperationNotAllowedException("Only a coach-proposed booking can be confirmed by the parent",
+                Map.of("submitted booking id", bookingId), BookingError.NOT_A_COACH_PROPOSAL);
+        }
+        if (!BookingStatus.REQUESTED.name().equals(booking.getStatus())) {
+            throw new OperationNotAllowedException("This proposal has already been answered",
+                Map.of("submitted booking id", bookingId), BookingError.REQUEST_NOT_PENDING);
+        }
+        // Confirming a session whose start has passed would charge for a session that can no longer happen.
+        if (!booking.getRequestedStartTime().isAfter(Instant.now(ClockProvider.getClock()))) {
+            throw new OperationNotAllowedException("The proposed session time has already passed",
+                Map.of("requested start time", booking.getRequestedStartTime()), BookingError.START_TIME_IN_PAST);
+        }
+
+        CoachProfile lockedCoach = lockRetryer.withBoundedRetry("BookingService.confirmProposedBooking", () -> {
+            CoachProfile c = coachProfileRepository.findByIdForUpdate(booking.getCoachId())
+                .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
+            // Refresh for the same reason as acceptBooking: the row may already be managed here.
+            entityManager.refresh(c, LockModeType.PESSIMISTIC_WRITE);
+            return c;
+        });
+        if (lockedCoach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            throw new OperationNotAllowedException("Coach is suspended",
+                Map.of("submitted coach id", lockedCoach.getId()), BookingError.COACH_UNAVAILABLE);
+        }
+        List<Booking> overlapping = bookingRepository.findOverlappingBookings(
+            booking.getCoachId(), booking.getRequestedStartTime(), booking.getRequestedEndTime(),
+            ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, bookingId);
+        if (!overlapping.isEmpty()) {
+            throw new OperationNotAllowedException(
+                "This slot is no longer available — another booking was accepted for the same time",
+                Map.of("submitted coach id", lockedCoach.getId(), "requested start time", booking.getRequestedStartTime(),
+                    "requested end time", booking.getRequestedEndTime()),
+                BookingError.SLOT_UNAVAILABLE);
+        }
+        resolveSessionPrice(booking);
+
+        try {
+            acceptAndInitiatePayment(bookingId, new TransitionContext(ActorRole.PARENT, parentUserId));
+        } catch (OptimisticLockingFailureException e) {
+            throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
+        }
+
+        Booking updated = getBookingOrThrow(bookingId);
+        BigDecimal sessionPrice = resolveSessionPrice(updated);
+        eventPublisher.publishEvent(new BookingAcceptedEvent(
+            this, updated.getId(), updated.getParentId(), updated.getCoachId(),
+            sessionPrice, updated.getSessionPackPurchaseId(),
+            resolveEmail(updated.getParentId(), updated.getId()), lockedCoach.getDisplayName(),
+            updated.getRequestedStartTime(), updated.getCanonicalTimezone()
+        ));
+        log.info("Parent {} confirmed coach-proposed booking {}", parentUserId, bookingId);
+        return toResponse(updated, lockedCoach.getDisplayName(), resolvePlayerName(updated.getPlayerId()),
+            null, null, null, null);
+    }
+
+    /**
+     * fix/booking-request-consent (M1, H3): the parent withdraws a request of their own, or declines a
+     * coach's proposal — any booking still REQUESTED. Nothing has been charged before accept, so nothing
+     * is refunded and nothing is forfeited ({@code moneyTaken = false}); the coach is told the slot is free.
+     *
+     * <p>Deliberately not {@link #cancelBookingAsParent}: that applies the paid-booking refund rules to
+     * whatever status it finds, so a "withdraw" click racing a coach accept would cancel a booking that
+     * was charged a moment earlier — inside 24h, a forfeit. This method refuses anything but REQUESTED,
+     * read under the booking row lock ({@code REQUEST_NOT_PENDING}).
+     */
+    @Transactional
+    public void withdrawBookingRequest(UUID bookingId, Long parentUserId) {
+        Booking unlocked = getBookingOrThrow(bookingId);
+        if (!Objects.equals(unlocked.getParentId(), parentUserId)) {
+            throw new OperationNotAllowedException("Parent does not own this booking",
+                Map.of("submitted booking id", bookingId), SecurityError.MISSING_RIGHTS);
+        }
+        Booking booking = lockBookingForUpdate(bookingId);
+        if (!BookingStatus.REQUESTED.name().equals(booking.getStatus())) {
+            throw new OperationNotAllowedException("This request has already been answered",
+                Map.of("submitted booking id", bookingId), BookingError.REQUEST_NOT_PENDING);
+        }
+        long hoursBeforeSession = ChronoUnit.HOURS.between(
+            Instant.now(ClockProvider.getClock()), booking.getRequestedStartTime());
+        String parentEmail = resolveEmail(parentUserId, bookingId);
+        String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
+
+        transition(bookingId, BookingEvent.CANCEL_PARENT, new TransitionContext(ActorRole.PARENT, parentUserId));
+
+        eventPublisher.publishEvent(new BookingCancelledByParentEvent(
+            this, bookingId, parentUserId, booking.getCoachId(),
+            booking.getSessionPackPurchaseId(), hoursBeforeSession, false,
+            BigDecimal.ZERO, parentEmail, coachEmail,
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), false, false
+        ));
+        log.info("Parent {} withdrew REQUESTED booking {} (coach proposal: {})",
+            parentUserId, bookingId, booking.isProposedByCoach());
+    }
+
+    /**
+     * fix/booking-request-consent: who may accept which booking. A coach-proposed booking is accepted only
+     * by its parent (the consent step); any other booking only by the coach, never by a parent. Called by
+     * {@link #acceptAndInitiatePayment} under the booking row lock, so every accept path — single, batch
+     * and parent confirm — passes through it.
+     */
+    private static void requireConsentingAcceptor(Booking booking, TransitionContext context) {
+        boolean parentActor = context.actorRole() == ActorRole.PARENT;
+        if (booking.isProposedByCoach() && !parentActor) {
+            throw new OperationNotAllowedException("A coach-proposed booking must be confirmed by the parent",
+                Map.of("booking id", booking.getId()), BookingError.PARENT_CONFIRMATION_REQUIRED);
+        }
+        if (!booking.isProposedByCoach() && parentActor) {
+            throw new OperationNotAllowedException("Only a coach-proposed booking can be confirmed by the parent",
+                Map.of("booking id", booking.getId()), BookingError.NOT_A_COACH_PROPOSAL);
+        }
+        if (parentActor && !Objects.equals(booking.getParentId(), context.actorUserId())) {
+            throw new OperationNotAllowedException("Parent does not own this booking", SecurityError.MISSING_RIGHTS);
+        }
+    }
+
+    /**
+     * fix/booking-request-consent (M2): request-time limits shared by single and batch creation. Every
+     * {@code requestedStarts} entry must be within {@code booking.request.maxHorizonDays}, and the parent's
+     * requests awaiting this coach (coach proposals excluded) plus the new ones must not exceed
+     * {@code booking.request.maxPendingPerCoach}. Must run under the coach row lock — that is what
+     * serialises two concurrent creates for the same parent and coach, so both cannot pass the count.
+     */
+    void requireRequestQuota(Long parentId, UUID coachId, Collection<Instant> requestedStarts) {
+        long horizonDays = configService.getBoundedLong(ConfigBounds.BOOKING_REQUEST_MAX_HORIZON_DAYS);
+        Instant horizon = Instant.now(ClockProvider.getClock()).plus(horizonDays, ChronoUnit.DAYS);
+        for (Instant start : requestedStarts) {
+            if (start.isAfter(horizon)) {
+                throw new OperationNotAllowedException("Requested start time is beyond the booking horizon",
+                    Map.of("requested start time", start, "max horizon days", horizonDays),
+                    BookingError.BEYOND_BOOKING_HORIZON);
+            }
+        }
+        long maxPending = configService.getBoundedLong(ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH);
+        long pending = bookingRepository.countPendingParentRequests(parentId, coachId);
+        if (pending + requestedStarts.size() > maxPending) {
+            throw new OperationNotAllowedException("Too many requests are already awaiting this coach",
+                Map.of("pending requests", pending, "new requests", requestedStarts.size(),
+                    "max pending per coach", maxPending),
+                BookingError.TOO_MANY_PENDING_REQUESTS);
+        }
     }
 
     @Transactional(readOnly = true)
@@ -1622,7 +1791,8 @@ public class BookingService {
             batchSize,
             b.getPlayerRequest(),
             receiptAvailable,
-            b.getRequestedStartTime() == null ? null : coachNoShowReportableAt(b.getRequestedStartTime())
+            b.getRequestedStartTime() == null ? null : coachNoShowReportableAt(b.getRequestedStartTime()),
+            b.isProposedByCoach()
         );
     }
 }

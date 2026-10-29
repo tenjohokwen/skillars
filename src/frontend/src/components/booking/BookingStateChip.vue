@@ -14,6 +14,9 @@ const props = defineProps({
   // type logged an "Invalid prop" warning on every render. useBookingSse only interpolates the id
   // into an EventSource URL, so a Number needs no companion coercion.
   bookingId: { type: [String, Number], default: null },
+  // fix/booking-request-consent: a coach-proposed booking is REQUESTED too, but it waits on the family,
+  // not on the coach — "Awaiting coach response" would tell the parent the opposite of the truth.
+  proposedByCoach: { type: Boolean, default: false },
 })
 const { t } = useI18n()
 
@@ -49,6 +52,9 @@ const statusMap = {
 }
 
 const label = computed(() => {
+  if (liveStatus.value === 'REQUESTED' && props.proposedByCoach) {
+    return t('booking.requests.statusProposedByCoach')
+  }
   const entry = statusMap[liveStatus.value]
   return entry ? t(entry.key) : liveStatus.value
 })

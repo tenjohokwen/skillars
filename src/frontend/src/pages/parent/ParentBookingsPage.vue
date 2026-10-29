@@ -93,6 +93,55 @@
             />
           </div>
 
+          <!-- fix/booking-request-consent: a session the coach proposed ("repeat next week") waits on
+               the family. Confirm accepts it and takes payment exactly like a coach accept; Decline
+               withdraws it. Nothing is charged until Confirm. -->
+          <div
+            v-if="(authStore.isParent || authStore.isPlayer) && isCoachProposal(booking)"
+            class="q-mt-xs"
+            data-testid="coach-proposal"
+          >
+            <div class="text-caption" style="color: var(--accent-warning)">
+              {{ t('booking.proposal.proposedLabel') }}
+            </div>
+            <div class="q-gutter-sm q-mt-xs">
+              <q-btn
+                unelevated
+                color="primary"
+                size="sm"
+                data-testid="confirm-proposal-btn"
+                :label="t('booking.proposal.confirm')"
+                :loading="proposalActionId === booking.id"
+                :disable="proposalActionId !== null && proposalActionId !== booking.id"
+                @click="openConfirmProposalDialog(booking)"
+              />
+              <q-btn
+                flat
+                size="sm"
+                data-testid="decline-proposal-btn"
+                :label="t('booking.proposal.decline')"
+                :loading="proposalActionId === booking.id"
+                :disable="proposalActionId !== null && proposalActionId !== booking.id"
+                @click="submitWithdraw(booking, 'declined')"
+              />
+            </div>
+          </div>
+          <!-- fix/booking-request-consent (M1): a parent can take back a request the coach has not
+               answered yet. Refused server-side once the coach has accepted (booking.requestNotPending),
+               so this never cancels a paid booking. -->
+          <q-btn
+            v-else-if="(authStore.isParent || authStore.isPlayer) && booking.status === 'REQUESTED'"
+            flat
+            dense
+            size="sm"
+            color="negative"
+            data-testid="withdraw-request-btn"
+            :label="t('booking.proposal.withdraw')"
+            :loading="proposalActionId === booking.id"
+            @click="submitWithdraw(booking, 'withdrawn')"
+            class="q-mt-xs self-start"
+          />
+
           <!-- Request Change button — parent-or-self-booking-player (skillars-deferred-69 AC4:
                widened from parent-only; RescheduleService.requestReschedule's ownership check is
                self-booking-compatible). -->
@@ -210,7 +259,11 @@
           />
         </q-item-section>
         <q-item-section side>
-          <BookingStateChip :status="booking.status" :booking-id="booking.id" />
+          <BookingStateChip
+            :status="booking.status"
+            :booking-id="booking.id"
+            :proposed-by-coach="booking.proposedByCoach === true"
+          />
           <!-- Confirm Completion button — parent-or-self-booking-player (skillars-deferred-69 AC4:
                widened from parent-only; BookingCompletionService.confirmCompletion's ownership check
                is self-booking-compatible). -->
@@ -331,6 +384,29 @@
             color="primary"
             :label="t('booking.cancel.confirm')"
             @click="submitCancelBooking"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Coach-proposed session confirmation dialog (fix/booking-request-consent) -->
+    <q-dialog v-model="confirmProposalDialogOpen">
+      <q-card data-testid="confirm-proposal-dialog" style="min-width: 320px; max-width: 480px">
+        <q-card-section>
+          <div class="text-h6">{{ t('booking.proposal.confirmTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          {{ t('booking.proposal.confirmBody') }}
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            unelevated
+            color="primary"
+            data-testid="confirm-proposal-submit-btn"
+            :label="t('booking.proposal.confirm')"
+            :loading="proposalActionId !== null"
+            @click="submitConfirmProposal"
           />
         </q-card-actions>
       </q-card>
@@ -544,6 +620,74 @@ async function submitNoShowCoach() {
     }
   } finally {
     noShowCoachId.value = null
+  }
+}
+
+// fix/booking-request-consent: a REQUESTED booking the coach created waits on the family's answer.
+function isCoachProposal(booking) {
+  return booking.status === 'REQUESTED' && booking.proposedByCoach === true
+}
+
+const proposalActionId = ref(null)
+const confirmProposalDialogOpen = ref(false)
+const confirmProposalBookingId = ref(null)
+
+// Shared by Confirm, Decline and Withdraw. These keys mean the booking moved on under a stale list (the
+// coach answered, it expired, the slot went), so the list is reloaded to show its real state.
+const PROPOSAL_ERROR_MESSAGES = {
+  MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
+  'booking.requestNotPending': 'booking.errors.requestNotPending',
+  'booking.notACoachProposal': 'booking.errors.notACoachProposal',
+  'booking.slotUnavailable': 'booking.errors.slotUnavailable',
+  'booking.coachUnavailable': 'booking.errors.coachUnavailable',
+  'booking.startTimeInPast': 'booking.errors.startTimeInPast',
+  'booking.concurrentModification': 'booking.errors.concurrentModification',
+  'booking.invalidTransition': 'booking.errors.requestNotPending',
+}
+
+async function notifyProposalError(err, fallbackKey) {
+  const errorKey = err?.response?.data?.errorMsg?.errorKey
+  $q.notify({ message: t(PROPOSAL_ERROR_MESSAGES[errorKey] || fallbackKey), type: 'negative' })
+  try {
+    await bookingStore.loadParentBookings()
+  } catch {
+    /* keep the current list */
+  }
+}
+
+function openConfirmProposalDialog(booking) {
+  confirmProposalBookingId.value = booking.id
+  confirmProposalDialogOpen.value = true
+}
+
+async function submitConfirmProposal() {
+  if (proposalActionId.value !== null) return
+  proposalActionId.value = confirmProposalBookingId.value
+  try {
+    await bookingStore.handleConfirmProposedBooking(confirmProposalBookingId.value)
+    confirmProposalDialogOpen.value = false
+    $q.notify({ message: t('booking.proposal.confirmed'), type: 'positive' })
+  } catch (err) {
+    confirmProposalDialogOpen.value = false
+    await notifyProposalError(err, 'booking.proposal.confirmFailed')
+  } finally {
+    proposalActionId.value = null
+  }
+}
+
+/** outcome: 'declined' (a coach proposal) or 'withdrawn' (the family's own request) — picks the toast. */
+async function submitWithdraw(booking, outcome) {
+  if (proposalActionId.value !== null) return
+  proposalActionId.value = booking.id
+  try {
+    await bookingStore.handleWithdrawBookingRequest(booking.id)
+    const message =
+      outcome === 'declined' ? t('booking.proposal.declined') : t('booking.proposal.withdrawn')
+    $q.notify({ message, type: 'positive' })
+  } catch (err) {
+    await notifyProposalError(err, 'booking.proposal.withdrawFailed')
+  } finally {
+    proposalActionId.value = null
   }
 }
 

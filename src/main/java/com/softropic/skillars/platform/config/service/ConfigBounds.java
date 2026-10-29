@@ -158,6 +158,24 @@ public final class ConfigBounds {
         new BoundedKey("coach.excusedCancellations.windowDays", 1L, 3650L, false,
             "out-of-range falls back to the coded default (90); tiny → the excused-cancel cap never bites", 90L);
 
+    /**
+     * fix/booking-request-consent (M2): {@code BookingService.requireRequestQuota} — how many of a parent's
+     * own requests may await one coach's answer at once (single and batch creation; coach-proposed bookings
+     * do not count). Requests are free and hold their slot, so without a cap one account could hide a
+     * coach's whole calendar. A single batch larger than this is refused too.
+     */
+    public static final BoundedKey BOOKING_REQUEST_MAX_PENDING_PER_COACH =
+        new BoundedKey("booking.request.maxPendingPerCoach", 1L, 100L, false,
+            "out-of-range falls back to the coded default (10); huge → one account can block a coach's calendar", 10L);
+
+    /**
+     * fix/booking-request-consent (M2): {@code BookingService.requireRequestQuota} — how many days ahead a
+     * session may be requested. Also bounds how far ahead a price can be locked ({@code agreed_price}).
+     */
+    public static final BoundedKey BOOKING_REQUEST_MAX_HORIZON_DAYS =
+        new BoundedKey("booking.request.maxHorizonDays", 1L, 730L, false,
+            "out-of-range falls back to the coded default (120); tiny → families cannot book next week", 120L);
+
     /** {@code ModerationSlaMonitorService} — 0/neg → everything instantly SLA-breached. */
     public static final BoundedKey MODERATION_SLA_MINUTES =
         new BoundedKey("platform.moderation_sla_minutes", 1L, 10080L, true,
@@ -503,7 +521,9 @@ public final class ConfigBounds {
         BOOKING_RECAP_EDIT_WINDOW_DAYS.key(),
         BOOKING_LATE_CANCEL_GRACE_MINUTES.key(),
         COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW.key(),
-        COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.key());
+        COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.key(),
+        BOOKING_REQUEST_MAX_PENDING_PER_COACH.key(),
+        BOOKING_REQUEST_MAX_HORIZON_DAYS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -546,7 +566,9 @@ public final class ConfigBounds {
             BOOKING_RECAP_EDIT_WINDOW_DAYS,
             BOOKING_LATE_CANCEL_GRACE_MINUTES,
             COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW,
-            COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS));
+            COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS,
+            BOOKING_REQUEST_MAX_PENDING_PER_COACH,
+            BOOKING_REQUEST_MAX_HORIZON_DAYS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

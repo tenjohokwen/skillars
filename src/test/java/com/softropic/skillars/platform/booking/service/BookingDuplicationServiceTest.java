@@ -10,8 +10,8 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
-import com.softropic.skillars.platform.payment.service.PackSessionService;
-import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -24,6 +24,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -44,7 +45,7 @@ class BookingDuplicationServiceTest {
     @Mock private BookingRepository bookingRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private UserRepository userRepository;
-    @Mock private PackSessionService packSessionService;
+    @Mock private SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock private EntityManager entityManager;
@@ -65,7 +66,7 @@ class BookingDuplicationServiceTest {
     void setUp() {
         service = new BookingDuplicationService(
             bookingService, bookingRepository, coachProfileRepository,
-            userRepository, packSessionService, eventPublisher, coachAvailabilityWindowRepository,
+            userRepository, sessionPackPurchaseRepository, eventPublisher, coachAvailabilityWindowRepository,
             entityManager, lockRetryer
         );
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
@@ -94,7 +95,8 @@ class BookingDuplicationServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
-        when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenReturn(activePackId);
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(List.of(pack(activePackId, PARENT_ID)));
 
         // Override the start time to be far enough in the past that +7 days is in the future
         Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
@@ -128,6 +130,9 @@ class BookingDuplicationServiceTest {
         assertThat(saved.getPlayerId()).isEqualTo(PLAYER_ID);
         assertThat(saved.getParentId()).isEqualTo(PARENT_ID);
         assertThat(saved.getSessionPackPurchaseId()).isEqualTo(activePackId);
+        // fix/booking-request-consent (H3): only the parent can confirm it; the coach cannot accept it.
+        assertThat(saved.isProposedByCoach()).isTrue();
+        assertThat(saved.getStatus()).isNull(); // REQUESTED by @PrePersist, like every new request
 
         ArgumentCaptor<DuplicateBookingProposedEvent> eventCaptor =
             ArgumentCaptor.forClass(DuplicateBookingProposedEvent.class);
@@ -192,23 +197,82 @@ class BookingDuplicationServiceTest {
             .hasMessageContaining("COMPLETED");
     }
 
+    /**
+     * fix/booking-request-consent (packs-subs L2): a card-paid session can be repeated — no active pack used
+     * to throw, so the price-lock branch was dead. Now the coach's current price is locked instead.
+     */
     @Test
-    void duplicateNextWeek_noCreditsAvailable_throws() {
-        // Start time 6 days ago → +7 days is in the future (1 day from now)
+    void duplicateNextWeek_noActivePack_locksTheCoachPriceInstead() {
         Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
         completedBooking.setRequestedStartTime(originalStart);
         completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+        stubHappyPathUpToPack();
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any())).thenReturn(List.of());
+        when(bookingService.requireRequestTimePrice(COACH_ID)).thenReturn(new BigDecimal("45.00"));
 
+        service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
+
+        ArgumentCaptor<Booking> captor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(captor.capture());
+        assertThat(captor.getValue().getSessionPackPurchaseId()).isNull();
+        assertThat(captor.getValue().getAgreedPrice()).isEqualByComparingTo("45.00");
+        assertThat(captor.getValue().isProposedByCoach()).isTrue();
+    }
+
+    /**
+     * fix/booking-request-consent (packs-subs L2): the active pack must belong to the booking's own parent —
+     * a pack another parent of the same player bought is never attached; the next one of this parent is.
+     */
+    @Test
+    void duplicateNextWeek_skipsAPackBoughtByAnotherParent() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+        stubHappyPathUpToPack();
+        UUID otherParentsPack = UUID.randomUUID();
+        UUID ownPack = UUID.randomUUID();
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(List.of(pack(otherParentsPack, 999L), pack(ownPack, PARENT_ID)));
+
+        service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
+
+        ArgumentCaptor<Booking> captor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(captor.capture());
+        assertThat(captor.getValue().getSessionPackPurchaseId()).isEqualTo(ownPack);
+        verify(bookingService, never()).requireRequestTimePrice(any());
+    }
+
+    @Test
+    void duplicateNextWeek_onlyAnotherParentsPack_fallsBackToThePriceLock() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+        stubHappyPathUpToPack();
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(List.of(pack(UUID.randomUUID(), 999L)));
+        when(bookingService.requireRequestTimePrice(COACH_ID)).thenReturn(new BigDecimal("45.00"));
+
+        service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
+
+        ArgumentCaptor<Booking> captor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(captor.capture());
+        assertThat(captor.getValue().getSessionPackPurchaseId()).isNull();
+        assertThat(captor.getValue().getAgreedPrice()).isEqualByComparingTo("45.00");
+    }
+
+    private void stubHappyPathUpToPack() {
         when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
-        when(packSessionService.findActivePackId(PLAYER_ID, COACH_ID)).thenThrow(
-            new OperationNotAllowedException(
-                "No effective session credits available for this coach", SecurityError.MISSING_RIGHTS));
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(bookingRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+    }
 
-        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
-            .isInstanceOf(OperationNotAllowedException.class)
-            .hasMessageContaining("credits");
+    private static SessionPackPurchase pack(UUID purchaseId, Long parentId) {
+        SessionPackPurchase p = new SessionPackPurchase();
+        p.setPurchaseId(purchaseId);
+        p.setParentId(parentId);
+        return p;
     }
 
     /** Deferred-49 AC2: repeat-next-week must fit the coach's CURRENT availability. */
@@ -235,7 +299,7 @@ class BookingDuplicationServiceTest {
                 .isEqualTo(BookingError.SLOT_OUTSIDE_AVAILABILITY));
 
         verify(bookingRepository, never()).save(any());
-        verify(packSessionService, never()).findActivePackId(any(), any());
+        verify(sessionPackPurchaseRepository, never()).findActivePacks(any(), any(), any());
     }
 
     /** Deferred-79 AC1: repeat-next-week must not land on a slot the coach has explicitly blocked out. */
@@ -257,7 +321,7 @@ class BookingDuplicationServiceTest {
 
         verify(bookingRepository, never()).findOverlappingBookings(any(), any(), any(), any(), any());
         verify(bookingRepository, never()).save(any());
-        verify(packSessionService, never()).findActivePackId(any(), any());
+        verify(sessionPackPurchaseRepository, never()).findActivePacks(any(), any(), any());
     }
 
     @Test
@@ -276,7 +340,7 @@ class BookingDuplicationServiceTest {
             b.setId(UUID.randomUUID());
             return b;
         });
-        when(packSessionService.findActivePackId(any(), any())).thenReturn(null);
+        when(sessionPackPurchaseRepository.findActivePacks(any(), any(), any())).thenReturn(List.of());
 
         UUID duplicateId = service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
 
@@ -296,7 +360,7 @@ class BookingDuplicationServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
-        when(packSessionService.findActivePackId(any(), any())).thenReturn(null);
+        when(sessionPackPurchaseRepository.findActivePacks(any(), any(), any())).thenReturn(List.of());
         when(bookingService.requireRequestTimePrice(COACH_ID)).thenThrow(new OperationNotAllowedException(
             "This coach has not set a session price yet", BookingError.COACH_PRICING_UNAVAILABLE));
 
@@ -332,7 +396,7 @@ class BookingDuplicationServiceTest {
             eq(BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED),
             isNull());
         verify(bookingRepository, never()).save(any());
-        verify(packSessionService, never()).findActivePackId(any(), any());
+        verify(sessionPackPurchaseRepository, never()).findActivePacks(any(), any(), any());
     }
 
     @Test

@@ -76,6 +76,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Now 58 as of fix/payment-pack-refund-rounding's {@code PackRefundAllocationService.allocateSessionRefund}
  * and {@code releaseSessionRefund}: each a read-only {@code findByIdForUpdate(packId).orElse(null)} on the
  * pack row; the marker insert/delete, the ledger update and {@code save} run after it returns.
+ * Now 61 as of fix/booking-request-consent: {@code BookingService.confirmProposedBooking} (a coach-row
+ * {@code findByIdForUpdate}+{@code orElseThrow} plus {@code entityManager.refresh}, the acceptBooking shape)
+ * and {@code BookingBatchService.claimBatchForAccept}/{@code releaseAcceptClaim} (each a read-only batch-row
+ * {@code findByIdForUpdate}; the ACCEPTING / PENDING status write and {@code save} run after
+ * {@code withBoundedRetry} returns — in the claim after {@code .orElseThrow}, in the release inside the
+ * chained {@code .ifPresent(}, which the balanced-paren scan correctly excludes).
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -167,7 +173,7 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 58;
+    private static final int EXPECTED_CALL_SITE_COUNT = 61;
 
     private record CallSite(String file, int line, String argument) {
     }
