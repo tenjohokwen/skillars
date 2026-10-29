@@ -28,184 +28,250 @@
   <main class="content">
     <div class="breadcrumb"><a href="../index.html">Home</a> / Money &amp; Commercial Model</div>
     <h1>Money &amp; Commercial Model</h1>
-    <p class="subtitle">Every rule that moves money in Skillars, in one place — how a session gets paid for, what the platform takes, and what happens on cancellation, expiry, and refund.</p>
+    <p class="subtitle">Every rule that moves money in Skillars, in one place — how a session gets paid for, when the coach is paid, what the platform takes, and what happens on cancellation, expiry, dispute and refund.</p>
 
     <div class="callout">
-      <p>Figures on this page are the values currently seeded in configuration. Nearly all of them are
-      runtime-tunable by an admin without a redeploy, so treat them as <em>current defaults</em> rather than
-      constants — but they are the numbers the product ships with today.</p>
+      <p>Figures on this page are the current defaults. Most are runtime-tunable by an admin on the
+      <code>/admin/config</code> page without a redeploy, so treat them as <em>current defaults</em> rather than
+      constants. A few are fixed in code and need a release to change: the 24-hour refund window, the 60-day pack
+      validity, and the 30-day / 14-day pack-extension rule.</p>
     </div>
 
-    <h2>The one path money takes</h2>
+    <h2>How a session gets paid for</h2>
     <p>
-      There used to be several. There is now exactly one route from a parent's card to a coach's bank account, and
-      understanding it explains most of the product's commercial behaviour:
+      A family pays for a session in one of two ways: <strong>per session</strong> at the coach's listed price (from
+      their credit wallet first, then their saved card), or by spending one credit from a <strong>session pack</strong>
+      they bought from that coach in advance. Either way, money is taken by the platform when the booking is
+      confirmed, and the coach is paid only <em>after</em> the session has happened:
     </p>
     <pre class="mermaid">
 flowchart LR
-    A["Coach publishes ONE<br/>session pack"] --> B["Parent saves a card"]
-    B --> C["Parent buys the pack<br/>(charged up front)"]
-    C --> D["Parent holds credits<br/>with that coach"]
-    D --> E["Parent requests a booking<br/>spending one credit"]
-    E --> F["Coach accepts"]
-    F --> G["Stripe destination charge<br/>coach payout + platform commission"]
+    A["Parent requests a session<br/>(price locked now)"] --> B["Coach accepts"]
+    B --> C["Platform takes payment:<br/>pack credit, or wallet then card"]
+    C --> D["Session happens<br/>and is completed"]
+    D --> E["48h hold<br/>(dispute window)"]
+    E --> F["Coach paid price minus<br/>8% commission via Stripe"]
     </pre>
+    <ul>
+      <li><strong>The price is locked when the request is made.</strong> If the coach changes their price later, the
+        family still pays what they were quoted. A coach with no per-session price set cannot be booked per session
+        at all (the booking page says so); only pack bookings work for them.</li>
+      <li><strong>In practice the first purchase is a pack.</strong> The "Book a session" button on a coach's profile
+        only appears once the family holds unused pack credits with that coach. Until then it reads "Buy sessions" and
+        leads to the pack purchase page. Per-session (wallet/card) payment is offered on the booking request page and
+        for coach proposals, so a family with no pack and a coach with no pack effectively can't start.</li>
+      <li><strong>Nothing is charged until the booking is confirmed.</strong> Requests are free. A request the coach
+        never answers expires after 48 hours (or at its start time). A failed card charge declines the booking.</li>
+      <li><strong>The coach is paid per completed session.</strong> This applies to card, wallet and pack sessions alike.
+        For a pack, the coach receives that session's share of what the pack cost, as each session completes. The
+        48-hour hold gives a family time to raise a problem before the money leaves the platform.</li>
+    </ul>
     <div class="callout warn">
-      <p><strong>No pack means no bookings.</strong> Credits are the only entry point to a booking, and credits come
-      only from a coach's published pack. A coach who leaves the pack step of their profile builder empty is listed
-      in the marketplace but cannot be booked by anyone. This is the most common cause of "I'm live but getting no
-      requests" — see <a href="../coach/index.html">Coach</a>.</p>
+      <p><strong>A coach without Stripe Connect cannot be booked.</strong> Booking requests to a coach whose Stripe
+      onboarding is incomplete are refused at request time. Stripe account status is re-checked daily, so a coach
+      whose account Stripe restricts stops being bookable even if a notification was missed. Payouts that Stripe
+      refuses go <em>on hold</em> and are retried automatically once the coach finishes onboarding (an admin can also
+      release them from the coach's revenue view on <code>/admin/finance</code>).</p>
     </div>
+
+    <h3>Booking request rules that affect money</h3>
+    <ul>
+      <li><strong>Coach-proposed sessions need the parent's consent.</strong> A coach's "repeat next week" creates a
+        <em>proposal</em>. Nothing is charged until the parent presses <strong>Confirm</strong> on their bookings page,
+        and the parent can decline it instead. A coach cannot accept their own proposal.</li>
+      <li><strong>Parents can withdraw any request still awaiting an answer</strong>. Nothing has been charged, so
+        nothing is refunded or forfeited.</li>
+      <li><strong>Request limits:</strong> at most 10 open requests per family per coach, and no further ahead than
+        120 days. This stops one account blocking a coach's calendar with free requests.</li>
+      <li><strong>Batch bookings</strong> (several slots in one go, up to <code>booking.batch.maxSize</code>, seeded at 5) are paid from the wallet and the card,
+        never from a pack. The review dialog shows the price per session, the total, and the wallet/card split before
+        the parent submits.</li>
+    </ul>
 
     <h2>Session packs</h2>
     <table>
       <thead><tr><th>Rule</th><th>Detail</th></tr></thead>
       <tbody>
-        <tr><td>One active pack per coach</td><td>A coach defines a session count, a total price, and a label. Publishing a new pack deactivates the previous one. Credits already sold are unaffected — deactivation changes what is on sale, not what was bought.</td></tr>
-        <tr><td>Paid up front</td><td>The parent is charged the full pack price at purchase, not per session.</td></tr>
-        <tr><td>Scoped to one coach</td><td>Credits are not transferable between coaches. A parent using three coaches buys three packs.</td></tr>
+        <tr><td>One active pack per coach</td><td>A coach defines a session count, a total price, and a label. Publishing a new pack deactivates the previous one. Packs already sold are unaffected, including their price.</td></tr>
+        <tr><td>Paid up front</td><td>The full pack price is charged to the saved card at purchase. Parents and self-registered adult players can both buy packs.</td></tr>
+        <tr><td>Scoped to one coach and one player</td><td>Credits can't be moved to another coach or another child.</td></tr>
         <tr><td>Expiry</td><td>60 days from purchase.</td></tr>
-        <tr><td>Extension</td><td>The <strong>coach</strong> can extend a pack by 30 days — once only, and only within the 14 days before it expires.</td></tr>
-        <tr><td>Expiry warning</td><td>A warning email goes out when a pack with sessions remaining is within 14 days of expiring, sent once per pack rather than daily.</td></tr>
-        <tr><td>Forfeiture</td><td>Unused sessions are <strong>forfeited</strong> at expiry — not refunded, not returned to the wallet. The parent is emailed and told how many they lost.</td></tr>
+        <tr><td>Extension</td><td>The <strong>coach</strong> can extend a pack by 30 days, once only, and only within the 14 days before it expires (the <strong>Extend</strong> action on their pack page).</td></tr>
+        <tr><td>Expiry warning</td><td>One email when a pack with sessions remaining is 14 days from expiry.</td></tr>
+        <tr><td>Forfeiture</td><td>Unused sessions are <strong>forfeited</strong> at expiry: not refunded, not returned to the wallet. The parent is emailed how many they lost. The coach is not paid for them, so the platform keeps that money.</td></tr>
+        <tr><td>Frozen or revoked</td><td>While a card dispute (chargeback) on the pack purchase is open, the pack can't be spent. If the platform loses that dispute, or the charge is refunded outside the app, the remaining sessions are revoked. If the coach is suspended, the unused sessions are refunded to the wallet and the pack is closed.</td></tr>
       </tbody>
     </table>
 
     <h3>Pausing a pack</h3>
-    <p>A parent can pause a pack to stop the expiry clock — for an injury or a holiday — with tight limits:</p>
+    <p>A parent can pause a pack from the pack dashboard to stop the expiry clock, for example for an injury or a holiday. The limits are tight:</p>
     <ul>
-      <li><strong>Once per pack lifetime.</strong> There is no second pause, ever.</li>
-      <li>Maximum pause length is <strong>90 days</strong> by default.</li>
-      <li>The pause must start today or later, and must start before the pack expires.</li>
-      <li>Expiry moves out by exactly the pause length.</li>
-      <li><strong>Conflicting bookings must be resolved first.</strong> If any of the parent's bookings with that
-        coach fall inside the pause window, the first attempt returns that list <em>without</em> applying the pause;
-        the parent must explicitly confirm cancelling them before it commits. This two-step confirm is intended
-        behaviour, not an error state.</li>
+      <li><strong>Once per pack lifetime.</strong> There is no second pause.</li>
+      <li>The pause can last at most <strong>90 days</strong> by default. It must start in the future and before the pack expires.</li>
+      <li>Expiry moves out by exactly the pause length. The pack can't be used during the pause, but it stays usable until a future pause starts.</li>
+      <li><strong>Bookings on this pack that fall inside the pause must be cancelled first.</strong> The first attempt
+        lists them <em>without</em> applying the pause; the parent confirms cancelling them, and the pause then applies.
+        Each cancelled session goes back to the pack (or to the wallet if the pack has already expired). The coach gets no
+        strike. This two-step confirm is intended behaviour, not an error.</li>
+      <li>A paid booking inside its 24-hour notice window <strong>cannot</strong> be cancelled by a pause. The pause is
+        refused until it is moved after that session. Otherwise, pausing would turn a late-cancel forfeit into a refund.</li>
     </ul>
 
     <h2>What the platform takes</h2>
     <table>
       <thead><tr><th>Charge</th><th>Default</th><th>Applies to</th></tr></thead>
       <tbody>
-        <tr><td>Platform commission</td><td><strong>8%</strong></td><td>Deducted from each session payment as the application fee on the Stripe destination charge — so the split happens in a single Stripe call rather than an invoice back to the coach.</td></tr>
-        <tr><td>Stripe processing fee</td><td><strong>2.5% + 0.25</strong></td><td>Stripe's own cut. Also charged separately to a parent cashing out credit.</td></tr>
+        <tr><td>Platform commission</td><td><strong>8%</strong></td><td>Deducted from the coach's payout for every paid session, whether paid by card, wallet or pack, and also for forfeited sessions. The rate is fixed when the payment is taken (for a pack, at purchase), so changing it later doesn't affect money already collected.</td></tr>
+        <tr><td>Stripe card fees</td><td>paid by the platform</td><td>Coaches don't pay card processing fees. Their revenue dashboard says so: payout = session amount minus commission. The admin finance page shows an <em>estimate</em> of these fees (2.5% + €0.25 per charge).</td></tr>
+        <tr><td>Cash-out fee</td><td><strong>2.5% + €0.25</strong></td><td>Charged to a parent who cashes wallet credit back to their card. It comes out of the amount they withdraw.</td></tr>
+        <tr><td>Expired pack sessions</td><td>kept by the platform</td><td>Unused sessions of an expired pack are never paid to the coach.</td></tr>
       </tbody>
     </table>
     <p>
-      A coach's revenue dashboard shows gross earnings with both deducted, so the figure they see is real take-home.
-      Coaches cannot be paid at all until Stripe Connect onboarding is complete — an incomplete Stripe account is
-      the most common reason a payment fails at booking time.
+      The coach's revenue dashboard (<code>/coach/revenue</code>) shows commission, the amount released to their
+      Stripe account, the amount still <em>pending release</em> (inside the 48h hold), and the amount <em>on hold</em>
+      (frozen by a dispute or refused by Stripe). "Released" means the transfer has started; Stripe then pays the
+      coach's bank on its own schedule.
     </p>
 
     <h2>Credit wallet</h2>
     <p>
-      Separately from coach-scoped session credits, a parent holds a <strong>cash balance</strong> with Skillars.
-      This is where refunds and adjustments land — money is never silently returned to a card.
+      As well as pack credits, each payer has a <strong>euro balance</strong> with Skillars. Refunds land here and are
+      never sent straight back to a card.
     </p>
     <ul>
-      <li>The ledger is append-only: a correction is a new reversing entry, never an edit. This means the statement
-        at <code>/parent/credit-statement</code> is a true audit trail.</li>
-      <li>Balance can be spent on future bookings, or <strong>cashed out</strong> back to the parent's card minus the
-        Stripe processing fee.</li>
-      <li>Where a booking is part-covered by wallet balance, credit is applied first and only the remainder is
-        charged to the card — a parent with enough balance never touches Stripe for that booking.</li>
+      <li>The ledger is append-only: a correction is a new entry, never an edit. The statement at
+        <code>/parent/credit-statement</code> is a true audit trail with a running balance.</li>
+      <li>Wallet balance is used first on every per-session booking; only the remainder is charged to the card.</li>
+      <li><strong>Cashable vs. booking-only credit.</strong> Most credit can be <strong>cashed out</strong> to the card
+        (minus the fee above). Some credit is <em>booking-only</em> and can never be cashed out. Today this is only the
+        refund for cancelling (with more than 24h notice) a session drawn on an <em>expired</em> pack. The wallet page
+        shows both amounts separately, and booking-only credit is spent first.</li>
+      <li>Cash-out is <strong>parent accounts only</strong>, and is blocked while any dispute or chargeback involving
+        that payer is open. The money goes back to the card charge that originally funded the credit.</li>
     </ul>
 
     <h2>Subscriptions</h2>
-    <p>Two entirely separate subscription products, easily confused because both are called "tiers":</p>
+    <p>There are two separate subscription products. Both are called "tiers", so they are easy to confuse:</p>
     <div class="card-grid">
       <div class="card">
         <h4>Coach subscriptions</h4>
         <p><strong>SCOUT → INSTRUCTOR → ACADEMY.</strong> Paid by the coach to unlock platform capability. The gating
-        is real, not marketing: a coach on the entry SCOUT tier sees a locked overlay instead of the session
-        builder.</p>
+        is real: a coach on the free SCOUT tier sees a locked overlay instead of the session builder, and has no video
+        storage.</p>
       </div>
       <div class="card">
         <h4>Player subscriptions</h4>
-        <p><strong>ATHLETE → SEMI_PRO → PRO.</strong> Bought by a parent for a child (or by an adult player),
-        unlocking video and skills-radar capability. SEMI_PRO and PRO are <strong>yearly billing only</strong>.</p>
+        <p><strong>ATHLETE → SEMI_PRO → PRO.</strong> Bought by a parent for a child, or by an adult player,
+        to unlock video and skills-radar features. SEMI_PRO and PRO are <strong>yearly billing only</strong>.</p>
       </div>
     </div>
     <div class="callout">
-      <p><strong>Upgrades and downgrades are deliberately asymmetric.</strong> An upgrade applies immediately with
-      proration. A downgrade is scheduled and only takes effect at the end of the current billing period — the
-      customer keeps what they paid for. A failed payment moves the subscription to past-due and, after a grace
-      period, downgrades it automatically.</p>
+      <p><strong>Upgrades and downgrades are deliberately asymmetric.</strong> An upgrade is charged immediately (prorated)
+      and unlocks only once that charge succeeds. A downgrade takes effect at the end of the current billing period, so
+      the customer keeps what they paid for. Downgrading to SCOUT means cancelling at period end. If a payment fails, the
+      subscription keeps its features for a <strong>7-day grace period</strong> and is then cancelled, dropping back to
+      the free tier. Saving a new card moves the customer's subscriptions onto it, retries the overdue invoice, and
+      resumes a paused subscription.</p>
     </div>
 
     <h2>Cancellations, no-shows, and refunds</h2>
-    <p>Who cancelled, and how close to the session, determines both the refund and whether the coach is penalised.</p>
+    <p>Who cancelled, and how close to the session, decides the refund, whether the coach is still paid, and whether the coach gets a strike.
+    "Refund" always means what the family actually paid (the locked price or the pack's per-session value), returned as wallet credit or a pack session.</p>
     <table>
-      <thead><tr><th>Scenario</th><th>Money actually returned</th><th>Coach penalised?</th></tr></thead>
+      <thead><tr><th>Scenario</th><th>Family gets back</th><th>Coach paid?</th><th>Coach strike?</th></tr></thead>
       <tbody>
-        <tr><td>Parent cancels &gt; 24h before</td><td>Full — pack session restored, or wallet credit issued</td><td>No</td></tr>
-        <tr><td>Parent cancels ≤ 24h before</td><td><strong>Nothing</strong> — fully forfeited</td><td>No</td></tr>
-        <tr><td>Coach cancels (any notice)</td><td>Full</td><td><strong>Yes</strong>, unless excused</td></tr>
-        <tr><td>Coach no-show</td><td>Full</td><td><strong>Yes</strong></td></tr>
-        <tr><td>Player no-show</td><td>Nothing — forfeited</td><td>No</td></tr>
+        <tr><td>Parent withdraws a request (not yet accepted)</td><td>Nothing was charged</td><td>No</td><td>No</td></tr>
+        <tr><td>Parent cancels &gt; 24h before the <em>original</em> start time</td><td>Full: pack session restored, or wallet credit</td><td>No</td><td>No</td></tr>
+        <tr><td>Parent cancels ≤ 24h before (including after the start time, up to 30 min)</td><td><strong>Nothing</strong>: forfeited</td><td><strong>Yes</strong>, normal payout</td><td>No</td></tr>
+        <tr><td>Parent cancels when the coach still hasn't started 30+ min after the start time</td><td>Full</td><td>No</td><td>No</td></tr>
+        <tr><td>Player no-show (coach can report it from 15 min after the start)</td><td>Nothing: forfeited</td><td><strong>Yes</strong>, normal payout</td><td>No</td></tr>
+        <tr><td>Coach cancels a paid booking (any notice)</td><td>Full</td><td>No</td><td><strong>Yes</strong>, unless excused</td></tr>
+        <tr><td>Coach no-show (parent can report it from 30 min after the start)</td><td>Full</td><td>No</td><td><strong>Yes</strong></td></tr>
+        <tr><td>Skillars cancels (coach suspension, safety hold, or an admin cancelling one booking)</td><td>Full</td><td>No</td><td>No</td></tr>
       </tbody>
     </table>
-    <div class="callout">
-      <p><strong>Fixed as of <code>skillars-deferred-33</code>.</strong> This page used to warn that a
-      cancelled booking's <code>refundEligibility</code> label (<code>FULL</code>/<code>PARTIAL</code>/
-      <code>NONE</code>) was never read and disagreed with the table above — a defect risking a chargeback.
-      That dead column and the code that wrote it were deleted outright rather than reconciled; the table
-      above is the single, accurate source of truth.</p>
-    </div>
-    <p>
-      "Excused" coach cancellations — mutual agreement, health/medical, family emergency, and weather — still refund
-      the parent in full but do <em>not</em> count against the coach. A refunded pack session is returned to the
-      pack; a refunded cash payment lands in the credit wallet.
-    </p>
+    <ul>
+      <li><strong>Rescheduling doesn't reopen the 24-hour window.</strong> Notice is measured from the earlier of the
+        original and the new start time. The cancel dialog warns parents about this.</li>
+      <li><strong>A session that has started can't be cancelled.</strong> The family raises a dispute instead (see below).
+        A live session nobody ends is closed automatically 2 hours after its scheduled end, which opens the family's
+        confirm/dispute window. A session that was never started is flagged to admins and is never paid or refunded
+        automatically.</li>
+      <li><strong>Excused coach cancellations</strong> (mutual agreement, health/medical, family emergency, weather)
+        still refund the family in full but don't count against the coach, up to <strong>3 in any rolling 90 days</strong>.
+        Any more excused cancellations in that window earn a strike, so that coaches can't avoid strikes by always picking
+        an excused reason.</li>
+      <li>A refunded pack session goes back to the pack, or to the wallet if the pack has expired since.</li>
+    </ul>
 
     <h3>Reliability strikes</h3>
     <p>
-      Unexcused coach cancellations and no-shows accumulate strikes on a rolling 30-day window, with two
-      consequences:
+      Unexcused coach cancellations, excused cancellations over the cap, and coach no-shows each add a strike.
+      Strikes count over a rolling 30-day window:
     </p>
     <ul>
-      <li><strong>3 strikes</strong> → marketplace visibility reduced.</li>
-      <li><strong>5 strikes</strong> → coach suspended pending admin review.</li>
+      <li><strong>3 strikes</strong> → visibility reduced: the coach is listed below all coaches in good standing in search results.</li>
+      <li><strong>5 strikes</strong> → <em>pending review</em>: hidden from search and sent to the admin queue. This
+        is not an automatic suspension. An admin decides on <code>/admin/coaches</code> whether to suspend,
+        reinstate, or add or remove strikes.</li>
     </ul>
     <p>
-      This is the platform's main lever over supply-side behaviour. Coaches see their own strike history and can
-      acknowledge strikes at <code>/coach/reliability</code>. Because strikes roll off after 30 days, a coach can
-      recover without intervention — but a suspension needs an admin to lift it, and
-      <a href="../admin/index.html">there is no admin UI for that today</a>.
+      Coaches see and acknowledge their strikes at <code>/coach/reliability</code>, and can appeal a strike within
+      14 days. Strikes drop out of the window after 30 days, but the coach's status does not recover on its own: an
+      admin has to reinstate a coach who is reduced or pending review.
+    </p>
+
+    <h2>Disputes and chargebacks</h2>
+    <p>
+      <strong>In-app disputes.</strong> A parent, an adult player or the coach can raise a dispute on a finished booking
+      within 14 days, and a family can also dispute a session that is in progress. While the dispute is open, the
+      coach's payout for that session is frozen. An admin resolves it on <code>/admin/disputes</code>:
+    </p>
+    <table>
+      <thead><tr><th>Resolution</th><th>Family</th><th>Coach</th></tr></thead>
+      <tbody>
+        <tr><td>Full / partial credit</td><td>Wallet credit, capped at what was paid minus anything already refunded</td><td>Payout cut by the same proportion (or partly reversed, if already paid)</td></tr>
+        <tr><td>No action / coach warning</td><td>Nothing</td><td>Paid normally</td></tr>
+        <tr><td>Uphold coach</td><td>Any refund they already received is taken back from the wallet, up to the current balance and never below zero</td><td>Paid the full amount, topped up if the payout had been cut. The platform absorbs any shortfall.</td></tr>
+      </tbody>
+    </table>
+    <p>
+      <strong>Card chargebacks</strong> (a family disputes the charge with their bank) freeze the coach payouts and any
+      pack paid by that charge. Wallet credit the charge funded is taken back, up to the available balance. If the
+      platform loses the chargeback, the coach's payout is cut and the pack's remaining sessions are revoked. If it
+      wins, everything is restored. When Stripe refuses to take money back from a coach who has already been paid, the
+      amount becomes <strong>coach debt</strong>, which is deducted from that coach's future payouts. Every one of these
+      events raises a "payment integrity" alert in the admin queue.
     </p>
 
     <h2>Gotchas worth knowing before you quote a number</h2>
     <div class="callout warn">
-      <p><strong>Forfeiture is real and it is silent.</strong> Between per-pack expiry, sub-6h cancellations, and
-      player no-shows, a parent can lose paid-for sessions in three different ways. Only pack expiry emails them.
-      This is the most likely source of billing complaints, and it is worth being straight about in marketing copy.</p>
+      <p><strong>Forfeiture hits the family, and they aren't emailed about it.</strong> A family can lose a paid
+      session in three ways: pack expiry, a cancellation inside 24 hours, or a player no-show. Only pack expiry
+      emails the parent. The cancel dialog warns about the 24-hour rule, but the late-cancel and no-show emails go to the
+      coach only. This is the most likely source of billing complaints, so be upfront about it in marketing copy.</p>
     </div>
     <div class="callout warn">
-      <p><strong>A card must be saved before any purchase.</strong> Session-pack purchase and player subscriptions
-      both disable their confirm button until a card is on file. A parent who expects to enter card details at
-      checkout will hit a gate earlier than they expect.</p>
+      <p><strong>A card must be saved before buying a pack or a subscription.</strong> Their confirm buttons stay
+      disabled until a card is on file, so a parent who expects to type card details at checkout hits this gate
+      earlier than expected.</p>
     </div>
     <div class="callout">
-      <p><strong>Batch bookings don't draw on a pack.</strong> When a parent selects several slots at once, the
-      batch settles against the credit wallet/card rather than pack credits. Only single booking requests offer a
-      pack selector.</p>
-    </div>
-    <div class="callout">
-      <p><strong>Config changes are not instant.</strong> Commission rate, strike thresholds and pack limits are all
-      admin-tunable at runtime, but the value is cached for around five minutes. A rate change that "didn't work"
-      has usually just not refreshed yet.</p>
+      <p><strong>Config changes are not instant.</strong> Commission rate, strike thresholds, grace minutes and pause
+      limits can be changed at runtime, but the values are cached for up to five minutes. A change that "didn't work"
+      has usually not refreshed yet. A commission change never applies retroactively.</p>
     </div>
 
     <h2>Related</h2>
     <div class="card-grid">
-      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>The paying customer — buying packs, managing the wallet, and cancelling bookings.</p></div>
-      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Publishes the pack, onboards with Stripe, and carries the reliability consequences.</p></div>
-      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Owns disputes, refunds beyond the standard matrix, and lifting suspensions — all API-only today.</p></div>
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>The paying customer: buying packs, managing the wallet, confirming coach proposals, cancelling and disputing.</p></div>
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Sets the price and the pack, onboards with Stripe, gets paid after each session, and carries the reliability consequences.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Resolves disputes, handles payment-integrity alerts, releases held payouts, and reviews coaches pending review, all from the admin console.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+    <footer class="page-footer">Skillars business documentation — last verified against master <code>2ad84416</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

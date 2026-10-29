@@ -31,124 +31,121 @@
     <p class="subtitle">An adult (18+) athlete who trains directly with a coach through Skillars — browsing coaches, doing assigned homework, and tracking their own skill development.</p>
 
     <h2>Who this persona is</h2>
-    <p>A Player is the person actually being coached. Skillars supports two very different kinds of player account: an <strong>adult self-registered Player</strong> (this page) who manages their own account end-to-end, and a <strong>minor player profile</strong> created and supervised by a Parent (no login of their own — see the <a href="../parent/index.html">Parent</a> page). Sports coverage centers on football/soccer today — the player profile asks for a playing position (Goalkeeper, Defender, Midfielder, Forward).</p>
+    <p>A Player is the person actually being coached. Skillars supports two very different kinds of player account: an <strong>adult self-registered Player</strong> (this page) who manages their own account end-to-end — booking, paying, confirming sessions — and a <strong>parent-managed player profile</strong> created and supervised by a Parent (no login of their own — see the <a href="../parent/index.html">Parent</a> page). Sports coverage centers on football/soccer today — the player profile asks for a playing position (Goalkeeper, Defender, Midfielder, Forward).</p>
 
     <h2>Your journey at a glance</h2>
     <pre class="mermaid">
 flowchart LR
     A["/player-register<br/>Create account"] --> B["/player/email-pending<br/>Check your email"]
     B --> C["/player/verify-email<br/>Click emailed link"]
-    C --> D["/player/verify-phone<br/>Enter 6-digit SMS code"]
+    C --> D["/login (or /player/verify-phone<br/>when phone OTP is switched on)"]
     D --> E["/player/profile-builder<br/>Pick your position"]
     E --> F["/player/locker-room/:id<br/>Your homework hub"]
-    F --> G["/marketplace<br/>Browse coaches"]
-    G --> H["/coaches/:coachId<br/>View coach & book"]
-    H --> I["Buy session pack"]
-    I --> J["Request booking"]
-    J --> K["Live session &<br/>coach feedback"]
-    H --> L["Write review"]
-    K --> M["/player/development/:id<br/>Skills Radar & progress"]
-    F --> N["/player/videos<br/>Upload drill videos"]
+    F --> G["/marketplace<br/>Find a coach"]
+    G --> H["/coaches/:coachId"]
+    H --> I["/parent/coaches/:id/purchase-sessions<br/>Buy the coach's pack"]
+    I --> J["/parent/coaches/:id/request-booking<br/>Request a session"]
+    J --> K["/parent/bookings<br/>Confirm, cancel, dispute"]
+    K --> M["/player/development/:id<br/>Skills Radar and progress"]
+    F --> N["/player/videos<br/>Upload homework videos"]
     K --> O["/messaging<br/>Chat with your coach"]
     </pre>
-    <p>As an adult self-registered player, you have full control over booking and paying for sessions with coaches directly — no parent account required.</p>
+    <p>As an adult self-registered player you book and pay for your own sessions — no parent account required. Several of your pages live under <code>/parent/...</code> URLs; that prefix is historical, the pages are shared with parents.</p>
 
     <h3>1. Registering as a player</h3>
     <p><strong>Why it matters:</strong> this is Skillars' self-serve acquisition path for adult athletes — no coach or parent has to invite them first.</p>
     <ol>
-      <li>Go to <code>/player-register</code> (not the generic <code>/register</code> page — that's a separate legacy form used for admin-style accounts, and using it will not create a usable Player account).</li>
-      <li>Fill in: First name, Last name, Email, Phone, Date of birth, Password. Ticking the Terms of Service and Privacy Policy checkboxes is required before the "Create Account" button becomes clickable.</li>
-      <li>The Date of birth field is validated live: if you enter a birth date under 18 years ago, a banner appears ("You must be 18 or older to register as a player") with a link to <code>/parent-register</code> instead — self-registration is adults-only by design; minors are onboarded by a parent.</li>
-      <li>First/Last name are also scanned for accidental contact info (e.g. a phone number typed into the name field) and warn you before submitting.</li>
-      <li>On submit, you land on <code>/player/email-pending</code>, which tells you to check your email and offers a "Resend email" button (60-second cooldown between resends).</li>
+      <li>Go to <code>/player-register</code> ("Create Player Account") — not the generic <code>/register</code> page, which is a separate legacy form and will not create a usable Player account.</li>
+      <li>Fill in: First Name, Last Name, Email, Phone Number, Date of Birth, Password. Ticking "I accept the Terms of Service" and "I accept the Privacy Policy" is required before "Create Account" becomes clickable.</li>
+      <li>Date of Birth is validated live: under 18 shows "You must be 18 or older to register directly." with an "Ask a parent to register instead" link to <code>/parent-register</code> — self-registration is adults-only by design.</li>
+      <li>First/Last name are scanned for accidental contact info (e.g. a phone number in the name field): "Contact details will be removed on save".</li>
+      <li>On submit you land on <code>/player/email-pending</code> ("Check your email"), with a "Resend email" button (60-second cooldown).</li>
     </ol>
     <div class="callout warn">
-      <p><strong>In local/dev environments, no real email is sent.</strong> The dev-mode email service only logs the subject line and suppresses the body — this is a known, common point of confusion, not a bug specific to registration.</p>
+      <p><strong>In local/dev environments, no real email is sent.</strong> The logging email transport only records each send in the application log; the rendered email (with the verification link) is written to disk only when <code>app.email.log.dump-dir</code> is configured. This is a common point of confusion, not a registration bug.</p>
     </div>
 
-    <h3>2. Verifying your email and phone</h3>
+    <h3>2. Verifying and finishing your profile</h3>
     <ol>
-      <li>Clicking the verification link in the email opens <code>/player/verify-email?token=...</code>, which auto-submits the token — you'll briefly see a spinner, then get redirected automatically.</li>
-      <li>You land on <code>/player/verify-phone</code>: a 6-digit one-time-passcode entry (auto-advances between digit boxes, and auto-submits once all 6 digits are filled — pasting a 6-digit code also works).</li>
-      <li>On success, you're taken to <code>/player/profile-builder</code>.</li>
+      <li>The verification link opens <code>/player/verify-email?token=...</code>, which submits the token automatically.</li>
+      <li>By default (<code>security.registration.phone-otp-required</code> is seeded <code>false</code>) you are then sent to <code>/login</code> to sign in. When phone OTP is switched on you go to <code>/player/verify-phone</code> first (6-digit code, auto-advance/auto-submit, paste works) and from there to the profile builder.</li>
+      <li>Signing in always routes through <code>/player/home</code>. If you have no player profile yet it sends you to <code>/player/profile-builder</code> ("One Last Step"): choose a <strong>Position</strong> and click "Finish Setup".</li>
+      <li>From then on, <code>/player/home</code> resolves your player ID and opens your Locker Room.</li>
     </ol>
 
-    <h3>3. Finishing your profile</h3>
+    <h3>3. Your Locker Room and dashboard</h3>
+    <p><strong>Why it matters:</strong> the Locker Room is where a coach's homework reaches the player between live sessions — the retention mechanic that keeps a player training on their own time.</p>
     <ol>
-      <li>At <code>/player/profile-builder</code>, the only required field today is <strong>Position</strong> (Goalkeeper, Defender, Midfielder, or Forward).</li>
-      <li>Clicking "Finish Setup" creates your player profile and takes you straight to your Locker Room.</li>
+      <li><code>/player/locker-room/:playerId</code> ("Player Locker Room") shows assigned drills as cards, labelled "Assigned by {coach}" when more than one coach has set homework. Tick "I've done this" to mark one complete; it then reads "Done!" and can't be unticked.</li>
+      <li>With nothing assigned you see "No homework yet".</li>
+      <li><code>/player/dashboard</code> ("My Dashboard", the drawer's Dashboard entry) shows three tiles: <strong>Upcoming Sessions</strong> ("{n} upcoming"), <strong>Credit Wallet</strong> (your balance, opens the Credit Statement) and <strong>Pending Approvals</strong> ("{n} awaiting coach response" — your requests the coach hasn't answered).</li>
+      <li>The drawer also lists Find a Coach, My bookings, Messages, Locker room, My videos, Credit Statement, Your session packs and Player Development.</li>
     </ol>
 
-    <h3>4. Your home base: the Locker Room</h3>
-    <p><strong>Why it matters:</strong> this is where a coach's homework assignments actually reach the player between live sessions — it's the retention mechanic that keeps a player training on their own time.</p>
+    <h3>4. Finding a coach and booking a session</h3>
     <ol>
-      <li>Logging in always sends you through <code>/player/home</code>, which silently resolves your own player ID and redirects you to <code>/player/locker-room/:playerId</code>.</li>
-      <li>If you have assigned homework, drills are grouped by the coach who assigned them, each shown as a drill card with a "Mark done" checkbox you tick off yourself (once checked, it can't be unchecked).</li>
-      <li>If nothing's been assigned yet, you'll see an empty state instead.</li>
+      <li>Go to <code>/marketplace</code> ("Find a Coach", also public). Type a city and search — there is no default/nearby listing. Filters (District, Age group, Language, Sort) then appear; results are coach cards with "Load more".</li>
+      <li>A card opens <code>/coaches/:coachId</code>: photo, verification badge, availability, rating and reviews, bio, specialties, languages, per-session price and the coach's session pack.</li>
+      <li>Without remaining pack credits the button reads "Buy sessions" → <code>/parent/coaches/:coachId/purchase-sessions</code>: select the "{n}-session bundle" and "Confirm purchase" (a saved card is required — "Add card" if prompted).</li>
+      <li>With credits it reads "Book a session" → <code>/parent/coaches/:coachId/request-booking</code>: pick a slot under "Select a time slot" (shown in the coach's time zone), choose a pack or "Per session" under "Use a session pack", check your "Payment Method" card, add optional notes and press "Request session". "Multi-select" lets you request several slots at once (paid by credit/card, never from a pack).</li>
+      <li>The same request limits as for parents apply: up to 10 requests waiting on one coach, at most 120 days ahead, and the price is locked when you request. Nothing is charged until the coach accepts.</li>
     </ol>
 
-    <h3>5. Browsing the marketplace and booking a session</h3>
-    <p><strong>Why it matters:</strong> this is how a player evaluates, chooses, and books a coach to work with directly.</p>
-    <ol>
-      <li>Go to <code>/marketplace</code> (also reachable while logged out — it's public).</li>
-      <li>You must type a city and search before any results show — there's no default/nearby listing.</li>
-      <li>Once a city is entered, filters appear: District, Age group, Language, and a Sort option; results are shown as a grid of coach cards with a "Load more" button for pagination.</li>
-      <li>Clicking a coach card opens <code>/coaches/:coachId</code> — their public profile: photo, verification badge, availability status, star rating, reviews from other players/parents, bio, specialties, languages, price, and session packs they offer.</li>
-      <li>On the coach's profile, you'll see their published session packs (bundles of sessions at a fixed price) and a call-to-action button. If you already own credits with this coach, the button says "Book Session" and takes you to request-booking. If not, it says "Buy Sessions" and takes you to a purchase page where you can buy a pack.</li>
-      <li>After purchasing a pack, you'll have session credits with that coach. Click "Book Session" to request a specific date and time — the coach accepts or declines in their booking-requests inbox, and once accepted you're in their command-center system for the live session.</li>
-    </ol>
+    <h3>5. Managing your bookings</h3>
+    <p><code>/parent/bookings</code> ("My bookings") gives you exactly the parent's actions on your own bookings: Confirm / Decline a session your coach proposed (payment is taken on Confirm), "Withdraw request" while the coach hasn't answered, "Request Change", "Cancel", "Request for the coach", "Message coach", "Coach didn't show" (from start + 30 minutes), "Confirm session" after the coach ends it, "Raise a dispute" (within 14 days, or while a started session is in progress) and "Receipt". The refund and forfeit rules are the same as for parents — 24 hours' notice measured from the original start, forfeits pay the coach, the coach may report you as a no-show from start + 15 minutes — see the table on the <a href="../parent/index.html">Parent</a> page.</p>
+    <p>Money pages you can use: "Your session packs" (<code>/parent/players/:playerId/packs</code>, including "Pause pack"), the "Credit Statement" (<code>/parent/credit-statement</code>) with receipts, and the player subscription page (<code>/parent/player/:playerId/subscription</code>, reachable from the storage-quota bar on <code>/player/videos</code>). The <strong>Credit Wallet page with "Cash Out" is parent-only</strong>, so a player's wallet credit can only be spent on bookings.</p>
 
     <h3>6. Tracking your development</h3>
-    <p><strong>Why it matters:</strong> this is Skillars' core value proposition beyond just scheduling — a visible, ongoing record of skill growth.</p>
+    <p><strong>Why it matters:</strong> this is Skillars' core value proposition beyond scheduling — a visible, ongoing record of skill growth.</p>
     <ol>
-      <li>Go to <code>/player/development/:playerId</code> (linked from your Locker Room).</li>
-      <li>You'll see a Skills Radar chart (multi-axis ability ratings your coach has scored you on) — read-only for players — with an optional toggle to compare against your original baseline.</li>
-      <li>Below that, a weekly Skill Exposure chart shows which skills you've actually been training, highlighting any the system flags as neglected.</li>
+      <li>Open "Player Development" from the drawer (<code>/player/development/:playerId</code>).</li>
+      <li>The Skills Radar (scored by your coach, read-only) has a "Compare to baseline" toggle. Below it: Skill Exposure for "This Week" with neglected skills highlighted, a "Weekly Trend" chart, Skill Trends, performance reports and your Player Timeline.</li>
     </ol>
 
     <h3>7. Uploading drill videos</h3>
     <ol>
-      <li>Go to <code>/player/videos</code>.</li>
-      <li>A quota bar shows your storage/bandwidth usage before you upload.</li>
-      <li>Click "Upload", pick a video file — a progress bar tracks the upload, and once processed it appears in your video list with a status card (this is where content moderation applies). Only adult players can upload; a minor's profile is refused.</li>
-      <li>Each video can be deleted from the same list.</li>
-      <li>Below your own videos, "From the coach" lists the session videos a coach recorded of you — watch only.</li>
+      <li>Go to <code>/player/videos</code> ("My Videos"). A quota bar shows your storage usage.</li>
+      <li>Click "Upload Homework Video" and pick a file (max 500 MB). A progress bar tracks the upload; the video then appears with a status card while it is processed and moderated. Only adult accounts can upload — a minor's profile is refused.</li>
+      <li>Each of your videos can be deleted from the list.</li>
+      <li>Below your own videos, "From the coach" lists session videos a coach recorded of you — watch only.</li>
     </ol>
 
     <h3>8. Reviewing a coach</h3>
-    <p><strong>Why it matters:</strong> your honest feedback helps other players choose coaches and helps coaches improve their service.</p>
     <ol>
-      <li>After you've trained with a coach, visit their profile again at <code>/coaches/:coachId</code>.</li>
-      <li>Scroll to the "Write Review" section (visible only if you're logged in and haven't already reviewed this coach).</li>
-      <li>Click "Write Review" to open a dialog where you can rate the coach 1–5 stars and write up to 1000 characters of feedback.</li>
-      <li>Once submitted, your review goes into moderation — it may initially show a "Pending moderation" status. Once approved, it appears on the coach's profile where all players can see it.</li>
-      <li>You can edit your existing review by clicking "Edit Review" next to it; coaches can also respond to your review with their own message.</li>
+      <li>On <code>/coaches/:coachId</code>, "Write a review" appears once you have a completed session with that coach at least 7 days old and no open dispute with them; otherwise the reason is shown.</li>
+      <li>Give a 1–5 star "Rating" and an optional "Comment" (max 1000 characters), then "Submit review". It shows "Your review is awaiting moderation…" until approved.</li>
+      <li>"Edit your review" requires a new session since you last wrote it (30-day cooldown). Coaches can add a "Coach's response"; you can "Flag this review" on other reviews.</li>
     </ol>
 
     <h3>9. Messaging your coach</h3>
     <ol>
-      <li>Go to <code>/messaging</code>: a two-panel screen — conversation list on the left, message thread on the right.</li>
-      <li>Selecting a conversation loads its message history; type in the box at the bottom and press Enter or click send.</li>
-      <li>Conversations only exist against a real, booking-linked coach relationship — you can't cold-message an arbitrary coach.</li>
+      <li>Start a conversation with "Message coach" on a booking in "My bookings" or on the coach's profile — it only appears once a booking links you to that coach.</li>
+      <li><code>/messaging</code> ("Messages") is a two-panel screen: conversation list on the left, thread on the right; press Enter or click send.</li>
     </ol>
+
+    <h3>10. Your account and data</h3>
+    <p><code>/profile</code> ("My Profile") has a <strong>Privacy &amp; data</strong> section ("Request export" of your personal data, and "Delete my account") plus your email notification preferences; <code>/notifications</code> is the full notification inbox behind the bell icon.</p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
       <p><strong>Use <code>/player-register</code>, never the generic <code>/register</code> page</strong> — they lead to different account types.</p>
     </div>
     <div class="callout">
-      <p><strong>Player profiles must complete the profile-builder step before they can book sessions.</strong> A player who registers but doesn't finish the "Pick your position" step won't have a resolvable player ID, and marketplace booking won't function yet.</p>
+      <p><strong>Players must finish the profile-builder step before anything else works.</strong> Without a player profile there is no player ID, so the Locker Room, packs, development links and booking can't resolve — <code>/player/home</code> keeps sending you back to <code>/player/profile-builder</code>.</p>
+    </div>
+    <div class="callout">
+      <p><strong>Your money pages live under <code>/parent/...</code> URLs</strong> (bookings, packs, statement, receipts). That is intentional reuse; the page hides parent-only controls such as cash-out.</p>
     </div>
 
     <h2>Related Personas</h2>
     <div class="card-grid">
-      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books sessions and pays on behalf of players under 18 — Parents can also book for adult players if they prefer. See how parent booking differs from self-booking.</p></div>
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books and pays on behalf of players under 18 (and can manage an 18+ child too). Uses the same booking, pack and refund rules you do — the full refund/forfeit table lives there.</p></div>
       <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>The other side of every booking, messaging thread, homework assignment, review, and development assessment a player sees.</p></div>
       <div class="card"><h4><a href="../trust-and-safety/index.html">Trust &amp; Safety</a></h4><p>As an adult player you sit in the unrestricted age tier — this explains what changes for the minors you'll see referenced everywhere.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+    <footer class="page-footer">Skillars business documentation — last verified against master <code>2ad84416</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
