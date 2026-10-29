@@ -10,20 +10,24 @@ import com.stripe.model.Account;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.Pageable;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -185,6 +189,45 @@ class StripeOnboardingStatusSyncTest {
         assertThat(status.disconnected()).isTrue();
         assertThat(status.onboardingStatus()).isEqualTo("RESTRICTED");
         verify(stripeClient, never()).retrieveAccount(any());
+    }
+
+    // ── fix/prod-readiness-gaps: daily re-read of COMPLETE accounts ─────────────────────────────
+
+    @Test
+    void resyncCompleteAccounts_restrictedAtStripe_storedAsRestricted() throws Exception {
+        CoachStripeAccount row = row("COMPLETE");
+        when(repository.findConnectedByStatusAfter(eq("COMPLETE"), eq("deauthorized"), any(UUID.class),
+            any(Pageable.class))).thenReturn(List.of(row));
+        when(repository.findById(COACH_ID)).thenReturn(Optional.of(row));
+        when(stripeClient.retrieveAccount(ACCT)).thenReturn(account(ACCT, false, false, "inactive"));
+
+        int changed = service.resyncCompleteAccounts(200, 25);
+
+        assertThat(changed).isEqualTo(1);
+        assertThat(row.getOnboardingStatus()).isEqualTo("RESTRICTED");
+        assertThat(row.isChargesEnabled()).isFalse();
+    }
+
+    @Test
+    void resyncCompleteAccounts_pagesByCoachIdAndStopsAtMaxPages() throws Exception {
+        CoachStripeAccount a = row("COMPLETE");
+        CoachStripeAccount b = row("COMPLETE");
+        b.setCoachId(UUID.fromString("ffffffff-1111-2222-3333-eeeeeeeeeeee"));
+        b.setStripeAccountId("acct_sync_2");
+        when(repository.findConnectedByStatusAfter(eq("COMPLETE"), eq("deauthorized"), any(UUID.class),
+            any(Pageable.class))).thenReturn(List.of(a), List.of(b));
+        when(stripeClient.retrieveAccount(any())).thenThrow(new ApiConnectionException("down"));
+
+        int changed = service.resyncCompleteAccounts(1, 2);
+
+        assertThat(changed).isZero();
+        ArgumentCaptor<UUID> after = ArgumentCaptor.forClass(UUID.class);
+        verify(repository, times(2)).findConnectedByStatusAfter(eq("COMPLETE"), eq("deauthorized"), after.capture(),
+            any(Pageable.class));
+        assertThat(after.getAllValues()).containsExactly(new UUID(0L, 0L), COACH_ID);
+        // A Stripe failure on one account does not stop the run.
+        verify(stripeClient).retrieveAccount(ACCT);
+        verify(stripeClient).retrieveAccount("acct_sync_2");
     }
 
     private static CoachStripeAccount row(String status) {

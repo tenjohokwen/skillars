@@ -25,6 +25,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -96,6 +98,38 @@ class ConfigStartupAssertionTest {
     void allKeysInRange_noThrow_noErrorMetric() {
         assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
         assertThat(meterRegistry.find("config.value.misconfigured").counter()).isNull();
+    }
+
+    // ── fix/prod-readiness-gaps: blank launch keys and phone OTP without SMS warn, never block ──
+
+    @Test
+    void blankLaunchKey_nonDev_countsWithoutBlockingBoot() {
+        when(configService.find("platform.admin_alert_email")).thenReturn(Optional.of(""));
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+        assertThat(meterRegistry.find("config.value.misconfigured")
+                .tag("key", "platform.admin_alert_email").tag("reason", "launch_blank").counter())
+                .isNotNull()
+                .satisfies(c -> assertThat(c.count()).isEqualTo(1.0));
+    }
+
+    @Test
+    void phoneOtpOnWithoutSmsGateway_nonDev_countsWithoutBlockingBoot() {
+        when(configService.find(ConfigService.PHONE_OTP_REQUIRED_KEY)).thenReturn(Optional.of("true"));
+
+        assertThatCode(() -> assertion.onApplicationEvent(EVENT)).doesNotThrowAnyException();
+        assertThat(meterRegistry.find("config.value.misconfigured")
+                .tag("key", ConfigService.PHONE_OTP_REQUIRED_KEY).tag("reason", "no_sms_gateway").counter())
+                .isNotNull();
+    }
+
+    @Test
+    void blankLaunchKey_devProfile_notReported() {
+        when(env.getActiveProfiles()).thenReturn(new String[] {"dev"});
+
+        assertion.onApplicationEvent(EVENT);
+
+        verify(configService, never()).find("platform.admin_alert_email");
     }
 
     @Test

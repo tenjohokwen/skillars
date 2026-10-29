@@ -218,8 +218,11 @@ below, which is specific to UAT / not in `secrets-reference.md` yet:
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | **Yes — app refuses to start without it** | `BunnyVideoProviderAdapter`'s constructor throws if blank, and it's built eagerly (non-lazy bean) whenever `app.video.provider=bunny`, the default — so this crashes the *entire* app context on boot even if UAT never touches video. Any non-blank value unblocks startup; only real Bunny webhook verification needs the real Bunny Read-Only API key — generate a placeholder with `openssl rand -base64 24` if video isn't in scope for this UAT round |
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Yes, before anyone tries to watch a video | Not fail-fast at boot — only fails the first time a playback JWT is signed (`Base64.getDecoder().decode(...)` needs ≥32 raw bytes). Generate: `openssl rand -base64 32` |
 | `BUNNY_LIBRARY_ID` / `BUNNY_API_KEY` / `BUNNY_CDN_HOSTNAME` | No | Reuses the same variables as `.env` (production); omit `BUNNY_LIBRARY_ID` to fall back to the `123456` placeholder that unblocks app startup without real video features |
-| `ENVIRONMENT` | **Yes — set to `uat`** | `docker-compose.yml` injects `ENVIRONMENT=${ENVIRONMENT:-prod}`, which overrides `application-uat.yaml`; `.env.example` seeds `prod`. Left unset, every uat log line and Loki stream is labelled `prod`. |
-| `APP_FRONTEND_URL` | **Yes — your UAT URL** | Same override problem: `docker-compose.yml` defaults it to `https://skillars.com`, beating `application-uat.yaml`'s `https://uat.skillars.com`. Left unset, every verification / password-reset link in uat email points at **production**. |
+| `ENVIRONMENT` | **Yes — set to `uat`** | `docker-compose.uat.yml` defaults it to `uat`, but `.env.example` seeds `prod`, and a copied `prod` wins. Left as `prod`, every uat log line and Loki stream is labelled `prod`. |
+| `APP_FRONTEND_URL` | **Yes — your UAT URL** | `docker-compose.uat.yml` requires it (`:?`), so `docker compose up` stops if it is missing. Without it, `docker-compose.yml`'s `https://skillars.com` default would beat `application-uat.yaml`, and every verification / password-reset link in uat email would point at **production**. |
+| `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | **Yes** — `https://<DOMAIN>/api/payment/coaches/me/stripe/callback` | Required by `docker-compose.uat.yml` (`:?`), for the same override reason. Stripe rejects the relative base default |
+| `GMX_PASSWORD` / `GMAIL_PASSWORD` | **Yes — both** | UAT sends mail over SMTP, and `ProviderConfigsValidator` aborts the boot on a blank password. `docker-compose.uat.yml` requires both (`:?`) |
+| `ALLOWED_CLIENTS` | If you curl the API with `X-Client-Id` (8.3) | Comma-separated client ids. Blank accepts no machine client. The old `myClientId` placeholders now work on the dev profile only |
 | `APP_BOOTSTRAP_ADMIN_EMAIL` / `APP_BOOTSTRAP_ADMIN_PASSWORD` / `APP_BOOTSTRAP_ADMIN_PHONE` | Yes, for the first deploy only | Creates the platform's first admin account — the only supported way to get one. See [Step 8](#step-8-create-the-admin-account) for the full procedure, including removing the password again afterwards |
 
 **Do not put a live (`sk_live_...` or `rk_live_...`) key in `.env.uat`.**
@@ -460,7 +463,7 @@ Drive them with curl or Postman. Log in first and reuse the cookies:
 
 ```bash
 curl -s -c /tmp/admin-cookies.txt -X POST https://<DOMAIN>/api/auth/login \
-  -H 'Content-Type: application/json' -H 'X-Client-Id: <a configured client id>' \
+  -H 'Content-Type: application/json' -H 'X-Client-Id: <an id listed in ALLOWED_CLIENTS>' \
   -d '{"email":"admin@yourdomain.com","password":"<the password from 8.1>"}'
 # {"id":...,"role":"ADMIN","displayName":"..."}
 

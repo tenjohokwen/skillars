@@ -461,7 +461,11 @@ log:
   database:
     spy: false
 allowed:
-  clients: myClientId,hisClientId,herClientId,ourClientId #do not put spaces between entries
+  # X-Client-Id values accepted from machine (non-browser) clients, comma-separated. A machine client
+  # skips the browser fingerprint-cookie check, so a well-known value here weakens every login. Blank
+  # by default: no machine client is accepted until an environment sets ALLOWED_CLIENTS. Only the dev
+  # profile keeps the old placeholder ids.
+  clients: ${ALLOWED_CLIENTS:}
 
 datasource.container: true #use container connection config to connect to the container db
 
@@ -525,7 +529,6 @@ management:
       application: ${spring.application.name}
 skillars:
   platform:
-    notification-email: ${PLATFORM_NOTIFICATION_EMAIL:tenjoh_okwen@yahoo.com}
     # Declared here, not only on dev/uat, so the prod profile can supply it. Encrypts
     # parent-approval PINs — rotating it invalidates every PIN already stored.
     pin-encryption-secret: ${PLATFORM_PIN_ENCRYPTION_SECRET:}

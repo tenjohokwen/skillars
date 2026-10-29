@@ -542,12 +542,7 @@ async function submitAction() {
   } catch (err) {
     const status = err?.response?.status
     let message = t('admin.coaches.actionFailed')
-    if (
-      status === 409 &&
-      err?.response?.data?.errorMsg?.message === 'admin.coaches.paymentInProgress'
-    )
-      message = t('admin.coaches.paymentInProgress')
-    else if (status === 409) message = t('admin.coaches.actionConflict')
+    if (status === 409) message = t('admin.coaches.actionConflict')
     else if (status === 400 && actionMode.value === 'strike')
       message = t('admin.coaches.strikeInvalid')
     $q.notify({ message, type: 'negative' })

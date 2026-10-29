@@ -332,6 +332,30 @@ class ConfigServiceTest {
         verify(configRepository, never()).save(any());
     }
 
+    // ── fix/prod-readiness-gaps: phone OTP cannot be enabled without an SMS gateway ──────────
+
+    @Test
+    void updateConfig_enablePhoneOtpWithoutSmsGateway_rejectedWith400() {
+        when(configRepository.findByKey(ConfigService.PHONE_OTP_REQUIRED_KEY)).thenReturn(Optional.of(
+                entry(ConfigService.PHONE_OTP_REQUIRED_KEY, "false", ConfigValueType.STRING)));
+
+        assertThatThrownBy(() -> configService.updateConfig(ConfigService.PHONE_OTP_REQUIRED_KEY, " TRUE "))
+                .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                .hasMessageContaining("SMS gateway");
+        verify(configRepository, never()).save(any());
+    }
+
+    @Test
+    void updateConfig_disablePhoneOtp_persists() {
+        PlatformConfig existing = entry(ConfigService.PHONE_OTP_REQUIRED_KEY, "true", ConfigValueType.STRING);
+        when(configRepository.findByKey(ConfigService.PHONE_OTP_REQUIRED_KEY)).thenReturn(Optional.of(existing));
+
+        configService.updateConfig(ConfigService.PHONE_OTP_REQUIRED_KEY, "false");
+
+        verify(configRepository).save(existing);
+        assertThat(existing.getValue()).isEqualTo("false");
+    }
+
     @Test
     void updateConfig_boundedKeyInRange_persists() {
         PlatformConfig existing = entry("pack.pause.maxDays", "90", ConfigValueType.LONG);

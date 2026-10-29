@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,6 +23,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -177,6 +179,39 @@ public class StripeOnboardingService {
     /** Captured before the request: the fetched state is at least this new (minus the skew allowance). */
     private Instant pollSnapshotTime() {
         return clock.instant().truncatedTo(ChronoUnit.SECONDS).minus(FETCH_SNAPSHOT_SKEW_ALLOWANCE);
+    }
+
+    /**
+     * fix/prod-readiness-gaps: re-reads every connected {@code COMPLETE} account from Stripe. The status
+     * poll in {@link #getStripeStatus} stops once an account is COMPLETE, so without this a later
+     * restriction (requirements due, charges or payouts disabled) reaches the platform only through an
+     * {@code account.updated} webhook; one missed delivery left the coach bookable and payable. Same
+     * apply rules as the webhook. Keyset pages of {@code pageSize}, at most {@code maxPages} per run.
+     *
+     * @return how many accounts changed
+     */
+    public int resyncCompleteAccounts(int pageSize, int maxPages) {
+        int checked = 0;
+        int changed = 0;
+        // The nil UUID: Postgres orders uuid by unsigned bytes, so every real coach id sorts after it.
+        UUID after = new UUID(0L, 0L);
+        for (int pages = 0; pages < maxPages; pages++) {
+            List<CoachStripeAccount> page = coachStripeAccountRepository.findConnectedByStatusAfter(
+                CoachStripeAccountStatusApplier.STATUS_COMPLETE, CoachStripeAccountStatusApplier.TRANSFERS_DEAUTHORIZED,
+                after, PageRequest.of(0, pageSize));
+            for (CoachStripeAccount account : page) {
+                checked++;
+                if (syncAccountFromStripe(account.getCoachId(), account.getStripeAccountId(), pollSnapshotTime())) {
+                    changed++;
+                }
+            }
+            if (page.size() < pageSize) {
+                break;
+            }
+            after = page.get(page.size() - 1).getCoachId();
+        }
+        log.info("[STRIPE_ACCOUNT_RESYNC] {} COMPLETE account(s) re-read from Stripe, {} changed", checked, changed);
+        return changed;
     }
 
     /** True at most once per {@link #STATUS_SYNC_MIN_INTERVAL} per coach (atomic per key). */

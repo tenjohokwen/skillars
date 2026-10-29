@@ -1435,8 +1435,6 @@ export default {
       alreadySuspended: 'This coach was already suspended — nothing changed.',
       suspendSuccess:
         'Coach suspended. Sessions cancelled: {count} (any that were paid are fully refunded).',
-      paymentInProgress:
-        "A payment for one of this coach's sessions is being processed. Try again in a moment, or untick the session cancellation to suspend now.",
       notifyCoachLabel: 'Notify the coach by email',
       actionSuccess: 'Done.',
       actionFailed: 'The action failed. Please try again.',
@@ -1586,6 +1584,20 @@ export default {
       coachPendingAmount: 'Pending release',
       coachPendingCount: 'Sessions pending release',
       coachStrikes: 'Reliability strikes (30 days)',
+      releaseHeld: 'Release held payouts',
+      releaseHeldTitle: 'Release held payouts?',
+      releaseHeldRecheck:
+        "Each of this coach's held payouts is re-checked for freezes (open disputes, safety holds); one that is still frozen stays frozen.",
+      releaseHeldNotBefore:
+        'The rest are queued for transfer, not before their original release date. If the Stripe account still cannot receive transfers, they go back on hold.',
+      releaseHeldMismatch:
+        'Payouts held because an existing Stripe transfer has a different amount or account are skipped and need an operator.',
+      releaseHeldRepeat: 'This is safe to repeat.',
+      releaseHeldAction: 'Release',
+      releaseHeldDone:
+        'Held payouts: {released} queued for transfer, {stillFrozen} still frozen, {skipped} skipped',
+      releaseHeldNone: 'This coach has no held payouts',
+      releaseHeldFailed: 'Failed to release held payouts',
     },
     bookings: {
       title: 'Booking lookup',

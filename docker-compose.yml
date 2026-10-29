@@ -60,6 +60,8 @@ services:
       # redirect_uri, and PaymentConfig only warns about it. Compose cannot nest ${DOMAIN}
       # inside a :- default, so this mirrors application.yaml's relative fallback instead.
       - APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL=${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:-/api/payment/coaches/me/stripe/callback}
+      # Where the OAuth callback sends the coach afterwards (frontend route). Mirrors application.yaml.
+      - APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL=${APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL:-/coach/payment-settings}
 
       # Video. BUNNY_* are the .env names; the app reads APP_VIDEO_BUNNY_* — same mapping
       # docker-compose.uat.yml uses. LIBRARY_ID must be numeric or VideoProviderConfig fails the
@@ -80,12 +82,19 @@ services:
       # APP_STORAGE_ENDPOINT_URL / APP_STORAGE_S3_* from .env (path-style per provider), copy the
       # bucket over, then drop `storage` + `storage-init` — runbook.md "Moving object storage to a
       # managed provider".
-      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-dev}
+      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-prod}
       - APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}
       - APP_STORAGE_REGION=${APP_STORAGE_REGION:-us-east-1}
       - APP_STORAGE_S3_ACCESS_KEY=${STORAGE_ROOT_USER}
       - APP_STORAGE_S3_SECRET_KEY=${STORAGE_ROOT_PASSWORD}
       - APP_STORAGE_S3_PATH_STYLE_ACCESS=true
+      # Optional second bucket that StorageBackupService copies uploads to (app.storage.backup.*). All
+      # blank = off. Defaults mirror application.yaml.
+      - APP_STORAGE_BACKUP_ENDPOINT_URL=${APP_STORAGE_BACKUP_ENDPOINT_URL:-}
+      - APP_STORAGE_BACKUP_BUCKET=${APP_STORAGE_BACKUP_BUCKET:-}
+      - APP_STORAGE_BACKUP_REGION=${APP_STORAGE_BACKUP_REGION:-us-east-1}
+      - APP_STORAGE_BACKUP_ACCESS_KEY=${APP_STORAGE_BACKUP_ACCESS_KEY:-}
+      - APP_STORAGE_BACKUP_SECRET_KEY=${APP_STORAGE_BACKUP_SECRET_KEY:-}
 
       # SES (ses-1.1). No `:-` default on APP_SES_FROM_ADDRESS, deliberately: a genuinely
       # missing value must reach the app as blank and trip SesPropertiesValidator's startup
@@ -112,6 +121,13 @@ services:
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET:-}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # AI moderation and safety providers (off unless enabled in config). Defaults mirror application.yaml.
+      - ARACHNID_API_BASE_URL=${ARACHNID_API_BASE_URL:-https://api.c3p.ca}
+      - VIDEOINTEL_PROJECT_ID=${VIDEOINTEL_PROJECT_ID:-}
+      - VIDEOINTEL_CREDENTIALS_PATH=${VIDEOINTEL_CREDENTIALS_PATH:-}
+      # X-Client-Id values accepted from machine (non-browser) clients, comma-separated. Blank = none.
+      # Never reuse the dev placeholders (myClientId, ...): a machine client skips the fingerprint check.
+      - ALLOWED_CLIENTS=${ALLOWED_CLIENTS:-}
       - ENVIRONMENT=${ENVIRONMENT:-prod}
       - APP_VERSION=${APP_VERSION:-unknown}
       # Access logging via SLF4J -> Loki. false silences both the 9990 and 8367 loggers;
@@ -124,6 +140,12 @@ services:
       - APP_BOOTSTRAP_ADMIN_EMAIL=${APP_BOOTSTRAP_ADMIN_EMAIL:-}
       - APP_BOOTSTRAP_ADMIN_PASSWORD=${APP_BOOTSTRAP_ADMIN_PASSWORD:-}
       - APP_BOOTSTRAP_ADMIN_PHONE=${APP_BOOTSTRAP_ADMIN_PHONE:-}
+      - APP_BOOTSTRAP_ADMIN_FIRST_NAME=${APP_BOOTSTRAP_ADMIN_FIRST_NAME:-Platform}
+      - APP_BOOTSTRAP_ADMIN_LAST_NAME=${APP_BOOTSTRAP_ADMIN_LAST_NAME:-Administrator}
+      # JWT signing-key bootstrap (JwtSecretBootstrapRunner): creates the (v1, jot) secret on a database
+      # that has none. false = off. Set true in .env for ONE boot of a new environment, then remove it
+      # (secrets-reference.md "JWT signing key"). Never seed a real environment from secData.sql.
+      - APP_BOOTSTRAP_JWT_SECRET_ENABLED=${APP_BOOTSTRAP_JWT_SECRET_ENABLED:-false}
     healthcheck:
       # Story ses-1.3 code review 2026-09-12: polls the `smoke` group (db,diskSpace,ping), NOT the
       # default `/manage/health`. The default group is unconditionally every registered contributor
@@ -312,7 +334,7 @@ services:
       - AWS_ACCESS_KEY_ID=${STORAGE_ROOT_USER}
       - AWS_SECRET_ACCESS_KEY=${STORAGE_ROOT_PASSWORD}
       - AWS_DEFAULT_REGION=us-east-1
-      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-dev}
+      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-prod}
       - DOMAIN=${DOMAIN}
     entrypoint: >
       /bin/sh -c "

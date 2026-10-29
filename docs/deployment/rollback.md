@@ -249,11 +249,13 @@ crash the reverted app on startup or corrupt data on write.
 **The supported remedy is a full restore, not an image-only rollback:**
 
 1. Revert the app image using Steps 1–6 above.
-2. Restore the database from the most recent `pg-backup.sh` dump, following
-   [`backup-restore.md`](backup-restore.md) → **Section A: Restore from pg_dump**.
+2. Restore the database from the pre-deploy dump that `deploy.yml` took for the bad release (its run
+   summary shows "Pre-deploy dump (rollback pointer): s3://…"; pass that object key, without the bucket, to
+   `restore-from-dump.sh`), following [`backup-restore.md`](backup-restore.md) → **Section A: Restore from pg_dump**.
+   Use the most recent `pg-backup.sh` dump only if the deploy ran with `skip_backup`.
    - **Backup storage location:** Backups are stored per your deployment provider configuration (see [`backup-restore.md`](backup-restore.md) for details)
-3. **Accepted data-loss window:** up to 6 hours — `pg-backup.sh` runs on a `0 */6 * * *` cron
-   (`deploy/backup/install-crons.sh`). Any writes made between the last backup and the incident are lost.
+3. **Data-loss window:** writes made between the pre-deploy dump and the restore are lost. Without that dump
+   it is up to 6 hours (`pg-backup.sh` also runs on a `0 */6 * * *` cron, `deploy/backup/install-crons.sh`).
 
 A forward-fixing follow-up deploy remains the preferred option whenever feasible — this restore-from-backup
 path is the fallback for when the bad release's migrations have already caused a production-blocking failure

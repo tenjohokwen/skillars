@@ -51,6 +51,7 @@ import org.springframework.web.servlet.HandlerExceptionResolver;
 import com.softropic.skillars.platform.security.contract.AdminBootstrapProperties;
 import com.softropic.skillars.platform.security.contract.SecurityProperties;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.ADMIN_COOKIE;
@@ -109,9 +110,13 @@ public class SecurityConfiguration {
         return new DefaultAuthenticationEventPublisher(applicationEventPublisher);
     }
 
+    /** Trimmed, blanks dropped: a blank {@code allowed.clients} accepts no machine client at all. */
     @Bean
-    public List<String> allowedClients(@Value("#{'${allowed.clients}'.split(',')}") final List<String> allowedClients) {
-        return allowedClients;
+    public List<String> allowedClients(@Value("${allowed.clients:}") final String allowedClients) {
+        return Arrays.stream(allowedClients.split(","))
+            .map(String::trim)
+            .filter(id -> !id.isEmpty())
+            .toList();
     }
 
     @Bean

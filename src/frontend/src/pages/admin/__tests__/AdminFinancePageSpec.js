@@ -1,5 +1,6 @@
 // feat/admin-operations A6: AdminFinancePage.vue — read-only finance overview for a period, and the
-// per-coach revenue drill-down (coach list from the admin coach list, or a coach id).
+// per-coach revenue drill-down (coach list from the admin coach list, or a coach id), and the
+// coach's "release held payouts" action.
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
@@ -9,9 +10,35 @@ vi.mock('src/api/admin.api', () => ({
     getFinanceOverview: vi.fn(),
     getCoachRevenue: vi.fn(),
     getEnforcementCoaches: vi.fn(),
+    releaseHeldPayouts: vi.fn(),
   },
 }))
 
+// Only reached by the real admin.api (vi.importActual) in the URL test below.
+vi.mock('src/boot/axios', () => ({ api: { get: vi.fn(), post: vi.fn() } }))
+
+const notifySpy = vi.fn()
+vi.mock('quasar', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, useQuasar: () => ({ notify: notifySpy }) }
+})
+
+// The shared test i18n has no messages, so t returns the key; append any params so the counts the
+// release-held notification interpolates are visible to the assertions.
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    useI18n: (...args) => {
+      const i18n = actual.useI18n(...args)
+      const t = (key, params) =>
+        params && typeof params === 'object' ? `${key}${JSON.stringify(params)}` : i18n.t(key)
+      return { ...i18n, t }
+    },
+  }
+})
+
+import { api } from 'src/boot/axios'
 import { adminApi } from 'src/api/admin.api'
 import AdminFinancePage from 'src/pages/admin/AdminFinancePage.vue'
 
@@ -178,5 +205,75 @@ describe('AdminFinancePage.vue', () => {
     expect(wrapper.vm.rangeInvalid).toBe(true)
     expect(wrapper.vm.rangeError).toBe('admin.finance.fromRequired')
     expect(adminApi.getFinanceOverview).toHaveBeenCalledTimes(1)
+  })
+
+  describe('release held payouts', () => {
+    it('posts to the coach release-held endpoint with no body', async () => {
+      const { adminApi: realAdminApi } = await vi.importActual('src/api/admin.api')
+      api.post.mockResolvedValue({ released: 0, stillFrozen: 0, skipped: 0 })
+
+      await realAdminApi.releaseHeldPayouts(COACH_ID)
+
+      expect(api.post).toHaveBeenCalledWith(
+        `/api/admin/payment/coaches/${COACH_ID}/payouts/release-held`,
+      )
+    })
+
+    it('needs the coach revenue to have loaded first', async () => {
+      adminApi.getCoachRevenue.mockRejectedValue({ response: { status: 404 } })
+      const wrapper = await mountPage()
+      await wrapper.vm.openCoach(COACH_ID, '')
+
+      const btn = wrapper.findComponent('[data-testid="finance-release-held-btn"]')
+      expect(btn.props('disable')).toBe(true)
+    })
+
+    it('shows the three counts and reloads the revenue after a release', async () => {
+      adminApi.releaseHeldPayouts.mockResolvedValue({ released: 3, stillFrozen: 1, skipped: 2 })
+      const wrapper = await mountPage()
+      await wrapper.vm.openCoach(COACH_ID, 'Coach A')
+      wrapper.vm.releaseConfirmOpen = true
+
+      await wrapper.vm.submitReleaseHeld()
+
+      expect(adminApi.releaseHeldPayouts).toHaveBeenCalledWith(COACH_ID)
+      expect(notifySpy).toHaveBeenCalledWith({
+        type: 'positive',
+        message: 'admin.finance.releaseHeldDone{"released":3,"stillFrozen":1,"skipped":2}',
+      })
+      expect(adminApi.getCoachRevenue).toHaveBeenCalledTimes(2)
+      expect(wrapper.vm.releaseConfirmOpen).toBe(false)
+      expect(wrapper.vm.releasing).toBe(false)
+    })
+
+    it('says so when the coach has no held payouts, without reloading', async () => {
+      adminApi.releaseHeldPayouts.mockResolvedValue({ released: 0, stillFrozen: 0, skipped: 0 })
+      const wrapper = await mountPage()
+      await wrapper.vm.openCoach(COACH_ID, 'Coach A')
+
+      await wrapper.vm.submitReleaseHeld()
+
+      expect(notifySpy).toHaveBeenCalledWith({
+        type: 'info',
+        message: 'admin.finance.releaseHeldNone',
+      })
+      expect(adminApi.getCoachRevenue).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the confirmation open and notifies on failure', async () => {
+      adminApi.releaseHeldPayouts.mockRejectedValue({ response: { status: 500 } })
+      const wrapper = await mountPage()
+      await wrapper.vm.openCoach(COACH_ID, 'Coach A')
+      wrapper.vm.releaseConfirmOpen = true
+
+      await wrapper.vm.submitReleaseHeld()
+
+      expect(notifySpy).toHaveBeenCalledWith({
+        type: 'negative',
+        message: 'admin.finance.releaseHeldFailed',
+      })
+      expect(wrapper.vm.releaseConfirmOpen).toBe(true)
+      expect(wrapper.vm.releasing).toBe(false)
+    })
   })
 })

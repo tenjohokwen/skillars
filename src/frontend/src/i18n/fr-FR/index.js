@@ -1335,8 +1335,6 @@ export default {
       alreadySuspended: "Cet entraîneur était déjà suspendu — rien n'a changé.",
       suspendSuccess:
         'Entraîneur suspendu. Séances annulées : {count} (celles déjà payées sont intégralement remboursées).',
-      paymentInProgress:
-        "Un paiement pour une séance de cet entraîneur est en cours de traitement. Réessayez dans un instant, ou décochez l'annulation des séances pour suspendre immédiatement.",
       notifyCoachLabel: "Prévenir l'entraîneur par e-mail",
       actionSuccess: 'Terminé.',
       actionFailed: "L'action a échoué. Veuillez réessayer.",
@@ -1492,6 +1490,20 @@ export default {
       coachPendingAmount: 'En attente de libération',
       coachPendingCount: 'Séances en attente de libération',
       coachStrikes: 'Avertissements de fiabilité (30 jours)',
+      releaseHeld: 'Libérer les versements retenus',
+      releaseHeldTitle: 'Libérer les versements retenus ?',
+      releaseHeldRecheck:
+        'Chaque versement retenu de ce coach est revérifié (litiges ouverts, blocages de sécurité) ; un versement encore gelé le reste.',
+      releaseHeldNotBefore:
+        "Les autres sont mis en file pour virement, pas avant leur date de libération d'origine. Si le compte Stripe ne peut toujours pas recevoir de virements, ils sont de nouveau retenus.",
+      releaseHeldMismatch:
+        "Les versements retenus parce qu'un virement Stripe existant a un montant ou un compte différent sont ignorés et nécessitent un opérateur.",
+      releaseHeldRepeat: 'Cette action peut être répétée sans risque.',
+      releaseHeldAction: 'Libérer',
+      releaseHeldDone:
+        'Versements retenus : {released} mis en file pour virement, {stillFrozen} toujours gelés, {skipped} ignorés',
+      releaseHeldNone: "Ce coach n'a aucun versement retenu",
+      releaseHeldFailed: 'Impossible de libérer les versements retenus',
     },
     bookings: {
       title: 'Recherche de réservation',

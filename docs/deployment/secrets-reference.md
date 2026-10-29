@@ -32,7 +32,7 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 > - **An empty value is not the same as an unset one.** Spring applies a `${prop:default}` default
 >   only when the property is *absent*; an empty environment variable is present-and-blank and
 >   overrides the default. The compose defaults therefore mirror the application defaults
->   (`APP_STORAGE_BUCKET` → `skillars-dev`, and so on) rather
+>   (`APP_STORAGE_BUCKET` → `skillars-prod`, and so on) rather
 >   than being blank. **This includes profile defaults.** Adding a variable to
 >   `docker-compose.yml` disables any `${VAR:some-default}` fallback for it in
 >   `application-dev.yaml` / `application-uat.yaml`, so a change aimed at production can break
@@ -148,7 +148,7 @@ application read them but no deploy supplied them. Defaults below are the applic
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | String | `""` under `prod` — see the profile note below | Bunny.net Stream → your library → Webhook signing secret |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | String | dev placeholder (`S3CR3TW0RD`) | `openssl rand -base64 32`. Encrypts parent-approval PINs — **rotating it invalidates every stored PIN** |
 | `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | String | dev placeholder; **empty under `prod`/`uat` — `RegistrationVerificationTokenService` aborts startup if unset** | `openssl rand -base64 32`. HMAC key for the phone-verification handle returned by `/verify-email` and required by `/verify-phone` and `/resend-otp`. Also the root of the phone-OTP hash key (`OtpHasher`, skillars-deferred-162), so **rotating it also invalidates in-flight phone OTPs** (10 min TTL; the user resends) as well as registration handles issued in the last 24h |
-| `APP_STORAGE_BUCKET` | String, e.g. `skillars-prod` | `skillars-dev` (compose default) | Bucket name. `storage-init` creates it in the SeaweedFS `storage` service on every `up`. Set it in `.env` for production; don't rely on the default |
+| `APP_STORAGE_BUCKET` | String, e.g. `skillars-prod` | `skillars-prod` (compose default; `docker-compose.local.yml` pins `skillars-dev`) | Bucket name. `storage-init` creates it in the SeaweedFS `storage` service on every `up`. Set it in `.env` for production; don't rely on the default |
 | `APP_STORAGE_ENDPOINT_URL` | URL | **set by `docker-compose.yml`** to `https://${STORAGE_DOMAIN}`, not read from `.env` | The S3 endpoint the app signs requests and presigned URLs for, so it must be reachable **by the browser**. Overlays restate it (`docker-compose.local.yml`: `http://storage:9500`; `docker-compose.uat-hostwinds.yml`: `http://${DOMAIN}:9500`). When moving to a managed provider, restore the `.env` passthrough (runbook) |
 | `APP_STORAGE_REGION` | String | `us-east-1` | S3 signing region. SeaweedFS accepts any region; keep `us-east-1` unless a managed provider needs its own |
 | `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **set by `docker-compose.yml`** from `STORAGE_ROOT_USER` / `STORAGE_ROOT_PASSWORD` | Static S3 credentials. Bound on every profile (`application.yaml`). If both are blank, `BlobstoreConfig` falls back to the AWS default credential chain. Production never does: the chain is shared with SES, so storage must not depend on it |
@@ -282,6 +282,24 @@ application read them but no deploy supplied them. Defaults below are the applic
 > contain **only** the configured channel's receiver, so there is no empty second receiver to
 > silently no-op. (The `${GF_*}` placeholders are kept in the file — Grafana expands them at load;
 > the secrets are never written there.)
+
+### Optional application variables
+
+Passed through `docker-compose.yml` with defaults that mirror `application.yaml` (added by
+`fix/prod-readiness-gaps`). Leave them unset unless you need a different value.
+
+| Variable | Default if unset | What it does |
+|---|---|---|
+| `ALLOWED_CLIENTS` | blank (no machine client) | Comma-separated `X-Client-Id` values accepted from non-browser API clients (`allowed.clients`). A machine client skips the browser fingerprint-cookie check, so use long random ids and never the dev placeholders (`myClientId`, ...). UAT testers who curl the admin API (`uat-deployment.md` 8.3) need one listed here |
+| `APP_BOOTSTRAP_JWT_SECRET_ENABLED` | `false` | `true` makes `JwtSecretBootstrapRunner` create the `(v1, jot)` JWT signing key when none exists. One boot only, then remove it ("JWT signing key" below). `docker-compose.local.yml` defaults it to `true` |
+| `APP_BOOTSTRAP_ADMIN_FIRST_NAME` / `APP_BOOTSTRAP_ADMIN_LAST_NAME` | `Platform` / `Administrator` | Display name of the admin created by `AdminBootstrapRunner` |
+| `APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL` | `/coach/payment-settings` | SPA route the Stripe OAuth callback redirects the coach to. Relative to `APP_FRONTEND_URL` |
+| `APP_STORAGE_BACKUP_ENDPOINT_URL`, `_BUCKET`, `_REGION`, `_ACCESS_KEY`, `_SECRET_KEY` | blank, `us-east-1` for the region | Optional second S3 bucket that uploads are copied to (`app.storage.backup.*`). All blank = off |
+| `ARACHNID_API_BASE_URL` | `https://api.c3p.ca` | Project Arachnid endpoint. Used only with `features.toggles.arachnid-enabled` |
+| `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH` | blank | Google Video Intelligence project and credentials file path (inside the container). Used only with `features.toggles.videointel-enabled` |
+| `APP_STORAGE_LOCAL_BASE_DIR` | `/tmp/skillars-storage` | Only for `app.storage.provider=local`; not passed through compose, since PROD and UAT run the S3 backend |
+
+`PLATFORM_NOTIFICATION_EMAIL` was removed: nothing read it.
 
 ---
 

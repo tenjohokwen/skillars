@@ -72,6 +72,17 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
     // from — see assertSchedulerLockOrdering's Javadoc.
     private final ApplicationContext applicationContext;
 
+    /** Seeded blank by V139; nothing works for the feature behind each until it is set. */
+    static final List<String> LAUNCH_REQUIRED_KEYS = List.of(
+        "platform.admin_alert_email",
+        "subscription.coach.academy.monthly.priceId",
+        "subscription.coach.instructor.monthly.priceId",
+        "subscription.player.athlete.monthly.priceId",
+        "subscription.player.athlete.quarterly.priceId",
+        "subscription.player.athlete.yearly.priceId",
+        "subscription.player.pro.yearly.priceId",
+        "subscription.player.semi_pro.yearly.priceId");
+
     @Override
     public void onApplicationEvent(ApplicationReadyEvent event) {
         boolean devProfile = Arrays.asList(env.getActiveProfiles()).contains("dev");
@@ -207,6 +218,9 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
         }
 
         int locksChecked = assertSchedulerLockOrdering(failFastViolations);
+        if (!devProfile) {
+            warnLaunchConfig();
+        }
 
         // Logged before the fail-fast throw so a blocked boot still records what was checked.
         log.info("ConfigStartupAssertion: {} bounded platform config keys and {} @SchedulerLock pair(s) "
@@ -222,6 +236,39 @@ public class ConfigStartupAssertion implements ApplicationListener<ApplicationRe
             } else {
                 throw new AppSetupException(message);
             }
+        }
+    }
+
+    /**
+     * fix/prod-readiness-gaps: rows V139 seeds blank that an operator must fill before launch, and a
+     * phone-OTP flag no SMS gateway can serve. Never blocks the boot (UAT may run without
+     * subscriptions or an alert inbox); each problem is an ERROR plus a {@code config.value.misconfigured}
+     * count, so it shows on every restart until fixed.
+     */
+    private void warnLaunchConfig() {
+        for (String key : LAUNCH_REQUIRED_KEYS) {
+            Optional<String> raw = configService.find(key);
+            if (raw.isEmpty() || raw.get().isBlank()) {
+                log.error("Platform config '{}' is blank — set it in the admin config editor before launch "
+                    + "(docs/deployment/provisioning-checklist.md section 7)", key);
+                Counter.builder("config.value.misconfigured")
+                    .tag("key", key)
+                    .tag("reason", "launch_blank")
+                    .register(meterRegistry)
+                    .increment();
+            }
+        }
+        boolean phoneOtpOn = configService.find(ConfigService.PHONE_OTP_REQUIRED_KEY)
+            .map(v -> "true".equalsIgnoreCase(v.trim()))
+            .orElse(false);
+        if (phoneOtpOn && !ConfigService.SMS_GATEWAY_AVAILABLE) {
+            log.error("Platform config '{}' is true but no SMS gateway is integrated — no OTP is ever sent, so "
+                + "every new Player/Parent/Coach is blocked. Set it to false.", ConfigService.PHONE_OTP_REQUIRED_KEY);
+            Counter.builder("config.value.misconfigured")
+                .tag("key", ConfigService.PHONE_OTP_REQUIRED_KEY)
+                .tag("reason", "no_sms_gateway")
+                .register(meterRegistry)
+                .increment();
         }
     }
 

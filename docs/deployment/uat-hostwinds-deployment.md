@@ -246,7 +246,9 @@ ssh root@hwsrv-1301707.hostwindsdns.com "chmod 600 /server/skillars/.env.uat"
 **`.env.uat` must set `ENVIRONMENT=uat` and `APP_FRONTEND_URL` to this box's URL** (ses-1.5): `docker-compose.yml`
 injects `ENVIRONMENT=${ENVIRONMENT:-prod}` and `APP_FRONTEND_URL=${APP_FRONTEND_URL:-https://skillars.com}`, which
 override `application-uat.yaml`, and `.env.example` seeds the production values — so without these two lines uat logs
-are labelled `prod` and every email link points at production. See the table in
+are labelled `prod` and every email link points at production. `docker-compose.uat-hostwinds.yml` now requires
+`APP_FRONTEND_URL`, `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL`, `GMX_PASSWORD` and `GMAIL_PASSWORD` (`:?`), so a
+missing value stops `docker compose up` with a message instead of booting against production URLs. See the table in
 [`uat-deployment.md`](uat-deployment.md#step-4-prepare-envuat). uat sends email over Gmail/GMX SMTP for now; the move to
 SES is deferred (`ses-1-5b-uat-ses-cutover`).
 
