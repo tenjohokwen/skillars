@@ -451,6 +451,7 @@ describe('BookingRequestPage.vue — submit error toasts (fix/booking-integrity 
     ['booking.playerNotBookable', 'booking.errors.playerNotBookable'],
     ['booking.slotUnavailable', 'booking.errors.slotUnavailable'],
     ['payment.coachStripeNotConfigured', 'payment.error.coachStripeNotConfigured'],
+    ['booking.coachPricingUnavailable', 'booking.errors.coachPricingUnavailable'],
   ])('batch submit: %s maps to %s (codes now reachable from createBatch)', async (code, key) => {
     const { wrapper, bookingStore } = await mountPage({ batchBasket: [SLOT] })
     bookingStore.submitBatch.mockRejectedValue(rejectWith(code))
@@ -458,5 +459,65 @@ describe('BookingRequestPage.vue — submit error toasts (fix/booking-integrity 
     await wrapper.vm.submitBatchRequest()
 
     expect(notifySpy).toHaveBeenCalledWith({ message: key, type: 'negative' })
+  })
+})
+
+describe('BookingRequestPage.vue — coach without pricing (fix/booking-price-and-excused-race)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    getBatchConfig.mockResolvedValue({ maxSize: 4 })
+    getBookingRequestConfig.mockResolvedValue({ activeSlotStatuses: ['REQUESTED', 'CONFIRMED'] })
+  })
+
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+  })
+
+  const rejectWith = (errorKey) => ({ response: { data: { errorMsg: { errorKey } } } })
+
+  it('an unpriced coach shows the banner and blocks a per-session request', async () => {
+    const { wrapper } = await mountPage({ computedSlots: [SLOT], coachPriced: false })
+    wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+    await wrapper.vm.$nextTick()
+
+    // Shallow mount does not render q-page's slot, so the banner's v-if condition is asserted directly.
+    expect(wrapper.vm.coachUnpriced).toBe(true)
+    expect(wrapper.vm.canSubmit).toBe(false)
+  })
+
+  it('an unpriced coach can still be booked against a session pack', async () => {
+    const { wrapper } = await mountPage({ computedSlots: [SLOT], coachPriced: false })
+    wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+    wrapper.vm.selectedPackId = 'pack-1'
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.vm.canSubmit).toBe(true)
+  })
+
+  it('a priced or unknown pricing state does not block or show the banner', async () => {
+    for (const coachPriced of [true, null]) {
+      const { wrapper } = await mountPage({ computedSlots: [SLOT], coachPriced })
+      wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.vm.coachUnpriced).toBe(false)
+      expect(wrapper.vm.canSubmit).toBe(true)
+    }
+  })
+
+  it('single submit: booking.coachPricingUnavailable gets its own toast', async () => {
+    const { wrapper, bookingStore } = await mountPage({ computedSlots: [SLOT] })
+    bookingStore.submitBookingRequest.mockRejectedValue(
+      rejectWith('booking.coachPricingUnavailable'),
+    )
+    wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
+    await wrapper.vm.$nextTick()
+
+    await wrapper.vm.submit()
+
+    expect(notifySpy).toHaveBeenCalledWith({
+      type: 'negative',
+      message: 'booking.errors.coachPricingUnavailable',
+    })
   })
 })

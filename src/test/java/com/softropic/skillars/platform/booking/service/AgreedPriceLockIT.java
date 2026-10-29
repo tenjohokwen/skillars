@@ -1,11 +1,14 @@
 package com.softropic.skillars.platform.booking.service;
 
 import com.softropic.skillars.config.AbstractIntegrationTest;
-import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.booking.contract.BatchSlot;
+import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingResponse;
+import com.softropic.skillars.platform.booking.contract.CreateBatchRequest;
 import com.softropic.skillars.platform.booking.contract.CreateBookingRequest;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,6 +22,7 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -33,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class AgreedPriceLockIT extends AbstractIntegrationTest {
 
     @Autowired private BookingService bookingService;
+    @Autowired private BookingBatchService bookingBatchService;
     @Autowired private BookingRepository bookingRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -105,32 +110,95 @@ class AgreedPriceLockIT extends AbstractIntegrationTest {
         assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus()).isEqualTo("CONFIRMED");
     }
 
+    /**
+     * fix/booking-price-and-excused-race: a non-pack booking with no agreed_price (pre-V192, or requested
+     * while the coach had no pricing) is never charged at the coach's current price — the payer never saw
+     * it. The accept is refused, nothing is charged and the booking stays REQUESTED for the coach to decline.
+     */
     @Test
-    void legacyBookingWithoutAgreedPrice_fallsBackToCurrentPricing() {
+    void bookingWithoutAgreedPrice_acceptIsRefused_notChargedAtTheCurrentPrice() {
         Booking legacy = seedRequestedBooking(null);
         setCoachPrice("65.00");
 
-        bookingService.acceptBooking(legacy.getId(), COACH_USER_ID);
+        assertThatThrownBy(() -> bookingService.acceptBooking(legacy.getId(), COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.PRICE_NOT_LOCKED);
 
-        BigDecimal charged = jdbcTemplate.queryForObject(
-            "SELECT stripe_charged FROM payment.booking_payments WHERE booking_id = ?", BigDecimal.class,
-            legacy.getId());
-        assertThat(charged).isEqualByComparingTo("65.00");
+        assertNotChargedAndStillRequested(legacy.getId());
     }
 
     @Test
-    void noAgreedPriceAndNoPricing_acceptFailsLoudly_neverConfirmedForFree() {
+    void noAgreedPriceAndNoPricing_acceptIsRefused_neverConfirmedForFree() {
         Booking legacy = seedRequestedBooking(null);
-        transactionTemplate.execute(status ->
-            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId));
+        deleteCoachPricing();
 
         assertThatThrownBy(() -> bookingService.acceptBooking(legacy.getId(), COACH_USER_ID))
-            .isInstanceOf(ResourceNotFoundException.class);
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.PRICE_NOT_LOCKED);
 
-        assertThat(bookingRepository.findById(legacy.getId()).orElseThrow().getStatus()).isEqualTo("REQUESTED");
+        assertNotChargedAndStillRequested(legacy.getId());
+    }
+
+    /** fix/booking-price-and-excused-race: the request itself is refused when there is no price to lock. */
+    @Test
+    void requestWhileCoachHasNoPricing_isRefused_noBookingWritten() {
+        deleteCoachPricing();
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID,
+                new CreateBookingRequest(coachProfileId, PLAYER_ID, slotStart, slotEnd, null, null, null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.COACH_PRICING_UNAVAILABLE);
+
+        assertThat(bookingCountForCoach()).isZero();
+    }
+
+    @Test
+    void batchRequestWhileCoachHasNoPricing_isRefused_nothingWritten() {
+        deleteCoachPricing();
+
+        assertThatThrownBy(() -> bookingBatchService.createBatch(PARENT_ID, new CreateBatchRequest(
+                coachProfileId, PLAYER_ID, List.of(new BatchSlot(slotStart, slotEnd)), null, null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.COACH_PRICING_UNAVAILABLE);
+
+        assertThat(bookingCountForCoach()).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.booking_batches WHERE coach_id = ?", Integer.class, coachProfileId)).isZero();
+    }
+
+    @Test
+    void batchRequest_locksTheCurrentPriceOntoEveryBooking() {
+        Instant secondStart = slotStart.plus(java.time.Duration.ofHours(2));
+        bookingBatchService.createBatch(PARENT_ID, new CreateBatchRequest(coachProfileId, PLAYER_ID,
+            List.of(new BatchSlot(slotStart, slotEnd),
+                new BatchSlot(secondStart, secondStart.plus(java.time.Duration.ofHours(1)))), null, null));
+
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT agreed_price FROM booking.bookings WHERE coach_id = ?", BigDecimal.class, coachProfileId))
+            .hasSize(2)
+            .allSatisfy(p -> assertThat(p).isEqualByComparingTo("50.00"));
+    }
+
+    private void assertNotChargedAndStillRequested(UUID bookingId) {
+        assertThat(bookingRepository.findById(bookingId).orElseThrow().getStatus()).isEqualTo("REQUESTED");
         Integer rows = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM payment.booking_payments WHERE booking_id = ?", Integer.class, legacy.getId());
+            "SELECT COUNT(*) FROM payment.booking_payments WHERE booking_id = ?", Integer.class, bookingId);
         assertThat(rows).isZero();
+    }
+
+    private void deleteCoachPricing() {
+        transactionTemplate.execute(status ->
+            jdbcTemplate.update("DELETE FROM marketplace.coach_pricing WHERE coach_id = ?", coachProfileId));
+    }
+
+    private int bookingCountForCoach() {
+        Integer n = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.bookings WHERE coach_id = ?", Integer.class, coachProfileId);
+        return n == null ? 0 : n;
     }
 
     private void setCoachPrice(String price) {

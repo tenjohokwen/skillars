@@ -150,6 +150,9 @@ export const useBookingStore = defineStore('booking', () => {
   const computedSlots = ref([])
   const coachTimezone = ref(null)
   const availabilitySignature = ref(null)
+  // fix/booking-price-and-excused-race: false when the coach has no session price, so card/credit requests
+  // would be refused (booking.coachPricingUnavailable). null = unknown (not loaded / older response).
+  const coachPriced = ref(null)
   const weekStart = ref(null)
   const loading = ref(false)
   const error = ref(null)
@@ -224,6 +227,7 @@ export const useBookingStore = defineStore('booking', () => {
     computedSlots.value = []
     coachTimezone.value = null
     availabilitySignature.value = null
+    coachPriced.value = null
     try {
       const ws = date ?? currentMonday()
       weekStart.value = ws
@@ -233,6 +237,7 @@ export const useBookingStore = defineStore('booking', () => {
       computedSlots.value = res.computedSlots ?? []
       coachTimezone.value = res.canonicalTimezone ?? null
       availabilitySignature.value = res.availabilitySignature ?? null
+      coachPriced.value = typeof res.coachPriced === 'boolean' ? res.coachPriced : null
     } catch (e) {
       error.value = e
     } finally {
@@ -718,6 +723,7 @@ export const useBookingStore = defineStore('booking', () => {
     computedSlots,
     coachTimezone,
     availabilitySignature,
+    coachPriced,
     weekStart,
     loading,
     error,

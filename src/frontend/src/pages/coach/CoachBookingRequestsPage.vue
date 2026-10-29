@@ -173,6 +173,10 @@ async function handleAccept(id) {
       $q.notify({ type: 'negative', message: t('booking.errors.coachUnavailable') })
     } else if (errorKey === 'booking.slotUnavailable') {
       $q.notify({ type: 'negative', message: t('booking.errors.slotUnavailable') })
+    } else if (errorKey === 'booking.priceNotLocked') {
+      // fix/booking-price-and-excused-race: a request with no agreed price is never charged at the
+      // coach's current price — the coach declines it and the family re-requests.
+      $q.notify({ type: 'negative', message: t('booking.errors.priceNotLocked') })
     } else {
       $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
     }
@@ -223,6 +227,7 @@ function failureReasonFor(batchId, bookingId) {
   if (!result || result.accepted) return null
   if (result.errorKey === 'booking.slotUnavailable') return t('booking.errors.slotUnavailable')
   if (result.errorKey === 'booking.coachUnavailable') return t('booking.errors.coachUnavailable')
+  if (result.errorKey === 'booking.priceNotLocked') return t('booking.errors.priceNotLocked')
   return t('booking.batch.itemNotAccepted')
 }
 

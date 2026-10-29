@@ -801,6 +801,9 @@ class BookingServiceConcurrencyIT extends AbstractIntegrationTest {
             booking.setRequestedEndTime(end);
             booking.setCanonicalTimezone(WINDOW_TZ);
             booking.setStatus("REQUESTED");
+            // fix/booking-price-and-excused-race: accept refuses a non-pack booking without the price locked
+            // at request time; 50.00 matches this coach's pricing row.
+            booking.setAgreedPrice(new java.math.BigDecimal("50.00"));
             return bookingRepository.save(booking);
         });
     }

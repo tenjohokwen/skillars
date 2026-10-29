@@ -158,7 +158,22 @@ public enum BookingError implements ErrorCode {
      * {@code GdprErasureService.retryFailedErasures}). Checked under the {@code player_profiles} row
      * lock by {@code BookingService.requirePlayerBookableUnderLock}, the same lock the erasure takes.
      */
-    PLAYER_NOT_BOOKABLE;
+    PLAYER_NOT_BOOKABLE,
+    /**
+     * fix/booking-price-and-excused-race: a card- or credit-funded booking (single, batch, or a coach's
+     * duplicate-next-week proposal) is being created while the coach has no {@code coach_pricing} row.
+     * The request is refused rather than stored with a NULL {@code agreed_price}, because whatever price
+     * the coach set before accepting would then be charged without the payer ever having seen it.
+     * Pack-funded bookings are exempt (the pack's own locked price applies).
+     */
+    COACH_PRICING_UNAVAILABLE,
+    /**
+     * fix/booking-price-and-excused-race: accept-time counterpart of {@code COACH_PRICING_UNAVAILABLE}. A
+     * non-pack booking with no {@code agreed_price} (a row created before V192, or after it while the
+     * coach had no pricing) is never charged at the coach's current price, which the payer did not agree
+     * to. The coach declines it and the payer re-requests, which locks the price they then see.
+     */
+    PRICE_NOT_LOCKED;
 
     @Override
     public String getErrorCode() {
@@ -191,6 +206,8 @@ public enum BookingError implements ErrorCode {
             case RECAP_NOT_EDITABLE_DISPUTED -> "booking.recapNotEditableDisputed";
             case RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE -> "booking.recapStillEditableAfterForceComplete";
             case PLAYER_NOT_BOOKABLE       -> "booking.playerNotBookable";
+            case COACH_PRICING_UNAVAILABLE -> "booking.coachPricingUnavailable";
+            case PRICE_NOT_LOCKED          -> "booking.priceNotLocked";
         };
     }
 

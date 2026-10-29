@@ -285,10 +285,13 @@ class BatchAcceptPaymentIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
-                " status, canonical_timezone, batch_id, session_pack_purchase_id, version, created_at, updated_at) " +
-                "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', ?, ?, ?, 0, ?, ?)",
+                " status, canonical_timezone, batch_id, session_pack_purchase_id, agreed_price, version, created_at, updated_at) " +
+                "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', ?, ?, ?, ?, 0, ?, ?)",
                 bookingId, PARENT_ID, PLAYER_ID, coachProfileId,
                 Timestamp.from(start), Timestamp.from(end), TZ, batchId, packPurchaseId,
+                // fix/booking-price-and-excused-race: a non-pack booking carries the price createBatch locked
+                // (the coach's 40.00); accept refuses one without it. Pack bookings use the pack's price.
+                packPurchaseId == null ? new java.math.BigDecimal("40.00") : null,
                 Timestamp.from(Instant.now()), Timestamp.from(Instant.now())
             );
             return null;

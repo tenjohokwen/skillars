@@ -235,8 +235,12 @@ class BatchPaymentIT extends BasePaymentIT {
             bookingId);
     }
 
+    /**
+     * fix/booking-price-and-excused-race: a non-pack booking defaults to the price createBatch would have
+     * locked (the coach's 40.00) — settlement no longer falls back to the coach's current price.
+     */
     private void insertBooking(UUID bookingId, UUID forCoachId, UUID packPurchaseId) {
-        insertBooking(bookingId, forCoachId, packPurchaseId, null);
+        insertBooking(bookingId, forCoachId, packPurchaseId, packPurchaseId == null ? new BigDecimal("40.00") : null);
     }
 
     private void insertBooking(UUID bookingId, UUID forCoachId, UUID packPurchaseId, BigDecimal agreedPrice) {

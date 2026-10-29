@@ -133,8 +133,9 @@ public class BookingDuplicationService {
         newBooking.setRequestedEndTime(newEnd);
         newBooking.setSessionPackPurchaseId(packId);
         // fix/payment-agreed-price-lock: a non-pack duplicate locks the coach's price as of the proposal.
+        // fix/booking-price-and-excused-race: refused (COACH_PRICING_UNAVAILABLE) when the coach has none.
         if (packId == null) {
-            newBooking.setAgreedPrice(bookingService.currentCoachPrice(original.getCoachId()));
+            newBooking.setAgreedPrice(bookingService.requireRequestTimePrice(original.getCoachId()));
         }
         bookingRepository.save(newBooking);
 

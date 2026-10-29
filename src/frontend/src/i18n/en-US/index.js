@@ -1995,6 +1995,10 @@ export default {
     errors: {
       coachUnavailable: 'This coach is currently unavailable.',
       playerNotBookable: 'This player can no longer be booked.',
+      coachPricingUnavailable:
+        "This coach hasn't set a session price yet, so sessions can't be booked by card or credit. Use a session pack, or try again later.",
+      priceNotLocked:
+        'This request has no agreed price. Decline it and ask the family to send a new request.',
       slotUnavailable: 'This time slot is no longer available.',
       startTimeInPast: 'That time has already passed. Pick a later slot.',
       invalidTimeRange: 'The session end time must be after its start time.',

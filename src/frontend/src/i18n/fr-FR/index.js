@@ -2439,6 +2439,10 @@ export default {
     errors: {
       coachUnavailable: "Ce coach n'est actuellement pas disponible.",
       playerNotBookable: 'Ce joueur ne peut plus être réservé.',
+      coachPricingUnavailable:
+        "Ce coach n'a pas encore fixé de prix par séance : la réservation par carte ou crédit est impossible. Utilisez un pack de séances ou réessayez plus tard.",
+      priceNotLocked:
+        "Cette demande n'a pas de prix convenu. Refusez-la et demandez à la famille d'envoyer une nouvelle demande.",
       slotUnavailable: "Ce créneau horaire n'est plus disponible.",
       startTimeInPast: 'Cet horaire est déjà passé. Veuillez choisir un créneau ultérieur.',
       invalidTimeRange: 'La fin de la séance doit être postérieure à son début.',

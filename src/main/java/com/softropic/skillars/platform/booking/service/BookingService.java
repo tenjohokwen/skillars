@@ -322,7 +322,17 @@ public class BookingService {
         if (paid != null && paid.signum() > 0) {
             return paid;
         }
-        return resolveSessionPrice(booking);
+        if (booking.getAgreedPrice() != null) {
+            return booking.getAgreedPrice();
+        }
+        // fix/booking-price-and-excused-race: deliberately NOT resolveSessionPrice, which refuses a booking
+        // with no agreed_price. This is a refund of money that already moved, for a row-less pre-V192
+        // booking: refusing it would fail the cancellation, so the legacy current-price estimate stays here.
+        BigDecimal current = currentCoachPrice(booking.getCoachId());
+        if (current == null) {
+            throw new ResourceNotFoundException("Coach pricing not found", "coach_pricing");
+        }
+        return current;
     }
 
     /**
@@ -495,8 +505,9 @@ public class BookingService {
         booking.setSessionPackPurchaseId(req.sessionPackPurchaseId());
         // fix/payment-agreed-price-lock: lock the price the parent is requesting at (pack bookings keep
         // the pack's own locked price), read under the coach row lock taken above.
+        // fix/booking-price-and-excused-race: and refuse the request when there is no price to lock.
         if (req.sessionPackPurchaseId() == null) {
-            booking.setAgreedPrice(currentCoachPrice(req.coachId()));
+            booking.setAgreedPrice(requireRequestTimePrice(req.coachId()));
         }
         bookingRepository.save(booking);
 
@@ -622,6 +633,12 @@ public class BookingService {
                     "requested end time", booking.getRequestedEndTime()),
                 BookingError.SLOT_UNAVAILABLE);
         }
+        // fix/booking-price-and-excused-race: refuse an unpriced booking (PRICE_NOT_LOCKED) before the
+        // transition rather than relying on the post-transition resolveSessionPrice below to roll it back.
+        // REQUESTED only, so a booking in any other status still reports its state-transition error.
+        if ("REQUESTED".equals(booking.getStatus())) {
+            resolveSessionPrice(booking);
+        }
 
         TransitionContext ctx = new TransitionContext(ActorRole.COACH, coachUserId);
         try {
@@ -668,11 +685,17 @@ public class BookingService {
     }
 
     /**
-     * The price a booking is charged (and, absent a captured payment row, refunded at): the pack's
-     * locked per-session price, else the {@code agreed_price} locked at request time
-     * (fix/payment-agreed-price-lock), else — only for a pre-V192 row — the coach's current price.
-     * Throws when none exists, so an unpriceable booking is never confirmed for free. Package-private
-     * for {@code BookingBatchService.acceptOneBooking}'s pre-accept check.
+     * The price a booking is charged at accept: the pack's locked per-session price, else the
+     * {@code agreed_price} locked at request time (fix/payment-agreed-price-lock). Package-private for
+     * {@code BookingBatchService.acceptOneBooking}'s pre-accept check.
+     *
+     * <p>fix/booking-price-and-excused-race: there is no longer a fallback to the coach's current price.
+     * A non-pack booking without an {@code agreed_price} — a pre-V192 row, or one requested after V192
+     * while the coach had no pricing (request creation now refuses that, see
+     * {@link #requireRequestTimePrice}) — is refused with {@code PRICE_NOT_LOCKED} and stays REQUESTED:
+     * charging whatever the coach priced at since would charge a price the payer never saw. The coach
+     * declines it and the payer re-requests. Refunds keep their own legacy fallback
+     * ({@link #resolveAmountPaid}), since that money has already moved.
      */
     BigDecimal resolveSessionPrice(Booking booking) {
         if (booking.getSessionPackPurchaseId() != null) {
@@ -683,11 +706,25 @@ public class BookingService {
         if (booking.getAgreedPrice() != null) {
             return booking.getAgreedPrice();
         }
-        BigDecimal current = currentCoachPrice(booking.getCoachId());
-        if (current == null) {
-            throw new ResourceNotFoundException("Coach pricing not found", "coach_pricing");
+        throw new OperationNotAllowedException(
+            "This booking has no price agreed at request time — decline it and ask the parent to request again",
+            Map.of("booking id", booking.getId()), BookingError.PRICE_NOT_LOCKED);
+    }
+
+    /**
+     * fix/booking-price-and-excused-race: the price a card- or credit-funded booking is locked at when it is
+     * created (single request, batch, coach duplicate) — the coach's current per-session price, read under
+     * the caller's coach row lock. Refuses with {@code COACH_PRICING_UNAVAILABLE} when the coach has no
+     * pricing, rather than storing a NULL {@code agreed_price} that whatever price the coach set before
+     * accepting would later fill.
+     */
+    BigDecimal requireRequestTimePrice(UUID coachId) {
+        BigDecimal price = currentCoachPrice(coachId);
+        if (price == null) {
+            throw new OperationNotAllowedException("This coach has not set a session price yet",
+                Map.of("coach id", coachId), BookingError.COACH_PRICING_UNAVAILABLE);
         }
-        return current;
+        return price;
     }
 
     /** fix/payment-agreed-price-lock: the coach's current per-session price, or null with no pricing row. */

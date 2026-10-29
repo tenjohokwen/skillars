@@ -672,10 +672,12 @@ class BookingBatchResourceIT extends AbstractIntegrationTest {
             for (int i = 0; i < bookingCount; i++) {
                 Instant start = Instant.now().plus(3 + i, ChronoUnit.DAYS);
                 jdbcTemplate.update(
+                    // agreed_price: createBatch locks it, and accept refuses a booking without one
+                    // (fix/booking-price-and-excused-race) — matches the coach's 50.00 pricing row.
                     "INSERT INTO booking.bookings " +
                     "(id, parent_id, player_id, coach_id, requested_start_time, requested_end_time, " +
-                    "status, canonical_timezone, batch_id, version, created_at, updated_at) " +
-                    "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', 'Europe/Berlin', ?, 0, ?, ?)",
+                    "status, canonical_timezone, batch_id, agreed_price, version, created_at, updated_at) " +
+                    "VALUES (?, ?, ?, ?, ?, ?, 'REQUESTED', 'Europe/Berlin', ?, 50.00, 0, ?, ?)",
                     UUID.randomUUID(), PARENT_ID, PLAYER_ID, coachProfileId,
                     Timestamp.from(start), Timestamp.from(start.plus(1, ChronoUnit.HOURS)),
                     batchId, Timestamp.from(Instant.now()), Timestamp.from(Instant.now())

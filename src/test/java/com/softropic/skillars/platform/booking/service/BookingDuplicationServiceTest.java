@@ -284,6 +284,29 @@ class BookingDuplicationServiceTest {
         verify(bookingRepository).save(any(Booking.class));
     }
 
+    /** fix/booking-price-and-excused-race: a non-pack duplicate needs a price to lock; none → refused, nothing saved. */
+    @Test
+    void duplicateNextWeek_noPackAndCoachWithoutPricing_isRefused() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+
+        when(bookingService.getBookingOrThrow(ORIGINAL_BOOKING_ID)).thenReturn(completedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingService.isSlotBlocked(any(), any(), any())).thenReturn(false);
+        when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(packSessionService.findActivePackId(any(), any())).thenReturn(null);
+        when(bookingService.requireRequestTimePrice(COACH_ID)).thenThrow(new OperationNotAllowedException(
+            "This coach has not set a session price yet", BookingError.COACH_PRICING_UNAVAILABLE));
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.COACH_PRICING_UNAVAILABLE));
+        verify(bookingRepository, never()).save(any());
+    }
+
     /** Deferred-50 AC1: repeat-next-week must not double-book the coach at the duplicated slot. */
     @Test
     void duplicateNextWeek_overlapsAnotherBooking_throwsSlotUnavailable() {

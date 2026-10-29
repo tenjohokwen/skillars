@@ -100,11 +100,13 @@ class CaptureReservationIT extends BasePaymentIT {
         Instant start = Instant.now().plus(startsInHours, ChronoUnit.HOURS);
         transactionTemplate.execute(status -> {
             jdbcTemplate.update(
+                // agreed_price: batch settlement charges only the price locked at request time
+                // (fix/booking-price-and-excused-race) — SESSION_PRICE, the coach's 50.00.
                 "INSERT INTO booking.bookings (id, parent_id, player_id, coach_id, requested_start_time, "
-                + "requested_end_time, status, canonical_timezone, version, created_at, updated_at) "
-                + "VALUES (?, ?, ?, ?, ?, ?, 'PAYMENT_PENDING', 'UTC', 0, now(), now())",
+                + "requested_end_time, status, canonical_timezone, agreed_price, version, created_at, updated_at) "
+                + "VALUES (?, ?, ?, ?, ?, ?, 'PAYMENT_PENDING', 'UTC', ?, 0, now(), now())",
                 bookingId, PARENT_ID, PLAYER_ID, coachId,
-                Timestamp.from(start), Timestamp.from(start.plus(1, ChronoUnit.HOURS)));
+                Timestamp.from(start), Timestamp.from(start.plus(1, ChronoUnit.HOURS)), SESSION_PRICE);
             return null;
         });
         return bookingId;

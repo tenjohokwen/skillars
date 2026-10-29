@@ -76,6 +76,11 @@ class AvailabilityServiceTest {
     @Mock
     EntityManager entityManager;
 
+    // fix/booking-price-and-excused-race: CoachAvailabilityResponse.coachPriced. Unstubbed it returns
+    // Optional.empty (Mockito's default for Optional), i.e. coachPriced = false.
+    @Mock
+    com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository coachPricingRepository;
+
     @InjectMocks
     AvailabilityService service;
 
@@ -261,6 +266,24 @@ class AvailabilityServiceTest {
             .isInstanceOf(ResourceNotFoundException.class);
 
         verifyNoInteractions(windowRepository, blockRepository, bookingRepository);
+    }
+
+    // fix/booking-price-and-excused-race: the booking page disables card/credit requests for an unpriced coach.
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void getAvailabilityCalendar_reportsWhetherTheCoachHasPricing(boolean priced) {
+        UUID coachId = UUID.randomUUID();
+        when(coachProfileRepository.findById(coachId)).thenReturn(Optional.of(makeCoachProfile(coachId, COACH_USER_ID)));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(coachId)).thenReturn(List.of());
+        lenient().when(blockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(eq(coachId), any(), any()))
+            .thenReturn(List.of());
+        lenient().when(sessionDurationResolver.resolve(coachId)).thenReturn(ONE_HOUR);
+        when(coachPricingRepository.findByCoachId(coachId)).thenReturn(priced
+            ? Optional.of(new com.softropic.skillars.platform.marketplace.repo.CoachPricing())
+            : Optional.empty());
+
+        assertThat(service.getAvailabilityCalendar(coachId, LocalDate.of(2026, 6, 15)).coachPriced())
+            .isEqualTo(priced);
     }
 
     @Test
