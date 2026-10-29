@@ -327,7 +327,7 @@ class SessionPackPaymentResourceWebMvcTest {
                 org.mockito.ArgumentMatchers.isNull()))
             .thenReturn(new SessionPackPurchaseResponse(
                 java.util.UUID.randomUUID(), packTierId, "Starter", 5, 5, new BigDecimal("20.00"),
-                Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE"));
+                Instant.now().plusSeconds(3600), "pi_test", 1L, java.util.UUID.randomUUID(), null, "ACTIVE", null));
 
         mockMvc.perform(post("/api/payment/session-packs/purchase")
                 .contentType(MediaType.APPLICATION_JSON)

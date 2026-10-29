@@ -10,18 +10,23 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 @Component
 @RequiredArgsConstructor
 @Slf4j
 public class SessionPackForfeitureScheduler {
+
+    static final int PAGE_SIZE = 200;
+    private static final UUID FIRST_PAGE = new UUID(0L, 0L);
 
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final CoachProfileRepository coachProfileRepository;
@@ -34,10 +39,26 @@ public class SessionPackForfeitureScheduler {
                    lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     public void forfeitExpiredPacks() {
         Instant now = Instant.now();
-        List<SessionPackPurchase> expired = transactionTemplate.execute(
-            status -> sessionPackPurchaseRepository.findExpiredNotYetNotified(now));
-        if (expired == null) return;
+        // fix/payment-pack-integrity: keyset-paged by purchase id — the first run after a deploy or an outage
+        // used to load the whole backlog in one query. Paging by id (not "until empty") because a pack with a
+        // missing coach is deliberately left unstamped and would otherwise be re-read forever.
+        UUID afterId = FIRST_PAGE;
+        while (true) {
+            UUID cursor = afterId;
+            List<SessionPackPurchase> page = transactionTemplate.execute(
+                status -> sessionPackPurchaseRepository.findExpiredNotYetNotified(now, cursor, PageRequest.of(0, PAGE_SIZE)));
+            if (page == null || page.isEmpty()) {
+                return;
+            }
+            forfeitPage(page, now);
+            if (page.size() < PAGE_SIZE) {
+                return;
+            }
+            afterId = page.get(page.size() - 1).getPurchaseId();
+        }
+    }
 
+    private void forfeitPage(List<SessionPackPurchase> expired, Instant now) {
         for (SessionPackPurchase staleFromBatch : expired) {
             try {
                 transactionTemplate.execute(status -> {

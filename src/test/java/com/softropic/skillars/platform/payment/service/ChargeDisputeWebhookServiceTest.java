@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.stripe.model.Charge;
 import com.stripe.model.Dispute;
 import com.stripe.model.Event;
@@ -46,6 +47,7 @@ class ChargeDisputeWebhookServiceTest {
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock ParentCreditLedgerRepository ledgerRepository;
     @Mock CreditWalletService creditWalletService;
+    @Mock PackSessionService packSessionService;
 
     private ChargeDisputeWebhookService service;
     private final UUID bookingA = UUID.randomUUID();
@@ -59,7 +61,7 @@ class ChargeDisputeWebhookServiceTest {
         ChargebackCreditReversalService credit = new ChargebackCreditReversalService(ledgerRepository,
             chargeDisputeRepository, creditWalletService, eventPublisher);
         service = new ChargeDisputeWebhookService(chargeDisputeRepository, coachPayoutRepository,
-            bookingPaymentRepository, adjustment, credit, eventPublisher);
+            bookingPaymentRepository, adjustment, credit, eventPublisher, packSessionService);
     }
 
     private static Dispute dispute(String status, long amountCents) {
@@ -374,5 +376,72 @@ class ChargeDisputeWebhookServiceTest {
         assertThat(alert.getReferenceId()).isEqualTo("pi_1");
         assertThat(alert.getReason()).isEqualTo("refunded 20.00 of 50.00");
         verify(coachPayoutRepository, never()).findFundedByPaymentIntentForUpdate(any());
+        // fix/payment-pack-integrity: a partial external refund only alerts — no pack is revoked.
+        verify(packSessionService, never()).revokeForCharge(any(), any());
+    }
+
+    // ---- fix/payment-pack-integrity: a pack bought with the disputed charge ---------------------
+
+    private void packCharge() {
+        when(chargeDisputeRepository.findPackPurchaseIdsByPaymentIntent("pi_1")).thenReturn(List.of(UUID.randomUUID()));
+    }
+
+    @Test
+    void created_onAPackCharge_freezesThePack() {
+        packCharge();
+        when(packSessionService.freezeForDispute("pi_1")).thenReturn(true);
+
+        service.onDisputeCreated(dispute("needs_response", 10_000));
+
+        verify(packSessionService).freezeForDispute("pi_1");
+        assertThat(capturedAlert().getReason()).contains("pack=frozen");
+    }
+
+    @Test
+    void closedLost_onAPackCharge_revokesTheRemainingSessions() {
+        packCharge();
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.empty());
+        when(chargeDisputeRepository.sumChargedByPaymentIntent("pi_1")).thenReturn(new BigDecimal("100.00"));
+        when(packSessionService.revokeForCharge("pi_1", SessionPackPurchase.REVOKED_CHARGEBACK_LOST)).thenReturn(7);
+
+        service.onDisputeClosed(dispute("lost", 10_000));
+
+        verify(packSessionService).revokeForCharge("pi_1", SessionPackPurchase.REVOKED_CHARGEBACK_LOST);
+        verify(packSessionService, never()).liftDisputeFreeze(any());
+        assertThat(capturedAlert().getReason()).contains("packSessionsRevoked=7");
+    }
+
+    @Test
+    void closedWon_onAPackCharge_liftsThePackFreeze_unlessAnotherDisputeIsOpen() {
+        packCharge();
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.empty());
+
+        service.onDisputeClosed(dispute("won", 10_000));
+
+        verify(packSessionService).liftDisputeFreeze("pi_1");
+        verify(packSessionService, never()).revokeForCharge(any(), any());
+    }
+
+    @Test
+    void closedWon_anotherDisputeStillOpen_keepsThePackFrozen() {
+        packCharge();
+        when(chargeDisputeRepository.findByIdForUpdate("dp_1")).thenReturn(Optional.empty());
+        when(chargeDisputeRepository.existsByPaymentIntentIdAndStatus("pi_1", ChargeDispute.STATUS_OPEN)).thenReturn(true);
+
+        service.onDisputeClosed(dispute("won", 10_000));
+
+        verify(packSessionService, never()).liftDisputeFreeze(any());
+    }
+
+    @Test
+    void refunded_inFullOutsideTheApp_revokesThePack() {
+        packCharge();
+        Charge full = charge();
+        full.setAmountRefunded(5_000L);
+        when(packSessionService.revokeForCharge("pi_1", SessionPackPurchase.REVOKED_EXTERNAL_REFUND)).thenReturn(3);
+
+        service.onChargeRefunded(full, eventWithKey(null));
+
+        assertThat(capturedAlert().getReason()).isEqualTo("refunded 50.00 of 50.00 packSessionsRevoked=3");
     }
 }

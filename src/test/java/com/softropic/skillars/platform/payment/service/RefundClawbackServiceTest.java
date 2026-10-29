@@ -140,11 +140,15 @@ class RefundClawbackServiceTest {
         when(ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND))
             .thenReturn(Optional.empty());
         restoreMarker(true);
-        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack(2)));
+        SessionPackPurchase pack = pack(2);
+        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack));
+        when(packSessionService.deductSessionForClawback(pack)).thenReturn(true);
 
         RefundClawbackService.RefundClawback result = service.clawBack(bookingId, packId).orElseThrow();
 
-        verify(packSessionService).deductSession(packId);
+        // fix/payment-pack-integrity: the clawback path, never deductSession (whose pause guard threw).
+        verify(packSessionService).deductSessionForClawback(pack);
+        verify(packSessionService, never()).deductSession(any());
         assertThat(result.sessionRededucted()).isTrue();
         assertThat(result.refunded()).isEqualByComparingTo("33.33");
         assertThat(result.absorbed()).isEqualByComparingTo("0.00");
@@ -155,7 +159,9 @@ class RefundClawbackServiceTest {
         when(ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND))
             .thenReturn(Optional.empty());
         restoreMarker(true);
-        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack(0)));
+        SessionPackPurchase pack = pack(0);
+        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack));
+        when(packSessionService.deductSessionForClawback(pack)).thenReturn(false);
 
         RefundClawbackService.RefundClawback result = service.clawBack(bookingId, packId).orElseThrow();
 

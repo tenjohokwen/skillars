@@ -2507,12 +2507,14 @@ class BookingServiceTest {
 
     @Test
     void cancelDueToPause_concurrentModification_throwsRetryableException() {
+        UUID packId = UUID.randomUUID();
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        booking.setSessionPackPurchaseId(packId);
 
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
 
-        assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID))
+        assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), packId, COACH_ID, PARENT_ID))
             .isInstanceOf(OperationNotAllowedException.class)
             .hasCauseInstanceOf(OptimisticLockingFailureException.class)
             .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
@@ -2528,30 +2530,57 @@ class BookingServiceTest {
             .findFirst().orElseThrow();
     }
 
+    /**
+     * fix/payment-pack-integrity: a card-paid booking is not the pause's business — pausing a pack used to cancel
+     * it with a full refund, even inside the 24h forfeit window.
+     */
     @Test
-    void cancelDueToPause_capturedCardBooking_refundsTheAmountActuallyPaid() {
+    void cancelDueToPause_cardBooking_notDrawnOnThePack_isRefused() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setRequestedStartTime(Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS));
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
-        BookingPayment bp = new BookingPayment();
-        bp.setBookingId(booking.getId());
-        bp.setStatus("CAPTURED");
-        bp.setCreditDebited(new BigDecimal("10.00"));
-        bp.setStripeCharged(new BigDecimal("30.00"));
-        when(bookingPaymentRepository.findById(booking.getId())).thenReturn(Optional.of(bp));
 
-        bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID);
+        assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), UUID.randomUUID(), COACH_ID, PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class);
 
-        var event = pauseEvent();
-        assertThat(event.isWalletRefund()).isTrue();
-        assertThat(event.isPackRestore()).isFalse();
-        assertThat(event.getRefundAmount()).isEqualByComparingTo("40.00");
-        verify(coachPricingRepository, never()).findByCoachId(any());
+        verify(eventPublisher, never()).publishEvent(any());
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    /** fix/payment-pack-integrity: a paid pack booking inside the 24h notice window is the parent's to cancel. */
+    @Test
+    void cancelDueToPause_paidPackBookingInside24h_isRefused() {
+        UUID packId = UUID.randomUUID();
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING"); // starts in 2h
+        booking.setSessionPackPurchaseId(packId);
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), packId, COACH_ID, PARENT_ID))
+            .isInstanceOf(com.softropic.skillars.platform.booking.contract.BatchRuleViolationException.class)
+            .hasMessageContaining("booking.pauseInsideCancellationNotice");
+
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    /** The notice is measured from the earlier of the original and the current start (reschedule anchor). */
+    @Test
+    void cancelDueToPause_rescheduledOutOfTheWindow_stillInsideNoticeOfTheOriginalStart_isRefused() {
+        UUID packId = UUID.randomUUID();
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        booking.setSessionPackPurchaseId(packId);
+        booking.setOriginalStartTime(Instant.now().plus(10, java.time.temporal.ChronoUnit.HOURS));
+        booking.setRequestedStartTime(Instant.now().plus(5, java.time.temporal.ChronoUnit.DAYS));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.cancelDueToPause(booking.getId(), packId, COACH_ID, PARENT_ID))
+            .isInstanceOf(com.softropic.skillars.platform.booking.contract.BatchRuleViolationException.class);
     }
 
     @Test
     void cancelDueToPause_capturedPackBooking_restoresTheSession() {
         UUID packId = UUID.randomUUID();
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS));
         booking.setSessionPackPurchaseId(packId);
         com.softropic.skillars.platform.payment.repo.SessionPackPurchase pack =
             new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
@@ -2559,7 +2588,7 @@ class BookingServiceTest {
         when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
 
-        bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID);
+        bookingService.cancelDueToPause(booking.getId(), packId, COACH_ID, PARENT_ID);
 
         var event = pauseEvent();
         assertThat(event.isPackRestore()).isTrue();
@@ -2570,11 +2599,12 @@ class BookingServiceTest {
     @ParameterizedTest
     @ValueSource(strings = {"REQUESTED", "ACCEPTED"})
     void cancelDueToPause_notYetCaptured_returnsNothing(String status) {
+        UUID packId = UUID.randomUUID();
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
-        booking.setSessionPackPurchaseId(UUID.randomUUID());
+        booking.setSessionPackPurchaseId(packId);
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
 
-        bookingService.cancelDueToPause(booking.getId(), COACH_ID, PARENT_ID);
+        bookingService.cancelDueToPause(booking.getId(), packId, COACH_ID, PARENT_ID);
 
         var event = pauseEvent();
         assertThat(event.isPaymentCaptured()).isFalse();

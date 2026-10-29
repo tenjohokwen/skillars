@@ -74,7 +74,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
   product decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208 and V209 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209 and V210 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -507,6 +507,17 @@ WHERE type = 'BOOKING_REFUND' AND description = 'Parent cancellation >24h — ex
 ```
 Admin dispute credits written before V208 are `BOOKING_REFUND` rows and stay so (UPHOLD_COACH can still
 claw one back); new ones are `DISPUTE_CREDIT`.
+
+**V210: session pack pause / dispute freeze / revoke** (`V210__session_pack_pause_freeze_revoke.sql`).
+Four nullable columns on `payment.session_pack_purchases` and two validating CHECKs
+(`chk_spp_pause_window`, `chk_spp_revoked_reason`) over columns that are new in V210, so every existing
+row passes. A pause recorded before V210 has no `paused_from` and keeps its old meaning (paused until
+`paused_until`). Informational, after the deploy: packs whose pause was scheduled for a later date were
+blocked from the moment it was scheduled; from V210 on, a new pause is only in force from its start.
+```sql
+SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
+WHERE paused_from IS NULL AND paused_until > now();
+```
 
 V187, V188, V191 and V193's new columns and tables are additive (new tables, `NOT NULL DEFAULT`
 constants, nullable columns) and need no data check. V186's backfill `UPDATE` of
@@ -998,3 +1009,8 @@ an operator must now do.
   (payment-integrity bucket). `BookingExpiryScheduler` now also expires REQUESTED bookings past their start
   time. V209 is additive. Run its backlog query (section 3.2) to see what the first sweeps will touch, and
   V209 joins the "prod is not live" list in section 0.
+- 2026-10-29: fix/payment-pack-integrity (V210): risky migration (validating CHECKs, "prod is not live"
+  list in section 0); see the V210 entry in [3.2](#32-pre-migration-data-checks). New outbox aggregate
+  `PACK_SUSPENSION_REFUND` (enqueued by a coach suspension / safety hold, drained by the existing outbox
+  drain and sweep). No new config keys, scheduled jobs, env vars or Stripe webhook events (it reacts to
+  the already-subscribed `charge.dispute.created` / `charge.dispute.closed` / `charge.refunded`).

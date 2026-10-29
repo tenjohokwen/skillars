@@ -48,6 +48,14 @@
               <div v-if="isPaused(pack)" class="text-caption q-mt-xs text-warning">
                 {{ t('booking.packs.pausedUntilLabel', { date: formatDate(pack.pausedUntil) }) }}
               </div>
+              <div v-else-if="isPauseScheduled(pack)" class="text-caption q-mt-xs text-warning">
+                {{
+                  t('booking.packs.pauseScheduledLabel', {
+                    from: formatDate(pack.pausedFrom),
+                    until: formatDate(pack.pausedUntil),
+                  })
+                }}
+              </div>
               <q-btn
                 v-if="pack.status === 'ACTIVE' && pack.creditsRemaining > 0 && !pack.pausedUntil"
                 flat
@@ -83,6 +91,8 @@
           <q-input
             v-model="pauseForm.startDate"
             type="date"
+            :min="minPauseStartDate"
+            :hint="t('booking.packs.pauseStartHint')"
             :label="t('booking.packs.pauseStartLabel')"
             outlined
             class="q-mb-md"
@@ -108,10 +118,16 @@
                   formatDateTime(b.requestedStartTime, b.canonicalTimezone)
                 }}</q-item-label>
                 <q-item-label caption>{{ b.status }}</q-item-label>
+                <q-item-label v-if="b.cancellable === false" caption class="text-negative">
+                  {{ t('booking.packs.pauseConflictInsideNotice') }}
+                </q-item-label>
               </q-item-section>
             </q-item>
           </q-list>
-          <div class="text-caption text-negative q-mt-sm">
+          <div v-if="hasBlockingConflict" class="text-caption text-negative q-mt-sm">
+            {{ t('booking.packs.pauseBlockedInsideNotice') }}
+          </div>
+          <div v-else class="text-caption text-negative q-mt-sm">
             {{ t('booking.packs.pauseConflictsWarning') }}
           </div>
         </q-card-section>
@@ -131,6 +147,7 @@
                 : t('booking.packs.pauseConfirm')
             "
             :loading="bookingStore.packPauseLoading"
+            :disable="hasBlockingConflict"
             @click="submitPause"
           />
         </q-card-actions>
@@ -140,7 +157,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
@@ -198,9 +215,33 @@ function formatDateTime(isoString, timezone) {
   })
 }
 
+// fix/payment-pack-integrity: a pause covers [pausedFrom, pausedUntil) — a pause scheduled for a later
+// date leaves the pack usable until it starts. A pause recorded before pausedFrom existed has none.
 function isPaused(pack) {
-  return pack.pausedUntil && new Date(pack.pausedUntil) > new Date()
+  const now = new Date()
+  return (
+    !!pack.pausedUntil &&
+    new Date(pack.pausedUntil) > now &&
+    (!pack.pausedFrom || new Date(pack.pausedFrom) <= now)
+  )
 }
+
+function isPauseScheduled(pack) {
+  return !!pack.pausedFrom && new Date(pack.pausedFrom) > new Date()
+}
+
+// The pause must start in the future (the server refuses today or earlier): tomorrow at the earliest.
+const minPauseStartDate = computed(() => {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+})
+
+// A paid session within 24h of its start cannot be cancelled by a pause: the pause is refused.
+const hasBlockingConflict = computed(() =>
+  bookingStore.packPauseConflicts.some((b) => b.cancellable === false),
+)
 
 function expiryClass(pack) {
   const daysUntilExpiry = (new Date(pack.expiresAt) - new Date()) / (1000 * 60 * 60 * 24)
@@ -250,8 +291,8 @@ async function submitPause() {
         pauseDialogOpen.value = false
         $q.notify({ message: t('booking.packs.pauseSuccess'), type: 'positive' })
       }
-    } catch {
-      $q.notify({ message: t('error.generic'), type: 'negative' })
+    } catch (err) {
+      notifyPauseError(err)
     }
   } else {
     try {
@@ -260,9 +301,18 @@ async function submitPause() {
         pauseDialogOpen.value = false
         $q.notify({ message: t('booking.packs.pauseSuccess'), type: 'positive' })
       }
-    } catch {
-      $q.notify({ message: t('error.generic'), type: 'negative' })
+    } catch (err) {
+      notifyPauseError(err)
     }
+  }
+}
+
+function notifyPauseError(err) {
+  const errorKey = err?.response?.data?.errorMsg?.errorKey
+  if (errorKey === 'booking.pauseStartInPast') {
+    $q.notify({ message: t('booking.packs.pauseStartInPast'), type: 'negative' })
+  } else {
+    $q.notify({ message: t('error.generic'), type: 'negative' })
   }
 }
 

@@ -109,6 +109,8 @@ class CoachSuspensionCancelsUpcomingBookingsIT extends AbstractIntegrationTest {
                 + "(SELECT id::text FROM booking.bookings WHERE coach_id = ?)", coachId);
             jdbcTemplate.update("DELETE FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'bookingId' IN "
                 + "(SELECT id::text FROM booking.bookings WHERE coach_id = ?)", RefundOutboxSupport.AGGREGATE_TYPE, coachId);
+            jdbcTemplate.update("DELETE FROM main.outbox_messages WHERE aggregate_type = ? AND payload->>'coachId' = ?",
+                "PACK_SUSPENSION_REFUND", coachId.toString());
             jdbcTemplate.execute("SET SESSION session_replication_role = 'replica'");
             jdbcTemplate.update("DELETE FROM payment.parent_credit_ledger WHERE parent_id = ?", PARENT_ID);
             jdbcTemplate.execute("SET SESSION session_replication_role = 'origin'");
@@ -159,13 +161,28 @@ class CoachSuspensionCancelsUpcomingBookingsIT extends AbstractIntegrationTest {
                 "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
                 BigDecimal.class, confirmedCard)).isEqualByComparingTo("40.00"));
         // Pre-capture bookings took no money: nothing refunded for them.
-        for (UUID id : List.of(requested, accepted, paymentPendingNoCapture, upcomingPack)) {
+        for (UUID id : List.of(requested, accepted, paymentPendingNoCapture)) {
             assertThat(refundOutboxRows(id)).as("no wallet refund for %s", id).isZero();
         }
-        // Pack booking: the session goes back to the pack (3 -> 4), not to the wallet.
+        // The pack booking's session (captured) is refunded to the wallet on its own reference — the suspension
+        // committed (and its PACK_SUSPENSION_REFUND revoked the pack) before the per-booking cancels ran, so the
+        // restore lands on a revoked pack and becomes a cashable wallet refund (counted in the 120.00 below).
+        // fix/payment-pack-integrity: the pack of a suspended coach can no longer be used, so it is revoked and
+        // the payer made whole in cashable wallet credit at the locked price — the 3 unused sessions plus the
+        // cancelled booking's session (4 x 30.00), never "restored" into the unusable pack.
+        outboxService.drain();
+        Awaitility.await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT remaining_sessions FROM payment.session_pack_purchases WHERE purchase_id = ?", Integer.class,
+                packId)).isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT COALESCE(SUM(amount), 0) FROM payment.parent_credit_ledger WHERE parent_id = ? "
+                    + "AND type = 'BOOKING_REFUND' AND reference_id <> ?", BigDecimal.class, PARENT_ID, confirmedCard))
+                .isEqualByComparingTo("120.00");
+        });
         assertThat(jdbcTemplate.queryForObject(
-            "SELECT remaining_sessions FROM payment.session_pack_purchases WHERE purchase_id = ?", Integer.class, packId))
-            .isEqualTo(4);
+            "SELECT revoked_reason FROM payment.session_pack_purchases WHERE purchase_id = ?", String.class, packId))
+            .isEqualTo("COACH_SUSPENDED");
 
         // No reliability strike, no coach-cancellation history: the coach did not cancel.
         assertThat(count("SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?")).isZero();

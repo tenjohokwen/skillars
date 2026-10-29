@@ -215,16 +215,23 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("maturedBefore") Instant maturedBefore,
         @Param("sinceAfter") Instant sinceAfter);
 
+    /**
+     * fix/payment-pack-integrity: only the bookings drawn on the paused pack ({@code sessionPackPurchaseId})
+     * conflict with its pause — a card / credit booking, or one on another pack, is not the pause's business
+     * and must not be cancellable (with a full refund) by pausing a pack.
+     */
     @Query("""
         SELECT b FROM Booking b
         WHERE b.playerId = :playerId
           AND b.coachId = :coachId
+          AND b.sessionPackPurchaseId = :purchaseId
           AND b.status IN :statuses
           AND b.requestedStartTime >= :pauseStart
           AND b.requestedStartTime <  :pauseEnd
         ORDER BY b.requestedStartTime ASC
         """)
     List<Booking> findConflictingBookingsForPause(
+        @Param("purchaseId") UUID purchaseId,
         @Param("playerId")   Long playerId,
         @Param("coachId")    UUID coachId,
         @Param("pauseStart") Instant pauseStart,

@@ -71,7 +71,7 @@ class SessionPackForfeitureSchedulerTest {
     @Test
     void forfeitExpiredPacks_coachAndEmailPresent_marksNotifiedAndPublishesEventOnce() {
         SessionPackPurchase purchase = buildPurchase(COACH_ID);
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase));
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any())).thenReturn(List.of(purchase));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Forfeit Coach")));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(userWithEmail("parent@test.com")));
 
@@ -92,7 +92,7 @@ class SessionPackForfeitureSchedulerTest {
         // is a data-integrity failure. It is deliberately NOT stamped — the pack keeps being
         // selected and the ERROR repeats until the row is repaired.
         SessionPackPurchase purchase = buildPurchase(COACH_ID);
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase));
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any())).thenReturn(List.of(purchase));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
 
         scheduler.forfeitExpiredPacks();
@@ -108,7 +108,7 @@ class SessionPackForfeitureSchedulerTest {
         // and a retry cannot change the outcome — the forfeiture is stamped once (so the pack stops
         // being re-selected every hour) and only the notification is skipped.
         SessionPackPurchase purchase = buildPurchase(COACH_ID);
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(purchase));
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any())).thenReturn(List.of(purchase));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Coach")));
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(userWithEmail("  ")));
 
@@ -122,7 +122,7 @@ class SessionPackForfeitureSchedulerTest {
     @Test
     void forfeitExpiredPacks_secondRun_doesNotReNotifyAlreadyFinalisedPack() {
         SessionPackPurchase purchase = buildPurchase(COACH_ID);
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any()))
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any()))
             .thenReturn(List.of(purchase))
             .thenReturn(List.of());
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Coach")));
@@ -142,7 +142,7 @@ class SessionPackForfeitureSchedulerTest {
         SessionPackPurchase failing = buildPurchase(COACH_ID);
         SessionPackPurchase healthy = buildPurchase(otherCoach);
 
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any()))
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any()))
             .thenReturn(List.of(failing, healthy));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach("Coach A")));
         when(coachProfileRepository.findById(otherCoach)).thenReturn(Optional.of(coach("Coach B")));
@@ -163,7 +163,7 @@ class SessionPackForfeitureSchedulerTest {
         // The stale in-memory object from the batch load is still expired, but the re-fetch inside
         // the per-item transaction sees the extended (no-longer-expired) row and must skip.
         SessionPackPurchase staleFromBatch = buildPurchase(COACH_ID);
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(staleFromBatch));
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any())).thenReturn(List.of(staleFromBatch));
 
         SessionPackPurchase extended = buildPurchase(COACH_ID);
         extended.setPurchaseId(staleFromBatch.getPurchaseId());
@@ -185,7 +185,7 @@ class SessionPackForfeitureSchedulerTest {
         // (fully consumed) in the same commit gap. The re-fetch's remainingSessions > 0 guard must
         // also catch this, not just the expiresAt guard.
         SessionPackPurchase staleFromBatch = buildPurchase(COACH_ID);
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of(staleFromBatch));
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any())).thenReturn(List.of(staleFromBatch));
 
         SessionPackPurchase consumed = buildPurchase(COACH_ID);
         consumed.setPurchaseId(staleFromBatch.getPurchaseId());
@@ -203,12 +203,36 @@ class SessionPackForfeitureSchedulerTest {
 
     @Test
     void forfeitExpiredPacks_noExpiredPacks_doesNothing() {
-        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any())).thenReturn(List.of());
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any())).thenReturn(List.of());
 
         scheduler.forfeitExpiredPacks();
 
         verify(eventPublisher, never()).publishEvent(any());
         verify(sessionPackPurchaseRepository, never()).save(any());
+    }
+
+    /**
+     * fix/payment-pack-integrity: the backlog is read a page at a time, keyset by purchase id — a full page
+     * asks for the next one after its last id; a short page ends the run. Rows left unstamped (missing coach)
+     * cannot make it loop, since the cursor moves past them.
+     */
+    @Test
+    void forfeitExpiredPacks_fullPage_readsTheNextPageAfterTheLastId() {
+        List<SessionPackPurchase> fullPage = new java.util.ArrayList<>();
+        for (int i = 0; i < SessionPackForfeitureScheduler.PAGE_SIZE; i++) {
+            fullPage.add(buildPurchase(COACH_ID)); // coach lookup unstubbed -> left unstamped, as a missing coach
+        }
+        UUID lastId = fullPage.get(fullPage.size() - 1).getPurchaseId();
+        when(sessionPackPurchaseRepository.findExpiredNotYetNotified(any(), any(), any()))
+            .thenReturn(fullPage)
+            .thenReturn(List.of());
+
+        scheduler.forfeitExpiredPacks();
+
+        ArgumentCaptor<UUID> cursor = ArgumentCaptor.forClass(UUID.class);
+        verify(sessionPackPurchaseRepository, times(2)).findExpiredNotYetNotified(any(), cursor.capture(), any());
+        assertThat(cursor.getAllValues().get(0)).isEqualTo(new UUID(0L, 0L));
+        assertThat(cursor.getAllValues().get(1)).isEqualTo(lastId);
     }
 
     private SessionPackPurchase buildPurchase(UUID coachId) {

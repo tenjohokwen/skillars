@@ -54,6 +54,7 @@ class SessionPackPaymentServiceTest {
     @Mock StripeClient stripeClient;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock RefundReconciliationService refundReconciliationService;
+    @Mock SubscriptionService subscriptionService;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
@@ -61,6 +62,95 @@ class SessionPackPaymentServiceTest {
     void setUpLockRetryer() {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        // fix/payment-pack-integrity: purchasePack checks the tier's coach is bookable.
+        com.softropic.skillars.platform.marketplace.repo.CoachProfile coach =
+            new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
+        coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
+        lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+    }
+
+    // ── fix/payment-pack-integrity ─────────────────────────────────────────────────────────────
+
+    @Test
+    void purchasePack_suspendedCoach_refusedBeforeAnyCharge() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        com.softropic.skillars.platform.marketplace.repo.CoachProfile suspended =
+            new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
+        suspended.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.SUSPENDED);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(suspended));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test"))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    private StripeCustomer existingCustomerWithCard(String card) {
+        StripeCustomer sc = new StripeCustomer();
+        sc.setParentId(PARENT_ID);
+        sc.setStripeCustomerId("cus_test");
+        sc.setStripePaymentMethodId(card);
+        return sc;
+    }
+
+    private void stubPurchaseWithExistingCustomer(SessionPackTier tier, String savedCard) {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(tier));
+        when(stripeCustomerRepository.findById(PARENT_ID))
+            .thenAnswer(inv -> Optional.of(existingCustomerWithCard(savedCard)));
+        lenient().when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
+            .thenReturn("pi_test");
+        lenient().when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    /** L4: a pack bought with a new card moves the payer's subscriptions onto it, like the save-card flow. */
+    @Test
+    void purchasePack_withANewCard_schedulesTheSubscriptionCardSync() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new");
+
+        verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_ID, "pm_new");
+    }
+
+    @Test
+    void purchasePack_withTheSavedCard_noSync() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_same");
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_same");
+
+        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+    }
+
+    @Test
+    void purchasePack_newCardButTheChargeFails_noSync() {
+        SessionPackTier tier = makeActiveTier();
+        stubPurchaseWithExistingCustomer(tier, "pm_old");
+        when(paymentGateway.chargeAndCapture(eq(TIER_ID), eq(PARENT_ID), eq(COACH_ID), eq(tier.getTotalPrice()), anyString()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.declined"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class);
+
+        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+    }
+
+    @Test
+    void purchasePack_firstEverCustomer_noSubscriptionToSync() {
+        SessionPackTier tier = makeActiveTier();
+        stubHappyPathUntilPersist(tier);
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test");
+
+        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
     }
 
     private static final Long PARENT_ID = 8001L;

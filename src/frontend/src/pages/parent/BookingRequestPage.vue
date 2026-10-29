@@ -628,6 +628,8 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packPlayerMismatch') })
     } else if (errorKey === 'payment.packPaused') {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packPaused') })
+    } else if (errorKey === 'payment.packFrozen') {
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packFrozen') })
     } else if (errorKey === 'booking.startTimeInPast') {
       $q.notify({ type: 'negative', message: t('booking.errors.startTimeInPast') })
     } else if (errorKey === 'booking.invalidTimeRange') {
