@@ -13,6 +13,8 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -118,6 +120,63 @@ class PackCancellationRefundIT extends BasePaymentIT {
         assertThat(amount).isEqualByComparingTo(PRICE_PER_SESSION);
     }
 
+    /**
+     * fix/payment-pack-refund-rounding: 1000.00 for 3 sessions, one already paid to the coach (333.33). The two
+     * remaining sessions are refunded on an expired pack: 333.33, then the last one takes the remainder 333.34,
+     * so coach + refunds reconcile to exactly 1000.00 (it used to be 999.99). A re-delivered event for a
+     * booking already refunded settles nothing again.
+     */
+    @Test
+    void expiredPackRefunds_lastSessionTakesTheRoundingRemainder_reconcilingToTheCharge() {
+        UUID stamped = transactionTemplate.execute(status -> {
+            UUID tierId = jdbcTemplate.queryForObject(
+                "SELECT pack_tier_id FROM payment.session_pack_purchases WHERE purchase_id = ?", UUID.class, packId);
+            return jdbcTemplate.queryForObject(
+                "INSERT INTO payment.session_pack_purchases " +
+                "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, remaining_sessions, price_per_session, " +
+                " amount_charged, session_count, payout_sessions_allocated, payout_gross_allocated, expires_at) " +
+                "VALUES (gen_random_uuid(), ?, ?, ?, ?, 0, 333.33, 1000.00, 3, 1, 333.33, ?) RETURNING purchase_id",
+                UUID.class, PARENT_ID, PLAYER_ID, coachId, tierId,
+                Timestamp.from(Instant.now().minus(1, ChronoUnit.DAYS)));
+        });
+
+        BookingCancelledByCoachEvent first = coachEvent(stamped, "MUTUAL_AGREEMENT", true, new BigDecimal("333.33"));
+        BookingCancelledByCoachEvent last = coachEvent(stamped, "MUTUAL_AGREEMENT", true, new BigDecimal("333.33"));
+        for (BookingCancelledByCoachEvent e : List.of(first, last)) {
+            transactionTemplate.execute(status -> {
+                eventPublisher.publishEvent(e);
+                return null;
+            });
+        }
+
+        assertThat(ledgerAmount(first.getBookingId())).isEqualByComparingTo("333.33");
+        assertThat(ledgerAmount(last.getBookingId())).isEqualByComparingTo("333.34");
+        Map<String, Object> ledger = jdbcTemplate.queryForMap(
+            "SELECT refund_sessions_issued, refund_gross_issued, payout_gross_allocated, amount_charged " +
+            "FROM payment.session_pack_purchases WHERE purchase_id = ?", stamped);
+        assertThat(ledger.get("refund_sessions_issued")).isEqualTo(2);
+        assertThat((BigDecimal) ledger.get("refund_gross_issued")).isEqualByComparingTo("666.67");
+        assertThat(((BigDecimal) ledger.get("payout_gross_allocated")).add((BigDecimal) ledger.get("refund_gross_issued")))
+            .isEqualByComparingTo((BigDecimal) ledger.get("amount_charged"));
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COALESCE(SUM(amount), 0) FROM payment.pack_session_refunds WHERE purchase_id = ?",
+            BigDecimal.class, stamped)).isEqualByComparingTo("666.67");
+
+        // The pack is fully settled: a further expired-pack refund (should not happen) credits nothing.
+        BookingCancelledByCoachEvent extra = coachEvent(stamped, "MUTUAL_AGREEMENT", true, new BigDecimal("333.33"));
+        transactionTemplate.execute(status -> {
+            eventPublisher.publishEvent(extra);
+            return null;
+        });
+        assertThat(countLedgerEntries(extra.getBookingId())).isZero();
+    }
+
+    private BigDecimal ledgerAmount(UUID bookingId) {
+        return jdbcTemplate.queryForObject(
+            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
+            BigDecimal.class, bookingId);
+    }
+
     @Test
     void parentCancels_gt24h_sessionRestored_noLedgerEntry() {
         int remainingBefore = getRemainingSessions();
@@ -167,9 +226,14 @@ class PackCancellationRefundIT extends BasePaymentIT {
     }
 
     private BookingCancelledByCoachEvent coachEvent(UUID purchaseId, String reason, boolean packExpired) {
+        return coachEvent(purchaseId, reason, packExpired, PRICE_PER_SESSION);
+    }
+
+    private BookingCancelledByCoachEvent coachEvent(UUID purchaseId, String reason, boolean packExpired,
+                                                    BigDecimal price) {
         return new BookingCancelledByCoachEvent(
             this, UUID.randomUUID(), PARENT_ID, coachId,
-            reason, purchaseId, PRICE_PER_SESSION, packExpired, true,
+            reason, purchaseId, price, packExpired, true,
             "parent@test.com", Instant.now(), "UTC"
         );
     }

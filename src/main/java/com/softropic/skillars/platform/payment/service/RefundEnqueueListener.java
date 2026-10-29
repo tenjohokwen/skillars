@@ -12,6 +12,9 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
+import java.math.BigDecimal;
+import java.util.UUID;
+
 /**
  * skillars-deferred-101 AC4: dedicated BEFORE_COMMIT listener for BOOKING_REFUND enqueue atomicity.
  *
@@ -34,6 +37,7 @@ public class RefundEnqueueListener {
 
     private final RefundOutboxSupport refundOutboxSupport;
     private final PackRestoreOutboxSupport packRestoreOutboxSupport;
+    private final PackRefundAllocationService packRefundAllocationService;
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
@@ -56,8 +60,8 @@ public class RefundEnqueueListener {
         // (nothing charged yet) and for an unexpired pack booking (its session is restored by
         // CancellationRefundService instead) — the same rule as onBookingCancelledByAdmin.
         if (event.isWalletRefund()) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+            enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
+                event.getSessionPrice(),
                 event.getSessionPackPurchaseId() != null
                     ? "Coach cancellation — expired pack refund"
                     : "Coach cancellation — full refund");
@@ -71,8 +75,8 @@ public class RefundEnqueueListener {
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
         if (event.isWalletRefund()) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getSessionPrice(), event.getBookingId(),
+            enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
+                event.getSessionPrice(),
                 event.getSessionPackPurchaseId() != null
                     ? "Coach no-show — expired pack refund"
                     : "Coach no-show — full refund");
@@ -90,9 +94,8 @@ public class RefundEnqueueListener {
         // (REQUESTED / ACCEPTED / PAYMENT_PENDING: nothing was charged) and for an unexpired pack
         // booking (its session is restored by CancellationRefundService instead).
         if (event.isWalletRefund()) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getRefundAmount(), event.getBookingId(),
-                refundDescription(event));
+            enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
+                event.getRefundAmount(), refundDescription(event));
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -109,8 +112,8 @@ public class RefundEnqueueListener {
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledDueToPause(BookingCancelledDueToPauseEvent event) {
         if (event.isWalletRefund() && event.getRefundAmount() != null && event.getRefundAmount().signum() > 0) {
-            refundOutboxSupport.enqueueBookingRefund(
-                event.getParentId(), event.getRefundAmount(), event.getBookingId(),
+            enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
+                event.getRefundAmount(),
                 event.getSessionPackPurchaseId() != null
                     ? "Pack pause — expired pack refund"
                     : "Pack pause — full refund");
@@ -119,6 +122,26 @@ public class RefundEnqueueListener {
             packRestoreOutboxSupport.enqueuePackRestore(
                 event.getSessionPackPurchaseId(), event.getBookingId(), "PACK_PAUSE");
         }
+    }
+
+    /**
+     * fix/payment-pack-refund-rounding: a wallet refund of a pack session (the pack expired, so restoring the
+     * session would be worthless) is settled on the pack's ledger under its row lock — the per-session share,
+     * or the pack's unsettled remainder when it is the last session to settle — instead of the rounded-down
+     * share the cancellation computed, which lost up to {@code session_count - 1} cents per pack. A card /
+     * credit booking refunds what was paid, unchanged.
+     */
+    private void enqueueWalletRefund(Long parentId, UUID packId, UUID bookingId,
+                                     BigDecimal computed, String description) {
+        BigDecimal amount = packId == null
+            ? computed
+            : packRefundAllocationService.allocateSessionRefund(packId, bookingId, computed);
+        if (packId != null && (amount == null || amount.signum() <= 0)) {
+            log.warn("[PACK_REFUND] booking={} pack={} — the session settles at 0.00, no wallet credit enqueued",
+                bookingId, packId);
+            return;
+        }
+        refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId, description);
     }
 
     /**

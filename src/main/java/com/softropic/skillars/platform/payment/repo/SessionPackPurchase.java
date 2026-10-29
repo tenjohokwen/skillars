@@ -86,6 +86,21 @@ public class SessionPackPurchase {
     private BigDecimal payoutGrossAllocated = BigDecimal.ZERO;
 
     /**
+     * fix/payment-pack-refund-rounding (V200): how many of this pack's sessions have been refunded to the
+     * payer as money (a wallet {@code BOOKING_REFUND} for a booking on an expired pack), and the gross
+     * refunded so far. Written only under this row's lock, by {@code PackRefundAllocationService}, with a
+     * per-booking {@code pack_session_refunds} marker. Together with the payout columns above they are
+     * the pack's settlement ledger: every session is settled once — paid to its coach or refunded — and
+     * whichever settles LAST takes the rounding remainder, so payouts + refunds never drift from
+     * {@link #amountCharged} by the cents {@link #perSessionShare()} rounds away.
+     */
+    @Column(name = "refund_sessions_issued", nullable = false)
+    private int refundSessionsIssued;
+
+    @Column(name = "refund_gross_issued", nullable = false, precision = 10, scale = 2)
+    private BigDecimal refundGrossIssued = BigDecimal.ZERO;
+
+    /**
      * skillars-deferred-164 AC5. Mutable by design — deliberately NOT {@code updatable = false}.
      * Three service-layer call sites mutate this outside the entity: {@code PackSessionService}
      * (pause, extends by the pause duration) and {@code SessionPackPaymentService} (both
@@ -121,17 +136,90 @@ public class SessionPackPurchase {
     private Instant createdAt;
 
     /**
-     * fix/payment-session-pack-integrity: one session's share of what this pack was charged, for a refund of a
-     * single session — {@code amountCharged / sessionCount} rounded DOWN to the cent, so refunding every
-     * session can never return more than was paid (the tier's HALF_UP {@code pricePerSession} could:
+     * fix/payment-session-pack-integrity: one session's share of what this pack was charged —
+     * {@code amountCharged / sessionCount} rounded DOWN to the cent, so settling every session at it can
+     * never return more than was paid (fix/payment-pack-refund-rounding: settlement — payouts and refunds —
+     * uses {@link #nextSettlementValue()}, whose last session takes the remainder) (the tier's HALF_UP {@code pricePerSession} could:
      * 3 x 66.67 = 200.01 for 200.00). Falls back to {@code pricePerSession} only for a legacy row V181/V186
      * could not stamp.
      */
     public BigDecimal perSessionShare() {
-        if (amountCharged != null && sessionCount != null && sessionCount > 0) {
+        if (hasStampedAmount()) {
             return amountCharged.divide(BigDecimal.valueOf(sessionCount), 2, RoundingMode.DOWN);
         }
         return pricePerSession;
+    }
+
+    /** Sessions settled so far: paid out to the coach, or refunded to the payer as money. */
+    public int settledSessions() {
+        return payoutSessionsAllocated + refundSessionsIssued;
+    }
+
+    /** Gross settled so far: allocated to coach payouts plus refunded to the payer. */
+    public BigDecimal settledGross() {
+        return nz(payoutGrossAllocated).add(nz(refundGrossIssued));
+    }
+
+    /**
+     * What is still unsettled of what this pack was charged — {@code amountCharged} minus every coach
+     * allocation and every refund so far. This is the most that refunding ALL the pack's remaining value
+     * may return; it already includes the rounding remainder. Null for a legacy row with no stamped
+     * {@code amountCharged}/{@code sessionCount}.
+     */
+    public BigDecimal unsettledValue() {
+        if (!hasStampedAmount()) {
+            return null;
+        }
+        return amountCharged.subtract(settledGross());
+    }
+
+    /**
+     * fix/payment-pack-refund-rounding: the value of the next session to settle (coach payout or refund),
+     * read under this row's lock. Every session but the last settles at {@link #perSessionShare()} (rounded
+     * DOWN); the {@code sessionCount}-th settled session takes {@link #unsettledValue()}, so the shares and
+     * the remainder sum to exactly {@code amountCharged} whatever the order of payouts and refunds. Never
+     * more than {@link #unsettledValue()}, never negative. Falls back to {@code pricePerSession} for a legacy
+     * row.
+     */
+    public BigDecimal nextSettlementValue() {
+        if (!hasStampedAmount()) {
+            return pricePerSession;
+        }
+        BigDecimal remaining = unsettledValue();
+        if (remaining.signum() <= 0 || settledSessions() >= sessionCount) {
+            return BigDecimal.ZERO;
+        }
+        return settledSessions() + 1 >= sessionCount ? remaining : perSessionShare().min(remaining);
+    }
+
+    /** Records one session's coach-payout allocation. Caller holds this row's lock. */
+    public void recordPayoutAllocation(BigDecimal gross) {
+        payoutSessionsAllocated++;
+        payoutGrossAllocated = nz(payoutGrossAllocated).add(gross);
+    }
+
+    /** Records one session refunded to the payer. Caller holds this row's lock. */
+    public void recordRefund(BigDecimal amount) {
+        refundSessionsIssued++;
+        refundGrossIssued = nz(refundGrossIssued).add(amount);
+    }
+
+    /**
+     * Un-records one session's refund (the refund was clawed back by an {@code UPHOLD_COACH} dispute and the
+     * session is now paid to the coach instead). Caller holds this row's lock.
+     */
+    public void releaseRefund(BigDecimal amount) {
+        refundSessionsIssued = Math.max(0, refundSessionsIssued - 1);
+        refundGrossIssued = nz(refundGrossIssued).subtract(amount).max(BigDecimal.ZERO);
+    }
+
+    /** True when {@code amountCharged} and {@code sessionCount} were stamped at purchase. */
+    public boolean hasStampedAmount() {
+        return amountCharged != null && sessionCount != null && sessionCount > 0;
+    }
+
+    private static BigDecimal nz(BigDecimal v) {
+        return v == null ? BigDecimal.ZERO : v;
     }
 
     @PrePersist

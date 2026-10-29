@@ -301,7 +301,8 @@ public class BookingService {
      * coach's current price is only a fallback for a row-less pre-V192 booking (and is wrong once the
      * coach has re-priced, which is why it is not the primary source). A pack booking refunds the
      * pack's per-session share of what it was charged (its row records zero — the pack was charged at
-     * purchase), rounded down so the shares never sum above the charge.
+     * purchase), rounded down so the shares never sum above the charge, the pack's last unsettled session
+     * taking the remainder ({@link SessionPackPurchase#nextSettlementValue}).
      *
      * <p>Throws {@link ResourceNotFoundException} when neither a captured payment row nor a price exists,
      * failing the cancellation: the coach / parent / no-show paths (C6) must never commit a refund of 0
@@ -311,8 +312,11 @@ public class BookingService {
         if (booking.getSessionPackPurchaseId() != null) {
             // fix/payment-session-pack-integrity: the per-session share rounded DOWN, so refunding every
             // session of a pack can never return more than it was charged (200.00 / 3 → 66.66, not 66.67).
+            // fix/payment-pack-refund-rounding: ... except the pack's last unsettled session, which takes the
+            // remainder (66.68). This is the preview for the event / notice; the wallet refund itself is
+            // settled under the pack lock by PackRefundAllocationService (RefundEnqueueListener).
             return sessionPackPurchaseRepository.findById(booking.getSessionPackPurchaseId())
-                .map(SessionPackPurchase::perSessionShare)
+                .map(BookingService::packSessionRefundValue)
                 .orElseThrow(() -> new ResourceNotFoundException("Session pack purchase not found", "session_pack_purchase"));
         }
         BigDecimal paid = bookingPaymentRepository.findById(booking.getId())
@@ -333,6 +337,11 @@ public class BookingService {
             throw new ResourceNotFoundException("Coach pricing not found", "coach_pricing");
         }
         return current;
+    }
+
+    private static BigDecimal packSessionRefundValue(SessionPackPurchase pack) {
+        BigDecimal next = pack.nextSettlementValue();
+        return next != null && next.signum() > 0 ? next : pack.perSessionShare();
     }
 
     /**

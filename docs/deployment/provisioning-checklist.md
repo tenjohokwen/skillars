@@ -85,10 +85,10 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
   product decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195 and V198 use
-  validating `CHECK` swaps and non-concurrent unique indexes, justified in their headers by "no
-  production deployment exists yet". Once PROD holds real data, the next migration must follow the
-  full online-safety rules in `migration-conventions.md`, without that exemption.
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199 and V200 use
+  validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
+  justified in their headers by "no production deployment exists yet". Once PROD holds real data,
+  the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
 
 ---
 
@@ -311,6 +311,18 @@ FROM payment.session_pack_purchases
 WHERE stripe_payment_intent_id IS NOT NULL
 GROUP BY 1 HAVING count(*) > 1;
 -- non-zero: deduplicate the double-inserted packs for the same PaymentIntent first
+```
+
+**V200: pack refund settlement** (`V200__pack_refund_settlement.sql`). It adds no constraint to an
+existing table, so there is nothing to check before it runs. It backfills `payment.pack_session_refunds`
+and the new `refund_sessions_issued` / `refund_gross_issued` counters from the existing expired-pack
+`BOOKING_REFUND` ledger rows. **After** it runs, this query must return 0 rows. A row means a pack has
+paid out plus refunded more than it was charged, and must be reconciled by hand:
+```sql
+SELECT purchase_id, amount_charged, payout_gross_allocated, refund_gross_issued
+FROM payment.session_pack_purchases
+WHERE amount_charged IS NOT NULL
+  AND payout_gross_allocated + refund_gross_issued > amount_charged;
 ```
 
 **V198: `uq_pcl_booking_refund_reversal`** (`V198__forfeit_payouts_and_dispute_clawback.sql`). The
@@ -842,3 +854,6 @@ an operator must now do.
 - 2026-10-29: #353 (fix/booking-price-and-excused-race). Section 3.2 has a new informational check
   for non-pack bookings with NULL `agreed_price`, which accept now refuses (`booking.priceNotLocked`).
   No migration and no new config keys.
+- 2026-10-29: PR #350 (fix/payment-pack-refund-rounding). There is no new provisioning step. V200 runs
+  automatically. Run its post-migration reconciliation query ([3.2](#32-pre-migration-data-checks)) on
+  an upgraded UAT/PROD database. V200 joins the "prod is not live" list in section 0.
