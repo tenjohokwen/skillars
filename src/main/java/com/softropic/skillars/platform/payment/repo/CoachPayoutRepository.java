@@ -221,4 +221,13 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
                        WHERE d.booking_id = :bookingId AND d.status NOT IN ('RESOLVED', 'DISMISSED'))
         """, nativeQuery = true)
     boolean existsOpenDisputeForBooking(@Param("bookingId") UUID bookingId);
+
+    /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute: payouts sitting in FROZEN or HOLD with no change
+     * since {@code cutoff} (oldest first) — {@code StalePayoutAlertScheduler}'s safety net, so a payout
+     * no automatic path will ever release is never silently stuck.
+     */
+    @Query("SELECT p FROM CoachPayout p WHERE p.status IN ('FROZEN', 'HOLD') AND p.updatedAt < :cutoff "
+        + "ORDER BY p.updatedAt, p.bookingId")
+    List<CoachPayout> findStaleUnreleased(@Param("cutoff") Instant cutoff, Pageable pageable);
 }

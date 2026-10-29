@@ -57,4 +57,20 @@ public class ChargeDispute {
 
     @Column(name = "closed_at")
     private Instant closedAt;
+
+    /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute (V199): the part of {@link #amount} attributed to
+     * wallet credit the charge had funded (a booking refunded to credit) and taken back from the payer —
+     * NULL until traced. {@code ChargebackCreditReversalService} writes it under this row's lock together
+     * with the debit, so a re-delivered event debits nothing more.
+     */
+    @Column(name = "credit_reversal_target", precision = 10, scale = 2)
+    private BigDecimal creditReversalTarget;
+
+    /**
+     * V199: on a LOST close, the share (0..1) of each funded payout's card portion the coach bears. Read
+     * again when a session the charge paid for completes after the close, so its payout is cut the same way.
+     */
+    @Column(name = "payout_loss_fraction", precision = 9, scale = 6)
+    private BigDecimal payoutLossFraction;
 }

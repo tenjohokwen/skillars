@@ -426,7 +426,8 @@ public class PaymentLifecycleService {
                 log.error("Batch booking settled elsewhere or vanished after the batch charge — crediting its "
                         + "share back to the wallet: bookingId={} batchId={} credit={} card={}",
                     bookingId, event.getBatchId(), creditShare, stripeShare);
-                refundShareQuietly(event.getParentId(), bookingId, event.getBatchId(), creditShare.add(stripeShare));
+                refundShareQuietly(event.getParentId(), bookingId, event.getBatchId(), creditShare.add(stripeShare),
+                    finalPaymentIntentId, stripeShare);
                 continue;
             }
             try {
@@ -478,10 +479,12 @@ public class PaymentLifecycleService {
         }
     }
 
-    private void refundShareQuietly(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount) {
+    private void refundShareQuietly(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount,
+                                    String paymentIntentId, BigDecimal cardShare) {
         if (amount.signum() <= 0) return;
         try {
-            persistenceService.refundBatchShareToCredit(parentId, bookingId, batchId, amount);
+            persistenceService.refundBatchShareToCredit(parentId, bookingId, batchId, amount, paymentIntentId,
+                cardShare);
         } catch (RuntimeException e) {
             log.error("[BATCH_DECLINE_REFUND_FAILED] bookingId={} batchId={} parentId={} amount={} — refund "
                 + "not enqueued; credit by hand", bookingId, batchId, parentId, amount, e);

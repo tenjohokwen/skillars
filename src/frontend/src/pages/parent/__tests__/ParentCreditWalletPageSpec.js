@@ -58,6 +58,7 @@ describe('ParentCreditWalletPage.vue — cash-out error messages', () => {
     ['payment.noPaymentMethod', 'payment.credits.noPaymentMethod'],
     ['payment.cashOutTooSmall', 'payment.credits.cashOutTooSmall'],
     ['payment.cashOutExceedsRefundable', 'payment.credits.cashOutExceedsRefundable'],
+    ['payment.cashOutBlockedByDispute', 'payment.credits.cashOutBlockedByDispute'],
     ['payment.refundFailed', 'payment.credits.refundFailed'],
     ['payment.refundOutcomeUnknown', 'payment.credits.refundOutcomeUnknown'],
   ])('maps backend helpCode %s to %s', async (helpCode, i18nKey) => {

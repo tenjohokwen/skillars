@@ -99,6 +99,7 @@ const CASHOUT_ERROR_MESSAGES = {
   'payment.noPaymentMethod': () => t('payment.credits.noPaymentMethod'),
   'payment.cashOutTooSmall': () => t('payment.credits.cashOutTooSmall'),
   'payment.cashOutExceedsRefundable': () => t('payment.credits.cashOutExceedsRefundable'),
+  'payment.cashOutBlockedByDispute': () => t('payment.credits.cashOutBlockedByDispute'),
   'payment.refundFailed': () => t('payment.credits.refundFailed'),
   'payment.refundOutcomeUnknown': () => t('payment.credits.refundOutcomeUnknown'),
 }

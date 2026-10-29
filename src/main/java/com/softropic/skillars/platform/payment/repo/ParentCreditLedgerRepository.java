@@ -79,4 +79,56 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
      * dispute resolution claws back.
      */
     Optional<ParentCreditLedger> findFirstByReferenceIdAndType(UUID referenceId, String type);
+
+    // --- fix/payment-dispute-credit-trace-and-lost-dispute (V199) ---
+
+    boolean existsByReferenceIdAndParentIdAndType(UUID referenceId, Long parentId, String type);
+
+    List<ParentCreditLedger> findByReferenceIdAndTypeOrderByParentId(UUID referenceId, String type);
+
+    /** Wallet credit traced to one card charge, per payer. */
+    interface TracedCredit {
+        Long getParentId();
+        BigDecimal getAmount();
+    }
+
+    /**
+     * The wallet credit a card charge (PaymentIntent) funded and the payer still holds the claim to, per
+     * payer: every {@code BOOKING_REFUND} whose money came from {@code :pi}, counted only up to its card
+     * part, minus what an {@code UPHOLD_COACH} resolution already took back ({@code BOOKING_REFUND_REVERSAL}).
+     * The source of a refund is, in order: the row's own {@code source_payment_intent_id} (with
+     * {@code source_card_amount}); else the booking's {@code booking_payments} charge (card part =
+     * {@code stripe_charged}); else the charge of the pack the booking drew on (card part = what the pack
+     * was charged).
+     */
+    @Query(value = """
+        SELECT t.parent_id AS "parentId", SUM(t.card_part) AS "amount" FROM (
+          SELECT l.parent_id,
+                 GREATEST(LEAST(l.amount, COALESCE(l.source_card_amount, l.amount))
+                          + COALESCE((SELECT SUM(x.amount) FROM payment.parent_credit_ledger x WHERE x.type = 'BOOKING_REFUND_REVERSAL' AND x.reference_id = l.reference_id), 0), 0) AS card_part
+          FROM payment.parent_credit_ledger l
+          WHERE l.type = 'BOOKING_REFUND' AND l.source_payment_intent_id = :pi
+          UNION ALL
+          SELECT l.parent_id,
+                 GREATEST(LEAST(l.amount, COALESCE(bp.stripe_charged, 0)) + COALESCE((SELECT SUM(x.amount) FROM payment.parent_credit_ledger x WHERE x.type = 'BOOKING_REFUND_REVERSAL' AND x.reference_id = l.reference_id), 0), 0)
+          FROM payment.parent_credit_ledger l
+          JOIN payment.booking_payments bp ON bp.booking_id = l.reference_id
+          WHERE l.type = 'BOOKING_REFUND' AND l.source_payment_intent_id IS NULL
+            AND bp.stripe_payment_intent_id = :pi
+          UNION ALL
+          SELECT l.parent_id,
+                 GREATEST(LEAST(l.amount, COALESCE(sp.amount_charged, 0)) + COALESCE((SELECT SUM(x.amount) FROM payment.parent_credit_ledger x WHERE x.type = 'BOOKING_REFUND_REVERSAL' AND x.reference_id = l.reference_id), 0), 0)
+          FROM payment.parent_credit_ledger l
+          JOIN booking.bookings b ON b.id = l.reference_id
+          JOIN payment.session_pack_purchases sp ON sp.purchase_id = b.session_pack_purchase_id
+          WHERE l.type = 'BOOKING_REFUND' AND l.source_payment_intent_id IS NULL
+            AND sp.stripe_payment_intent_id = :pi
+            AND NOT EXISTS (SELECT 1 FROM payment.booking_payments bp2
+                            WHERE bp2.booking_id = l.reference_id AND bp2.stripe_payment_intent_id IS NOT NULL)
+        ) t
+        WHERE t.card_part > 0
+        GROUP BY t.parent_id
+        ORDER BY t.parent_id
+        """, nativeQuery = true)
+    List<TracedCredit> findCreditFundedByPaymentIntent(@Param("pi") String paymentIntentId);
 }

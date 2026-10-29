@@ -57,7 +57,6 @@ class CoachPayoutOutboxSupportTest {
     @Mock CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository chargeDisputeRepository;
-    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     private CoachPayoutOutboxSupport support;
     private final UUID bookingId = UUID.randomUUID();
@@ -67,8 +66,7 @@ class CoachPayoutOutboxSupportTest {
     void setUp() {
         support = new CoachPayoutOutboxSupport(coachPayoutRepository, bookingPaymentRepository, bookingRepository,
             sessionPackPurchaseRepository, coachPayoutFreezeRepository, lockRetryer,
-            coachStripeAccountRepository, outboxService, configService, new ObjectMapper(), chargeDisputeRepository,
-            eventPublisher);
+            coachStripeAccountRepository, outboxService, configService, new ObjectMapper(), chargeDisputeRepository);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
         lenient().when(bookingRepository.findById(any())).thenReturn(Optional.empty());
@@ -321,20 +319,67 @@ class CoachPayoutOutboxSupportTest {
         verify(outboxService, never()).enqueue(any(), any(), any());
     }
 
-    @Test
-    void lostCardDisputeOnTheFundingCharge_payoutRecordedHold_andAlerted() {
-        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+    private static com.softropic.skillars.platform.payment.repo.ChargeDispute lost(String fraction, String amount) {
+        var d = new com.softropic.skillars.platform.payment.repo.ChargeDispute();
+        d.setStripeDisputeId("dp_1");
+        d.setPaymentIntentId("pi_1");
+        d.setStatus(com.softropic.skillars.platform.payment.repo.ChargeDispute.STATUS_LOST);
+        d.setAmount(new BigDecimal(amount));
+        d.setPayoutLossFraction(fraction == null ? null : new BigDecimal(fraction));
+        return d;
+    }
+
+    private void lostDisputeOnFundingCharge(com.softropic.skillars.platform.payment.repo.ChargeDispute d) {
         when(chargeDisputeRepository.findFundingPaymentIntents(bookingId)).thenReturn(java.util.List.of("pi_1"));
         when(chargeDisputeRepository.findStatusesByPaymentIntentIds(java.util.List.of("pi_1")))
             .thenReturn(java.util.List.of(com.softropic.skillars.platform.payment.repo.ChargeDispute.STATUS_LOST));
+        when(chargeDisputeRepository.findByPaymentIntentIdInAndStatus(java.util.List.of("pi_1"),
+            com.softropic.skillars.platform.payment.repo.ChargeDispute.STATUS_LOST)).thenReturn(java.util.List.of(d));
+    }
+
+    /** fix/payment-dispute-credit-trace-and-lost-dispute: no more HOLD forever — a whole loss cancels the payout. */
+    @Test
+    void lostCardDisputeForAllOfTheCharge_payoutWrittenCancelled_noTransfer() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        lostDisputeOnFundingCharge(lost("1.000000", "50.00"));
 
         support.enqueuePayout(bookingId, coachId);
 
         CoachPayout row = captureSavedRow();
-        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.HOLD);
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.CANCELLED);
         assertThat(row.getLastError()).isEqualTo(CoachPayoutOutboxSupport.REASON_CHARGEBACK_LOST);
-        verify(eventPublisher).publishEvent(any(com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent.class));
         verify(outboxService, never()).enqueue(any(), any(), any());
+    }
+
+    /** A partial loss cuts the payout by the dispute's recorded fraction and it releases normally. */
+    @Test
+    void lostCardDisputeForPartOfTheCharge_payoutCutProRata_andEnqueued() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        lostDisputeOnFundingCharge(lost("0.400000", "20.00"));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
+        // 40% of the 50.00 card portion = 20.00 of 50.00 -> the coach bears 40% of the 45.00 net.
+        assertThat(row.getNetAmount()).isEqualByComparingTo("27.00");
+        assertThat(row.getGrossAmount()).isEqualByComparingTo("30.00");
+        assertThat(row.getCommissionAmount()).isEqualByComparingTo("3.00");
+        verify(outboxService).enqueue(eq(CoachPayoutOutboxSupport.AGGREGATE_TYPE_TRANSFER), any(), any(Instant.class));
+    }
+
+    /** A dispute lost before V199 recorded its fraction falls back to disputed / charged. */
+    @Test
+    void lostCardDisputeWithoutRecordedFraction_fallsBackToDisputedOverCharged() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        lostDisputeOnFundingCharge(lost(null, "25.00"));
+        when(chargeDisputeRepository.sumChargedByPaymentIntent("pi_1")).thenReturn(new BigDecimal("100.00"));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getNetAmount()).isEqualByComparingTo("33.75");
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
     }
 
     @Test

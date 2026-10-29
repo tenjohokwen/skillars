@@ -46,6 +46,20 @@ public class ParentCreditLedger {
     @Column(length = 500)
     private String description;
 
+    /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute (V199): the card charge (PaymentIntent) a refund
+     * credit came from, when the booking's own {@code booking_payments} row does not say it. NULL = trace
+     * through {@code booking_payments} / the booking's pack.
+     */
+    @Setter
+    @Column(name = "source_payment_intent_id")
+    private String sourcePaymentIntentId;
+
+    /** V199: how much of {@link #amount} was card money from {@link #sourcePaymentIntentId}. */
+    @Setter
+    @Column(name = "source_card_amount", precision = 10, scale = 2)
+    private BigDecimal sourceCardAmount;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

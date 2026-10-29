@@ -453,6 +453,7 @@ sequenceDiagram
     Svc->>Sub: PAST_DUE/UNPAID/INCOMPLETE back to ACTIVE, clear pastDueSince
   else charge.dispute.created / closed
     Svc->>Svc: freeze (or, if lost, cut / reverse pro rata) the coach payouts the charge funded, admin alert
+    Svc->>Svc: take back wallet credit the charge funded (restored if won), cash-out refused while open
   else charge.refunded
     Svc->>Svc: refund not issued by the app: admin alert only
   end

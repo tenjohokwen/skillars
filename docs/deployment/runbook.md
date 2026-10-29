@@ -491,6 +491,30 @@ blocked and the handler will not retry on its own (a `HOLD` is a decision, not a
    The next drain (≤ 5 min, or trigger the sweep) picks it up. The handler re-checks
    `status = PENDING_RELEASE` and `release_after`, so a double-insert is harmless.
 
+### Stale `FROZEN` / `HOLD` — the safety net
+
+`StalePayoutAlertScheduler` (daily 06:30, ShedLock) raises a `PAYOUT_HELD` admin alert, reason
+`STALE_<status> <n>d <last_error>`, for every payout in `FROZEN` or `HOLD` whose row has not changed for
+`payment.payout.stale_alert_days` (default 14, bounded 1-365). It never moves money. Read `last_error`:
+`DISPUTE_OPEN` / `CHARGEBACK_OPEN` means a dispute is still open (check `admin.disputes` /
+`payment.charge_disputes`), `SAFETY_HOLD` a coach safety hold, anything else a `HOLD` handled as above.
+
+A card dispute that closes **lost** no longer parks the payouts it funded in `HOLD`: an existing payout
+is cut pro rata (or cancelled) on the close, and a session completing after the close is cut the same
+way at enqueue, using `payment.charge_disputes.payout_loss_fraction` (`last_error` starts
+`CHARGEBACK_LOST`). Rows written `HOLD` / `CHARGEBACK_LOST` before this release are not migrated; find
+them with `SELECT booking_id FROM payment.coach_payouts WHERE status = 'HOLD' AND last_error = 'CHARGEBACK_LOST';`
+and settle them by hand.
+
+### Card dispute on a charge that was refunded to wallet credit
+
+When `charge.dispute.created` arrives, wallet credit the charge funded (a booking refunded to credit) is
+taken back up to the disputed amount (`CHARGEBACK_CREDIT_REVERSAL` ledger rows, never below a zero
+balance) and the payer cannot cash out while the dispute is open (`payment.cashOutBlockedByDispute`).
+A part already spent or cashed out raises a `CHARGEBACK` alert on the dispute id, reason
+`CREDIT_SHORTFALL ...`: the platform absorbs it, so decide whether to pursue the payer. Won: the credit
+comes back as `CHARGEBACK_CREDIT_RESTORE`. Lost: the reversal stands.
+
 ### `REVERSAL_FAILED` — coach withdrew the balance / account closed (B.7.3)
 
 A dispute was upheld after the payout `RELEASED`, a `COACH_PAYOUT_REVERSAL` ran, and

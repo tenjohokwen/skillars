@@ -10,7 +10,6 @@ import com.softropic.skillars.platform.outbox.service.OutboxService;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutReversalPayload;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutTransferPayload;
-import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.ChargeDispute;
@@ -25,7 +24,6 @@ import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepositor
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -78,7 +76,6 @@ public class CoachPayoutOutboxSupport {
     private final ConfigService configService;
     private final ObjectMapper objectMapper;
     private final ChargeDisputeRepository chargeDisputeRepository;
-    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * AC3.2 / AC4.1: insert the {@code coach_payouts} row {@code PENDING_RELEASE} and enqueue a
@@ -115,6 +112,7 @@ public class CoachPayoutOutboxSupport {
 
         final BigDecimal gross;
         final BigDecimal rate;
+        final BigDecimal cardPortion;
         if (packId != null) {
             PackShare share = allocatePackShare(bookingId, packId);
             if (share.alreadyPaidOut()) {
@@ -130,6 +128,7 @@ public class CoachPayoutOutboxSupport {
                 return;
             }
             gross = share.gross();
+            cardPortion = gross;
             rate = share.commissionRate() != null ? share.commissionRate() : liveCommissionRate();
         } else {
             BookingPayment bp = bookingPaymentRepository.findById(bookingId).orElse(null);
@@ -143,6 +142,7 @@ public class CoachPayoutOutboxSupport {
             BigDecimal stripeCharged = bp.getStripeCharged() == null ? BigDecimal.ZERO : bp.getStripeCharged();
             BigDecimal creditDebited = bp.getCreditDebited() == null ? BigDecimal.ZERO : bp.getCreditDebited();
             gross = stripeCharged.add(creditDebited);
+            cardPortion = stripeCharged;
             // AC4.2: the rate LOCKED AT CAPTURE (booking_payments.commission_rate), never
             // platform.commission.rate re-read now.
             rate = bp.getCommissionRate() != null ? bp.getCommissionRate() : liveCommissionRate();
@@ -173,19 +173,42 @@ public class CoachPayoutOutboxSupport {
         row.setSessionPackPurchaseId(packId);
         // fix/payment-payouts-disputes-webhooks: a dispute opened before the session completed — in-app
         // (open on this booking) or a card dispute on the charge that funded it — freezes the payout from
-        // the start. A card dispute already LOST leaves the payout to an operator (HOLD + alert).
-        List<String> chargeDisputeStatuses = chargeDisputeStatuses(bookingId);
+        // the start.
+        List<String> intents = chargeDisputeRepository.findFundingPaymentIntents(bookingId);
+        List<String> chargeDisputeStatuses = intents.isEmpty()
+            ? List.of() : chargeDisputeRepository.findStatusesByPaymentIntentIds(intents);
+        // fix/payment-dispute-credit-trace-and-lost-dispute: a card dispute already LOST — the session
+        // completed after the payer's bank took the money back. This payout used to be parked in HOLD for an
+        // operator (and could sit there forever); it is now cut exactly as the lost close cuts a payout that
+        // already existed (the dispute's payout_loss_fraction of the card portion), or cancelled when that
+        // is all of it.
+        if (chargeDisputeStatuses.contains(ChargeDispute.STATUS_LOST)) {
+            BigDecimal fraction = lostFraction(intents);
+            BigDecimal refund = cardPortion.multiply(fraction).setScale(2, RoundingMode.HALF_UP);
+            BigDecimal lostShare = CoachPayoutAdjustmentService.coachShareOfRefund(net, refund, gross);
+            if (lostShare.compareTo(net) >= 0) {
+                row.setStatus(CoachPayoutStatus.CANCELLED);
+                row.setLastError(REASON_CHARGEBACK_LOST);
+                row.setCoachStripeAccountId(resolveCoachAccountIdBestEffort(coachId));
+                coachPayoutRepository.save(row);
+                log.warn("[COACH_PAYOUT_CHARGEBACK_LOST] booking={} coach={} — the charge that paid for this session "
+                    + "lost a card dispute for all of it, payout written CANCELLED, no transfer", bookingId, coachId);
+                return;
+            }
+            if (lostShare.signum() > 0) {
+                BigDecimal newNet = CoachPayoutAdjustmentService.cutNet(row, lostShare);
+                row.setLastError(REASON_CHARGEBACK_LOST + " -" + lostShare + " (net was " + net + ")");
+                log.warn("[COACH_PAYOUT_CHARGEBACK_LOST] booking={} coach={} — the charge that paid for this session "
+                    + "lost a card dispute in part, payout cut by {} to {}", bookingId, coachId, lostShare, newNet);
+            }
+        }
         row.setDisputeFrozen(coachPayoutRepository.existsOpenDisputeForBooking(bookingId));
         row.setChargebackFrozen(chargeDisputeStatuses.contains(ChargeDispute.STATUS_OPEN));
         // A coach already under a CSAM safety hold: record the payout FROZEN, never PENDING_RELEASE.
         // (A hold landing after this read is caught by CoachPayoutTransferHandler's release-time check.)
         boolean safetyHold = coachPayoutFreezeRepository.isFrozenForShare(coachId);
         boolean frozen = safetyHold || row.hasPayoutFreezeReason();
-        boolean chargebackLost = chargeDisputeStatuses.contains(ChargeDispute.STATUS_LOST);
-        if (chargebackLost) {
-            row.setStatus(CoachPayoutStatus.HOLD);
-            row.setLastError(REASON_CHARGEBACK_LOST);
-        } else if (frozen) {
+        if (frozen) {
             row.setStatus(CoachPayoutStatus.FROZEN);
             row.setLastError(safetyHold ? CoachPayoutFreezeService.REASON_SAFETY_HOLD
                 : row.isDisputeFrozen() ? CoachPayoutAdjustmentService.REASON_DISPUTE_OPEN
@@ -196,21 +219,14 @@ public class CoachPayoutOutboxSupport {
         row.setCoachStripeAccountId(resolveCoachAccountIdBestEffort(coachId));
         coachPayoutRepository.save(row);
 
-        if (chargebackLost) {
-            log.warn("[COACH_PAYOUT_HELD] booking={} coach={} net={} — the charge that paid for this session lost a "
-                + "card dispute, payout recorded HOLD for an operator", bookingId, coachId, net);
-            eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this, PaymentIntegrityAlertEvent.Kind.PAYOUT_HELD,
-                bookingId.toString(), PaymentIntegrityAlertEvent.Reference.BOOKING, REASON_CHARGEBACK_LOST));
-            return;
-        }
         if (frozen) {
             log.warn("[COACH_PAYOUT_FROZEN] booking={} coach={} net={} reason={} — payout recorded FROZEN, no transfer "
-                + "until the freeze is lifted", bookingId, coachId, net, row.getLastError());
+                + "until the freeze is lifted", bookingId, coachId, row.getNetAmount(), row.getLastError());
             return;
         }
         enqueue(AGGREGATE_TYPE_TRANSFER, new CoachPayoutTransferPayload(bookingId), releaseAfter, bookingId);
         log.info("[COACH_PAYOUT] enqueued transfer for booking {} coach {} gross {} net {} pack {} releaseAfter {}",
-            bookingId, coachId, gross, net, packId, releaseAfter);
+            bookingId, coachId, row.getGrossAmount(), row.getNetAmount(), packId, releaseAfter);
     }
 
     /**
@@ -323,9 +339,24 @@ public class CoachPayoutOutboxSupport {
         }
     }
 
-    private List<String> chargeDisputeStatuses(UUID bookingId) {
-        List<String> intents = chargeDisputeRepository.findFundingPaymentIntents(bookingId);
-        return intents.isEmpty() ? List.of() : chargeDisputeRepository.findStatusesByPaymentIntentIds(intents);
+    /**
+     * The share of the card portion lost to the LOST card disputes on {@code intents}, at most 1: each
+     * dispute's recorded {@code payout_loss_fraction}, or — closed before V199 recorded it — disputed /
+     * charged.
+     */
+    private BigDecimal lostFraction(List<String> intents) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (ChargeDispute d : chargeDisputeRepository.findByPaymentIntentIdInAndStatus(intents, ChargeDispute.STATUS_LOST)) {
+            BigDecimal f = d.getPayoutLossFraction();
+            if (f == null) {
+                BigDecimal charged = chargeDisputeRepository.sumChargedByPaymentIntent(d.getPaymentIntentId());
+                BigDecimal disputed = d.getAmount() == null ? BigDecimal.ZERO : d.getAmount();
+                f = charged == null || charged.signum() <= 0 || disputed.compareTo(charged) >= 0
+                    ? BigDecimal.ONE : disputed.divide(charged, 6, RoundingMode.HALF_UP);
+            }
+            total = total.add(f);
+        }
+        return total.min(BigDecimal.ONE);
     }
 
     private CoachPayout newRow(UUID bookingId, UUID coachId, String currency,

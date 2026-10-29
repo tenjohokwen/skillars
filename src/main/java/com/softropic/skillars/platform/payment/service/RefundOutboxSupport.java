@@ -51,9 +51,22 @@ public class RefundOutboxSupport {
      */
     @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void enqueueBookingRefund(Long parentId, BigDecimal amount, UUID bookingId, String description) {
+        enqueueBookingRefund(parentId, amount, bookingId, description, null, null);
+    }
+
+    /**
+     * fix/payment-dispute-credit-trace-and-lost-dispute: as {@link #enqueueBookingRefund(Long, BigDecimal,
+     * UUID, String)}, naming the card charge the refunded money came from and its card part, for a refund
+     * whose booking's own {@code booking_payments} row does not say it (V199
+     * {@code parent_credit_ledger.source_payment_intent_id}). A later card dispute on that charge then finds
+     * the credit and takes back what is unspent.
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void enqueueBookingRefund(Long parentId, BigDecimal amount, UUID bookingId, String description,
+                                     String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
         try {
-            String json = objectMapper.writeValueAsString(
-                new BookingRefundPayload(parentId, amount, bookingId, description));
+            String json = objectMapper.writeValueAsString(new BookingRefundPayload(parentId, amount, bookingId,
+                description, sourcePaymentIntentId, sourceCardAmount));
             outboxService.enqueue(AGGREGATE_TYPE, json);
             outboxService.requestDrainAfterCommit();
         } catch (JsonProcessingException e) {
@@ -64,7 +77,15 @@ public class RefundOutboxSupport {
         }
     }
 
-    /** Outbox payload for a re-drivable credit-wallet BOOKING_REFUND. */
-    public record BookingRefundPayload(Long parentId, BigDecimal amount, UUID bookingId, String description) {
+    /**
+     * Outbox payload for a re-drivable credit-wallet BOOKING_REFUND. {@code sourcePaymentIntentId} /
+     * {@code sourceCardAmount} are null on payloads enqueued before V199 and for refunds traced through
+     * {@code booking_payments}.
+     */
+    public record BookingRefundPayload(Long parentId, BigDecimal amount, UUID bookingId, String description,
+                                       String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
+        public BookingRefundPayload(Long parentId, BigDecimal amount, UUID bookingId, String description) {
+            this(parentId, amount, bookingId, description, null, null);
+        }
     }
 }
