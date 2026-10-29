@@ -232,8 +232,11 @@ public class CoachPayoutOutboxSupport {
     /**
      * This session's share of its pack, allocated under the pack row lock so concurrent completions of
      * sessions from the same pack serialize: each takes {@code amount_charged / session_count} rounded
-     * DOWN to the cent, the last ({@code session_count}-th) takes whatever remains, and the running
-     * total ({@code payout_gross_allocated}) can therefore never exceed {@code amount_charged}.
+     * DOWN to the cent, the last ({@code session_count}-th) SETTLED session takes whatever remains, and
+     * the running total can therefore never exceed {@code amount_charged}. fix/payment-pack-refund-rounding:
+     * "settled" counts sessions refunded to the payer as money too ({@link PackRefundAllocationService}),
+     * so payouts + refunds of a fully-settled pack sum to exactly {@code amount_charged}
+     * ({@link SessionPackPurchase#nextSettlementValue}).
      *
      * <p>Lock order: the completion transaction already holds this booking's row; the pack row comes
      * second. The other pack-row lockers ({@code PackSessionService.deductSession} / {@code pausePack},
@@ -267,22 +270,21 @@ public class CoachPayoutOutboxSupport {
                 + "(amount={} sessions={}) — payout NOT computed, operator follow-up", bookingId, packId, amount, sessions);
             return PackShare.skip(REASON_PACK_AMOUNT_UNKNOWN);
         }
-        BigDecimal allocated = pack.getPayoutGrossAllocated() == null ? BigDecimal.ZERO : pack.getPayoutGrossAllocated();
-        BigDecimal remaining = amount.subtract(allocated);
-        int allocatedSessions = pack.getPayoutSessionsAllocated();
-        if (allocatedSessions >= sessions || remaining.signum() <= 0) {
-            // More completed sessions than the pack sold (should be impossible — deductSession refuses an
-            // exhausted pack): the pack's money is already fully allocated. Never pay beyond it.
-            log.error("[COACH_PAYOUT_PACK] booking={} pack={} is already fully allocated ({} of {} sessions, {} of {}) "
-                + "— no payout for this session, investigate", bookingId, packId, allocatedSessions, sessions,
-                allocated, amount);
+        // fix/payment-pack-refund-rounding: payouts and money refunds settle the pack's sessions from one
+        // ledger, so the LAST session settled (paid or refunded) takes the rounding remainder.
+        BigDecimal remaining = pack.unsettledValue();
+        int settledSessions = pack.settledSessions();
+        if (settledSessions >= sessions || remaining.signum() <= 0) {
+            // More settled sessions than the pack sold (should be impossible — deductSession refuses an
+            // exhausted pack, a refunded session never completes): the pack's money is already fully
+            // settled. Never pay beyond it.
+            log.error("[COACH_PAYOUT_PACK] booking={} pack={} is already fully settled ({} paid + {} refunded of {} "
+                + "sessions, {} of {}) — no payout for this session, investigate", bookingId, packId,
+                pack.getPayoutSessionsAllocated(), pack.getRefundSessionsIssued(), sessions, pack.settledGross(), amount);
             return PackShare.skip(REASON_PACK_FULLY_ALLOCATED);
         }
-        BigDecimal gross = allocatedSessions + 1 >= sessions
-            ? remaining
-            : amount.divide(BigDecimal.valueOf(sessions), 2, RoundingMode.DOWN).min(remaining);
-        pack.setPayoutSessionsAllocated(allocatedSessions + 1);
-        pack.setPayoutGrossAllocated(allocated.add(gross));
+        BigDecimal gross = pack.nextSettlementValue();
+        pack.recordPayoutAllocation(gross);
         sessionPackPurchaseRepository.save(pack);
         return new PackShare(gross, pack.getCommissionRate(), null);
     }

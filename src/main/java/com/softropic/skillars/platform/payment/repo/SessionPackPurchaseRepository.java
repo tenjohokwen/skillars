@@ -105,6 +105,29 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
     @Query(nativeQuery = true, value = "SELECT EXISTS (SELECT 1 FROM payment.pack_session_restores WHERE booking_id = :bookingId)")
     boolean existsRestoreMarker(@Param("bookingId") UUID bookingId);
 
+    /**
+     * fix/payment-pack-refund-rounding: claims the per-booking money-refund marker (V199) for a pack session
+     * refunded to the payer. 1 when this call claimed it (the caller records the refund on the locked pack
+     * row in the same transaction), 0 when this booking's session was already refunded.
+     */
+    @Modifying
+    @Query(nativeQuery = true, value = """
+        INSERT INTO payment.pack_session_refunds (booking_id, purchase_id, amount, refunded_at)
+        VALUES (:bookingId, :purchaseId, :amount, now())
+        ON CONFLICT (booking_id) DO NOTHING
+        """)
+    int insertRefundMarker(@Param("bookingId") UUID bookingId, @Param("purchaseId") UUID purchaseId,
+                           @Param("amount") BigDecimal amount);
+
+    /** fix/payment-pack-refund-rounding: the amount a booking's pack session was refunded at (its V199 marker). */
+    @Query(nativeQuery = true, value = "SELECT amount FROM payment.pack_session_refunds WHERE booking_id = :bookingId")
+    Optional<BigDecimal> findRefundMarkerAmount(@Param("bookingId") UUID bookingId);
+
+    /** fix/payment-pack-refund-rounding: drops a booking's refund marker once its refund was clawed back. */
+    @Modifying
+    @Query(nativeQuery = true, value = "DELETE FROM payment.pack_session_refunds WHERE booking_id = :bookingId")
+    int deleteRefundMarker(@Param("bookingId") UUID bookingId);
+
     /** Pack purchases in the period that went through a Stripe charge — the Stripe-fee estimate's count. */
     @Query("SELECT COUNT(p) FROM SessionPackPurchase p WHERE p.stripePaymentIntentId IS NOT NULL AND p.createdAt BETWEEN :from AND :to")
     long countChargedForPeriod(@Param("from") Instant from, @Param("to") Instant to);

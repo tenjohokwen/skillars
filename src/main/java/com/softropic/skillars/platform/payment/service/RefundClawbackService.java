@@ -40,6 +40,7 @@ public class RefundClawbackService {
     private final CreditWalletService creditWalletService;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final PackSessionService packSessionService;
+    private final PackRefundAllocationService packRefundAllocationService;
     private final PessimisticLockRetryer lockRetryer;
 
     /**
@@ -76,6 +77,11 @@ public class RefundClawbackService {
             ParentCreditLedger refund = walletRefund.get();
             BigDecimal recovered = creditWalletService.debitRefundReversal(
                 refund.getParentId(), bookingId, refund.getAmount());
+            // fix/payment-pack-refund-rounding: an expired-pack session refunded as money is un-settled on the
+            // pack's ledger — the caller now pays it to the coach, which settles it again through the payout
+            // allocation. Without this the session would count as settled twice and the pack's last payout
+            // would come up short. (Any unrecovered part is the platform's absorbed loss, on the dispute.)
+            packRefundAllocationService.releaseSessionRefund(sessionPackPurchaseId, bookingId);
             log.info("[REFUND_CLAWBACK] booking={} payer={} refunded={} recovered={}", bookingId,
                 refund.getParentId(), refund.getAmount(), recovered);
             return Optional.of(new RefundClawback(refund.getAmount(), recovered, false, false));

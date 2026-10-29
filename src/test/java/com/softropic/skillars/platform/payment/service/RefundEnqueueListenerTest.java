@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachE
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -19,8 +20,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * skillars-deferred-101 AC4: unit tests for RefundEnqueueListener enqueue guard conditions.
@@ -38,8 +41,50 @@ class RefundEnqueueListenerTest {
 
     @Mock RefundOutboxSupport refundOutboxSupport;
     @Mock PackRestoreOutboxSupport packRestoreOutboxSupport;
+    @Mock PackRefundAllocationService packRefundAllocationService;
 
     @InjectMocks RefundEnqueueListener listener;
+
+    @BeforeEach
+    void allocatorReturnsTheComputedAmountByDefault() {
+        lenient().when(packRefundAllocationService.allocateSessionRefund(any(), any(), any()))
+            .thenAnswer(inv -> inv.getArgument(2));
+    }
+
+    // ========== fix/payment-pack-refund-rounding: pack wallet refunds settle on the pack ledger ==========
+
+    @Test
+    void packWalletRefund_enqueuesTheAmountSettledOnThePack_notTheComputedShare() {
+        UUID packId = UUID.randomUUID();
+        // 1000.00 / 3: the cancellation computed the rounded-down 333.33; the pack's last session settles 333.34.
+        when(packRefundAllocationService.allocateSessionRefund(packId, BOOKING_ID, SESSION_PRICE))
+            .thenReturn(new BigDecimal("333.34"));
+
+        listener.onBookingCancelledByCoach(coachCancelEvent(packId, true));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(new BigDecimal("333.34")), eq(BOOKING_ID), anyString());
+    }
+
+    @Test
+    void packWalletRefund_nothingLeftOnThePack_enqueuesNothing() {
+        UUID packId = UUID.randomUUID();
+        when(packRefundAllocationService.allocateSessionRefund(packId, BOOKING_ID, SESSION_PRICE))
+            .thenReturn(BigDecimal.ZERO);
+
+        listener.onCoachNoShow(noShowEvent(packId, true));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+    }
+
+    @Test
+    void cardBookingWalletRefund_neverTouchesThePackLedger() {
+        listener.onBookingCancelledByCoach(coachCancelEvent(null, true));
+
+        verify(packRefundAllocationService, never()).allocateSessionRefund(any(), any(), any());
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+    }
 
     private static final Long PARENT_ID = 1001L;
     private static final UUID COACH_ID = UUID.randomUUID();

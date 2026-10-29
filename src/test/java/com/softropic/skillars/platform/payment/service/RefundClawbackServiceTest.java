@@ -36,6 +36,7 @@ class RefundClawbackServiceTest {
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock PackSessionService packSessionService;
     @Mock PessimisticLockRetryer lockRetryer;
+    @Mock PackRefundAllocationService packRefundAllocationService;
 
     private RefundClawbackService service;
     private final UUID bookingId = UUID.randomUUID();
@@ -45,7 +46,7 @@ class RefundClawbackServiceTest {
     @SuppressWarnings("unchecked")
     void setUp() {
         service = new RefundClawbackService(ledgerRepository, creditWalletService,
-            sessionPackPurchaseRepository, packSessionService, lockRetryer);
+            sessionPackPurchaseRepository, packSessionService, packRefundAllocationService, lockRetryer);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any(Supplier.class)))
             .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
     }
@@ -84,6 +85,18 @@ class RefundClawbackServiceTest {
         assertThat(result.recovered()).isEqualByComparingTo("15.00");
         assertThat(result.absorbed()).isEqualByComparingTo("25.00");
         assertThat(result.packSession()).isFalse();
+    }
+
+    @Test
+    void expiredPackWalletRefund_isUnsettledOnThePack_soThePayoutThatFollowsSettlesItInstead() {
+        when(ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND))
+            .thenReturn(Optional.of(refund("33.34")));
+        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("33.34")))
+            .thenReturn(new BigDecimal("33.34"));
+
+        service.clawBack(bookingId, packId).orElseThrow();
+
+        verify(packRefundAllocationService).releaseSessionRefund(packId, bookingId);
     }
 
     @Test
