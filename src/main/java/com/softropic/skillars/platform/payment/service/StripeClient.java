@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.stripe.exception.StripeException;
 import com.stripe.model.Customer;
+import com.stripe.model.Invoice;
 import com.stripe.model.PaymentIntent;
 import com.stripe.model.PaymentMethod;
 import com.stripe.model.Refund;
@@ -11,6 +12,7 @@ import com.stripe.model.Transfer;
 import com.stripe.model.TransferReversal;
 import com.stripe.net.RequestOptions;
 import com.stripe.param.CustomerCreateParams;
+import com.stripe.param.InvoicePayParams;
 import com.stripe.param.PaymentIntentCreateParams;
 import com.stripe.param.PaymentIntentRetrieveParams;
 import com.stripe.param.RefundCreateParams;
@@ -208,6 +210,37 @@ public class StripeClient {
             .build();
         Subscription updated = sub.update(params, options);
         return Instant.ofEpochSecond(updated.getCurrentPeriodEnd());
+    }
+
+    /**
+     * fix/payment-subscription-payment-method-sync: points the subscription's
+     * {@code default_payment_method} at a newly saved card (it otherwise keeps the card it was created
+     * with, so "update your card" never reached the subscription).
+     */
+    public Subscription updateSubscriptionDefaultPaymentMethod(String stripeSubscriptionId, String paymentMethodId)
+            throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey("sub-pm-" + stripeSubscriptionId + "-" + paymentMethodId)
+            .build();
+        Subscription sub = Subscription.retrieve(stripeSubscriptionId);
+        return sub.update(SubscriptionUpdateParams.builder().setDefaultPaymentMethod(paymentMethodId).build(), options);
+    }
+
+    /**
+     * fix/payment-subscription-payment-method-sync: retries the subscription's latest invoice with the
+     * given card if it is still {@code open}. Returns the invoice (null when there is none); a decline
+     * throws CardException. The per-attempt key lets the user retry with the same card later (a fixed
+     * key would replay the earlier decline for 24h). A successful payment arrives as invoice.paid.
+     */
+    public Invoice payLatestOpenInvoice(String stripeSubscriptionId, String paymentMethodId, String idempotencyKey)
+            throws StripeException {
+        Subscription sub = Subscription.retrieve(stripeSubscriptionId);
+        String invoiceId = sub.getLatestInvoice();
+        if (invoiceId == null) return null;
+        Invoice invoice = Invoice.retrieve(invoiceId);
+        if (!"open".equals(invoice.getStatus())) return invoice;
+        RequestOptions options = RequestOptions.builder().setIdempotencyKey(idempotencyKey).build();
+        return invoice.pay(InvoicePayParams.builder().setPaymentMethod(paymentMethodId).build(), options);
     }
 
     /**

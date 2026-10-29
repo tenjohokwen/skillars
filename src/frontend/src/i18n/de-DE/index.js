@@ -1489,6 +1489,8 @@ export default {
       saveError: 'Ihre Karte konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
       savedRefreshFailed:
         'Ihre Karte wurde gespeichert, aber die Ansicht konnte nicht aktualisiert werden. Bitte laden Sie die Seite neu.',
+      subscriptionNote:
+        'Eine neue Karte wird auch für Ihr Abonnement verwendet, und eine offene Zahlung wird damit erneut versucht.',
       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
     },
     sessionPackTiersTitle: 'Sitzungspaket-Angebot',
@@ -2235,11 +2237,14 @@ export default {
     confirm: 'Bestätigen',
     perMonth: '{price} / Monat',
     perYear: '{price} / Jahr',
+    paymentIssue:
+      'Ihre letzte Abonnementzahlung ist fehlgeschlagen. Aktualisieren Sie Ihre Karte, dann versuchen wir die Zahlung sofort erneut.',
+    updateCard: 'Karte aktualisieren',
     errors: {
       paymentDeclined:
         'Ihre Karte wurde abgelehnt oder erfordert eine zusätzliche Authentifizierung. Bitte aktualisieren Sie Ihre Zahlungsmethode und versuchen Sie es erneut.',
       updatePaymentMethod:
-        'Für Ihr bestehendes Abonnement ist eine Rechnung offen. Aktualisieren Sie Ihre Zahlungsmethode, um es wiederherzustellen, statt ein neues Abonnement abzuschließen.',
+        'Für Ihr bestehendes Abonnement ist eine Rechnung offen. Aktualisieren Sie Ihre Karte, statt ein neues Abonnement abzuschließen: Beim Speichern wird die Zahlung erneut versucht und Ihr Tarif wiederhergestellt.',
       notActive:
         'Ihr Abonnement ist derzeit nicht aktiv. Begleichen Sie die offene Zahlung, bevor Sie Ihren Tarif ändern.',
       alreadyActive: 'Sie haben bereits ein aktives Abonnement.',

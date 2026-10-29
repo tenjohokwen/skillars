@@ -106,7 +106,7 @@ class PastDueGracePeriodTest {
     @Test
     void pastDuePastGracePeriod_coachDowngradedToScout() {
         PaymentCoachSubscription sub = pastDueCoach(Instant.now().minus(8, ChronoUnit.DAYS));
-        when(paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any())).thenReturn(List.of(sub));
+        when(paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any())).thenReturn(List.of(sub));
         when(coachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(java.util.Optional.empty());
 
         service.checkPastDueGracePeriod();
@@ -119,7 +119,7 @@ class PastDueGracePeriodTest {
     @Test
     void pastDuePastGracePeriod_playerDowngradedToAthlete() {
         PaymentPlayerSubscription sub = pastDuePlayer(Instant.now().minus(8, ChronoUnit.DAYS));
-        when(paymentPlayerSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any())).thenReturn(List.of(sub));
+        when(paymentPlayerSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any())).thenReturn(List.of(sub));
 
         service.checkPastDueGracePeriod();
 
@@ -143,7 +143,7 @@ class PastDueGracePeriodTest {
         // updatedAt was bumped recently, but pastDueSince is old — must use pastDueSince
         PaymentCoachSubscription sub = pastDueCoach(Instant.now().minus(10, ChronoUnit.DAYS));
         sub.setUpdatedAt(Instant.now()); // recently updated — must NOT reset grace window
-        when(paymentCoachSubscriptionRepository.findByStatusAndPastDueSinceBefore(any(), any())).thenReturn(List.of(sub));
+        when(paymentCoachSubscriptionRepository.findByStatusInAndPastDueSinceBefore(any(), any())).thenReturn(List.of(sub));
         when(coachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(java.util.Optional.empty());
 
         service.checkPastDueGracePeriod();

@@ -106,3 +106,25 @@ describe('PlayerSubscriptionPage.vue — mutating controls by role', () => {
     expect(actionButtons(wrapper)).toHaveLength(0)
   })
 })
+
+// fix/payment-subscription-payment-method-sync: a past-due/unpaid subscription points the user at
+// "update card", which now retries the outstanding payment.
+describe('PlayerSubscriptionPage.vue — payment issue banner', () => {
+  const tiers = [
+    { tier: 'ATHLETE', features: [] },
+    { tier: 'PRO', features: [] },
+  ]
+
+  it.each([
+    ['PAST_DUE', true],
+    ['UNPAID', true],
+    ['ACTIVE', false],
+  ])('status %s shows the banner: %s', async (status, shown) => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerTiers: tiers,
+      playerSubscription: { tier: 'PRO', status, cancelAtPeriodEnd: false },
+    })
+
+    expect(wrapper.find('[data-test="payment-issue-banner"]').exists()).toBe(shown)
+  })
+})

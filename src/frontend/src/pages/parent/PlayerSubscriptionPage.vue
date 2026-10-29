@@ -8,6 +8,28 @@
       </div>
 
       <template v-else>
+        <!-- fix/payment-subscription-payment-method-sync: past-due recovery -->
+        <q-banner
+          v-if="paymentIssue"
+          class="q-mb-md"
+          rounded
+          style="background: rgba(255, 82, 82, 0.15)"
+          data-test="payment-issue-banner"
+        >
+          <template #avatar>
+            <q-icon name="mdi-credit-card-off" color="negative" />
+          </template>
+          {{ t('subscription.paymentIssue') }}
+          <template #action>
+            <q-btn
+              flat
+              color="primary"
+              :label="t('subscription.updateCard')"
+              @click="addCardDialog = true"
+            />
+          </template>
+        </q-banner>
+
         <!-- Cancel pending banner -->
         <q-banner
           v-if="subscription?.cancelAtPeriodEnd"
@@ -171,7 +193,7 @@
           <div class="text-h6">{{ t('payment.card.title') }}</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <PaymentMethodCard @saved="addCardDialog = false" />
+          <PaymentMethodCard subscription-note @saved="addCardDialog = false" />
         </q-card-section>
       </q-card>
     </q-dialog>
@@ -210,6 +232,8 @@ const tiers = computed(() => paymentStore.playerTiers)
 // AC 5: gate confirm on a saved card instead of a raw, frontend-typed payment-method id — the
 // backend resolves the saved card itself (SubscriptionService.subscribePlayer).
 const hasCard = computed(() => paymentStore.savedPaymentMethod?.hasCard ?? false)
+
+const paymentIssue = computed(() => ['PAST_DUE', 'UNPAID'].includes(subscription.value?.status))
 
 const TIER_ORDER = ['ATHLETE', 'SEMI_PRO', 'PRO']
 

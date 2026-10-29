@@ -64,9 +64,10 @@ function trackMounted(wrapper) {
   return wrapper
 }
 
-function mountCard(initialPaymentState) {
+function mountCard(initialPaymentState, props = {}) {
   return trackMounted(
     mount(PaymentMethodCard, {
+      props,
       global: {
         plugins: [
           createTestingPinia({
@@ -119,6 +120,22 @@ describe('PaymentMethodCard.vue (deferred-108 AC1)', () => {
     expect(wrapper.vm.showForm).toBe(false)
     expect(wrapper.text()).toContain('payment.card.savedLabel')
     expect(wrapper.text()).not.toContain('payment.card.addCardPrompt')
+  })
+
+  // fix/payment-subscription-payment-method-sync: subscription pages explain that a new card also
+  // updates the subscription and retries an outstanding payment.
+  it.each([
+    [true, true],
+    [false, false],
+  ])('subscriptionNote=%s shows the subscription note: %s', async (subscriptionNote, shown) => {
+    loadStripe.mockResolvedValue(fakeStripe())
+    const wrapper = mountCard(
+      { savedPaymentMethod: { hasCard: false }, stripeConfig: { publishableKey: 'pk_test_x' } },
+      { subscriptionNote },
+    )
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="subscription-note"]').exists()).toBe(shown)
   })
 
   it('renders the add-card form when savedPaymentMethod.hasCard is false', async () => {
