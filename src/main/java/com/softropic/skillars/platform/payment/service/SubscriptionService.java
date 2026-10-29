@@ -20,10 +20,13 @@ import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
+import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.stripe.exception.CardException;
+import com.stripe.exception.IdempotencyException;
+import com.stripe.exception.InvalidRequestException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Subscription;
 import com.stripe.param.SubscriptionListParams;
@@ -72,6 +75,7 @@ public class SubscriptionService {
     // first, and there is no circular-construction cycle.
     private final StripeWebhookService stripeWebhookService;
     private final PlayerProfileRepository playerProfileRepository;
+    private final PaymentMethodSyncOutboxSupport paymentMethodSyncOutboxSupport;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
     @Autowired @Lazy
@@ -89,9 +93,11 @@ public class SubscriptionService {
     // (pastDueSince) and are cancelled at Stripe once it expires. UNPAID/PAUSED used to lose the paid
     // tier but were never swept, so the Stripe subscription lingered (UNPAID keeps raising invoices).
     private static final List<String> GRACE_STATUSES = List.of("PAST_DUE", "UNPAID", "PAUSED");
-    // Statuses whose open invoice is retried when a new card is saved (PAUSED has no invoice to pay;
-    // it resumes via Stripe's resume flow, so it only gets the new default payment method).
+    // Statuses whose open invoice is retried when a new card is saved.
     private static final Set<String> RETRY_ON_NEW_PAYMENT_METHOD = Set.of("PAST_DUE", "UNPAID");
+    // fix/payment-subscription-resume-and-async-sync: PAUSED (trial ended without a card) has no invoice
+    // to pay; a new card resumes it through Stripe's resume API instead of waiting for grace expiry.
+    private static final Set<String> RESUME_ON_NEW_PAYMENT_METHOD = Set.of("PAUSED");
 
     // ─── Tier Info ─────────────────────────────────────────────────────────────
 
@@ -565,19 +571,52 @@ public class SubscriptionService {
     // ─── Payment Method Sync ──────────────────────────────────────────────────────
 
     /**
-     * fix/payment-subscription-payment-method-sync: called after the user saves a new card
-     * (POST /save-payment-method). Every live Stripe subscription this user pays for — their own coach
-     * subscription and the player subscriptions of players they own (parent link or self-registered
-     * profile) — gets the card as its {@code default_payment_method}; a PAST_DUE/UNPAID one also has its
-     * open invoice retried with it, so updating the card actually recovers the subscription (the
-     * resulting invoice.paid restores ACTIVE). Best-effort per subscription and never throws: the card
-     * is already saved, and Stripe's own retries still use the new default.
+     * fix/payment-subscription-resume-and-async-sync: records the card the user just saved (POST
+     * /save-payment-method) and, in the same transaction, enqueues the subscription sync onto the durable
+     * outbox. The Stripe calls run after commit, off the request path ({@link PaymentMethodSyncOutboxHandler}),
+     * so a Stripe outage neither fails nor slows the save, and a failed sync is retried by the outbox.
+     * The caller must have created the {@code stripe_customers} row first (that needs a Stripe call).
+     */
+    @Transactional
+    public void savePaymentMethodAndScheduleSync(Long userId, String paymentMethodId) {
+        StripeCustomer customer = stripeCustomerRepository.findById(userId)
+            .orElseThrow(() -> new IllegalStateException("stripe_customers row missing for userId=" + userId));
+        customer.setStripePaymentMethodId(paymentMethodId);
+        stripeCustomerRepository.save(customer);
+        paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);
+    }
+
+    /**
+     * fix/payment-subscription-payment-method-sync: run from the outbox after the user saves a new card
+     * ({@link #savePaymentMethodAndScheduleSync}). Every live Stripe subscription this user pays for — their
+     * own coach subscription and the player subscriptions of players they own (parent link or
+     * self-registered profile) — gets the card as its {@code default_payment_method}; a PAST_DUE/UNPAID one
+     * also has its open invoice retried with it, and a PAUSED one (trial ended without a card) is resumed
+     * (fix/payment-subscription-resume-and-async-sync), so updating the card actually recovers the
+     * subscription. The resulting invoice.paid / customer.subscription.updated webhooks restore entitlement.
+     *
+     * <p>Idempotent, so the outbox may run it any number of times: the default payment method converges,
+     * an invoice is only paid while still {@code open}, a subscription is only resumed while Stripe still
+     * reports it {@code paused}. A row whose card has since been replaced is skipped — the newer save
+     * enqueued its own sync, and replaying the older card would move the subscriptions back onto it.
+     *
+     * <p>A decline or a permanent Stripe 4xx is logged and not retried (the card is saved; Stripe's own
+     * dunning still uses the new default). Any other failure is collected and rethrown after every
+     * subscription has been attempted, so the outbox retries the whole (idempotent) sync with backoff.
      */
     public void syncPaymentMethodToSubscriptions(Long userId, String paymentMethodId) {
+        String currentCard = stripeCustomerRepository.findById(userId)
+            .map(StripeCustomer::getStripePaymentMethodId).orElse(null);
+        if (!Objects.equals(currentCard, paymentMethodId)) {
+            log.info("[SUBSCRIPTION_PAYMENT_METHOD_SYNC_SUPERSEDED userId={}] the saved card has changed since "
+                + "this sync was enqueued; the newer save's own sync applies it", userId);
+            return;
+        }
+        List<String> retryable = new java.util.ArrayList<>();
         coachProfileRepository.findByUserId(userId)
             .flatMap(coach -> paymentCoachSubscriptionRepository.findByCoachId(coach.getId()))
             .ifPresent(sub -> syncPaymentMethod(sub.getStripeSubscriptionId(), sub.getStatus(),
-                paymentMethodId, "COACH", sub.getCoachId()));
+                paymentMethodId, "COACH", sub.getCoachId(), retryable));
 
         Set<Long> playerIds = new java.util.LinkedHashSet<>();
         parentPlayerLinkRepository.findByParentId(userId).forEach(link -> playerIds.add(link.getPlayerId()));
@@ -585,12 +624,16 @@ public class SubscriptionService {
         for (Long playerId : playerIds) {
             paymentPlayerSubscriptionRepository.findByPlayerId(playerId)
                 .ifPresent(sub -> syncPaymentMethod(sub.getStripeSubscriptionId(), sub.getStatus(),
-                    paymentMethodId, "PLAYER", playerId));
+                    paymentMethodId, "PLAYER", playerId, retryable));
+        }
+        if (!retryable.isEmpty()) {
+            throw new IllegalStateException("[SUBSCRIPTION_PAYMENT_METHOD_SYNC_RETRY userId=" + userId
+                + "] transient Stripe failure for " + retryable + "; the outbox will retry");
         }
     }
 
     private void syncPaymentMethod(String stripeSubId, String status, String paymentMethodId,
-                                   String kind, Object ownerId) {
+                                   String kind, Object ownerId, List<String> retryable) {
         if (stripeSubId == null || "CANCELLED".equals(status)) return;
         try {
             stripeClient.updateSubscriptionDefaultPaymentMethod(stripeSubId, paymentMethodId);
@@ -600,13 +643,24 @@ public class SubscriptionService {
                     stripeSubId, paymentMethodId, "inv-retry-" + UUID.randomUUID());
                 log.info("[{}_SUBSCRIPTION_INVOICE_RETRIED ownerId={} stripeSubId={} invoiceStatus={}]",
                     kind, ownerId, stripeSubId, invoice == null ? null : invoice.getStatus());
+            } else if (RESUME_ON_NEW_PAYMENT_METHOD.contains(status)) {
+                Subscription resumed = stripeClient.resumePausedSubscription(
+                    stripeSubId, "sub-resume-" + stripeSubId + "-" + UUID.randomUUID());
+                log.info("[{}_SUBSCRIPTION_RESUMED ownerId={} stripeSubId={} stripeStatus={}]",
+                    kind, ownerId, stripeSubId, resumed == null ? null : resumed.getStatus());
             }
         } catch (CardException e) {
-            log.warn("[{}_SUBSCRIPTION_INVOICE_RETRY_DECLINED ownerId={} stripeSubId={} code={}]",
+            log.warn("[{}_SUBSCRIPTION_PAYMENT_DECLINED ownerId={} stripeSubId={} code={}]",
                 kind, ownerId, stripeSubId, e.getCode());
+        } catch (InvalidRequestException | IdempotencyException e) {
+            // Permanent: retrying the same request cannot succeed (detached card, subscription gone at
+            // Stripe, ...). The outbox retries forever, so a permanent error must not be rethrown.
+            log.error("[{}_SUBSCRIPTION_PAYMENT_METHOD_SYNC_REJECTED ownerId={} stripeSubId={} code={}]",
+                kind, ownerId, stripeSubId, e.getCode(), e);
         } catch (StripeException | RuntimeException e) {
-            log.error("[{}_SUBSCRIPTION_PAYMENT_METHOD_SYNC_FAILED ownerId={} stripeSubId={}]",
+            log.warn("[{}_SUBSCRIPTION_PAYMENT_METHOD_SYNC_FAILED ownerId={} stripeSubId={}] will retry",
                 kind, ownerId, stripeSubId, e);
+            retryable.add(kind + ":" + stripeSubId);
         }
     }
 

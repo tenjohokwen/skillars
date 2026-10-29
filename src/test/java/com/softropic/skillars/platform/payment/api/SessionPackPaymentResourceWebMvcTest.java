@@ -258,11 +258,12 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(status().isNoContent());
     }
 
-    // fix/payment-subscription-payment-method-sync: a saved card is pushed to the caller's live
-    // subscriptions (and retries a past-due invoice) — see SubscriptionPaymentMethodSyncTest.
+    // fix/payment-subscription-resume-and-async-sync: the save hands the subscription sync to the durable
+    // outbox (SubscriptionService.savePaymentMethodAndScheduleSync) instead of calling Stripe in the
+    // request — see SubscriptionPaymentMethodSyncTest / SubscriptionLifecycleIT.
     @Test
     @WithMockUser(roles = "COACH")
-    void savePaymentMethod_syncsCardToCallersSubscriptions() throws Exception {
+    void savePaymentMethod_schedulesSubscriptionSync_noInlineStripeSync() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         StripeCustomer customer = new StripeCustomer();
         customer.setParentId(PARENT_USER_ID);
@@ -274,7 +275,28 @@ class SessionPackPaymentResourceWebMvcTest {
                 .content("{\"paymentMethodId\":\"pm_sync_test\"}"))
             .andExpect(status().isNoContent());
 
-        org.mockito.Mockito.verify(subscriptionService).syncPaymentMethodToSubscriptions(PARENT_USER_ID, "pm_sync_test");
+        org.mockito.Mockito.verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_USER_ID, "pm_sync_test");
+        org.mockito.Mockito.verify(subscriptionService, org.mockito.Mockito.never())
+            .syncPaymentMethodToSubscriptions(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never())
+            .createStripeCustomer(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void savePaymentMethod_firstCard_createsStripeCustomerThenSchedulesSync() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_first\"}"))
+            .andExpect(status().isNoContent());
+
+        org.mockito.Mockito.verify(stripeCustomerRepository).save(org.mockito.ArgumentMatchers.argThat(
+            sc -> "cus_new".equals(sc.getStripeCustomerId()) && PARENT_USER_ID.equals(sc.getParentId())));
+        org.mockito.Mockito.verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_USER_ID, "pm_first");
     }
 
     @Test

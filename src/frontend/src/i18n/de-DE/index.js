@@ -1493,7 +1493,7 @@ export default {
       savedRefreshFailed:
         'Ihre Karte wurde gespeichert, aber die Ansicht konnte nicht aktualisiert werden. Bitte laden Sie die Seite neu.',
       subscriptionNote:
-        'Eine neue Karte wird auch für Ihr Abonnement verwendet, und eine offene Zahlung wird damit erneut versucht.',
+        'Eine neue Karte wird auch für Ihr Abonnement verwendet: Innerhalb weniger Minuten versuchen wir eine offene Zahlung damit erneut oder setzen ein pausiertes Abonnement fort.',
       unavailable: 'Kartenzahlungen sind derzeit nicht verfügbar',
     },
     sessionPackTiersTitle: 'Sitzungspaket-Angebot',
@@ -2248,13 +2248,17 @@ export default {
     perMonth: '{price} / Monat',
     perYear: '{price} / Jahr',
     paymentIssue:
-      'Ihre letzte Abonnementzahlung ist fehlgeschlagen. Aktualisieren Sie Ihre Karte, dann versuchen wir die Zahlung sofort erneut.',
+      'Ihre letzte Abonnementzahlung ist fehlgeschlagen. Aktualisieren Sie Ihre Karte, dann versuchen wir die Zahlung damit erneut.',
+    paymentPaused:
+      'Ihr Testzeitraum ist abgelaufen und Ihr Abonnement ist pausiert, weil keine Karte hinterlegt war. Fügen Sie eine Karte hinzu, um es fortzusetzen.',
+    paymentRetrying:
+      'Karte gespeichert. Wir versuchen die Abonnementzahlung damit erneut; Ihr Tarif wird wiederhergestellt, sobald die Zahlung erfolgt ist. Das kann einige Minuten dauern.',
     updateCard: 'Karte aktualisieren',
     errors: {
       paymentDeclined:
         'Ihre Karte wurde abgelehnt oder erfordert eine zusätzliche Authentifizierung. Bitte aktualisieren Sie Ihre Zahlungsmethode und versuchen Sie es erneut.',
       updatePaymentMethod:
-        'Für Ihr bestehendes Abonnement ist eine Rechnung offen. Aktualisieren Sie Ihre Karte, statt ein neues Abonnement abzuschließen: Beim Speichern wird die Zahlung erneut versucht und Ihr Tarif wiederhergestellt.',
+        'Für Ihr bestehendes Abonnement ist eine Rechnung offen. Aktualisieren Sie Ihre Karte, statt ein neues Abonnement abzuschließen: Wir versuchen die Zahlung dann erneut und stellen Ihren Tarif wieder her, sobald sie erfolgt ist.',
       notActive:
         'Ihr Abonnement ist derzeit nicht aktiv. Begleichen Sie die offene Zahlung, bevor Sie Ihren Tarif ändern.',
       alreadyActive: 'Sie haben bereits ein aktives Abonnement.',

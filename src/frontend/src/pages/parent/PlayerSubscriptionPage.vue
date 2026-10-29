@@ -8,7 +8,9 @@
       </div>
 
       <template v-else>
-        <!-- fix/payment-subscription-payment-method-sync: past-due recovery -->
+        <!-- fix/payment-subscription-payment-method-sync: past-due recovery.
+             fix/payment-subscription-resume-and-async-sync: a saved card is applied to the subscription
+             asynchronously, so after saving we say the payment is being retried, not that it is paid. -->
         <q-banner
           v-if="paymentIssue"
           class="q-mb-md"
@@ -19,7 +21,13 @@
           <template #avatar>
             <q-icon name="mdi-credit-card-off" color="negative" />
           </template>
-          {{ t('subscription.paymentIssue') }}
+          <span v-if="paymentRetryPending" data-test="payment-retry-pending">{{
+            t('subscription.paymentRetrying')
+          }}</span>
+          <span v-else-if="subscription?.status === 'PAUSED'">{{
+            t('subscription.paymentPaused')
+          }}</span>
+          <span v-else>{{ t('subscription.paymentIssue') }}</span>
           <template #action>
             <q-btn
               flat
@@ -193,7 +201,7 @@
           <div class="text-h6">{{ t('payment.card.title') }}</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <PaymentMethodCard subscription-note @saved="addCardDialog = false" />
+          <PaymentMethodCard subscription-note @saved="onCardSaved" />
         </q-card-section>
       </q-card>
     </q-dialog>
@@ -233,7 +241,16 @@ const tiers = computed(() => paymentStore.playerTiers)
 // backend resolves the saved card itself (SubscriptionService.subscribePlayer).
 const hasCard = computed(() => paymentStore.savedPaymentMethod?.hasCard ?? false)
 
-const paymentIssue = computed(() => ['PAST_DUE', 'UNPAID'].includes(subscription.value?.status))
+const paymentIssue = computed(() =>
+  ['PAST_DUE', 'UNPAID', 'PAUSED'].includes(subscription.value?.status),
+)
+// The backend moves the subscription onto the new card on its outbox after the save returns, and the
+// status only changes once Stripe's webhook arrives — so the banner switches to "retrying" copy.
+const paymentRetryPending = ref(false)
+function onCardSaved() {
+  addCardDialog.value = false
+  if (paymentIssue.value) paymentRetryPending.value = true
+}
 
 const TIER_ORDER = ['ATHLETE', 'SEMI_PRO', 'PRO']
 
