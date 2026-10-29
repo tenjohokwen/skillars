@@ -38,6 +38,13 @@
                   t('booking.packs.pricePerSession', { price: formatPrice(tier.pricePerSession) })
                 }}
               </div>
+              <div
+                v-if="tier.validityDays"
+                class="text-caption text-grey"
+                data-test="pack-validity"
+              >
+                {{ t('booking.packs.validFor', { days: tier.validityDays }) }}
+              </div>
             </div>
             <q-radio
               :model-value="selected"

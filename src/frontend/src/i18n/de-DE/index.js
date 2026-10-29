@@ -549,6 +549,7 @@ export default {
       perSession: 'Pro Sitzung',
       sessionsBundle: '{count}-Sitzungen-Paket',
       pricePerSession: '{price} pro Sitzung',
+      validFor: 'Gültig {days} Tage ab Kauf',
       confirmPurchase: 'Kauf bestätigen',
       dashboardTitle: 'Ihre Sitzungspakete',
       emptyState: 'Noch keine Sitzungspakete — finde einen Trainer, um zu beginnen',

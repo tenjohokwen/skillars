@@ -2381,6 +2381,7 @@ export default {
       perSession: 'Par séance',
       sessionsBundle: 'Pack de {count} séances',
       pricePerSession: '{price} par séance',
+      validFor: "Valable {days} jours à compter de l'achat",
       confirmPurchase: "Confirmer l'achat",
       dashboardTitle: 'Vos packs de séances',
       emptyState: 'Aucun pack de séances pour le moment — trouvez un coach pour commencer',

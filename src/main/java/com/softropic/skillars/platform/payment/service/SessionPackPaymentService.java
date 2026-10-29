@@ -389,7 +389,9 @@ public class SessionPackPaymentService {
         purchase.setSessionCount(tier.getSessionCount());
         purchase.setCommissionRate(currentCommissionRate());
         purchase.setRemainingSessions(tier.getSessionCount());
-        purchase.setExpiresAt(Instant.now().plus(60, ChronoUnit.DAYS));
+        // fix/pack-expiry-size-tiers: validity by pack size (pack.expiry.days.tier1..4), not a flat 60 days.
+        purchase.setExpiresAt(Instant.now().plus(SessionPackValidity.days(configService, tier.getSessionCount()),
+            ChronoUnit.DAYS));
         purchase.setStripePaymentIntentId(paymentIntentId);
         return sessionPackPurchaseRepository.save(purchase);
     }
@@ -473,7 +475,8 @@ public class SessionPackPaymentService {
             tier.getTotalPrice(),
             tier.getPricePerSession(),
             tier.isActive(),
-            tier.getCreatedAt()
+            tier.getCreatedAt(),
+            SessionPackValidity.days(configService, tier.getSessionCount())
         );
     }
 }

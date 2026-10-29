@@ -1912,6 +1912,7 @@ export default {
       perSession: 'Per session',
       sessionsBundle: '{count}-session bundle',
       pricePerSession: '{price} per session',
+      validFor: 'Valid for {days} days from purchase',
       confirmPurchase: 'Confirm purchase',
       dashboardTitle: 'Your session packs',
       emptyState: 'No session packs yet — find a coach to get started',
