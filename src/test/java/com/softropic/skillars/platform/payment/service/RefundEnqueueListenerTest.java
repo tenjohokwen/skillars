@@ -304,6 +304,33 @@ class RefundEnqueueListenerTest {
             Instant.now(), "UTC", packId, captured, packExpired, refundAmount);
     }
 
+    @Test
+    void onBookingCancelledByParent_refundEligibleOnAnExpiredPack_refundsTheWallet_throughThePackLedger() {
+        UUID packId = UUID.randomUUID();
+        when(packRefundAllocationService.allocateSessionRefund(packId, BOOKING_ID, SESSION_PRICE))
+            .thenReturn(new BigDecimal("50.01"));
+
+        listener.onBookingCancelledByParent(new BookingCancelledByParentEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, packId, 25, true, SESSION_PRICE, "parent@test.com",
+            "coach@test.com", Instant.now(), "UTC", true, true));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(
+            eq(PARENT_ID), eq(new BigDecimal("50.01")), eq(BOOKING_ID), eq("Parent cancellation >24h — expired pack refund"));
+        verify(packRestoreOutboxSupport, never()).enqueuePackRestore(any(), any(), any());
+    }
+
+    @Test
+    void onBookingCancelledByParent_lateCancelOnAnExpiredPack_isAForfeit_nothingRefunded() {
+        UUID packId = UUID.randomUUID();
+        listener.onBookingCancelledByParent(new BookingCancelledByParentEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, packId, 3, false, SESSION_PRICE, "parent@test.com",
+            "coach@test.com", Instant.now(), "UTC", true, true));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+        verify(packRestoreOutboxSupport, never()).enqueuePackRestore(any(), any(), any());
+        verify(packRefundAllocationService, never()).allocateSessionRefund(any(), any(), any());
+    }
+
     private BookingCancelledByParentEvent parentEvent(UUID packId, boolean refundEligible) {
         return new BookingCancelledByParentEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID,

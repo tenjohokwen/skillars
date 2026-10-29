@@ -164,7 +164,10 @@ public class CoachPayoutAdjustmentService {
      *       {@link CoachPayoutOutboxSupport#enqueuePayout}, with its usual hold and freeze checks;</li>
      *   <li>CANCELLED with a net (a dispute refund cut it to nothing) — reinstated and released now, unless
      *       a safety hold or an open card dispute still freezes it;</li>
-     *   <li>CANCELLED with nothing computed (a skip reason) — replaced by a freshly computed payout;</li>
+     *   <li>CANCELLED with nothing computed (a skip reason) — replaced by a freshly computed payout. A card /
+     *       credit row is always recomputable (from {@code booking_payments}); a pack row only when its pack
+     *       share was never allocated ({@link CoachPayoutOutboxSupport#isRecomputable}) — one that settled at
+     *       0.00 stays as it is, so the session is never settled twice on the pack ledger;</li>
      *   <li>anything else — left as it is (only its dispute freeze is lifted).</li>
      * </ul>
      *
@@ -175,6 +178,17 @@ public class CoachPayoutAdjustmentService {
         CoachPayout row = coachPayoutRepository.findByIdForUpdate(bookingId).orElse(null);
         if (row != null && CoachPayoutStatus.CANCELLED.equals(row.getStatus())
                 && (row.getNetAmount() == null || row.getNetAmount().signum() <= 0)) {
+            if (!CoachPayoutOutboxSupport.isRecomputable(row)) {
+                // fix/payment-pack-clawback-and-expired-cancel: a pack session whose share was allocated
+                // (NOTHING_CHARGED: it settled at 0.00) is already settled on the pack ledger. Deleting the row
+                // and enqueuing again would allocate the session a second time and short the pack's last
+                // payout. There is nothing more to pay for it.
+                row.setDisputeFrozen(false);
+                coachPayoutRepository.save(row);
+                log.info("[COACH_PAYOUT_UPHOLD] booking={} — pack session already settled at {} ({}), nothing to "
+                    + "reinstate", bookingId, row.getGrossAmount(), row.getLastError());
+                return BigDecimal.ZERO;
+            }
             coachPayoutRepository.delete(row);
             coachPayoutRepository.flush();
             row = null;

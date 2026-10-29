@@ -1863,6 +1863,52 @@ class BookingServiceTest {
         assertThat(capturedParentCancellation().isForfeit()).isFalse();
     }
 
+    // ---- fix/payment-pack-clawback-and-expired-cancel: >24h parent cancel on an expired pack ----
+
+    @Test
+    void cancelBookingAsParent_refundEligibleOnAnExpiredPack_isAWalletRefund_notARestore() {
+        BookingCancelledByParentEvent event = cancelPackBookingAsParent(Instant.now().minus(1, java.time.temporal.ChronoUnit.DAYS));
+        assertThat(event.isRefundEligible()).isTrue();
+        assertThat(event.isPackExpiredAtCancellation()).isTrue();
+        assertThat(event.isWalletRefund()).isTrue();
+        assertThat(event.isPackRestore()).isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_refundEligibleOnAValidPack_restoresTheSession() {
+        BookingCancelledByParentEvent event = cancelPackBookingAsParent(Instant.now().plus(10, java.time.temporal.ChronoUnit.DAYS));
+        assertThat(event.isPackExpiredAtCancellation()).isFalse();
+        assertThat(event.isPackRestore()).isTrue();
+        assertThat(event.isWalletRefund()).isFalse();
+    }
+
+    private BookingCancelledByParentEvent cancelPackBookingAsParent(Instant packExpiresAt) {
+        UUID packId = UUID.randomUUID();
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchase pack =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
+        pack.setPurchaseId(packId);
+        pack.setAmountCharged(new BigDecimal("100.00"));
+        pack.setSessionCount(2);
+        pack.setPricePerSession(new BigDecimal("50.00"));
+        pack.setExpiresAt(packExpiresAt);
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "CONFIRMED");
+        Instant start = Instant.now().plus(5, java.time.temporal.ChronoUnit.DAYS);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plus(1, java.time.temporal.ChronoUnit.HOURS));
+        booking.setSessionPackPurchaseId(packId);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        return capturedParentCancellation();
+    }
+
     @Test
     void cancelBookingAsParent_pausedSession_isACapturedForfeit() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAUSED");
