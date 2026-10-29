@@ -125,6 +125,23 @@ public class Booking {
     private Instant liveStartedAt;
 
     /**
+     * fix/booking-completion-integrity (V209): set when UnresolvedSessionSweeperService ended a live
+     * session (IN_PROGRESS / PAUSED) the coach left open past its scheduled end. The coach's wrap-up of
+     * such a session is then a QUICK one (parent confirm / dispute window), not a LIVE one that completes
+     * and pays at once. NULL = the coach ended it (or it was never live).
+     */
+    @Column(name = "auto_ended_at")
+    private Instant autoEndedAt;
+
+    /**
+     * fix/booking-completion-integrity (V209): set when UnresolvedSessionSweeperService raised the
+     * SESSION_NEVER_STARTED admin alert for this UPCOMING booking whose session ended without being
+     * started — once per booking, so a resolved alert is not raised again every sweep.
+     */
+    @Column(name = "unresolved_alerted_at")
+    private Instant unresolvedAlertedAt;
+
+    /**
      * fix/booking-integrity (B2, V178): when the booking entered its CURRENT status. Unlike
      * {@code updatedAt}, later writes that do not change the status (a recap edit, a reminder stamp,
      * GDPR note anonymisation, a plan note) leave it alone — so for a terminal status it is the moment

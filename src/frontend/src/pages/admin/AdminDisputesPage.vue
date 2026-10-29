@@ -391,6 +391,9 @@ async function submitResolve() {
       $q.notify({ message: t('admin.disputes.noRefundToReverse'), type: 'negative' })
     } else if (message === 'disputes.alreadyRefunded') {
       $q.notify({ message: t('admin.disputes.alreadyRefunded'), type: 'negative' })
+    } else if (message === 'disputes.bookingNotSettled') {
+      // fix/booking-completion-integrity: a dispute on a live session waits until the session completes.
+      $q.notify({ message: t('admin.disputes.bookingNotSettled'), type: 'negative' })
     } else {
       $q.notify({ message: t('admin.disputes.resolveFailed'), type: 'negative' })
     }

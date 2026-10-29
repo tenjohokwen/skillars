@@ -206,7 +206,7 @@ public class BookingService {
      * Locked, refreshed read of one booking row. The refresh matters when the row is already managed
      * in this persistence context: the JPQL locked read would otherwise hand back the stale instance.
      */
-    private Booking lockBookingForUpdate(UUID bookingId) {
+    Booking lockBookingForUpdate(UUID bookingId) {
         Booking booking = lockRetryer.withBoundedRetry("BookingService.lockBookingForUpdate",
             () -> bookingRepository.findByIdForUpdate(bookingId)
                 .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "booking")));
@@ -650,6 +650,7 @@ public class BookingService {
         // transition rather than relying on the post-transition resolveSessionPrice below to roll it back.
         // REQUESTED only, so a booking in any other status still reports its state-transition error.
         if ("REQUESTED".equals(booking.getStatus())) {
+            requireRequestStartNotPassed(booking);
             resolveSessionPrice(booking);
         }
 
@@ -693,9 +694,34 @@ public class BookingService {
      */
     @Transactional
     public void acceptAndInitiatePayment(UUID bookingId, TransitionContext context) {
-        requireConsentingAcceptor(lockBookingForUpdate(bookingId), context);
+        Booking locked = lockBookingForUpdate(bookingId);
+        requireConsentingAcceptor(locked, context);
+        // fix/booking-completion-integrity: the authoritative past-start guard for every accept path (coach
+        // accept, batch accept, parent confirm), under the booking row lock. The callers' earlier unlocked
+        // calls to the same helper only fail fast before they take the coach lock. REQUESTED only, so any other
+        // status still reports its own state-transition error.
+        if (BookingStatus.REQUESTED.name().equals(locked.getStatus())) {
+            requireRequestStartNotPassed(locked);
+        }
         transitionInternal(bookingId, BookingEvent.ACCEPT, context, false);
         transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, context, true);
+    }
+
+    /**
+     * fix/booking-completion-integrity: a request whose start time has passed is refused
+     * ({@code REQUEST_EXPIRED}) by every accept path ({@link #acceptBooking},
+     * {@code BookingBatchService.acceptOneBooking}, {@link #confirmProposedBooking}) and, authoritatively, by
+     * {@link #acceptAndInitiatePayment} under the booking lock. Accepting it charged the parent for a session that
+     * was already over, which the coach could then report as a player no-show or quick-complete; the
+     * expiry scheduler declines such requests as well. Package-private for the batch path.
+     */
+    void requireRequestStartNotPassed(Booking booking) {
+        if (!booking.getRequestedStartTime().isAfter(Instant.now(ClockProvider.getClock()))) {
+            throw new OperationNotAllowedException(
+                "This request can no longer be accepted — its start time has passed",
+                Map.of("booking id", booking.getId(), "requested start time", booking.getRequestedStartTime()),
+                BookingError.REQUEST_EXPIRED);
+        }
     }
 
     /**
@@ -803,10 +829,9 @@ public class BookingService {
                 Map.of("submitted booking id", bookingId), BookingError.REQUEST_NOT_PENDING);
         }
         // Confirming a session whose start has passed would charge for a session that can no longer happen.
-        if (!booking.getRequestedStartTime().isAfter(Instant.now(ClockProvider.getClock()))) {
-            throw new OperationNotAllowedException("The proposed session time has already passed",
-                Map.of("requested start time", booking.getRequestedStartTime()), BookingError.START_TIME_IN_PAST);
-        }
+        // fix/booking-completion-integrity: the same check (and code, REQUEST_EXPIRED) as the coach accept
+        // paths; fail fast here, re-checked under the booking lock in acceptAndInitiatePayment.
+        requireRequestStartNotPassed(booking);
 
         CoachProfile lockedCoach = lockRetryer.withBoundedRetry("BookingService.confirmProposedBooking", () -> {
             CoachProfile c = coachProfileRepository.findByIdForUpdate(booking.getCoachId())
@@ -1087,13 +1112,19 @@ public class BookingService {
             : sessionCompletionDataRepository.findByBookingIdIn(bookingIds).stream()
                 .collect(Collectors.toMap(SessionCompletionData::getBookingId, s -> s, (a, b2) -> a));
 
+        // fix/booking-completion-integrity: one batched player-name lookup, like the sibling list methods —
+        // this used to issue one findById per booking row.
+        Map<Long, String> playerNames = bookings.isEmpty()
+            ? Map.of()
+            : resolvePlayerNames(bookings.stream().map(Booking::getPlayerId).distinct().toList());
+
         return bookings.stream()
             .map(b -> {
                 SessionCompletionData scd = completionByBooking.get(b.getId());
                 return new ScheduleBookingItem(
                     b.getId(),
                     b.getPlayerId(),
-                    resolvePlayerName(b.getPlayerId()),
+                    playerNames.getOrDefault(b.getPlayerId(), "Unknown Player"),
                     b.getRequestedStartTime(),
                     b.getRequestedEndTime(),
                     b.getStatus(),
@@ -1354,6 +1385,16 @@ public class BookingService {
         // This CONFIRMED/UPCOMING condition used to also be duplicated in a dead refund-tier field's
         // populating method, deleted by Deferred-33 AC7 — not adding a third refund rule here.
         BookingStatus statusBeforeCancel = readStatusOrThrow(booking);
+        // fix/booking-completion-integrity: a started session (IN_PROGRESS / PAUSED) is not cancellable by the
+        // parent. Cancelling a PAUSED one used to be a forfeit that paid the coach in full — so a coach who
+        // pressed Start then Pause and never coached collected the session. The parent disputes instead
+        // (DisputeService accepts IN_PROGRESS / PAUSED), and UnresolvedSessionSweeperService ends a live
+        // session left open past its end, which opens the parent's confirm / dispute window.
+        if (statusBeforeCancel == BookingStatus.IN_PROGRESS || statusBeforeCancel == BookingStatus.PAUSED) {
+            throw new OperationNotAllowedException(
+                "A session that has started cannot be cancelled — raise a dispute instead",
+                Map.of("booking id", bookingId, "status", statusBeforeCancel), BookingError.SESSION_IN_PROGRESS);
+        }
 
         // UAT.3 AC2. A CAPTURE_PENDING row means a Stripe charge for this booking is in flight, or
         // has completed without its record committing. Cancelling on top of it is what produced
@@ -1369,9 +1410,9 @@ public class BookingService {
 
         boolean paymentWasCaptured = statusBeforeCancel == BookingStatus.CONFIRMED
             || statusBeforeCancel == BookingStatus.UPCOMING;
-        // feat/payment-forfeit-payouts-and-clawback: a PAUSED session was captured too (it was started), but is
-        // never refund-eligible here — cancelling it is a forfeit that pays the coach, like a <24h cancel.
-        boolean moneyTaken = paymentWasCaptured || statusBeforeCancel == BookingStatus.PAUSED;
+        // fix/booking-completion-integrity: PAUSED no longer reaches here (refused above), so money was taken
+        // exactly when payment was captured.
+        boolean moneyTaken = paymentWasCaptured;
         // Deferred-64 AC4: a parent cancellation arriving after the booking's own start time has
         // already passed is refund-eligible too — refund-only, no coach reliability strike, no
         // BookingStateMachine/event-type change. Stays entirely on the ordinary CANCEL_PARENT path.
@@ -1500,11 +1541,15 @@ public class BookingService {
         // for this endpoint") no longer holds: recordNoShowPlayer's own sibling, recordNoShowCoach
         // below, already has this exact guard, and leaving the player-facing path ungated made a
         // full-fee, no-refund, no-strike-counterweight forfeiture reportable before a session ever
-        // started. Mirrors recordNoShowCoach's own check character-for-character.
-        if (Instant.now().isBefore(booking.getRequestedStartTime())) {
+        // started.
+        // fix/booking-completion-integrity (owner decision 2026-10-29): and not at start+0s either — a family a
+        // few minutes late is not a no-show, and the report is a forfeit that pays the coach. Reportable from
+        // start + booking.playerNoShow.graceMinutes (default 15); the parent's coach no-show stays start + 30.
+        Instant reportableAt = playerNoShowReportableAt(booking.getRequestedStartTime());
+        if (Instant.now(ClockProvider.getClock()).isBefore(reportableAt)) {
             throw new OperationNotAllowedException(
-                "Cannot report a no-show before the booking's scheduled start time",
-                Map.of("requested start time", booking.getRequestedStartTime()), BookingError.NO_SHOW_TOO_EARLY);
+                "Cannot report a player no-show before the grace period after the scheduled start has passed",
+                Map.of("reportable at", reportableAt), BookingError.NO_SHOW_TOO_EARLY);
         }
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
@@ -1572,6 +1617,15 @@ public class BookingService {
         return requestedStartTime.plus(lateCancelGrace());
     }
 
+    /**
+     * fix/booking-completion-integrity: the earliest instant a coach may report a player no-show —
+     * {@code start + booking.playerNoShow.graceMinutes}.
+     */
+    Instant playerNoShowReportableAt(Instant requestedStartTime) {
+        return requestedStartTime.plus(
+            Duration.ofMinutes(configService.getBoundedLong(ConfigBounds.BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES)));
+    }
+
     private Duration lateCancelGrace() {
         return Duration.ofMinutes(configService.getBoundedLong(ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES));
     }
@@ -1603,7 +1657,7 @@ public class BookingService {
      * the coach's misconfiguration; the WARN keeps the bad row observable. Mirrors the guard
      * {@code AvailabilityService.getAvailabilityCalendar} applies to this same value.
      */
-    private String resolveCoachTimezone(CoachProfile coach) {
+    String resolveCoachTimezone(CoachProfile coach) {
         String timezone = coach.getCanonicalTimezone();
         if (timezone == null || timezone.isBlank()) {
             log.warn("Coach coachId={} has no canonical timezone — defaulting booking to UTC", coach.getId());

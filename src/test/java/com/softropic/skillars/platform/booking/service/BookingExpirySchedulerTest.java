@@ -81,7 +81,7 @@ class BookingExpirySchedulerTest {
     @Test
     void resolveEmail_unknownParent_publishesBlankEmailInsteadOfThrowing() {
         Booking booking = buildBooking();
-        when(bookingRepository.findRequestedBookingsOlderThan(any())).thenReturn(List.of(booking));
+        when(bookingRepository.findExpiredRequestedBookings(any(), any(), any())).thenReturn(List.of(booking));
         when(coachProfileRepository.findById(any())).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
 
@@ -98,7 +98,7 @@ class BookingExpirySchedulerTest {
         Booking booking = buildBooking();
         User parent = new User();
         parent.setEmail("parent@example.com");
-        when(bookingRepository.findRequestedBookingsOlderThan(any())).thenReturn(List.of(booking));
+        when(bookingRepository.findExpiredRequestedBookings(any(), any(), any())).thenReturn(List.of(booking));
         when(coachProfileRepository.findById(any())).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parent));
 
@@ -124,7 +124,7 @@ class BookingExpirySchedulerTest {
     void expireStaleRequests_secondBookingRacesAndThrows_firstBookingsExpiryStillCommits() {
         Booking first = buildBooking();
         Booking second = buildBooking();
-        when(bookingRepository.findRequestedBookingsOlderThan(any())).thenReturn(List.of(first, second));
+        when(bookingRepository.findExpiredRequestedBookings(any(), any(), any())).thenReturn(List.of(first, second));
         when(coachProfileRepository.findById(any())).thenReturn(Optional.empty());
         when(userRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
         // First booking transitions normally. Second booking raced by a concurrent coach-accept/
@@ -143,5 +143,25 @@ class BookingExpirySchedulerTest {
         ArgumentCaptor<BookingExpiredEvent> captor = ArgumentCaptor.forClass(BookingExpiredEvent.class);
         verify(eventPublisher, times(1)).publishEvent(captor.capture());
         assertThat(captor.getValue().getBookingId()).isEqualTo(first.getId());
+    }
+    /**
+     * fix/booking-completion-integrity: the query is asked for requests past their start time too (now), and
+     * for a bounded page — 48h before now for the createdAt threshold.
+     */
+    @Test
+    void expireStaleRequests_queriesStartTimePassedRequestsToo_inABoundedPage() {
+        when(bookingRepository.findExpiredRequestedBookings(any(), any(), any())).thenReturn(List.of());
+        Instant before = Instant.now();
+
+        scheduler.expireStaleRequests();
+
+        ArgumentCaptor<Instant> threshold = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<Instant> now = ArgumentCaptor.forClass(Instant.class);
+        ArgumentCaptor<org.springframework.data.domain.Pageable> page =
+            ArgumentCaptor.forClass(org.springframework.data.domain.Pageable.class);
+        verify(bookingRepository).findExpiredRequestedBookings(threshold.capture(), now.capture(), page.capture());
+        assertThat(now.getValue()).isAfterOrEqualTo(before);
+        assertThat(threshold.getValue()).isEqualTo(now.getValue().minus(java.time.Duration.ofHours(48)));
+        assertThat(page.getValue().getPageSize()).isEqualTo(BookingExpiryScheduler.EXPIRY_BATCH_SIZE);
     }
 }

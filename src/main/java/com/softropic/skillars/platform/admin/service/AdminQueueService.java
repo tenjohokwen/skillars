@@ -240,6 +240,10 @@ public class AdminQueueService {
             case BOOKING_ACTION_REQUIRED -> "Booking " + referenceId + " needs an operator"
                 + (reason != null ? " (" + reason + ")" : "")
                 + " — finish it by hand (cancel / refund to the parent's wallet), then mark it handled";
+            // fix/booking-completion-integrity: referenceId is the booking id.
+            case SESSION_NEVER_STARTED -> "Booking " + referenceId + " ended without the session being started"
+                + " — payment captured, nothing paid out or refunded. The parent can report a coach no-show;"
+                + " otherwise contact the coach (quick-complete) or the parent: " + parentContact(referenceId);
             default -> "";
         };
     }

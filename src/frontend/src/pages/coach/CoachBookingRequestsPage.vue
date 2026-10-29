@@ -196,6 +196,9 @@ async function handleAccept(id) {
       // fix/booking-price-and-excused-race: a request with no agreed price is never charged at the
       // coach's current price — the coach declines it and the family re-requests.
       $q.notify({ type: 'negative', message: t('booking.errors.priceNotLocked') })
+    } else if (errorKey === 'booking.requestExpired') {
+      // fix/booking-completion-integrity: a request whose start time has passed cannot be accepted.
+      $q.notify({ type: 'negative', message: t('booking.errors.requestExpired') })
     } else {
       $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
     }
@@ -247,6 +250,7 @@ function failureReasonFor(batchId, bookingId) {
   if (result.errorKey === 'booking.slotUnavailable') return t('booking.errors.slotUnavailable')
   if (result.errorKey === 'booking.coachUnavailable') return t('booking.errors.coachUnavailable')
   if (result.errorKey === 'booking.priceNotLocked') return t('booking.errors.priceNotLocked')
+  if (result.errorKey === 'booking.requestExpired') return t('booking.errors.requestExpired')
   return t('booking.batch.itemNotAccepted')
 }
 

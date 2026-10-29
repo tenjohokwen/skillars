@@ -448,6 +448,11 @@ public class RescheduleService {
         }
         booking.setRequestedStartTime(lockedReq.getProposedStartTime());
         booking.setRequestedEndTime(lockedReq.getProposedEndTime());
+        // fix/booking-completion-integrity: the reminders already sent were for the OLD time. Clearing the
+        // stamps lets BookingReminderScheduler send the new time's reminders: the 2h one for an UPCOMING
+        // booking (findUpcomingWithin2hWindow filters secondary IS NULL), the 24h one for a CONFIRMED one.
+        booking.setPrimaryReminderSentAt(null);
+        booking.setSecondaryReminderSentAt(null);
         try {
             bookingRepository.save(booking);
         } catch (OptimisticLockingFailureException e) {

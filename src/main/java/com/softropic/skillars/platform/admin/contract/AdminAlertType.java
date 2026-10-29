@@ -30,9 +30,14 @@ public enum AdminAlertType {
     // fix/payment-wallet-dispute-integrity (V208): a booking an automatic path could not finish (referenceId =
     // the booking id; reason says which: an admin-cancel refund of unknown amount, or a booking a coach
     // suspension could not cancel). Reconciled by hand, then marked handled — the payment-integrity bucket.
-    BOOKING_ACTION_REQUIRED;
+    BOOKING_ACTION_REQUIRED,
+    // fix/booking-completion-integrity (V209): an UPCOMING booking whose session ended without being started —
+    // captured money with nothing settled (reference_type BOOKING). Raised once per booking by
+    // UnresolvedSessionSweeperService; in the payment-integrity bucket (no workflow of its own).
+    SESSION_NEVER_STARTED;
 
     /** fix/payment-payouts-disputes-webhooks: the payment-integrity types (one queue bucket, one resolve action). */
     public static final java.util.Set<AdminAlertType> PAYMENT_INTEGRITY =
-        java.util.EnumSet.of(CHARGEBACK, EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED, BOOKING_ACTION_REQUIRED);
+        java.util.EnumSet.of(CHARGEBACK, EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED, BOOKING_ACTION_REQUIRED,
+            SESSION_NEVER_STARTED);
 }

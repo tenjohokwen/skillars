@@ -201,7 +201,20 @@ public enum BookingError implements ErrorCode {
      * fix/booking-request-consent (M2): the requested start is further ahead than
      * {@code booking.request.maxHorizonDays}. Also bounds how far ahead a price can be locked.
      */
-    BEYOND_BOOKING_HORIZON;
+    BEYOND_BOOKING_HORIZON,
+    /**
+     * fix/booking-completion-integrity: a REQUESTED booking whose start time has already passed can no
+     * longer be accepted or confirmed (coach accept, batch accept, parent confirm — one shared check in
+     * {@code BookingService.acceptAndInitiatePayment}). Accepting it used to charge the parent for a session
+     * that was already over. The expiry scheduler declines such requests too.
+     */
+    REQUEST_EXPIRED,
+    /**
+     * fix/booking-completion-integrity: a parent cannot cancel a session the coach has started
+     * (IN_PROGRESS or PAUSED). Cancelling a PAUSED session used to be a forfeit that paid the coach in
+     * full; a grievance about a live session goes through a dispute instead.
+     */
+    SESSION_IN_PROGRESS;
 
     @Override
     public String getErrorCode() {
@@ -241,6 +254,8 @@ public enum BookingError implements ErrorCode {
             case REQUEST_NOT_PENDING       -> "booking.requestNotPending";
             case TOO_MANY_PENDING_REQUESTS -> "booking.tooManyPendingRequests";
             case BEYOND_BOOKING_HORIZON    -> "booking.beyondBookingHorizon";
+            case REQUEST_EXPIRED           -> "booking.requestExpired";
+            case SESSION_IN_PROGRESS       -> "booking.sessionInProgress";
         };
     }
 

@@ -145,6 +145,27 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (30); tiny → parents cancel at start for a full refund", 30L);
 
     /**
+     * fix/booking-completion-integrity: {@code BookingService.recordNoShowPlayer} — how long after a
+     * booking's start the coach must wait before reporting a player no-show (a forfeit that pays the
+     * coach). Before this, start+0s was enough, so a family a minute late lost the session before they
+     * could do anything. Owner decision 2026-10-29: 15. The floor is 5, not 0: 0 reopens exactly that.
+     */
+    public static final BoundedKey BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES =
+        new BoundedKey("booking.playerNoShow.graceMinutes", 5L, 1440L, false,
+            "out-of-range falls back to the coded default (15); tiny → coaches forfeit late families at start", 15L);
+
+    /**
+     * fix/booking-completion-integrity: {@code UnresolvedSessionSweeperService} — how long after a
+     * booking's scheduled end a session still IN_PROGRESS / PAUSED is ended automatically (moved to
+     * COMPLETED_PENDING_CONFIRMATION, so the parent's confirm / dispute window applies), and a session
+     * still UPCOMING (never started) raises a SESSION_NEVER_STARTED admin alert. The floor keeps a
+     * session that merely overran from being cut off.
+     */
+    public static final BoundedKey BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES =
+        new BoundedKey("booking.unresolvedSession.graceMinutes", 30L, 10080L, false,
+            "out-of-range falls back to the coded default (120); tiny → overrunning live sessions are cut off", 120L);
+
+    /**
      * fix/booking-cancel-policy-loopholes: {@code CancellationRefundService.onBookingCancelledByCoach}
      * — excused (self-declared) coach cancellations allowed per rolling window before an excused one
      * also issues a {@code COACH_CANCELLATION_EXCUSED_LIMIT} strike. 0 = every excused cancel strikes.
@@ -523,7 +544,9 @@ public final class ConfigBounds {
         COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW.key(),
         COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.key(),
         BOOKING_REQUEST_MAX_PENDING_PER_COACH.key(),
-        BOOKING_REQUEST_MAX_HORIZON_DAYS.key());
+        BOOKING_REQUEST_MAX_HORIZON_DAYS.key(),
+        BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES.key(),
+        BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -568,7 +591,9 @@ public final class ConfigBounds {
             COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW,
             COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS,
             BOOKING_REQUEST_MAX_PENDING_PER_COACH,
-            BOOKING_REQUEST_MAX_HORIZON_DAYS));
+            BOOKING_REQUEST_MAX_HORIZON_DAYS,
+            BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES,
+            BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

@@ -45,7 +45,6 @@ import com.softropic.skillars.platform.session.service.DrillUsagePolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -161,8 +160,14 @@ public class BookingCompletionService {
     @Transactional
     public void submitWrapUp(UUID bookingId, Long coachUserId, WrapUpRequest req) {
         CoachProfile coach = resolveCoach(coachUserId);
-        Booking booking = bookingService.getBookingOrThrow(bookingId);
-        verifyCoachOwnership(booking, coach);
+        Booking unlocked = bookingService.getBookingOrThrow(bookingId);
+        verifyCoachOwnership(unlocked, coach);
+        // fix/booking-completion-integrity (payouts L4): lock the booking row before anything is read, so two
+        // concurrent submits serialise — the second then sees the first one's completion row (or its status
+        // change) below and is a no-op. The old catch of DataIntegrityViolationException around save() could
+        // never fire: the row's id is generated in the VM, so the INSERT only flushed at commit. Locked after
+        // the ownership check, so a caller who does not own the booking cannot pin its row.
+        Booking booking = bookingService.lockBookingForUpdate(bookingId);
 
         // skillars-deferred-153 AC1 (code review, 2026-10-17): distinguish "the stuck-completion
         // sweeper already auto-completed this booking" from a generic status mismatch. This is the one
@@ -181,8 +186,8 @@ public class BookingCompletionService {
         // recapEditability verdict it applies. A disputed, erased or out-of-window booking gets that
         // verdict's own reason instead, never a "you can still save it" redirect into a read-only dialog.
         // The message names no cause: "automatically" would be false for an admin force-complete.
+        Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
         if (BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED) {
-            Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
             if (existing.isPresent() && isSweeperPlaceholder(existing.get())) {
                 Editability verdict = recapEditability(booking, coach, Instant.now(ClockProvider.getClock()));
                 if (!verdict.editable()) {
@@ -193,7 +198,26 @@ public class BookingCompletionService {
                     BookingError.RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE);
             }
         }
+        if (existing.isPresent()
+                && BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED_PENDING_CONFIRMATION) {
+            // Idempotency guard (see the lock above): a previous QUICK submit already saved this booking's
+            // wrap-up and is waiting on the parent. (A duplicate of a LIVE submit finds the booking COMPLETED
+            // and gets verifyStatus's mismatch below, as before.)
+            log.warn("Session completion data already exists for booking {} — ignoring duplicate submitWrapUp", bookingId);
+            return;
+        }
         verifyStatus(booking, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
+        // fix/booking-completion-integrity (H1): the mode is the server's, never the client's. LIVE (complete and
+        // release the payout now) only when the coach actually ran the session — pressed Start
+        // (liveStartedAt) and ended it themselves. A quick-completed session (never started), or one
+        // UnresolvedSessionSweeperService ended (autoEndedAt), is QUICK: it stays pending until the parent
+        // confirms or the quick-complete timeout passes. A coach used to quick-complete and then submit
+        // mode=LIVE, completing and getting paid with no parent confirmation window at all.
+        String mode = booking.getLiveStartedAt() != null && booking.getAutoEndedAt() == null ? "LIVE" : "QUICK";
+        if (!mode.equals(req.mode())) {
+            log.warn("submitWrapUp for booking {}: client sent mode={}, server derived {} — using {}",
+                bookingId, req.mode(), mode, mode);
+        }
         List<UUID> homeworkDrillIds = validateHomeworkDrills(req.homeworkDrillIds(), coach);
 
         SessionCompletionData scd = new SessionCompletionData();
@@ -204,7 +228,7 @@ public class BookingCompletionService {
         scd.setEffortRating(req.effortRating());
         scd.setFocusRating(req.focusRating());
         scd.setTechniqueRating(req.techniqueRating());
-        scd.setCompletionMode(req.mode());
+        scd.setCompletionMode(mode);
         // skillars-deferred-163 AC2.3: sanitised on every write path (updateRecap already shares this
         // helper — see BookingService.setPlayerRequest/setCoachPlanNote for the same call shape).
         scd.setWhatWeDid(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.recapWhatWeDid(), 500));
@@ -218,21 +242,15 @@ public class BookingCompletionService {
                 log.warn("Failed to serialize homeworkDrillIds for booking {}", bookingId, e);
             }
         }
-        if (!"LIVE".equals(req.mode())) {
+        if (!"LIVE".equals(mode)) {
             // skillars-deferred-163 AC2.4: QUICK's session plan stays editable until the delayed
             // BookingCompletedEvent (parent confirm or QuickCompleteTimeoutService's timeout)
             // eventually fires, so snapshot the plan's blocks now, while they are still trustworthy.
             scd.setPlanBlocksSnapshot(capturePlanBlocksSnapshot(bookingId));
         }
-        try {
-            completionDataRepository.save(scd);
-        } catch (DataIntegrityViolationException e) {
-            // Idempotency guard: a previous request already saved completion data for this booking
-            log.warn("Session completion data already exists for booking {} — ignoring duplicate submitWrapUp", bookingId);
-            return;
-        }
+        completionDataRepository.save(scd);
 
-        if ("LIVE".equals(req.mode())) {
+        if ("LIVE".equals(mode)) {
             try {
                 bookingService.transition(bookingId, BookingEvent.QUICK_COMPLETE, new TransitionContext(ActorRole.COACH, coachUserId));
             } catch (OptimisticLockingFailureException e) {

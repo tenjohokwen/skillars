@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.booking.service;
 
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingEvent;
 import com.softropic.skillars.platform.booking.contract.BookingExpiredEvent;
@@ -13,6 +14,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -52,6 +54,9 @@ public class BookingExpiryScheduler {
 
     private static final long MAX_WINDOW_HOURS = 24L * 365; // 1 year — guards against Duration.ofHours overflow
 
+    /** fix/booking-completion-integrity: bounded page per tick, like StuckCompletionSweeperService. */
+    static final int EXPIRY_BATCH_SIZE = 200;
+
     private final BookingRepository bookingRepository;
     private final BookingService bookingService;
     private final ApplicationEventPublisher eventPublisher;
@@ -65,9 +70,13 @@ public class BookingExpiryScheduler {
                    lockAtMostFor = "PT15M", lockAtLeastFor = "PT2M")
     public void expireStaleRequests() {
         long expiryHours = configService.getBoundedLong("booking.request_expiry_hours", 48L, 1L, MAX_WINDOW_HOURS);
-        Instant threshold = Instant.now().minus(Duration.ofHours(expiryHours));
+        Instant now = Instant.now(ClockProvider.getClock());
+        Instant threshold = now.minus(Duration.ofHours(expiryHours));
+        // fix/booking-completion-integrity: also requests whose start time has passed (they can no longer be
+        // accepted), and a bounded page per tick — the backlog drains across ticks, since every expired row
+        // leaves the REQUESTED result set.
         List<Booking> stale = transactionTemplate.execute(status ->
-            bookingRepository.findRequestedBookingsOlderThan(threshold));
+            bookingRepository.findExpiredRequestedBookings(threshold, now, PageRequest.of(0, EXPIRY_BATCH_SIZE)));
         if (stale == null) {
             stale = List.of();
         }

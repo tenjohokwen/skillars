@@ -677,6 +677,8 @@ export default {
         'Dieser Coach hat noch keinen Preis pro Einheit festgelegt, daher sind Buchungen per Karte oder Guthaben nicht möglich. Nutzen Sie ein Einheitenpaket oder versuchen Sie es später erneut.',
       priceNotLocked:
         'Für diese Anfrage wurde kein Preis vereinbart. Lehnen Sie sie ab und bitten Sie die Familie um eine neue Anfrage.',
+      requestExpired:
+        'Der Beginn dieser Anfrage ist bereits verstrichen, daher kann sie nicht mehr angenommen werden.',
       slotUnavailable: 'Dieses Zeitfenster ist nicht mehr verfügbar.',
       startTimeInPast:
         'Dieser Zeitpunkt liegt bereits in der Vergangenheit. Bitte wählen Sie einen späteren Termin.',
@@ -723,7 +725,8 @@ export default {
       overlappingSlots: 'Zwei oder mehr Anfragen in dieser Sammelanfrage überschneiden sich.',
       sessionNotYetStarted:
         'Diese Einheit kann nicht vor ihrem geplanten Beginn gestartet oder abgeschlossen werden.',
-      noShowTooEarly: 'Ein Nichterscheinen kann nicht vor Beginn der Einheit gemeldet werden.',
+      noShowTooEarly:
+        'Ein Nichterscheinen des Spielers kann erst nach Ablauf der Karenzzeit nach dem geplanten Beginn gemeldet werden.',
       coachNoShowTooEarly:
         'Ein Nichterscheinen des Coaches kann erst nach Ablauf der Karenzzeit nach dem geplanten Beginn gemeldet werden.',
       recapStillEditableAfterForceComplete:
@@ -1678,6 +1681,8 @@ export default {
         'Für diese Buchung gibt es keine Erstattung an die Eltern, die zurückgebucht werden könnte.',
       alreadyRefunded:
         'Diese Buchung wurde bereits vollständig erstattet. Wählen Sie eine andere Lösung, z. B. keine Maßnahme.',
+      bookingNotSettled:
+        'Diese Einheit ist noch nicht abgeschlossen. Lösen Sie den Streitfall, sobald sie abgeschlossen ist (oder weisen Sie ihn ab).',
       upholdCoachHelp:
         'Verwenden, wenn die Sitzung tatsächlich stattgefunden hat oder die Erstattung nicht geschuldet war. Die Erstattung wird vom Guthaben der Eltern zurückgebucht (nie unter null) bzw. die zurückgegebene Paket-Sitzung erneut abgezogen, und der Coach erhält seinen vollen Anteil. Nicht einziehbare Beträge trägt Skillars.',
       recoveredAmountLabel: 'Von den Eltern zurückgebucht',
@@ -1745,6 +1750,7 @@ export default {
         PAYOUT_HELD: 'Trainer-Auszahlung angehalten',
         PAYOUT_REVERSAL_FAILED: 'Rückbuchung der Trainer-Auszahlung fehlgeschlagen',
         BOOKING_ACTION_REQUIRED: 'Buchung erfordert manuelle Bearbeitung',
+        SESSION_NEVER_STARTED: 'Einheit beendet, ohne gestartet worden zu sein',
       },
     },
     reviewModeration: {

@@ -390,6 +390,9 @@ class RescheduleServiceTest {
     @Test
     void acceptReschedule_coachOwnsBooking_updatesTimesAndStatus() {
         Instant confirmedStart = confirmedBooking.getRequestedStartTime();
+        // fix/booking-completion-integrity: reminders sent for the old time are cleared below.
+        confirmedBooking.setPrimaryReminderSentAt(Instant.now().minus(1, ChronoUnit.HOURS));
+        confirmedBooking.setSecondaryReminderSentAt(Instant.now().minus(1, ChronoUnit.HOURS));
         when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
 
@@ -423,6 +426,8 @@ class RescheduleServiceTest {
                 "proposed end time", proposedEnd)));
         assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(proposedStart);
         assertThat(confirmedBooking.getRequestedEndTime()).isEqualTo(proposedEnd);
+        assertThat(confirmedBooking.getPrimaryReminderSentAt()).isNull();
+        assertThat(confirmedBooking.getSecondaryReminderSentAt()).isNull();
         // fix/booking-cancel-policy-loopholes: the first confirmed start is kept for the refund window.
         assertThat(confirmedBooking.getOriginalStartTime()).isEqualTo(confirmedStart);
         assertThat(pending.getStatus()).isEqualTo("ACCEPTED");

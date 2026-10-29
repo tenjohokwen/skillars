@@ -130,6 +130,21 @@ class BookingStateMachineTest {
             .isInstanceOf(BookingStateTransitionException.class);
     }
 
+    /**
+     * fix/booking-completion-integrity: a parent cannot cancel a started session (a PAUSED cancel was a forfeit
+     * that paid the coach); the coach still can, and the system can end one left open past its end.
+     */
+    @Test
+    void paused_parentCancelIsRejected_coachCancelAndSystemEndRemain() {
+        assertThatThrownBy(() -> stateMachine.validate(BookingStatus.PAUSED, CANCEL_PARENT))
+            .isInstanceOf(BookingStateTransitionException.class);
+        assertThatThrownBy(() -> stateMachine.validate(IN_PROGRESS, CANCEL_PARENT))
+            .isInstanceOf(BookingStateTransitionException.class);
+        assertThat(stateMachine.targetStatus(BookingStatus.PAUSED, CANCEL_COACH)).isEqualTo(CANCELLED_COACH);
+        assertThat(stateMachine.targetStatus(BookingStatus.PAUSED, COMPLETE_PENDING))
+            .isEqualTo(COMPLETED_PENDING_CONFIRMATION);
+    }
+
     static Stream<BookingStatus> liveStatuses() {
         return Stream.of(IN_PROGRESS, BookingStatus.PAUSED, COMPLETED_PENDING_CONFIRMATION, COMPLETED, DISPUTED);
     }

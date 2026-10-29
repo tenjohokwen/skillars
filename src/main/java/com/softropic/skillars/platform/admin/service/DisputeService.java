@@ -66,6 +66,24 @@ public class DisputeService {
     private static final List<String> ELIGIBLE_STATUSES = List.of(
         "COMPLETED", "CANCELLED", "CANCELLED_PARENT", "CANCELLED_COACH", "NO_SHOW_PLAYER", "NO_SHOW_COACH");
 
+    /**
+     * fix/booking-completion-integrity: a started session the parent (or the player) disputes — e.g. the coach
+     * pressed Start then Pause and never coached. A live session cannot be cancelled by the parent, so without
+     * this they had no way to contest it at all. Parent / player only: the coach controls a live session.
+     * The booking keeps its status; resolving waits until it has settled ({@link #UNSETTLED_STATUSES}).
+     */
+    private static final List<String> LIVE_STATUSES = List.of("IN_PROGRESS", "PAUSED");
+
+    /**
+     * fix/booking-completion-integrity: a dispute on a booking in one of these statuses is not resolved yet —
+     * its coach payout does not exist, so a credit could not be reconciled against it and the coach would
+     * later be paid in full on top. Once it completes (the coach ends it, or UnresolvedSessionSweeperService
+     * then the completion timeouts / admin force-complete), the payout is created frozen by the open dispute
+     * and resolving reconciles it.
+     */
+    private static final List<String> UNSETTLED_STATUSES =
+        List.of("IN_PROGRESS", "PAUSED", "COMPLETED_PENDING_CONFIRMATION");
+
     /** feat/payment-forfeit-payouts-and-clawback: the refund was not owed — claw it back, pay the coach in full. */
     static final String UPHOLD_COACH = "UPHOLD_COACH";
 
@@ -112,6 +130,7 @@ public class DisputeService {
                 .map(raisedBy::equals)
                 .orElse(false);
         }
+        boolean raisedByPayerSide = ownerEligible;
         // Deferred-63 AC5: a coach may raise their own dispute on a booking (e.g. contesting a
         // NO_SHOW_COACH claim), not only the parent/player. booking.getCoachId() is the coach
         // *profile* UUID, not a user id, so this needs the same profile-to-user-id hop
@@ -132,7 +151,8 @@ public class DisputeService {
                 .map(raisedBy::equals)
                 .orElse(false);
         }
-        boolean statusEligible = ELIGIBLE_STATUSES.contains(booking.getStatus());
+        boolean statusEligible = ELIGIBLE_STATUSES.contains(booking.getStatus())
+            || (raisedByPayerSide && LIVE_STATUSES.contains(booking.getStatus()));
         if (!statusEligible || !ownerEligible) {
             throw new OperationNotAllowedException(
                 "Not eligible to raise dispute for this booking", DisputeError.NOT_ELIGIBLE);
@@ -244,6 +264,10 @@ public class DisputeService {
 
         Booking booking = bookingRepository.findById(dispute.getBookingId())
             .orElseThrow(() -> new ResourceNotFoundException("Booking not found", "Booking"));
+        if (UNSETTLED_STATUSES.contains(booking.getStatus())) {
+            // fix/booking-completion-integrity: see UNSETTLED_STATUSES. Dismissing stays possible.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, DisputeError.BOOKING_NOT_SETTLED.getErrorCode());
+        }
 
         Optional<BookingPayment> paymentLookup = bookingPaymentRepository.findById(dispute.getBookingId());
         paymentLookup
