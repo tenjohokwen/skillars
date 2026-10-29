@@ -409,7 +409,7 @@ public class DisputeService {
 
     /**
      * feat/payment-forfeit-payouts-and-clawback: {@code UPHOLD_COACH} — only for a booking whose payer was
-     * actually refunded (a wallet {@code BOOKING_REFUND}, or a restored pack session), and only once per
+     * actually refunded (a wallet {@code BOOKING_REFUND} or {@code DISPUTE_CREDIT}, or a restored pack session), and only once per
      * booking; otherwise 400 before anything is written.
      */
     private RefundClawbackService.RefundClawback clawBackRefund(Booking booking) {

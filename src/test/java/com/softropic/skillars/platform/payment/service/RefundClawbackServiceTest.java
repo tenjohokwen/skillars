@@ -87,6 +87,27 @@ class RefundClawbackServiceTest {
         assertThat(result.packSession()).isFalse();
     }
 
+    /**
+     * fix/payment-wallet-dispute-integrity: an admin dispute credit is its own DISPUTE_CREDIT row (V208); an
+     * UPHOLD_COACH after it must still find and claw it back (together with any BOOKING_REFUND), and a dispute
+     * credit is not a pack refund to un-settle.
+     */
+    @Test
+    void disputeCredits_areClawedBackTogetherWithTheBookingRefund() {
+        ParentCreditLedger credit = refund("20.00");
+        credit.setType(CreditLedgerEntryType.DISPUTE_CREDIT);
+        when(ledgerRepository.findByReferenceIdAndTypeOrderByParentId(bookingId, CreditLedgerEntryType.DISPUTE_CREDIT))
+            .thenReturn(java.util.List.of(credit));
+        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("20.00"), false))
+            .thenReturn(new BigDecimal("20.00"));
+
+        RefundClawbackService.RefundClawback result = service.clawBack(bookingId, packId).orElseThrow();
+
+        assertThat(result.refunded()).isEqualByComparingTo("20.00");
+        assertThat(result.recovered()).isEqualByComparingTo("20.00");
+        verify(packRefundAllocationService, org.mockito.Mockito.never()).releaseSessionRefund(any(), any());
+    }
+
     @Test
     void expiredPackWalletRefund_isUnsettledOnThePack_soThePayoutThatFollowsSettlesItInstead() {
         when(ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND))
