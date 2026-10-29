@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricing;
 import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.payment.contract.BatchPaymentQuoteDto;
+import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,6 +27,7 @@ public class BatchPaymentQuoteService {
 
     private final CoachPricingRepository coachPricingRepository;
     private final CreditWalletService creditWalletService;
+    private final PaymentGateway paymentGateway;
 
     @Transactional(readOnly = true)
     public BatchPaymentQuoteDto quote(Long payerId, UUID coachId, int sessionCount) {
@@ -34,7 +36,8 @@ public class BatchPaymentQuoteService {
             .orElse(BigDecimal.ZERO);
         BigDecimal total = price.multiply(BigDecimal.valueOf(sessionCount));
         BigDecimal balance = creditWalletService.getBalance(payerId);
-        CreditCardSplit split = CreditCardSplit.of(balance, total);
+        // fix/payment-charge-idempotency: the same below-minimum card re-balance the settlement applies.
+        CreditCardSplit split = CreditCardSplit.of(balance, total, paymentGateway.minimumCardCharge());
         return new BatchPaymentQuoteDto(price, sessionCount, total, balance,
             split.creditApplied(), split.cardCharge(), "EUR");
     }

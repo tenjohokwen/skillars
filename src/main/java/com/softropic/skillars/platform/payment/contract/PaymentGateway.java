@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.payment.contract;
 
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface PaymentGateway {
@@ -27,8 +29,37 @@ public interface PaymentGateway {
     /**
      * Creates a single platform-account charge for a batch of credit-based bookings (see
      * {@link #chargeAndCapture} — same B-1 model). Returns stripePaymentIntentId.
+     *
+     * <p>fix/payment-charge-idempotency: {@code idempotencyKey} names ONE settlement of the batch (batch id +
+     * the reserved booking ids), persisted on the reserved rows before this call. The batch id alone is not
+     * unique per charge: two concurrent accepts of one batch settle disjoint booking sets and used to share a
+     * key, so the second replayed the first's PaymentIntent and its bookings were confirmed uncharged.
+     *
+     * @throws com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException when
+     *     the charge may have been executed but no response says so — never a decline
      */
-    String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount);
+    String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount,
+                                    String idempotencyKey);
+
+    /**
+     * fix/payment-charge-idempotency: the PaymentIntent a booking charge was sent under {@code idempotencyKey}
+     * for (matched on its {@code chargeKey} metadata among the payer's PaymentIntents created at or after
+     * {@code createdAfter}); empty when there is none — i.e. the charge never reached Stripe.
+     *
+     * @throws com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException when Stripe
+     *     cannot be asked (the caller retries later — absence is not proven)
+     */
+    Optional<ChargeLookup> findChargeByIdempotencyKey(Long parentId, String idempotencyKey, Instant createdAfter);
+
+    /** fix/payment-charge-idempotency: re-reads a known PaymentIntent's status and amount. */
+    ChargeLookup retrieveCharge(String paymentIntentId);
+
+    /**
+     * fix/payment-charge-idempotency: the smallest card charge Stripe accepts in the platform currency (e.g.
+     * EUR 0.50). A wallet/card split leaving less than this on the card is re-balanced
+     * ({@code CreditCardSplit}) instead of being declined as {@code amount_too_small}.
+     */
+    BigDecimal minimumCardCharge();
 
     /**
      * skillars-deferred-106 AC5.1: transfers {@code netAmount} from the platform balance to the

@@ -28,4 +28,13 @@ public class PaymentProperties {
     private String callbackSuccessUrl = "/coach/payment-settings";
     /** Stripe.js publishable key, safe to expose to authenticated frontend clients. */
     private String publishableKey = "";
+    /**
+     * fix/payment-charge-idempotency (L2): Stripe SDK timeouts and network retries, set explicitly instead of
+     * the SDK defaults (30s connect, 80s read). A booking settlement holds the payer's wallet lock and a DB
+     * connection across the charge call, so its worst case — (connect + read) x (1 + retries) — must stay
+     * short. Retries are safe: every money-moving call carries an idempotency key.
+     */
+    private int connectTimeoutMs = 10_000;
+    private int readTimeoutMs = 30_000;
+    private int maxNetworkRetries = 2;
 }

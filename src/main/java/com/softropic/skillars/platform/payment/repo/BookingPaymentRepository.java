@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.repo;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -94,4 +95,34 @@ public interface BookingPaymentRepository extends JpaRepository<BookingPayment, 
      */
     @Query("SELECT bp.bookingId FROM BookingPayment bp WHERE bp.bookingId IN :bookingIds AND bp.status = 'CAPTURED'")
     List<UUID> findCapturedBookingIds(@Param("bookingIds") Collection<UUID> bookingIds);
+
+    /**
+     * fix/payment-charge-idempotency: CAPTURE_PENDING reservations whose charge has a known idempotency key
+     * and was reserved before {@code reservedBefore} — long enough ago that the listener that made the charge
+     * call is done with it (its response was lost, or it died). Keyset-paged on (reserved_at, booking_id) so
+     * rows a run cannot resolve yet do not starve the ones behind them.
+     */
+    @Query("""
+        SELECT bp FROM BookingPayment bp
+        WHERE bp.status = 'CAPTURE_PENDING' AND bp.chargeIdempotencyKey IS NOT NULL
+          AND bp.reservedAt < :reservedBefore
+          AND (bp.reservedAt > :afterReservedAt OR (bp.reservedAt = :afterReservedAt AND bp.bookingId > :afterBookingId))
+        ORDER BY bp.reservedAt, bp.bookingId
+        """)
+    List<BookingPayment> findReconcilableCharges(@Param("reservedBefore") Instant reservedBefore,
+                                                 @Param("afterReservedAt") Instant afterReservedAt,
+                                                 @Param("afterBookingId") UUID afterBookingId,
+                                                 Pageable pageable);
+
+    /** fix/payment-charge-idempotency: every reservation one charge was sent for (the rows of one batch). */
+    List<BookingPayment> findByChargeIdempotencyKey(String chargeIdempotencyKey);
+
+    /** fix/payment-charge-idempotency (M1): see BookingPaymentPersistenceService.recordChargeIntent. */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("""
+        UPDATE BookingPayment bp SET bp.stripePaymentIntentId = :paymentIntentId
+        WHERE bp.bookingId IN :bookingIds AND bp.status = 'CAPTURE_PENDING'
+        """)
+    int recordPendingPaymentIntent(@Param("bookingIds") Collection<UUID> bookingIds,
+                                   @Param("paymentIntentId") String paymentIntentId);
 }

@@ -19,6 +19,7 @@ import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -55,6 +56,9 @@ class CreditRoutingTest {
     // null from Counter.builder(...).register(...), so a real registry is used and @Spy is what
     // makes @InjectMocks pass it to the constructor.
     @Spy MeterRegistry meterRegistry = new SimpleMeterRegistry();
+    // fix/payment-charge-idempotency: the post-charge settle runs in perBookingTx (a TransactionTemplate
+    // over this manager); a mock manager makes it a plain pass-through.
+    @Mock PlatformTransactionManager transactionManager;
 
     @InjectMocks PaymentLifecycleService service;
 
@@ -62,6 +66,7 @@ class CreditRoutingTest {
     private static final UUID COACH_ID = UUID.randomUUID();
     private static final Long PARENT_ID = 1001L;
     private static final BigDecimal SESSION_PRICE = new BigDecimal("50.00");
+    private static final String CHARGE_KEY = "pi-booking-" + BOOKING_ID;
 
     private BookingAcceptedEvent event(UUID packPurchaseId) {
         return new BookingAcceptedEvent(this, BOOKING_ID, PARENT_ID, COACH_ID,
@@ -71,6 +76,7 @@ class CreditRoutingTest {
 
     @BeforeEach
     void setUp() {
+        service.initPerBookingTx();
         // UAT.3 AC3: "a row exists" no longer means "settled", so the guards read the row and its
         // status rather than existsById. No row at all is the ordinary first-delivery case; the
         // two tests that need a row override this, hence lenient.
@@ -79,7 +85,7 @@ class CreditRoutingTest {
 
     /** Stubs the pre-capture reservation as granted — required on every path that reaches Stripe. */
     private void reservationGranted() {
-        when(persistenceService.reserveCapture(eq(BOOKING_ID), any(), any(), isNull()))
+        when(persistenceService.reserveCapture(eq(BOOKING_ID), any(), any(), isNull(), eq(CHARGE_KEY)))
             .thenReturn(CaptureReservation.RESERVED);
     }
 
@@ -91,12 +97,12 @@ class CreditRoutingTest {
     void lockedBalanceDecidesTheSplit_notTheUnlockedRead() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("100.00"));
         when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("10.00"));
-        when(persistenceService.reserveCapture(any(), any(), any(), any())).thenReturn(CaptureReservation.RESERVED);
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_locked");
+        when(persistenceService.reserveCapture(any(), any(), any(), any(), any())).thenReturn(CaptureReservation.RESERVED);
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_locked");
 
         service.onBookingAccepted(event(null));
 
-        verify(paymentGateway).chargeAndCapture(eq(BOOKING_ID), eq(PARENT_ID), any(), eq(new BigDecimal("40.00")));
+        verify(paymentGateway).chargeAndCapture(eq(BOOKING_ID), eq(PARENT_ID), any(), eq(new BigDecimal("40.00")), eq(CHARGE_KEY));
         verify(persistenceService).persistPaymentSuccess(
             eq(BOOKING_ID), eq(new BigDecimal("10.00")), eq(new BigDecimal("40.00")),
             eq("pi_locked"), isNull(),
@@ -106,8 +112,8 @@ class CreditRoutingTest {
     @Test
     void noCredit_takesNoWalletLock() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
-        when(persistenceService.reserveCapture(any(), any(), any(), any())).thenReturn(CaptureReservation.RESERVED);
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_card");
+        when(persistenceService.reserveCapture(any(), any(), any(), any(), any())).thenReturn(CaptureReservation.RESERVED);
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_card");
 
         service.onBookingAccepted(event(null));
 
@@ -122,13 +128,13 @@ class CreditRoutingTest {
     void negativeBalance_cardChargedExactlyTheSessionPrice_noCreditApplied() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("-15.00"));
         reservationGranted();
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any())).thenReturn("pi_neg");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_neg");
 
         service.onBookingAccepted(event(null));
 
         verify(creditWalletService, never()).lockAndGetBalance(any());
         verify(paymentGateway).chargeAndCapture(eq(BOOKING_ID), eq(PARENT_ID), eq(COACH_ID),
-            org.mockito.ArgumentMatchers.argThat(a -> a.compareTo(SESSION_PRICE) == 0));
+            org.mockito.ArgumentMatchers.argThat(a -> a.compareTo(SESSION_PRICE) == 0), eq(CHARGE_KEY));
         verify(persistenceService).persistPaymentSuccess(
             eq(BOOKING_ID), org.mockito.ArgumentMatchers.argThat(c -> c.signum() == 0),
             org.mockito.ArgumentMatchers.argThat(a -> a.compareTo(SESSION_PRICE) == 0),
@@ -143,7 +149,7 @@ class CreditRoutingTest {
 
         service.onBookingAccepted(event(null));
 
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         // creditToUse = min(100, 50) = 50; stripeAmount = 0
         verify(persistenceService).persistPaymentSuccess(
             eq(BOOKING_ID), eq(new BigDecimal("50.00")), eq(BigDecimal.ZERO),
@@ -158,7 +164,7 @@ class CreditRoutingTest {
 
         service.onBookingAccepted(event(null));
 
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         // creditToUse = min(50, 50) = 50; stripeAmount = 0
         verify(persistenceService).persistPaymentSuccess(
             eq(BOOKING_ID), eq(SESSION_PRICE), eq(BigDecimal.ZERO),
@@ -171,13 +177,13 @@ class CreditRoutingTest {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         lenient().when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         reservationGranted();
-        when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, new BigDecimal("30.00")))
+        when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, new BigDecimal("30.00"), CHARGE_KEY))
             .thenReturn("pi_test_123");
 
         service.onBookingAccepted(event(null));
 
         // creditToUse = min(20, 50) = 20; stripeAmount = 30
-        verify(paymentGateway).chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, new BigDecimal("30.00"));
+        verify(paymentGateway).chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, new BigDecimal("30.00"), CHARGE_KEY);
         // P3: assert status=CAPTURED is delegated via persistPaymentSuccess (AC 3 requirement)
         verify(persistenceService).persistPaymentSuccess(
             eq(BOOKING_ID), eq(new BigDecimal("20.00")), eq(new BigDecimal("30.00")),
@@ -189,13 +195,13 @@ class CreditRoutingTest {
     void caseC_zeroCredit_fullStripeCharge() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
         reservationGranted();
-        when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, SESSION_PRICE))
+        when(paymentGateway.chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, SESSION_PRICE, CHARGE_KEY))
             .thenReturn("pi_full_123");
 
         service.onBookingAccepted(event(null));
 
         // creditToUse = 0; stripeAmount = 50
-        verify(paymentGateway).chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, SESSION_PRICE);
+        verify(paymentGateway).chargeAndCapture(BOOKING_ID, PARENT_ID, COACH_ID, SESSION_PRICE, CHARGE_KEY);
         // P4: assert status=CAPTURED delegated via persistPaymentSuccess (AC 3 requirement)
         verify(persistenceService).persistPaymentSuccess(
             eq(BOOKING_ID), eq(BigDecimal.ZERO), eq(new BigDecimal("50.00")),
@@ -210,7 +216,7 @@ class CreditRoutingTest {
         service.onBookingAccepted(event(packId));
 
         verify(creditWalletService, never()).getBalance(any());
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         verify(packSessionService).deductSession(packId);
         // P5: assert BookingPayment with status=CAPTURED is persisted (AC 4 requirement)
         verify(persistenceService).persistPaymentSuccess(
@@ -228,7 +234,7 @@ class CreditRoutingTest {
         service.onBookingAccepted(event(packId));
 
         verify(creditWalletService, never()).getBalance(any());
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentSuccess(
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(persistenceService).persistPaymentFailure(
@@ -279,7 +285,7 @@ class CreditRoutingTest {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         lenient().when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
         reservationGranted();
-        when(paymentGateway.chargeAndCapture(any(), any(), any(), any()))
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any()))
             .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));
 
         service.onBookingAccepted(event(null));
@@ -301,7 +307,7 @@ class CreditRoutingTest {
         service.onBookingAccepted(event(null));
 
         verify(creditWalletService, never()).getBalance(any());
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentSuccess(
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentFailure(
@@ -321,8 +327,8 @@ class CreditRoutingTest {
 
         service.onBookingAccepted(event(null));
 
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
-        verify(persistenceService, never()).reserveCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(persistenceService, never()).reserveCapture(any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentSuccess(
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
 
@@ -339,16 +345,92 @@ class CreditRoutingTest {
     @Test
     void reservationRefused_bookingNoLongerPending_stripeIsNeverCalled() {
         when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
-        when(persistenceService.reserveCapture(eq(BOOKING_ID), any(), any(), isNull()))
+        when(persistenceService.reserveCapture(eq(BOOKING_ID), any(), any(), isNull(), eq(CHARGE_KEY)))
             .thenReturn(CaptureReservation.BOOKING_NOT_PENDING);
 
         service.onBookingAccepted(event(null));
 
-        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentSuccess(
             any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(persistenceService, never()).persistPaymentFailure(
             any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ── fix/payment-charge-idempotency ──
+
+    /** H2: an unknown charge outcome must neither decline (money may be taken) nor confirm (it may not be). */
+    @Test
+    void chargeOutcomeUnknown_keepsTheReservation_neitherDeclinesNorSettles() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
+        reservationGranted();
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException(
+                CHARGE_KEY, new RuntimeException("read timed out")));
+
+        service.onBookingAccepted(event(null));
+
+        verify(persistenceService, never()).persistPaymentFailure(any(), any(), any(), any(), any(), any(), any());
+        verify(persistenceService, never()).persistPaymentSuccess(
+            any(), any(), any(), any(), any(), any(), any(), any(), any(), any());
+        assertThat(meterRegistry.find("booking.payment.settle_aborted").tag("reason", "charge_outcome_unknown")
+            .counter().count()).isEqualTo(1.0);
+    }
+
+    /** M1: the intent id is written onto the reservation before the settle that could roll back. */
+    @Test
+    void successfulCharge_recordsTheIntentOnTheReservation_thenSettles() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(BigDecimal.ZERO);
+        reservationGranted();
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_rec");
+
+        service.onBookingAccepted(event(null));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(persistenceService);
+        order.verify(persistenceService).recordChargeIntent(java.util.List.of(BOOKING_ID), "pi_rec");
+        order.verify(persistenceService).persistPaymentSuccess(eq(BOOKING_ID), any(), any(), eq("pi_rec"), isNull(),
+            eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
+    }
+
+    /**
+     * M1: the settle fails after the card was charged — mirror of the #335 batch compensation. The booking is
+     * declined and only the card share returned as credit: the credit share was never debited (it commits
+     * with the confirm that failed).
+     */
+    @Test
+    void settleFailsAfterCharge_declinesAndReturnsOnlyTheCardShareAsCredit() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
+        when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("20.00"));
+        reservationGranted();
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_charged");
+        doThrow(new PessimisticLockingFailureException("booking row locked"))
+            .when(persistenceService).persistPaymentSuccess(any(), any(), any(), any(), any(), any(), any(), any(),
+                any(), any());
+
+        service.onBookingAccepted(event(null));
+
+        verify(persistenceService).declineBookingAfterCharge(eq(BOOKING_ID), isNull(),
+            org.mockito.ArgumentMatchers.argThat(c -> c.signum() == 0), eq(new BigDecimal("30.00")),
+            eq("pi_charged"), eq(PARENT_ID), anyString());
+        verify(persistenceService, never()).persistPaymentFailure(any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** L3: EUR 49.80 of credit on a EUR 50 session would leave EUR 0.20 on the card — below Stripe's minimum. */
+    @Test
+    void cardShareBelowStripeMinimum_isRaisedToTheMinimum_notDeclined() {
+        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("49.80"));
+        when(creditWalletService.lockAndGetBalance(PARENT_ID)).thenReturn(new BigDecimal("49.80"));
+        when(paymentGateway.minimumCardCharge()).thenReturn(new BigDecimal("0.50"));
+        reservationGranted();
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), any())).thenReturn("pi_min");
+
+        service.onBookingAccepted(event(null));
+
+        verify(paymentGateway).chargeAndCapture(eq(BOOKING_ID), eq(PARENT_ID), eq(COACH_ID),
+            eq(new BigDecimal("0.50")), eq(CHARGE_KEY));
+        verify(persistenceService).persistPaymentSuccess(eq(BOOKING_ID), eq(new BigDecimal("49.50")),
+            eq(new BigDecimal("0.50")), eq("pi_min"), isNull(),
+            eq(PARENT_ID), anyString(), anyString(), any(Instant.class), anyString());
     }
 
     private BookingPayment payment(String status) {

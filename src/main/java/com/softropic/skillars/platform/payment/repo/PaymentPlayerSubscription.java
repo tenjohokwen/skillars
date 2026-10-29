@@ -58,6 +58,15 @@ public class PaymentPlayerSubscription {
     @Column(name = "last_stripe_event_at")
     private Instant lastStripeEventAt;
 
+    // fix/payment-charge-idempotency (V203): a subscribe in flight — written under the row lock before the
+    // Stripe subscription is created, cleared when the attempt ends. A second subscribe while it stands
+    // (double-click, client retry) is refused instead of creating and charging a second subscription.
+    @Column(name = "subscribe_attempt_key", length = 64)
+    private String subscribeAttemptKey;
+
+    @Column(name = "subscribe_attempt_at")
+    private Instant subscribeAttemptAt;
+
     // fix/payment-subscription-entitlements: optimistic-lock backstop behind the persist paths'
     // re-read-under-lock (V197).
     @Version

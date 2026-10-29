@@ -2447,6 +2447,7 @@ export default {
       notActive:
         'Your subscription is not active right now. Settle the outstanding payment before changing your plan.',
       alreadyActive: 'You already have an active subscription.',
+      inProgress: 'Your subscription is already being set up. Please wait a moment and refresh.',
     },
     coach: {
       pageTitle: 'Coach Subscription',

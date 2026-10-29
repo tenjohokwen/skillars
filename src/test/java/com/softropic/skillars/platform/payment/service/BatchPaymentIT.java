@@ -150,15 +150,16 @@ class BatchPaymentIT extends BasePaymentIT {
 
         paymentLifecycleService.onBatchBookingAccepted(event);
 
-        // P9: one BOOKING_DEDUCTION is written for the entire batch (not one per booking)
-        long deductionCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM payment.parent_credit_ledger " +
+        // fix/payment-charge-idempotency (M2): one BOOKING_DEDUCTION per booking (reference = bookingId),
+        // committed with that booking's confirm — no longer one batch-wide row committed after the confirms.
+        List<UUID> deductionRefs = jdbcTemplate.queryForList(
+            "SELECT reference_id FROM payment.parent_credit_ledger " +
             "WHERE parent_id = ? AND type = 'BOOKING_DEDUCTION'",
-            Long.class, PARENT_ID
+            UUID.class, PARENT_ID
         );
-        assertThat(deductionCount)
-            .as("One BOOKING_DEDUCTION row for the whole batch credit deduction")
-            .isEqualTo(1L);
+        assertThat(deductionRefs)
+            .as("one BOOKING_DEDUCTION per settled booking, referencing it")
+            .containsExactlyInAnyOrder(bookingId1, bookingId2);
 
         // Total deducted must equal 2 × €40 = €80 (fully covered by the €100 balance)
         BigDecimal totalDeducted = jdbcTemplate.queryForObject(

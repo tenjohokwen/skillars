@@ -500,6 +500,10 @@ Scenarios 4 and 5, `docs/dev-docs/payment/index.html`.
 - [ ] Webhook endpoint API version matches the SDK: `stripe-java` 28.4.0 (`pom.xml`) pins API
   version `2025-02-24.acacia`. The handlers use `deserializeUnsafe`, but a mismatch is what the
   `STRIPE_WEBHOOK_DESERIALIZE_FAILED` retry loop in `StripeWebhookService` warns about **(confirm)**.
+- [ ] Stripe SDK timeouts (`PaymentConfig`, optional): `APP_PAYMENT_STRIPE_CONNECT_TIMEOUT_MS` (10000),
+  `APP_PAYMENT_STRIPE_READ_TIMEOUT_MS` (30000), `APP_PAYMENT_STRIPE_MAX_NETWORK_RETRIES` (2). The defaults
+  are right for PROD and UAT. Do not raise them much: a booking charge holds the payer's wallet lock for
+  the whole call.
 
 ### 4.2 Connect platform settings
 
@@ -694,6 +698,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `ConfigService` cache refresh | 300 s | `app.config.cache-ttl-seconds`: config edits take up to 5 min to apply |
 | `BookingExpiryScheduler`, `BookingReminderScheduler`, `QuickCompleteTimeoutService`, `StuckCompletionSweeperService` | 5 min | hard-coded |
 | `PaymentPendingSweeper` | 15 min | hard-coded |
+| `ChargeOutcomeReconciler` | 10 min | hard-coded cadence; age threshold `booking.payment.charge_reconcile_after_minutes` (10). Settles or declines booking charges whose Stripe response was lost; ERROR tags `[CHARGE_RECONCILE_AMOUNT_MISMATCH]` / `[CHARGE_RECONCILE_BOOKING_MOVED]` need an operator |
 | `CashOutReconciliationService` | 15 min | hard-coded |
 | `SessionPackForfeitureScheduler` | 60 min | hard-coded |
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
@@ -767,6 +772,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.stuck_completion_timeout_hours` | 72 (code default) | `ConfigBounds` | Keep |
 | `booking.payment_pending_sweep_grace_minutes` | 120 | V139 | Keep |
 | `booking.payment_pending.capture_pending_max_hours` | 72 (code default, range 6–720) | `PaymentPendingSweeper` | Keep |
+| `booking.payment.charge_reconcile_after_minutes` | 10 (code default, range 5–1440) | `ChargeOutcomeReconciler` | Keep. Age a CAPTURE_PENDING reservation must reach before its unknown charge outcome is looked up at Stripe; keep it well above the Stripe SDK worst case (connect + read timeout × (1 + retries)) |
 | `booking.batch.maxSize` | 5 | V139 | Keep |
 | `reliability.strike.visibilityThreshold` / `suspensionThreshold` | 3 / 5 | V139 | Keep |
 | `platform.strike_threshold.admin_alert` / `auto_suspension` | 3 / 5 | V139 | Keep |
@@ -938,3 +944,10 @@ an operator must now do.
   for the parent's confirmation. Run the V206 pre-migration check and review its informational follow-up
   query ([3.2](#32-pre-migration-data-checks)). V206 joins the "prod is not live" list in section 0. No new
   job, webhook or env var.
+- 2026-10-29: fix/payment-charge-idempotency (V203). V203 runs automatically (additive nullable
+  columns on `payment.booking_payments`, `coach_subscriptions`, `player_subscriptions` plus a partial
+  index on a new all-NULL column; no pre-migration check). New job `ChargeOutcomeReconciler` (10 min,
+  ShedLock `ChargeOutcomeReconciler_reconcile`), new code-default config key
+  `booking.payment.charge_reconcile_after_minutes` (10), new optional properties
+  `app.payment.stripe.connect-timeout-ms` / `read-timeout-ms` / `max-network-retries`
+  (`APP_PAYMENT_STRIPE_*`, defaults 10000 / 30000 / 2). No new Stripe webhook events; nothing to set.

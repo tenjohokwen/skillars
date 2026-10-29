@@ -13,6 +13,7 @@ const BACKEND_CODES = [
   'payment.subscription.updatePaymentMethod',
   'payment.subscription.notActive',
   'payment.subscription.alreadyActive',
+  'payment.subscription.inProgress',
 ]
 
 const FALLBACKS = [

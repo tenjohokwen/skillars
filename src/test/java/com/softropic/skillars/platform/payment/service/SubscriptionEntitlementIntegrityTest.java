@@ -488,19 +488,74 @@ class SubscriptionEntitlementIntegrityTest {
     }
 
     @Test
-    void item9_concurrentSubscribeLostRace_duplicateStripeSubscriptionCancelled() throws StripeException {
-        // Pre-Stripe read: a fresh row; by persist time (re-read under lock) another request linked one.
+    void item9_concurrentSubscribeLostRace_duplicateStripeSubscriptionCancelledAndRefunded() throws StripeException {
+        // Pre-Stripe reads (the unlocked one AND the claim under lock): a fresh row; by persist time (re-read
+        // under lock) another request linked one.
         PaymentCoachSubscription stale = new PaymentCoachSubscription();
         stale.setCoachId(COACH_ID);
         when(paymentCoachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(stale));
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(COACH_ID))
+            .thenReturn(Optional.of(stale), Optional.of(coachSub));
         givenStripeCustomer();
         Subscription duplicate = stripeSub("sub_dup", "active");
         when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString())).thenReturn(duplicate);
 
         assertThatThrownBy(() -> service.subscribeCoach(COACH_ID, COACH_USER_ID, "INSTRUCTOR"))
             .hasMessage("payment.subscription.alreadyActive");
-        verify(stripeClient).cancelSubscriptionImmediately("sub_dup");
+        // fix/payment-charge-idempotency: the duplicate's paid first invoice is refunded, not just cancelled.
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeClient);
+        order.verify(stripeClient).refundLatestInvoicePayment("sub_dup");
+        order.verify(stripeClient).cancelSubscriptionImmediately("sub_dup");
         assertThat(coachSub.getStripeSubscriptionId()).isEqualTo(SUB_ID);
+    }
+
+    /**
+     * fix/payment-charge-idempotency: the unlocked pre-check passed, but under the claim's row lock the owner is
+     * already subscribed (a concurrent subscribe finished in between) — refused before any Stripe subscription
+     * is created, so there is nothing to cancel or refund.
+     */
+    @Test
+    void subscribeClaim_alreadySubscribedUnderLock_refusedBeforeStripe() throws StripeException {
+        PaymentCoachSubscription stale = new PaymentCoachSubscription();
+        stale.setCoachId(COACH_ID);
+        when(paymentCoachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(stale));
+        givenStripeCustomer();
+
+        assertThatThrownBy(() -> service.subscribeCoach(COACH_ID, COACH_USER_ID, "INSTRUCTOR"))
+            .hasMessage("payment.subscription.alreadyActive");
+        verify(stripeClient, never()).createSubscription(anyString(), anyString(), anyString(), anyString());
+    }
+
+    /** fix/payment-charge-idempotency: a double-click while the first subscribe is in flight is refused. */
+    @Test
+    void subscribeClaim_attemptInFlight_secondSubscribeRefused_noSecondStripeSubscription() throws StripeException {
+        givenFreshCoachRow();
+        coachSub.setSubscribeAttemptKey("other-attempt");
+        coachSub.setSubscribeAttemptAt(Instant.now().minusSeconds(5));
+
+        assertThatThrownBy(() -> service.subscribeCoach(COACH_ID, COACH_USER_ID, "INSTRUCTOR"))
+            .hasMessage("payment.subscription.inProgress");
+        verify(stripeClient, never()).createSubscription(anyString(), anyString(), anyString(), anyString());
+        assertThat(coachSub.getSubscribeAttemptKey()).as("another attempt's marker is left alone").isEqualTo("other-attempt");
+    }
+
+    /** fix/payment-charge-idempotency: a marker from an attempt that died is taken over; the Stripe key names the attempt. */
+    @Test
+    void subscribeClaim_staleMarker_takenOver_keyCarriesTheAttempt_markerClearedAfterwards() throws StripeException {
+        givenFreshCoachRow();
+        coachSub.setSubscribeAttemptKey("dead-attempt");
+        coachSub.setSubscribeAttemptAt(Instant.now().minus(1, ChronoUnit.HOURS));
+        when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString()))
+            .thenThrow(new CardException("declined", "req", "card_declined", null, null, null, 402, null));
+
+        assertThatThrownBy(() -> service.subscribeCoach(COACH_ID, COACH_USER_ID, "INSTRUCTOR"))
+            .hasMessage("payment.subscription.paymentDeclined");
+
+        ArgumentCaptor<String> key = ArgumentCaptor.forClass(String.class);
+        verify(stripeClient).createSubscription(anyString(), anyString(), anyString(), key.capture());
+        assertThat(key.getValue()).startsWith("sub-create-coach-" + COACH_ID + "-").doesNotContain("dead-attempt");
+        assertThat(coachSub.getSubscribeAttemptKey()).as("released when the attempt ended").isNull();
+        assertThat(coachSub.getSubscribeAttemptAt()).isNull();
     }
 
     @Test

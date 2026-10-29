@@ -98,6 +98,12 @@ public class SubscriptionService {
     // fix/payment-subscription-resume-and-async-sync: PAUSED (trial ended without a card) has no invoice
     // to pay; a new card resumes it through Stripe's resume API instead of waiting for grace expiry.
     private static final Set<String> RESUME_ON_NEW_PAYMENT_METHOD = Set.of("PAUSED");
+    /**
+     * fix/payment-charge-idempotency: how long a subscribe-in-flight marker blocks another subscribe for the
+     * same owner. Far above a live attempt's worst case (SDK timeouts in PaymentConfig); an older marker is
+     * from an attempt that died and is taken over.
+     */
+    static final java.time.Duration SUBSCRIBE_ATTEMPT_WINDOW = java.time.Duration.ofMinutes(10);
 
     // ─── Tier Info ─────────────────────────────────────────────────────────────
 
@@ -168,18 +174,56 @@ public class SubscriptionService {
         // exact customer when it was saved (POST /setup-intent creates a customer-scoped
         // SetupIntent; confirmCardSetup + POST /save-payment-method complete it). Calling
         // attach again on an already-attached payment method throws on Stripe's side.
-        Subscription stripeSub = createPaidStripeSubscription(
-            stripeCustomer.getStripeCustomerId(), priceId, paymentMethodId, "COACH", coachId);
+        // fix/payment-charge-idempotency: claim the subscribe under the row lock first, so a double-click or
+        // client retry is refused instead of creating (and charging) a second subscription.
+        String attemptKey = self.claimCoachSubscribeAttempt(coachId);
+        try {
+            Subscription stripeSub = createPaidStripeSubscription(stripeCustomer.getStripeCustomerId(), priceId,
+                paymentMethodId, "COACH", coachId, subscribeIdempotencyKey("COACH", coachId, attemptKey));
 
-        Optional<CoachSubscriptionResponse> persisted =
-            self.persistCoachSubscription(coachId, tier.toUpperCase(), stripeSub);
-        if (persisted.isEmpty()) {
-            // fix/payment-subscription-entitlements: a concurrent subscribe linked another live
-            // subscription first — cancel this duplicate so the coach is not billed twice.
-            cancelStripeSubscriptionQuietly(stripeSub.getId(), "COACH", coachId);
-            throw new PaymentGatewayException("payment.subscription.alreadyActive");
+            Optional<CoachSubscriptionResponse> persisted =
+                self.persistCoachSubscription(coachId, tier.toUpperCase(), stripeSub);
+            if (persisted.isEmpty()) {
+                // fix/payment-subscription-entitlements: a concurrent subscribe linked another live
+                // subscription first — cancel this duplicate so the coach is not billed twice.
+                cancelDuplicateSubscription(stripeSub.getId(), "COACH", coachId);
+                throw new PaymentGatewayException("payment.subscription.alreadyActive");
+            }
+            return persisted.get();
+        } finally {
+            releaseSubscribeAttemptQuietly(() -> self.releaseCoachSubscribeAttempt(coachId, attemptKey), "COACH", coachId);
         }
-        return persisted.get();
+    }
+
+    /**
+     * fix/payment-charge-idempotency: marks a coach subscribe in flight, under the row lock, before Stripe is
+     * called. Re-checks "already subscribed" under that lock (the caller's assertCanSubscribe read is
+     * unlocked) and refuses while another attempt's marker is younger than {@link #SUBSCRIBE_ATTEMPT_WINDOW}.
+     * The returned key names this attempt and is part of its Stripe idempotency key.
+     */
+    @Transactional
+    public String claimCoachSubscribeAttempt(UUID coachId) {
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
+        assertSubscribeClaimable(sub.getStatus(), sub.getStripeSubscriptionId(), sub.getSubscribeAttemptAt(),
+            "COACH", coachId);
+        String attemptKey = UUID.randomUUID().toString();
+        sub.setSubscribeAttemptKey(attemptKey);
+        sub.setSubscribeAttemptAt(Instant.now());
+        paymentCoachSubscriptionRepository.save(sub);
+        return attemptKey;
+    }
+
+    /** Clears this attempt's marker (and only this attempt's — an expired one may have been re-claimed). */
+    @Transactional
+    public void releaseCoachSubscribeAttempt(UUID coachId, String attemptKey) {
+        paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
+            .filter(sub -> attemptKey.equals(sub.getSubscribeAttemptKey()))
+            .ifPresent(sub -> {
+                sub.setSubscribeAttemptKey(null);
+                sub.setSubscribeAttemptAt(null);
+                paymentCoachSubscriptionRepository.save(sub);
+            });
     }
 
     /**
@@ -396,16 +440,48 @@ public class SubscriptionService {
         }
 
         // No attachPaymentMethod call here: see subscribeCoach.
-        Subscription stripeSub = createPaidStripeSubscription(
-            stripeCustomer.getStripeCustomerId(), priceId, paymentMethodId, "PLAYER", playerId);
+        // fix/payment-charge-idempotency: see subscribeCoach.
+        String attemptKey = self.claimPlayerSubscribeAttempt(playerId);
+        try {
+            Subscription stripeSub = createPaidStripeSubscription(stripeCustomer.getStripeCustomerId(), priceId,
+                paymentMethodId, "PLAYER", playerId, subscribeIdempotencyKey("PLAYER", playerId, attemptKey));
 
-        Optional<PlayerSubscriptionResponse> persisted = self.persistPlayerSubscription(
-            playerId, tier.toUpperCase(), billingInterval.toUpperCase(), stripeSub);
-        if (persisted.isEmpty()) {
-            cancelStripeSubscriptionQuietly(stripeSub.getId(), "PLAYER", playerId);
-            throw new PaymentGatewayException("payment.subscription.alreadyActive");
+            Optional<PlayerSubscriptionResponse> persisted = self.persistPlayerSubscription(
+                playerId, tier.toUpperCase(), billingInterval.toUpperCase(), stripeSub);
+            if (persisted.isEmpty()) {
+                cancelDuplicateSubscription(stripeSub.getId(), "PLAYER", playerId);
+                throw new PaymentGatewayException("payment.subscription.alreadyActive");
+            }
+            return persisted.get();
+        } finally {
+            releaseSubscribeAttemptQuietly(() -> self.releasePlayerSubscribeAttempt(playerId, attemptKey), "PLAYER", playerId);
         }
-        return persisted.get();
+    }
+
+    /** See {@link #claimCoachSubscribeAttempt}. */
+    @Transactional
+    public String claimPlayerSubscribeAttempt(Long playerId) {
+        PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
+        assertSubscribeClaimable(sub.getStatus(), sub.getStripeSubscriptionId(), sub.getSubscribeAttemptAt(),
+            "PLAYER", playerId);
+        String attemptKey = UUID.randomUUID().toString();
+        sub.setSubscribeAttemptKey(attemptKey);
+        sub.setSubscribeAttemptAt(Instant.now());
+        paymentPlayerSubscriptionRepository.save(sub);
+        return attemptKey;
+    }
+
+    /** See {@link #releaseCoachSubscribeAttempt}. */
+    @Transactional
+    public void releasePlayerSubscribeAttempt(Long playerId, String attemptKey) {
+        paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
+            .filter(sub -> attemptKey.equals(sub.getSubscribeAttemptKey()))
+            .ifPresent(sub -> {
+                sub.setSubscribeAttemptKey(null);
+                sub.setSubscribeAttemptAt(null);
+                paymentPlayerSubscriptionRepository.save(sub);
+            });
     }
 
     /** See {@link #persistCoachSubscription}. */
@@ -1382,11 +1458,11 @@ public class SubscriptionService {
      * payment.subscription.paymentDeclined; any other non-active result is cancelled, never granted.
      */
     private Subscription createPaidStripeSubscription(String stripeCustomerId, String priceId,
-                                                      String paymentMethodId, String kind, Object ownerId) {
+                                                      String paymentMethodId, String kind, Object ownerId,
+                                                      String idempotencyKey) {
         Subscription stripeSub;
         try {
-            stripeSub = stripeClient.createSubscription(stripeCustomerId, priceId, paymentMethodId,
-                "sub-create-" + UUID.randomUUID());
+            stripeSub = stripeClient.createSubscription(stripeCustomerId, priceId, paymentMethodId, idempotencyKey);
         } catch (StripeException e) {
             throw stripeFailure(kind + "_SUBSCRIBE", ownerId, e);
         }
@@ -1397,6 +1473,60 @@ public class SubscriptionService {
             throw new PaymentGatewayException("payment.subscription.paymentDeclined");
         }
         return stripeSub;
+    }
+
+    /**
+     * fix/payment-charge-idempotency: the Stripe key of one subscribe attempt — owner + the attempt key
+     * written by the claim before the call. Covers the SDK's own network retries; a new attempt (after this
+     * one ended) gets a new key, so a re-subscribe after a decline is not replayed from Stripe's 24h cache.
+     */
+    private static String subscribeIdempotencyKey(String kind, Object ownerId, String attemptKey) {
+        return "sub-create-" + kind.toLowerCase(java.util.Locale.ROOT) + "-" + ownerId + "-" + attemptKey;
+    }
+
+    /**
+     * Claim-time re-check under the row lock: an owner already linked to a billing-healthy subscription is
+     * refused (the caller's unlocked assertCanSubscribe may have raced a subscribe that just finished), and so
+     * is a second attempt while a fresh marker stands. A marker older than the window is from an attempt that
+     * died mid-flight (the SDK timeouts bound a live one well inside it) and is taken over.
+     */
+    private void assertSubscribeClaimable(String status, String stripeSubId, Instant attemptAt, String kind,
+                                          Object ownerId) {
+        if (stripeSubId != null && isBillingHealthy(status)) {
+            throw new PaymentGatewayException("payment.subscription.alreadyActive");
+        }
+        if (attemptAt != null && attemptAt.isAfter(Instant.now().minus(SUBSCRIBE_ATTEMPT_WINDOW))) {
+            log.warn("[{}_SUBSCRIBE_IN_PROGRESS ownerId={} since={}] concurrent subscribe refused", kind, ownerId,
+                attemptAt);
+            throw new PaymentGatewayException("payment.subscription.inProgress");
+        }
+    }
+
+    private void releaseSubscribeAttemptQuietly(Runnable release, String kind, Object ownerId) {
+        try {
+            release.run();
+        } catch (RuntimeException e) {
+            // The marker expires on its own after SUBSCRIBE_ATTEMPT_WINDOW; never mask the subscribe's outcome.
+            log.error("[{}_SUBSCRIBE_ATTEMPT_RELEASE_FAILED ownerId={}]", kind, ownerId, e);
+        }
+    }
+
+    /**
+     * fix/payment-charge-idempotency: a duplicate created by a concurrent subscribe is cancelled AND its paid
+     * first invoice refunded — error_if_incomplete means it was charged before Stripe returned, and a plain
+     * cancel kept that money (two periods paid for one). Refund first, while the invoice is still the
+     * subscription's latest; a refund failure is logged for manual reconciliation and the cancel still runs.
+     */
+    private void cancelDuplicateSubscription(String stripeSubId, String kind, Object ownerId) {
+        try {
+            long refunded = stripeClient.refundLatestInvoicePayment(stripeSubId);
+            log.warn("[{}_DUPLICATE_SUBSCRIPTION_REFUNDED ownerId={} stripeSubId={} amountMinor={}]",
+                kind, ownerId, stripeSubId, refunded);
+        } catch (StripeException | RuntimeException e) {
+            log.error("[{}_DUPLICATE_SUBSCRIPTION_REFUND_FAILED ownerId={} stripeSubId={}] first invoice NOT refunded — "
+                + "refund it by hand in the Stripe Dashboard", kind, ownerId, stripeSubId, e);
+        }
+        cancelStripeSubscriptionQuietly(stripeSubId, kind, ownerId);
     }
 
     private void cancelStripeSubscriptionQuietly(String stripeSubId, String kind, Object ownerId) {

@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
 import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import io.micrometer.core.instrument.Counter;
@@ -97,9 +98,9 @@ public class PaymentLifecycleService {
      * with no payment row, which is precisely the state PaymentPendingSweeper can decide safely.
      */
     private CaptureReservation reserveOrReport(UUID bookingId, BigDecimal intendedCredit,
-                                               BigDecimal intendedStripe, UUID batchId) {
+                                               BigDecimal intendedStripe, UUID batchId, String chargeKey) {
         try {
-            return persistenceService.reserveCapture(bookingId, intendedCredit, intendedStripe, batchId);
+            return persistenceService.reserveCapture(bookingId, intendedCredit, intendedStripe, batchId, chargeKey);
         } catch (RuntimeException e) {
             Counter.builder(SETTLE_ABORTED_COUNTER)
                 .tag("reason", "reservation_failed")
@@ -150,6 +151,8 @@ public class PaymentLifecycleService {
      * lock is blocking, so an accepted booking is never stranded by contention); the alternative — debiting the credit in its own committed
      * transaction before the charge — would strand debited credit on a crash between the two. With no
      * credit (the common case) no lock is taken at all: there is nothing to overdraw.
+     * fix/payment-charge-idempotency (L2): the hold is now bounded by the Stripe SDK timeouts configured in
+     * {@code PaymentConfig} (connect / read / network retries) instead of the SDK's 80s-read defaults.
      */
     private BigDecimal walletBalanceForSettlement(Long parentId) {
         BigDecimal unlocked = creditWalletService.getBalance(parentId);
@@ -223,11 +226,11 @@ public class PaymentLifecycleService {
         BigDecimal balance = walletBalanceForSettlement(event.getParentId());
         // fix/payment-agreed-price-lock: the same split rule as the batch path, which clamps a negative
         // balance to zero (balance.min(price) here used to charge the card price + |balance|).
-        CreditCardSplit split = CreditCardSplit.of(balance, event.getSessionPrice());
+        // fix/payment-charge-idempotency (L3): a card part below Stripe's minimum is re-balanced, not declined.
+        CreditCardSplit split = CreditCardSplit.of(balance, event.getSessionPrice(), paymentGateway.minimumCardCharge());
         BigDecimal creditToUse = split.creditApplied();
         BigDecimal stripeAmount = split.cardCharge().signum() == 0 ? BigDecimal.ZERO : split.cardCharge();
 
-        String paymentIntentId = null;
         if (stripeAmount.compareTo(BigDecimal.ZERO) > 0) {
             // UAT.3 AC3. Reserve only when a Stripe call is actually about to happen: a fully
             // credit-covered booking touches Stripe never, and a row from it would break the
@@ -240,17 +243,27 @@ public class PaymentLifecycleService {
             // reserveCapture never touches. If a future edit adds a write above this line, it
             // deadlocks with NO timeout: a plain UPDATE ignores the jakarta.persistence.lock.timeout=0
             // (NOWAIT) hint, which applies only to the locked SELECT.
+            //
+            // fix/payment-charge-idempotency: the charge's idempotency key is written onto the
+            // reservation in that same committed transaction, BEFORE Stripe is called.
+            String chargeKey = ChargeKeys.forBooking(event.getBookingId());
             CaptureReservation reservation = reserveOrReport(
-                event.getBookingId(), creditToUse, stripeAmount, null);
+                event.getBookingId(), creditToUse, stripeAmount, null, chargeKey);
             if (reservation != CaptureReservation.RESERVED) {
                 if (reservation != null) {
                     abortSettle(event.getBookingId(), reservation);
                 }
                 return;
             }
+            String paymentIntentId;
             try {
                 paymentIntentId = paymentGateway.chargeAndCapture(
-                    event.getBookingId(), event.getParentId(), event.getCoachId(), stripeAmount);
+                    event.getBookingId(), event.getParentId(), event.getCoachId(), stripeAmount, chargeKey);
+            } catch (ChargeOutcomeUnknownException e) {
+                // The card may have been charged: never decline here. The reservation keeps the key and
+                // ChargeOutcomeReconciler settles or declines once Stripe can say which.
+                reportOutcomeUnknown(List.of(event.getBookingId()), null, chargeKey);
+                return;
             } catch (PaymentGatewayException e) {
                 log.error("Stripe charge failed for booking {}: {}", event.getBookingId(), e.getMessage());
                 persistenceService.persistPaymentFailure(event.getBookingId(), BigDecimal.ZERO,
@@ -258,12 +271,67 @@ public class PaymentLifecycleService {
                     event.getRequestedStartTime(), event.getCanonicalTimezone());
                 return;
             }
+            recordChargeIntentQuietly(List.of(event.getBookingId()), paymentIntentId);
+            settleChargedBookingOrCompensate(event, creditToUse, stripeAmount, paymentIntentId);
+            return;
         }
 
-        // BOOKING_DEDUCTION + BookingPayment + status transition all commit atomically
+        // Credit only — nothing reached Stripe. BOOKING_DEDUCTION + BookingPayment + status transition
+        // all commit atomically, and a failure rolls all of them back with nothing to compensate.
         persistenceService.persistPaymentSuccess(event.getBookingId(), creditToUse, stripeAmount,
-            paymentIntentId, null, event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
+            null, null, event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
             event.getRequestedStartTime(), event.getCanonicalTimezone());
+    }
+
+    /**
+     * fix/payment-charge-idempotency (M1): the single-booking twin of the batch path's post-charge
+     * compensation (#335). The settle (BOOKING_DEDUCTION + CAPTURED row + transition) runs in its own
+     * transaction so a failure there — the booking row locked by another transaction past the NOWAIT retry
+     * budget, a DB blip, an optimistic-lock clash — no longer rolls back silently while the parent's card
+     * stays charged: the booking is declined and the card share credited back to the wallet (the credit
+     * share was never debited — it commits only with the confirm). If the compensation fails too, the
+     * reservation survives as CAPTURE_PENDING with its charge key and PaymentIntent id, and
+     * ChargeOutcomeReconciler retries the settle.
+     */
+    private void settleChargedBookingOrCompensate(BookingAcceptedEvent event, BigDecimal creditToUse,
+                                                  BigDecimal stripeAmount, String paymentIntentId) {
+        try {
+            perBookingTx.executeWithoutResult(s -> persistenceService.persistPaymentSuccess(event.getBookingId(),
+                creditToUse, stripeAmount, paymentIntentId, null, event.getParentId(), event.getParentEmail(),
+                event.getCoachDisplayName(), event.getRequestedStartTime(), event.getCanonicalTimezone()));
+        } catch (RuntimeException e) {
+            log.error("[SETTLE_FAILED_AFTER_CHARGE] bookingId={} intentId={} card={} — declining and returning "
+                + "the card share as wallet credit", event.getBookingId(), paymentIntentId, stripeAmount, e);
+            try {
+                persistenceService.declineBookingAfterCharge(event.getBookingId(), null, BigDecimal.ZERO,
+                    stripeAmount, paymentIntentId, event.getParentId(),
+                    "Booking could not be confirmed - payment returned as credit");
+            } catch (RuntimeException de) {
+                log.error("[SINGLE_DECLINE_REFUND_FAILED] bookingId={} parentId={} intentId={} card={} — decline and "
+                        + "refund both rolled back; the CAPTURE_PENDING reservation is left for ChargeOutcomeReconciler",
+                    event.getBookingId(), event.getParentId(), paymentIntentId, stripeAmount, de);
+            }
+        }
+    }
+
+    private void recordChargeIntentQuietly(List<UUID> bookingIds, String paymentIntentId) {
+        try {
+            persistenceService.recordChargeIntent(bookingIds, paymentIntentId);
+        } catch (RuntimeException e) {
+            // Bookkeeping only: the reservation's charge key still finds the PaymentIntent.
+            log.error("[STRIPE_INTENT_RECORD_FAILED] charge captured, intent id not written onto the reservation: "
+                + "bookingIds={} intentId={}", bookingIds, paymentIntentId, e);
+        }
+    }
+
+    private void reportOutcomeUnknown(List<UUID> bookingIds, UUID batchId, String chargeKey) {
+        Counter.builder(SETTLE_ABORTED_COUNTER)
+            .tag("reason", "charge_outcome_unknown")
+            .register(meterRegistry)
+            .increment();
+        log.error("[STRIPE_CHARGE_OUTCOME_UNKNOWN] bookingIds={} batchId={} key={} — the card may have been charged; "
+            + "reservations kept CAPTURE_PENDING for ChargeOutcomeReconciler, nothing declined", bookingIds, batchId,
+            chargeKey);
     }
 
     // ─── Batch booking ────────────────────────────────────────────────────────
@@ -349,7 +417,7 @@ public class PaymentLifecycleService {
             // columns. A reserved row's amounts are an operator's reconciliation hint, not an
             // accounting record — only CAPTURED rows are ever summed.
             CaptureReservation reservation = reserveOrReport(
-                bookingId, BigDecimal.ZERO, price, event.getBatchId());
+                bookingId, BigDecimal.ZERO, price, event.getBatchId(), null);
             if (reservation != CaptureReservation.RESERVED) {
                 // A booking that could not be reserved — for any reason, including a thrown one —
                 // is dropped from the batch and its siblings carry on. Letting the exception escape
@@ -372,85 +440,123 @@ public class PaymentLifecycleService {
         // feat/coach-workflow-gaps A22: the split rule lives in CreditCardSplit so the parent's pre-submit
         // batch quote (BatchPaymentQuoteService) computes exactly this figure.
         BigDecimal balance = walletBalanceForSettlement(event.getParentId());
-        CreditCardSplit split = CreditCardSplit.of(balance, creditSubtotal);
+        CreditCardSplit split = CreditCardSplit.of(balance, creditSubtotal, paymentGateway.minimumCardCharge());
         BigDecimal creditToUse = split.creditApplied();
         BigDecimal stripeAmount = split.cardCharge();
 
-        if (creditToUse.compareTo(BigDecimal.ZERO) > 0) {
-            creditWalletService.writeLedgerEntry(event.getParentId(), creditToUse.negate(),
-                CreditLedgerEntryType.BOOKING_DEDUCTION, event.getBatchId(), "Batch session booking deduction");
+        // Each booking's credit / card share, decided once before the charge. fix/payment-agreed-price-lock:
+        // the price reserved above (agreed_price), so the shares always sum to exactly what is charged.
+        List<BookingPaymentPersistenceService.ChargeShare> shares = new ArrayList<>();
+        BigDecimal remainingCredit = creditToUse;
+        for (UUID bookingId : reserved) {
+            BigDecimal price = reservedPrices.get(bookingId);
+            BigDecimal creditShare = remainingCredit.signum() > 0 ? price.min(remainingCredit) : BigDecimal.ZERO;
+            remainingCredit = remainingCredit.subtract(creditShare);
+            shares.add(new BookingPaymentPersistenceService.ChargeShare(bookingId, creditShare, price.subtract(creditShare)));
         }
 
         String paymentIntentId = null;
         if (stripeAmount.compareTo(BigDecimal.ZERO) > 0) {
+            // fix/payment-charge-idempotency (H1/H2): the key names THIS settlement — batch id + the exact
+            // reserved set — so a concurrent accept of the same batch (a disjoint set) cannot replay this
+            // PaymentIntent. It and every row's share are committed onto the reservations before the call.
+            String chargeKey = ChargeKeys.forBatch(event.getBatchId(), reserved);
+            try {
+                persistenceService.stampBatchCharge(shares, chargeKey);
+            } catch (RuntimeException e) {
+                // Nothing charged yet: decline outright rather than charge under a key no row records.
+                log.error("Batch charge key could not be recorded — declining, nothing charged: batchId={}",
+                    event.getBatchId(), e);
+                reserved.forEach(id -> declineQuietly(id, event.getBatchId()));
+                return;
+            }
             try {
                 paymentIntentId = paymentGateway.chargeAndCaptureForBatch(
-                    event.getBatchId(), event.getParentId(), event.getCoachId(), stripeAmount);
+                    event.getBatchId(), event.getParentId(), event.getCoachId(), stripeAmount, chargeKey);
+            } catch (ChargeOutcomeUnknownException e) {
+                // The card may have been charged: decline nothing. No credit was debited (it commits per
+                // booking with the confirm), and the rows carry the key and their shares for the reconciler.
+                reportOutcomeUnknown(reserved, event.getBatchId(), chargeKey);
+                return;
             } catch (PaymentGatewayException e) {
                 log.error("Stripe batch charge failed: batchId={}", event.getBatchId());
-                if (creditToUse.compareTo(BigDecimal.ZERO) > 0) {
-                    creditWalletService.writeLedgerEntry(event.getParentId(), creditToUse,
-                        CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL, event.getBatchId(), "Batch payment failed - credit restored");
-                }
                 // UAT.3 AC3. Every reserved booking now HAS a row, so the previous
                 // `if (!existsById(bookingId))` condition would be permanently false and nothing
                 // would be declined — the whole batch would strand in PAYMENT_PENDING. Decline the
                 // reserved set outright; declineBatchBooking writes each existing row to
-                // CHARGE_FAILED through the AC3 write-back helper.
+                // CHARGE_FAILED through the AC3 write-back helper. No credit to restore: none was debited.
                 for (UUID bookingId : reserved) {
                     persistenceService.declineBatchBooking(bookingId, event.getBatchId());
                 }
                 return;
             }
+            recordChargeIntentQuietly(reserved, paymentIntentId);
         }
 
         String finalPaymentIntentId = paymentIntentId;
-        BigDecimal remainingCredit = creditToUse;
-        for (UUID bookingId : reserved) {
-            // fix/payment-agreed-price-lock: the price reserved above (agreed_price), so the shares
-            // always sum to exactly what was debited and charged.
-            BigDecimal price = reservedPrices.get(bookingId);
-            BigDecimal bookingCreditShare = remainingCredit.compareTo(BigDecimal.ZERO) > 0
-                ? price.min(remainingCredit) : BigDecimal.ZERO;
-            remainingCredit = remainingCredit.subtract(bookingCreditShare);
-            BigDecimal bookingStripeShare = price.subtract(bookingCreditShare);
-            final BigDecimal creditShare = bookingCreditShare;
-            final BigDecimal stripeShare = bookingStripeShare;
-            Booking b = isSettled(bookingId) ? null : bookingRepository.findById(bookingId).orElse(null);
+        for (BookingPaymentPersistenceService.ChargeShare share : shares) {
+            UUID bookingId = share.bookingId();
+            final BigDecimal creditShare = share.credit();
+            final BigDecimal stripeShare = share.card();
+            final Booking b;
+            try {
+                b = isSettled(bookingId) ? null : bookingRepository.findById(bookingId).orElse(null);
+            } catch (RuntimeException e) {
+                // fix/payment-charge-idempotency: used to escape and abandon every later sibling. The row stays
+                // CAPTURE_PENDING (with the charge key and intent id when a charge was made) for the reconciler.
+                log.error("[BATCH_SETTLE_READ_FAILED] bookingId={} batchId={} — left CAPTURE_PENDING", bookingId,
+                    event.getBatchId(), e);
+                continue;
+            }
             if (b == null) {
-                // fix/payment-agreed-price-lock: this booking's share was already debited and charged
-                // above. It used to be skipped silently, keeping the money; credit it back instead. Its
-                // payment row is left alone (something else settled it, or the booking is gone).
+                // fix/payment-agreed-price-lock: this booking's card share was already charged above. It used to
+                // be skipped silently, keeping the money; credit it back instead. Its payment row is left alone
+                // (something else settled it, or the booking is gone). fix/payment-charge-idempotency: only the
+                // card share — its credit share was never debited.
                 log.error("Batch booking settled elsewhere or vanished after the batch charge — crediting its "
-                        + "share back to the wallet: bookingId={} batchId={} credit={} card={}",
-                    bookingId, event.getBatchId(), creditShare, stripeShare);
-                refundShareQuietly(event.getParentId(), bookingId, event.getBatchId(), creditShare.add(stripeShare),
+                        + "card share back to the wallet: bookingId={} batchId={} card={}",
+                    bookingId, event.getBatchId(), stripeShare);
+                refundShareQuietly(event.getParentId(), bookingId, event.getBatchId(), stripeShare,
                     finalPaymentIntentId, stripeShare);
                 continue;
             }
             try {
-                // Own transaction per booking, as in the pack loop above: one booking failing to
-                // settle must not discard the siblings that already succeeded.
-                perBookingTx.executeWithoutResult(s ->
+                // Own transaction per booking, as in the pack loop above: one booking failing to settle must
+                // not discard the siblings that already succeeded. fix/payment-charge-idempotency (M2): the
+                // booking's credit share is debited in this same transaction (reference = bookingId), so a
+                // confirmed booking always has its deduction and a crash between bookings strands none. The
+                // listener still holds the payer's wallet lock; parent_credit_ledger has no FK to
+                // stripe_customers, so this second connection cannot block on it.
+                perBookingTx.executeWithoutResult(s -> {
+                    if (creditShare.signum() > 0) {
+                        creditWalletService.writeLedgerEntry(event.getParentId(), creditShare.negate(),
+                            CreditLedgerEntryType.BOOKING_DEDUCTION, bookingId, "Batch session booking deduction");
+                    }
                     persistenceService.confirmCreditBatchPayment(bookingId, event.getBatchId(),
                         creditShare, stripeShare, finalPaymentIntentId,
                         event.getParentId(), event.getParentEmail(), event.getCoachDisplayName(),
-                        b.getRequestedStartTime(), b.getCanonicalTimezone()));
+                        b.getRequestedStartTime(), b.getCanonicalTimezone());
+                });
             } catch (Exception e) {
                 log.error("Credit batch settle failed after the batch charge: bookingId={} batchId={}",
                     bookingId, event.getBatchId(), e);
-                // fix/payment-agreed-price-lock: the parent WAS charged for this booking (credit share +
-                // card share), so declining it with a zeroed CHARGE_FAILED row kept their money. Decline
-                // it with the real amounts and credit the full share back to the wallet, atomically.
+                if (stripeShare.signum() == 0) {
+                    // Paid wholly from credit, and that debit rolled back with the confirm: nothing was taken.
+                    declineQuietly(bookingId, event.getBatchId());
+                    continue;
+                }
+                // fix/payment-agreed-price-lock: the parent WAS charged this booking's card share, so declining
+                // it with a zeroed CHARGE_FAILED row kept their money. Decline it with the real amount and credit
+                // the card share back to the wallet, atomically.
                 try {
                     persistenceService.declineBatchBookingAfterCharge(bookingId, event.getBatchId(),
-                        creditShare, stripeShare, finalPaymentIntentId, event.getParentId());
+                        BigDecimal.ZERO, stripeShare, finalPaymentIntentId, event.getParentId());
                 } catch (RuntimeException de) {
-                    // Nothing committed: the reserved CAPTURE_PENDING row survives, so the booking stays
-                    // in PAYMENT_PENDING and PaymentPendingSweeper escalates it. Do not abandon siblings.
-                    log.error("[BATCH_DECLINE_REFUND_FAILED] bookingId={} batchId={} parentId={} credit={} "
-                            + "card={} — decline and refund both rolled back; reconcile by hand",
-                        bookingId, event.getBatchId(), event.getParentId(), creditShare, stripeShare, de);
+                    // Nothing committed: the reserved CAPTURE_PENDING row survives with its charge key and intent
+                    // id, so ChargeOutcomeReconciler retries it. Do not abandon siblings.
+                    log.error("[BATCH_DECLINE_REFUND_FAILED] bookingId={} batchId={} parentId={} card={} — decline "
+                            + "and refund both rolled back; left for ChargeOutcomeReconciler",
+                        bookingId, event.getBatchId(), event.getParentId(), stripeShare, de);
                 }
             }
         }
@@ -470,7 +576,8 @@ public class PaymentLifecycleService {
         try {
             persistenceService.declineBatchBooking(bookingId, batchId);
         } catch (RuntimeException e) {
-            log.error("Declining unpriced batch booking failed: bookingId={} batchId={}", bookingId, batchId, e);
+            log.error("Declining batch booking failed (nothing was charged for it): bookingId={} batchId={}",
+                bookingId, batchId, e);
         }
     }
 

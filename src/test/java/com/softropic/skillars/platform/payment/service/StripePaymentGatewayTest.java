@@ -714,6 +714,128 @@ class StripePaymentGatewayTest {
     private PaymentIntent mockIntent(String id) {
         PaymentIntent intent = new PaymentIntent();
         intent.setId(id);
+        intent.setStatus("succeeded");
         return intent;
+    }
+
+    // ── fix/payment-charge-idempotency ──
+
+    private static final UUID BOOKING_ID = UUID.randomUUID();
+
+    private void stubChargeable() {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+    }
+
+    /** H2: no response at all — the card may have been charged; must not read as a decline. */
+    @Test
+    void charge_connectionFailure_isOutcomeUnknown_notADecline() throws StripeException {
+        stubChargeable();
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("read timed out"));
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT,
+                "pi-booking-" + BOOKING_ID))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class)
+            .satisfies(e -> assertThat(((com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException) e)
+                .getIdempotencyKey()).isEqualTo("pi-booking-" + BOOKING_ID));
+    }
+
+    @Test
+    void charge_5xx_and_idempotencyConflict_areOutcomeUnknown() throws StripeException {
+        stubChargeable();
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.ApiException("boom", "req_1", "api_error", 502, null))
+            .thenThrow(new com.stripe.exception.IdempotencyException("in flight", "req_2", "idempotency_error", 400));
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k1"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k1"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+    }
+
+    @Test
+    void charge_cardDecline_isAPlainFailure_notUnknown() throws StripeException {
+        stubChargeable();
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.CardException("declined", "req", "card_declined", null,
+                "generic_decline", null, 402, null));
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k2"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .isNotInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class)
+            .hasMessage("payment.lifecycleFailure");
+    }
+
+    /** L5: only "succeeded" is captured money. */
+    @Test
+    void charge_intentNotSucceeded_isNeverReturnedAsCaptured() throws StripeException {
+        stubChargeable();
+        PaymentIntent processing = mockIntent("pi_proc");
+        processing.setStatus("processing");
+        PaymentIntent needsAction = mockIntent("pi_action");
+        needsAction.setStatus("requires_action");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(processing)
+            .thenReturn(needsAction);
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k3"))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k3"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .isNotInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+    }
+
+    /** H1: the batch charge goes out under the caller's per-settlement key, carried on the intent's metadata. */
+    @Test
+    void batchCharge_usesTheCallersKeyVerbatim_andPutsItOnTheIntentMetadata() throws StripeException {
+        stubChargeable();
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_batch"));
+        UUID batchId = UUID.randomUUID();
+
+        stripePaymentGateway.chargeAndCaptureForBatch(batchId, 1001L, COACH_ID, AMOUNT, "pi-batch-" + batchId + "-abc");
+
+        ArgumentCaptor<PaymentIntentCreateParams> params = ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient)
+            .createPaymentIntent(params.capture(), org.mockito.ArgumentMatchers.eq("pi-batch-" + batchId + "-abc"));
+        assertThat(params.getValue().getMetadata()).containsEntry("chargeKey", "pi-batch-" + batchId + "-abc");
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_matchesOnTheChargeKeyMetadata() throws StripeException {
+        stubStripeCustomer(1001L, "cus_1001");
+        PaymentIntent other = mockIntent("pi_other");
+        other.setMetadata(Map.of("chargeKey", "pi-booking-someone-else"));
+        PaymentIntent mine = mockIntent("pi_mine");
+        mine.setMetadata(Map.of("chargeKey", "pi-booking-" + BOOKING_ID));
+        mine.setAmount(5000L);
+        when(stripeClient.listPaymentIntentsForCustomer(org.mockito.ArgumentMatchers.eq("cus_1001"),
+                org.mockito.ArgumentMatchers.anyLong()))
+            .thenReturn(java.util.List.of(other, mine));
+
+        Optional<com.softropic.skillars.platform.payment.contract.ChargeLookup> found = stripePaymentGateway
+            .findChargeByIdempotencyKey(1001L, "pi-booking-" + BOOKING_ID, Instant.now().minusSeconds(3600));
+
+        assertThat(found).isPresent();
+        assertThat(found.get().paymentIntentId()).isEqualTo("pi_mine");
+        assertThat(found.get().succeeded()).isTrue();
+        assertThat(found.get().amount()).isEqualByComparingTo("50.00");
+    }
+
+    @Test
+    void findChargeByIdempotencyKey_noStripeCustomer_isAProvenAbsence() {
+        when(stripeCustomerRepository.findById(1001L)).thenReturn(Optional.empty());
+
+        assertThat(stripePaymentGateway.findChargeByIdempotencyKey(1001L, "k", Instant.now())).isEmpty();
+    }
+
+    /** L3: Stripe's per-currency minimum, defaulting to 0.50. */
+    @Test
+    void minimumCardCharge_followsTheConfiguredCurrency() {
+        when(configService.getString("platform.payment.currency")).thenReturn("gbp", "EUR", "xof");
+        assertThat(stripePaymentGateway.minimumCardCharge()).isEqualByComparingTo("0.30");
+        assertThat(stripePaymentGateway.minimumCardCharge()).isEqualByComparingTo("0.50");
+        assertThat(stripePaymentGateway.minimumCardCharge()).isEqualByComparingTo("0.50");
     }
 }
