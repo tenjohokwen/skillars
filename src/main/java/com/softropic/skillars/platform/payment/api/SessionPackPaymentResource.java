@@ -191,25 +191,24 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_PLAYER_OR_COACH_ROLE)
     public ResponseEntity<Void> savePaymentMethod(@Valid @RequestBody SavedPaymentMethodRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
-        StripeCustomer customer = stripeCustomerRepository.findById(parentId)
-            .orElseGet(() -> {
-                String stripeCustomerId = paymentGateway.createStripeCustomer(parentId);
-                StripeCustomer sc = new StripeCustomer();
-                sc.setParentId(parentId);
-                sc.setStripeCustomerId(stripeCustomerId);
-                return sc;
-            });
-        customer.setStripePaymentMethodId(request.paymentMethodId());
-        try {
-            stripeCustomerRepository.save(customer);
-        } catch (DataIntegrityViolationException e) {
-            StripeCustomer existing = stripeCustomerRepository.findById(parentId).orElseThrow();
-            existing.setStripePaymentMethodId(request.paymentMethodId());
-            stripeCustomerRepository.save(existing);
+        if (stripeCustomerRepository.findById(parentId).isEmpty()) {
+            // The Stripe customer is created outside any transaction (it is a Stripe call); a concurrent
+            // request that inserted the row first wins and its customer is kept.
+            StripeCustomer sc = new StripeCustomer();
+            sc.setParentId(parentId);
+            sc.setStripeCustomerId(paymentGateway.createStripeCustomer(parentId));
+            sc.setStripePaymentMethodId(request.paymentMethodId());
+            try {
+                stripeCustomerRepository.save(sc);
+            } catch (DataIntegrityViolationException e) {
+                // Created concurrently by another request; the update below sets the card on that row.
+            }
         }
-        // fix/payment-subscription-payment-method-sync: move live subscriptions onto the new card and
-        // retry a past-due invoice with it. Best-effort; never fails the save.
-        subscriptionService.syncPaymentMethodToSubscriptions(parentId, request.paymentMethodId());
+        // fix/payment-subscription-resume-and-async-sync: saves the card and, atomically with it, enqueues
+        // the move of the caller's live subscriptions onto it (default payment method, past-due invoice
+        // retry, paused-subscription resume). The Stripe calls run on the durable outbox after commit, so
+        // they neither fail nor slow this request, and a Stripe outage is retried.
+        subscriptionService.savePaymentMethodAndScheduleSync(parentId, request.paymentMethodId());
         return ResponseEntity.noContent().build();
     }
 

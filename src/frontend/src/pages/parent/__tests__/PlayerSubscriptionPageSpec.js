@@ -9,8 +9,8 @@
 // "exact id, not corrupted" assertion below goes RED, since it would assert against a Number
 // whose string form has already lost the trailing digits.
 
-import { describe, it, expect, vi, afterEach } from 'vitest'
-import { mount, flushPromises } from '@vue/test-utils'
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { mount, flushPromises, config } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
@@ -118,6 +118,7 @@ describe('PlayerSubscriptionPage.vue — payment issue banner', () => {
   it.each([
     ['PAST_DUE', true],
     ['UNPAID', true],
+    ['PAUSED', true],
     ['ACTIVE', false],
   ])('status %s shows the banner: %s', async (status, shown) => {
     const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
@@ -126,5 +127,48 @@ describe('PlayerSubscriptionPage.vue — payment issue banner', () => {
     })
 
     expect(wrapper.find('[data-test="payment-issue-banner"]').exists()).toBe(shown)
+  })
+})
+
+// fix/payment-subscription-resume-and-async-sync: the backend applies a saved card to the subscription
+// asynchronously (durable outbox), so after saving the banner says the payment is being retried rather
+// than implying it already went through.
+describe('PlayerSubscriptionPage.vue — banner after saving a card', () => {
+  const tiers = [
+    { tier: 'ATHLETE', features: [] },
+    { tier: 'PRO', features: [] },
+  ]
+  let previous
+
+  beforeEach(() => {
+    previous = config.global.renderStubDefaultSlot
+    config.global.renderStubDefaultSlot = true
+  })
+  afterEach(() => {
+    config.global.renderStubDefaultSlot = previous
+  })
+
+  it('switches to the "retrying" copy once a card is saved on a past-due subscription', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerTiers: tiers,
+      playerSubscription: { tier: 'PRO', status: 'PAST_DUE', cancelAtPeriodEnd: false },
+    })
+    expect(wrapper.find('[data-test="payment-retry-pending"]').exists()).toBe(false)
+    expect(wrapper.text()).toContain('subscription.paymentIssue')
+
+    wrapper.findComponent({ name: 'PaymentMethodCard' }).vm.$emit('saved')
+    await flushPromises()
+
+    expect(wrapper.find('[data-test="payment-retry-pending"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('subscription.paymentRetrying')
+  })
+
+  it('shows the paused copy for a PAUSED subscription', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerTiers: tiers,
+      playerSubscription: { tier: 'PRO', status: 'PAUSED', cancelAtPeriodEnd: false },
+    })
+
+    expect(wrapper.text()).toContain('subscription.paymentPaused')
   })
 })

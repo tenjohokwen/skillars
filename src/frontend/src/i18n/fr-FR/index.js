@@ -1956,7 +1956,7 @@ export default {
       savedRefreshFailed:
         "Votre carte a été enregistrée, mais l'affichage n'a pas pu être actualisé. Rechargez la page pour la voir.",
       subscriptionNote:
-        'Une nouvelle carte est aussi utilisée pour votre abonnement, et tout paiement en attente est retenté avec elle.',
+        'Une nouvelle carte est aussi utilisée pour votre abonnement : dans les minutes qui suivent, nous retentons avec elle tout paiement en attente, ou reprenons un abonnement en pause.',
       unavailable: 'Les paiements par carte ne sont pas disponibles pour le moment',
     },
     sessionPackTiersTitle: 'Offre de pack de séances',
@@ -2023,13 +2023,17 @@ export default {
     perMonth: '{price} / mois',
     perYear: '{price} / an',
     paymentIssue:
-      'Le dernier paiement de votre abonnement a échoué. Mettez à jour votre carte et nous retenterons le paiement immédiatement.',
+      'Le dernier paiement de votre abonnement a échoué. Mettez à jour votre carte et nous retenterons le paiement avec elle.',
+    paymentPaused:
+      "Votre période d'essai est terminée et votre abonnement est en pause car aucune carte n'était enregistrée. Ajoutez une carte pour le reprendre.",
+    paymentRetrying:
+      'Carte enregistrée. Nous retentons le paiement de votre abonnement avec elle ; votre formule sera rétablie dès que le paiement aura abouti, ce qui peut prendre quelques minutes.',
     updateCard: 'Mettre à jour la carte',
     errors: {
       paymentDeclined:
         'Votre carte a été refusée ou nécessite une authentification supplémentaire. Veuillez mettre à jour votre moyen de paiement et réessayer.',
       updatePaymentMethod:
-        "Votre abonnement actuel a une facture impayée. Mettez à jour votre carte au lieu de vous réabonner : l'enregistrer retente le paiement et rétablit votre formule.",
+        "Votre abonnement actuel a une facture impayée. Mettez à jour votre carte au lieu de vous réabonner : nous retenterons alors le paiement et rétablirons votre formule dès qu'il aura abouti.",
       notActive:
         "Votre abonnement n'est pas actif actuellement. Réglez le paiement en attente avant de changer de formule.",
       alreadyActive: 'Vous avez déjà un abonnement actif.',

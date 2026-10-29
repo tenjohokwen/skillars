@@ -40,6 +40,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
     @Autowired PaymentCoachSubscriptionRepository paymentCoachSubscriptionRepository;
     @Autowired CoachSubscriptionChangeRepository coachSubscriptionChangeRepository;
     @Autowired ConfigService configService;
+    @Autowired com.softropic.skillars.platform.outbox.service.OutboxService outboxService;
 
     @MockitoBean StripeClient stripeClient;
 
@@ -109,6 +110,8 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
     void cleanSubscriptionData() {
         transactionTemplate.execute(status -> {
             jdbcTemplate.execute("DELETE FROM payment.coach_subscription_changes");
+            jdbcTemplate.update("DELETE FROM main.outbox_messages WHERE aggregate_type = ?",
+                PaymentMethodSyncOutboxSupport.AGGREGATE_TYPE);
             jdbcTemplate.execute("DELETE FROM payment.player_subscription_changes");
             jdbcTemplate.execute("DELETE FROM payment.coach_subscriptions");
             jdbcTemplate.execute("DELETE FROM payment.player_subscriptions");
@@ -430,15 +433,57 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         assertThat(marketplaceTier()).isEqualTo("SCOUT");
     }
 
+    // fix/payment-subscription-resume-and-async-sync: saving the card enqueues the sync on the durable
+    // outbox in the same transaction; the relay runs it after commit, and a Stripe outage is retried.
     @Test
-    void newCardSaved_pastDueSubscriptionMovedToCardAndInvoiceRetried() throws StripeException {
+    void newCardSaved_enqueuesSync_relayRetriesAfterStripeOutage_movesPastDueSubAndRetriesInvoice()
+            throws StripeException {
         subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
         subscriptionService.handleSubscriptionWebhook("invoice.payment_failed", STRIPE_SUB_ID, Map.of());
+        when(stripeClient.updateSubscriptionDefaultPaymentMethod(STRIPE_SUB_ID, "pm_replacement"))
+            .thenThrow(new com.stripe.exception.ApiConnectionException("stripe down"))
+            .thenReturn(null);
 
-        subscriptionService.syncPaymentMethodToSubscriptions(COACH_USER_ID, "pm_replacement");
+        subscriptionService.savePaymentMethodAndScheduleSync(COACH_USER_ID, "pm_replacement");
 
-        verify(stripeClient).updateSubscriptionDefaultPaymentMethod(STRIPE_SUB_ID, "pm_replacement");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT stripe_payment_method_id FROM payment.stripe_customers WHERE parent_id = ?",
+            String.class, COACH_USER_ID)).isEqualTo("pm_replacement");
+        assertThat(syncOutboxAttempts()).as("the after-commit drain failed; the row waits for a retry")
+            .containsExactly(1);
+        verify(stripeClient, never()).payLatestOpenInvoice(anyString(), anyString(), anyString());
+
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            // Backdated, not now(): the DB container's clock can run ahead of the JVM's Instant.now().
+            "UPDATE main.outbox_messages SET next_attempt_at = now() - interval '1 hour' WHERE aggregate_type = ?",
+            PaymentMethodSyncOutboxSupport.AGGREGATE_TYPE));
+        outboxService.drain();
+
+        verify(stripeClient, times(2)).updateSubscriptionDefaultPaymentMethod(STRIPE_SUB_ID, "pm_replacement");
         verify(stripeClient).payLatestOpenInvoice(eq(STRIPE_SUB_ID), eq("pm_replacement"), startsWith("inv-retry-"));
+        assertThat(syncOutboxAttempts()).isEmpty();
+    }
+
+    @Test
+    void newCardSaved_pausedSubscriptionResumedByRelay() throws StripeException {
+        subscriptionService.subscribeCoach(coachId, COACH_USER_ID, "INSTRUCTOR");
+        subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", STRIPE_SUB_ID,
+            Map.of("status", "paused"));
+        assertThat(paymentCoachSubscriptionRepository.findByCoachId(coachId).orElseThrow().getStatus())
+            .isEqualTo("PAUSED");
+
+        subscriptionService.savePaymentMethodAndScheduleSync(COACH_USER_ID, "pm_replacement");
+
+        var order = org.mockito.Mockito.inOrder(stripeClient);
+        order.verify(stripeClient).updateSubscriptionDefaultPaymentMethod(STRIPE_SUB_ID, "pm_replacement");
+        order.verify(stripeClient).resumePausedSubscription(eq(STRIPE_SUB_ID), startsWith("sub-resume-"));
+        verify(stripeClient, never()).payLatestOpenInvoice(anyString(), anyString(), anyString());
+        assertThat(syncOutboxAttempts()).isEmpty();
+    }
+
+    private java.util.List<Integer> syncOutboxAttempts() {
+        return jdbcTemplate.queryForList("SELECT attempts FROM main.outbox_messages WHERE aggregate_type = ?",
+            Integer.class, PaymentMethodSyncOutboxSupport.AGGREGATE_TYPE);
     }
 
     // ─── Cancel ──────────────────────────────────────────────────────────────────

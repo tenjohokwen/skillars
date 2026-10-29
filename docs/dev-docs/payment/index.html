@@ -309,7 +309,7 @@
         <tr><td>PATCH</td><td>/api/payment/coaches/me/session-pack-tiers/{tierId}/deactivate</td><td>Deactivate a tier</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>A coach's active tier (404 if none)</td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/setup-intent</td><td>Create a Stripe SetupIntent (creates the Stripe customer if needed)</td><td>PARENT|PLAYER|COACH</td></tr>
-        <tr><td>POST</td><td>/api/payment/save-payment-method</td><td>Store the default payment method on the caller's Stripe customer</td><td>PARENT|PLAYER|COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/save-payment-method</td><td>Store the default payment method on the caller's Stripe customer and enqueue (outbox <code>SUBSCRIPTION_PAYMENT_METHOD_SYNC</code>) moving their live subscriptions onto it: new default card, past-due invoice retry, paused-subscription resume</td><td>PARENT|PLAYER|COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/payment-method</td><td>Saved card summary (brand/last4/expiry), used to gate the purchase and subscribe UI</td><td>PARENT|PLAYER|COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/stripe/config</td><td>Stripe.js publishable key</td><td>Any authenticated user</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/stripe/onboard</td><td>Connect OAuth authorize URL</td><td>COACH</td></tr>

@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepo
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
+import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLink;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
@@ -18,6 +19,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.stripe.exception.ApiConnectionException;
 import com.stripe.exception.CardException;
+import com.stripe.exception.InvalidRequestException;
 import com.stripe.exception.StripeException;
 import org.instancio.Instancio;
 import org.junit.jupiter.api.BeforeEach;
@@ -45,12 +47,15 @@ import java.util.function.Supplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -59,6 +64,8 @@ import static org.mockito.Mockito.when;
  * fix/payment-subscription-payment-method-sync: (1) saving a new card moves the user's live
  * subscriptions onto it and retries a past-due invoice; (2) UNPAID/PAUSED get the same grace
  * treatment as PAST_DUE (clock, then cancel at Stripe and clear the link).
+ * fix/payment-subscription-resume-and-async-sync: (3) a PAUSED subscription is resumed; (4) the sync
+ * runs from the outbox — transient failures throw for a retry, declines/permanent errors do not.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -79,6 +86,7 @@ class SubscriptionPaymentMethodSyncTest {
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock StripeWebhookService stripeWebhookService;
     @Mock PlayerProfileRepository playerProfileRepository;
+    @Mock PaymentMethodSyncOutboxSupport paymentMethodSyncOutboxSupport;
 
     @InjectMocks SubscriptionService service;
 
@@ -118,7 +126,14 @@ class SubscriptionPaymentMethodSyncTest {
         when(paymentCoachSubscriptionRepository.findByStripeSubscriptionIdForUpdate("sub_coach"))
             .thenAnswer(inv -> "sub_coach".equals(coachSub.getStripeSubscriptionId())
                 ? Optional.of(coachSub) : Optional.empty());
+        savedCard = new StripeCustomer();
+        savedCard.setParentId(USER_ID);
+        savedCard.setStripeCustomerId("cus_7100");
+        savedCard.setStripePaymentMethodId(PM);
+        when(stripeCustomerRepository.findById(USER_ID)).thenReturn(Optional.of(savedCard));
     }
+
+    private StripeCustomer savedCard;
 
     // ─── Item 1: payment-method sync ──────────────────────────────────────────────
 
@@ -170,16 +185,94 @@ class SubscriptionPaymentMethodSyncTest {
     }
 
     @Test
-    void stripeFailureOrDeclinedRetry_neverThrows() throws StripeException {
+    void declinedRetry_isNotRetried() throws StripeException {
         coachSub.setStatus("PAST_DUE");
         when(stripeClient.payLatestOpenInvoice(anyString(), anyString(), anyString()))
             .thenThrow(new CardException("declined", "req", "card_declined", null, null, null, 402, null));
 
         assertThatCode(() -> service.syncPaymentMethodToSubscriptions(USER_ID, PM)).doesNotThrowAnyException();
+    }
 
+    @Test
+    void permanentStripeRejection_isNotRetried() throws StripeException {
         when(stripeClient.updateSubscriptionDefaultPaymentMethod(anyString(), anyString()))
-            .thenThrow(new ApiConnectionException("down"));
+            .thenThrow(new InvalidRequestException("No such PaymentMethod", "payment_method", "req",
+                "resource_missing", 400, null));
+
         assertThatCode(() -> service.syncPaymentMethodToSubscriptions(USER_ID, PM)).doesNotThrowAnyException();
+    }
+
+    // fix/payment-subscription-resume-and-async-sync: the sync runs on the outbox, so a transient Stripe
+    // failure must throw (the row is retried) — after every other subscription has still been attempted.
+    @Test
+    void transientStripeFailure_throwsForOutboxRetry_afterAttemptingEverySubscription() throws StripeException {
+        ParentPlayerLink link = new ParentPlayerLink();
+        link.setPlayerId(81L);
+        when(parentPlayerLinkRepository.findByParentId(USER_ID)).thenReturn(List.of(link));
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(81L)).thenReturn(Optional.of(playerSub(81L, "ACTIVE", "sub_p81")));
+        when(stripeClient.updateSubscriptionDefaultPaymentMethod("sub_coach", PM))
+            .thenThrow(new ApiConnectionException("down"));
+
+        assertThatThrownBy(() -> service.syncPaymentMethodToSubscriptions(USER_ID, PM))
+            .isInstanceOf(IllegalStateException.class)
+            .hasMessageContaining("COACH:sub_coach");
+        verify(stripeClient).updateSubscriptionDefaultPaymentMethod("sub_p81", PM);
+    }
+
+    @Test
+    void supersededCard_isSkipped() throws StripeException {
+        savedCard.setStripePaymentMethodId("pm_newer");
+
+        service.syncPaymentMethodToSubscriptions(USER_ID, PM);
+
+        verify(stripeClient, never()).updateSubscriptionDefaultPaymentMethod(anyString(), anyString());
+    }
+
+    // ─── fix/payment-subscription-resume-and-async-sync: PAUSED resumes ─────────
+
+    @Test
+    void pausedSubscription_getsNewCardThenIsResumed_noInvoiceRetry() throws StripeException {
+        coachSub.setStatus("PAUSED");
+
+        service.syncPaymentMethodToSubscriptions(USER_ID, PM);
+
+        var order = inOrder(stripeClient);
+        order.verify(stripeClient).updateSubscriptionDefaultPaymentMethod("sub_coach", PM);
+        order.verify(stripeClient).resumePausedSubscription(eq("sub_coach"), startsWith("sub-resume-sub_coach-"));
+        verify(stripeClient, never()).payLatestOpenInvoice(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void activeOrPastDueSubscription_isNotResumed() throws StripeException {
+        service.syncPaymentMethodToSubscriptions(USER_ID, PM);
+        coachSub.setStatus("PAST_DUE");
+        service.syncPaymentMethodToSubscriptions(USER_ID, PM);
+
+        verify(stripeClient, never()).resumePausedSubscription(anyString(), anyString());
+    }
+
+    @Test
+    void pausedResumeDeclined_isNotRetried_transientResumeFailureIs() throws StripeException {
+        coachSub.setStatus("PAUSED");
+        when(stripeClient.resumePausedSubscription(anyString(), anyString()))
+            .thenThrow(new CardException("declined", "req", "card_declined", null, null, null, 402, null));
+        assertThatCode(() -> service.syncPaymentMethodToSubscriptions(USER_ID, PM)).doesNotThrowAnyException();
+
+        doThrow(new ApiConnectionException("down")).when(stripeClient).resumePausedSubscription(anyString(), anyString());
+        assertThatThrownBy(() -> service.syncPaymentMethodToSubscriptions(USER_ID, PM))
+            .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void savePaymentMethod_storesCardAndEnqueuesSync_noStripeCall() throws StripeException {
+        savedCard.setStripePaymentMethodId("pm_old");
+
+        service.savePaymentMethodAndScheduleSync(USER_ID, PM);
+
+        assertThat(savedCard.getStripePaymentMethodId()).isEqualTo(PM);
+        verify(stripeCustomerRepository).save(savedCard);
+        verify(paymentMethodSyncOutboxSupport).enqueueSync(USER_ID, PM);
+        verify(stripeClient, never()).updateSubscriptionDefaultPaymentMethod(anyString(), anyString());
     }
 
     // ─── Item 2: UNPAID/PAUSED grace ──────────────────────────────────────────────

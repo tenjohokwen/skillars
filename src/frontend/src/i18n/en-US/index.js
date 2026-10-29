@@ -2246,7 +2246,7 @@ export default {
       savedRefreshFailed:
         'Your card was saved, but we could not refresh the view. Reload to see it.',
       subscriptionNote:
-        'Saving a new card also updates your subscription and retries any outstanding payment with it.',
+        'Saving a new card also updates your subscription: within a few minutes we retry any outstanding payment with it, or resume a paused subscription.',
       unavailable: 'Card payments are unavailable right now',
     },
     sessionPackTiersTitle: 'Session Pack Offer',
@@ -2401,13 +2401,17 @@ export default {
     perMonth: '{price} / month',
     perYear: '{price} / year',
     paymentIssue:
-      'Your last subscription payment failed. Update your card and we will retry the payment straight away.',
+      'Your last subscription payment failed. Update your card and we will retry the payment with it.',
+    paymentPaused:
+      'Your trial has ended and your subscription is paused because no card was on file. Add a card to resume it.',
+    paymentRetrying:
+      'Card saved. We are retrying your subscription payment with it; your plan is restored as soon as the payment goes through, which can take a few minutes.',
     updateCard: 'Update card',
     errors: {
       paymentDeclined:
         'Your card was declined or needs extra authentication. Please update your payment method and try again.',
       updatePaymentMethod:
-        'Your current subscription has an unpaid invoice. Update your card instead of subscribing again: saving it retries the payment and restores your plan.',
+        'Your current subscription has an unpaid invoice. Update your card instead of subscribing again: we then retry the payment and restore your plan once it goes through.',
       notActive:
         'Your subscription is not active right now. Settle the outstanding payment before changing your plan.',
       alreadyActive: 'You already have an active subscription.',

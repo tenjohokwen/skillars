@@ -20,6 +20,7 @@ import com.stripe.param.SetupIntentCreateParams;
 import com.stripe.param.SubscriptionCancelParams;
 import com.stripe.param.SubscriptionCreateParams;
 import com.stripe.param.SubscriptionListParams;
+import com.stripe.param.SubscriptionResumeParams;
 import com.stripe.param.SubscriptionUpdateParams;
 import com.stripe.param.TransferCreateParams;
 import com.stripe.param.TransferListParams;
@@ -241,6 +242,31 @@ public class StripeClient {
         if (!"open".equals(invoice.getStatus())) return invoice;
         RequestOptions options = RequestOptions.builder().setIdempotencyKey(idempotencyKey).build();
         return invoice.pay(InvoicePayParams.builder().setPaymentMethod(paymentMethodId).build(), options);
+    }
+
+    /**
+     * fix/payment-subscription-resume-and-async-sync: resumes a subscription Stripe paused because its
+     * trial ended without a payment method ({@code POST /v1/subscriptions/{id}/resume}). Call it after
+     * {@link #updateSubscriptionDefaultPaymentMethod} so the resume invoice is charged to the new card.
+     *
+     * <p>{@code billing_cycle_anchor=now} starts a fresh period from today and invoices it immediately
+     * (a paused subscription delivered nothing during the pause, so the old anchor would bill time the
+     * user never had); {@code proration_behavior=none} because there is no unused time to credit.
+     * Converges on a retry: a subscription Stripe no longer reports as {@code paused} (an earlier attempt
+     * resumed it, or it was cancelled) is returned as-is instead of resumed again, which Stripe rejects.
+     * The caller-supplied key is per attempt, like {@link #payLatestOpenInvoice}: it covers the SDK's own
+     * network retries without replaying a cached failure on a later attempt. The resulting status change
+     * arrives as {@code customer.subscription.updated} / {@code invoice.paid} and drives entitlement.
+     */
+    public Subscription resumePausedSubscription(String stripeSubscriptionId, String idempotencyKey)
+            throws StripeException {
+        Subscription sub = Subscription.retrieve(stripeSubscriptionId);
+        if (!"paused".equals(sub.getStatus())) return sub;
+        RequestOptions options = RequestOptions.builder().setIdempotencyKey(idempotencyKey).build();
+        return sub.resume(SubscriptionResumeParams.builder()
+            .setBillingCycleAnchor(SubscriptionResumeParams.BillingCycleAnchor.NOW)
+            .setProrationBehavior(SubscriptionResumeParams.ProrationBehavior.NONE)
+            .build(), options);
     }
 
     /**
