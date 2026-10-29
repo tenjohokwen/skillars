@@ -2389,6 +2389,15 @@ export default {
     confirm: 'Confirm',
     perMonth: '{price} / month',
     perYear: '{price} / year',
+    errors: {
+      paymentDeclined:
+        'Your card was declined or needs extra authentication. Please update your payment method and try again.',
+      updatePaymentMethod:
+        'Your current subscription has an unpaid invoice. Update your payment method to restore it instead of subscribing again.',
+      notActive:
+        'Your subscription is not active right now. Settle the outstanding payment before changing your plan.',
+      alreadyActive: 'You already have an active subscription.',
+    },
     coach: {
       pageTitle: 'Coach Subscription',
       loadError: 'Failed to load your subscription details. Please try again.',

@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.contract.PlayerSubscriptionTierBilling;
+import com.softropic.skillars.platform.payment.contract.SubscriptionEntitlement;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
 import lombok.RequiredArgsConstructor;
@@ -119,8 +120,10 @@ public class QuotaConfigService {
             videoMetrics.recordQuotaTierFallback("no_subscription_row");
             return "athlete";
         }
+        // fix/payment-subscription-entitlements: the stored tier counts only while the subscription
+        // status entitles it (a CANCELLED/UNPAID/INCOMPLETE/PAUSED row falls back to athlete).
         return subscription
-            .map(PaymentPlayerSubscription::getTier)
+            .map(sub -> SubscriptionEntitlement.effectivePlayerTier(sub.getTier(), sub.getStatus()))
             .map(this::playerTierToQuotaSegment)
             .orElse("athlete");
     }

@@ -8,6 +8,7 @@ import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
 import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
@@ -51,6 +52,17 @@ public class PaymentPlayerSubscription {
 
     @Column(name = "past_due_since")
     private Instant pastDueSince;
+
+    // fix/payment-subscription-entitlements: `created` of the newest Stripe event applied to this row;
+    // older out-of-order subscription/invoice events are ignored (V197).
+    @Column(name = "last_stripe_event_at")
+    private Instant lastStripeEventAt;
+
+    // fix/payment-subscription-entitlements: optimistic-lock backstop behind the persist paths'
+    // re-read-under-lock (V197).
+    @Version
+    @Column(name = "version", nullable = false)
+    private long version;
 
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;

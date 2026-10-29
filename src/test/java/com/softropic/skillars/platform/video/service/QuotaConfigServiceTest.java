@@ -113,6 +113,21 @@ class QuotaConfigServiceTest {
         verify(configService).getBoundedLong("video.quota.semiPro.storageBytes", 0L, Long.MAX_VALUE);
     }
 
+    // fix/payment-subscription-entitlements item 3: a stored paid tier only counts while the
+    // subscription status entitles it.
+    @Test
+    void storageQuota_cancelledSemiProPlayer_fallsBackToAthleteKey() {
+        PaymentPlayerSubscription subscription = new PaymentPlayerSubscription();
+        subscription.setPlayerId(8L);
+        subscription.setTier("SEMI_PRO");
+        subscription.setStatus("UNPAID");
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(8L)).thenReturn(Optional.of(subscription));
+        when(configService.getBoundedLong("video.quota.athlete.storageBytes", 0L, Long.MAX_VALUE)).thenReturn(1L);
+
+        assertThat(quotaConfigService.getStorageQuotaBytes("8")).isEqualTo(1L);
+        verify(configService, never()).getBoundedLong("video.quota.semiPro.storageBytes", 0L, Long.MAX_VALUE);
+    }
+
     @Test
     void bandwidthQuota_proPlayer_readsProKey() {
         PaymentPlayerSubscription subscription = new PaymentPlayerSubscription();

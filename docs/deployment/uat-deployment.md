@@ -245,7 +245,10 @@ if you want to test webhook-driven flows without touching UAT at all).
    - `account.updated` — tick **Listen to events on Connected accounts** for
      this one (it is a coach's connected account changing, not the platform's)
    - `customer.subscription.updated`, `customer.subscription.deleted`,
-     `invoice.payment_failed`
+     `invoice.payment_failed`, `invoice.paid` — `invoice.paid` returns a
+     recovered past-due subscription to ACTIVE and resets its grace clock;
+     without it a paying subscriber can be cancelled at grace expiry if the
+     matching `customer.subscription.updated` is lost
    - `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` —
      card disputes freeze the coach payouts the charge funded; a refund made
      in the Dashboard raises an admin alert. Without these a chargeback is

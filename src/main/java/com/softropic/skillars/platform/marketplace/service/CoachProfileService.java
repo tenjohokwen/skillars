@@ -10,6 +10,7 @@ import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachAvailabilityWindowDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionEntitlementPort;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
@@ -92,6 +93,7 @@ public class CoachProfileService {
     private final EntityManager entityManager;
     private final PessimisticLockRetryer lockRetryer;
     private final FileStorageService fileStorageService;
+    private final CoachSubscriptionEntitlementPort coachSubscriptionEntitlementPort;
 
     /**
      * The timezones the profile builder is allowed to offer a coach.
@@ -692,12 +694,19 @@ public class CoachProfileService {
      */
     @Transactional(readOnly = true)
     public CoachSubscriptionTier getCoachSubscriptionTier(UUID coachId) {
-        return coachSubscriptionRepository.findByCoachId(coachId)
+        CoachSubscriptionTier projected = coachSubscriptionRepository.findByCoachId(coachId)
             .map(CoachSubscription::getTier)
             .orElseGet(() -> {
                 log.warn("No coach_subscriptions row for coachId={}, defaulting to SCOUT", coachId);
                 return CoachSubscriptionTier.SCOUT;
             });
+        // fix/payment-subscription-entitlements: the projection is only as fresh as the last sync; a
+        // paid tier is granted only while the payment-side subscription is still entitled.
+        if (projected != CoachSubscriptionTier.SCOUT && !coachSubscriptionEntitlementPort.isPaidTierEntitled(coachId)) {
+            log.debug("Coach {} projected tier {} not entitled by payment status, using SCOUT", coachId, projected);
+            return CoachSubscriptionTier.SCOUT;
+        }
+        return projected;
     }
 
     @Transactional(readOnly = true)

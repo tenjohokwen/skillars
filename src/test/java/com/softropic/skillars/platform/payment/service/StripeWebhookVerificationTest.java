@@ -165,6 +165,51 @@ class StripeWebhookVerificationTest {
         assertThat(counter.count()).isEqualTo(1.0);
     }
 
+    // fix/payment-subscription-entitlements item 8: invoice.paid is now handled and every
+    // subscription/invoice delegation carries the event's `created` for the out-of-order guard.
+    @Test
+    void processWebhook_invoicePaid_delegatesWithEventCreated() throws Exception {
+        String payload = """
+            {
+              "id": "evt_test_invoice_paid_001",
+              "object": "event",
+              "type": "invoice.paid",
+              "created": 1767225600,
+              "data": {
+                "object": {
+                  "id": "in_test_paid_001",
+                  "object": "invoice",
+                  "subscription": "sub_paid_123",
+                  "customer": "cus_paid_123"
+                }
+              }
+            }
+            """;
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+
+        webhookService.processWebhook(payload, buildStripeSignature(WEBHOOK_SECRET, payload));
+
+        verify(subscriptionService).handleSubscriptionWebhook("invoice.paid", "sub_paid_123",
+            java.util.Map.of("event_created", 1767225600L));
+    }
+
+    @Test
+    void processWebhook_invoicePaid_noSubscription_notDelegated() throws Exception {
+        String payload = """
+            {
+              "id": "evt_test_invoice_paid_002",
+              "object": "event",
+              "type": "invoice.paid",
+              "data": { "object": { "id": "in_test_paid_002", "object": "invoice", "subscription": null } }
+            }
+            """;
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+
+        webhookService.processWebhook(payload, buildStripeSignature(WEBHOOK_SECRET, payload));
+
+        verify(subscriptionService, never()).handleSubscriptionWebhook(any(), any(), any());
+    }
+
     @Test
     void processWebhook_invoicePaymentFailed_noSubscription_doesNotIncrementCounter() throws Exception {
         String payload = buildInvoicePaymentFailedPayload(null);

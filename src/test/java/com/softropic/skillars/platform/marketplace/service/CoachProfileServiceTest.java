@@ -7,6 +7,7 @@ import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
+import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionEntitlementPort;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
@@ -22,6 +23,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPublicProfileFactsRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
 import jakarta.persistence.EntityManager;
@@ -76,6 +78,7 @@ class CoachProfileServiceTest {
     @Mock private EntityManager entityManager;
     @Mock private PessimisticLockRetryer lockRetryer;
     @Mock private FileStorageService fileStorageService;
+    @Mock private CoachSubscriptionEntitlementPort coachSubscriptionEntitlementPort;
 
     @InjectMocks
     private CoachProfileService service;
@@ -100,6 +103,30 @@ class CoachProfileServiceTest {
         when(coachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
 
         assertThat(service.getCoachSubscriptionTier(COACH_ID)).isEqualTo(CoachSubscriptionTier.SCOUT);
+    }
+
+    // fix/payment-subscription-entitlements item 3: the marketplace projection is gated by the
+    // payment-side subscription status.
+    @Test
+    void getCoachSubscriptionTier_paidProjectionButNotEntitled_returnsScout() {
+        CoachSubscription cs = new CoachSubscription();
+        cs.setCoachId(COACH_ID);
+        cs.setTier(CoachSubscriptionTier.ACADEMY);
+        when(coachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(cs));
+        when(coachSubscriptionEntitlementPort.isPaidTierEntitled(COACH_ID)).thenReturn(false);
+
+        assertThat(service.getCoachSubscriptionTier(COACH_ID)).isEqualTo(CoachSubscriptionTier.SCOUT);
+    }
+
+    @Test
+    void getCoachSubscriptionTier_paidProjectionEntitled_returnsProjection() {
+        CoachSubscription cs = new CoachSubscription();
+        cs.setCoachId(COACH_ID);
+        cs.setTier(CoachSubscriptionTier.INSTRUCTOR);
+        when(coachSubscriptionRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(cs));
+        when(coachSubscriptionEntitlementPort.isPaidTierEntitled(COACH_ID)).thenReturn(true);
+
+        assertThat(service.getCoachSubscriptionTier(COACH_ID)).isEqualTo(CoachSubscriptionTier.INSTRUCTOR);
     }
 
     // ---- AC1: getOwnProfile ----

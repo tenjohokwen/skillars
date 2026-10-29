@@ -2013,6 +2013,15 @@ export default {
     confirm: 'Confirmer',
     perMonth: '{price} / mois',
     perYear: '{price} / an',
+    errors: {
+      paymentDeclined:
+        'Votre carte a été refusée ou nécessite une authentification supplémentaire. Veuillez mettre à jour votre moyen de paiement et réessayer.',
+      updatePaymentMethod:
+        'Votre abonnement actuel a une facture impayée. Mettez à jour votre moyen de paiement pour le rétablir au lieu de vous réabonner.',
+      notActive:
+        "Votre abonnement n'est pas actif actuellement. Réglez le paiement en attente avant de changer de formule.",
+      alreadyActive: 'Vous avez déjà un abonnement actif.',
+    },
     coach: {
       pageTitle: 'Abonnement Coach',
       loadError: "Échec du chargement de vos informations d'abonnement. Veuillez réessayer.",

@@ -275,7 +275,7 @@
         <tr><td>RefundReconciliationService</td><td>Writes or increments a <code>stripe_refund_failures</code> row in its own <code>REQUIRES_NEW</code> transaction.</td></tr>
         <tr><td>PaymentPendingSweeper</td><td>Recovers bookings stuck in <code>PAYMENT_PENDING</code>, deciding by the payment row, not the funding type. See the "stuck payments" flow below.</td></tr>
         <tr><td>SubscriptionService</td><td>Tier catalogue, subscribe/upgrade/downgrade/cancel for coaches and players, the webhook-driven status sync, and the bodies of four nightly jobs: <code>applyPendingChanges</code>, <code>checkPastDueGracePeriod</code>, <code>reconcileMarketplaceTiers</code> and <code>reconcileStripeSubscriptions</code>. The last one only alerts and never auto-heals.</td></tr>
-        <tr><td>StripeWebhookService</td><td>Verifies signatures, enforces idempotency, and routes four event types. Raises <code>CoachSubscriptionOrphanedEvent</code> when Stripe bills a coach who has no local subscription row.</td></tr>
+        <tr><td>StripeWebhookService</td><td>Verifies signatures, enforces idempotency, and routes the account, subscription, invoice, dispute and refund events listed below. Raises <code>CoachSubscriptionOrphanedEvent</code> when Stripe bills a coach who has no local subscription row.</td></tr>
         <tr><td>StripeOnboardingService</td><td>Builds the Connect OAuth URL (<code>state</code> = coach id) and exchanges the code (<code>OAuth.token</code>) for the account id. It upserts the account as <code>PENDING</code>.</td></tr>
         <tr><td>ReliabilityStrikeService</td><td><code>issue</code> runs in <code>REQUIRES_NEW</code>. It inserts the strike, locks the coach row, counts strikes over 30 days, and changes the coach to REDUCED or PENDING_REVIEW. Also handles acknowledge and paged history.</td></tr>
         <tr><td>RevenueReportingService</td><td>Read-only. Coach summary and transactions come from the <code>coach_payouts</code> ledger (RELEASED, plus PENDING_RELEASE as a separate line). Coach receipts require a <code>RELEASED</code> payout and payer receipts a <code>CAPTURED</code> payment; anything else returns 404. Also the credit statement with running balance, the admin overview, and per-coach admin revenue.</td></tr>
@@ -449,6 +449,8 @@ sequenceDiagram
   else invoice.payment_failed
     Svc->>Svc: orphan check first, then
     Svc->>Sub: mark PAST_DUE, stamp pastDueSince (first failure only)
+  else invoice.paid
+    Svc->>Sub: PAST_DUE/UNPAID/INCOMPLETE back to ACTIVE, clear pastDueSince
   else charge.dispute.created / closed
     Svc->>Svc: freeze (or, if lost, cut / reverse pro rata) the coach payouts the charge funded, admin alert
   else charge.refunded
@@ -462,9 +464,11 @@ sequenceDiagram
       called through a self-injected proxy. A deserialization failure re-throws, so the idempotency row
       rolls back and Stripe retries the event rather than it being lost. The orphan check skips coaches
       whose <code>coach_subscriptions</code> row was touched within a short grace window, so a subscribe
-      that is still being set up doesn't trigger a false alert. Only these four event types are handled:
-      <code>payment_intent.*</code>, <code>charge.dispute.*</code> and <code>transfer.*</code> are
-      ignored (logged at DEBUG).
+      that is still being set up doesn't trigger a false alert. Subscription and invoice events carry the
+      Stripe event's <code>created</code> time, and an event older than the last one applied to that
+      subscription row (<code>last_stripe_event_at</code>) is ignored, so late out-of-order deliveries
+      cannot overwrite newer state. Every other event type (<code>payment_intent.*</code>,
+      <code>transfer.*</code>, ...) is ignored (logged at DEBUG).
     </p>
 
     <h3 id="booking-settlement-reserve-then-charge-the-platform-account">Booking settlement: reserve, then charge the platform account</h3>
@@ -716,7 +720,7 @@ sequenceDiagram
       <code>APP_PAYMENT_STRIPE_PUBLISHABLE_KEY</code> to the matching <code>pk_test_...</code> key, which the
       frontend reads from <code>GET /api/payment/stripe/config</code>. The handled events are
       <code>account.updated</code>, <code>customer.subscription.updated</code>/<code>deleted</code>,
-      <code>invoice.payment_failed</code>, <code>charge.dispute.created</code>/<code>closed</code> and
+      <code>invoice.payment_failed</code>, <code>invoice.paid</code>, <code>charge.dispute.created</code>/<code>closed</code> and
       <code>charge.refunded</code>, so trigger those, e.g.
       <code>stripe trigger customer.subscription.updated</code> or <code>stripe trigger charge.dispute.created</code>.
       A deployed webhook endpoint must be subscribed to all of them.</p>
