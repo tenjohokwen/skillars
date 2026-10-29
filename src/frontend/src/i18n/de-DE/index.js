@@ -109,7 +109,7 @@ export default {
         'Jeder buchbare Termin in Ihrem Kalender ist so lang. Lassen Sie den Plattform-Standard stehen, wenn Sie unsicher sind.',
       step3SessionPacks: 'Einheitenpakete (optional)',
       step3PackHelper:
-        'Bieten Sie vergünstigte Mehrfachpakete an. Leer lassen, wenn Sie nur Einzelpreise möchten.',
+        'Optional: Bieten Sie vergünstigte Mehrfachpakete an. Familien können jederzeit einzelne Sitzungen zu Ihrem Preis pro Sitzung buchen.',
       step3PackEmpty: 'Noch keine Pakete hinzugefügt.',
       step3AddPack: 'Paket hinzufügen',
       step3PackSessions: 'Einheiten',
@@ -423,7 +423,10 @@ export default {
       ownBookingCaption: 'Sie haben dieses Zeitfenster bereits angefragt',
       notes: 'Notizen für den Trainer (optional)',
       confirmRequest: 'Sitzung anfragen',
-      noCreditsWarning: 'Kaufen Sie ein Sitzungspaket, um eine Buchung anzufragen',
+      noCreditsWarning:
+        'Dieser Coach ist nur mit einem Sitzungspaket buchbar. Kaufen Sie eines, um eine Buchung anzufragen.',
+      perSessionInfo:
+        'Kein Sitzungspaket nötig: Sie zahlen den Preis pro Sitzung dieses Coaches, sobald er Ihre Anfrage annimmt (zuerst Guthaben, dann Ihre gespeicherte Karte).',
       listTitle: 'Meine Buchungen',
       emptyState: 'Noch keine Buchungen — buchen Sie Ihre erste Sitzung mit einem Trainer',
       emptyStateCta: 'Trainer finden',
@@ -907,6 +910,9 @@ export default {
     noReviewsYet: 'Noch keine Bewertungen',
     signUpToBook: 'Registrieren zum Buchen',
     bookSession: 'Eine Sitzung buchen',
+    notBookable: 'Noch nicht buchbar',
+    notBookableHint:
+      'Dieser Coach hat noch keinen Preis pro Sitzung und kein Sitzungspaket festgelegt und kann daher derzeit nicht gebucht werden.',
     sessionPacksOffered: 'Sitzungspakete',
     perSessionFrom: 'Ab {price}/Sitzung',
     sessionsFallbackLabel: '{count} Sitzungen',

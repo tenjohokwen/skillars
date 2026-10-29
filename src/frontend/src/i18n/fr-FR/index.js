@@ -302,7 +302,7 @@ export default {
         'Chaque créneau réservable de votre calendrier aura cette durée. Laissez la valeur par défaut si vous hésitez.',
       step3SessionPacks: 'Packs de séances (facultatif)',
       step3PackHelper:
-        'Proposez des forfaits multi-séances à prix réduit. Laissez vide si vous ne souhaitez que le tarif à la séance.',
+        'Facultatif : proposez des forfaits multi-séances à prix réduit. Les familles peuvent toujours réserver des séances à l’unité à votre tarif par séance.',
       step3PackEmpty: 'Aucun pack ajouté pour le moment.',
       step3AddPack: 'Ajouter un pack',
       step3PackSessions: 'Séances',
@@ -413,6 +413,9 @@ export default {
     noReviewsYet: 'Aucun avis pour le moment',
     signUpToBook: "S'inscrire pour réserver",
     bookSession: 'Réserver une séance',
+    notBookable: 'Pas encore réservable',
+    notBookableHint:
+      'Ce coach n’a encore fixé ni tarif par séance ni pack de séances : il ne peut pas être réservé pour le moment.',
     sessionPacksOffered: 'Packs de séances',
     perSessionFrom: 'À partir de {price}/séance',
     sessionsFallbackLabel: '{count} séances',
@@ -2283,7 +2286,10 @@ export default {
       ownBookingCaption: 'Vous avez déjà demandé ce créneau',
       notes: 'Notes pour le coach (facultatif)',
       confirmRequest: 'Demander la séance',
-      noCreditsWarning: 'Achetez un pack de séances pour demander une réservation',
+      noCreditsWarning:
+        'Ce coach ne peut être réservé qu’avec un pack de séances. Achetez-en un pour demander une réservation.',
+      perSessionInfo:
+        'Aucun pack nécessaire : vous payez le tarif par séance de ce coach lorsqu’il accepte votre demande (crédit du portefeuille d’abord, puis votre carte enregistrée).',
       listTitle: 'Mes réservations',
       emptyState:
         'Aucune réservation pour le moment — réservez votre première séance avec un coach',

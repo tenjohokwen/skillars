@@ -306,9 +306,11 @@
             class="q-mb-md"
           />
 
-          <!-- Credit tracker — always visible before booking CTA for parents -->
+          <!-- Credit tracker — shown to a parent who holds (or held) an active pack with this coach.
+               A family with no pack books per session, so an always-red "no sessions left" tracker
+               would read as a dead end (fix/per-session-booking-cta). -->
           <SessionPackTracker
-            v-if="authStore.isParent"
+            v-if="authStore.isParent && (creditsForThisCoach > 0 || activePackSessionCount > 0)"
             :credits-remaining="creditsForThisCoach"
             :session-count="activePackSessionCount"
             class="q-mb-md"
@@ -323,15 +325,41 @@
             {{ t('marketplace.sharedSlot', { slot: sharedSlot.replace('T', ' ') }) }}
           </q-banner>
 
-          <!-- CTA -->
+          <!-- CTA (fix/per-session-booking-cta). Primary action, by ctaAction:
+               request    — family holds credits, or the coach has a per-session price → request-booking
+               purchase   — no credits, coach sells packs only → purchase-sessions
+               login      — anonymous / non-family viewer of a bookable coach
+               unbookable — coach has neither a per-session price nor a pack → disabled + hint -->
           <q-btn
             unelevated
             color="primary"
             class="full-width"
             size="md"
+            data-testid="coach-primary-cta"
             :label="ctaLabel"
-            :loading="(authStore.isParent || authStore.isPlayer) && bookingStore.packsLoading"
+            :disable="ctaAction === 'unbookable'"
+            :loading="isFamilyViewer && bookingStore.packsLoading"
             @click="handleCta"
+          />
+          <div
+            v-if="ctaAction === 'unbookable'"
+            class="text-caption q-mt-sm"
+            style="color: var(--text-secondary)"
+            data-testid="coach-not-bookable-hint"
+          >
+            {{ t('marketplace.notBookableHint') }}
+          </div>
+          <!-- Secondary pack purchase when the primary action is a per-session request and the
+               coach also sells packs. -->
+          <q-btn
+            v-if="showBuySessionsSecondary"
+            outline
+            color="primary"
+            class="full-width q-mt-sm"
+            size="md"
+            data-testid="coach-buy-sessions-btn"
+            :label="t('booking.packs.buySessions')"
+            @click="handleBuySessions"
           />
           <!-- Story 8.1 entry point: only once a confirmed booking links this coach to the selected
                child (parent — the header child switcher's selection) or to the player themself;
@@ -559,15 +587,63 @@ const hasCreditsForCoach = computed(() =>
   ),
 )
 
-const ctaLabel = computed(() => {
-  if (!authStore.isParent && !authStore.isPlayer) return t('marketplace.signUpToBook')
-  return hasCreditsForCoach.value ? t('marketplace.bookSession') : t('booking.packs.buySessions')
+const isFamilyViewer = computed(() => authStore.isParent || authStore.isPlayer)
+// CoachProfileDto.perSessionPrice is the coach_pricing row the backend locks at request time
+// (BookingService.requireRequestTimePrice) — a coach without one can only be booked against a pack.
+const coachHasPerSessionPrice = computed(() => Number(profile.value?.perSessionPrice) > 0)
+const coachHasPacks = computed(() => (profile.value?.sessionPacks?.length ?? 0) > 0)
+
+// fix/per-session-booking-cta: a family without pack credits can still book per session (wallet
+// credit first, then card, charged when the coach accepts) — packs are an optional discount.
+const ctaAction = computed(() => {
+  if (isFamilyViewer.value && hasCreditsForCoach.value) return 'request'
+  if (!coachHasPerSessionPrice.value && !coachHasPacks.value) return 'unbookable'
+  if (!isFamilyViewer.value) return 'login'
+  return coachHasPerSessionPrice.value ? 'request' : 'purchase'
 })
 
+const showBuySessionsSecondary = computed(
+  () =>
+    isFamilyViewer.value &&
+    ctaAction.value === 'request' &&
+    !hasCreditsForCoach.value &&
+    coachHasPacks.value,
+)
+
+const ctaLabel = computed(() => {
+  switch (ctaAction.value) {
+    case 'request':
+      return t('marketplace.bookSession')
+    case 'purchase':
+      return t('booking.packs.buySessions')
+    case 'unbookable':
+      return t('marketplace.notBookable')
+    default:
+      return t('marketplace.signUpToBook')
+  }
+})
+
+// The booking player: a parent's selected child, or a self-registered player's own profile id
+// (never playerStore for a player — that is a parent's linked-children store).
+const bookingPlayerId = computed(() =>
+  authStore.isPlayer ? selfPlayerId.value : playerStore.activePlayerId,
+)
+
 function handleBuySessions() {
-  const playerId = playerStore.activePlayerId
-  if (!playerId) return
-  router.push(`/parent/coaches/${coachId}/purchase-sessions?playerId=${playerId}`)
+  // SessionPackPurchasePage reads ?playerId and cannot purchase without it.
+  const params = new URLSearchParams()
+  if (bookingPlayerId.value) params.set('playerId', bookingPlayerId.value)
+  const qs = params.toString()
+  router.push(`/parent/coaches/${coachId}/purchase-sessions${qs ? `?${qs}` : ''}`)
+}
+
+function goToRequestBooking() {
+  const params = new URLSearchParams()
+  if (bookingPlayerId.value) params.set('playerId', bookingPlayerId.value)
+  if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
+  if (sharedSlot.value) params.set('slot', sharedSlot.value)
+  const qs = params.toString()
+  router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
 }
 
 onMounted(async () => {
@@ -632,35 +708,19 @@ onMounted(async () => {
 
 function handleCta() {
   if (!profile.value) return
-  if (authStore.isPlayer) {
-    // Deferred-82 AC2: mirrors the parent branch below now that a self-booking player can hold
-    // credits with this coach too — route to a per-session request or straight to purchase based
-    // on existing credits, using the player's own id rather than a playerId query param sourced
-    // from playerStore (a parent's linked-children store, meaningless here).
-    if (hasCreditsForCoach.value) {
-      const params = new URLSearchParams()
-      if (selfPlayerId.value) params.set('playerId', selfPlayerId.value)
-      if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
-      if (sharedSlot.value) params.set('slot', sharedSlot.value)
-      const qs = params.toString()
-      router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
-    } else {
-      router.push(`/parent/coaches/${coachId}/purchase-sessions`)
-    }
-  } else if (authStore.isParent) {
-    if (hasCreditsForCoach.value) {
-      const playerId = playerStore.activePlayerId
-      const params = new URLSearchParams()
-      if (playerId) params.set('playerId', playerId)
-      if (profile.value?.displayName) params.set('coachName', profile.value.displayName)
-      if (sharedSlot.value) params.set('slot', sharedSlot.value)
-      const qs = params.toString()
-      router.push(`/parent/coaches/${coachId}/request-booking${qs ? `?${qs}` : ''}`)
-    } else {
-      router.push(`/parent/coaches/${coachId}/purchase-sessions`)
-    }
-  } else {
-    router.push(`/login?returnUrl=${encodeURIComponent(route.fullPath)}`)
+  switch (ctaAction.value) {
+    case 'request':
+      goToRequestBooking()
+      break
+    case 'purchase':
+      handleBuySessions()
+      break
+    case 'login':
+      router.push(`/login?returnUrl=${encodeURIComponent(route.fullPath)}`)
+      break
+    default:
+      // 'unbookable': the button is disabled; nothing to navigate to.
+      break
   }
 }
 

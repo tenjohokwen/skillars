@@ -19,9 +19,34 @@
          their own packs (purchase-sessions route) and GET /api/payment/session-packs admits
          ROLE_PLAYER (packs they bought are keyed to their own user id), so the UAT.5-era
          "packs out of scope for players" gating here had gone stale. -->
-    <SessionPackTracker :credits-remaining="creditsForCoach" :session-count="0" class="q-mb-md" />
+    <!-- fix/per-session-booking-cta: only once the family holds credits with this coach — a family
+         booking per session has no pack to track, and the tracker's empty state reads as "blocked". -->
+    <SessionPackTracker
+      v-if="hasCredits"
+      :credits-remaining="creditsForCoach"
+      :session-count="activePackSessionTotal"
+      class="q-mb-md"
+    />
 
-    <q-banner v-if="!hasCredits" class="bg-warning text-white q-mb-md">
+    <!-- No credits: per session is the default (selectedPackId null) — explain how it is paid. Only
+         a coach with no per-session price (coachPriced === false) still needs a pack first. -->
+    <q-banner
+      v-if="!hasCredits && !coachUnpriced"
+      dense
+      rounded
+      class="q-mb-md"
+      data-test="per-session-info"
+    >
+      <template #avatar>
+        <q-icon name="info" color="primary" />
+      </template>
+      {{ t('booking.requests.perSessionInfo') }}
+    </q-banner>
+    <q-banner
+      v-if="!hasCredits && coachUnpriced"
+      class="bg-warning text-white q-mb-md"
+      data-test="no-credits-warning"
+    >
       {{ t('booking.requests.noCreditsWarning') }}
       <template #action>
         <q-btn flat :label="t('booking.packs.buySessions')" @click="goToPurchase" />
@@ -132,10 +157,17 @@
         </q-card-section>
       </q-card>
 
-      <!-- UAT.5 AC2/AC4: a self-booking player pays per-session by card only (packs out of
-           scope) — the same reusable card-entry component parent pages already use for
-           setup-intent/save-payment-method, wholesale, no pack-purchase logic inside it. -->
-      <q-card v-if="authStore.isPlayer" flat bordered class="q-mb-md">
+      <!-- UAT.5 AC2/AC4: the reusable card-entry component parent pages already use for
+           setup-intent/save-payment-method, wholesale, no pack-purchase logic inside it. Shown to a
+           self-booking player, and (fix/per-session-booking-cta) to a parent paying per session —
+           the coach's accept charges wallet credit first, then this saved card. -->
+      <q-card
+        v-if="authStore.isPlayer || selectedPackId === null"
+        flat
+        bordered
+        class="q-mb-md"
+        data-test="payment-card"
+      >
         <q-card-section>
           <div class="text-subtitle1 q-mb-sm">{{ t('payment.card.title') }}</div>
         </q-card-section>
@@ -363,6 +395,9 @@ const activePacksForCoach = computed(() =>
   bookingStore.sessionPacks.filter(
     (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
   ),
+)
+const activePackSessionTotal = computed(() =>
+  activePacksForCoach.value.reduce((sum, p) => sum + (Number(p.sessionCount) || 0), 0),
 )
 const packOptions = computed(() => [
   { label: t('booking.packs.perSession'), value: null },
