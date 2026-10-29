@@ -8,6 +8,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
+import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.BookingDeclinedEvent;
@@ -2431,6 +2432,7 @@ class BookingServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
         when(bookingRepository.save(any(Booking.class))).thenThrow(new OptimisticLockingFailureException("test"));
 
         assertThatThrownBy(() -> bookingService.recordNoShowPlayer(booking.getId(), COACH_USER_ID))
@@ -2495,12 +2497,25 @@ class BookingServiceTest {
         when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
-        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        // makeUser's reflection targets User's own fields, but email lives on the Customer superclass — so its
+        // users have a null email. Set it through the setter: this test asserts the resolved addresses.
+        User coachUser = new User();
+        coachUser.setEmail("coach@test.com");
+        User parentUser = new User();
+        parentUser.setEmail("parent@test.com");
+        when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(coachUser));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parentUser));
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
 
         bookingService.recordNoShowPlayer(booking.getId(), COACH_USER_ID);
 
         assertThat(booking.getStatus()).isEqualTo("NO_SHOW_PLAYER");
+        // fix/forfeit-family-emails: the family notice goes to the payer — Booking.parentId (a User id) —
+        // never to anything resolved from playerId (a PlayerProfile key).
+        PlayerNoShowEvent event = capturedEvent(PlayerNoShowEvent.class);
+        assertThat(event.getCoachEmail()).isEqualTo("coach@test.com");
+        assertThat(event.getParentEmail()).isEqualTo("parent@test.com");
+        verify(userRepository, never()).findById(PLAYER_ID);
     }
 
     // ---- cancelDueToPause tests ----

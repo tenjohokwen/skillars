@@ -2,11 +2,13 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.admin.service.DisputeService;
 import com.softropic.skillars.platform.booking.service.BookingService;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.outbox.service.OutboxService;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
+import com.softropic.skillars.utils.TestMailManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +44,7 @@ class ForfeitPayoutAndClawbackIT extends BasePaymentIT {
     @Autowired DisputeService disputeService;
     @Autowired CoachPayoutRepository coachPayoutRepository;
     @Autowired OutboxService outboxService;
+    @Autowired TestMailManager testMailManager;
 
     private UUID coachId;
     private long parentId;
@@ -52,11 +55,33 @@ class ForfeitPayoutAndClawbackIT extends BasePaymentIT {
         coachId = insertTestCoach(COACH_USER_ID, "forfeit_coach@test.com", "Forfeit Coach");
         parentId = NEXT_PARENT.getAndAdd(2);
         playerId = parentId + 1;
-        insertTestParent(parentId, "forfeit_parent_" + parentId + "@test.com");
+        insertTestParent(parentId, parentEmail());
         insertTestPlayer(playerId, parentId);
     }
 
     // ── fixtures ──
+
+    private String parentEmail() {
+        return "forfeit_parent_" + parentId + "@test.com";
+    }
+
+    /**
+     * fix/forfeit-family-emails: the family's forfeit notices of {@code template} for this booking's payer. The
+     * outbox drain runs on a SyncTaskExecutor under the test profile, so the email has been handed to the
+     * TestMailManager by the time the service call returns; the in-app row commits with the business write.
+     */
+    private long familyEmails(EmailTemplate template) {
+        return testMailManager.getEnvelopes().values().stream()
+            .filter(e -> e.emailTemplate() == template)
+            .filter(e -> e.recipients().stream().anyMatch(r -> parentEmail().equals(r.getEmail())))
+            .count();
+    }
+
+    private int familyInboxRows(EmailTemplate template) {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.user_notifications WHERE recipient_user_id = ? AND type = ?",
+            Integer.class, parentId, template.name());
+    }
 
     private UUID seedBooking(String status, Instant start) {
         UUID bookingId = UUID.randomUUID();
@@ -108,6 +133,10 @@ class ForfeitPayoutAndClawbackIT extends BasePaymentIT {
 
         bookingService.recordNoShowPlayer(bookingId, COACH_USER_ID);
 
+        // fix/forfeit-family-emails: the payer (Booking.parentId — the player row is a PlayerProfile id) is told.
+        assertThat(familyEmails(EmailTemplate.SESSION_FORFEITED_NO_SHOW)).isEqualTo(1);
+        assertThat(familyInboxRows(EmailTemplate.SESSION_FORFEITED_NO_SHOW)).isEqualTo(1);
+
         CoachPayout row = payout(bookingId);
         assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
         assertThat(row.getNetAmount()).isEqualByComparingTo("45.00");
@@ -127,10 +156,24 @@ class ForfeitPayoutAndClawbackIT extends BasePaymentIT {
         assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
         assertThat(payout(bookingId).getNetAmount()).isEqualByComparingTo("45.00");
         assertThat(balance()).as("no refund on a <24h cancel").isEqualByComparingTo("0");
+        // fix/forfeit-family-emails: the family's only email for its own cancellation states the forfeit.
+        assertThat(familyEmails(EmailTemplate.SESSION_FORFEITED_LATE_CANCEL)).isEqualTo(1);
+        assertThat(familyInboxRows(EmailTemplate.SESSION_FORFEITED_LATE_CANCEL)).isEqualTo(1);
 
         // CANCELLED_PARENT is dispute-eligible; the open dispute freezes the forfeit payout.
         disputeService.raiseDispute(bookingId, "OTHER", "coach agreed to waive", parentId, "PARENT");
         assertThat(payout(bookingId).getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
+    }
+
+    @Test
+    void refundedParentCancel_isNotAForfeit_andSendsTheFamilyNoForfeitNotice() {
+        UUID bookingId = seedBooking("CONFIRMED", Instant.now().plus(3, ChronoUnit.DAYS));
+
+        bookingService.cancelBookingAsParent(bookingId, parentId);
+
+        assertThat(coachPayoutRepository.findById(bookingId)).as(">24h notice: refunded, coach not paid").isEmpty();
+        assertThat(familyEmails(EmailTemplate.SESSION_FORFEITED_LATE_CANCEL)).isZero();
+        assertThat(familyInboxRows(EmailTemplate.SESSION_FORFEITED_LATE_CANCEL)).isZero();
     }
 
     // ── UPHOLD_COACH clawback ──

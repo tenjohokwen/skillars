@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.session_forfeited_late_cancel.title}">Session Cancelled — No Refund Due</title>
+</head>
+<body>
+    <h2 th:text="#{email.booking.session_forfeited_late_cancel.title}">Session Cancelled — No Refund Due</h2>
+    <p>Your cancellation of the session on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>) has been recorded.</p>
+    <p>It was made less than 24 hours before the session's originally booked start time, so under our cancellation policy the session is forfeited and no refund is due.</p>
+    <p th:if="${map.paidWith == 'PACK'}">The session used from your session pack is not returned to the pack.</p>
+    <p th:if="${map.paidWith == 'CHARGE' and map.sessionPrice != ''}">The <strong th:text="${map.sessionPrice}">amount</strong> paid for this session is not refunded.</p>
+    <p>If you believe this is wrong — for example, your coach agreed to waive the fee — you can raise a dispute from your bookings page within <strong th:text="${map.disputeWindowDays}">14</strong> days.</p>
+    <p>Your bookings on Skillars: <a th:href="${map.bookingsUrl}" th:text="${map.bookingsUrl}">bookings</a></p>
+</body>
+</html>

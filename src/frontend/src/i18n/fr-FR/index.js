@@ -2676,6 +2676,10 @@ export default {
         'Une absence du coach a été enregistrée pour la séance du {requestedStartTime}.',
       PLAYER_NO_SHOW:
         'Une absence du joueur a été enregistrée pour la séance du {requestedStartTime}.',
+      SESSION_FORFEITED_NO_SHOW:
+        'Le coach a signalé une absence pour la séance du {requestedStartTime}. La séance est perdue et aucun remboursement n’est dû.',
+      SESSION_FORFEITED_LATE_CANCEL:
+        'Votre annulation tardive de la séance du {requestedStartTime} n’est pas remboursée : la séance est perdue.',
       BOOKING_REMINDER: 'Rappel : séance avec {coachDisplayName} le {requestedStartTime}.',
       SESSION_PACK_EXPIRY_WARNING:
         '{creditsRemaining} séance(s) avec {coachDisplayName} expirent le {expiresAt}.',

@@ -2649,6 +2649,10 @@ export default {
       BOOKING_CANCELLED_BY_COACH: 'Your coach cancelled the session on {requestedStartTime}.',
       COACH_NO_SHOW: 'A coach no-show was recorded for the session on {requestedStartTime}.',
       PLAYER_NO_SHOW: 'A player no-show was recorded for the session on {requestedStartTime}.',
+      SESSION_FORFEITED_NO_SHOW:
+        'The coach reported a no-show for the session on {requestedStartTime}. The session is forfeited and no refund is due.',
+      SESSION_FORFEITED_LATE_CANCEL:
+        'Your late cancellation of the session on {requestedStartTime} is not refunded: the session is forfeited.',
       BOOKING_REMINDER: 'Reminder: session with {coachDisplayName} on {requestedStartTime}.',
       SESSION_PACK_EXPIRY_WARNING:
         '{creditsRemaining} session(s) with {coachDisplayName} expire on {expiresAt}.',
