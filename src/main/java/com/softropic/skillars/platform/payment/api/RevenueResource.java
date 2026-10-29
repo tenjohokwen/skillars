@@ -80,8 +80,9 @@ public class RevenueResource {
 
     // feat/coach-workflow-gaps A23: widened to PLAYER alongside GET /credits/balance (skillars-deferred-141).
     // The ledger is keyed by the paying user id, i.e. the caller — a player's own credits only.
+    // fix/player-wallet-cashout: same wallet-owner gate as the balance / cash-out endpoints.
     @GetMapping("/credits/statement")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    @PreAuthorize(CreditWalletResource.WALLET_OWNER)
     public ResponseEntity<Page<CreditStatementEntryDto>> getCreditStatement(
             @RequestParam(required = false) LocalDate from,
             @RequestParam(required = false) LocalDate to,

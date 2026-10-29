@@ -9,8 +9,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -86,5 +92,59 @@ class PlayerOwnershipGuardTest {
     @Test
     void check_malformedBusinessId_false() {
         assertThat(guard.check(authenticatedAs("not-a-number"), 42L)).isFalse();
+    }
+
+    // ─── isWalletOwner (fix/player-wallet-cashout) ────────────────────────────────
+
+    private Authentication authenticatedWithRole(String businessId, String role) {
+        Principal principal = new Principal.Builder()
+            .username("user@example.com")
+            .password("password")
+            .enabled(true)
+            .businessId(businessId)
+            .otpEnabled(false)
+            .build();
+        return new UsernamePasswordAuthenticationToken(principal, null, List.of(new SimpleGrantedAuthority(role)));
+    }
+
+    @Test
+    void isWalletOwner_parent_true_withoutAProfileLookup() {
+        assertThat(guard.isWalletOwner(authenticatedWithRole("7", "ROLE_PARENT"))).isTrue();
+        verify(playerProfileRepository, never()).existsByUserIdAndParentIdIsNull(anyLong());
+    }
+
+    @Test
+    void isWalletOwner_selfRegisteredAdultPlayer_true() {
+        when(playerProfileRepository.existsByUserIdAndParentIdIsNull(7L)).thenReturn(true);
+
+        assertThat(guard.isWalletOwner(authenticatedWithRole("7", "ROLE_PLAYER"))).isTrue();
+    }
+
+    @Test
+    void isWalletOwner_playerWithoutAParentlessOwnProfile_false() {
+        // A player belonging to a parent (or a PLAYER login with no profile of its own) never owns a wallet.
+        when(playerProfileRepository.existsByUserIdAndParentIdIsNull(7L)).thenReturn(false);
+
+        assertThat(guard.isWalletOwner(authenticatedWithRole("7", "ROLE_PLAYER"))).isFalse();
+    }
+
+    @Test
+    void isWalletOwner_coach_false() {
+        assertThat(guard.isWalletOwner(authenticatedWithRole("7", "ROLE_COACH"))).isFalse();
+        verify(playerProfileRepository, never()).existsByUserIdAndParentIdIsNull(anyLong());
+    }
+
+    @Test
+    void isWalletOwner_nonSkillarsPrincipal_false() {
+        Authentication auth = new UsernamePasswordAuthenticationToken(
+            "x", "y", List.of(new SimpleGrantedAuthority("ROLE_PLAYER")));
+
+        assertThat(guard.isWalletOwner(auth)).isFalse();
+    }
+
+    @Test
+    void isWalletOwner_nullOrMalformed_false() {
+        assertThat(guard.isWalletOwner(null)).isFalse();
+        assertThat(guard.isWalletOwner(authenticatedWithRole("not-a-number", "ROLE_PLAYER"))).isFalse();
     }
 }

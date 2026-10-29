@@ -35,8 +35,18 @@ public class CreditWalletResource {
     private final SecurityUtil securityUtil;
     private final BatchPaymentQuoteService batchPaymentQuoteService;
 
+    /**
+     * fix/player-wallet-cashout: the credit wallet's gate — a PARENT, or a self-registered adult PLAYER (own
+     * profile, no parent). The wallet is keyed by the caller's own user id, and a self-booking player's bookings
+     * and packs carry that id as the payer, so their refunds land here; a PLAYER login that is not such a payer
+     * (no self-owned profile — e.g. one belonging to a parent) is refused by {@code PlayerOwnershipGuard}.
+     * Shared with {@code RevenueResource}'s credit statement.
+     */
+    static final String WALLET_OWNER = "(" + SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE + ")"
+        + " and @playerOwnershipGuard.isWalletOwner(authentication)";
+
     @GetMapping("/balance")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    @PreAuthorize(WALLET_OWNER)
     public ResponseEntity<CreditBalanceResponse> getBalance() {
         // skillars-deferred-141 code review: was getCurrentCoachUserId(), which is role-agnostic
         // despite its name (it just parses the principal's businessId) but reads as coach-specific —
@@ -57,7 +67,7 @@ public class CreditWalletResource {
      * CreateBatchRequest.slots (1..10).
      */
     @GetMapping("/batch-quote")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE)
+    @PreAuthorize(WALLET_OWNER)
     public ResponseEntity<BatchPaymentQuoteDto> getBatchQuote(
             @RequestParam UUID coachId,
             @RequestParam int sessionCount) {
@@ -69,14 +79,17 @@ public class CreditWalletResource {
     }
 
     /**
-     * Stays PARENT-only: the UAT.5 story (skillars-uat-5-player-self-booking.md, "Explicitly out of scope")
-     * keeps the credit wallet's cash-out a parent capability; a self-booking player can read their balance and
-     * statement (feat/coach-workflow-gaps A23) but not cash out.
+     * fix/player-wallet-cashout: widened from PARENT-only to {@link #WALLET_OWNER}. A self-registered adult
+     * player pays for their own sessions and packs, so the cashable refund credit in their wallet is theirs to
+     * cash out under exactly the parent's rules — {@link CashOutService} is payer-agnostic: the fee, the refund
+     * onto a funding / latest card charge, the open-dispute block, the spend-only exclusion and the
+     * reconciliation record all key on the caller's user id. (Previously UAT.5 kept cash-out parent-only,
+     * leaving a self-booking player's refunds stranded in the wallet.)
      */
     @PostMapping("/cashout")
-    @PreAuthorize(SecurityConstants.HAS_PARENT_ROLE)
+    @PreAuthorize(WALLET_OWNER)
     public ResponseEntity<Void> cashOut(@Valid @RequestBody CashOutRequest request) {
-        // Same accessor rename as getBalance() above; this endpoint stays PARENT-only.
+        // The payer's own user id: a parent, or a self-registered adult player (same accessor as getBalance()).
         Long parentId = securityUtil.requireCurrentUserId();
         cashOutService.processCashOut(parentId, request.amount());
         return ResponseEntity.noContent().build();

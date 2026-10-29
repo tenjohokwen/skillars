@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
 import com.softropic.skillars.platform.security.contract.Principal;
+import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,38 @@ public class PlayerOwnershipGuard {
             log.warn("Ownership guard denied: malformed businessId in principal for playerId={}", playerId);
             return false;
         }
+    }
+
+    /**
+     * fix/player-wallet-cashout: whether the caller may use the credit wallet (balance, statement, batch quote,
+     * cash-out). The wallet is keyed by the paying user's own id — the caller's — so the question is only
+     * whether the caller is a payer: a PARENT, or a self-registered adult PLAYER (own profile, no parent), whose
+     * bookings and packs carry their own user id as the payer (UAT.5 opaque-payer model), so their refunds land
+     * in this wallet. A PLAYER login without such a profile — any player belonging to a parent — is refused.
+     */
+    public boolean isWalletOwner(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()
+                || !(authentication.getPrincipal() instanceof Principal skillarsP)) {
+            return false;
+        }
+        boolean parent = hasAuthority(authentication, AuthoritiesConstants.PARENT);
+        boolean player = hasAuthority(authentication, AuthoritiesConstants.PLAYER);
+        if (parent) {
+            return true;
+        }
+        if (!player) {
+            return false;
+        }
+        try {
+            return playerProfileRepository.existsByUserIdAndParentIdIsNull(Long.parseLong(skillarsP.getBusinessId()));
+        } catch (NumberFormatException e) {
+            log.warn("Wallet guard denied: malformed businessId in principal");
+            return false;
+        }
+    }
+
+    private static boolean hasAuthority(Authentication authentication, String authority) {
+        return authentication.getAuthorities().stream().anyMatch(a -> authority.equals(a.getAuthority()));
     }
 
     /**

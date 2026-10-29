@@ -166,7 +166,8 @@ describe('PlayerDashboardPage.vue — tiles (deferred-141 AC4)', () => {
 })
 
 describe('PlayerDashboardPage.vue — wallet tile (feat/coach-workflow-gaps A23)', () => {
-  it('the credit-wallet tile links to the player’s own credit statement', async () => {
+  // fix/player-wallet-cashout: the tile now opens the wallet itself (balance + cash-out).
+  it('the credit-wallet tile links to the player’s own credit wallet', async () => {
     const pinia = createTestingPinia({ createSpy: vi.fn })
     const wrapper = mount(PlayerDashboardPage, {
       global: {
@@ -184,6 +185,6 @@ describe('PlayerDashboardPage.vue — wallet tile (feat/coach-workflow-gaps A23)
 
     const tile = wrapper.find('[data-test="wallet-tile"]')
     expect(tile.exists()).toBe(true)
-    expect(JSON.parse(tile.attributes('data-to'))).toEqual({ name: 'parent-credit-statement' })
+    expect(JSON.parse(tile.attributes('data-to'))).toEqual({ name: 'parent-credit-wallet' })
   })
 })
