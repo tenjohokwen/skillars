@@ -293,6 +293,18 @@ describe('router/index.js — nav destinations admit their own role (navigation 
     expect(parentRouter.currentRoute.value.path).toBe('/parent/dashboard')
   })
 
+  // fix/player-wallet-cashout: the credit wallet (cash-out) is dual-role — a self-registered PLAYER
+  // reaches it; a COACH is still redirected away.
+  it('lets a PLAYER reach /parent/credit-wallet, and redirects a COACH away from it', async () => {
+    const playerRouter = await buildRouter({ auth: { userId: '1', role: 'PLAYER' } })
+    await playerRouter.push('/parent/credit-wallet')
+    expect(playerRouter.currentRoute.value.path).toBe('/parent/credit-wallet')
+
+    const coachRouter = await buildRouter(COACH_COMPLETE)
+    await coachRouter.push('/parent/credit-wallet')
+    expect(coachRouter.currentRoute.value.path).toBe('/coach/command-center')
+  })
+
   it('redirects a COACH away from the parent child hub', async () => {
     const router = await buildRouter(COACH_COMPLETE)
     await router.push(`/parent/players/${PID}/sessions`)

@@ -51,6 +51,14 @@ public interface PlayerProfileRepository extends JpaRepository<PlayerProfile, Lo
     boolean existsByUserId(Long userId);
 
     /**
+     * fix/player-wallet-cashout: whether {@code userId} is a self-registered adult player — owns their own
+     * profile and has no parent. {@code chk_pp_owner} already makes a profile carrying a {@code user_id}
+     * parentless; the explicit {@code parentId IS NULL} keeps the credit-wallet guard correct even if that
+     * constraint is ever relaxed.
+     */
+    boolean existsByUserIdAndParentIdIsNull(Long userId);
+
+    /**
      * Single-query JOIN avoids the TOCTOU gap between separately fetching parentId then looking up
      * the parent's user row, and returns no row (rather than throwing) for self-registered adult
      * players whose parentId is null — see chk_pp_owner in V84.

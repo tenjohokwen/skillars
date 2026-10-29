@@ -21,10 +21,10 @@
           </div>
         </router-link>
 
-        <!-- feat/coach-workflow-gaps A23: opens the player's own credit statement (and from there
-             their receipts). Cash-out stays a parent capability (UAT.5 scope). -->
+        <!-- fix/player-wallet-cashout: opens the player's own credit wallet (balance + cash-out), as the
+             parent dashboard's wallet tile does; the statement stays one drawer entry away. -->
         <router-link
-          :to="{ name: 'parent-credit-statement' }"
+          :to="{ name: 'parent-credit-wallet' }"
           class="glass-card soft-hover player-dashboard__tile"
           data-test="wallet-tile"
         >

@@ -322,17 +322,21 @@ const routes = [
         redirect: '/parent/dashboard',
       },
       {
+        // Dual-role (fix/player-wallet-cashout): a self-registered adult player pays for their own sessions
+        // and packs, so the refund credit in their wallet is theirs to cash out under the parent's rules. The
+        // backend gates balance + cash-out on the wallet owner (a PARENT, or a PLAYER whose own profile has no
+        // parent) and keys the wallet on the caller's own user id.
         path: 'parent/credit-wallet',
         name: 'parent-credit-wallet',
         component: () => import('pages/parent/ParentCreditWalletPage.vue'),
-        meta: { requiresAuth: true, role: 'PARENT' },
+        meta: { requiresAuth: true, roles: ['PARENT', 'PLAYER'] },
       },
       {
         // Dual-role (feat/coach-workflow-gaps A23): a self-registered adult player pays for their own
         // sessions, so their credit statement and receipts are theirs to read. The backend scopes both
         // to the caller's own user id (GET /api/payment/credits/statement and
-        // /api/payment/parents/bookings/{id}/receipt). Cash-out
-        // (parent-credit-wallet) stays PARENT-only per the UAT.5 scope.
+        // /api/payment/parents/bookings/{id}/receipt). Cash-out (parent-credit-wallet) is dual-role too
+        // since fix/player-wallet-cashout.
         path: 'parent/credit-statement',
         name: 'parent-credit-statement',
         component: () => import('pages/parent/CreditStatementPage.vue'),

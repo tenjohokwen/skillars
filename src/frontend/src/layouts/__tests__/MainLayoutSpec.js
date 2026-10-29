@@ -545,7 +545,8 @@ describe('MainLayout.vue — role-scoped nav entries (navigation reachability)',
     '/coach/reliability',
     '/coach/subscription',
   ]
-  const PARENT_ONLY = ['/parent/credit-wallet']
+  // fix/player-wallet-cashout: /parent/credit-wallet left this list — it is dual-role (asserted below).
+  const PARENT_ONLY = ['/parent/dashboard']
   const PLAYER_ONLY = ['/player/videos', '/player/locker-room/42']
 
   async function mountAs(role, { players = [] } = {}) {
@@ -586,6 +587,15 @@ describe('MainLayout.vue — role-scoped nav entries (navigation reachability)',
   // feat/coach-workflow-gaps A23: the credit statement (and its receipts) is dual-role now.
   it.each(['PARENT', 'PLAYER'])('%s sees the credit statement entry', async (role) => {
     expect(has(await mountAs(role), '/parent/credit-statement')).toBe(true)
+  })
+
+  // fix/player-wallet-cashout: the credit wallet (balance + cash-out) is dual-role too.
+  it.each(['PARENT', 'PLAYER'])('%s sees the credit wallet entry', async (role) => {
+    expect(has(await mountAs(role), '/parent/credit-wallet')).toBe(true)
+  })
+
+  it.each(['COACH', 'ADMIN'])('%s does not see the credit wallet entry', async (role) => {
+    expect(has(await mountAs(role), '/parent/credit-wallet')).toBe(false)
   })
 
   it.each(['COACH', 'PLAYER', 'ADMIN'])('%s sees none of the parent-only entries', async (role) => {
