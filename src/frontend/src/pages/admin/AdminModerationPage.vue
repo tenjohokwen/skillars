@@ -408,6 +408,7 @@ const typeLabels = computed(() => ({
   EXTERNAL_REFUND: t('admin.moderation.types.EXTERNAL_REFUND'),
   PAYOUT_HELD: t('admin.moderation.types.PAYOUT_HELD'),
   PAYOUT_REVERSAL_FAILED: t('admin.moderation.types.PAYOUT_REVERSAL_FAILED'),
+  BOOKING_ACTION_REQUIRED: t('admin.moderation.types.BOOKING_ACTION_REQUIRED'),
 }))
 
 const typeOptions = computed(() => [
@@ -468,6 +469,7 @@ const PAYMENT_INTEGRITY_TYPES = [
   'EXTERNAL_REFUND',
   'PAYOUT_HELD',
   'PAYOUT_REVERSAL_FAILED',
+  'BOOKING_ACTION_REQUIRED',
 ]
 
 function isPaymentIntegrityAlert(type) {

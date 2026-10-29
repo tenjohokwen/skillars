@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
-import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.service.RefundOutboxSupport.BookingRefundPayload;
 
@@ -11,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
 import java.io.UncheckedIOException;
+import java.math.BigDecimal;
 
 /**
  * skillars-deferred-91 AC2: re-drives a credit-wallet {@code BOOKING_REFUND} enqueued by
@@ -44,13 +44,24 @@ public class CreditWalletRefundOutboxHandler implements OutboxMessageHandler {
         } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
             throw new UncheckedIOException(e);
         }
-        if (ledgerRepository.existsByReferenceIdAndType(p.bookingId(), CreditLedgerEntryType.BOOKING_REFUND)) {
-            log.info("[CREDIT_WALLET_REFUND] BOOKING_REFUND already present for booking {} — re-drive is a no-op",
-                p.bookingId());
+        // fix/payment-wallet-dispute-integrity: one row per booking per refund kind — a batch-share refund
+        // (BATCH_SHARE_REFUND) and the booking's own cancellation refund (BOOKING_REFUND) no longer collide.
+        String type = p.ledgerType();
+        if (ledgerRepository.existsByReferenceIdAndType(p.bookingId(), type)) {
+            log.info("[CREDIT_WALLET_REFUND] {} already present for booking {} — re-drive is a no-op",
+                type, p.bookingId());
             return;
         }
-        creditWalletService.writeLedgerEntry(p.parentId(), p.amount(), CreditLedgerEntryType.BOOKING_REFUND,
-            p.bookingId(), p.description(), p.sourcePaymentIntentId(), p.sourceCardAmount());
+        if (p.amount() == null || p.amount().signum() <= 0) {
+            // Never enqueued since fix/payment-wallet-dispute-integrity (RefundEnqueueListener alerts instead); an
+            // older 0.00 row would otherwise fail on every drain forever.
+            log.error("[CREDIT_WALLET_REFUND] booking {} payload amount {} is not positive — dropped, reconcile by hand",
+                p.bookingId(), p.amount());
+            return;
+        }
+        // fix/payment-wallet-dispute-integrity: a spend-only refund puts the whole amount in the spend-only pool.
+        creditWalletService.writeLedgerEntry(p.parentId(), p.amount(), type, p.bookingId(), p.description(),
+            p.sourcePaymentIntentId(), p.sourceCardAmount(), p.spendOnly() ? p.amount() : BigDecimal.ZERO);
         // fix/payment-dispute-credit-trace-and-lost-dispute: credit funded by a charge that already lost a
         // card dispute is taken back at once (the bank refunded the payer).
         chargebackCreditReversalService.onRefundCredited(p.bookingId(), p.sourcePaymentIntentId());

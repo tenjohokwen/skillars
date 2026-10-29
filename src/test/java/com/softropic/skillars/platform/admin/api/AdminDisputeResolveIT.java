@@ -21,6 +21,7 @@ import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.HttpClientErrorException;
 
+import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
@@ -166,12 +167,12 @@ class AdminDisputeResolveIT extends AbstractIntegrationTest {
         assertThat(resolution).isEqualTo("FULL_CREDIT");
 
         Integer ledgerCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
+            "SELECT COUNT(*) FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'DISPUTE_CREDIT'",
             Integer.class, bookingId);
         assertThat(ledgerCount).isEqualTo(1);
 
         Double amount = jdbcTemplate.queryForObject(
-            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
+            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'DISPUTE_CREDIT'",
             Double.class, bookingId);
         assertThat(amount).isEqualTo(50.0);
 
@@ -197,7 +198,7 @@ class AdminDisputeResolveIT extends AbstractIntegrationTest {
             Void.class);
 
         Double amount = jdbcTemplate.queryForObject(
-            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
+            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'DISPUTE_CREDIT'",
             Double.class, bookingId);
         assertThat(amount).isEqualTo(25.0);
     }
@@ -265,7 +266,7 @@ class AdminDisputeResolveIT extends AbstractIntegrationTest {
             Void.class);
 
         Double amount = jdbcTemplate.queryForObject(
-            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'BOOKING_REFUND'",
+            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'DISPUTE_CREDIT'",
             Double.class, bookingId);
         assertThat(amount).isEqualTo(20.0);
 
@@ -309,6 +310,51 @@ class AdminDisputeResolveIT extends AbstractIntegrationTest {
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.CONFLICT));
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: FULL_CREDIT on a booking whose cancellation refund already went to
+     * the wallet used to hit uq_pcl_booking_refund (a raw 500); it now answers 409 disputes.alreadyRefunded and
+     * credits nothing, and after a partial refund it credits only what is left of the price.
+     */
+    @Test
+    void resolveFullCredit_afterTheBookingWasRefunded_is409_thenOnlyTheRemainderAfterAPartialRefund() {
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO payment.parent_credit_ledger (tx_id, parent_id, amount, type, reference_id, description, created_at) "
+                + "VALUES (gen_random_uuid(), ?, 50.00, 'BOOKING_REFUND', ?, 'IT cancel refund', now())",
+            PARENT_ID, bookingId));
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+        Map<String, Object> body = Map.of("resolution", "FULL_CREDIT", "resolutionNote", "Already refunded");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_DISP_BASE + "/" + disputeId + "/resolve",
+            HttpMethod.POST, body, authenticatedHeaders(adminCookies), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                assertThat(((HttpClientErrorException) e).getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+                assertThat(((HttpClientErrorException) e).getResponseBodyAsString()).contains("disputes.alreadyRefunded");
+            });
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'DISPUTE_CREDIT'",
+            Integer.class, bookingId)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT status FROM admin.disputes WHERE id = ?", String.class, disputeId)).isEqualTo("OPEN");
+
+        // Only 20.00 of the 50.00 went back before: FULL_CREDIT tops up the remaining 30.00.
+        transactionTemplate.execute(status -> {
+            resetDisputeToOpen();
+            return jdbcTemplate.update(
+                "INSERT INTO payment.parent_credit_ledger (tx_id, parent_id, amount, type, reference_id, description, created_at) "
+                    + "VALUES (gen_random_uuid(), ?, 20.00, 'BOOKING_REFUND', ?, 'IT partial refund', now())",
+                PARENT_ID, bookingId);
+        });
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ADMIN_DISP_BASE + "/" + disputeId + "/resolve",
+            HttpMethod.POST, body, authenticatedHeaders(adminCookies), Void.class);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT amount FROM payment.parent_credit_ledger WHERE reference_id = ? AND type = 'DISPUTE_CREDIT'",
+            BigDecimal.class, bookingId)).isEqualByComparingTo("30.00");
     }
 
     // ── helpers ──

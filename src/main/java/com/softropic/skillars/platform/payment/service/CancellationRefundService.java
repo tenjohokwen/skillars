@@ -15,6 +15,8 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -22,8 +24,10 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Coach-side consequences of a cancellation / no-show — cancellation history and reliability strikes —
- * run AFTER_COMMIT so their failure can never roll back the cancellation. Money (wallet refunds and, since
+ * Coach-side consequences of a cancellation / no-show — cancellation history and reliability strikes. Strikes
+ * run after the commit so their failure can never roll back the cancellation; since
+ * fix/payment-wallet-dispute-integrity the coach-cancellation history row is written BEFORE_COMMIT, in the
+ * cancellation's transaction, so it is never lost. Money (wallet refunds and, since
  * fix/payment-session-pack-integrity, pack session restores) is enqueued BEFORE_COMMIT by
  * {@link RefundEnqueueListener}; parent and admin cancellations therefore need no listener here.
  */
@@ -39,25 +43,45 @@ public class CancellationRefundService {
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final ConfigService configService;
 
-    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    /**
+     * fix/payment-wallet-dispute-integrity: BEFORE_COMMIT, in the cancellation's own transaction — the
+     * {@code coach_cancellation_history} row (what the excused-cancellation cap counts) commits exactly when the
+     * cancellation does. It used to be written AFTER_COMMIT in a separate transaction, so a crash after the
+     * booking committed, or any failure there, lost the row and the strike and weakened the cap. The strike
+     * itself still runs after the commit ({@link #afterCommit}), in {@code ReliabilityStrikeService.issue}'s own
+     * {@code REQUIRES_NEW} transaction, so a strike failure can never roll the cancellation back; the decision
+     * whether to strike is taken here, under the per-coach lock, against the committed history.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    // REQUIRED: joins the cancellation's transaction (BEFORE_COMMIT runs while it is still active), so the
+    // pg_advisory_xact_lock, the history insert and the window count all sit in ONE transaction and the lock is
+    // held until it commits — a concurrent cancel by the same coach counts this row only once it is committed.
+    // Without it each repository call ran in its own transaction, the xact lock was released at once, and two
+    // concurrent excused cancels both counted past the cap (two EXCUSED_LIMIT strikes). A direct call with no
+    // transaction gets its own.
+    @Transactional
     public void onBookingCancelledByCoach(BookingCancelledByCoachEvent event) {
         // skillars-deferred-101 AC4 / fix/payment-session-pack-integrity: the refund and the pack session
         // restore are both enqueued by RefundEnqueueListener (BEFORE_COMMIT, durable outbox).
 
         // Always record cancellation history — ALL coach cancellations (excused AND unexcused)
         String reason = event.getCancelReason() != null ? event.getCancelReason() : "OTHER_UNEXCUSED";
-        // fix/booking-price-and-excused-race: first statement of this transaction, before the history
-        // insert and the window count, so concurrent cancels by one coach count and strike one at a time
-        // (see acquireCoachCancellationLock). Taken for unexcused reasons too: their history rows are not
-        // counted, but one code path keeps the ordering obvious and the lock is held for milliseconds.
+        // fix/booking-price-and-excused-race: before the history insert and the window count, so concurrent
+        // cancels by one coach count and strike one at a time (see acquireCoachCancellationLock); held to the
+        // cancellation's commit. Taken for unexcused reasons too: their history rows are not counted, but one
+        // code path keeps the ordering obvious and the lock is held for milliseconds.
         cancellationHistoryRepository.acquireCoachCancellationLock(event.getCoachId().toString());
         saveCancellationHistory(event.getCoachId(), event.getBookingId(), reason);
 
+        String strikeReason = null;
         if (!EXCUSED_REASONS.contains(reason)) {
-            issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_CANCELLATION_UNEXCUSED");
+            strikeReason = "COACH_CANCELLATION_UNEXCUSED";
         } else if (exceedsExcusedCancellationCap(event.getCoachId())) {
-            issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_CANCELLATION_EXCUSED_LIMIT");
+            strikeReason = "COACH_CANCELLATION_EXCUSED_LIMIT";
+        }
+        if (strikeReason != null) {
+            String strike = strikeReason;
+            afterCommit(() -> issueStrikeSafely(event.getCoachId(), event.getBookingId(), strike));
         }
 
         log.info("Coach cancellation processed: bookingId={} reason={}", event.getBookingId(), reason);
@@ -113,6 +137,32 @@ public class CancellationRefundService {
         // No credit action — the session fee is forfeited. feat/payment-forfeit-payouts-and-clawback: the coach
         // IS paid for it, by CoachPayoutEnqueueListener (BEFORE_COMMIT, atomic with the NO_SHOW_PLAYER write).
         log.info("Player no-show recorded: bookingId={}", event.getBookingId());
+    }
+
+    /**
+     * Runs {@code action} once the current transaction has committed (never on rollback); immediately when no
+     * transaction synchronization is active. Registering from a BEFORE_COMMIT listener is fine: the completion
+     * callbacks are read after the before-commit ones have run. Runs in {@code afterCompletion}, like Spring's own
+     * AFTER_COMMIT event listeners, and never throws back into the committed caller.
+     */
+    private static void afterCommit(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCompletion(int status) {
+                if (status != STATUS_COMMITTED) {
+                    return;
+                }
+                try {
+                    action.run();
+                } catch (RuntimeException e) {
+                    log.error("Post-commit coach strike failed — the cancellation and its history row stand", e);
+                }
+            }
+        });
     }
 
     private void saveCancellationHistory(UUID coachId, UUID bookingId, String reason) {

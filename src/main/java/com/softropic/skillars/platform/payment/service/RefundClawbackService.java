@@ -75,8 +75,11 @@ public class RefundClawbackService {
             ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND);
         if (walletRefund.isPresent()) {
             ParentCreditLedger refund = walletRefund.get();
+            // fix/payment-wallet-dispute-integrity: a spend-only refund is taken back from the spend-only pool
+            // first, a cashable one from the cashable pool first.
             BigDecimal recovered = creditWalletService.debitRefundReversal(
-                refund.getParentId(), bookingId, refund.getAmount());
+                refund.getParentId(), bookingId, refund.getAmount(),
+                refund.getSpendOnlyAmount() != null && refund.getSpendOnlyAmount().signum() > 0);
             // fix/payment-pack-refund-rounding: an expired-pack session refunded as money is un-settled on the
             // pack's ledger — the caller now pays it to the coach, which settles it again through the payout
             // allocation. Without this the session would count as settled twice and the pack's last payout

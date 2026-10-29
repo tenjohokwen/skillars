@@ -389,6 +389,8 @@ async function submitResolve() {
       $q.notify({ message: t('admin.disputes.invalidCreditAmount'), type: 'negative' })
     } else if (message === 'disputes.noRefundToReverse') {
       $q.notify({ message: t('admin.disputes.noRefundToReverse'), type: 'negative' })
+    } else if (message === 'disputes.alreadyRefunded') {
+      $q.notify({ message: t('admin.disputes.alreadyRefunded'), type: 'negative' })
     } else {
       $q.notify({ message: t('admin.disputes.resolveFailed'), type: 'negative' })
     }

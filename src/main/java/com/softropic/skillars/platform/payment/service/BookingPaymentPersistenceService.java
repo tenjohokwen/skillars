@@ -14,7 +14,6 @@ import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
-import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import io.micrometer.core.instrument.Counter;
@@ -328,8 +327,8 @@ public class BookingPaymentPersistenceService {
                                        Instant requestedStartTime, String canonicalTimezone) {
         settleSuccessCounter.increment();
         if (creditDebited.compareTo(BigDecimal.ZERO) > 0) {
-            creditWalletService.writeLedgerEntry(parentId, creditDebited.negate(),
-                CreditLedgerEntryType.BOOKING_DEDUCTION, bookingId, "Session booking deduction");
+            // fix/payment-wallet-dispute-integrity: spend-only credit is consumed first.
+            creditWalletService.debitForBooking(parentId, creditDebited, bookingId, "Session booking deduction");
         }
         BookingPayment bp = loadOrCreate(bookingId);
         bp.setCreditDebited(creditDebited);
@@ -377,8 +376,8 @@ public class BookingPaymentPersistenceService {
                                        Instant requestedStartTime, String canonicalTimezone) {
         settleFailedCounter.increment();
         if (creditToReverse.compareTo(BigDecimal.ZERO) > 0) {
-            creditWalletService.writeLedgerEntry(parentId, creditToReverse,
-                CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL, bookingId, "Payment failed - credit restored");
+            creditWalletService.restoreBookingDeduction(parentId, creditToReverse, bookingId,
+                "Payment failed - credit restored");
         }
         BookingPayment bp = loadOrCreate(bookingId);
         bp.setCreditDebited(BigDecimal.ZERO);
@@ -552,7 +551,9 @@ public class BookingPaymentPersistenceService {
     public void refundBatchShareToCreditTransactional(Long parentId, UUID bookingId, UUID batchId, BigDecimal amount,
                                                       String paymentIntentId, BigDecimal cardShare) {
         boolean card = paymentIntentId != null && cardShare != null && cardShare.signum() > 0;
-        refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId,
+        // fix/payment-wallet-dispute-integrity: its own ledger kind (BATCH_SHARE_REFUND), so it never takes the
+        // booking's one BOOKING_REFUND slot from a later real cancellation refund.
+        refundOutboxSupport.enqueueBatchShareRefund(parentId, amount, bookingId,
             "Batch booking could not be confirmed - payment returned as credit (batch " + batchId + ")",
             card ? paymentIntentId : null, card ? cardShare : null);
     }

@@ -19,7 +19,12 @@ public class PaymentIntegrityAlertEvent extends ApplicationEvent {
         /** A coach payout went to HOLD — the transfer cannot be made without an operator. */
         PAYOUT_HELD,
         /** A post-payout reversal failed non-retryably. */
-        PAYOUT_REVERSAL_FAILED
+        PAYOUT_REVERSAL_FAILED,
+        /**
+         * fix/payment-wallet-dispute-integrity: a booking an automatic path could not finish — e.g. an admin
+         * cancellation owing a refund whose amount is unknown (nothing is enqueued; refund by hand).
+         */
+        BOOKING_ACTION_REQUIRED
     }
 
     /** What {@link #getReferenceId()} names. */

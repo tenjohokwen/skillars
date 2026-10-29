@@ -1189,6 +1189,8 @@ export default {
       invalidCreditAmount: 'Veuillez saisir un montant de crédit valide.',
       noRefundToReverse:
         'Cette réservation n’a aucun remboursement au parent qui puisse être annulé.',
+      alreadyRefunded:
+        'Cette réservation a déjà été entièrement remboursée. Choisissez une autre résolution, par exemple aucune action.',
       upholdCoachHelp:
         'À utiliser lorsque la séance a bien eu lieu ou que le remboursement n’était pas dû. Le remboursement est repris sur le portefeuille de crédits du parent (jamais en dessous de zéro) ou la séance restituée au forfait est de nouveau déduite, et le coach reçoit sa part complète. Tout montant non récupérable est pris en charge par Skillars.',
       recoveredAmountLabel: 'Récupéré auprès du parent',
@@ -1254,6 +1256,7 @@ export default {
         EXTERNAL_REFUND: "Remboursement effectué hors de l'application",
         PAYOUT_HELD: 'Versement coach en attente',
         PAYOUT_REVERSAL_FAILED: "Échec de l'annulation du versement coach",
+        BOOKING_ACTION_REQUIRED: 'Réservation nécessitant une action manuelle',
       },
     },
     reviewModeration: {
@@ -1914,6 +1917,10 @@ export default {
     credits: {
       title: 'Portefeuille de crédits',
       balance: 'Solde actuel',
+      cashableBalance: 'Retirable : {amount} €',
+      spendOnlyBalance: 'Réservations uniquement : {amount} €',
+      spendOnlyHint:
+        "Le crédit remboursé d'un forfait de séances expiré peut servir pour des réservations mais ne peut pas être retiré.",
       cashout: 'Retirer',
       cashoutLabel: 'Montant à retirer (EUR)',
       cashoutSuccess:
@@ -1923,7 +1930,9 @@ export default {
       cashOutTooSmall:
         'Ce montant est trop faible pour être retiré une fois les frais de traitement déduits.',
       cashOutBlockedByDispute:
-        "Les retraits sont suspendus tant qu'une contestation de paiement par carte est en cours sur l'un de vos paiements. Vous pourrez de nouveau retirer votre crédit une fois celle-ci résolue.",
+        "Les retraits sont suspendus tant qu'un litige est en cours sur l'un de vos paiements ou l'une de vos réservations. Vous pourrez de nouveau retirer votre crédit une fois celui-ci résolu.",
+      cashOutExceedsCashable:
+        'Une partie de votre crédit ne peut servir que pour des réservations. Vous pouvez retirer au plus le montant indiqué comme retirable.',
       cashOutExceedsRefundable:
         'Les retraits sont remboursés sur votre dernier paiement par carte, qui ne peut pas recevoir ce montant. Essayez un montant plus petit.',
       refundFailed: 'Le remboursement sur votre carte a échoué. Votre crédit a été restauré.',

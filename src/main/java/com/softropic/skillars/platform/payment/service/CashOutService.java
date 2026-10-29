@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import lombok.RequiredArgsConstructor;
@@ -41,10 +42,13 @@ public class CashOutService {
     private final PaymentGateway paymentGateway;
     private final ConfigService configService;
     private final CashOutReconciliationService cashOutReconciliationService;
+    private final ParentCreditLedgerRepository ledgerRepository;
 
     static final String REFUND_OUTCOME_UNKNOWN = "payment.refundOutcomeUnknown";
     /** Total refund attempts under one idempotency key when Stripe's answer is ambiguous. */
     static final int MAX_REFUND_ATTEMPTS = 3;
+    /** Funding charges checked for refund headroom (one Stripe read each) before falling back to the latest. */
+    static final int MAX_REFUND_TARGET_CANDIDATES = 3;
 
     public void processCashOut(Long parentId, BigDecimal requestedAmount) {
         BigDecimal feeRate = new BigDecimal(configService.getString("payment.stripe.feeRate"));
@@ -57,29 +61,25 @@ public class CashOutService {
         }
 
         // Early, unlocked balance check: a clear error without a Stripe round-trip. The authoritative
-        // check is the locked one in debitForCashOut.
-        if (creditWalletService.getBalance(parentId).compareTo(requested) < 0) {
+        // check is the locked one in debitForCashOut. fix/payment-wallet-dispute-integrity: only the
+        // cashable pool can be cashed out; spend-only credit stays for bookings.
+        CreditWalletService.WalletBalance balance = creditWalletService.getWalletBalance(parentId);
+        if (balance.total().compareTo(requested) < 0) {
             throw new PaymentGatewayException("payment.insufficientCredit");
         }
+        if (balance.cashable().compareTo(requested) < 0) {
+            throw new PaymentGatewayException("payment.cashOutExceedsCashable");
+        }
 
-        String paymentIntentId = stripeCustomerRepository.findById(parentId)
+        String lastPaymentIntentId = stripeCustomerRepository.findById(parentId)
             .map(StripeCustomer::getLastPaymentIntentId)
             .orElse(null);
-        if (paymentIntentId == null) {
-            throw new PaymentGatewayException("payment.noPaymentMethod");
-        }
 
-        // A cash-out refunds onto ONE PaymentIntent (the payer's most recent card charge), and Stripe
-        // refuses to refund more than that charge has left. Wallet credit can come from many earlier
-        // charges, so cap explicitly with a dedicated error rather than letting Stripe reject it as a
-        // generic refund failure. Multi-PaymentIntent split refunds are not supported (PR design note).
-        // Not re-checked under the wallet lock: a concurrent cash-out can still consume the headroom
-        // between this read and the refund, in which case Stripe rejects the refund and the
-        // compensation below restores the credit.
-        BigDecimal refundable = paymentGateway.getRefundableAmount(paymentIntentId);
-        if (netAmount.compareTo(refundable) > 0) {
-            throw new PaymentGatewayException("payment.cashOutExceedsRefundable");
-        }
+        // A cash-out refunds onto ONE PaymentIntent, and Stripe refuses to refund more than that charge has
+        // left. Multi-PaymentIntent split refunds are not supported (PR design note). Not re-checked under
+        // the wallet lock: a concurrent cash-out can still consume the headroom between this read and the
+        // refund, in which case Stripe rejects the refund and the compensation below restores the credit.
+        String paymentIntentId = refundTarget(parentId, netAmount, lastPaymentIntentId);
 
         UUID cashOutId = UUID.randomUUID();
         // The debit and its PENDING cash_out_reconciliations record commit together: from here on, a crash
@@ -139,6 +139,36 @@ public class CashOutService {
             }
             return;
         }
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: the charge a cash-out is refunded onto. Preferably one that funded
+     * the payer's cashable refund credit (most recently credited first) and still has {@code netAmount} of
+     * refundable headroom: refunding the funding charge lowers its disputable amount, whereas a refund onto an
+     * unrelated later charge left the funding charge fully disputable — a chargeback on it after the cash-out
+     * paid the parent twice. Falls back to the payer's most recent charge (the previous behaviour) when no
+     * funding charge can take the whole amount.
+     */
+    private String refundTarget(Long parentId, BigDecimal netAmount, String lastPaymentIntentId) {
+        for (String candidate : ledgerRepository.findCashOutRefundTargets(parentId, MAX_REFUND_TARGET_CANDIDATES)) {
+            try {
+                if (netAmount.compareTo(paymentGateway.getRefundableAmount(candidate)) <= 0) {
+                    return candidate;
+                }
+            } catch (RuntimeException e) {
+                // A funding charge Stripe cannot read now is just not a target; the fallback below still applies.
+                log.warn("Cash-out refund target {} unreadable for parentId={} — trying the next", candidate, parentId, e);
+            }
+        }
+        if (lastPaymentIntentId == null) {
+            throw new PaymentGatewayException("payment.noPaymentMethod");
+        }
+        // Wallet credit can come from many earlier charges, so cap explicitly with a dedicated error rather than
+        // letting Stripe reject it as a generic refund failure.
+        if (netAmount.compareTo(paymentGateway.getRefundableAmount(lastPaymentIntentId)) > 0) {
+            throw new PaymentGatewayException("payment.cashOutExceedsRefundable");
+        }
+        return lastPaymentIntentId;
     }
 
     /** Best effort: if even this write fails, the record stays PENDING and the re-check job escalates it. */

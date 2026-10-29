@@ -42,6 +42,7 @@ class RefundEnqueueListenerTest {
     @Mock RefundOutboxSupport refundOutboxSupport;
     @Mock PackRestoreOutboxSupport packRestoreOutboxSupport;
     @Mock PackRefundAllocationService packRefundAllocationService;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @InjectMocks RefundEnqueueListener listener;
 
@@ -314,8 +315,10 @@ class RefundEnqueueListenerTest {
             this, BOOKING_ID, PARENT_ID, COACH_ID, packId, 25, true, SESSION_PRICE, "parent@test.com",
             "coach@test.com", Instant.now(), "UTC", true, true));
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(new BigDecimal("50.01")), eq(BOOKING_ID), eq("Parent cancellation >24h — expired pack refund"));
+        // fix/payment-wallet-dispute-integrity (owner decision): SPEND-ONLY credit — bookable, never cashed out.
+        verify(refundOutboxSupport).enqueueSpendOnlyBookingRefund(eq(PARENT_ID), eq(new BigDecimal("50.01")),
+            eq(BOOKING_ID), eq("Parent cancellation >24h — expired pack refund (booking credit only)"));
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
         verify(packRestoreOutboxSupport, never()).enqueuePackRestore(any(), any(), any());
     }
 
@@ -358,6 +361,34 @@ class RefundEnqueueListenerTest {
             packId, SESSION_PRICE, packExpired,
             "parent@test.com", Instant.now(), "UTC"
         );
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: a captured admin cancel whose amount is unknown (0.00) used to
+     * enqueue a 0.00 refund that failed on every drain forever. Nothing is enqueued; an admin alert is raised.
+     */
+    @Test
+    void onBookingCancelledByAdmin_capturedButAmountUnknown_enqueuesNothing_andAlerts() {
+        listener.onBookingCancelledByAdmin(new BookingCancelledByAdminEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, null, BigDecimal.ZERO, true, false,
+            "parent@test.com", "coach@test.com", "Coach", BookingCancelledByAdminEvent.REASON_COACH_UNAVAILABLE,
+            Instant.now(), "UTC"));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+        var alert = org.mockito.ArgumentCaptor.forClass(
+            com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent.class);
+        verify(eventPublisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().getKind()).isEqualTo(
+            com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent.Kind.BOOKING_ACTION_REQUIRED);
+        assertThat(alert.getValue().getReferenceId()).isEqualTo(BOOKING_ID.toString());
+    }
+
+    /** A coach-side expired-pack refund stays cashable (only the parent's own >24h cancel is spend-only). */
+    @Test
+    void onBookingCancelledByCoach_expiredPack_refundIsCashable() {
+        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true));
+
+        verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
     }
 
     private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {

@@ -109,11 +109,15 @@ class CreditWalletResourceWebMvcTest {
     @WithMockUser(roles = "PARENT")
     void getBalance_parentRole_returns200() throws Exception {
         when(securityUtil.requireCurrentUserId()).thenReturn(CALLER_ID);
-        when(creditWalletService.getBalance(CALLER_ID)).thenReturn(new BigDecimal("12.50"));
+        // fix/payment-wallet-dispute-integrity: with the cashable / spend-only split.
+        when(creditWalletService.getWalletBalance(CALLER_ID)).thenReturn(new CreditWalletService.WalletBalance(
+            new BigDecimal("12.50"), new BigDecimal("10.00"), new BigDecimal("2.50")));
 
         mockMvc.perform(get("/api/payment/credits/balance"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.balance").value(12.50))
+            .andExpect(jsonPath("$.cashableBalance").value(2.50))
+            .andExpect(jsonPath("$.spendOnlyBalance").value(10.00))
             .andExpect(jsonPath("$.currency").value("EUR"));
     }
 
@@ -121,7 +125,8 @@ class CreditWalletResourceWebMvcTest {
     @WithMockUser(roles = "PLAYER")
     void getBalance_playerRole_returns200() throws Exception {
         when(securityUtil.requireCurrentUserId()).thenReturn(CALLER_ID);
-        when(creditWalletService.getBalance(CALLER_ID)).thenReturn(new BigDecimal("3.00"));
+        when(creditWalletService.getWalletBalance(CALLER_ID)).thenReturn(new CreditWalletService.WalletBalance(
+            new BigDecimal("3.00"), BigDecimal.ZERO, new BigDecimal("3.00")));
 
         mockMvc.perform(get("/api/payment/credits/balance"))
             .andExpect(status().isOk())

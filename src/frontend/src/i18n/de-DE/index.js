@@ -1478,6 +1478,10 @@ export default {
     credits: {
       title: 'Guthaben-Wallet',
       balance: 'Aktuelles Guthaben',
+      cashableBalance: 'Auszahlbar: {amount} €',
+      spendOnlyBalance: 'Nur für Buchungen: {amount} €',
+      spendOnlyHint:
+        'Guthaben aus der Erstattung eines abgelaufenen Sitzungspakets kann für Buchungen verwendet, aber nicht ausgezahlt werden.',
       cashout: 'Auszahlen',
       cashoutLabel: 'Auszahlungsbetrag (EUR)',
       cashoutSuccess:
@@ -1488,7 +1492,9 @@ export default {
       cashOutTooSmall:
         'Dieser Betrag ist nach Abzug der Bearbeitungsgebühr zu klein für eine Auszahlung.',
       cashOutBlockedByDispute:
-        'Auszahlungen sind ausgesetzt, solange eine Rückbuchung zu einer Ihrer Kartenzahlungen offen ist. Sobald sie geklärt ist, können Sie wieder auszahlen.',
+        'Auszahlungen sind ausgesetzt, solange ein Streitfall zu einer Ihrer Zahlungen oder Buchungen offen ist. Sobald er geklärt ist, können Sie wieder auszahlen.',
+      cashOutExceedsCashable:
+        'Ein Teil Ihres Guthabens kann nur für Buchungen verwendet werden. Sie können höchstens den als auszahlbar angezeigten Betrag auszahlen.',
       cashOutExceedsRefundable:
         'Auszahlungen werden auf Ihre letzte Kartenzahlung erstattet, die diesen Betrag nicht aufnehmen kann. Bitte wählen Sie einen kleineren Betrag.',
       refundFailed:
@@ -1670,6 +1676,8 @@ export default {
       invalidCreditAmount: 'Bitte geben Sie einen gültigen Gutschriftbetrag ein.',
       noRefundToReverse:
         'Für diese Buchung gibt es keine Erstattung an die Eltern, die zurückgebucht werden könnte.',
+      alreadyRefunded:
+        'Diese Buchung wurde bereits vollständig erstattet. Wählen Sie eine andere Lösung, z. B. keine Maßnahme.',
       upholdCoachHelp:
         'Verwenden, wenn die Sitzung tatsächlich stattgefunden hat oder die Erstattung nicht geschuldet war. Die Erstattung wird vom Guthaben der Eltern zurückgebucht (nie unter null) bzw. die zurückgegebene Paket-Sitzung erneut abgezogen, und der Coach erhält seinen vollen Anteil. Nicht einziehbare Beträge trägt Skillars.',
       recoveredAmountLabel: 'Von den Eltern zurückgebucht',
@@ -1736,6 +1744,7 @@ export default {
         EXTERNAL_REFUND: 'Erstattung außerhalb der App',
         PAYOUT_HELD: 'Trainer-Auszahlung angehalten',
         PAYOUT_REVERSAL_FAILED: 'Rückbuchung der Trainer-Auszahlung fehlgeschlagen',
+        BOOKING_ACTION_REQUIRED: 'Buchung erfordert manuelle Bearbeitung',
       },
     },
     reviewModeration: {

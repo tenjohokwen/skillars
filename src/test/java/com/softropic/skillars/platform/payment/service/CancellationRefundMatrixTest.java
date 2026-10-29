@@ -202,6 +202,32 @@ class CancellationRefundMatrixTest {
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
     }
 
+    /**
+     * fix/payment-wallet-dispute-integrity: inside the cancellation's transaction the history row is written at
+     * once (BEFORE_COMMIT), but the strike waits for the commit — and never happens on a rollback.
+     */
+    @Test
+    void coachCancel_insideATransaction_historyNow_strikeOnlyAfterCommit() {
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.onBookingCancelledByCoach(coachEvent(null, "OTHER_UNEXCUSED", false));
+
+            verify(cancellationHistoryRepository).save(any());
+            verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+
+            var syncs = org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            syncs.forEach(s -> s.afterCompletion(
+                org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK));
+            verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+
+            syncs.forEach(s -> s.afterCompletion(
+                org.springframework.transaction.support.TransactionSynchronization.STATUS_COMMITTED));
+            verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_UNEXCUSED");
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
     private BookingCancelledByCoachEvent coachEvent(UUID packId, String reason, boolean packExpired) {
         return new BookingCancelledByCoachEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID,

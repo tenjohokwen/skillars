@@ -14,6 +14,15 @@
             <div v-else class="text-h4 text-weight-bold">
               {{ balance !== null ? `€${Number(balance).toFixed(2)}` : '—' }}
             </div>
+            <div v-if="spendOnly > 0" class="q-mt-sm" data-testid="wallet-split">
+              <div class="text-body2">
+                {{ $t('payment.credits.cashableBalance', { amount: cashable.toFixed(2) }) }}
+              </div>
+              <div class="text-body2">
+                {{ $t('payment.credits.spendOnlyBalance', { amount: spendOnly.toFixed(2) }) }}
+              </div>
+              <div class="text-caption text-grey-6">{{ $t('payment.credits.spendOnlyHint') }}</div>
+            </div>
           </q-card-section>
         </q-card>
 
@@ -47,9 +56,7 @@
               color="primary"
               unelevated
               :loading="cashingOut"
-              :disable="
-                !cashoutAmount || cashoutAmount <= 0 || balance === null || cashoutAmount > balance
-              "
+              :disable="cashoutDisabled"
               @click="handleCashOut"
             />
             <q-banner
@@ -86,6 +93,19 @@ const cashingOut = ref(false)
 const cashoutError = ref(null)
 
 const balance = computed(() => store.creditBalance?.balance ?? null)
+// Spend-only credit (an expired-pack refund) can be booked with but never cashed out; an older API response
+// without the split counts everything as cashable.
+const spendOnly = computed(() => Number(store.creditBalance?.spendOnlyBalance ?? 0))
+const cashable = computed(() =>
+  Number(store.creditBalance?.cashableBalance ?? store.creditBalance?.balance ?? 0),
+)
+const cashoutDisabled = computed(
+  () =>
+    !cashoutAmount.value ||
+    cashoutAmount.value <= 0 ||
+    balance.value === null ||
+    cashoutAmount.value > cashable.value,
+)
 
 onMounted(async () => {
   await store.fetchCreditBalance()
@@ -100,6 +120,7 @@ const CASHOUT_ERROR_MESSAGES = {
   'payment.cashOutTooSmall': () => t('payment.credits.cashOutTooSmall'),
   'payment.cashOutExceedsRefundable': () => t('payment.credits.cashOutExceedsRefundable'),
   'payment.cashOutBlockedByDispute': () => t('payment.credits.cashOutBlockedByDispute'),
+  'payment.cashOutExceedsCashable': () => t('payment.credits.cashOutExceedsCashable'),
   'payment.refundFailed': () => t('payment.credits.refundFailed'),
   'payment.refundOutcomeUnknown': () => t('payment.credits.refundOutcomeUnknown'),
 }

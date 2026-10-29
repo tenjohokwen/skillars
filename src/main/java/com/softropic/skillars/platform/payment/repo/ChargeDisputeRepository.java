@@ -85,4 +85,19 @@ public interface ChargeDisputeRepository extends JpaRepository<ChargeDispute, St
                         WHERE l.source_payment_intent_id = d.payment_intent_id AND l.parent_id = :parentId)))
         """, nativeQuery = true)
     boolean existsOpenDisputeForPayer(@Param("parentId") Long parentId);
+
+    /**
+     * fix/payment-wallet-dispute-integrity: an in-app (admin) dispute is still open on one of this payer's
+     * bookings. Cash-out is refused meanwhile: an {@code UPHOLD_COACH} resolution claws the booking's refund
+     * back from the wallet, capped at the balance — credit cashed out while the dispute was open would be
+     * paid twice (to the card and to the coach). Same open predicate as
+     * {@code CoachPayoutRepository.existsOpenDisputeForBooking}; native, the payment module does not depend
+     * on the admin module's entities.
+     */
+    @Query(value = """
+        SELECT EXISTS (SELECT 1 FROM admin.disputes d
+                       JOIN booking.bookings b ON b.id = d.booking_id
+                       WHERE b.parent_id = :parentId AND d.status NOT IN ('RESOLVED', 'DISMISSED'))
+        """, nativeQuery = true)
+    boolean existsOpenAdminDisputeForPayer(@Param("parentId") Long parentId);
 }

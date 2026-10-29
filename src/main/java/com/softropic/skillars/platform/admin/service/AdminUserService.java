@@ -236,7 +236,9 @@ public class AdminUserService {
      * taking booking requests for a coach who can no longer log in to accept or deliver them. Delegates
      * to the existing coach suspension (marketplace status SUSPENDED + REQUESTED bookings cancelled, and
      * by default the upcoming ones too, with full refunds — C2),
-     * in this same transaction, so a failure rolls the account suspension back with it. Lock order is
+     * the profile status in this same transaction, so a failure there rolls the account suspension back with
+     * it (fix/payment-wallet-dispute-integrity: each booking cancellation then commits in its own transaction,
+     * and a busy booking is skipped with an admin alert instead of failing the suspension). Lock order is
      * user row then coach_profiles row; the coach lock is NO_WAIT + bounded retry, so contention
      * surfaces as a 409, never a hang. Reactivating the account deliberately does NOT reinstate the
      * profile: that stays an explicit decision on the coach enforcement page.
