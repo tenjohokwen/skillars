@@ -70,13 +70,22 @@ services:
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET:-}
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=${APP_VIDEO_PLAYBACK_SIGNING_SECRET:-}
 
-      # Storage. Leave the two S3 keys blank to keep the AWS default credential provider chain
-      # (instance profile / ~/.aws), which is what this deploy used before these lines existed.
+      # Storage: the single-node SeaweedFS `storage` service below (S3 API). The endpoint is the
+      # PUBLIC STORAGE_DOMAIN, not `storage:9500`, because S3Presigner bakes it into every
+      # presigned URL and the browser uploads/downloads against it directly. Credentials are the
+      # storage service's own identity (STORAGE_ROOT_*), passed as static keys so SES's AWS
+      # default credential chain is never involved. Path-style addressing because there is one
+      # hostname, not a {bucket}.STORAGE_DOMAIN wildcard.
+      # Moving to a managed S3-compatible provider later: point these five lines back at
+      # APP_STORAGE_ENDPOINT_URL / APP_STORAGE_S3_* from .env (path-style per provider), copy the
+      # bucket over, then drop `storage` + `storage-init` — runbook.md "Moving object storage to a
+      # managed provider".
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-dev}
-      - APP_STORAGE_ENDPOINT_URL=${APP_STORAGE_ENDPOINT_URL:-http://localhost:9000}
+      - APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}
       - APP_STORAGE_REGION=${APP_STORAGE_REGION:-us-east-1}
-      - APP_STORAGE_S3_ACCESS_KEY=${APP_STORAGE_S3_ACCESS_KEY:-}
-      - APP_STORAGE_S3_SECRET_KEY=${APP_STORAGE_S3_SECRET_KEY:-}
+      - APP_STORAGE_S3_ACCESS_KEY=${STORAGE_ROOT_USER}
+      - APP_STORAGE_S3_SECRET_KEY=${STORAGE_ROOT_PASSWORD}
+      - APP_STORAGE_S3_PATH_STYLE_ACCESS=true
 
       # SES (ses-1.1). No `:-` default on APP_SES_FROM_ADDRESS, deliberately: a genuinely
       # missing value must reach the app as blank and trip SesPropertiesValidator's startup
@@ -162,6 +171,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      storage:
+        condition: service_healthy
       loki:
         condition: service_started
       tempo:
@@ -230,6 +241,87 @@ services:
       - skillars-observability
     stop_grace_period: 30s
     restart: unless-stopped
+    logging: *default-logging
+
+  # Object storage (uploads: coach photos/gallery, documents, reports). Single-node SeaweedFS
+  # serving the S3 API, same image as UAT/local — MinIO's images stopped pulling anonymously on
+  # 2026-09-24 (see docker-compose.uat.yml's `storage` comment). Routed through Traefik on its own
+  # STORAGE_DOMAIN with its own Let's Encrypt certificate, because browsers PUT/GET presigned URLs
+  # against it directly.
+  #   -volume.max=0              size the volume count from free disk (the default, 8, caps the
+  #                              store at 8 x volumeSizeLimitMB = 8 GB, then writes fail)
+  #   -volume.minFreeSpace=10    go read-only at 10% free instead of filling the Hetzner Volume
+  #                              that Postgres shares
+  # Data lives on the Hetzner Volume (/opt/skillars/data/storage), so volume-backup.sh — which
+  # archives everything under /opt/skillars/data except postgres/ — already backs it up.
+  # The overlays (uat, uat-hostwinds, local) restate entrypoint/volumes/healthcheck for their own
+  # setups; Compose merges by key, so their values win.
+  storage:
+    image: chrislusf/seaweedfs:3.97
+    # SeaweedFS has no env-var credential path worth trusting (seaweedfs/seaweedfs#7311), so the
+    # identity file is written from STORAGE_ROOT_* at start. Refuses to start with blank
+    # credentials: an S3 endpoint on a public domain must never come up with an empty identity.
+    entrypoint: >
+      /bin/sh -c "
+      if [ -z \"$$STORAGE_ROOT_USER\" ] || [ -z \"$$STORAGE_ROOT_PASSWORD\" ]; then
+      echo 'storage: STORAGE_ROOT_USER and STORAGE_ROOT_PASSWORD must be set in /opt/skillars/.env' >&2; exit 1; fi &&
+      mkdir -p /etc/seaweedfs &&
+      printf '{\"identities\":[{\"name\":\"app\",\"credentials\":[{\"accessKey\":\"%s\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"$$STORAGE_ROOT_USER\" \"$$STORAGE_ROOT_PASSWORD\" > /etc/seaweedfs/s3.json &&
+      exec weed server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500 -s3.config=/etc/seaweedfs/s3.json
+      -master.volumeSizeLimitMB=1024 -volume.max=0 -volume.minFreeSpace=10
+      "
+    environment:
+      - STORAGE_ROOT_USER=${STORAGE_ROOT_USER}
+      - STORAGE_ROOT_PASSWORD=${STORAGE_ROOT_PASSWORD}
+    volumes:
+      - /opt/skillars/data/storage:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.storage.rule=Host(`${STORAGE_DOMAIN}`)"
+      - "traefik.http.routers.storage.entrypoints=websecure"
+      - "traefik.http.routers.storage.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.storage.service=storage-svc"
+      - "traefik.http.services.storage-svc.loadbalancer.server.port=9500"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 9500"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 768m
+    networks:
+      - skillars-internal
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
+  # One-shot: creates the bucket (no-op if it exists) and sets its CORS policy on every
+  # `up`. Without CORS the browser's presigned-upload preflight 403s (S3-compatible APIs refuse
+  # cross-origin preflights until a bucket policy allows them). The Origin is the app domain,
+  # not STORAGE_DOMAIN. Exits when done; `restart` is deliberately left at "no".
+  storage-init:
+    image: amazon/aws-cli:2.31.13
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=${STORAGE_ROOT_USER}
+      - AWS_SECRET_ACCESS_KEY=${STORAGE_ROOT_PASSWORD}
+      - AWS_DEFAULT_REGION=us-east-1
+      - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET:-skillars-dev}
+      - DOMAIN=${DOMAIN}
+    entrypoint: >
+      /bin/sh -c "
+      aws --endpoint-url http://storage:9500 s3 mb s3://$$APP_STORAGE_BUCKET || true &&
+      printf '{\"CORSRules\":[{\"AllowedOrigins\":[\"https://%s\"],\"AllowedMethods\":[\"GET\",\"PUT\",\"POST\",\"HEAD\"],\"AllowedHeaders\":[\"*\"],\"ExposeHeaders\":[\"ETag\"],\"MaxAgeSeconds\":3000}]}' \"$$DOMAIN\" > /tmp/s3-cors.json &&
+      aws --endpoint-url http://storage:9500 s3api put-bucket-cors --bucket $$APP_STORAGE_BUCKET --cors-configuration file:///tmp/s3-cors.json
+      "
+    networks:
+      - skillars-internal
     logging: *default-logging
 
   traefik:
@@ -454,6 +546,7 @@ networks:
     driver: bridge
     internal: true
 
-# No top-level `volumes:` key: every stateful service now binds under /opt/skillars/data, which
-# provision.sh mounts from the Hetzner Volume. docker-compose.uat.yml declares its own
-# `volumes:` block (skillars-uat-storage) and still merges correctly against this file.
+# No top-level `volumes:` key: every stateful service (storage included) binds under
+# /opt/skillars/data, which provision.sh mounts from the Hetzner Volume. docker-compose.uat.yml
+# declares its own `volumes:` block (skillars-uat-storage); its `storage` service's /data mount
+# replaces the bind above when merged (Compose merges volumes by container path).

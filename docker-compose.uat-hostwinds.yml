@@ -180,9 +180,8 @@ services:
       printf '{\"identities\":[{\"name\":\"uat\",\"credentials\":[{\"accessKey\":\"%s\",\"secretKey\":\"%s\"}],\"actions\":[\"Admin\",\"Read\",\"Write\",\"List\",\"Tagging\"]}]}' \"$$STORAGE_ROOT_USER\" \"$$STORAGE_ROOT_PASSWORD\" > /etc/seaweedfs/s3.json &&
       exec weed server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500 -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
       "
-    # No limit at all otherwise — this is new to this stripped-down file (unlike
-    # postgres/redis, storage isn't in the base docker-compose.yml with its own defaults to
-    # cap down), so it would run under Docker's unbounded default without this.
+    # Caps the base docker-compose.yml's storage limits (0.5 CPU / 768m, sized for the
+    # production Hetzner box) down to this 1 vCPU / 1GB plan, same as postgres/redis here.
     deploy:
       resources:
         limits:

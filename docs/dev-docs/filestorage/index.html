@@ -60,7 +60,7 @@
     <p>
       Skillars stores files for almost every persona: a coach's profile photo and gallery images, a coach's report
       branding logo, a branded session-report PDF, and a GDPR data-export ZIP. None of those modules knows whether the
-      bytes end up in S3 or MinIO, or get mirrored to a backup bucket. That is <code>filestorage</code>'s job. It answers,
+      bytes end up in S3 (SeaweedFS in every environment today), or get mirrored to a backup bucket. That is <code>filestorage</code>'s job. It answers,
       once for the whole platform: how do we accept a browser upload safely, enforce a size, type and quota policy,
       know who owns the file, let it be downloaded without proxying bytes through our servers, and eventually delete it?
     </p>
@@ -183,7 +183,7 @@
       <code>infrastructure.blobstore</code>'s <code>StorageService</code> interface (used by replication, migration and
       deletion), its <code>S3Client</code>/<code>S3Presigner</code> beans (used directly by <code>FileStorageService</code>,
       because presigning is S3-specific), <code>BlobstoreProperties</code> (<code>app.storage.*</code>) and
-      <code>StorageMetrics</code>. Back-end details such as S3/MinIO, bucket, credentials and backup wiring are on the
+      <code>StorageMetrics</code>. Back-end details such as the S3 endpoint (SeaweedFS), bucket, credentials and backup wiring are on the
       <a href="../infrastructure/index.html">Infrastructure</a> page. Two configuration namespaces are involved:
       <code>app.storage.*</code> (blobstore: TTLs, poller, replication, retention) and <code>platform.filestorage.*</code>
       (this module: validation, quota).</p>
@@ -395,7 +395,7 @@ sequenceDiagram
       Presigned URLs need <code>S3Presigner</code>, which the generic interface does not expose, and the raw helpers also
       call <code>S3Client</code> directly. Only <code>ReplicatedStorageService</code>, <code>OutboxPollerScheduler</code>,
       <code>DeletionSchedulerService</code> and <code>StorageMigrationService</code> use the portable interface. The
-      presigning path is S3-only, which includes MinIO in dev.</p>
+      presigning path is S3-only, which includes SeaweedFS in dev, UAT and production.</p>
     </div>
     <div class="callout">
       <p><strong>Video bytes do not go through this module.</strong> The <a href="../video/index.html">video</a> module has

@@ -73,20 +73,20 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `GF_SMTP_STARTTLS_POLICY` | String | `MandatoryStartTLS` for port 587 (recommended); `OpportunisticStartTLS` for flexible servers; `NoStartTLS` for unencrypted relay only — port 465 (SMTPS/implicit TLS) is not supported via this setting, use port 587 |
 | `GF_ALERT_NOTIFY_EMAIL` | Email address | Recipient for all Grafana-routed alerts |
 | `GF_SLACK_WEBHOOK_URL` | HTTPS URL | Slack → Apps → Incoming Webhooks → Add to Slack → select channel → copy URL |
-| `STORAGE_ROOT_USER` | String | Local S3-compatible storage service (SeaweedFS; renamed from `MINIO_ROOT_USER` 2026-09-28) admin username (production and UAT). Default `minioadmin` |
-| `STORAGE_ROOT_PASSWORD` | 24+ character random string | Local S3-compatible storage service admin password (renamed from `MINIO_ROOT_PASSWORD` 2026-09-28; production and UAT). `openssl rand -base64 24` |
-| `STORAGE_DOMAIN` | FQDN, e.g. `storage.skillars.com` | Public hostname Traefik routes to the storage service in production (or test domains in UAT). Must be reachable **by the browser**, not just from inside the compose network — presigned upload URLs are built from it |
-| `BACKUP_STORAGE_TYPE` | String: `hetzner` or `s3-compatible` | **Production only.** Backup destination storage type. Use `hetzner` for Hetzner Object Storage, or `s3-compatible` for MinIO or other S3-compatible storage |
+| `STORAGE_ROOT_USER` | String, e.g. `skillars-app` | Access key of the SeaweedFS `storage` service's single S3 identity (production and UAT; renamed from `MINIO_ROOT_USER` 2026-09-28). The app uses the same value as its S3 access key (`docker-compose.yml` passes it as `APP_STORAGE_S3_ACCESS_KEY`). **Required:** the production `storage` container refuses to start if it is blank. Pick any non-guessable name; there is no default |
+| `STORAGE_ROOT_PASSWORD` | 24+ character random string | Secret key of that identity, also used by the app (`APP_STORAGE_S3_SECRET_KEY`) and by `storage-init` (production and UAT; renamed from `MINIO_ROOT_PASSWORD` 2026-09-28). `openssl rand -base64 24`. **Required** — blank stops the `storage` container at boot. Rotating it: change `.env`, then `docker compose up -d storage storage-init app` together |
+| `STORAGE_DOMAIN` | FQDN, e.g. `storage.skillars.com` | Public hostname Traefik routes to the `storage` service (its own Let's Encrypt certificate), in production and UAT. Needs a DNS A record to the server. Must be reachable **by the browser**, not just from inside the compose network: `docker-compose.yml` sets `APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}`, and every presigned upload/download URL is built from it |
+| `BACKUP_STORAGE_TYPE` | String: `hetzner` or `s3-compatible` | **Production only.** Backup destination storage type. Use `hetzner` for Hetzner Object Storage, or `s3-compatible` for another S3-compatible provider |
 | `HOS_ACCESS_KEY` | String | Hetzner Object Storage access key (if `BACKUP_STORAGE_TYPE=hetzner`). Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
 | `HOS_SECRET_KEY` | String | Hetzner Object Storage secret key (if `BACKUP_STORAGE_TYPE=hetzner`). Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
 | `HOS_BUCKET` | String, e.g. `skillars-backups` | Hetzner Object Storage bucket name (if `BACKUP_STORAGE_TYPE=hetzner`). Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
 | `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region (if `BACKUP_STORAGE_TYPE=hetzner`). Examples: `https://s3.fsn1.hetzner.com` (Falkenstein), `https://s3.nbg1.hetzner.com` (Nuremberg), `https://s3.hel1.hetzner.com` (Helsinki) |
 | `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for Hetzner Object Storage (if `BACKUP_STORAGE_TYPE=hetzner`). Choose a prefix to organize backups within the bucket; default `pg-backups/` |
 | `HOS_VOLUME_BACKUP_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for Hetzner Object Storage (if `BACKUP_STORAGE_TYPE=hetzner`). Choose a prefix to organize file-level volume backups; default `volume-backups/` |
-| `S3_BACKUP_ACCESS_KEY` | String | S3-compatible backup storage access key (if `BACKUP_STORAGE_TYPE=s3-compatible`). E.g., MinIO root user or IAM credentials |
+| `S3_BACKUP_ACCESS_KEY` | String | S3-compatible backup storage access key (if `BACKUP_STORAGE_TYPE=s3-compatible`). E.g., the provider's access key or IAM credentials |
 | `S3_BACKUP_SECRET_KEY` | String | S3-compatible backup storage secret key (if `BACKUP_STORAGE_TYPE=s3-compatible`) |
 | `S3_BACKUP_BUCKET` | String, e.g. `skillars-backups` | S3-compatible backup storage bucket name (if `BACKUP_STORAGE_TYPE=s3-compatible`) |
-| `S3_BACKUP_ENDPOINT` | HTTPS URL, e.g. `https://minio.skillars.com:9000` | S3-compatible backup storage endpoint (if `BACKUP_STORAGE_TYPE=s3-compatible`). E.g., MinIO service URL or third-party S3-compatible provider |
+| `S3_BACKUP_ENDPOINT` | HTTPS URL, e.g. `https://s3.eu-central-003.backblazeb2.com` | S3-compatible backup storage endpoint (if `BACKUP_STORAGE_TYPE=s3-compatible`): a third-party S3-compatible provider. Never the app's own `storage` service — backups must live off this server |
 | `S3_BACKUP_REGION` | String, e.g. `us-east-1` | S3-compatible backup storage region (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `us-east-1` |
 | `S3_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for S3-compatible storage (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `pg-backups/` |
 | `S3_BACKUP_VOLUME_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for S3-compatible storage (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `volume-backups/` |
@@ -97,17 +97,37 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 
 ### Storage Architecture
 
-**MinIO in Production:**
-- MinIO runs as a container in production for object storage (videos, images, documents)
-- The app communicates with MinIO via `APP_STORAGE_ENDPOINT_URL` (internal: `http://minio:9000`)
-- Clients (browsers) receive presigned URLs for direct upload/download, using a public endpoint (e.g., `https://storage.skillars.com`)
-- MinIO data persists on the volume (`/opt/skillars/data/minio`) and is backed up by `volume-backup.sh`
+**Object storage in production (single-node SeaweedFS):**
+- Uploads (coach photos and gallery, documents, generated reports) live in the `storage` service in
+  `docker-compose.yml`: SeaweedFS (`chrislusf/seaweedfs`) serving the S3 API on port 9500. MinIO is
+  no longer used anywhere: its images stopped pulling anonymously on 2026-09-24 (see
+  `docker-compose.uat.yml`). UAT and local run the same image.
+- The app talks to it at `https://${STORAGE_DOMAIN}` (Traefik → `storage:9500`), with path-style
+  addressing (`APP_STORAGE_S3_PATH_STYLE_ACCESS=true`) and static credentials from `STORAGE_ROOT_*`.
+  Browsers use the same host, because presigned upload/download URLs are built from that endpoint.
+  The database stores object keys only (e.g. `coach_profile/{userId}/…`), never URLs, so the host
+  can change without a data migration.
+- `storage-init` (one-shot, runs on every `docker compose up`) creates `APP_STORAGE_BUCKET` and sets
+  its CORS policy to allow `https://${DOMAIN}`. Without CORS, browser uploads fail at the preflight.
+- Data lives on the Hetzner Volume at `/opt/skillars/data/storage`. `volume-backup.sh` archives all
+  of `/opt/skillars/data` except `postgres/`, so the media store is in the daily volume backup.
+  Note that backup is a full archive every day: as the media library grows, so do backup time and
+  Object Storage cost (×`VOLUME_BACKUP_RETENTION_DAYS`).
+- Started with `-volume.max=0` (volume count sized from free disk; the default of 8 would cap the
+  store at 8 GB) and `-volume.minFreeSpace=10` (read-only at 10% free disk, so a full media store
+  cannot fill the volume Postgres shares). Uploads then fail until disk is added. Watch disk usage
+  in Grafana.
+- `deploy.yml` only recreates `app` (`up -d --no-deps app`). Start `storage` once at first-time
+  setup and after changing its compose definition or `STORAGE_ROOT_*`
+  (`docker compose --env-file /opt/skillars/.env up -d storage storage-init`).
+- Moving to a managed S3-compatible provider later is a config change plus a bucket copy; see
+  [`runbook.md`](runbook.md#moving-object-storage-to-a-managed-provider).
 
 **Backup Storage:**
-- PostgreSQL dumps and volume backups are stored off-server (not in MinIO or S3)
+- PostgreSQL dumps and volume backups are stored off-server (never in the app's own `storage` service)
 - Configure via `BACKUP_STORAGE_TYPE`:
   - `hetzner`: Use Hetzner Object Storage (HOS_* variables)
-  - `s3-compatible`: Use MinIO or other S3-compatible storage (S3_BACKUP_* variables)
+  - `s3-compatible`: Use another S3-compatible provider (S3_BACKUP_* variables)
 - Backup schedule: PostgreSQL every 6 hours, volumes daily; retention: 14 days by default
 
 ### Application secrets
@@ -128,10 +148,11 @@ application read them but no deploy supplied them. Defaults below are the applic
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | String | `""` under `prod` — see the profile note below | Bunny.net Stream → your library → Webhook signing secret |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | String | dev placeholder (`S3CR3TW0RD`) | `openssl rand -base64 32`. Encrypts parent-approval PINs — **rotating it invalidates every stored PIN** |
 | `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | String | dev placeholder; **empty under `prod`/`uat` — `RegistrationVerificationTokenService` aborts startup if unset** | `openssl rand -base64 32`. HMAC key for the phone-verification handle returned by `/verify-email` and required by `/verify-phone` and `/resend-otp`. Also the root of the phone-OTP hash key (`OtpHasher`, skillars-deferred-162), so **rotating it also invalidates in-flight phone OTPs** (10 min TTL; the user resends) as well as registration handles issued in the last 24h |
-| `APP_STORAGE_BUCKET` | String | `skillars-dev` | S3 bucket name (AWS S3 or MinIO). MinIO runs as a container in production for object storage (videos, images, documents) |
-| `APP_STORAGE_ENDPOINT_URL` | URL | `http://localhost:9000` | S3-compatible endpoint URL. Examples: AWS S3 (`https://s3.amazonaws.com`), MinIO (`http://minio:9000` from inside container; `https://storage.skillars.com` from browser). Presigned upload URLs are built from this, so it must be reachable **by the browser** — use an HTTPS URL with a registered domain or public MinIO service hostname |
-| `APP_STORAGE_REGION` | String | `us-east-1` | S3 region. For MinIO, default to `us-east-1` |
-| `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **not bound under `prod`** — see the profile note below | S3 credentials. For MinIO in production, use MinIO's root user (or IAM-equivalent). Leave blank to use AWS default credential chain (instance profile / `~/.aws`), which works only for AWS S3 |
+| `APP_STORAGE_BUCKET` | String, e.g. `skillars-prod` | `skillars-dev` (compose default) | Bucket name. `storage-init` creates it in the SeaweedFS `storage` service on every `up`. Set it in `.env` for production; don't rely on the default |
+| `APP_STORAGE_ENDPOINT_URL` | URL | **set by `docker-compose.yml`** to `https://${STORAGE_DOMAIN}`, not read from `.env` | The S3 endpoint the app signs requests and presigned URLs for, so it must be reachable **by the browser**. Overlays restate it (`docker-compose.local.yml`: `http://storage:9500`; `docker-compose.uat-hostwinds.yml`: `http://${DOMAIN}:9500`). When moving to a managed provider, restore the `.env` passthrough (runbook) |
+| `APP_STORAGE_REGION` | String | `us-east-1` | S3 signing region. SeaweedFS accepts any region; keep `us-east-1` unless a managed provider needs its own |
+| `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **set by `docker-compose.yml`** from `STORAGE_ROOT_USER` / `STORAGE_ROOT_PASSWORD` | Static S3 credentials. Bound on every profile (`application.yaml`). If both are blank, `BlobstoreConfig` falls back to the AWS default credential chain. Production never does: the chain is shared with SES, so storage must not depend on it |
+| `APP_STORAGE_S3_PATH_STYLE_ACCESS` | Boolean | `false` in `application.yaml`; **`true` from `docker-compose.yml`**; dev/uat profiles pin `true` | `true` for a single-hostname endpoint such as SeaweedFS on `STORAGE_DOMAIN`. Most managed providers (AWS S3, Hetzner Object Storage) prefer `false` (virtual-hosted `{bucket}.host`) |
 | `GEMINI_API_KEY` | String | *empty* | Google AI Studio → API keys. Used by the AI narrative features |
 | `ARACHNID_API_KEY` | String | *empty* | Project Arachnid (C3P) credential. Only needed when `features.toggles.arachnid-enabled` is on |
 | `APP_ACCESS_LOG_ENABLED` | Boolean | `true` | **Tuning knob, not a secret.** Tomcat access logging, emitted through SLF4J (loggers `skillars.access` for port 9990 and `skillars.access.management` for 8367) so entries reach Loki. Set `false` to disable both; see [`local/deployment.md`](local/deployment.md) for silencing only the management half, which is mostly healthcheck and Prometheus traffic |

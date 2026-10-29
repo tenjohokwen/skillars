@@ -50,7 +50,7 @@ Choose your provider and follow the equivalent steps:
    - netcup's standard VPS includes local storage; ensure **≥100 GB** available for `/opt/skillars/data`
    - Alternatively, attach a managed volume if available
    - After provisioning, verify available space: `lsblk` or `df -h`
-   - **MinIO:** The stack runs MinIO as a container for object storage (videos, images, documents). Ensure the Volume/storage pool has sufficient capacity for your media library (plan for growth).
+   - **Object storage:** the stack runs SeaweedFS (the `storage` service, S3 API) for uploads: coach photos and gallery images, documents, generated reports. Video goes to Bunny.net Stream, not here. It stores its data under `/opt/skillars/data/storage`, so size this storage for the media library as well (plan for growth). SeaweedFS goes read-only at 10% free disk.
 
 ### Option B: Hetzner Cloud (Legacy)
 
@@ -64,7 +64,7 @@ Choose your provider and follow the equivalent steps:
 2. **Attach a 100 GB Volume**
    - Create or attach immediately after server creation
    - The provisioning script mounts the volume at `/opt/skillars/data` via its stable `/dev/disk/by-id/scsi-0HC_Volume_*` symlink
-   - PostgreSQL, Prometheus, Loki, Tempo, Grafana, MinIO, and Traefik certificates all live on this volume
+   - PostgreSQL, Prometheus, Loki, Tempo, Grafana, Redis, SeaweedFS object storage (`storage/`), and Traefik certificates all live on this volume
    - After attaching, verify with `lsblk`; the provisioning script picks it up via the `by-id` path
 
 ---
@@ -74,7 +74,7 @@ Choose your provider and follow the equivalent steps:
 The stack requires:
 - **CPU:** ~2–3 vCPU under normal load; 4 vCPU recommended for headroom
 - **Memory:** ~6–7 GB reserved by containers; 8 GB minimum for host OS and overhead
-- **Storage:** ≥100 GB for database and system; add capacity for MinIO media library (depends on your upload volume)
+- **Storage:** ≥100 GB for database and system; add capacity for the SeaweedFS media library under `/opt/skillars/data/storage` (depends on your upload volume)
 
 If running on netcup VPS 1000 G12 base tier (2 vCPU, 4 GB RAM), monitor CPU and memory closely during testing. Upgrade if sustained load exceeds 80% on either metric.
 
@@ -84,25 +84,28 @@ If running on netcup VPS 1000 G12 base tier (2 vCPU, 4 GB RAM), monitor CPU and 
 
 > **You can do this in parallel with Step 3.** DNS propagation takes time; starting early saves waiting later.
 
-Create two **A records** at your domain registrar pointing to the Node IP:
+Create three **A records** at your domain registrar pointing to the Node IP:
 
 | Record | Type | Value |
 |---|---|---|
 | `DOMAIN` (e.g. `api.example.com`) | A | `<NODE_IP>` |
 | `MONITORING_DOMAIN` (e.g. `monitoring.api.example.com`) | A | `<NODE_IP>` |
+| `STORAGE_DOMAIN` (e.g. `storage.api.example.com`) | A | `<NODE_IP>` |
 
 Verify propagation from your local machine:
 
 ```bash
 dig +short <DOMAIN> @8.8.8.8              # must return <NODE_IP>
 dig +short <MONITORING_DOMAIN> @8.8.8.8   # must return <NODE_IP>
+dig +short <STORAGE_DOMAIN> @8.8.8.8      # must return <NODE_IP>
 ```
 
 Typical wait: **5–30 minutes** for most registrars; allow up to 24 hours in the worst case.
 
-> **Do NOT start the stack until both records resolve to the Node IP.**
-> Traefik uses Let's Encrypt HTTP-01 challenge — it must be reachable on port 80 at **both** `DOMAIN` and `MONITORING_DOMAIN`.
-> If either record is not propagated when the stack first starts, the corresponding TLS certificate will not be issued.
+> **Do NOT start the stack until all three records resolve to the Node IP.**
+> Traefik uses Let's Encrypt HTTP-01 challenge — it must be reachable on port 80 at `DOMAIN`, `MONITORING_DOMAIN` **and** `STORAGE_DOMAIN`.
+> Browsers upload and download files directly against `STORAGE_DOMAIN` (presigned URLs), so without its certificate every upload fails.
+> If any record is not propagated when the stack first starts, the corresponding TLS certificate will not be issued.
 
 ---
 
@@ -367,6 +370,13 @@ Wait for DNS propagation (verify with `dig` as shown in Step 2), then start all 
 ssh root@<NODE_IP> "cd /opt/skillars/app && docker compose up -d"
 ```
 
+> **Object storage starts here, not on deploys.** This `up -d` also starts `storage` (SeaweedFS)
+> and runs the one-shot `storage-init`, which creates `APP_STORAGE_BUCKET` and its CORS policy.
+> `storage` refuses to start if `STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD` are blank, and the app
+> waits for it to be healthy. Later releases through `deploy.yml` recreate only `app`. After you
+> change the `storage` definition or rotate `STORAGE_ROOT_*`, run
+> `docker compose up -d storage storage-init app` by hand.
+
 > **Docker Hub pull rate limits.** Unauthenticated pulls from Docker Hub are rate-limited per
 > source IP, and shared Hetzner egress IPs can hit that ceiling. The symptom is `toomanyrequests`
 > on `docker compose pull` / `up`. Mitigation: run `docker login` on the Node with a free Docker
@@ -418,7 +428,7 @@ Full service health reference — run `docker compose` commands from `/opt/skill
 | grafana | `curl -s https://<MONITORING_DOMAIN>/api/health` → `{"database":"ok"}` |
 | loki | `docker compose exec loki wget -qO- http://localhost:3100/ready` |
 | tempo | `docker compose exec tempo wget -qO- http://localhost:3200/ready` |
-| minio | `docker compose exec minio mc admin info local` → displays service info and status |
+| storage | `curl -s -o /dev/null -w '%{http_code}\n' https://<STORAGE_DOMAIN>/` → `403` (TLS works and the S3 API refuses anonymous access). `docker compose ps -a storage-init` must show `Exited (0)`: bucket and CORS policy were created |
 
 Replace `<POSTGRES_USER>` and `<POSTGRES_DB>` with the values from your `.env`.
 
@@ -453,7 +463,7 @@ After the stack is live, establish a backup and recovery plan:
 
 **Data at risk:**
 - PostgreSQL database: player/coach/admin data, payment history, session state
-- MinIO object storage: uploaded video files, images, documents
+- SeaweedFS object storage (`/opt/skillars/data/storage`): uploaded images, documents, generated reports (video lives at Bunny.net)
 - Traefik `acme.json`: TLS certificates (regenerating costs time and hits Let's Encrypt rate limits)
 
 **Backup options:**
@@ -466,7 +476,7 @@ After the stack is live, establish a backup and recovery plan:
 2. **Volume/filesystem backups**
    - If using a managed volume (Hetzner, netcup), use provider snapshots if available
    - Alternatively, use `restic`, `duplicati`, or similar for incremental off-site backups of `/opt/skillars/data`
-   - Include MinIO data in filesystem backups
+   - `deploy/backup/volume-backup.sh` already archives `/opt/skillars/data/storage` (everything under `/opt/skillars/data` except `postgres/`). Check a restored archive contains `storage/` when you test recovery
 
 3. **Automated recovery testing**
    - Monthly: restore a backup to a test environment and verify the app starts correctly
@@ -503,7 +513,7 @@ After setup is complete:
 All `docker compose` commands below must be run from `/opt/skillars/app` on the Node. If starting a new SSH session, run `cd /opt/skillars/app` first.
 
 **TLS certificate not issued / HTTPS returns a certificate error**
-- Confirm DNS is propagated for **both** `DOMAIN` and `MONITORING_DOMAIN`: `dig +short <DOMAIN> @8.8.8.8` and `dig +short <MONITORING_DOMAIN> @8.8.8.8` must each return the Node IP
+- Confirm DNS is propagated for `DOMAIN`, `MONITORING_DOMAIN` and `STORAGE_DOMAIN`: `dig +short <name> @8.8.8.8` must return the Node IP for each
 - Check Traefik logs for ACME errors: `docker compose logs traefik --tail=50`
 - Traefik requires `acme.json` to have mode 600; `provision.sh` sets this — re-run if needed
 - **Do not delete `acme.json`** — Traefik will immediately attempt a new ACME request and a failed attempt counts against the rate limit. Stop the stack first (`docker compose down`) if the file must be recreated, then re-run `provision.sh` to recreate it with the correct permissions before restarting

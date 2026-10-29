@@ -61,12 +61,11 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `secrets-reference.md` → "JWT signing key" tells you to, therefore has no effect. Decide how PROD
   gets a unique `(v1, jot)` row **(confirm)**: a one-off compose override that passes the flag, or
   hand-written Jasypt SQL. Then verify with the query in [section 8](#8-accounts-and-seed-data).
-- [ ] **Production object storage has no service in `docker-compose.yml`.** UAT runs SeaweedFS
-  (`storage` in `docker-compose.uat.yml`). The base/prod compose has no storage container and
-  defaults `APP_STORAGE_ENDPOINT_URL` to `http://localhost:9000` and `APP_STORAGE_BUCKET` to
-  `skillars-dev`. `secrets-reference.md` → "Storage Architecture" still says "MinIO runs as a
-  container in production", which is no longer true. PROD needs an external S3-compatible bucket
-  and a browser-reachable HTTPS endpoint **(confirm provider)**.
+- [x] ~~**Production object storage has no service in `docker-compose.yml`.**~~ Resolved by
+  `infra/prod-seaweedfs-storage`: `docker-compose.yml` now runs single-node SeaweedFS (`storage` +
+  one-shot `storage-init`) on `STORAGE_DOMAIN`, with data on the Hetzner Volume. See
+  [section 5 → Object storage](#object-storage-filestorage-module-over-infrastructureblobstore).
+  Moving to a managed provider later: `runbook.md` → "Moving object storage to a managed provider".
 - [ ] **Deploys take no pre-migration backup.** `deploy.yml` takes
   no database dump before `up -d`, and its auto-revert reverts the image only. After a migration
   has run, an image-only revert is unsafe (`rollback.md` → "Rollback After Migrations Have Run"). Take
@@ -131,7 +130,7 @@ and [`uat-hostwinds-deployment.md`](uat-hostwinds-deployment.md) (UAT).
   |---|---|---|
   | `DOMAIN` | yes | yes |
   | `MONITORING_DOMAIN` (Grafana) | yes (`docker-compose.yml` fails interpolation without it) | yes (full UAT); not used on Hostwinds |
-  | `STORAGE_DOMAIN` (S3 endpoint the browser uses) | external bucket host **(confirm)** | yes (`docker-compose.uat.yml` → `storage` router) |
+  | `STORAGE_DOMAIN` (S3 endpoint the browser uses) | yes (`docker-compose.yml` → `storage` router; uploads fail without its certificate) | yes (`docker-compose.uat.yml` → `storage` router); not used on Hostwinds |
 
 - [ ] `LETSENCRYPT_EMAIL` set. `/opt/skillars/data/traefik/acme.json` exists with mode 600
   (`docker-compose.yml` → `traefik`, [`traefik-tls.md`](traefik-tls.md)). Note the Let's Encrypt
@@ -156,9 +155,12 @@ Detail: [`backup-restore.md`](backup-restore.md), `deploy/backup/`.
 - [ ] **A restore has been tested**: `restore-from-dump.sh` (`backup-restore.md` Section A) into a
   scratch database, then Section C integrity checks. Record it in `deploy/backup/drill-log.md`. Repeat
   quarterly (`backup-restore.md` → "Quarterly Restore Drill Reminder").
-- [ ] Object-storage backup: `app.storage.replication.enabled` is `false` by default
-  (`application.yaml`). `APP_STORAGE_BACKUP_*` configure a secondary bucket. Decide whether PROD
-  replicates uploaded files **(confirm)**.
+- [ ] Object-storage backup: PROD's SeaweedFS data (`/opt/skillars/data/storage`) is in the daily
+  `volume-backup.sh` archive (all of `data/` except `postgres/`). That is a full archive each day, so
+  its size and Object Storage cost grow with the media library. Separately,
+  `app.storage.replication.enabled` is `false` by default (`application.yaml`);
+  `APP_STORAGE_BACKUP_*` configure a secondary bucket. Decide whether PROD also replicates uploaded
+  files **(confirm)**.
 
 ### Uptime monitoring
 
@@ -214,9 +216,10 @@ Spring `${X:default}` default.
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | required (base64, ≥ 32 bytes) | required | fail-fast | `application.yaml` |
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | required | required | fail-fast | `application.yaml` |
 | `BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME` | required for video | test library | compose defaults the library ID to the placeholder `123456` | `docker-compose.yml` |
-| `APP_STORAGE_BUCKET`, `APP_STORAGE_ENDPOINT_URL` | external bucket **(confirm)** | `https://${STORAGE_DOMAIN}` (set by override) | compose defaults are dev values (`skillars-dev`, `http://localhost:9000`) | `docker-compose.yml`, `docker-compose.uat.yml` |
-| `APP_STORAGE_S3_ACCESS_KEY`/`SECRET_KEY` | bucket credentials (blank selects the AWS default chain, which works on AWS only) | `STORAGE_ROOT_USER`/`PASSWORD` | uploads fail | `application.yaml` |
-| `STORAGE_ROOT_USER`, `STORAGE_ROOT_PASSWORD`, `STORAGE_DOMAIN` | n/a | required | SeaweedFS identity / routing | `docker-compose.uat.yml` |
+| `APP_STORAGE_BUCKET` | set it (e.g. `skillars-prod`) | set it | compose default is `skillars-dev` | `docker-compose.yml` |
+| `APP_STORAGE_ENDPOINT_URL` | not from `.env`: compose sets `https://${STORAGE_DOMAIN}` | same (override) | n/a | `docker-compose.yml`, `docker-compose.uat.yml` |
+| `APP_STORAGE_S3_ACCESS_KEY`/`SECRET_KEY`, `APP_STORAGE_S3_PATH_STYLE_ACCESS` | not from `.env`: compose sets `STORAGE_ROOT_USER`/`PASSWORD` and `true` | same | uploads fail | `docker-compose.yml`, `application.yaml` |
+| `STORAGE_ROOT_USER`, `STORAGE_ROOT_PASSWORD`, `STORAGE_DOMAIN` | required | required | `storage` refuses to start on blank credentials; no `STORAGE_DOMAIN` means no certificate and broken presigned URLs | `docker-compose.yml` |
 | `APP_FRONTEND_URL` | defaults to `https://skillars.com` | **must set**: the compose default overrides `application-uat.yaml` | email links point at PROD | `docker-compose.yml` |
 | `ENVIRONMENT` | `prod` (default) | **must set `uat`**: same override problem | logs and Loki labelled `prod` | `docker-compose.yml` |
 | `GF_SECURITY_ADMIN_PASSWORD`, `MONITORING_DOMAIN` | required | required where Grafana runs | compose `:?` error | `docker-compose.yml` |
@@ -605,13 +608,19 @@ logged at DEBUG and acknowledged):
 
 ### Object storage (`filestorage` module over `infrastructure.blobstore`)
 
-- [ ] `app.storage.provider: s3` (`application.yaml`). PROD needs an S3-compatible bucket with a
-  public HTTPS endpoint, because presigned upload and download URLs are built from
-  `APP_STORAGE_ENDPOINT_URL` and must be reachable by the browser.
-- [ ] Bucket CORS allows the app origin for browser uploads. UAT's `storage-init` applies
-  `deploy/seaweedfs/s3-cors.json` (`uat-deployment.md` Step 7). PROD bucket CORS **(confirm)**.
-- [ ] UAT: SeaweedFS identity comes from `STORAGE_ROOT_USER`/`PASSWORD`
-  (`docker-compose.uat.yml` → `storage`, `deploy/seaweedfs/s3-identity.json`).
+- [ ] PROD and UAT run SeaweedFS (`storage`, `chrislusf/seaweedfs:3.97`) behind Traefik on
+  `STORAGE_DOMAIN`. Presigned upload and download URLs are built from `https://${STORAGE_DOMAIN}`
+  and must be reachable by the browser (`docker-compose.yml` → `app` storage block).
+- [ ] `STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD` set (random, ≥ 24 chars); the container exits on
+  blank values. The same pair is the app's S3 key (passed by compose, not read from `APP_STORAGE_S3_*`).
+- [ ] After the first `up`, `docker compose ps -a storage-init` shows `Exited (0)`: bucket
+  `APP_STORAGE_BUCKET` created and CORS set to `https://${DOMAIN}`. Otherwise browser uploads 403 at
+  the preflight. Verify: `curl -s -o /dev/null -w '%{http_code}' https://<STORAGE_DOMAIN>/` → `403`.
+- [ ] Disk: SeaweedFS goes read-only at 10% free on the Hetzner Volume (`-volume.minFreeSpace=10`),
+  so uploads stop before Postgres runs out of space. Alert on disk usage in Grafana.
+- [ ] `deploy.yml` recreates `app` only. After changing `storage` or rotating `STORAGE_ROOT_*`, run
+  `docker compose up -d storage storage-init app` on the node.
+- [ ] UAT (Hostwinds): published port 9500 instead of Traefik (`docker-compose.uat-hostwinds.yml`).
 - [ ] Limits accepted: per-user quota `platform.filestorage.quota.default-bytes` 10 GiB, max file
   100 MiB, MIME/extension allowlist (`application.yaml` → `platform.filestorage`).
 
@@ -875,3 +884,10 @@ an operator must now do.
   URL in each mode, set its `whsec_`,
   and repoint any existing Connect endpoint that still targets `/api/payment/webhooks/stripe`. No
   migration.
+- 2026-10-29: infra/prod-seaweedfs-storage: production now runs single-node SeaweedFS
+  (`storage` + `storage-init` in `docker-compose.yml`), which clears the section 0 storage item. Before
+  the first `up`: add the `STORAGE_DOMAIN` A record and set `STORAGE_ROOT_USER`,
+  `STORAGE_ROOT_PASSWORD`, `STORAGE_DOMAIN` and `APP_STORAGE_BUCKET` in `/opt/skillars/.env`.
+  `APP_STORAGE_ENDPOINT_URL` and `APP_STORAGE_S3_*` are now set by compose, not `.env`. New property
+  `app.storage.s3.path-style-access` (`APP_STORAGE_S3_PATH_STYLE_ACCESS`, default `false`; compose
+  sets `true`). No migration.
