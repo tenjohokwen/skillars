@@ -34,164 +34,174 @@
     <p>
       Skillars puts adult coaches in contact with minors, and coaches film those minors in sessions.
       That combination is the single largest risk the business carries, and it shapes product decisions that
-      otherwise look strange: why a child has no login, why minors can never upload video, why messaging is
-      booking-gated, why registration has four separate scroll-gated consent boxes. None of those are incidental —
+      otherwise look strange: why a child has no login, why minors can never upload video, why messaging needs
+      a paid booking, why registration has four separate scroll-gated consent boxes. None of those are incidental —
       each is a control. This page exists so nobody removes one without understanding what it was for.
     </p>
 
     <h2>Age tiers: the spine of the whole system</h2>
     <p>
-      Every player has a date of birth, from which the platform derives an <strong>age tier</strong> on the fly. That
-      tier — not a role, not a setting — determines messaging permissions and parental visibility. The boundaries are
-      configurable at runtime rather than hard-coded, so treat the ages below as current defaults.
+      Every player has a date of birth, from which the platform works out an <strong>age tier</strong> each time it is
+      needed. The tier, not a role or a setting, decides who may take part in a conversation about that player. The age
+      boundaries are configurable at runtime rather than hard-coded, so treat the ages below as current defaults.
     </p>
     <table>
-      <thead><tr><th>Tier</th><th>Shown as</th><th>Can message?</th><th>Parent sees the thread?</th><th>Direct coach&harr;player?</th></tr></thead>
+      <thead><tr><th>Tier</th><th>Shown as</th><th>Player may message?</th><th>Parent's role in the thread</th></tr></thead>
       <tbody>
-        <tr><td><code>U10</code></td><td>U10</td><td><strong>No</strong> — messaging prohibited entirely</td><td>Yes</td><td>No</td></tr>
-        <tr><td><code>AGE_10_12</code></td><td>10–12</td><td>Yes, parent-managed</td><td>Yes</td><td>No</td></tr>
-        <tr><td><code>AGE_13_17</code></td><td>13–17</td><td>Yes, supervised</td><td>Yes</td><td>Yes</td></tr>
-        <tr><td><code>ADULT</code></td><td>18+</td><td>Yes, unrestricted</td><td>No</td><td>Yes</td></tr>
+        <tr><td><code>U10</code></td><td>Under 10</td><td><strong>No</strong></td><td>The parent is the participant and messages the coach on the child's behalf</td></tr>
+        <tr><td><code>AGE_10_12</code></td><td>10–12</td><td><strong>No</strong> (parent-managed)</td><td>Same as under 10: the parent is the participant</td></tr>
+        <tr><td><code>AGE_13_17</code></td><td>13–17</td><td>Yes, supervised</td><td>Reads and can send in the same thread</td></tr>
+        <tr><td><code>ADULT</code></td><td>18+</td><td>Yes</td><td>None. A parent cannot see or join an adult player's thread</td></tr>
       </tbody>
     </table>
-    <p>
-      Read the table as a gradient rather than four modes: as a child gets older they gain the ability to message at
-      all (at 10), then the ability to talk to a coach directly rather than through their parent (at 13), and finally
-      privacy from parental oversight (at 18). A parent is a visible participant in every conversation involving a
-      minor, at every tier.
-    </p>
     <div class="callout">
-      <p><strong>The tier is computed, never stored as a status.</strong> A player crosses a boundary silently on
-      their birthday and their permissions change with it. There is no migration, no notification, and nothing for
-      an admin to flip — which also means you cannot "grant" a 12-year-old direct messaging as an exception.</p>
+      <p><strong>In practice, every conversation about a minor goes through the parent's account.</strong> Minors
+      have no login of their own: a child is a profile under a parent account. So although the 13–17 policy would let a
+      teenager message, there is currently no way for a teenager to sign in. Only self-registered adult players have
+      their own accounts.</p>
     </div>
     <div class="callout">
-      <p><strong>Under-10s cannot have an independent account at all</strong>, separately from the messaging rule.
-      Every minor player is a profile under a parent account with no login of their own; the U10 rule additionally
-      removes messaging even through the parent.</p>
+      <p><strong>The tier is calculated, never stored as a status.</strong> A player crosses a boundary silently on their
+      birthday and their permissions change with it. Nobody is notified and there is nothing for an admin to switch,
+      which also means no individual exception can be granted.</p>
     </div>
 
     <h2>Consent gates at registration</h2>
     <p>
       Parent registration is deliberately heavier than any other flow in the product. There are <strong>four
-      separate scroll-gated consent boxes</strong> across two pages, each with its own checkbox that stays disabled
-      until that specific box has been scrolled to the bottom:
+      separate scroll-gated consent boxes</strong> across two pages. Each has its own checkbox, which stays disabled
+      until that box has been scrolled to the bottom:
     </p>
     <ol>
       <li><strong>Terms of Service</strong> — at <code>/parent-register</code>.</li>
       <li><strong>Privacy Policy</strong> — at <code>/parent-register</code>.</li>
       <li><strong>Parental Consent</strong> — at <code>/parent-register</code>.</li>
-      <li><strong>Child-specific consent</strong> — appears at <code>/parent/create-player</code> only when the
-        entered date of birth computes to under 18 ("I am the legal parent/guardian and consent to…"), and is
-        stamped with a policy version so you can tell which wording a given parent actually agreed to.</li>
+      <li><strong>Child-specific consent</strong> — at <code>/parent/create-player</code>, shown only when the date of
+        birth makes the child under 18 ("I am the legal parent/guardian and consent to…"). It is stamped with a policy
+        version, so you can tell which wording a given parent agreed to.</li>
     </ol>
     <p>
-      Adult self-registering players see a lighter two-checkbox flow (Terms + Privacy). Their registration also
-      refuses any date of birth under 18, redirecting to the parent registration page instead — self-registration is
-      adults-only by design.
+      Adult players who register themselves see a lighter flow with two checkboxes (Terms and Privacy). Their
+      registration refuses any date of birth under 18 and points them to parent registration instead:
+      self-registration is for adults only, by design.
     </p>
     <div class="callout warn">
       <p><strong>The scroll gate is the control, not the checkbox.</strong> If someone asks to "simplify onboarding"
-      by enabling the checkboxes immediately, understand that the scroll requirement is what makes the consent
-      defensible. The versioned stamp on the child consent exists for the same reason.</p>
+      by enabling the checkboxes immediately, they should know that the scroll requirement is what makes the consent
+      defensible. The versioned stamp on the child consent is there for the same reason.</p>
     </div>
 
     <h2>Messaging is gated on a real relationship</h2>
     <p>
-      Nobody can cold-message anyone on Skillars. A conversation can only exist between a coach and a player who
-      have an actual booking relationship — there is no coach-to-parent inbox, no discovery messaging, and no way to
-      contact someone you have never been booked with. Combined with the age tiers above, this means a coach cannot
-      reach a child they have not been booked with, and for under-13s cannot reach them directly at all.
+      Nobody can cold-message anyone on Skillars. A conversation belongs to one coach and one player, and it can only
+      be opened once they have a <strong>paid booking</strong> together (confirmed, upcoming, in progress or completed). A
+      request that is still waiting for an answer doesn't count. There is no discovery messaging, and there is no way to
+      contact someone you have never been booked with. Combined with the age tiers above, this means a coach can only
+      reach a family they actually coach, and for a minor always through the parent.
     </p>
     <p>
-      On top of that, message content is run through AI moderation before delivery. A message is written as
-      <em>pending</em> and only becomes visible once a verdict comes back. Blocked and under-review messages never
-      have their content returned to either party.
+      Every message is checked by AI moderation before delivery. A message is saved as <em>pending</em> and becomes
+      visible to the other side only once it has been judged safe. Messages judged unsafe are blocked. The other side
+      never sees the content of a blocked or under-review message.
     </p>
     <div class="callout warn">
-      <p><strong>Nothing is delivered on an unresolved verdict.</strong> If moderation fails or never returns, the
-      message is escalated for a human decision rather than released — the system fails closed. The business
-      consequence is that a moderation outage delays messages rather than leaking unmoderated ones, and produces a
-      queue of items an admin must clear. <strong>There is currently no admin screen to clear that queue</strong> —
-      see <a href="../admin/index.html">Admin / Staff</a>.</p>
+      <p><strong>Nothing is delivered on an unresolved verdict.</strong> If the AI is unsure, the moderation service
+      fails, or a message is still pending after 30 minutes, the message goes to a human instead of being released.
+      The system fails closed. So a moderation outage delays messages rather than leaking unmoderated ones, and it
+      builds up a queue that an admin clears on <code>/admin/moderation</code>.</p>
     </div>
     <div class="callout">
-      <p><strong>Contact details are stripped automatically.</strong> Free text is scanned for email addresses and
-      phone-number-shaped strings and redacted. The point is to stop a coach and a minor moving the relationship off
-      the platform, where none of these controls apply.</p>
+      <p><strong>Contact details: different rules for chat and for free-text fields.</strong> Chat messages are
+      <em>not</em> automatically redacted. Instead, asking for personal contact details is one of the things the AI
+      moderator blocks. Booking notes, the player's request to the coach, the coach's plan note and session recaps
+      <em>are</em> scanned, and any email addresses or phone numbers are removed. Both rules exist to stop a coach and
+      a family moving the relationship off the platform, where none of these controls apply.</p>
     </div>
+    <p>
+      Messages are deleted after 24 months, unless they are part of an open safety report, in which case they are kept as evidence.
+    </p>
 
     <h2>Video: minors never upload</h2>
     <p>
       Video is the highest-risk content type in the product, so the rule is simple: <strong>a minor never uploads
-      video</strong> (product decision, October 2026). Footage of a child only exists as a coach's session video:
+      video</strong> (product decision, October 2026). The only footage of a child is a coach's session video:
     </p>
     <pre class="mermaid">
 flowchart LR
     C["Coach uploads a session review"] --> B["Picks the session it is about"]
     B --> S["Automated content scanning"]
     S -->|Clean| V["Playable by the coach and by that child's parent"]
-    S -->|Flagged| A["Admin moderation queue"]
+    S -->|Flagged| A["Admin video review queue"]
+    S -->|CSAM match| H["Video locked, account suspended, admins alerted"]
     M["A minor tries to upload"] --> R["Refused, admin alerted"]
     </pre>
     <ol>
-      <li>Only a self-registered adult player can upload (homework). An upload attempt by any profile that is a minor
-        or managed by a parent is refused before anything is stored, and an admin is alerted — it should be
-        impossible, so reaching it means something else broke.</li>
-      <li>A coach's session review must name the session it reviews. The child in that session's parent (and the
-        player, if they have their own adult account) can then watch it — but cannot download or delete it.</li>
-      <li>Every video is still scanned automatically, including a CSAM hash-matching check and explicit-content
-        detection, before it becomes playable. If a child's data is erased (GDPR), the coach videos about that child are
-        deleted too.</li>
+      <li>Only a self-registered adult player can upload (homework). An upload attempt from any profile that is a minor
+        or managed by a parent is refused before anything is stored, and an admin is alerted. This should be
+        impossible, so if it happens, something else has broken.</li>
+      <li>A coach's session review must name the session it reviews. The parent of the child in that session (or the
+        player, if they have their own adult account) can then watch it, but cannot download or delete it.</li>
+      <li>Every video is still scanned automatically before it can be played: a CSAM hash-matching check, explicit-content
+        detection, and a minor-safety re-check that hides the video if anything looks wrong. If a child's data is erased
+        (GDPR), the coach's videos of that child are deleted too.</li>
     </ol>
+    <div class="callout warn">
+      <p><strong>A CSAM match is the most severe path in the product.</strong> The video is locked and the uploader's
+      account is suspended immediately. If the uploader is a coach, a <em>safety hold</em> also follows: the profile is
+      taken down, all their upcoming bookings are cancelled with full refunds, unused session packs are refunded, and
+      their payouts are frozen until an admin reinstates them. A safety hold cannot be appealed. Video moderation alerts
+      are also emailed to the admin alert address, the only alerts that are emailed.</p>
+    </div>
     <div class="callout">
-      <p><strong>There is no parental approval queue any more.</strong> <code>/parent/approvals</code> existed for the
-      old "minor uploads, parent approves" flow, which was removed; the address now just opens the parent dashboard.</p>
+      <p><strong>There is no parental approval queue any more.</strong> <code>/parent/approvals</code> belonged to the
+      old "minor uploads, parent approves" flow, which has been removed; the address now just opens the parent dashboard.</p>
     </div>
 
     <h2>Reporting and enforcement</h2>
     <table>
       <thead><tr><th>Signal</th><th>Raised by</th><th>What happens</th></tr></thead>
       <tbody>
-        <tr><td>Message report</td><td>Either party to a conversation</td><td>Message moves to under-review; an admin alert is raised.</td></tr>
-        <tr><td>Conversation report</td><td>Either party</td><td>The whole conversation is blocked immediately, then reviewed.</td></tr>
-        <tr><td>Review flag</td><td>Community</td><td>Enough flags auto-hold a published review pending moderation.</td></tr>
-        <tr><td>Reliability strikes</td><td>System, from coach behaviour</td><td>Late cancellations and no-shows accumulate; thresholds reduce marketplace visibility, then suspend the coach pending review. See <a href="../money/index.html">Money &amp; Commercial Model</a>.</td></tr>
-        <tr><td>Dispute</td><td>Parent or coach, over a booking</td><td>Enters the dispute queue for admin resolution.</td></tr>
+        <tr><td>Message report</td><td>Any party to the conversation</td><td>The message is hidden pending review and an admin alert is raised.</td></tr>
+        <tr><td>Conversation report</td><td>Any party</td><td>The whole conversation is blocked for everyone immediately, then reviewed. This is the only "block" users have.</td></tr>
+        <tr><td>Review flag</td><td>Any signed-in user</td><td>Once a review has enough flags, it is automatically held for moderation.</td></tr>
+        <tr><td>Reliability strikes</td><td>System, from coach behaviour</td><td>Unexcused cancellations and no-shows build up. At 3 the coach drops down the search results; at 5 they are hidden and sent to admin review. See <a href="../money/index.html">Money &amp; Commercial Model</a>.</td></tr>
+        <tr><td>Dispute</td><td>Parent, adult player or coach, within 14 days</td><td>The coach's payout is frozen and the dispute goes to the admin queue for resolution.</td></tr>
+        <tr><td>Appeal</td><td>The person affected, within 14 days</td><td>A strike, coach suspension, blocked review or dispute outcome can be appealed once; the admin's decision is final.</td></tr>
       </tbody>
     </table>
-    <div class="callout warn">
-      <p><strong>Every one of these lands in a queue with no admin UI.</strong> Reports, flags, strike thresholds and
-      disputes all raise real, deduplicated admin alerts in the backend — and there is no screen to read or action
-      them. Anyone planning a launch should treat "build the moderation console" as a safety prerequisite rather
-      than a nice-to-have, because the reporting mechanisms users can already reach assume somebody is watching.</p>
+    <div class="callout">
+      <p><strong>All of these land in one admin console.</strong> Reports, AI-moderation holds, review flags, strike
+      thresholds, disputes, GDPR deadline overruns, safety-hold bookings and payment-integrity alerts all appear in a
+      single deduplicated queue at <code>/admin/moderation</code>. There are dedicated pages for disputes, appeals,
+      coaches, videos and GDPR requests. Apart from video moderation, none of these alerts are pushed to anyone. Someone
+      has to check the queue regularly, because the reporting tools users already have assume somebody is watching.</p>
     </div>
 
     <h2>Data rights (GDPR)</h2>
     <p>
-      Parents and adult users can request data <strong>export</strong> or <strong>erasure</strong>. Both are real,
-      time-boxed backend flows. Two consequences worth knowing when discussing them:
+      Any user can request an <strong>export</strong> or <strong>erasure</strong> of their own data, and a parent can do
+      the same for their child's profile. Both are real backend flows, tracked against the legal deadline on
+      <code>/admin/gdpr</code>, and failed erasures are retried automatically. Two consequences are worth knowing:
     </p>
     <ul>
-      <li><strong>Erasure is genuinely destructive and overrides retention protections.</strong> It hard-deletes the
-        user's messages even where ordinary retention would have preserved them as evidence of an open report, and
-        deletes non-approved reviews while anonymising approved ones. This is intentional — a right-to-erasure
-        request wins over the moderation hold — but it means an erasure can remove material from an open
+      <li><strong>Erasure is genuinely destructive and overrides retention protections.</strong> It permanently deletes
+        the user's messages, even ones that ordinary retention would have kept as evidence for an open report. It also
+        deletes reviews that hadn't been approved and anonymises approved ones. This is intentional: a right-to-erasure
+        request wins over the moderation hold. But it means an erasure can remove material from an open
         investigation.</li>
-      <li><strong>Coach profiles are anonymised, not deleted</strong>, so historical bookings and reviews stay
-        coherent.</li>
+      <li><strong>Coach profiles are anonymised, not deleted</strong>, so historical bookings and reviews still make sense.</li>
     </ul>
 
     <h2>Where these controls surface, by persona</h2>
     <div class="card-grid">
-      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Four consent gates, the coach's session videos of their child, visibility into every conversation involving their child.</p></div>
-      <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>Adults-only self-registration; minors have no login at all. Age tier governs what a player can do.</p></div>
-      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Booking-gated messaging, age-tier limits on contacting minors, and reliability enforcement.</p></div>
-      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Owns every queue named on this page — and currently has a UI for none of them.</p></div>
+      <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Four consent gates. Takes part in every conversation about their child. Can watch the coach's session videos of their child, and can report, dispute and request GDPR actions for the child.</p></div>
+      <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>Only adults can self-register; minors have no login at all. The age tier governs who can talk about a player.</p></div>
+      <div class="card"><h4><a href="../coach/index.html">Coach</a></h4><p>Messaging only after a paid booking, always through the parent for minors. Reliability enforcement, appeals, and the safety-hold consequences.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Owns every queue named on this page, all in the admin console.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+    <footer class="page-footer">Skillars business documentation — last verified against master <code>2ad84416</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

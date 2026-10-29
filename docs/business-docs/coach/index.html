@@ -38,130 +38,202 @@
 flowchart LR
     A["/coach-register"] --> B["/coach/email-pending"]
     B --> C["/coach/verify-email"]
-    C --> D["/coach/verify-phone"]
-    D --> E["/coach/profile-builder<br/>5-step wizard"]
+    C --> L["/login"]
+    L --> E["/coach/profile-builder<br/>5-step wizard"]
     E --> F["/coach/command-center<br/>main hub"]
     F --> G["/coach/availability"]
     F --> H["/coach/booking-requests"]
     H --> I["Live session in Command Center"]
-    F --> J["/coach/drills & /coach/session-templates"]
+    F --> R["/coach/players<br/>roster"]
+    F --> J["/coach/drills, /coach/session-templates"]
     F --> K["/coach/session-builder/:bookingId"]
-    F --> L["/coach/payment-settings<br/>Stripe onboarding"]
-    F --> M["/coach/revenue"]
-    F --> N["/coach/reliability"]
-    F --> O["/coach/subscription"]
+    F --> Q["/coach/session-pack-tiers"]
+    F --> M["/coach/payment-settings<br/>Stripe onboarding"]
+    F --> N["/coach/revenue"]
+    F --> O["/coach/reliability"]
+    F --> S["/coach/reviews"]
     F --> P["/messaging"]
     </pre>
+    <p>Every one of these pages is in the left-hand menu for a coach, grouped as <strong>Schedule</strong> (Coach Command Center, Booking requests, Availability), <strong>Coaching</strong> (My Players, Drill library, Session templates, My videos, Messages) and <strong>Business &amp; account</strong> (Revenue Dashboard, Session Pack Offer, Payment settings, Subscription, My Reviews, Reliability).</p>
 
     <h3>1. Registering as a coach</h3>
     <ol>
       <li>Go to <code>/coach-register</code>. Fields: First name, Last name, Email, Phone, Password, plus Terms/Privacy acceptance.</li>
       <li>Submitting takes you to <code>/coach/email-pending</code> (same resend-with-cooldown pattern used across all three registration flows).</li>
-      <li>Email link → <code>/coach/verify-email</code> → <code>/coach/verify-phone</code> (6-digit SMS OTP).</li>
+      <li>The email link opens <code>/coach/verify-email</code>, which verifies you and sends you to <code>/login</code>. Sign in with your email and password.</li>
+      <li>On first sign-in you land on the command center, which redirects you to <code>/coach/profile-builder</code> until your profile is complete.</li>
     </ol>
+    <div class="callout">
+      <p><strong>There is no phone-code step today.</strong> A <code>/coach/verify-phone</code> page exists, but it is only
+      used when the platform setting <code>security.registration.phone-otp-required</code> is on. It ships off, and the
+      configuration editor refuses to turn it on because no SMS provider is integrated yet.</p>
+    </div>
 
     <h3>2. Building your public profile</h3>
-    <p><strong>Why it matters:</strong> this is literally your storefront — an incomplete or unpublished profile means zero marketplace visibility.</p>
-    <p>Despite its filename, <code>/coach/profile-builder</code> is a fully built 5-step wizard (not a stub) that must be completed before you show up in the marketplace. It shows "Step <em>n</em> of 5" throughout, with an icon and short label per step:</p>
+    <p><strong>Why it matters:</strong> this is your storefront. If the profile is incomplete or unpublished, you get no marketplace visibility.</p>
+    <p><code>/coach/profile-builder</code> ("Complete Your Profile") is a 5-step wizard that must be completed before you show up in the marketplace. It shows "Step <em>n</em> of 5" throughout, with a progress rail:</p>
     <ol>
-      <li><strong>Step 1 — Profile.</strong> Split into three labelled sections: Basic info, Location, and Languages. Your time zone is captured here and must be a real IANA zone — it's what every booking slot a parent sees is rendered in.</li>
-      <li><strong>Step 2 — Specialties.</strong> Sport/coaching specialties.</li>
-      <li><strong>Step 3 — Pricing, including your session packs.</strong> As well as per-session pricing you add <strong>session packs</strong> here — each with a session count, a total price in EUR, and a label. The helper text reads "Offer discounted multi-session packages. Leave empty if you only want per-session pricing." <strong>Read the warning below before leaving it empty.</strong></li>
-      <li><strong>Step 4 — Availability.</strong> Add weekly windows (day, start, end); helper text warns "Add at least one weekly window so parents know when they can book you." Fine-tuned later at <code>/coach/availability</code>.</li>
-      <li><strong>Step 5 — Photo</strong>, uploaded directly from this step (or skipped) via a presigned upload — same underlying mechanism as any other file upload on the platform. Guidance: "A clear headshot builds trust with parents. JPG or PNG, up to 5MB."</li>
+      <li><strong>Step 1 — Profile.</strong> Four labelled sections: Basic info, Location, Languages and Timezone. Contact details typed into your bio are stripped ("Contact details will be removed on save"). The Timezone is the zone every booking slot a parent sees is rendered in.</li>
+      <li><strong>Step 2 — Specializations and Age Groups.</strong></li>
+      <li><strong>Step 3 — Pricing.</strong> "Per Session Price (EUR)", "Session Length" (every bookable slot in your calendar is this long) and <strong>session packs</strong>, each with a session count, a total price in EUR and a label. The pack helper text reads "Offer discounted multi-session packages. Leave empty if you only want per-session pricing." <strong>Read the warning below before leaving it empty.</strong></li>
+      <li><strong>Step 4 — Availability.</strong> Add weekly windows (day, start, end); helper text: "Add at least one weekly window so parents know when they can book you." The timezone shown here is read-only and comes from step 1. You can change your windows later at <code>/coach/availability</code>.</li>
+      <li><strong>Step 5 — Photo.</strong> Upload a photo or skip this step. Guidance: "A clear headshot builds trust with parents. JPG or PNG, up to 5MB."</li>
     </ol>
     <div class="callout warn">
-      <p><strong>Leaving step 3's session packs empty makes you unbookable — despite what the helper text implies.</strong>
-      That text ("Leave empty if you only want per-session pricing") describes an option the booking flow no longer
-      supports as an entry point. A parent's only route to booking you is: buy your session pack, then spend a
-      credit. With no pack published, the parent's call-to-action leads to a purchase page reading "This coach has
-      no session pack available for purchase," and they cannot proceed.</p>
-      <p>You will still appear in marketplace search, which makes this fail silently — you simply never receive
-      requests. If a coach reports "I'm listed but nobody books me," check step 3 first.</p>
+      <p><strong>If you leave step 3's session packs empty, parents cannot book you, whatever the helper text implies.</strong>
+      On your public profile, a parent or player with no unused credits from you sees a "Buy sessions" button. It goes
+      to <code>/parent/coaches/:coachId/purchase-sessions</code>. Only when they hold an active pack with sessions left does the
+      button change to "Book a session" and take them to the booking request page. If you have no pack on sale, the purchase page says "This
+      coach has no session pack available for purchase." and they can go no further.</p>
+      <p>You still appear in marketplace search, so nothing tells you anything is wrong: you just never receive
+      requests. If a coach reports "I'm listed but nobody books me," check their session pack offer first
+      (<code>/coach/session-pack-tiers</code>).</p>
     </div>
-    <p>Completing step 5 publishes your profile and takes you straight to <code>/coach/command-center</code>. Coming back to this URL later, once your profile is already complete, redirects you straight to the command center instead of re-showing the wizard.</p>
+    <p>Completing step 5 publishes your profile and takes you to <code>/coach/command-center</code>. If you return to the wizard after your profile is complete, it sends you to the command center instead.</p>
 
     <h3>3. Your command center</h3>
-    <p><strong>Why it matters:</strong> this is the coach's single main hub — a week-by-week schedule plus the live-session tools that turn a booking into a delivered (and paid) session.</p>
+    <p><strong>Why it matters:</strong> this is the coach's main hub. It holds your week's schedule and the live-session tools that turn a booking into a delivered, paid session.</p>
     <ol>
-      <li><code>/coach/command-center</code> shows a week grid of your bookings (prev/next week navigation) plus a sidebar of currently active clients.</li>
-      <li>When a booked session's time arrives, an "Active Session" overlay takes over the screen for running it live.</li>
-      <li>Ending a session opens a "Wrap-Up" sequence, then a post-wrap-up summary showing a "Session DNA" chart — a snapshot of what was actually covered.</li>
+      <li><code>/coach/command-center</code> ("Coach Command Center") shows a week grid of your bookings ("Previous week" / "Next week"), an "Active Clients" sidebar, a "Projected Revenue" panel and a "Booking requests" shortcut button.</li>
+      <li>If your Stripe onboarding is not complete, a banner reads "Complete your Stripe setup to accept bookings" with a "Set up payments" button that opens <code>/coach/payment-settings</code>.</li>
+      <li>If any completed sessions have no recap, a banner shows how many ("<em>n</em> sessions need a recap"). Click "Show" to list them, with an "Add recap" button on each.</li>
+      <li>Each booking block shows buttons that depend on its status:
+        <ul>
+          <li><strong>Upcoming:</strong> "Start Session", "Quick Complete", "Prep", "Report No-Show", "Cancel Session", "Propose New Time".</li>
+          <li><strong>Confirmed:</strong> "Prep", "Cancel Session", "Propose New Time".</li>
+          <li><strong>Completed:</strong> "Add recap" / "Edit recap" and "Repeat for next week".</li>
+          <li><strong>Awaiting wrap-up:</strong> "Resume wrap-up".</li>
+          <li><strong>Finished or cancelled:</strong> "Raise a dispute" / "View dispute".</li>
+        </ul>
+        Empty availability windows have a "Share this slot" button, which copies a booking link for that slot.</li>
+      <li>"Start Session" opens the full-screen live-session overlay. Ending the session opens the wrap-up sequence, followed by a summary with a "Session DNA" chart of what was covered.</li>
+      <li>"Quick Complete" skips the live overlay. A quick-completed session waits for the parent to confirm it; if they don't, it confirms automatically after <code>booking.quick_complete_timeout_hours</code> (seeded at 24). <strong>The server decides which kind of wrap-up you are doing.</strong> It only counts as a live session if you pressed "Start Session" and ended it yourself, so you can't skip the parent's confirmation by claiming a live session.</li>
     </ol>
+    <div class="callout warn">
+      <p><strong>Time gates on the command center.</strong> You can't start or complete a session before its scheduled start
+      time. "Report No-Show" asks you to confirm ("Confirm that the player did not attend this session. This cannot be
+      undone."). It is only accepted from the start time plus <code>booking.playerNoShow.graceMinutes</code> (default
+      <strong>15 minutes</strong>). Before that you get "A player no-show can only be reported once the grace period after the
+      scheduled start has passed."</p>
+      <p><strong>Abandoned sessions are settled automatically.</strong> A session left running or paused more than
+      <code>booking.unresolvedSession.graceMinutes</code> (default 120) after its scheduled end is ended for you. It then
+      waits for the parent's confirmation like a Quick Complete. A paid session that was never started is <strong>not</strong>
+      paid out automatically; it raises a "Session ended without being started" alert for Skillars staff.</p>
+    </div>
 
     <h3>4. Setting your availability</h3>
     <ol>
-      <li><code>/coach/availability</code> shows a weekly calendar (prev/next week navigation) of your recurring availability windows and any one-off blocked time.</li>
-      <li>An always-visible add/edit panel below the calendar lets you pick a day of week, start time, and end time, then save — no modal, so you never lose your place on the calendar.</li>
-      <li>Existing windows/blocks can be edited or deleted directly from the calendar.</li>
+      <li><code>/coach/availability</code> ("Manage Availability") shows a weekly calendar of your recurring windows and any blocked time.</li>
+      <li>Below the calendar there are two panels that are always visible. <strong>Add Recurring Window</strong> has Day, Start time and End time fields and a Save button. <strong>Block Personal Time</strong> has Start date, Start time, End date, End time and an optional Reason, with a "Block Personal Time" button.</li>
+      <li>You can edit or delete existing windows and blocks directly from the calendar.</li>
     </ol>
 
     <h3>5. Handling booking requests</h3>
     <ol>
-      <li><code>/coach/booking-requests</code> is your inbox: individual requests, plus batch groups (several slots one parent requested together at once), each showing the player, requested time, and Accept/decline actions.</li>
-      <li>An empty inbox shows a simple "nothing here yet" state.</li>
-    </ol>
-
-    <h3>6. Planning session content</h3>
-    <p><strong>Why it matters:</strong> this is what separates Skillars from a bare scheduling tool — structured, reusable training content tied to each session.</p>
-    <ol>
-      <li><code>/coach/drills</code>: your drill library, split into a "Platform" tab (Skillars' own curated drills) and a "My Library" tab (drills you've authored yourself), with a filter button to narrow results.</li>
-      <li><code>/coach/session-builder/:bookingId</code>: a 3-column planner — drill library on the left, the session plan itself in the middle, template/save actions along the top ("Save Draft", "Save Session", "Save as Template", and a shortcut to browse existing templates).</li>
-      <li><code>/coach/session-templates</code>: your vault of saved, reusable templates — rename or delete from a per-template menu.</li>
+      <li><code>/coach/booking-requests</code> ("Booking requests") is your inbox. It shows single requests (player, parent, requested time, any notes) with "Accept" and "Decline" buttons. It also shows batch groups ("<em>name</em> — <em>n</em> sessions requested") with an "Accept all <em>n</em> sessions" button. An empty inbox reads "No pending booking requests".</li>
+      <li>Accepting charges the family. A request can't be accepted after its start time has passed ("This request’s start time has passed, so it can no longer be accepted."). Unanswered requests expire automatically after <code>booking.request_expiry_hours</code> (48 by default). If a request has no agreed price you'll see "This request has no agreed price. Decline it and ask the family to send a new request."</li>
+      <li>"Accept all" settles a batch one request at a time. If some fail, you see "<em>x</em> of <em>y</em> sessions accepted", and the ones that failed are marked. If two people try to accept the same batch at once, only one succeeds.</li>
+      <li>A family can have at most <code>booking.request.maxPendingPerCoach</code> (10) unanswered requests with you at a time, and can request at most <code>booking.request.maxHorizonDays</code> (120) days ahead.</li>
     </ol>
     <div class="callout">
-      <p><strong>The session builder can be feature-gated by subscription tier.</strong> Coaches on the lowest ("Scout") tier see a locked overlay instead of the builder — this is the per-tier feature gating mentioned in the subscription section below, enforced live rather than just described in marketing copy.</p>
+      <p><strong>"Repeat for next week" sends a proposal; it does not create a booking.</strong> Clicking it on a completed
+      session creates a coach proposal ("Repeat session proposed — parent will be notified"). In your inbox it appears as
+      "Proposed by you — awaiting parent confirmation". It has no Accept button, only "Withdraw proposal". The family
+      confirms it (they are charged at that point) or declines it. Nobody is charged until they confirm. Reschedules
+      work the same way: you can accept or decline a time the parent proposed, but not a time you proposed yourself.</p>
     </div>
 
-    <h3>7. Getting paid</h3>
+    <h3>6. Your players</h3>
     <ol>
-      <li><code>/coach/payment-settings</code>: connect your Stripe account (the "Connect with Stripe" button starts Stripe's own onboarding flow) — required before you can actually receive payouts.</li>
-      <li><code>/coach/revenue</code>: a date-range filtered summary of gross earnings, commission deducted, and Stripe fees, so you can see your real take-home at a glance.</li>
-      <li><code>/coach/subscription</code>: your own subscription tier (separate from a parent/player's subscription) — upgrade or cancel from a set of tier cards.</li>
-      <li><code>/coach/reliability</code>: your reliability-strike history (late cancellations/no-shows) with an "acknowledge" action — repeated strikes reduce your marketplace visibility or suspend you, per the platform's enforcement rules.</li>
+      <li><code>/coach/players</code> ("My Players") is your roster. Each player shows when they last trained with you, a "Gone quiet" badge if they have been dormant, a count of neglected skills, and a "Send message" button. Players whose access window has passed are listed separately under "Lapsed players".</li>
+      <li>Click a player to open <code>/coach/players/:playerId</code> ("<em>name</em>'s Development"): neglected skills, coach contributions, a progress summary, the homework you assigned, and your targets.</li>
+      <li>The "Prep" button on an upcoming booking opens "Session Prep": what you worked on last time, what's next, the focus thread, a private plan note ("Your plan note (private)", up to 500 characters) and a "Plan this session" button.</li>
     </ol>
 
-    <h3>8. Managing your reviews</h3>
-    <p><strong>Why it matters:</strong> coach ratings on the marketplace drive bookings — understanding how you're perceived and responding to feedback helps you build trust and improve your service.</p>
+    <h3>7. Planning session content</h3>
+    <p><strong>Why it matters:</strong> structured, reusable training content tied to each session is what separates Skillars from a plain scheduling tool.</p>
     <ol>
-      <li>Once parents or players have trained with you and left reviews, they appear on your public profile on the marketplace.</li>
-      <li>Reviews go through a moderation process — newly submitted reviews may show a "Pending moderation" status before being approved and made visible.</li>
-      <li>You can respond to individual reviews with your own message — this appears directly on your profile below the original review so other potential clients can see your commitment to feedback.</li>
-      <li>Your average rating and review count are displayed prominently on your coach card in the marketplace and on your full profile page.</li>
+      <li><code>/coach/drills</code> ("Drill Library"): "Platform Library" and "My Library" tabs, a search box, a "Filters" button (skill, difficulty, equipment, weak foot only), "New drill" and "Clone a platform drill".</li>
+      <li><code>/coach/session-builder/:bookingId</code> ("Session Builder"): drill library on the left (including a "Suggested" tab), the session plan in the middle, and "Templates", "Save Draft", "Save Session" and "Save as Template" actions.</li>
+      <li><code>/coach/session-templates</code> ("Session Templates"): your saved templates. Each has "Rename", "Delete" and "Create session plan", which applies the template to one of your bookings.</li>
+      <li><code>/coach/videos</code> ("My videos"): upload and manage your own coaching videos.</li>
+    </ol>
+    <div class="callout">
+      <p><strong>The session builder depends on your subscription tier.</strong> Coaches on the entry-level Scout plan see a locked screen instead: "Session Builder is available on Instructor and Academy plans."</p>
+    </div>
+
+    <h3>8. Your session pack offer</h3>
+    <ol>
+      <li><code>/coach/session-pack-tiers</code> ("My Session Pack Offer") shows "Your current offer", the offers it replaced, and a list of "Sold session packs" (bought by, sessions left, expiry date).</li>
+      <li>"Create a new offer" or "Replace your current offer" asks for a Label, a "Number of sessions" and a "Total price (€)". Replacing an offer deactivates the old one straight away. Parents who already bought under it keep their sessions. "Withdraw offer" stops new sales without creating a replacement.</li>
+      <li>Within the 14 days before a sold pack expires, you can extend it once by 30 days ("Extend").</li>
     </ol>
 
-    <h3>9. Messaging clients</h3>
-    <p>Same shared <code>/messaging</code> screen every persona uses. Conversations only exist against a real booking relationship — you can't message a parent or player you've never been booked with.</p>
+    <h3>9. Getting paid</h3>
+    <ol>
+      <li><code>/coach/payment-settings</code> ("Payment Settings"): the "Connect with Stripe" button starts Stripe's own onboarding. The page then shows "Charges enabled" / "Payouts enabled", "Setup pending — follow Stripe instructions" or "Account restricted — contact Stripe support". If you disconnect Skillars from your Stripe account, it reads "Your Stripe account is disconnected from Skillars. Reconnect it to receive payouts." with the connect button again. Skillars also re-checks connected accounts with Stripe daily, in case Stripe's own notification was missed.</li>
+      <li><code>/coach/revenue</code> ("Revenue Dashboard"): choose a start and end date and click "Apply". The tiles show Gross, Commission, "Released to your Stripe account", Refunds, "On hold" and Sessions, followed by a transaction table with a "View Receipt" link per session (<code>/coach/bookings/:bookingId/receipt</code>). Stripe processing fees are paid by the platform, not by the coach. Your payout is the session amount minus the platform commission (<code>platform.commission.rate</code>, seeded at 8%).</li>
+      <li><code>/coach/subscription</code> ("Coach Subscription"): your own plan, separate from any parent or player subscription. Upgrade, downgrade or cancel from the plan cards.</li>
+      <li><code>/coach/reliability</code> ("Reliability Dashboard"): your strike history (Date, Reason, Booking), with "Acknowledge" and "Appeal" on each strike.</li>
+    </ol>
+    <p><strong>When you get paid.</strong> A completed session's payout is held for <code>payment.payout.hold_hours</code> (48), then transferred to your Stripe account. You are paid your normal net amount for card-paid, credit-paid <em>and</em> pack-paid sessions. You are also paid it when a session is forfeited: a player no-show, or a parent cancelling with less than 24 hours' notice. Payouts are frozen while a dispute or card chargeback on that booking is open, and while your account is under a safety hold. If your Stripe account can't receive money, payouts go on hold. They are sent automatically once your onboarding completes, and staff can also release them manually.</p>
+    <p><strong>Cancelling and strikes.</strong> "Cancel Session" asks you to pick a reason. Mutual Agreement, Health / Medical, Family Emergency and Weather are excused. Scheduling Preference and Other are unexcused and always give you a reliability strike. Excused cancellations are capped: more than <code>coach.excusedCancellations.maxPerWindow</code> (3) in a rolling <code>coach.excusedCancellations.windowDays</code> (90) days, and the next excused one strikes too. The family is always refunded in full when you cancel. Not turning up yourself is a "Coach no-show" strike.</p>
+    <p><strong>What strikes do.</strong> At 3 strikes in 30 days your marketplace visibility is reduced ("Your visibility has been reduced due to recent cancellations or no-shows."). At 5 your profile goes to "under review" ("Your account is under review. Please contact support."). Suspension is not automatic: a Skillars admin decides.</p>
+
+    <h3>10. Disputes and appeals</h3>
+    <ol>
+      <li>On a finished or cancelled booking in the command center, "Raise a dispute" lets you dispute it yourself, within <code>disputes.submissionWindowDays</code> (14). Disputes raised by families against you are handled by Skillars staff.</li>
+      <li>Dispute outcomes that affect you: a credit to the family cuts your payout in proportion to the credit. "Uphold coach (reverse refund)" pays you your full net amount. If money already sent to you has to be taken back but Stripe refuses the reversal, the amount is recorded as a debt and deducted from your next payouts.</li>
+      <li>Reliability strikes, a suspension, a removed review and a dispute decision can each be appealed once, within 14 days, using the "Appeal" button ("Appeal this decision"). The admin's decision is final. A suspended coach appeals from <code>/profile</code>. A child-safety suspension cannot be appealed.</li>
+    </ol>
+
+    <h3>11. Managing your reviews</h3>
+    <p><strong>Why it matters:</strong> ratings drive bookings, and how you respond to feedback is visible to future clients.</p>
+    <ol>
+      <li><code>/coach/reviews</code> ("My Reviews") lists the reviews parents and players left you.</li>
+      <li>A review held for moderation is marked "This review is awaiting moderation and is not yet publicly visible."; one that was removed reads "This review was removed by moderation."</li>
+      <li>Reply to a review in the "Write a response (optional)" box and click "Submit response". Your reply appears under the review on your public profile, labelled "Coach's response".</li>
+      <li>Your average rating and review count appear on your marketplace card and your public profile (<code>/coaches/:coachId</code>).</li>
+    </ol>
+
+    <h3>12. Messaging clients</h3>
+    <p>This is the same <code>/messaging</code> screen every persona uses. Conversations only exist where there is a real booking relationship, so you can't message a parent or player who has never booked you.</p>
 
     <h2>Conventions &amp; Gotchas</h2>
     <div class="callout warn">
-      <p><strong>Your profile isn't visible in the marketplace until all 5 profile-builder steps are complete</strong> — a coach who registers but abandons the wizard partway through will not appear in search results.</p>
+      <p><strong>Your profile isn't visible in the marketplace until all 5 profile-builder steps are complete.</strong> A coach who registers but abandons the wizard partway through won't appear in search results.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Your time zone is load-bearing.</strong> The zone you set in step 1 is the zone every booking slot
-      is displayed in to parents — they book against your calendar, not their own local time. It is validated as a
-      real IANA zone at submission, so a malformed value is rejected at the form rather than silently breaking
-      slot rendering later.</p>
+      <p><strong>Your time zone matters.</strong> The zone you set in step 1 is the zone every booking slot
+      is shown in to parents: they book against your calendar, not their own local time.</p>
     </div>
     <div class="callout">
-      <p><strong>You define one active session pack at a time.</strong> Publishing a new pack tier deactivates the
-      previous one. Parents who already bought the old pack keep their credits — deactivating affects what is on
-      sale, not what has been sold.</p>
+      <p><strong>You have one active session pack offer at a time.</strong> Publishing a new one deactivates the
+      previous one. Parents who already bought the old pack keep their credits: deactivating changes what is on
+      sale, not what has already been sold.</p>
     </div>
     <div class="callout warn">
-      <p><strong>Session builder access is subscription-tier-gated.</strong> Don't promise full session-planning capability to a coach on the entry-level tier without checking current tier gates.</p>
+      <p><strong>Without a working Stripe account, families can't book you.</strong> New booking requests to a coach
+      whose Stripe account isn't payment-ready are refused. The banner says "to accept bookings", but the "Accept" button
+      itself is not blocked: requests that arrived before your account lost its Stripe status can still be accepted and
+      delivered, and their payouts sit on hold until onboarding completes.</p>
+    </div>
+    <div class="callout warn">
+      <p><strong>If Skillars suspends you</strong>, your profile leaves the marketplace, your pending requests are cancelled, and
+      (unless the admin opts out) so are your upcoming sessions. Families are refunded in full and the unused sessions on
+      your sold packs are refunded to their wallets. Sessions that are already running are left to finish.</p>
     </div>
 
     <h2>Related Personas</h2>
     <div class="card-grid">
       <div class="card"><h4><a href="../parent/index.html">Parent</a></h4><p>Books and pays for the sessions you deliver, and is the primary source of your booking requests and revenue.</p></div>
       <div class="card"><h4><a href="../player/index.html">Player</a></h4><p>The athlete you assign homework to and assess via Skills Radar — whether self-registered or added by a parent.</p></div>
-      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Enforces reliability strikes and resolves disputes involving your bookings, from the backend today (no dedicated coach-facing dispute UI yet).</p></div>
-      <div class="card"><h4><a href="../money/index.html">Money &amp; Commercial Model</a></h4><p>What Skillars takes from each session, when a cancellation costs you a strike, and how pack expiry works.</p></div>
+      <div class="card"><h4><a href="../admin/index.html">Admin / Staff</a></h4><p>Reviews strike thresholds, suspends or reinstates coaches, resolves disputes and decides appeals from the admin console.</p></div>
+      <div class="card"><h4><a href="../money/index.html">Money &amp; Commercial Model</a></h4><p>What Skillars takes from each session, which cancellations still pay you, and how pack expiry works.</p></div>
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Skillars business documentation — generated for onboarding.</footer>
+    <footer class="page-footer">Skillars business documentation — last verified against master <code>2ad84416</code> (2026-10-29).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
