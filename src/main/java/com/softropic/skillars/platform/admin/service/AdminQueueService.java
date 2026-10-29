@@ -235,6 +235,11 @@ public class AdminQueueService {
                 + " — the transfer cannot be made; see runbook COACH_PAYOUT_HELD";
             case PAYOUT_REVERSAL_FAILED -> "Coach payout reversal failed for booking " + referenceId
                 + (reason != null ? " (" + reason + ")" : "") + " — see runbook COACH_PAYOUT_REVERSAL";
+            // fix/payment-wallet-dispute-integrity: reason names the unfinished step (REFUND_AMOUNT_UNKNOWN /
+            // SUSPENSION_CANCEL_SKIPPED ...).
+            case BOOKING_ACTION_REQUIRED -> "Booking " + referenceId + " needs an operator"
+                + (reason != null ? " (" + reason + ")" : "")
+                + " — finish it by hand (cancel / refund to the parent's wallet), then mark it handled";
             default -> "";
         };
     }

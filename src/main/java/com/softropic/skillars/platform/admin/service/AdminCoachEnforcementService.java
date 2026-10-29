@@ -35,6 +35,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.event.StrikeThresholdReachedEvent;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeConfig;
 import com.softropic.skillars.platform.payment.service.ReliabilityStrikeService;
@@ -43,6 +44,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -55,6 +57,7 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -146,25 +149,45 @@ public class AdminCoachEnforcementService {
      * Admin suspension. REQUESTED bookings are always cancelled; with {@code cancelUpcomingBookings}
      * (the default — C2, DECISIONS.md item 2) the coach's ACCEPTED / PAYMENT_PENDING / CONFIRMED /
      * UPCOMING bookings are cancelled too, each with a full refund to the payer, no reliability strike
-     * and a neutral parent notice. All-or-nothing: a booking whose payment capture is in flight fails
-     * the whole suspension with a retryable 409 ({@code admin.coaches.paymentInProgress}) rather than
-     * leave money captured on a cancelled booking — retry in a few seconds, or opt out of the
-     * cancellation to suspend immediately. Live sessions (IN_PROGRESS / PAUSED) are left to finish.
-     * No payout freeze (that is the safety hold only).
+     * and a neutral parent notice. Live sessions (IN_PROGRESS / PAUSED) are left to finish. No payout freeze
+     * (that is the safety hold only).
+     *
+     * <p>fix/payment-wallet-dispute-integrity: no longer all-or-nothing. The profile goes SUSPENDED first
+     * ({@link #applyAdminSuspension}: committed before the sweep when this is the outermost transaction, so
+     * every accept path rejects from then on), then each booking is cancelled in its own transaction
+     * ({@link #cancelBookingForSuspension}). A booking whose row is busy, or whose payment capture is in flight,
+     * is retried once after the others; one still busy is skipped and raised as a {@code BOOKING_ACTION_REQUIRED}
+     * admin alert (counted in {@code alertedBookings}) instead of failing the whole suspension with a 409. Not
+     * {@code @Transactional} itself. Called inside a caller's transaction (an account suspension), the status
+     * step joins it while each booking still commits on its own: nothing a booking cancellation writes is a
+     * row that transaction wrote (the coach and user rows are only read there), so the REQUIRES_NEW steps never
+     * wait on it.
      */
-    @Transactional
     public AdminSuspendCoachResponse suspendCoach(UUID coachId, String reason, boolean notifyCoach, Long adminId,
                                                   boolean cancelUpcomingBookings) {
-        CoachProfile coach = lockCoachForSuspension(coachId);
-        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
+        if (!self.applyAdminSuspension(coachId, reason, notifyCoach, adminId)) {
             return AdminSuspendCoachResponse.alreadySuspended();
         }
-        Instant suspendedAt = markSuspended(coach);
+        SweepResult sweep = sweepBookingsOneByOne(coachId, cancelUpcomingBookings
+            ? BookingService.ADMIN_CANCELLABLE_STATUSES : List.of("REQUESTED"), adminId);
+        log.info("Coach suspended by admin: coachId={} adminId={} cancelUpcoming={} cancelledBookings={} "
+            + "skippedBookings={}", coachId, adminId, cancelUpcomingBookings, sweep.cancelled(), sweep.alerted());
+        return new AdminSuspendCoachResponse(true, sweep.cancelled(), sweep.alerted());
+    }
 
-        // Lock order: coach row (above, held to commit — no booking of this coach can be accepted behind
-        // the sweep's back) then each booking row.
-        SweepResult sweep = sweepBookings(coachId, cancelUpcomingBookings
-            ? BookingService.ADMIN_CANCELLABLE_STATUSES : List.of("REQUESTED"), adminId, false);
+    /**
+     * Step 1 of an admin suspension: profile SUSPENDED under the coach row lock, the coach notice and the
+     * audit row. Already suspended = no-op.
+     *
+     * @return true if this call suspended the coach
+     */
+    @Transactional
+    public boolean applyAdminSuspension(UUID coachId, String reason, boolean notifyCoach, Long adminId) {
+        CoachProfile coach = lockCoachForSuspension(coachId);
+        if (coach.getStatus() == CoachProfileStatus.SUSPENDED) {
+            return false;
+        }
+        Instant suspendedAt = markSuspended(coach);
 
         if (notifyCoach) {
             // B6: the coach is emailed + gets an inbox row (AdminOutcomeEmailListener). The recipient is
@@ -174,9 +197,68 @@ public class AdminCoachEnforcementService {
         }
         eventPublisher.publishEvent(new CoachSuspendedEvent(this, coachId, reason, adminId));
         logSuspension(coachId, adminId, AdminActionType.COACH_SUSPEND, reason, suspendedAt);
-        log.info("Coach suspended by admin: coachId={} adminId={} cancelUpcoming={} cancelledBookings={}",
-            coachId, adminId, cancelUpcomingBookings, sweep.cancelled());
-        return new AdminSuspendCoachResponse(true, sweep.cancelled(), 0);
+        return true;
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: one booking of an admin suspension, in its own transaction — its
+     * refund / restore and notices commit with it (BEFORE_COMMIT listeners), independently of the others. Must
+     * be {@code public} and called through {@link #self} for the {@code REQUIRES_NEW} to apply.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AdminBookingCancellationOutcome cancelBookingForSuspension(UUID bookingId, Long actorId) {
+        return bookingService.cancelBookingAsAdmin(bookingId, actorId, CANCEL_REASON_COACH_UNAVAILABLE);
+    }
+
+    /** A suspension's booking that could not be cancelled yet: its row lock is held, or a capture is in flight. */
+    private enum SuspensionCancel { DONE, LEFT, ROW_BUSY, PAYMENT_IN_FLIGHT }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: the admin suspension's sweep, one transaction per booking. Busy
+     * bookings are retried once after the rest (each attempt already has the lock retryer's bounded wait); one
+     * still busy is skipped with a {@code BOOKING_ACTION_REQUIRED} alert — the coach is already SUSPENDED, so it
+     * cannot be accepted again, but a capture in flight may still confirm it and an operator must cancel it.
+     */
+    private SweepResult sweepBookingsOneByOne(UUID coachId, List<String> statuses, Long actorId) {
+        List<UUID> busy = new ArrayList<>();
+        int cancelled = 0;
+        for (UUID bookingId : bookingRepository.findIdsByCoachIdAndStatusIn(coachId, statuses)) {
+            SuspensionCancel outcome = cancelForSuspension(bookingId, actorId);
+            if (outcome == SuspensionCancel.DONE) {
+                cancelled++;
+            } else if (outcome != SuspensionCancel.LEFT) {
+                busy.add(bookingId);
+            }
+        }
+        int alerted = 0;
+        for (UUID bookingId : busy) {
+            SuspensionCancel outcome = cancelForSuspension(bookingId, actorId);
+            if (outcome == SuspensionCancel.DONE) {
+                cancelled++;
+            } else if (outcome != SuspensionCancel.LEFT) {
+                log.error("[COACH_SUSPENSION_BOOKING] booking could not be cancelled by the suspension: bookingId={} "
+                    + "coachId={} state={} — admin alert raised", bookingId, coachId, outcome);
+                eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this,
+                    PaymentIntegrityAlertEvent.Kind.BOOKING_ACTION_REQUIRED, bookingId.toString(),
+                    PaymentIntegrityAlertEvent.Reference.BOOKING, "SUSPENSION_CANCEL_SKIPPED " + outcome.name()));
+                alerted++;
+            }
+        }
+        return new SweepResult(cancelled, alerted);
+    }
+
+    private SuspensionCancel cancelForSuspension(UUID bookingId, Long actorId) {
+        try {
+            return switch (self.cancelBookingForSuspension(bookingId, actorId)) {
+                case CANCELLED -> SuspensionCancel.DONE;
+                case PAYMENT_IN_PROGRESS -> SuspensionCancel.PAYMENT_IN_FLIGHT;
+                // Went live or out of a cancellable status since the id list was read: left as is.
+                case LIVE_SESSION, NOT_CANCELLABLE -> SuspensionCancel.LEFT;
+            };
+        } catch (PessimisticLockingFailureException e) {
+            log.warn("Suspension cancel of booking {} hit a busy row lock — will retry", bookingId);
+            return SuspensionCancel.ROW_BUSY;
+        }
     }
 
     /**
@@ -239,7 +321,7 @@ public class AdminCoachEnforcementService {
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public SweepResult sweepBookingsForSafetyHold(UUID coachId) {
         SweepResult sweep = sweepBookings(coachId, BookingService.ADMIN_CANCELLABLE_STATUSES,
-            AdminActionLog.SYSTEM_ACTOR_ID, true);
+            AdminActionLog.SYSTEM_ACTOR_ID);
         int alerted = sweep.alerted();
         for (Booking live : bookingRepository.findByCoachIdAndStatusInOrderByRequestedStartTimeAsc(
                 coachId, BookingService.LIVE_SESSION_STATUSES)) {
@@ -291,11 +373,11 @@ public class AdminCoachEnforcementService {
      * own row lock by cancelBookingAsAdmin, so one that moved since the id list was read (a concurrent
      * parent cancel, a settle) is judged on its fresh status.
      *
-     * <p>A capture in flight: an admin suspension fails as a whole with a retryable 409 (all-or-nothing
-     * — every cancellation above rolls back with it, their BEFORE_COMMIT refunds and notices never run;
-     * same contract as the parent's booking.paymentInProgress); a safety hold raises an urgent alert.
+     * <p>The safety hold's sweep (one transaction): a capture in flight raises an urgent alert.
+     * fix/payment-wallet-dispute-integrity: an admin suspension sweeps one booking per transaction instead
+     * ({@link #sweepBookingsOneByOne}).
      */
-    private SweepResult sweepBookings(UUID coachId, List<String> statuses, Long actorId, boolean safetyHold) {
+    private SweepResult sweepBookings(UUID coachId, List<String> statuses, Long actorId) {
         List<UUID> bookingIds = bookingRepository.findIdsByCoachIdAndStatusIn(coachId, statuses);
         int cancelled = 0;
         int alerted = 0;
@@ -304,12 +386,8 @@ public class AdminCoachEnforcementService {
                 bookingService.cancelBookingAsAdmin(bookingId, actorId, CANCEL_REASON_COACH_UNAVAILABLE);
             switch (outcome) {
                 case CANCELLED -> cancelled++;
-                case PAYMENT_IN_PROGRESS -> {
-                    if (!safetyHold) {
-                        throw new ResponseStatusException(HttpStatus.CONFLICT, "admin.coaches.paymentInProgress");
-                    }
+                case PAYMENT_IN_PROGRESS ->
                     alerted += raiseSafetyHoldBookingAlert(lockedBooking(bookingId), "PAYMENT_IN_FLIGHT") ? 1 : 0;
-                }
                 // A booking that went live since the id list was read: left to finish (the safety hold
                 // reports live sessions separately, unlocked).
                 case LIVE_SESSION, NOT_CANCELLABLE -> { }

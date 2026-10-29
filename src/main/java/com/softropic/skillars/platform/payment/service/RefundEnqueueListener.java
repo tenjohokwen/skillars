@@ -5,8 +5,10 @@ import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachE
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
@@ -38,6 +40,7 @@ public class RefundEnqueueListener {
     private final RefundOutboxSupport refundOutboxSupport;
     private final PackRestoreOutboxSupport packRestoreOutboxSupport;
     private final PackRefundAllocationService packRefundAllocationService;
+    private final ApplicationEventPublisher eventPublisher;
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
@@ -45,12 +48,16 @@ public class RefundEnqueueListener {
         // fix/payment-pack-clawback-and-expired-cancel: a refund-eligible (>24h) cancellation on an EXPIRED pack
         // refunds the session's value to the wallet, settled on the pack ledger like the coach / admin / no-show
         // expired-pack refunds; restoring it to the expired pack would give back nothing usable.
+        // fix/payment-wallet-dispute-integrity (owner decision 2026-10-29): that expired-pack refund is SPEND-ONLY
+        // credit — usable for bookings, never cashed out. A card / credit booking's refund stays cashable.
         if (event.isWalletRefund()) {
+            boolean expiredPack = event.getSessionPackPurchaseId() != null;
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
                 event.getSessionPrice(),
-                event.getSessionPackPurchaseId() != null
-                    ? "Parent cancellation >24h — expired pack refund"
-                    : "Parent cancellation >24h — full refund");
+                expiredPack
+                    ? "Parent cancellation >24h — expired pack refund (booking credit only)"
+                    : "Parent cancellation >24h — full refund",
+                expiredPack);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -69,7 +76,7 @@ public class RefundEnqueueListener {
                 event.getSessionPrice(),
                 event.getSessionPackPurchaseId() != null
                     ? "Coach cancellation — expired pack refund"
-                    : "Coach cancellation — full refund");
+                    : "Coach cancellation — full refund", false);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -84,7 +91,7 @@ public class RefundEnqueueListener {
                 event.getSessionPrice(),
                 event.getSessionPackPurchaseId() != null
                     ? "Coach no-show — expired pack refund"
-                    : "Coach no-show — full refund");
+                    : "Coach no-show — full refund", false);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -100,7 +107,7 @@ public class RefundEnqueueListener {
         // booking (its session is restored by CancellationRefundService instead).
         if (event.isWalletRefund()) {
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
-                event.getRefundAmount(), refundDescription(event));
+                event.getRefundAmount(), refundDescription(event), false);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -121,7 +128,7 @@ public class RefundEnqueueListener {
                 event.getRefundAmount(),
                 event.getSessionPackPurchaseId() != null
                     ? "Pack pause — expired pack refund"
-                    : "Pack pause — full refund");
+                    : "Pack pause — full refund", false);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -137,7 +144,7 @@ public class RefundEnqueueListener {
      * credit booking refunds what was paid, unchanged.
      */
     private void enqueueWalletRefund(Long parentId, UUID packId, UUID bookingId,
-                                     BigDecimal computed, String description) {
+                                     BigDecimal computed, String description, boolean spendOnly) {
         BigDecimal amount = packId == null
             ? computed
             : packRefundAllocationService.allocateSessionRefund(packId, bookingId, computed);
@@ -146,7 +153,22 @@ public class RefundEnqueueListener {
                 bookingId, packId);
             return;
         }
-        refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId, description);
+        if (amount == null || amount.signum() <= 0) {
+            // fix/payment-wallet-dispute-integrity: a refund is owed but its amount is unknown (e.g. an admin
+            // cancel of a captured booking with no payment row and no agreed price). A 0.00 payload used to be
+            // enqueued and fail on every drain forever; an operator refunds it by hand instead.
+            log.error("[REFUND_AMOUNT_UNKNOWN] booking={} parentId={} — refund owed but its amount is {}; nothing "
+                + "enqueued, admin alert raised", bookingId, parentId, amount);
+            eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this,
+                PaymentIntegrityAlertEvent.Kind.BOOKING_ACTION_REQUIRED, bookingId.toString(),
+                PaymentIntegrityAlertEvent.Reference.BOOKING, "REFUND_AMOUNT_UNKNOWN parent " + parentId));
+            return;
+        }
+        if (spendOnly) {
+            refundOutboxSupport.enqueueSpendOnlyBookingRefund(parentId, amount, bookingId, description);
+        } else {
+            refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId, description);
+        }
     }
 
     /**

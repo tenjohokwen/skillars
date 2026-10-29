@@ -60,6 +60,15 @@ public class ParentCreditLedger {
     @Column(name = "source_card_amount", precision = 10, scale = 2)
     private BigDecimal sourceCardAmount;
 
+    /**
+     * fix/payment-wallet-dispute-integrity (V208): the part of {@link #amount} in the SPEND-ONLY pool — same
+     * sign as {@code amount}, never larger in magnitude; zero = all cashable. The wallet's spend-only balance
+     * is the sum of this column, its cashable balance the rest ({@code CreditWalletService.getWalletBalance}).
+     */
+    @Setter
+    @Column(name = "spend_only_amount", nullable = false, precision = 10, scale = 2)
+    private BigDecimal spendOnlyAmount = BigDecimal.ZERO;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

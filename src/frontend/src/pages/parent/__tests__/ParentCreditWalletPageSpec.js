@@ -27,14 +27,21 @@ import ParentCreditWalletPage from 'src/pages/parent/ParentCreditWalletPage.vue'
 
 const mounted = []
 
-async function mountPage() {
+async function mountPage(creditBalance = { balance: 100, currency: 'EUR' }) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
-    initialState: { payment: { creditBalance: { balance: 100, currency: 'EUR' } } },
+    initialState: { payment: { creditBalance } },
   })
   const wrapper = mount(ParentCreditWalletPage, {
     shallow: true,
-    global: { plugins: [pinia], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    global: {
+      plugins: [pinia],
+      stubs: {
+        QPage: { template: '<div><slot /></div>' },
+        QCard: { template: '<div><slot /></div>' },
+        QCardSection: { template: '<div><slot /></div>' },
+      },
+    },
   })
   mounted.push(wrapper)
   await flushPromises()
@@ -59,6 +66,7 @@ describe('ParentCreditWalletPage.vue — cash-out error messages', () => {
     ['payment.cashOutTooSmall', 'payment.credits.cashOutTooSmall'],
     ['payment.cashOutExceedsRefundable', 'payment.credits.cashOutExceedsRefundable'],
     ['payment.cashOutBlockedByDispute', 'payment.credits.cashOutBlockedByDispute'],
+    ['payment.cashOutExceedsCashable', 'payment.credits.cashOutExceedsCashable'],
     ['payment.refundFailed', 'payment.credits.refundFailed'],
     ['payment.refundOutcomeUnknown', 'payment.credits.refundOutcomeUnknown'],
   ])('maps backend helpCode %s to %s', async (helpCode, i18nKey) => {
@@ -91,5 +99,39 @@ describe('ParentCreditWalletPage.vue — cash-out error messages', () => {
     expect(cashOut).toHaveBeenCalledWith(50)
     expect(wrapper.vm.cashoutError).toBeNull()
     expect(notifySpy).toHaveBeenCalledWith(expect.objectContaining({ type: 'positive' }))
+  })
+})
+
+// fix/payment-wallet-dispute-integrity: spend-only credit (an expired-pack refund) can be booked with but never
+// cashed out. Mutation check: drop the v-if split block, or compare the cash-out amount against `balance`
+// again, and these go RED.
+describe('ParentCreditWalletPage.vue — cashable vs spend-only credit', () => {
+  const split = { balance: 100, currency: 'EUR', cashableBalance: 40, spendOnlyBalance: 60 }
+
+  it('shows the cashable and booking-only parts when part of the credit is spend-only', async () => {
+    const wrapper = await mountPage(split)
+
+    const block = wrapper.find('[data-testid="wallet-split"]')
+    expect(block.exists()).toBe(true)
+    expect(block.text()).toContain('payment.credits.cashableBalance')
+    expect(block.text()).toContain('payment.credits.spendOnlyBalance')
+    expect(wrapper.vm.cashable).toBe(40)
+    expect(wrapper.vm.spendOnly).toBe(60)
+  })
+
+  it('hides the split when everything is cashable (and for a response without it)', async () => {
+    const wrapper = await mountPage()
+
+    expect(wrapper.find('[data-testid="wallet-split"]').exists()).toBe(false)
+    expect(wrapper.vm.cashable).toBe(100)
+  })
+
+  it('disables the cash-out above the cashable amount', async () => {
+    const wrapper = await mountPage(split)
+    wrapper.vm.cashoutAmount = 50
+    expect(wrapper.vm.cashoutDisabled).toBe(true)
+
+    wrapper.vm.cashoutAmount = 40
+    expect(wrapper.vm.cashoutDisabled).toBe(false)
   })
 })

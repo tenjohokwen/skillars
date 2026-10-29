@@ -1289,6 +1289,8 @@ export default {
       alreadyResolved: 'This dispute has already been resolved.',
       invalidCreditAmount: 'Please enter a valid credit amount.',
       noRefundToReverse: 'This booking has no refund to the parent that could be reversed.',
+      alreadyRefunded:
+        'This booking has already been refunded in full. Choose another resolution, such as no action.',
       upholdCoachHelp:
         'Use when the session actually took place or the refund was not owed. The refund is taken back from the parent’s credit wallet (never below zero) or the restored pack session is deducted again, and the coach is paid their full share. Any amount that cannot be recovered is absorbed by Skillars.',
       recoveredAmountLabel: 'Recovered from parent',
@@ -1354,6 +1356,7 @@ export default {
         EXTERNAL_REFUND: 'Refund made outside the app',
         PAYOUT_HELD: 'Coach payout on hold',
         PAYOUT_REVERSAL_FAILED: 'Coach payout reversal failed',
+        BOOKING_ACTION_REQUIRED: 'Booking needs manual action',
       },
     },
     reviewModeration: {
@@ -2232,6 +2235,10 @@ export default {
     credits: {
       title: 'Credit Wallet',
       balance: 'Current Balance',
+      cashableBalance: 'Can be cashed out: €{amount}',
+      spendOnlyBalance: 'Booking credit only: €{amount}',
+      spendOnlyHint:
+        'Credit refunded from an expired session pack can be used for bookings but cannot be cashed out.',
       cashout: 'Cash Out',
       cashoutLabel: 'Amount to cash out (EUR)',
       cashoutSuccess:
@@ -2240,7 +2247,9 @@ export default {
       noPaymentMethod: 'No payment method saved. Add a card first.',
       cashOutTooSmall: 'This amount is too small to cash out once the processing fee is deducted.',
       cashOutBlockedByDispute:
-        'Cash-outs are paused while a card dispute on one of your payments is open. You can cash out again once it is resolved.',
+        'Cash-outs are paused while a dispute on one of your payments or bookings is open. You can cash out again once it is resolved.',
+      cashOutExceedsCashable:
+        'Part of your credit can only be used for bookings. You can cash out up to the amount shown as cashable.',
       cashOutExceedsRefundable:
         'Cash-outs are refunded to your most recent card payment, which cannot take this much. Try a smaller amount.',
       refundFailed: 'The refund to your card failed. Your credit has been restored.',

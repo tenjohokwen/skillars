@@ -21,7 +21,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
-import com.softropic.skillars.platform.payment.service.CreditWalletService;
+import com.softropic.skillars.platform.payment.service.DisputeCreditService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -60,7 +60,7 @@ class DisputeServiceTest {
     @Mock private AdminAlertRepository adminAlertRepository;
     @Mock private AdminActionLogRepository adminActionLogRepository;
     @Mock private ConfigService configService;
-    @Mock private CreditWalletService creditWalletService;
+    @Mock private DisputeCreditService disputeCreditService;
     @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutRepository coachPayoutRepository;
     @Mock private com.softropic.skillars.platform.payment.service.CoachPayoutOutboxSupport coachPayoutOutboxSupport;
     @Mock private com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository coachPayoutFreezeRepository;
@@ -79,13 +79,16 @@ class DisputeServiceTest {
         service = new DisputeService(
             disputeRepository, bookingRepository, bookingPaymentRepository, coachProfileRepository,
             coachCancellationHistoryRepository, adminAlertRepository, adminActionLogRepository,
-            configService, creditWalletService, coachPayoutRepository,
+            configService, coachPayoutRepository,
             new com.softropic.skillars.platform.payment.service.CoachPayoutAdjustmentService(
                 coachPayoutRepository, coachPayoutFreezeRepository, coachPayoutOutboxSupport,
                 new com.softropic.skillars.platform.payment.service.CoachPayoutDebtService(org.mockito.Mockito.mock(com.softropic.skillars.platform.payment.repo.CoachPayoutDebtRepository.class), new io.micrometer.core.instrument.simple.SimpleMeterRegistry(), eventPublisher)),
             eventPublisher,
-            playerProfileRepository, recipientResolver, refundClawbackService
+            playerProfileRepository, recipientResolver, refundClawbackService, disputeCreditService
         );
+        // fix/payment-wallet-dispute-integrity: by default nothing was refunded yet — the whole price remains.
+        org.mockito.Mockito.lenient().when(disputeCreditService.remainingRefundable(any(), any()))
+            .thenAnswer(inv -> inv.getArgument(1));
     }
 
     private Dispute buildDispute() {
@@ -320,9 +323,8 @@ class DisputeServiceTest {
 
         service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(booking.getParentId()), eq(new BigDecimal("30.00")), eq("BOOKING_REFUND"),
-            eq(booking.getId()), any());
+        verify(disputeCreditService).credit(
+            eq(booking.getParentId()), eq(booking.getId()), eq(disputeId), eq(new BigDecimal("30.00")), any());
     }
 
     /**
@@ -354,9 +356,8 @@ class DisputeServiceTest {
 
         service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L);
 
-        verify(creditWalletService).writeLedgerEntry(
-            eq(booking.getParentId()), eq(new BigDecimal("33.33")), eq("BOOKING_REFUND"),
-            eq(booking.getId()), any());
+        verify(disputeCreditService).credit(
+            eq(booking.getParentId()), eq(booking.getId()), eq(disputeId), eq(new BigDecimal("33.33")), any());
         assertThat(payout.getStatus())
             .isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.CANCELLED);
         verify(coachPayoutOutboxSupport, never()).enqueueReversal(any(), any());
@@ -491,7 +492,7 @@ class DisputeServiceTest {
 
         service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L);
 
-        verifyNoInteractions(creditWalletService);
+        verify(disputeCreditService, never()).credit(any(), any(), any(), any(), any());
     }
 
     @Test
@@ -525,7 +526,7 @@ class DisputeServiceTest {
                     .contains(disputeId.toString())
                     .contains(bookingId.toString());
             });
-        verifyNoInteractions(creditWalletService);
+        verify(disputeCreditService, never()).credit(any(), any(), any(), any(), any());
     }
 
     // ── B6: dismissal audit type and outcome notifications ─────────────────
@@ -662,7 +663,7 @@ class DisputeServiceTest {
         var order = org.mockito.Mockito.inOrder(disputeRepository, coachPayoutOutboxSupport);
         order.verify(disputeRepository).saveAndFlush(dispute);
         order.verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, booking.getCoachId());
-        verify(creditWalletService, never()).writeLedgerEntry(any(), any(), any(), any(), any());
+        verify(disputeCreditService, never()).credit(any(), any(), any(), any(), any());
 
         var resolved = org.mockito.ArgumentCaptor.forClass(org.springframework.context.ApplicationEvent.class);
         verify(eventPublisher).publishEvent(resolved.capture());
@@ -709,5 +710,52 @@ class DisputeServiceTest {
         verify(coachPayoutOutboxSupport).enqueueTransfer(eq(bookingId), any());
         verify(coachPayoutOutboxSupport, never()).enqueuePayout(any(), any());
         assertThat(dispute.getAbsorbedAmount()).isEqualByComparingTo("0.00");
+    }
+
+    // ── fix/payment-wallet-dispute-integrity: dispute credit capped at paid minus refunded ─────────────
+
+    private void stubCapturedResolution(BigDecimal remaining) {
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(buildDispute()));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(buildBooking()));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(buildPayment("CAPTURED")));
+        when(disputeCreditService.remainingRefundable(bookingId, new BigDecimal("30.00"))).thenReturn(remaining);
+    }
+
+    @Test
+    void resolveDispute_fullCreditOnAnAlreadyRefundedBooking_is409_notAConstraintError() {
+        stubCapturedResolution(BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L))
+            .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class, e -> {
+                assertThat(e.getStatusCode()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                assertThat(e.getReason()).isEqualTo(DisputeError.ALREADY_REFUNDED.getErrorCode());
+            });
+        verify(disputeCreditService, never()).credit(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resolveDispute_fullCreditAfterAPartialRefund_creditsOnlyTheRemainder_andCutsTheCoachByIt() {
+        stubCapturedResolution(new BigDecimal("12.00"));
+        com.softropic.skillars.platform.payment.repo.CoachPayout row = payout("PENDING_RELEASE");
+        row.setNetAmount(new BigDecimal("27.00"));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(row));
+        when(adminAlertRepository.findFirstByReferenceIdAndTypeAndStatus(any(), any(), any()))
+            .thenReturn(Optional.empty());
+
+        service.resolveDispute(disputeId, "FULL_CREDIT", null, "note", 99L);
+
+        verify(disputeCreditService).credit(eq(1L), eq(bookingId), eq(disputeId), eq(new BigDecimal("12.00")), any());
+        // The coach's net is cut by the 12.00 actually credited (12/30 of 27.00 = 10.80), not by the full price.
+        assertThat(row.getNetAmount()).isEqualByComparingTo("16.20");
+    }
+
+    @Test
+    void resolveDispute_partialCreditAboveWhatIsLeft_isRejected() {
+        stubCapturedResolution(new BigDecimal("12.00"));
+
+        assertThatThrownBy(() -> service.resolveDispute(disputeId, "PARTIAL_CREDIT", new BigDecimal("15.00"), "n", 99L))
+            .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class, e ->
+                assertThat(e.getReason()).isEqualTo(DisputeError.INVALID_CREDIT_AMOUNT.getErrorCode()));
+        verify(disputeCreditService, never()).credit(any(), any(), any(), any(), any());
     }
 }

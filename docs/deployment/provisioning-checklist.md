@@ -74,7 +74,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `security.registration.phone-otp-required` is seeded `false` (`V139`). Keep it `false` on PROD
   until an SMS provider is integrated, or phone verification blocks every registration **(confirm
   product decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205 and V206 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206 and V208 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -475,6 +475,22 @@ WHERE b.status = 'REQUESTED' AND b.batch_id IS NULL
   AND EXISTS (SELECT 1 FROM booking.bookings o WHERE o.status = 'COMPLETED' AND o.coach_id = b.coach_id
               AND o.player_id = b.player_id AND o.requested_start_time = b.requested_start_time - interval '7 days');
 ```
+
+**V208: spend-only wallet credit, refund kinds, alert type** (`V208__wallet_spend_only_credit_and_refund_kinds.sql`).
+It adds `parent_credit_ledger.spend_only_amount` (`NOT NULL DEFAULT 0`, catalog-only) with
+`chk_ledger_spend_only`, rebuilds `chk_ledger_type` with `DISPUTE_CREDIT` and `BATCH_SHARE_REFUND`, rebuilds
+`admin_alerts_type_check` with `BOOKING_ACTION_REQUIRED`, and adds the `uq_pcl_batch_share_refund` and
+`idx_bp_stripe_payment_intent` indexes. Every CHECK is a superset of the old one and every existing row has
+`spend_only_amount = 0`, so nothing can fail before it runs. **No backfill**: the ledger is append-only
+(`trg_ledger_no_update`), so expired-pack parent-cancel refunds written since #355 stay cashable. After it
+runs on an upgraded UAT/PROD database, list them (informational, not a blocker; prod is not live, so PROD
+returns none) and decide by hand whether any needs a correcting entry:
+```sql
+SELECT tx_id, parent_id, amount, created_at FROM payment.parent_credit_ledger
+WHERE type = 'BOOKING_REFUND' AND description = 'Parent cancellation >24h — expired pack refund';
+```
+Admin dispute credits written before V208 are `BOOKING_REFUND` rows and stay so (UPHOLD_COACH can still
+claw one back); new ones are `DISPUTE_CREDIT`.
 
 V187, V188, V191 and V193's new columns and tables are additive (new tables, `NOT NULL DEFAULT`
 constants, nullable columns) and need no data check. V186's backfill `UPDATE` of
@@ -951,3 +967,9 @@ an operator must now do.
   `booking.payment.charge_reconcile_after_minutes` (10), new optional properties
   `app.payment.stripe.connect-timeout-ms` / `read-timeout-ms` / `max-network-retries`
   (`APP_PAYMENT_STRIPE_*`, defaults 10000 / 30000 / 2). No new Stripe webhook events; nothing to set.
+- 2026-10-29: fix/payment-wallet-dispute-integrity (V208). No new config key, job or Stripe webhook event.
+  V208 runs automatically and joins the "prod is not live" list in section 0. On an upgraded UAT/PROD
+  database, run its informational query ([3.2](#32-pre-migration-data-checks)) for expired-pack refunds
+  that stay cashable. New admin alert type `BOOKING_ACTION_REQUIRED` (payment-integrity bucket): an admin
+  cancel whose refund amount is unknown, or a booking a coach suspension could not cancel. Finish it by
+  hand and mark it handled.

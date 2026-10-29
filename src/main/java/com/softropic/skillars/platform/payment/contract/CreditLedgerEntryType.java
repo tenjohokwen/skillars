@@ -1,10 +1,10 @@
 package com.softropic.skillars.platform.payment.contract;
 
 /**
- * The nine values currently written to {@code payment.parent_credit_ledger.type}, enforced by the
- * {@code chk_ledger_type} CHECK constraint (V138, rebuilt by V198 and V199). Kept here, in
+ * The eleven values currently written to {@code payment.parent_credit_ledger.type}, enforced by the
+ * {@code chk_ledger_type} CHECK constraint (V138, rebuilt by V198, V199 and V208). Kept here, in
  * {@code payment.contract}, rather than beside the writing service because
- * {@code platform.admin.service.DisputeService} writes {@link #BOOKING_REFUND} too — a cross-module
+ * {@code platform.admin.service.DisputeService} writes {@link #DISPUTE_CREDIT} — a cross-module
  * read of this constants holder is the point.
  *
  * <p>Not an enum, mirroring {@link BookingPaymentStatus}'s own documented rationale: the column is a
@@ -36,10 +36,27 @@ public final class CreditLedgerEntryType {
     public static final String CASH_OUT_REVERSAL = "CASH_OUT_REVERSAL";
 
     /**
-     * A refund credited back to a parent: {@code CreditWalletRefundOutboxHandler}'s re-drive and
-     * {@code DisputeService}'s admin-resolution credits both write this.
+     * A booking's cancellation / no-show / decline refund credited back to a parent, written by
+     * {@code CreditWalletRefundOutboxHandler}; at most one per booking (V138 {@code uq_pcl_booking_refund}).
+     * fix/payment-wallet-dispute-integrity: admin dispute credits and batch-share refunds have their own
+     * types ({@link #DISPUTE_CREDIT}, {@link #BATCH_SHARE_REFUND}), so they can no longer collide with it.
      */
     public static final String BOOKING_REFUND = "BOOKING_REFUND";
+
+    /**
+     * fix/payment-wallet-dispute-integrity (V208): an admin dispute resolution's credit (FULL_CREDIT /
+     * PARTIAL_CREDIT / COACH_WARNING), positive, {@code reference_id} = the booking id, one per resolved
+     * dispute. {@code DisputeService} caps a booking's total at what was paid minus what was refunded.
+     */
+    public static final String DISPUTE_CREDIT = "DISPUTE_CREDIT";
+
+    /**
+     * fix/payment-wallet-dispute-integrity (V208): a batch booking's already-charged share credited back
+     * because the booking was settled elsewhere ({@code BookingPaymentPersistenceService.refundBatchShareToCredit}).
+     * Positive, {@code reference_id} = the booking id, at most one per booking ({@code uq_pcl_batch_share_refund});
+     * always names its source charge ({@code source_payment_intent_id}) when card money was involved.
+     */
+    public static final String BATCH_SHARE_REFUND = "BATCH_SHARE_REFUND";
 
     /**
      * feat/payment-forfeit-payouts-and-clawback: an {@code UPHOLD_COACH} dispute resolution taking a

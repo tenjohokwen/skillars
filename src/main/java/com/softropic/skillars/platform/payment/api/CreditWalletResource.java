@@ -44,8 +44,10 @@ public class CreditWalletResource {
         // behaviourally identical, correctly named accessor, and is what BookingResource already
         // uses for this same self-or-parent pattern (BookingResource.currentParentId()).
         Long parentId = securityUtil.requireCurrentUserId();
+        // fix/payment-wallet-dispute-integrity: with the cashable / spend-only split.
+        CreditWalletService.WalletBalance wallet = creditWalletService.getWalletBalance(parentId);
         return ResponseEntity.ok(new CreditBalanceResponse(
-            creditWalletService.getBalance(parentId), "EUR"));
+            wallet.total(), "EUR", wallet.cashable(), wallet.spendOnly()));
     }
 
     /**

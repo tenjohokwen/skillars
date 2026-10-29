@@ -5,7 +5,6 @@ import com.softropic.skillars.platform.booking.contract.BookingAcceptedEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
-import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
@@ -529,8 +528,10 @@ public class PaymentLifecycleService {
                 // stripe_customers, so this second connection cannot block on it.
                 perBookingTx.executeWithoutResult(s -> {
                     if (creditShare.signum() > 0) {
-                        creditWalletService.writeLedgerEntry(event.getParentId(), creditShare.negate(),
-                            CreditLedgerEntryType.BOOKING_DEDUCTION, bookingId, "Batch session booking deduction");
+                        // fix/payment-wallet-dispute-integrity: spend-only credit is consumed first (each booking's
+                        // split reads the pools after the previous booking's deduction committed).
+                        creditWalletService.debitForBooking(event.getParentId(), creditShare, bookingId,
+                            "Batch session booking deduction");
                     }
                     persistenceService.confirmCreditBatchPayment(bookingId, event.getBatchId(),
                         creditShare, stripeShare, finalPaymentIntentId,

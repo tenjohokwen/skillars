@@ -201,24 +201,31 @@ class CoachSuspensionCancelsUpcomingBookingsIT extends AbstractIntegrationTest {
         assertThat(refundOutboxRows(confirmed)).isZero();
     }
 
+    /**
+     * fix/payment-wallet-dispute-integrity: no longer all-or-nothing. A booking whose capture is in flight is
+     * retried once, then skipped with a BOOKING_ACTION_REQUIRED alert; the coach is still suspended and every
+     * other booking is cancelled (each in its own transaction) — the suspension no longer 409s as a whole.
+     */
     @Test
-    void adminSuspension_withACaptureInFlight_isRefusedWithA409_andChangesNothing() {
+    void adminSuspension_withACaptureInFlight_suspendsAndCancelsTheRest_andAlertsOnTheBusyBooking() {
         UUID requested = booking("REQUESTED", null);
         UUID inFlight = booking("PAYMENT_PENDING", null);
         capturePending(inFlight);
 
-        assertThatThrownBy(() -> enforcementService.suspendCoach(coachId, "Policy breach", false, ADMIN_ID, true))
-            .isInstanceOfSatisfying(ResponseStatusException.class, e -> {
-                assertThat(e.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(e.getReason()).isEqualTo("admin.coaches.paymentInProgress");
-            });
+        AdminSuspendCoachResponse result =
+            enforcementService.suspendCoach(coachId, "Policy breach", false, ADMIN_ID, true);
 
-        // All-or-nothing: the profile stays ACTIVE and the earlier REQUESTED cancellation rolled back.
+        assertThat(result.newlySuspended()).isTrue();
+        assertThat(result.cancelledBookings()).isEqualTo(1);
+        assertThat(result.alertedBookings()).isEqualTo(1);
         assertThat(jdbcTemplate.queryForObject(
-            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachId)).isEqualTo("ACTIVE");
-        assertThat(statusOf(requested)).isEqualTo("REQUESTED");
+            "SELECT status FROM marketplace.coach_profiles WHERE id = ?", String.class, coachId)).isEqualTo("SUSPENDED");
+        assertThat(statusOf(requested)).isEqualTo("CANCELLED");
         assertThat(statusOf(inFlight)).isEqualTo("PAYMENT_PENDING");
-        assertThat(noticesToParent()).isEmpty();
+        assertThat(jdbcTemplate.queryForList(
+            "SELECT reason FROM admin.admin_alerts WHERE reference_id = ? AND type = 'BOOKING_ACTION_REQUIRED' "
+                + "AND status = 'OPEN'", String.class, inFlight.toString()))
+            .containsExactly("SUSPENSION_CANCEL_SKIPPED PAYMENT_IN_FLIGHT");
     }
 
     // ── child-safety hold ──

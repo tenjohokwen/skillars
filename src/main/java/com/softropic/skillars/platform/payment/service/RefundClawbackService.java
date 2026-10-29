@@ -14,6 +14,8 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -22,8 +24,8 @@ import java.util.UUID;
  * the admin found the session took place (or the refund was otherwise not owed), so what the payer got back
  * is taken back, as far as it still can be:
  * <ul>
- *   <li><b>wallet refund</b> (the booking's one {@code BOOKING_REFUND} ledger row: card / credit bookings,
- *       expired-pack bookings, earlier dispute credits) — debited by the same amount, capped at the wallet's
+ *   <li><b>wallet refund</b> (the booking's {@code BOOKING_REFUND} ledger row — card / credit bookings,
+ *       expired-pack bookings — plus its admin {@code DISPUTE_CREDIT} rows) — debited by the same amount, capped at the wallet's
  *       current balance, never below zero ({@link CreditWalletService#debitRefundReversal});</li>
  *   <li><b>pack session restored</b> (its V195 {@code pack_session_restores} marker) — the session is deducted
  *       from the pack again if it has one left.</li>
@@ -71,20 +73,39 @@ public class RefundClawbackService {
             log.info("[REFUND_CLAWBACK] booking={} — refund already reversed", bookingId);
             return Optional.empty();
         }
+        // fix/payment-wallet-dispute-integrity: the wallet credit the payer got back for this booking is its
+        // BOOKING_REFUND (cancellation / no-show refund) plus any admin DISPUTE_CREDITs (V208 — they used to be
+        // the BOOKING_REFUND row). All of it is taken back, as one BOOKING_REFUND_REVERSAL (one per booking).
         Optional<ParentCreditLedger> walletRefund =
             ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND);
-        if (walletRefund.isPresent()) {
-            ParentCreditLedger refund = walletRefund.get();
-            BigDecimal recovered = creditWalletService.debitRefundReversal(
-                refund.getParentId(), bookingId, refund.getAmount());
-            // fix/payment-pack-refund-rounding: an expired-pack session refunded as money is un-settled on the
-            // pack's ledger — the caller now pays it to the coach, which settles it again through the payout
-            // allocation. Without this the session would count as settled twice and the pack's last payout
-            // would come up short. (Any unrecovered part is the platform's absorbed loss, on the dispute.)
-            packRefundAllocationService.releaseSessionRefund(sessionPackPurchaseId, bookingId);
-            log.info("[REFUND_CLAWBACK] booking={} payer={} refunded={} recovered={}", bookingId,
-                refund.getParentId(), refund.getAmount(), recovered);
-            return Optional.of(new RefundClawback(refund.getAmount(), recovered, false, false));
+        List<ParentCreditLedger> disputeCredits =
+            ledgerRepository.findByReferenceIdAndTypeOrderByParentId(bookingId, CreditLedgerEntryType.DISPUTE_CREDIT);
+        if (walletRefund.isPresent() || !disputeCredits.isEmpty()) {
+            List<ParentCreditLedger> credits = new ArrayList<>(disputeCredits);
+            walletRefund.ifPresent(credits::add);
+            Long parentId = walletRefund.map(ParentCreditLedger::getParentId).orElseGet(() -> disputeCredits.get(0).getParentId());
+            BigDecimal refunded = BigDecimal.ZERO;
+            BigDecimal spendOnly = BigDecimal.ZERO;
+            for (ParentCreditLedger credit : credits) {
+                refunded = refunded.add(credit.getAmount());
+                if (credit.getSpendOnlyAmount() != null) {
+                    spendOnly = spendOnly.add(credit.getSpendOnlyAmount());
+                }
+            }
+            // A spend-only refund is taken back from the spend-only pool first, a cashable one from the cashable
+            // pool first.
+            BigDecimal recovered = creditWalletService.debitRefundReversal(parentId, bookingId, refunded,
+                spendOnly.signum() > 0);
+            if (walletRefund.isPresent()) {
+                // fix/payment-pack-refund-rounding: an expired-pack session refunded as money is un-settled on the
+                // pack's ledger — the caller now pays it to the coach, which settles it again through the payout
+                // allocation. Without this the session would count as settled twice and the pack's last payout
+                // would come up short. (Any unrecovered part is the platform's absorbed loss, on the dispute.)
+                packRefundAllocationService.releaseSessionRefund(sessionPackPurchaseId, bookingId);
+            }
+            log.info("[REFUND_CLAWBACK] booking={} payer={} refunded={} recovered={}", bookingId, parentId, refunded,
+                recovered);
+            return Optional.of(new RefundClawback(refunded, recovered, false, false));
         }
         // The V195 once-per-booking restore marker is the record that the pack session was given back.
         if (sessionPackPurchaseId != null && sessionPackPurchaseRepository.existsRestoreMarker(bookingId)) {

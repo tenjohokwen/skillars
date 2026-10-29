@@ -283,11 +283,11 @@ class ChargeDisputeWebhookServiceTest {
         when(ledgerRepository.findByReferenceIdAndTypeOrderByParentId(ref,
             com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL))
             .thenReturn(List.of(reversal));
-        when(creditWalletService.restoreChargebackCredit(7L, ref, new BigDecimal("20.00"))).thenReturn(true);
+        when(creditWalletService.restoreChargebackCredit(7L, ref, new BigDecimal("20.00"), BigDecimal.ZERO)).thenReturn(true);
 
         service.onDisputeClosed(dispute("won", 10_000));
 
-        verify(creditWalletService).restoreChargebackCredit(7L, ref, new BigDecimal("20.00"));
+        verify(creditWalletService).restoreChargebackCredit(7L, ref, new BigDecimal("20.00"), BigDecimal.ZERO);
         assertThat(capturedAlert().getReason()).startsWith("WON").endsWith("restored=20.00");
     }
 

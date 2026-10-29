@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.service.OutboxService;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -64,9 +65,39 @@ public class RefundOutboxSupport {
     @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
     public void enqueueBookingRefund(Long parentId, BigDecimal amount, UUID bookingId, String description,
                                      String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
+        enqueue(new BookingRefundPayload(parentId, amount, bookingId, description, sourcePaymentIntentId,
+            sourceCardAmount, null, false));
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: a refund credited as SPEND-ONLY wallet credit — usable for
+     * bookings, never cashed out (a parent's >24h cancel of a booking drawn on an expired pack; owner
+     * decision 2026-10-29).
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void enqueueSpendOnlyBookingRefund(Long parentId, BigDecimal amount, UUID bookingId, String description) {
+        enqueue(new BookingRefundPayload(parentId, amount, bookingId, description, null, null, null, true));
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: a batch booking's charged share credited back because the booking
+     * was settled elsewhere — written as {@code BATCH_SHARE_REFUND}, not {@code BOOKING_REFUND}, so it never
+     * occupies the booking's one refund slot (a later real cancellation refund of that booking used to be
+     * silently skipped, and an {@code UPHOLD_COACH} clawed back the batch share instead).
+     */
+    @org.springframework.transaction.annotation.Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void enqueueBatchShareRefund(Long parentId, BigDecimal amount, UUID bookingId, String description,
+                                        String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
+        enqueue(new BookingRefundPayload(parentId, amount, bookingId, description, sourcePaymentIntentId,
+            sourceCardAmount, CreditLedgerEntryType.BATCH_SHARE_REFUND, false));
+    }
+
+    private void enqueue(BookingRefundPayload payload) {
+        Long parentId = payload.parentId();
+        BigDecimal amount = payload.amount();
+        UUID bookingId = payload.bookingId();
         try {
-            String json = objectMapper.writeValueAsString(new BookingRefundPayload(parentId, amount, bookingId,
-                description, sourcePaymentIntentId, sourceCardAmount));
+            String json = objectMapper.writeValueAsString(payload);
             outboxService.enqueue(AGGREGATE_TYPE, json);
             outboxService.requestDrainAfterCommit();
         } catch (JsonProcessingException e) {
@@ -80,12 +111,26 @@ public class RefundOutboxSupport {
     /**
      * Outbox payload for a re-drivable credit-wallet BOOKING_REFUND. {@code sourcePaymentIntentId} /
      * {@code sourceCardAmount} are null on payloads enqueued before V199 and for refunds traced through
-     * {@code booking_payments}.
+     * {@code booking_payments}. fix/payment-wallet-dispute-integrity (V208): {@code entryType} is the ledger
+     * type to write (null = {@code BOOKING_REFUND}, as on every earlier payload) and {@code spendOnly} credits
+     * the whole amount to the spend-only pool (false on earlier payloads).
      */
     public record BookingRefundPayload(Long parentId, BigDecimal amount, UUID bookingId, String description,
-                                       String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
+                                       String sourcePaymentIntentId, BigDecimal sourceCardAmount,
+                                       String entryType, boolean spendOnly) {
         public BookingRefundPayload(Long parentId, BigDecimal amount, UUID bookingId, String description) {
-            this(parentId, amount, bookingId, description, null, null);
+            this(parentId, amount, bookingId, description, null, null, null, false);
+        }
+
+        public BookingRefundPayload(Long parentId, BigDecimal amount, UUID bookingId, String description,
+                                    String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
+            this(parentId, amount, bookingId, description, sourcePaymentIntentId, sourceCardAmount, null, false);
+        }
+
+        /** The ledger type this payload writes (derived, not serialised). */
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public String ledgerType() {
+            return entryType == null ? CreditLedgerEntryType.BOOKING_REFUND : entryType;
         }
     }
 }

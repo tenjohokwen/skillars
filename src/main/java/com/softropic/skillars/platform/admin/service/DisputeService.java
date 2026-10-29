@@ -29,14 +29,13 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.BookingPaymentStatus;
-import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.BookingPayment;
 import com.softropic.skillars.platform.payment.repo.BookingPaymentRepository;
 import com.softropic.skillars.platform.payment.repo.CoachCancellationHistoryRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
 import com.softropic.skillars.platform.payment.service.CoachPayoutAdjustmentService;
-import com.softropic.skillars.platform.payment.service.CreditWalletService;
+import com.softropic.skillars.platform.payment.service.DisputeCreditService;
 import com.softropic.skillars.platform.payment.service.RefundClawbackService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
@@ -70,6 +69,9 @@ public class DisputeService {
     /** feat/payment-forfeit-payouts-and-clawback: the refund was not owed — claw it back, pay the coach in full. */
     static final String UPHOLD_COACH = "UPHOLD_COACH";
 
+    /** The resolutions that may credit the payer (fix/payment-wallet-dispute-integrity: capped per booking). */
+    private static final List<String> CREDIT_RESOLUTIONS = List.of("FULL_CREDIT", "PARTIAL_CREDIT", "COACH_WARNING");
+
     private static final List<String> VALID_REASONS = List.of(
         "COACH_NO_SHOW", "SESSION_QUALITY", "SAFETY_CONCERN", "UNAUTHORISED_CHARGE", "OTHER");
 
@@ -81,13 +83,13 @@ public class DisputeService {
     private final AdminAlertRepository adminAlertRepository;
     private final AdminActionLogRepository adminActionLogRepository;
     private final ConfigService configService;
-    private final CreditWalletService creditWalletService;
     private final CoachPayoutRepository coachPayoutRepository;
     private final CoachPayoutAdjustmentService coachPayoutAdjustmentService;
     private final ApplicationEventPublisher eventPublisher;
     private final PlayerProfileRepository playerProfileRepository;
     private final AdminNotificationRecipientResolver recipientResolver;
     private final RefundClawbackService refundClawbackService;
+    private final DisputeCreditService disputeCreditService;
 
     @Transactional
     public UUID raiseDispute(UUID bookingId, String reason, String details, Long raisedBy, String raisedByRole) {
@@ -257,14 +259,25 @@ public class DisputeService {
         // (FULL_CREDIT on a sessionPrice=0 booking credits nothing, and the email must say so).
         BigDecimal credited = BigDecimal.ZERO;
         RefundClawbackService.RefundClawback clawback = null;
+        // fix/payment-wallet-dispute-integrity: a booking's dispute credits are capped at what was paid minus what
+        // already went back to the payer (its cancellation refund, pending or written, and earlier dispute
+        // credits) — not at the full price per dispute.
+        BigDecimal remaining = DisputeService.CREDIT_RESOLUTIONS.contains(resolution)
+            ? disputeCreditService.remainingRefundable(booking.getId(), sessionPrice) : BigDecimal.ZERO;
 
         switch (resolution) {
             case "FULL_CREDIT" -> {
                 if (sessionPrice.compareTo(BigDecimal.ZERO) > 0) {
-                    creditWalletService.writeLedgerEntry(
-                        booking.getParentId(), sessionPrice, CreditLedgerEntryType.BOOKING_REFUND,
-                        booking.getId(), "Admin dispute resolution — full refund");
-                    credited = sessionPrice;
+                    if (remaining.signum() <= 0) {
+                        // Already refunded in full: a clear 409 instead of a raw unique-index violation.
+                        throw new ResponseStatusException(HttpStatus.CONFLICT, DisputeError.ALREADY_REFUNDED.getErrorCode());
+                    }
+                    // What is left of the price (all of it when nothing was refunded yet).
+                    disputeCreditService.credit(booking.getParentId(), booking.getId(), disputeId, remaining,
+                        remaining.compareTo(sessionPrice) < 0
+                            ? "Admin dispute resolution — refund of the remaining amount"
+                            : "Admin dispute resolution — full refund");
+                    credited = remaining;
                 } else {
                     log.warn("FULL_CREDIT resolution for disputeId={} issued no credit — sessionPrice=0 (pack-based or missing payment record)", disputeId);
                 }
@@ -272,23 +285,21 @@ public class DisputeService {
             case "PARTIAL_CREDIT" -> {
                 if (creditAmount == null
                         || creditAmount.compareTo(BigDecimal.ZERO) <= 0
-                        || creditAmount.compareTo(sessionPrice) > 0) {
+                        || creditAmount.compareTo(remaining) > 0) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST, DisputeError.INVALID_CREDIT_AMOUNT.getErrorCode());
                 }
-                creditWalletService.writeLedgerEntry(
-                    booking.getParentId(), creditAmount, CreditLedgerEntryType.BOOKING_REFUND,
-                    booking.getId(), "Admin dispute resolution — partial refund");
+                disputeCreditService.credit(booking.getParentId(), booking.getId(), disputeId, creditAmount,
+                    "Admin dispute resolution — partial refund");
                 credited = creditAmount;
             }
             case "NO_ACTION" -> { /* no credit operation */ }
             case "COACH_WARNING" -> {
                 if (creditAmount != null && creditAmount.compareTo(BigDecimal.ZERO) > 0) {
-                    if (creditAmount.compareTo(sessionPrice) > 0) {
+                    if (creditAmount.compareTo(remaining) > 0) {
                         throw new ResponseStatusException(HttpStatus.BAD_REQUEST, DisputeError.INVALID_CREDIT_AMOUNT.getErrorCode());
                     }
-                    creditWalletService.writeLedgerEntry(
-                        booking.getParentId(), creditAmount, CreditLedgerEntryType.BOOKING_REFUND,
-                        booking.getId(), "Admin dispute resolution — coach warning + partial refund");
+                    disputeCreditService.credit(booking.getParentId(), booking.getId(), disputeId, creditAmount,
+                        "Admin dispute resolution — coach warning + partial refund");
                     credited = creditAmount;
                 }
                 eventPublisher.publishEvent(
@@ -309,7 +320,7 @@ public class DisputeService {
         //   - no row (session not completed, or nothing charged) -> nothing on the coach side
         //   - UPHOLD_COACH -> the coach is paid in full instead (below, once this dispute is no longer open)
         if (clawback == null) {
-            reconcileCoachPayout(dispute.getBookingId(), resolution, creditAmount, sessionPrice);
+            reconcileCoachPayout(dispute.getBookingId(), resolution, credited, sessionPrice);
         }
 
         Instant now = Instant.now();
@@ -398,7 +409,7 @@ public class DisputeService {
 
     /**
      * feat/payment-forfeit-payouts-and-clawback: {@code UPHOLD_COACH} — only for a booking whose payer was
-     * actually refunded (a wallet {@code BOOKING_REFUND}, or a restored pack session), and only once per
+     * actually refunded (a wallet {@code BOOKING_REFUND} or {@code DISPUTE_CREDIT}, or a restored pack session), and only once per
      * booking; otherwise 400 before anything is written.
      */
     private RefundClawbackService.RefundClawback clawBackRefund(Booking booking) {
@@ -425,7 +436,7 @@ public class DisputeService {
      * <p>fix/payment-payouts-disputes-webhooks: two steps, kept apart so further resolutions (e.g. one
      * that forfeits or upholds the coach's payout) slot in as their own refund/coach-share rule:
      * <ol>
-     *   <li>{@link #parentRefundFor} — what went back to the parent;</li>
+     *   <li>{@code credited} — what actually went back to the parent;</li>
      *   <li>{@link CoachPayoutAdjustmentService#applyRefund} — the coach's proportional share of it
      *       (reversal if released, pro-rata cut if not), then the dispute freeze is lifted.</li>
      * </ol>
@@ -433,28 +444,20 @@ public class DisputeService {
      * @param parentPrice the full session price (credit + Stripe portions) — the denominator for the
      *     coach's proportional share of a partial refund
      */
-    private void reconcileCoachPayout(UUID bookingId, String resolution, BigDecimal creditAmount,
+    private void reconcileCoachPayout(UUID bookingId, String resolution, BigDecimal credited,
                                       BigDecimal parentPrice) {
         CoachPayout row = coachPayoutRepository.findByIdForUpdate(bookingId).orElse(null);
         if (row == null) {
             // No payout row (session not completed yet) — nothing has been transferred to the coach.
             return;
         }
-        BigDecimal parentRefund = parentRefundFor(resolution, creditAmount, parentPrice);
-        coachPayoutAdjustmentService.applyRefund(row, parentRefund, parentPrice, "DISPUTE_RESOLVED_" + resolution);
+        // fix/payment-wallet-dispute-integrity: what was actually credited — a FULL_CREDIT after an earlier refund
+        // credits only the remainder, and the coach's share is cut by that, not by the full price again.
+        coachPayoutAdjustmentService.applyRefund(row, credited, parentPrice, "DISPUTE_RESOLVED_" + resolution);
         if (row.isDisputeFrozen()) {
             row.setDisputeFrozen(false);
             coachPayoutAdjustmentService.releaseIfUnfrozen(row);
         }
-    }
-
-    private static BigDecimal parentRefundFor(String resolution, BigDecimal creditAmount, BigDecimal parentPrice) {
-        return switch (resolution) {
-            case "FULL_CREDIT" -> parentPrice;
-            case "PARTIAL_CREDIT" -> creditAmount;
-            case "COACH_WARNING" -> creditAmount != null && creditAmount.signum() > 0 ? creditAmount : BigDecimal.ZERO;
-            default -> BigDecimal.ZERO; // NO_ACTION
-        };
     }
 
     /**

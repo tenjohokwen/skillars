@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
+import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,7 @@ class CashOutServiceTest {
     @Mock PaymentGateway paymentGateway;
     @Mock ConfigService configService;
     @Mock CashOutReconciliationService cashOutReconciliationService;
+    @Mock ParentCreditLedgerRepository ledgerRepository;
 
     @InjectMocks CashOutService cashOutService;
 
@@ -46,6 +48,11 @@ class CashOutServiceTest {
     // fee = 100 * 0.025 + 0.25 = 2.75; net = 100 - 2.75 = 97.25
     private static final BigDecimal FEE = new BigDecimal("2.75");
     private static final BigDecimal NET = new BigDecimal("97.25");
+
+    /** A wallet whose credit is all cashable. */
+    private static CreditWalletService.WalletBalance cashable(BigDecimal total) {
+        return new CreditWalletService.WalletBalance(total, BigDecimal.ZERO, total);
+    }
 
     private void stubFeeConfig() {
         lenient().when(configService.getString("payment.stripe.feeRate")).thenReturn("0.025");
@@ -61,9 +68,10 @@ class CashOutServiceTest {
 
     private void stubHappyPath(BigDecimal balance) {
         stubFeeConfig();
-        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(balance);
+        when(creditWalletService.getWalletBalance(PARENT_ID)).thenReturn(cashable(balance));
         stubCustomer();
-        when(paymentGateway.getRefundableAmount(PAYMENT_INTENT_ID)).thenReturn(new BigDecimal("500.00"));
+        // lenient: not read when a funding charge is the refund target
+        lenient().when(paymentGateway.getRefundableAmount(PAYMENT_INTENT_ID)).thenReturn(new BigDecimal("500.00"));
     }
 
     @Test
@@ -109,7 +117,7 @@ class CashOutServiceTest {
     @Test
     void processCashOut_netAboveRefundableOnLastPaymentIntent_rejectedBeforeAnyDebit() {
         stubFeeConfig();
-        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("200.00"));
+        when(creditWalletService.getWalletBalance(PARENT_ID)).thenReturn(cashable(new BigDecimal("200.00")));
         stubCustomer();
         when(paymentGateway.getRefundableAmount(PAYMENT_INTENT_ID)).thenReturn(new BigDecimal("50.00"));
 
@@ -124,7 +132,7 @@ class CashOutServiceTest {
     @Test
     void processCashOut_insufficientBalance_throwsException() {
         stubFeeConfig();
-        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("50.00"));
+        when(creditWalletService.getWalletBalance(PARENT_ID)).thenReturn(cashable(new BigDecimal("50.00")));
 
         assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
             .isInstanceOf(PaymentGatewayException.class)
@@ -150,7 +158,7 @@ class CashOutServiceTest {
     @Test
     void processCashOut_noStripeCustomer_throwsException() {
         stubFeeConfig();
-        when(creditWalletService.getBalance(PARENT_ID)).thenReturn(new BigDecimal("200.00"));
+        when(creditWalletService.getWalletBalance(PARENT_ID)).thenReturn(cashable(new BigDecimal("200.00")));
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
@@ -254,5 +262,49 @@ class CashOutServiceTest {
 
         verify(paymentGateway, times(1)).refund(any(), any(), any());
         verify(cashOutReconciliationService, never()).reverseAfterRejection(any(), any());
+    }
+
+    // ── fix/payment-wallet-dispute-integrity ─────────────────────────────────────────────
+
+    @Test
+    void processCashOut_refundsOntoTheChargeThatFundedTheCredit_notTheLatestCharge() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_funding"));
+        when(paymentGateway.getRefundableAmount("pi_funding")).thenReturn(new BigDecimal("100.00"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), any(UUID.class), eq(NET), eq(FEE), eq("pi_funding"));
+        verify(paymentGateway).refund(eq("pi_funding"), eq(NET), anyString());
+        verify(paymentGateway, never()).refund(eq(PAYMENT_INTENT_ID), any(), any());
+    }
+
+    @Test
+    void processCashOut_fundingChargeWithoutHeadroom_fallsBackToTheLatestCharge() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_small", "pi_unreadable"));
+        when(paymentGateway.getRefundableAmount("pi_small")).thenReturn(new BigDecimal("10.00"));
+        when(paymentGateway.getRefundableAmount("pi_unreadable")).thenThrow(new PaymentGatewayException("payment.stripeError"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        verify(paymentGateway).refund(eq(PAYMENT_INTENT_ID), eq(NET), anyString());
+    }
+
+    @Test
+    void processCashOut_aboveTheCashablePart_isRefused_spendOnlyCreditNeverLeaves() {
+        stubFeeConfig();
+        when(creditWalletService.getWalletBalance(PARENT_ID))
+            .thenReturn(new CreditWalletService.WalletBalance(new BigDecimal("200.00"), new BigDecimal("150.00"),
+                new BigDecimal("50.00")));
+
+        assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.cashOutExceedsCashable");
+
+        verify(creditWalletService, never()).debitForCashOut(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).refund(any(), any(), any());
     }
 }

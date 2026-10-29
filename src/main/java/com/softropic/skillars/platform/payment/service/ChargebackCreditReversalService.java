@@ -115,7 +115,10 @@ public class ChargebackCreditReversalService {
         for (ParentCreditLedger reversal : ledgerRepository.findByReferenceIdAndTypeOrderByParentId(
                 reference, CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL)) {
             BigDecimal amount = reversal.getAmount().negate();
-            if (creditWalletService.restoreChargebackCredit(reversal.getParentId(), reference, amount)) {
+            // fix/payment-wallet-dispute-integrity: back into the pools the reversal took it from.
+            BigDecimal spendOnly = reversal.getSpendOnlyAmount() == null ? BigDecimal.ZERO
+                : reversal.getSpendOnlyAmount().negate();
+            if (creditWalletService.restoreChargebackCredit(reversal.getParentId(), reference, amount, spendOnly)) {
                 restored = restored.add(amount);
             }
         }
@@ -134,6 +137,19 @@ public class ChargebackCreditReversalService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void onRefundCredited(UUID bookingId, String sourcePaymentIntentId) {
+        onCreditWritten(bookingId, bookingId, sourcePaymentIntentId);
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: as {@link #onRefundCredited}, for a credit that is not the booking's
+     * one {@code BOOKING_REFUND} — an admin dispute credit ({@code DISPUTE_CREDIT}). {@code creditReference}
+     * names the credit (the admin dispute id) so its late reversal has its own reference instead of colliding
+     * with the booking refund's (V199 allows one reversal per reference and payer). Without this a dispute
+     * credit written after the card dispute was lost was never taken back: the parent had the bank's refund
+     * and the credit.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public void onCreditWritten(UUID creditReference, UUID bookingId, String sourcePaymentIntentId) {
         List<String> intents = sourcePaymentIntentId != null
             ? List.of(sourcePaymentIntentId)
             : chargeDisputeRepository.findFundingPaymentIntents(bookingId);
@@ -147,7 +163,7 @@ public class ChargebackCreditReversalService {
                     + "back if the dispute is lost", bookingId, dispute.getStripeDisputeId(), dispute.getPaymentIntentId());
                 continue;
             }
-            reverse(dispute, lateReference(dispute.getStripeDisputeId(), bookingId), "LATE");
+            reverse(dispute, lateReference(dispute.getStripeDisputeId(), creditReference), "LATE");
             chargeDisputeRepository.save(dispute);
         }
     }

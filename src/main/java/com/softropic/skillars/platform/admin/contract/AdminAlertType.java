@@ -26,9 +26,13 @@ public enum AdminAlertType {
     CHARGEBACK,
     EXTERNAL_REFUND,
     PAYOUT_HELD,
-    PAYOUT_REVERSAL_FAILED;
+    PAYOUT_REVERSAL_FAILED,
+    // fix/payment-wallet-dispute-integrity (V208): a booking an automatic path could not finish (referenceId =
+    // the booking id; reason says which: an admin-cancel refund of unknown amount, or a booking a coach
+    // suspension could not cancel). Reconciled by hand, then marked handled — the payment-integrity bucket.
+    BOOKING_ACTION_REQUIRED;
 
     /** fix/payment-payouts-disputes-webhooks: the payment-integrity types (one queue bucket, one resolve action). */
     public static final java.util.Set<AdminAlertType> PAYMENT_INTEGRITY =
-        java.util.EnumSet.of(CHARGEBACK, EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED);
+        java.util.EnumSet.of(CHARGEBACK, EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED, BOOKING_ACTION_REQUIRED);
 }

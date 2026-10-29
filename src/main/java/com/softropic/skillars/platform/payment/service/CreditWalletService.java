@@ -34,6 +34,29 @@ public class CreditWalletService {
     }
 
     /**
+     * fix/payment-wallet-dispute-integrity: the wallet split into its two pools. {@code total} is everything
+     * (what bookings can spend); {@code spendOnly} is credit that may be spent on bookings but never cashed
+     * out (an expired-pack parent-cancel refund — owner decision 2026-10-29); {@code cashable} is the rest.
+     */
+    public record WalletBalance(BigDecimal total, BigDecimal spendOnly, BigDecimal cashable) {
+    }
+
+    /**
+     * The payer's wallet in its two pools: the spend-only pool is the sum of every row's
+     * {@code spend_only_amount} (V208), clamped to {@code [0, total]} so an edge case can never report more
+     * spend-only credit than the wallet holds; cashable is {@code total - spendOnly}.
+     */
+    public WalletBalance getWalletBalance(Long parentId) {
+        BigDecimal total = getBalance(parentId);
+        BigDecimal spendOnly = ledgerRepository.sumSpendOnlyByParentId(parentId);
+        if (spendOnly == null) {
+            spendOnly = BigDecimal.ZERO;
+        }
+        spendOnly = spendOnly.max(BigDecimal.ZERO).min(total.max(BigDecimal.ZERO));
+        return new WalletBalance(total, spendOnly, total.subtract(spendOnly));
+    }
+
+    /**
      * fix/payment-money-integrity: the cash-out's balance check and its two debit rows, atomic per
      * payer. The ledger is append-only (no balance row to lock), so the payer's
      * {@code stripe_customers} row is the lock: two concurrent cash-outs used to read the balance
@@ -68,10 +91,20 @@ public class CreditWalletService {
         if (chargeDisputeRepository.existsOpenDisputeForPayer(parentId)) {
             throw new PaymentGatewayException("payment.cashOutBlockedByDispute");
         }
+        // fix/payment-wallet-dispute-integrity: so is an open in-app dispute on one of the payer's bookings —
+        // an UPHOLD_COACH resolution claws the refund back from the wallet, capped at the balance, so credit
+        // cashed out meanwhile would be paid twice (to the card, and to the coach in full).
+        if (chargeDisputeRepository.existsOpenAdminDisputeForPayer(parentId)) {
+            throw new PaymentGatewayException("payment.cashOutBlockedByDispute");
+        }
         BigDecimal requested = netAmount.add(feeAmount);
-        BigDecimal balance = ledgerRepository.sumByParentId(parentId).orElse(BigDecimal.ZERO);
-        if (balance.compareTo(requested) < 0) {
+        // Only the cashable pool leaves as cash; spend-only credit stays for bookings.
+        WalletBalance balance = getWalletBalance(parentId);
+        if (balance.total().compareTo(requested) < 0) {
             throw new PaymentGatewayException("payment.insufficientCredit");
+        }
+        if (balance.cashable().compareTo(requested) < 0) {
+            throw new PaymentGatewayException("payment.cashOutExceedsCashable");
         }
         writeLedgerEntry(parentId, netAmount.negate(), CreditLedgerEntryType.CASH_OUT_DEBIT, cashOutId,
             "Credit cash-out");
@@ -116,15 +149,70 @@ public class CreditWalletService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public BigDecimal debitRefundReversal(Long parentId, UUID bookingId, BigDecimal refundAmount) {
-        BigDecimal balance = lockAndGetBalance(parentId).max(BigDecimal.ZERO);
-        BigDecimal recovered = refundAmount.min(balance);
+        return debitRefundReversal(parentId, bookingId, refundAmount, false);
+    }
+
+    /**
+     * As {@link #debitRefundReversal(Long, UUID, BigDecimal)}; fix/payment-wallet-dispute-integrity: takes
+     * from the pool the refund went into first — the spend-only pool for a spend-only refund
+     * ({@code spendOnlyRefund}), else the cashable pool — and from the other pool for the rest.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal debitRefundReversal(Long parentId, UUID bookingId, BigDecimal refundAmount,
+                                          boolean spendOnlyRefund) {
+        lockAndGetBalance(parentId);
+        WalletBalance balance = getWalletBalance(parentId);
+        BigDecimal recovered = refundAmount.min(balance.total().max(BigDecimal.ZERO));
         if (recovered.signum() <= 0) {
             log.info("Refund reversal for booking {}: payer {} has no wallet balance — nothing recovered", bookingId, parentId);
             return BigDecimal.ZERO;
         }
         writeLedgerEntry(parentId, recovered.negate(), CreditLedgerEntryType.BOOKING_REFUND_REVERSAL, bookingId,
-            "Dispute resolved in the coach's favour — refund reversed");
+            "Dispute resolved in the coach's favour — refund reversed", null, null,
+            spendOnlyPart(balance, recovered, spendOnlyRefund).negate());
         return recovered;
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: a booking settlement's wallet debit ({@code BOOKING_DEDUCTION}).
+     * Spends consume the spend-only pool first, so spend-only credit is used up before cashable credit. The
+     * caller holds the payer's wallet lock ({@link #lockAndGetBalance}) whenever there is credit to spend, so
+     * the split is read under it.
+     */
+    @Transactional
+    public void debitForBooking(Long parentId, BigDecimal amount, UUID referenceId, String description) {
+        WalletBalance balance = getWalletBalance(parentId);
+        writeLedgerEntry(parentId, amount.negate(), CreditLedgerEntryType.BOOKING_DEDUCTION, referenceId,
+            description, null, null, spendOnlyPart(balance, amount, true).negate());
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: a failed settlement's {@code BOOKING_DEDUCTION} given back
+     * ({@code BOOKING_DEDUCTION_REVERSAL}) into the pools it came from — spend-only up to what the deduction(s)
+     * under {@code referenceId} took from that pool and earlier restores have not yet returned, the rest
+     * cashable.
+     */
+    @Transactional
+    public void restoreBookingDeduction(Long parentId, BigDecimal amount, UUID referenceId, String description) {
+        BigDecimal deductedSpendOnly = ledgerRepository.sumSpendOnlyByParentIdAndReferenceIdAndType(
+            parentId, referenceId, CreditLedgerEntryType.BOOKING_DEDUCTION).negate();
+        BigDecimal restoredSpendOnly = ledgerRepository.sumSpendOnlyByParentIdAndReferenceIdAndType(
+            parentId, referenceId, CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL);
+        BigDecimal spendOnly = deductedSpendOnly.subtract(restoredSpendOnly).max(BigDecimal.ZERO).min(amount);
+        writeLedgerEntry(parentId, amount, CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL, referenceId,
+            description, null, null, spendOnly);
+    }
+
+    /**
+     * How much of a debit of {@code take} comes out of the spend-only pool: all it can when
+     * {@code spendOnlyFirst}, else only what the cashable pool cannot cover. Never more than the pool holds.
+     */
+    static BigDecimal spendOnlyPart(WalletBalance balance, BigDecimal take, boolean spendOnlyFirst) {
+        BigDecimal pool = balance.spendOnly().max(BigDecimal.ZERO);
+        BigDecimal part = spendOnlyFirst
+            ? take.min(pool)
+            : take.subtract(balance.cashable().max(BigDecimal.ZERO)).max(BigDecimal.ZERO).min(pool);
+        return part.max(BigDecimal.ZERO);
     }
 
     /**
@@ -143,14 +231,17 @@ public class CreditWalletService {
                     CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL)) {
             return BigDecimal.ZERO;
         }
-        BigDecimal balance = lockAndGetBalance(parentId).max(BigDecimal.ZERO);
-        BigDecimal recovered = amount.min(balance);
+        lockAndGetBalance(parentId);
+        WalletBalance balance = getWalletBalance(parentId);
+        BigDecimal recovered = amount.min(balance.total().max(BigDecimal.ZERO));
         if (recovered.signum() <= 0) {
             log.info("Chargeback credit reversal {}: payer {} has no wallet balance — nothing recovered", reference, parentId);
             return BigDecimal.ZERO;
         }
+        // fix/payment-wallet-dispute-integrity: cashable credit first — the bank has already returned the money
+        // to the card, so what could otherwise leave as cash goes first; a won dispute's restore mirrors it.
         writeLedgerEntry(parentId, recovered.negate(), CreditLedgerEntryType.CHARGEBACK_CREDIT_REVERSAL, reference,
-            description);
+            description, null, null, spendOnlyPart(balance, recovered, false).negate());
         return recovered;
     }
 
@@ -163,13 +254,25 @@ public class CreditWalletService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean restoreChargebackCredit(Long parentId, UUID reference, BigDecimal amount) {
+        return restoreChargebackCredit(parentId, reference, amount, BigDecimal.ZERO);
+    }
+
+    /**
+     * As {@link #restoreChargebackCredit(Long, UUID, BigDecimal)}, giving {@code spendOnlyAmount} of it back to
+     * the spend-only pool — the part the reversal took from that pool (fix/payment-wallet-dispute-integrity).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public boolean restoreChargebackCredit(Long parentId, UUID reference, BigDecimal amount,
+                                           BigDecimal spendOnlyAmount) {
         if (amount == null || amount.signum() <= 0
                 || ledgerRepository.existsByReferenceIdAndParentIdAndType(reference, parentId,
                     CreditLedgerEntryType.CHARGEBACK_CREDIT_RESTORE)) {
             return false;
         }
+        BigDecimal spendOnly = spendOnlyAmount == null ? BigDecimal.ZERO
+            : spendOnlyAmount.max(BigDecimal.ZERO).min(amount);
         writeLedgerEntry(parentId, amount, CreditLedgerEntryType.CHARGEBACK_CREDIT_RESTORE, reference,
-            "Card dispute resolved in Skillars' favour — credit restored");
+            "Card dispute resolved in Skillars' favour — credit restored", null, null, spendOnly);
         return true;
     }
 
@@ -202,8 +305,26 @@ public class CreditWalletService {
     @Transactional
     public void writeLedgerEntry(Long parentId, BigDecimal amount, String type, UUID referenceId,
                                  String description, String sourcePaymentIntentId, BigDecimal sourceCardAmount) {
+        writeLedgerEntry(parentId, amount, type, referenceId, description, sourcePaymentIntentId, sourceCardAmount,
+            BigDecimal.ZERO);
+    }
+
+    /**
+     * fix/payment-wallet-dispute-integrity: as above, with the part of {@code amount} that belongs to the
+     * spend-only pool (V208 {@code spend_only_amount}: same sign as {@code amount}, never larger; zero = all
+     * cashable).
+     */
+    @Transactional
+    public void writeLedgerEntry(Long parentId, BigDecimal amount, String type, UUID referenceId,
+                                 String description, String sourcePaymentIntentId, BigDecimal sourceCardAmount,
+                                 BigDecimal spendOnlyAmount) {
         if (amount == null || amount.compareTo(BigDecimal.ZERO) == 0) {
             throw new IllegalArgumentException("Ledger entry amount must be non-zero");
+        }
+        BigDecimal spendOnly = spendOnlyAmount == null ? BigDecimal.ZERO : spendOnlyAmount;
+        if (spendOnly.signum() != 0
+                && (spendOnly.signum() != amount.signum() || spendOnly.abs().compareTo(amount.abs()) > 0)) {
+            throw new IllegalArgumentException("Spend-only part must have the amount's sign and not exceed it");
         }
         ParentCreditLedger entry = new ParentCreditLedger();
         entry.setParentId(parentId);
@@ -213,6 +334,7 @@ public class CreditWalletService {
         entry.setDescription(description);
         entry.setSourcePaymentIntentId(sourcePaymentIntentId);
         entry.setSourceCardAmount(sourceCardAmount);
+        entry.setSpendOnlyAmount(spendOnly);
         ledgerRepository.save(entry);
         log.debug("Credit ledger entry written: parentId={} type={} amount={}", parentId, type, amount);
     }
