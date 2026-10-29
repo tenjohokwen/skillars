@@ -94,6 +94,19 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     ).toHaveLength(1)
   })
 
+  // fix/pack-expiry-size-tiers: the coach sees how long a pack bought from the current offer lasts.
+  it('shows the active offer validity days when the backend sends them', () => {
+    const wrapper = mountPage([{ ...ACTIVE_TIER, validityDays: 365 }])
+    const validity = wrapper.find('[data-test="tier-validity"]')
+    expect(validity.exists()).toBe(true)
+    expect(validity.text()).toBe('booking.packs.validFor')
+  })
+
+  it('omits the validity line when the tier carries no validityDays', () => {
+    const wrapper = mountPage([ACTIVE_TIER])
+    expect(wrapper.find('[data-test="tier-validity"]').exists()).toBe(false)
+  })
+
   it('has no withdraw control when there is no active tier', () => {
     const wrapper = mountPage([])
     expect(wrapper.text()).not.toContain('payment.myTiers.withdrawOffer')

@@ -122,6 +122,32 @@ class SessionPackPaymentServiceTest {
         verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_ID, "pm_new");
     }
 
+    /** fix/pack-expiry-size-tiers: expiry is purchase + the size tier's days (5 sessions → tier2), not 60. */
+    @Test
+    void purchasePack_stampsExpiryFromThePackSizeTier() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_same");
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PACK_EXPIRY_DAYS_TIER2))
+            .thenReturn(180L);
+
+        Instant before = Instant.now();
+        SessionPackPurchaseResponse response =
+            sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_same");
+        Instant after = Instant.now();
+
+        assertThat(response.expiresAt())
+            .isBetween(before.plus(180, ChronoUnit.DAYS), after.plus(180, ChronoUnit.DAYS));
+        assertThat(response.status()).isEqualTo("ACTIVE");
+    }
+
+    @Test
+    void getActiveCoachTier_exposesTheTiersValidityDays() {
+        when(sessionPackTierRepository.findByCoachIdAndIsActiveTrue(COACH_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PACK_EXPIRY_DAYS_TIER2))
+            .thenReturn(180L);
+
+        assertThat(sessionPackPaymentService.getActiveCoachTier(COACH_ID).validityDays()).isEqualTo(180L);
+    }
+
     @Test
     void purchasePack_withTheSavedCard_noSync() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_same");

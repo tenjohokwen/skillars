@@ -393,12 +393,13 @@ class SessionPackPaymentResourceWebMvcTest {
         java.util.UUID tierId = java.util.UUID.randomUUID();
         com.softropic.skillars.platform.payment.contract.SessionPackTierResponse tier =
             new com.softropic.skillars.platform.payment.contract.SessionPackTierResponse(
-                tierId, coachId, "Basic", 5, BigDecimal.valueOf(49.99), BigDecimal.valueOf(9.99), true, Instant.now());
+                tierId, coachId, "Basic", 5, BigDecimal.valueOf(49.99), BigDecimal.valueOf(9.99), true, Instant.now(), 180L);
         when(sessionPackPaymentService.getActiveCoachTier(coachId)).thenReturn(tier);
 
         mockMvc.perform(get("/api/payment/coaches/" + coachId + "/session-pack-tiers"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.label").value("Basic"))
-            .andExpect(jsonPath("$.sessionCount").value(5));
+            .andExpect(jsonPath("$.sessionCount").value(5))
+            .andExpect(jsonPath("$.validityDays").value(180));
     }
 }

@@ -84,6 +84,37 @@ public final class ConfigBounds {
         new BoundedKey("pack.pause.maxDays", 1L, 3650L, true,
             "0/neg → every pack pause rejected as booking.pauseDurationInvalid", 90L);
 
+    /**
+     * fix/pack-expiry-size-tiers: {@code SessionPackValidity} — a session pack's validity at purchase,
+     * by its session count (1 / 2-5 / 6-10 / 11+). Seeded by V139 at exactly these defaults, so a
+     * fresh DB and an absent row behave identically. Read via the {@code BoundedKey} overload: an
+     * absent, non-numeric or out-of-range value falls back to the default — never fails a purchase
+     * the payer has already been charged for. The floor is 14 because both the expiry-warning email
+     * ({@code SessionPackExpiryNotifier}) and the coach "Extend" window
+     * ({@code SessionPackPaymentService.EXTENSION_WINDOW}) open 14 days before expiry; a shorter
+     * validity would warn on the day of purchase. Applies only to packs bought after the value
+     * changes — an existing pack keeps the {@code expires_at} stamped at its purchase. Nothing
+     * cross-checks that the tiers ascend.
+     */
+    public static final BoundedKey PACK_EXPIRY_DAYS_TIER1 =
+        new BoundedKey("pack.expiry.days.tier1", 14L, 3650L, false,
+            "too low → 1-session packs warn/expire almost at once; out of range → falls back to 90", 90L);
+
+    /** 2-5 session packs — see {@link #PACK_EXPIRY_DAYS_TIER1}. */
+    public static final BoundedKey PACK_EXPIRY_DAYS_TIER2 =
+        new BoundedKey("pack.expiry.days.tier2", 14L, 3650L, false,
+            "too low → 2-5 session packs warn/expire almost at once; out of range → falls back to 180", 180L);
+
+    /** 6-10 session packs — see {@link #PACK_EXPIRY_DAYS_TIER1}. */
+    public static final BoundedKey PACK_EXPIRY_DAYS_TIER3 =
+        new BoundedKey("pack.expiry.days.tier3", 14L, 3650L, false,
+            "too low → 6-10 session packs warn/expire almost at once; out of range → falls back to 365", 365L);
+
+    /** 11+ session packs — see {@link #PACK_EXPIRY_DAYS_TIER1}. */
+    public static final BoundedKey PACK_EXPIRY_DAYS_TIER4 =
+        new BoundedKey("pack.expiry.days.tier4", 14L, 3650L, false,
+            "too low → 11+ session packs warn/expire almost at once; out of range → falls back to 548", 548L);
+
     /** {@code DisputeService} — 0/neg → no dispute can ever be filed. */
     public static final BoundedKey DISPUTES_SUBMISSION_WINDOW_DAYS =
         new BoundedKey("disputes.submissionWindowDays", 1L, 365L, true,
@@ -546,7 +577,11 @@ public final class ConfigBounds {
         BOOKING_REQUEST_MAX_PENDING_PER_COACH.key(),
         BOOKING_REQUEST_MAX_HORIZON_DAYS.key(),
         BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES.key(),
-        BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES.key());
+        BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES.key(),
+        PACK_EXPIRY_DAYS_TIER1.key(),
+        PACK_EXPIRY_DAYS_TIER2.key(),
+        PACK_EXPIRY_DAYS_TIER3.key(),
+        PACK_EXPIRY_DAYS_TIER4.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -593,7 +628,11 @@ public final class ConfigBounds {
             BOOKING_REQUEST_MAX_PENDING_PER_COACH,
             BOOKING_REQUEST_MAX_HORIZON_DAYS,
             BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES,
-            BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES));
+            BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES,
+            PACK_EXPIRY_DAYS_TIER1,
+            PACK_EXPIRY_DAYS_TIER2,
+            PACK_EXPIRY_DAYS_TIER3,
+            PACK_EXPIRY_DAYS_TIER4));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

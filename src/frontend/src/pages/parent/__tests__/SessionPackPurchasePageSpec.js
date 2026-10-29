@@ -83,3 +83,45 @@ describe('SessionPackPurchasePage.vue — purchase attempt key', () => {
     expect(store.purchasePack).toHaveBeenCalledTimes(1)
   })
 })
+
+// fix/pack-expiry-size-tiers: the tier DTO carries validityDays (from the pack-size tier config);
+// the page shows it so the parent knows how long the pack lasts before buying.
+describe('SessionPackPurchasePage.vue — pack validity', () => {
+  async function mountWithTier(tier) {
+    const { fetchCoachSessionPackTiers } = await import('src/api/payment.api')
+    fetchCoachSessionPackTiers.mockResolvedValueOnce(tier)
+    const pinia = createTestingPinia({ createSpy: vi.fn })
+    const wrapper = mount(SessionPackPurchasePage, {
+      shallow: true,
+      global: {
+        plugins: [pinia],
+        renderStubDefaultSlot: true,
+        stubs: { QPage: { template: '<div><slot /></div>' }, PaymentMethodCard: true },
+      },
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+    return wrapper
+  }
+
+  const baseTier = {
+    packTierId: 'tier-1',
+    sessionCount: 5,
+    totalPrice: 100,
+    pricePerSession: 20,
+  }
+
+  it('shows the validity days for the offered tier', async () => {
+    const wrapper = await mountWithTier({ ...baseTier, validityDays: 180 })
+
+    const validity = wrapper.find('[data-test="pack-validity"]')
+    expect(validity.exists()).toBe(true)
+    expect(validity.text()).toBe('booking.packs.validFor')
+  })
+
+  it('hides the validity line when the backend does not send it', async () => {
+    const wrapper = await mountWithTier({ ...baseTier })
+
+    expect(wrapper.find('[data-test="pack-validity"]').exists()).toBe(false)
+  })
+})

@@ -36,6 +36,14 @@
                 })
               }}
             </div>
+            <div
+              v-if="activeTier.validityDays"
+              class="text-caption"
+              style="color: var(--text-secondary)"
+              data-test="tier-validity"
+            >
+              {{ t('booking.packs.validFor', { days: activeTier.validityDays }) }}
+            </div>
           </div>
           <div v-else class="text-body2" style="color: var(--text-secondary)">
             {{ t('payment.myTiers.noActiveOffer') }}
