@@ -261,6 +261,17 @@
       <code>refundAmount</code> and a <code>bookingsUrl</code>. <code>DisputeCoachUpheldEvent</code> (admin <code>DisputeService</code>) is handled by
       <code>AdminOutcomeEmailListener.onDisputeCoachUpheld</code> (<code>DISPUTE_COACH_UPHELD</code>, in-app <code>BOOKING</code>). That listener now owns nine
       templates, all transactional. For an <code>UPHOLD_COACH</code> outcome it adds string-typed refunded / recovered / absorbed / coach-payout amounts.</p>
+    <p><strong>Forfeit notices to the family (V212).</strong> A forfeit pays the coach and refunds nothing, so the payer is
+      told. <code>BookingEmailListener.onPlayerNoShowNotifyFamily</code> sends <code>SESSION_FORFEITED_NO_SHOW</code> to
+      <code>PlayerNoShowEvent.getParentEmail()</code> (the user <code>Booking.parentId</code> names: the parent, or the
+      self-booking adult player; never resolved through <code>playerId</code>, a <code>PlayerProfile</code> key).
+      <code>onBookingCancelledByParentForfeit</code> sends <code>SESSION_FORFEITED_LATE_CANCEL</code> only when
+      <code>BookingCancelledByParentEvent.isForfeit()</code> (captured and not refund-eligible), with <code>paidWith</code>
+      (<code>PACK</code>/<code>CHARGE</code>) and <code>sessionPrice</code>. A refunded or pre-capture cancel, and a withdrawn
+      request, send the family nothing (the coach's <code>BOOKING_CANCELLED_BY_PARENT</code> is unchanged). Both carry
+      <code>disputeWindowDays</code> (<code>disputes.submissionWindowDays</code>, 14) and a <code>bookingsUrl</code>, and are
+      in-app <code>BOOKING</code> rows deep-linking to the parent bookings page. <code>BookingEmailListener</code> now has
+      24 handlers.</p>
     <p>Internally: <code>Envelope</code> (published by direct-publish producers; consumed <code>BEFORE_COMMIT</code> by
       <code>InAppEnvelopeListener</code> and <code>AFTER_COMMIT</code> by <code>MailManager</code>) and
       <code>AlertFiredEvent</code> (<code>AlertEvaluationService</code> → <code>AlertNotificationListener</code>).</p>

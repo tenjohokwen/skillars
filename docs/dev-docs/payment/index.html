@@ -233,18 +233,32 @@
       (skillars-deferred-123).</p>
     </div>
     <div class="callout">
-      <p><strong>Session packs expire after 60 days and can be extended once.</strong> The coach can extend a
+      <p><strong>Pack validity is set by pack size at purchase.</strong> <code>createPurchase</code> stamps
+      <code>expiresAt = now + SessionPackValidity.days(sessionCount)</code>: 1 session →
+      <code>pack.expiry.days.tier1</code> (90), 2–5 → <code>tier2</code> (180), 6–10 → <code>tier3</code> (365), 11+ →
+      <code>tier4</code> (548). The keys are V139 seeds registered as <code>ConfigBounds.PACK_EXPIRY_DAYS_TIER1..4</code>
+      (range 14–3650, not fail-fast) and read through the <code>BoundedKey</code> overload of
+      <code>getBoundedLong</code>, so an absent, non-numeric or out-of-range value falls back to the seed default
+      and can never fail a purchase that was already charged. The floor is 14 because the expiry warning and the
+      Extend window both open 14 days before expiry. A config change affects only later purchases (no backfill),
+      and nothing checks that the tiers ascend. <code>SessionPackTierResponse.validityDays</code> carries the
+      current value to the purchase page and the coach's offer card ("Valid for {days} days from purchase").
+      Before #369 every pack got a flat 60 days.</p>
+      <p><strong>Packs can be extended once.</strong> The coach can extend a
       pack by 30 days, but only once (<code>extendedAt</code> must be null) and only within the 14 days
       before expiry (<code>SessionPackPaymentService.EXTENSION_WINDOW</code>, which
       <code>CoachSoldPackQueryService</code> also uses to compute its <code>extendable</code> flag). An
       extension that loses a race gets <strong>409</strong> <code>payment.packAlreadyExtended</code>. One
       outside the window gets 422 <code>payment.packExtensionNotEligible</code>. A daily job sends one
       warning email 14 days before expiry if sessions remain, and stamps <code>expiryWarnedAt</code> so it
-      isn't sent again. Packs that have already been extended are not warned again.</p>
+      isn't sent again. Packs that have already been extended are not warned again. A revoked pack can't be
+      extended (<code>payment.packRevoked</code>, checked before any write).</p>
     </div>
     <div class="callout">
       <p><strong>A pack can be paused exactly once in its lifetime.</strong> <code>pausePack</code> refuses
-      if <code>pausedUntil</code> is already set. The pause length must be between 1 and
+      if <code>pausedUntil</code> is already set, and refuses a revoked pack (<code>payment.packRevoked</code>) or one
+      frozen by an open card dispute (<code>payment.packFrozen</code>) ahead of the generic "not active" check, so no
+      booking is cancelled and no expiry pushed out. The pause length must be between 1 and
       <code>pack.pause.maxDays</code> days. The pause must start strictly in the future
       (<code>booking.pauseStartInPast</code>) and before the pack expires. Pausing pushes
       <code>expiresAt</code> out by the pause length and stores both ends (<code>paused_from</code>, V210), so
@@ -274,6 +288,15 @@
       <code>COACH_SUSPENDED</code>. The handler is a no-op if the coach was reinstated meanwhile.
       <code>purchasePack</code> refuses a coach who can't be booked before charging
       (<code>BookingService.requireBookableCoachStatus</code>).</p>
+      <p><strong>Pack status</strong> (<code>SessionPackPaymentService.computeStatus</code>, shared by
+      <code>CoachSoldPackQueryService</code>) is evaluated in the order <code>REVOKED</code> → <code>EXHAUSTED</code> →
+      <code>FROZEN</code> → <code>PAUSED</code> → <code>EXPIRED</code> → <code>ACTIVE</code>. Revoked outranks exhausted
+      because a revocation also zeroes the sessions. Both the buyer's <code>SessionPackPurchaseResponse</code> and the
+      coach's <code>CoachSoldPackDto</code> carry <code>revokedReason</code> (null unless revoked). Neither
+      <code>REVOKED</code> nor <code>FROZEN</code> is <code>ACTIVE</code>, so every client "usable pack" filter drops them.
+      The frontend maps the status to badges in <code>utils/packStatus.js</code>: the family sees Active / Paused /
+      Frozen / Withdrawn (with the reason) / Expired / Exhausted, a scheduled future pause stays Active with a
+      "Pause scheduled" note, and Pause is offered only on an <code>ACTIVE</code> pack.</p>
     </div>
     <div class="callout">
       <p><strong>Unused sessions are forfeited at expiry, not refunded.</strong>
@@ -383,17 +406,17 @@
     </table>
 
     <h3 id="rest-endpoints">REST endpoints</h3>
-    <p>Role constants come from <code>SecurityConstants</code>: <code>PARENT|PLAYER</code> = <code>HAS_PARENT_OR_PLAYER_ROLE</code> (a self-registered adult player pays for themselves, UAT.5), and <code>PARENT|PLAYER|COACH</code> = <code>HAS_PARENT_PLAYER_OR_COACH_ROLE</code>. Date params are <code>LocalDate</code>, interpreted in UTC, with <code>to</code> inclusive. If omitted, reports default to the current month up to now.</p>
+    <p>Role constants come from <code>SecurityConstants</code>: <code>PARENT|PLAYER</code> = <code>HAS_PARENT_OR_PLAYER_ROLE</code> (a self-registered adult player pays for themselves, UAT.5), and <code>PARENT|PLAYER|COACH</code> = <code>HAS_PARENT_PLAYER_OR_COACH_ROLE</code>. <code>WALLET_OWNER</code> is <code>CreditWalletResource.WALLET_OWNER</code> (also used by <code>RevenueResource</code>'s statement): <code>HAS_PARENT_OR_PLAYER_ROLE</code> and <code>@playerOwnershipGuard.isWalletOwner(authentication)</code>, which admits any PARENT and a PLAYER only if their own profile has no parent (<code>PlayerProfileRepository.existsByUserIdAndParentIdIsNull</code>). The wallet is keyed by the caller's own user id, and a self-booking adult player's bookings and packs carry that id as <code>parentId</code>, so their refunds land in their own wallet and they cash out under the parent's rules (#367; <code>CashOutService</code> is payer-agnostic). Date params are <code>LocalDate</code>, interpreted in UTC, with <code>to</code> inclusive. If omitted, reports default to the current month up to now.</p>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
         <tr><td>GET</td><td>/api/admin/payment/overview?from&amp;to</td><td>Platform finance overview: gross volume (bookings + packs), commission (released coach payouts), refunds credited, cash-outs, estimated Stripe fees, active subscriptions by tier</td><td>ADMIN</td></tr>
         <tr><td>GET</td><td>/api/admin/payment/coaches/{coachId}/revenue?from&amp;to</td><td>Per-coach revenue (same figures as the coach's own summary) plus 30-day strike count</td><td>ADMIN</td></tr>
         <tr><td>POST</td><td>/api/admin/payment/coaches/{coachId}/payouts/release-held</td><td>Re-drive the coach's <code>HOLD</code> payouts (<code>CoachPayoutHoldRecoveryService.redriveHeld</code>); returns released / still-frozen / skipped counts. Safe to repeat. No frontend caller yet</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td>/api/payment/credits/balance</td><td>Caller's credit wallet: <code>balance</code>, <code>cashableBalance</code>, <code>spendOnlyBalance</code></td><td>PARENT|PLAYER</td></tr>
-        <tr><td>GET</td><td>/api/payment/credits/batch-quote?coachId&amp;sessionCount</td><td>Batch cost preview: per-session price, total, balance, credit applied, card charge. <code>sessionCount</code> must be 1–10, otherwise 400</td><td>PARENT|PLAYER</td></tr>
-        <tr><td>POST</td><td>/api/payment/credits/cashout</td><td>Convert credit to a Stripe refund (minus fee)</td><td>PARENT only</td></tr>
-        <tr><td>GET</td><td>/api/payment/credits/statement?from&amp;to&amp;page&amp;size</td><td>Paged ledger statement with running balance</td><td>PARENT|PLAYER</td></tr>
+        <tr><td>GET</td><td>/api/payment/credits/balance</td><td>Caller's credit wallet: <code>balance</code>, <code>cashableBalance</code>, <code>spendOnlyBalance</code></td><td><code>WALLET_OWNER</code></td></tr>
+        <tr><td>GET</td><td>/api/payment/credits/batch-quote?coachId&amp;sessionCount</td><td>Batch cost preview: per-session price, total, balance, credit applied, card charge. <code>sessionCount</code> must be 1–10, otherwise 400</td><td><code>WALLET_OWNER</code></td></tr>
+        <tr><td>POST</td><td>/api/payment/credits/cashout</td><td>Convert credit to a Stripe refund (minus fee)</td><td><code>WALLET_OWNER</code></td></tr>
+        <tr><td>GET</td><td>/api/payment/credits/statement?from&amp;to&amp;page&amp;size</td><td>Paged ledger statement with running balance</td><td><code>WALLET_OWNER</code></td></tr>
         <tr><td>GET</td><td>/api/payment/parents/bookings/{bookingId}/receipt</td><td>Payer receipt (card + credit portions). Ownership comes from <code>findByIdAndParentId</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/revenue?from&amp;to</td><td>Coach revenue summary: released gross/commission/net (net of partial reversals), refunds on the coach's bookings, and separate pending-release and held (<code>FROZEN</code>/<code>HOLD</code>) amounts and counts</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/transactions?from&amp;to&amp;page&amp;size</td><td>Paged coach payouts (RELEASED and PENDING_RELEASE)</td><td>COACH</td></tr>
@@ -404,11 +427,11 @@
         <tr><td>GET</td><td>/api/payment/session-packs?coachId</td><td>Caller's purchased packs, optionally filtered by coach</td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/pause</td><td>Pause a pack. Returns the conflicts first; applies on a re-submit with <code>confirmedCancellationIds</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/extend</td><td>One-time 30-day extension within the 14-day pre-expiry window</td><td>COACH (owner)</td></tr>
-        <tr><td>GET</td><td>/api/payment/coaches/me/session-packs?page&amp;size</td><td>Coach's sold packs (size clamped to 1–100), feeding the Extend action</td><td>COACH</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/me/session-packs?page&amp;size</td><td>Coach's sold packs (size clamped to 1–100) with status and <code>revokedReason</code>, feeding the Extend action (hidden on a withdrawn pack)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Own pack tiers (active and inactive)</td><td>COACH</td></tr>
         <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a tier, which deactivates the previous active tier. A race returns 409</td><td>COACH</td></tr>
         <tr><td>PATCH</td><td>/api/payment/coaches/me/session-pack-tiers/{tierId}/deactivate</td><td>Deactivate a tier</td><td>COACH</td></tr>
-        <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>A coach's active tier (404 if none)</td><td>PARENT|PLAYER</td></tr>
+        <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>A coach's active tier (404 if none), with <code>validityDays</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/setup-intent</td><td>Create a Stripe SetupIntent (creates the Stripe customer if needed)</td><td>PARENT|PLAYER|COACH</td></tr>
         <tr><td>POST</td><td>/api/payment/save-payment-method</td><td>Store the default payment method on the caller's Stripe customer and enqueue (outbox <code>SUBSCRIPTION_PAYMENT_METHOD_SYNC</code>) moving their live subscriptions onto it: new default card, past-due invoice retry, paused-subscription resume</td><td>PARENT|PLAYER|COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/payment-method</td><td>Saved card summary (brand/last4/expiry), used to gate the purchase and subscribe UI</td><td>PARENT|PLAYER|COACH</td></tr>
@@ -437,7 +460,7 @@
       <li><code>pages/coach/CoachPaymentSettingsPage.vue</code>: Connect onboarding</li>
       <li><code>pages/coach/CoachReliabilityPage.vue</code></li>
       <li><code>pages/coach/CoachSubscriptionPage.vue</code></li>
-      <li><code>pages/parent/ParentCreditWalletPage.vue</code>: cash-out, PARENT only</li>
+      <li><code>pages/parent/ParentCreditWalletPage.vue</code>: balance and cash-out, PARENT and PLAYER routes (a self-registered adult player reaches it from the "Credit wallet" drawer entry and the dashboard wallet tile)</li>
       <li><code>pages/parent/CreditStatementPage.vue</code> and <code>ParentReceiptView.vue</code>: PARENT and PLAYER routes</li>
       <li><code>pages/parent/SessionPackPurchasePage.vue</code></li>
       <li><code>pages/parent/BookingRequestPage.vue</code>: batch quote</li>
