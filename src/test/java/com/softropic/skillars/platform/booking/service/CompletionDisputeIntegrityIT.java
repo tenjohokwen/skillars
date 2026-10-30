@@ -182,7 +182,7 @@ class CompletionDisputeIntegrityIT extends BasePaymentIT {
         Instant start = jdbcTemplate.queryForObject(
             "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId).toInstant();
         ScheduleBookingItem item = transactionTemplate.execute(s -> bookingService.getCoachWeekSchedule(coachId,
-                start.atZone(java.time.ZoneOffset.UTC).toLocalDate()).stream()
+                start.atZone(java.time.ZoneOffset.UTC).toLocalDate(), java.time.ZoneOffset.UTC).stream()
             .filter(i -> i.bookingId().equals(bookingId)).findFirst().orElseThrow());
         assertThat(item.awaitingWrapUp()).isTrue();
         assertThat(item.wrapUpSubmitted()).isFalse();
