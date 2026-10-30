@@ -456,7 +456,7 @@ class RescheduleServiceTest {
         when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
         doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.packPaused"))
-            .when(bookingService).requirePackNotPausedAt(packId, proposedStart);
+            .when(bookingService).requirePackNotPausedAtUnderLock(packId, proposedStart);
 
         assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
             .hasMessageContaining("payment.packPaused");

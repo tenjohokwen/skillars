@@ -489,6 +489,11 @@ public class BookingService {
             if (!Objects.equals(pack.getPlayerId(), req.playerId())) {
                 throw new PaymentGatewayException("payment.packPlayerMismatch");
             }
+            // fix/audit3-booking-scheduling-integrity: every state check below reads the pack under its row
+            // lock (re-read in place), so a pause or a settlement cannot commit between them and this
+            // booking's insert — see lockPackRow for the lock order. Ownership stays on the unlocked read
+            // above: an unowned pack id must not be able to pin another family's pack row.
+            lockPackRow(req.sessionPackPurchaseId());
             if (pack.getExpiresAt().isBefore(Instant.now())) {
                 throw new PaymentGatewayException("payment.packExpired");
             }
@@ -996,7 +1001,8 @@ public class BookingService {
      * the pack session is deducted only when the accepted booking settles
      * ({@code PaymentLifecycleService} → {@code PackSessionService.deductSession}), and the booking leaves
      * these statuses in that same step (PAYMENT_CAPTURED → CONFIRMED, or PAYMENT_FAILED → DECLINED). A coach
-     * proposal waiting for the parent's confirmation is REQUESTED, so it counts too.
+     * proposal waiting for the parent's confirmation is REQUESTED, so it counts too. Documents (and is pinned
+     * against) the literal list in {@code BookingRepository.countOpenPackReservations} and the V214 index.
      */
     static final List<String> PACK_RESERVING_STATUSES = List.of(
         BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(), BookingStatus.PAYMENT_PENDING.name());
@@ -1011,15 +1017,51 @@ public class BookingService {
      * in one step, so the comparison stays right across settlement.
      */
     void requirePackSessionUnreserved(SessionPackPurchase pack) {
+        // Callers hold the pack row (lockPackRow): reading remainingSessions and counting the open bookings
+        // without it let a settlement commit in between (remaining read before the deduction, count after
+        // the booking left PAYMENT_PENDING) and admit one booking too many.
         if (!hasUnreservedPackSession(pack)) {
             throw new PaymentGatewayException("payment.packSessionsReserved");
         }
     }
 
-    /** See {@link #requirePackSessionUnreserved}. */
+    /**
+     * fix/audit3-booking-scheduling-integrity: takes the pack row lock ({@code findByIdForUpdate}, NOWAIT +
+     * bounded retry) and re-reads the managed instance in place. Lock order on every caller: coach row →
+     * (player row) → pack row — createBookingRequest, BookingDuplicationService, and
+     * RescheduleService.acceptRescheduleShared (coach → pack, then the booking write). Safe against
+     * {@code PackSessionService}: a pause takes pack → booking rows and settlement ({@code deductSession})
+     * takes the pack row alone, and neither ever takes the coach row. Never call it from
+     * {@link #acceptAndInitiatePayment}, which already holds the booking row (booking → pack would invert
+     * the pause's pack → booking order).
+     */
+    SessionPackPurchase lockPackRow(UUID packId) {
+        SessionPackPurchase locked = lockRetryer.withBoundedRetry("BookingService.lockPackRow",
+            () -> sessionPackPurchaseRepository.findByIdForUpdate(packId)
+                .orElseThrow(() -> new PaymentGatewayException("payment.packNotFound")));
+        // Required, not defensive: the row may already be managed (an unlocked findById earlier in the same
+        // transaction), and the JPQL locked read then returns that instance without its committed state.
+        entityManager.refresh(locked, LockModeType.PESSIMISTIC_WRITE);
+        return locked;
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: {@link #requirePackNotPausedAt} with the pack read under its row
+     * lock ({@link #lockPackRow}), so a concurrent {@code pausePackTransactional} either commits first (and is
+     * seen here) or waits for this transaction. For RescheduleService.acceptRescheduleShared only.
+     */
+    void requirePackNotPausedAtUnderLock(UUID packId, Instant sessionStart) {
+        if (packId == null) {
+            return;
+        }
+        if (lockPackRow(packId).isPausedAt(sessionStart)) {
+            throw new PaymentGatewayException("payment.packPaused");
+        }
+    }
+
+    /** See {@link #requirePackSessionUnreserved}; the caller holds the pack row. */
     boolean hasUnreservedPackSession(SessionPackPurchase pack) {
-        long reserved = bookingRepository.countBySessionPackPurchaseIdAndStatusIn(
-            pack.getPurchaseId(), PACK_RESERVING_STATUSES);
+        long reserved = bookingRepository.countOpenPackReservations(pack.getPurchaseId());
         return pack.getRemainingSessions() > reserved;
     }
 

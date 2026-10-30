@@ -426,8 +426,13 @@ public class RescheduleService {
         }
 
         // fix/audit3-booking-scheduling-integrity: the proposal may predate the pause — a parent can propose
-        // a move, then schedule a pause over the new time, and have the move accepted into it.
-        bookingService.requirePackNotPausedAt(booking.getSessionPackPurchaseId(), lockedReq.getProposedStartTime());
+        // a move, then schedule a pause over the new time, and have the move accepted into it. Read under the
+        // pack row lock so a pausePackTransactional racing this accept is serialised against it: the pause's
+        // conflict re-check then sees the moved booking, or this check sees the pause. Lock order here:
+        // reschedule row → coach row → pack row, then the booking write; the pause takes pack → booking and
+        // never the coach or reschedule row, so no cycle.
+        bookingService.requirePackNotPausedAtUnderLock(booking.getSessionPackPurchaseId(),
+            lockedReq.getProposedStartTime());
 
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
             coach.getId(), lockedReq.getProposedStartTime(), lockedReq.getProposedEndTime(),

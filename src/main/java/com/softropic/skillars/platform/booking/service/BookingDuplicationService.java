@@ -177,31 +177,47 @@ public class BookingDuplicationService {
     }
 
     /**
-     * fix/audit3-booking-scheduling-integrity: findActivePacks answers "usable now" — a pack whose pause
-     * starts later is in it, and so is a pack whose remaining sessions are all claimed by open bookings. The
-     * duplicate takes the first of this parent's active packs that is not paused at {@code newStart} and still
-     * has an unclaimed session (BookingService.hasUnreservedPackSession, read under the coach row lock taken
-     * above). When the parent holds active packs but none qualifies, the duplicate is refused with the first
-     * pack's reason (payment.packPaused / payment.packSessionsReserved) rather than silently priced by card:
-     * the family bought a pack for these sessions, and a pause exists to take those weeks out of it. No
-     * active pack at all keeps the card price, as before.
+     * fix/audit3-booking-scheduling-integrity: which of this parent's packs funds the duplicate. Candidates are
+     * every pack the family still holds for this player and coach — sessions left, not expired, paused or not
+     * (findUnexpiredPacksWithSessions; findActivePacks hid a pack paused today, so the duplicate silently fell
+     * back to card pricing). Each candidate is read under its row lock (BookingService.lockPackRow; coach row →
+     * player row → pack row, the request path's order) and the first one that is not paused now or at
+     * {@code newStart} and still has a session no open booking claims (hasUnreservedPackSession) is used.
+     *
+     * <p>When the family holds packs but none qualifies, the duplicate is refused rather than priced by card:
+     * {@code payment.packPaused} if any candidate is paused (the temporary, family-chosen reason, so it wins),
+     * else {@code payment.packSessionsReserved}. No candidate at all — or only packs found exhausted or expired
+     * once locked — keeps the card/credit price ("no pack left"), as before.
      */
     private UUID resolveParentsActivePackId(Booking original, Instant newStart) {
+        Instant now = Instant.now(ClockProvider.getClock());
         List<SessionPackPurchase> parentsPacks = sessionPackPurchaseRepository
-            .findActivePacks(original.getPlayerId(), original.getCoachId(), Instant.now(ClockProvider.getClock()))
+            .findUnexpiredPacksWithSessions(original.getPlayerId(), original.getCoachId(), now)
             .stream()
             .filter(p -> Objects.equals(p.getParentId(), original.getParentId()))
             .toList();
-        if (parentsPacks.isEmpty()) {
-            return null;
-        }
+        boolean anyPaused = false;
+        boolean anyReserved = false;
         for (SessionPackPurchase pack : parentsPacks) {
-            if (!pack.isPausedAt(newStart) && bookingService.hasUnreservedPackSession(pack)) {
+            bookingService.lockPackRow(pack.getPurchaseId()); // re-reads this managed instance in place
+            if (pack.getRemainingSessions() <= 0 || !pack.getExpiresAt().isAfter(now)) {
+                continue; // used up or expired since the unlocked read: no pack left here
+            }
+            if (pack.isPausedAt(now) || pack.isPausedAt(newStart)) {
+                anyPaused = true;
+            } else if (bookingService.hasUnreservedPackSession(pack)) {
                 return pack.getPurchaseId();
+            } else {
+                anyReserved = true;
             }
         }
-        throw new PaymentGatewayException(parentsPacks.get(0).isPausedAt(newStart)
-            ? "payment.packPaused" : "payment.packSessionsReserved");
+        if (anyPaused) {
+            throw new PaymentGatewayException("payment.packPaused");
+        }
+        if (anyReserved) {
+            throw new PaymentGatewayException("payment.packSessionsReserved");
+        }
+        return null;
     }
 
     /** The booking's stamped zone; UTC when it is missing or invalid (pre-validation rows). */

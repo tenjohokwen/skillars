@@ -1690,6 +1690,23 @@ class BookingServiceTest {
         verify(bookingRepository, never()).save(any(Booking.class));
     }
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: the reservation count query and the V214 partial index carry
+     * the open statuses as literals; they must stay exactly PACK_RESERVING_STATUSES.
+     */
+    @Test
+    void packReservingStatuses_matchTheCountQueryAndTheV214IndexLiterals() throws Exception {
+        String jpql = BookingRepository.class.getMethod("countOpenPackReservations", UUID.class)
+            .getAnnotation(org.springframework.data.jpa.repository.Query.class).value();
+        String expectedInList = BookingService.PACK_RESERVING_STATUSES.stream()
+            .map(st -> "'" + st + "'").collect(java.util.stream.Collectors.joining(", ", "IN (", ")"));
+        assertThat(jpql).contains(expectedInList);
+        String migration = new String(getClass().getResourceAsStream(
+            "/db/migration/V214__bookings_open_pack_reservation_index.sql").readAllBytes(),
+            java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(migration).contains("status " + expectedInList);
+    }
+
     // ---- fix/audit3-booking-scheduling-integrity: getCoachWeekSchedule bounded at the coach's midnight ----
 
     @Test

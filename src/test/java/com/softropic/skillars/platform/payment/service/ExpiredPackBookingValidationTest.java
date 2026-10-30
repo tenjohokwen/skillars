@@ -103,6 +103,9 @@ class ExpiredPackBookingValidationTest {
     void setUp() {
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        // fix/audit3-booking-scheduling-integrity: the pack's state checks run on the locked re-read.
+        lenient().when(sessionPackPurchaseRepository.findByIdForUpdate(any()))
+            .thenAnswer(inv -> sessionPackPurchaseRepository.findById(inv.getArgument(0)));
         // fix/booking-request-consent (M2): createBookingRequest now checks the booking horizon and the
         // per-parent pending-request cap under the coach lock, before the pack validation under test. An
         // unstubbed mock returns 0 (a 0-day horizon refuses every request), so stub the coded defaults —
@@ -294,9 +297,7 @@ class ExpiredPackBookingValidationTest {
      */
     @Test
     void createBookingRequest_everyRemainingSessionClaimedByOpenBookings_throwsPackSessionsReserved() {
-        when(bookingRepository.countBySessionPackPurchaseIdAndStatusIn(any(),
-                org.mockito.ArgumentMatchers.eq(List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING"))))
-            .thenReturn(5L);
+        when(bookingRepository.countOpenPackReservations(any())).thenReturn(5L);
         assertPackRejected(pack -> { }, "payment.packSessionsReserved");
     }
 
