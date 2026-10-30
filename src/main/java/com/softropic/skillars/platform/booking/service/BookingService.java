@@ -37,6 +37,7 @@ import com.softropic.skillars.platform.booking.contract.TransitionContext;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingBatch;
 import com.softropic.skillars.platform.booking.repo.BookingBatchRepository;
+import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlock;
 import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.SessionCompletionData;
@@ -82,9 +83,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
-import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -462,6 +463,9 @@ public class BookingService {
         }
 
         requireNoOverlappingBooking(req.coachId(), req.requestedStartTime(), req.requestedEndTime());
+        // After the overlap and block checks, so a taken or blocked slot still reports its own clearer code.
+        requireStartOnSlotGrid(req.requestedStartTime(), req.requestedEndTime(), windows, req.coachId(),
+            lockedCoach.getCanonicalTimezone(), requiredDuration);
 
         // Validate session pack purchase if provided (AC 8)
         if (req.sessionPackPurchaseId() != null) {
@@ -507,6 +511,7 @@ public class BookingService {
             if (pack.getRemainingSessions() <= 0) {
                 throw new PaymentGatewayException("payment.packExhausted");
             }
+            requirePackSessionUnreserved(pack);
         }
 
         String canonicalTimezone = resolveCoachTimezone(coach);
@@ -711,6 +716,12 @@ public class BookingService {
         // status still reports its own state-transition error.
         if (BookingStatus.REQUESTED.name().equals(locked.getStatus())) {
             requireRequestStartNotPassed(locked);
+            // fix/audit3-booking-scheduling-integrity: a pack pause scheduled after this request was made
+            // may now cover its start. The pause's own conflict check normally cancels such a request, but
+            // a request created while the pause was being applied, or a coach proposal attached to the pack
+            // before it, would otherwise be accepted and settled inside the pause (the settle-time check in
+            // PackSessionService.deductSession only looks at "paused now").
+            requirePackNotPausedAt(locked.getSessionPackPurchaseId(), locked.getRequestedStartTime());
         }
         transitionInternal(bookingId, BookingEvent.ACCEPT, context, false);
         transitionInternal(bookingId, BookingEvent.INITIATE_PAYMENT, context, true);
@@ -952,15 +963,7 @@ public class BookingService {
      * serialises two concurrent creates for the same parent and coach, so both cannot pass the count.
      */
     void requireRequestQuota(Long parentId, UUID coachId, Collection<Instant> requestedStarts) {
-        long horizonDays = configService.getBoundedLong(ConfigBounds.BOOKING_REQUEST_MAX_HORIZON_DAYS);
-        Instant horizon = Instant.now(ClockProvider.getClock()).plus(horizonDays, ChronoUnit.DAYS);
-        for (Instant start : requestedStarts) {
-            if (start.isAfter(horizon)) {
-                throw new OperationNotAllowedException("Requested start time is beyond the booking horizon",
-                    Map.of("requested start time", start, "max horizon days", horizonDays),
-                    BookingError.BEYOND_BOOKING_HORIZON);
-            }
-        }
+        requireWithinBookingHorizon(requestedStarts);
         long maxPending = configService.getBoundedLong(ConfigBounds.BOOKING_REQUEST_MAX_PENDING_PER_COACH);
         long pending = bookingRepository.countPendingParentRequests(parentId, coachId);
         if (pending + requestedStarts.size() > maxPending) {
@@ -968,6 +971,74 @@ public class BookingService {
                 Map.of("pending requests", pending, "new requests", requestedStarts.size(),
                     "max pending per coach", maxPending),
                 BookingError.TOO_MANY_PENDING_REQUESTS);
+        }
+    }
+
+    /**
+     * fix/booking-request-consent (M2): every start must be within {@code booking.request.maxHorizonDays} of
+     * now. fix/audit3-booking-scheduling-integrity: extracted so {@code RescheduleService} applies the same
+     * horizon to a proposed new start — a reschedule used to move a session any distance ahead.
+     */
+    void requireWithinBookingHorizon(Collection<Instant> starts) {
+        long horizonDays = configService.getBoundedLong(ConfigBounds.BOOKING_REQUEST_MAX_HORIZON_DAYS);
+        Instant horizon = Instant.now(ClockProvider.getClock()).plus(horizonDays, ChronoUnit.DAYS);
+        for (Instant start : starts) {
+            if (start.isAfter(horizon)) {
+                throw new OperationNotAllowedException("Requested start time is beyond the booking horizon",
+                    Map.of("requested start time", start, "max horizon days", horizonDays),
+                    BookingError.BEYOND_BOOKING_HORIZON);
+            }
+        }
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: bookings drawing on a pack that has not been settled yet —
+     * the pack session is deducted only when the accepted booking settles
+     * ({@code PaymentLifecycleService} → {@code PackSessionService.deductSession}), and the booking leaves
+     * these statuses in that same step (PAYMENT_CAPTURED → CONFIRMED, or PAYMENT_FAILED → DECLINED). A coach
+     * proposal waiting for the parent's confirmation is REQUESTED, so it counts too.
+     */
+    static final List<String> PACK_RESERVING_STATUSES = List.of(
+        BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(), BookingStatus.PAYMENT_PENDING.name());
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: the pack must have a session left that no open booking has
+     * already claimed. Checking {@code remainingSessions > 0} alone let a one-session pack back any number of
+     * requests, all but one of which then failed at settlement as a payment failure. Call under the coach
+     * row lock: every path that attaches a pack to a new booking (single request, coach duplicate) holds it
+     * and a pack belongs to exactly one coach, so two creates cannot both see the same free session. The
+     * deduction lowers {@code remainingSessions} and moves the booking out of {@link #PACK_RESERVING_STATUSES}
+     * in one step, so the comparison stays right across settlement.
+     */
+    void requirePackSessionUnreserved(SessionPackPurchase pack) {
+        if (!hasUnreservedPackSession(pack)) {
+            throw new PaymentGatewayException("payment.packSessionsReserved");
+        }
+    }
+
+    /** See {@link #requirePackSessionUnreserved}. */
+    boolean hasUnreservedPackSession(SessionPackPurchase pack) {
+        long reserved = bookingRepository.countBySessionPackPurchaseIdAndStatusIn(
+            pack.getPurchaseId(), PACK_RESERVING_STATUSES);
+        return pack.getRemainingSessions() > reserved;
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: a session drawn on a pack may not take place inside the pack's
+     * pause — the pause extends the pack's expiry by its length, so a session inside it was training for free
+     * while the validity clock was stopped. {@link #createBookingRequest} always refused that; the reschedule
+     * (propose and accept), coach-duplicate and accept paths did not. Same code as the request-time check.
+     * No-op for a booking without a pack.
+     */
+    void requirePackNotPausedAt(UUID packId, Instant sessionStart) {
+        if (packId == null) {
+            return;
+        }
+        boolean paused = sessionPackPurchaseRepository.findById(packId)
+            .map(p -> p.isPausedAt(sessionStart))
+            .orElse(false);
+        if (paused) {
+            throw new PaymentGatewayException("payment.packPaused");
         }
     }
 
@@ -1095,9 +1166,12 @@ public class BookingService {
     }
 
     @Transactional(readOnly = true)
-    public List<ScheduleBookingItem> getCoachWeekSchedule(UUID coachId, LocalDate weekStart) {
-        Instant wkStart = weekStart.atStartOfDay(ZoneOffset.UTC).toInstant();
-        Instant wkEnd = weekStart.plusDays(7).atStartOfDay(ZoneOffset.UTC).toInstant();
+    public List<ScheduleBookingItem> getCoachWeekSchedule(UUID coachId, LocalDate weekStart, ZoneId coachZone) {
+        // fix/audit3-booking-scheduling-integrity: bounded at the coach's local midnight (coachZone, from
+        // AvailabilityService.resolveCoachZone), the same week the availability calendar and the revenue
+        // projection beside it in ScheduleResource use — it used to be UTC midnight.
+        Instant wkStart = weekStart.atStartOfDay(coachZone).toInstant();
+        Instant wkEnd = weekStart.plusDays(7).atStartOfDay(coachZone).toInstant();
 
         List<Booking> bookings = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
             coachId,
@@ -1870,6 +1944,70 @@ public class BookingService {
                                               Map<String, Object> details) {
         if (!isSlotWithinAvailabilityWindow(startTime, endTime, windows, coachId, coachTimezone)) {
             throw new OperationNotAllowedException(message, details, BookingError.SLOT_OUTSIDE_AVAILABILITY);
+        }
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: a parent-initiated request (single or batch) must start on one
+     * of the slots {@code AvailabilityService.getAvailabilityCalendar} offers. The server used to check only
+     * that the session lay inside a window, so a direct API call could book 09:07-10:07 in a 09:00-17:00
+     * window of 60-minute slots and leave 07 and 53 minute fragments nobody could book.
+     *
+     * <p>The slots are recomputed exactly as the calendar computes them, by the same
+     * {@code AvailabilityService.computeAvailableSlots}: the window materialized on the session's local date
+     * in the coach's zone ({@code date.atTime(...).atZone(zone)}, DST included), minus the coach's blocks and
+     * active bookings, each free segment sliced from its own start in {@code slotLength} steps of elapsed
+     * time. So the grid is anchored at the window start and re-anchored after a block or booking, never a
+     * fixed clock grid. Run it after the overlap and block checks, so a slot taken or blocked since the
+     * calendar loaded reports that instead.
+     *
+     * <p>Not applied to reschedule proposals (both UIs take a free date-time, not a calendar slot) or to coach
+     * duplicates ("same time next week" of a session that was itself valid).
+     */
+    void requireStartOnSlotGrid(Instant startTime, Instant endTime, List<CoachAvailabilityWindow> windows,
+                                UUID coachId, String coachTimezone, Duration slotLength) {
+        ZoneId zoneId = resolveZoneOrUtc(coachTimezone, coachId);
+        LocalDate date = startTime.atZone(zoneId).toLocalDate();
+        short isoDay = (short) date.getDayOfWeek().getValue();
+        for (CoachAvailabilityWindow w : windows) {
+            if (w.getDayOfWeek() != isoDay) {
+                continue;
+            }
+            Instant windowStart = date.atTime(w.getStartTime()).atZone(zoneId).toInstant();
+            Instant windowEnd = date.atTime(w.getEndTime()).atZone(zoneId).toInstant();
+            if (startTime.isBefore(windowStart) || endTime.isAfter(windowEnd) || !windowEnd.isAfter(windowStart)) {
+                continue;
+            }
+            List<CoachAvailabilityBlock> occupied = new ArrayList<>(coachAvailabilityBlockRepository
+                .findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(coachId, windowStart, windowEnd));
+            for (Booking b : bookingRepository.findOverlappingBookings(
+                    coachId, windowStart, windowEnd, ACTIVE_SLOT_STATUSES, null)) {
+                CoachAvailabilityBlock pseudoBlock = new CoachAvailabilityBlock();
+                pseudoBlock.setStartDatetime(b.getRequestedStartTime());
+                pseudoBlock.setEndDatetime(b.getRequestedEndTime());
+                occupied.add(pseudoBlock);
+            }
+            boolean onGrid = AvailabilityService.computeAvailableSlots(windowStart, windowEnd, occupied, slotLength)
+                .stream()
+                .anyMatch(slot -> slot.startDatetime().equals(startTime));
+            if (onGrid) {
+                return;
+            }
+        }
+        throw new OperationNotAllowedException(
+            "Requested start time is not one of the coach's bookable slots — please refresh and pick a slot",
+            Map.of("requested start time", startTime, "requested end time", endTime, "coach id", coachId),
+            BookingError.SLOT_NOT_ON_GRID);
+    }
+
+    private static ZoneId resolveZoneOrUtc(String coachTimezone, UUID coachId) {
+        String resolvedTimezone = (coachTimezone == null || coachTimezone.isBlank()) ? "UTC" : coachTimezone;
+        try {
+            return ZoneId.of(resolvedTimezone);
+        } catch (DateTimeException e) {
+            log.warn("Coach {} has an invalid canonicalTimezone '{}' — falling back to UTC for the "
+                    + "slot-grid check", coachId, coachTimezone);
+            return ZoneId.of("UTC");
         }
     }
 

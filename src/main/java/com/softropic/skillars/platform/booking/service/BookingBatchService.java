@@ -246,6 +246,11 @@ public class BookingBatchService {
             // outside the V87 exclusion constraint). Under the coach lock, like the single path.
             bookingService.requireNoOverlappingBooking(req.coachId(), slot.requestedStartTime(),
                 slot.requestedEndTime());
+            // fix/audit3-booking-scheduling-integrity: on the calendar's slot grid, like the single path.
+            // Every slot is checked against the coach's bookings as they stand before this batch writes
+            // any, which is the calendar the parent picked the basket from.
+            bookingService.requireStartOnSlotGrid(slot.requestedStartTime(), slot.requestedEndTime(),
+                freshWindows, req.coachId(), lockedCoach.getCanonicalTimezone(), freshRequiredDuration);
         }
 
         BookingBatch batch = new BookingBatch();

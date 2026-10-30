@@ -589,6 +589,31 @@ class BookingBatchServiceTest {
         verify(bookingRepository, never()).save(any());
     }
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: every batch slot must sit on the calendar's slot grid, checked
+     * under the coach lock before anything is written; an off-grid slot aborts the whole batch.
+     */
+    @Test
+    void createBatch_offGridSlot_isRejectedUnderTheCoachLockAndWritesNothing() {
+        when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);
+        stubOwnershipAndActiveCoach();
+        CreateBatchRequest req = buildRequest(2);
+        BatchSlot second = req.slots().get(1);
+        lenient().doThrow(new OperationNotAllowedException("off grid", java.util.Map.of(), BookingError.SLOT_NOT_ON_GRID))
+            .when(bookingService).requireStartOnSlotGrid(eq(second.requestedStartTime()), eq(second.requestedEndTime()),
+                any(), eq(COACH_ID), any(), any());
+
+        assertThatThrownBy(() -> service.createBatch(PARENT_ID, req))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_NOT_ON_GRID));
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(coachProfileRepository, bookingService);
+        order.verify(coachProfileRepository).findByIdForUpdate(COACH_ID);
+        order.verify(bookingService, times(2)).requireStartOnSlotGrid(any(), any(), any(), eq(COACH_ID), any(), any());
+        verify(batchRepository, never()).save(any());
+        verify(bookingRepository, never()).save(any());
+    }
+
     @Test
     void createBatch_erasedPlayer_isRejected() {
         when(configService.getBoundedLong("booking.batch.maxSize", 1L, 100L)).thenReturn(5L);

@@ -14,7 +14,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -28,9 +28,12 @@ public class ProjectedRevenueService {
     private final ConfigService configService;
 
     @Transactional(readOnly = true)
-    public ProjectedRevenueResult calculateWeeklyRevenue(UUID coachId, LocalDate weekStart) {
-        Instant wkStart = weekStart.atStartOfDay(ZoneOffset.UTC).toInstant();
-        Instant wkEnd = weekStart.plusDays(7).atStartOfDay(ZoneOffset.UTC).toInstant();
+    public ProjectedRevenueResult calculateWeeklyRevenue(UUID coachId, LocalDate weekStart, ZoneId coachZone) {
+        // fix/audit3-booking-scheduling-integrity: the week runs from the coach's local midnight, as in
+        // AvailabilityService.getAvailabilityCalendar — UTC midnight counted another week's sessions for
+        // any coach outside UTC. coachZone comes from AvailabilityService.resolveCoachZone.
+        Instant wkStart = weekStart.atStartOfDay(coachZone).toInstant();
+        Instant wkEnd = weekStart.plusDays(7).atStartOfDay(coachZone).toInstant();
 
         List<Booking> bookings = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
             coachId, List.of("CONFIRMED", "UPCOMING"), wkStart, wkEnd);

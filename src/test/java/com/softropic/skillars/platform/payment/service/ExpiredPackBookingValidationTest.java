@@ -288,6 +288,18 @@ class ExpiredPackBookingValidationTest {
         assertPackRejected(pack -> pack.setPausedUntil(Instant.now().plus(10, ChronoUnit.DAYS)), "payment.packPaused");
     }
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: the session is deducted only at settlement, so a pack with 5
+     * remaining sessions and 5 open (unsettled) bookings drawing on it has nothing left to back a sixth.
+     */
+    @Test
+    void createBookingRequest_everyRemainingSessionClaimedByOpenBookings_throwsPackSessionsReserved() {
+        when(bookingRepository.countBySessionPackPurchaseIdAndStatusIn(any(),
+                org.mockito.ArgumentMatchers.eq(List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING"))))
+            .thenReturn(5L);
+        assertPackRejected(pack -> { }, "payment.packSessionsReserved");
+    }
+
     private void assertPackRejected(java.util.function.Consumer<SessionPackPurchase> tweak, String errorKey) {
         LocalDate tomorrow = LocalDate.now(ZoneOffset.UTC).plusDays(1);
         Instant start = tomorrow.atTime(LocalTime.of(10, 0)).toInstant(ZoneOffset.UTC);

@@ -226,7 +226,14 @@ public enum BookingError implements ErrorCode {
      * recap-only dialog is refused: the coach submits the wrap-up, which also records the attendance, ratings and
      * homework (and the session's SLU / timeline / homework). Mirrors {@link #RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE}.
      */
-    WRAP_UP_AWAITED;
+    WRAP_UP_AWAITED,
+    /**
+     * fix/audit3-booking-scheduling-integrity: a parent-initiated request (single or batch) whose start is
+     * not one of the slot starts {@code AvailabilityService.getAvailabilityCalendar} offers for that window.
+     * An off-grid start (09:07 in a 09:00-17:00 window of 60-minute slots) left unbookable fragments either
+     * side of it. Reschedule proposals and coach duplicates are exempt (see {@code requireStartOnSlotGrid}).
+     */
+    SLOT_NOT_ON_GRID;
 
     @Override
     public String getErrorCode() {
@@ -270,6 +277,7 @@ public enum BookingError implements ErrorCode {
             case SESSION_IN_PROGRESS       -> "booking.sessionInProgress";
             case SESSION_WAS_STARTED       -> "booking.sessionWasStarted";
             case WRAP_UP_AWAITED           -> "booking.wrapUpAwaited";
+            case SLOT_NOT_ON_GRID          -> "booking.slotNotOnGrid";
         };
     }
 

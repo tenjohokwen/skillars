@@ -48,12 +48,16 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  *   <li>M2 — the per-parent pending-request cap and the booking horizon;</li>
  *   <li>M3 — a second, concurrent accept-all on one batch is refused under the batch row lock.</li>
  * </ul>
+ * fix/audit3-booking-scheduling-integrity adds: duplicate idempotency, pack-session reservation at request
+ * time, the pack pause on the duplicate / reschedule paths, and the slot-grid check against the live
+ * availability, block and booking rows.
  */
 class BookingRequestConsentIT extends AbstractIntegrationTest {
 
     @Autowired private BookingService bookingService;
     @Autowired private BookingBatchService bookingBatchService;
     @Autowired private BookingDuplicationService bookingDuplicationService;
+    @Autowired private RescheduleService rescheduleService;
     @Autowired private BookingRepository bookingRepository;
     @Autowired private JdbcTemplate jdbcTemplate;
     @Autowired private TransactionTemplate transactionTemplate;
@@ -333,11 +337,131 @@ class BookingRequestConsentIT extends AbstractIntegrationTest {
             .isEqualTo("FULLY_ACCEPTED");
     }
 
+    // ---- fix/audit3-booking-scheduling-integrity ----
+
+    /** "Repeat next week" clicked twice proposed the same session twice; the open proposal now holds the slot. */
+    @Test
+    void coachRepeatNextWeek_twice_secondIsRefusedSlotUnavailable() {
+        UUID first = proposeRepeatOfLastWeek();
+        UUID originalId = jdbcTemplate.queryForObject(
+            "SELECT id FROM booking.bookings WHERE coach_id = ? AND status = 'COMPLETED'", UUID.class, coachProfileId);
+
+        assertThatThrownBy(() -> bookingDuplicationService.duplicateNextWeek(originalId, COACH_USER_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.SLOT_UNAVAILABLE);
+        assertThat(jdbcTemplate.queryForList(
+                "SELECT id FROM booking.bookings WHERE coach_id = ? AND proposed_by_coach = true", UUID.class,
+                coachProfileId))
+            .containsExactly(first);
+    }
+
+    /** A duplicate can no longer be stacked on the family's own pending request for that time. */
+    @Test
+    void coachRepeatNextWeek_ontoAPendingParentRequest_isRefused() {
+        request(slotStart, slotEnd);
+
+        assertThatThrownBy(this::proposeRepeatOfLastWeek)
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.SLOT_UNAVAILABLE);
+    }
+
+    /**
+     * A one-session pack backs one open request, not any number: the session is deducted only at settlement,
+     * so the open (unsettled) bookings drawing on the pack are counted. Withdrawing the first frees it again.
+     */
+    @Test
+    void packRequests_onlyAsManyOpenRequestsAsTheRemainingSessions() {
+        UUID packId = insertPack(1, null, null);
+        Instant second = slotStart.plus(Duration.ofHours(2));
+
+        BookingResponse first = requestWithPack(slotStart, slotEnd, packId);
+        assertThatThrownBy(() -> requestWithPack(second, second.plus(Duration.ofHours(1)), packId))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.packSessionsReserved");
+
+        bookingService.withdrawBookingRequest(first.id(), PARENT_ID);
+        assertThat(requestWithPack(second, second.plus(Duration.ofHours(1)), packId).status()).isEqualTo("REQUESTED");
+    }
+
+    /** findActivePacks lists a pack whose pause starts later; the duplicate inside that pause is refused. */
+    @Test
+    void coachRepeatNextWeek_intoTheParentsPackPause_isRefusedPackPaused() {
+        insertPack(5, slotStart.minus(Duration.ofHours(6)), slotStart.plus(Duration.ofDays(30)));
+
+        assertThatThrownBy(this::proposeRepeatOfLastWeek)
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.packPaused");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.bookings WHERE proposed_by_coach = true", Integer.class)).isZero();
+    }
+
+    /** Moving a paid pack session into the pack's pause (proposal or accept) is refused. */
+    @Test
+    void rescheduleAPackBookingIntoThePause_isRefused() {
+        Instant pauseFrom = slotStart.plus(Duration.ofDays(2));
+        UUID packId = insertPack(5, pauseFrom, pauseFrom.plus(Duration.ofDays(30)));
+        UUID bookingId = transactionTemplate.execute(status -> {
+            Booking b = new Booking();
+            b.setParentId(PARENT_ID);
+            b.setPlayerId(PLAYER_ID);
+            b.setCoachId(coachProfileId);
+            b.setRequestedStartTime(slotStart);
+            b.setRequestedEndTime(slotEnd);
+            b.setCanonicalTimezone(TZ);
+            b.setStatus("CONFIRMED");
+            b.setSessionPackPurchaseId(packId);
+            return bookingRepository.save(b).getId();
+        });
+        Instant intoPause = slotStart.plus(Duration.ofDays(3));
+
+        assertThatThrownBy(() -> rescheduleService.requestReschedule(bookingId, PARENT_ID,
+                new com.softropic.skillars.platform.booking.contract.CreateRescheduleRequest(
+                    intoPause, intoPause.plus(Duration.ofHours(1)), null)))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.packPaused");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM booking.booking_reschedule_requests WHERE booking_id = ?", Integer.class, bookingId))
+            .isZero();
+    }
+
+    /**
+     * The grid is the calendar's: 10:30 is off the 08:00 hourly grid; after a 12:00-12:20 block the next slot
+     * is 12:20, which is accepted, while 13:00 (window grid, but not offered after the block) is refused.
+     */
+    @Test
+    void requestOffTheCalendarsSlotGrid_isRefused_blockReAnchoredSlotIsAccepted() {
+        Instant offGrid = slotStart.plus(Duration.ofMinutes(30));
+        assertThatThrownBy(() -> request(offGrid, offGrid.plus(Duration.ofHours(1))))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.SLOT_NOT_ON_GRID);
+
+        Instant blockStart = slotStart.plus(Duration.ofHours(2));
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO booking.coach_availability_blocks (id, coach_id, start_datetime, end_datetime, reason) "
+                + "VALUES (?, ?, ?, ?, 'Lunch')",
+            UUID.randomUUID(), coachProfileId, Timestamp.from(blockStart),
+            Timestamp.from(blockStart.plus(Duration.ofMinutes(20)))));
+        Instant afterBlock = blockStart.plus(Duration.ofMinutes(20));
+        assertThat(request(afterBlock, afterBlock.plus(Duration.ofHours(1))).status()).isEqualTo("REQUESTED");
+        Instant windowGrid = slotStart.plus(Duration.ofHours(4));
+        // 14:00 is not offered either: after the 12:20 slot the grid runs 13:20, 14:20 ...
+        assertThatThrownBy(() -> request(windowGrid, windowGrid.plus(Duration.ofHours(1))))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(e -> ((OperationNotAllowedException) e).getErrorCode())
+            .isEqualTo(BookingError.SLOT_NOT_ON_GRID);
+        assertThat(bookingCountForCoach()).isEqualTo(1);
+    }
+
     // ---- fixtures ----
 
     /** A COMPLETED session exactly one week before {@code slotStart}, repeated by the coach. */
     private UUID proposeRepeatOfLastWeek() {
-        Instant lastWeek = slotStart.minus(Duration.ofDays(7));
+        // fix/audit3-booking-scheduling-integrity: a calendar week in the booking's zone, as duplicateNextWeek
+        // computes it — 7 x 24h put the duplicate an hour off slotStart in a week with a DST change.
+        Instant lastWeek = slotStart.atZone(ZoneId.of(TZ)).minusWeeks(1).toInstant();
         UUID originalId = transactionTemplate.execute(status -> {
             Booking original = new Booking();
             original.setParentId(PARENT_ID);
@@ -356,6 +480,35 @@ class BookingRequestConsentIT extends AbstractIntegrationTest {
     private BookingResponse request(Instant start, Instant end) {
         return bookingService.createBookingRequest(PARENT_ID,
             new CreateBookingRequest(coachProfileId, PLAYER_ID, start, end, null, null, null));
+    }
+
+    private BookingResponse requestWithPack(Instant start, Instant end, UUID packId) {
+        return bookingService.createBookingRequest(PARENT_ID,
+            new CreateBookingRequest(coachProfileId, PLAYER_ID, start, end, null, packId, null));
+    }
+
+    /** A pack of this parent/player/coach, optionally with a pause over [pausedFrom, pausedUntil). */
+    private UUID insertPack(int remaining, Instant pausedFrom, Instant pausedUntil) {
+        UUID tierId = UUID.randomUUID();
+        UUID packId = UUID.randomUUID();
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers "
+                    + "(pack_tier_id, coach_id, label, session_count, total_price, price_per_session, is_active, version, created_at) "
+                    + "VALUES (?, ?, '5-Pack', 5, 150.00, 30.00, true, 0, now())",
+                tierId, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases "
+                    + "(purchase_id, parent_id, player_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, "
+                    + "expires_at, paused_from, paused_until, version, created_at) "
+                    + "VALUES (?, ?, ?, ?, ?, 30.00, ?, ?, ?, ?, 0, now())",
+                packId, PARENT_ID, PLAYER_ID, coachProfileId, tierId, remaining,
+                Timestamp.from(Instant.now().plus(Duration.ofDays(90))),
+                pausedFrom == null ? null : Timestamp.from(pausedFrom),
+                pausedUntil == null ? null : Timestamp.from(pausedUntil));
+            return null;
+        });
+        return packId;
     }
 
     private void seedRequested(Instant start, boolean proposedByCoach) {

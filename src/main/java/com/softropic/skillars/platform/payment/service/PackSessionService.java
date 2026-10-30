@@ -55,8 +55,11 @@ public class PackSessionService {
     // literals, so a future rename of one of these constants fails to compile here instead of
     // silently drifting out of sync. Booking.status itself stays a plain String column (D164-F) —
     // this list is only the argument to BookingRepository.findConflictingBookingsForPause.
+    // fix/audit3-booking-scheduling-integrity: PAYMENT_PENDING added — an accepted booking mid-settlement
+    // escaped the conflict check and was settled (a pack session spent) inside the new pause. It is never
+    // cancellable by the pause (see isPauseCancellable), so it blocks the pause until it settles.
     private static final List<String> CONFLICT_STATUSES = List.of(
-        BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(),
+        BookingStatus.REQUESTED.name(), BookingStatus.ACCEPTED.name(), BookingStatus.PAYMENT_PENDING.name(),
         BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
 
     /**
@@ -126,6 +129,13 @@ public class PackSessionService {
      * rules (a forfeit); pausing must not turn it into a full refund.
      */
     private static boolean isPauseCancellable(Booking booking, Instant now) {
+        // fix/audit3-booking-scheduling-integrity: a booking mid-settlement is neither — its pack session may
+        // be being deducted right now, and the state machine has no CANCEL_DUE_TO_PAUSE from PAYMENT_PENDING.
+        // Reported as a blocking conflict; the parent retries the pause once it has settled (it is then
+        // CONFIRMED and follows the paid-booking rule below).
+        if (BookingStatus.PAYMENT_PENDING.name().equals(booking.getStatus())) {
+            return false;
+        }
         boolean paid = BookingStatus.CONFIRMED.name().equals(booking.getStatus())
             || BookingStatus.UPCOMING.name().equals(booking.getStatus());
         return !paid || BookingService.hasCancellationNotice(

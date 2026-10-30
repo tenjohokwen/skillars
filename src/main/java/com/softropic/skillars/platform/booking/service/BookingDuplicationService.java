@@ -13,6 +13,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowR
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
+import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
@@ -118,12 +119,15 @@ public class BookingDuplicationService {
 
         // Deferred-50 AC1: duplicateNextWeek previously relied solely on the DB-level exclusion
         // constraint at commit to catch a double-booking, surfacing as an unmapped 500 rather than a
-        // clean rejection. Mirrors acceptReschedule's own overlap check (Deferred-14 AC4) — same
-        // repository method, status list, and error code. excludeBookingId is null: unlike a
-        // reschedule, this new booking doesn't exist yet, so there is nothing to exclude.
+        // clean rejection. excludeBookingId is null: unlike a reschedule, this new booking doesn't
+        // exist yet, so there is nothing to exclude.
+        // fix/audit3-booking-scheduling-integrity: REQUESTED is included now, as on the request path
+        // (BookingService.requireNoOverlappingBooking) — this creates a REQUESTED booking, it does not
+        // accept one. Without it a double-click (or a retry) on "repeat next week" proposed the same
+        // session twice, and a proposal could be stacked on a family's pending request for that time.
         List<Booking> overlapping = bookingRepository.findOverlappingBookings(
             coach.getId(), newStart, newEnd,
-            BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, null);
+            BookingService.ACTIVE_SLOT_STATUSES, null);
         if (!overlapping.isEmpty()) {
             throw new OperationNotAllowedException(
                 "The proposed slot is no longer available — another booking occupies that time",
@@ -136,7 +140,7 @@ public class BookingDuplicationService {
         // dead), and it matched on the player only, so a pack bought by another parent of the same player
         // could fund this parent's booking. Now: the earliest-expiring active pack of THIS booking's parent
         // (same order as findActivePackId), else the coach's price, locked now.
-        UUID packId = resolveParentsActivePackId(original);
+        UUID packId = resolveParentsActivePackId(original, newStart);
 
         Booking newBooking = new Booking();
         newBooking.setCoachId(original.getCoachId());
@@ -172,14 +176,32 @@ public class BookingDuplicationService {
         return newBooking.getId();
     }
 
-    private UUID resolveParentsActivePackId(Booking original) {
-        return sessionPackPurchaseRepository
+    /**
+     * fix/audit3-booking-scheduling-integrity: findActivePacks answers "usable now" — a pack whose pause
+     * starts later is in it, and so is a pack whose remaining sessions are all claimed by open bookings. The
+     * duplicate takes the first of this parent's active packs that is not paused at {@code newStart} and still
+     * has an unclaimed session (BookingService.hasUnreservedPackSession, read under the coach row lock taken
+     * above). When the parent holds active packs but none qualifies, the duplicate is refused with the first
+     * pack's reason (payment.packPaused / payment.packSessionsReserved) rather than silently priced by card:
+     * the family bought a pack for these sessions, and a pause exists to take those weeks out of it. No
+     * active pack at all keeps the card price, as before.
+     */
+    private UUID resolveParentsActivePackId(Booking original, Instant newStart) {
+        List<SessionPackPurchase> parentsPacks = sessionPackPurchaseRepository
             .findActivePacks(original.getPlayerId(), original.getCoachId(), Instant.now(ClockProvider.getClock()))
             .stream()
             .filter(p -> Objects.equals(p.getParentId(), original.getParentId()))
-            .map(SessionPackPurchase::getPurchaseId)
-            .findFirst()
-            .orElse(null);
+            .toList();
+        if (parentsPacks.isEmpty()) {
+            return null;
+        }
+        for (SessionPackPurchase pack : parentsPacks) {
+            if (!pack.isPausedAt(newStart) && bookingService.hasUnreservedPackSession(pack)) {
+                return pack.getPurchaseId();
+            }
+        }
+        throw new PaymentGatewayException(parentsPacks.get(0).isPausedAt(newStart)
+            ? "payment.packPaused" : "payment.packSessionsReserved");
     }
 
     /** The booking's stamped zone; UTC when it is missing or invalid (pre-validation rows). */

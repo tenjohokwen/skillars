@@ -137,6 +137,12 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """)
     long countPendingParentRequests(@Param("parentId") Long parentId, @Param("coachId") UUID coachId);
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: open bookings drawing on a pack — the input to
+     * {@code BookingService.hasUnreservedPackSession}. Read under the coach row lock.
+     */
+    long countBySessionPackPurchaseIdAndStatusIn(UUID sessionPackPurchaseId, Collection<String> statuses);
+
     List<Booking> findByBatchId(UUID batchId);
 
     List<Booking> findByBatchIdAndStatus(UUID batchId, String status);

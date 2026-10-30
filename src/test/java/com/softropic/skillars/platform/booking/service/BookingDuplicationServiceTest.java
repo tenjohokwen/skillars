@@ -71,6 +71,8 @@ class BookingDuplicationServiceTest {
         );
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        // fix/audit3-booking-scheduling-integrity: a pack with a free (unreserved) session unless a test says otherwise.
+        lenient().when(bookingService.hasUnreservedPackSession(any())).thenReturn(true);
 
         Instant past = Instant.now().minus(8, ChronoUnit.DAYS);
         completedBooking = new Booking();
@@ -292,7 +294,71 @@ class BookingDuplicationServiceTest {
         when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(any(), any(), any(), any(), any())).thenReturn(List.of());
-        when(bookingRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        // Lenient: the refusal tests below stop before the save.
+        lenient().when(bookingRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: findActivePacks lists a pack whose pause starts after today, so
+     * the duplicate used to attach it even when the new start fell inside that pause.
+     */
+    @Test
+    void duplicateNextWeek_onlyPackIsPausedAtTheNewStart_refusedPackPaused() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+        stubHappyPathUpToPack();
+        SessionPackPurchase paused = pack(UUID.randomUUID(), PARENT_ID);
+        // Starts after today (so findActivePacks lists it) and covers the duplicate's start (now + 1 day).
+        paused.setPausedFrom(Instant.now().plus(12, ChronoUnit.HOURS));
+        paused.setPausedUntil(Instant.now().plus(30, ChronoUnit.DAYS));
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(List.of(paused));
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.packPaused");
+        verify(bookingRepository, never()).save(any());
+    }
+
+    @Test
+    void duplicateNextWeek_firstPackPausedAtTheNewStart_usesTheNextUsablePack() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+        stubHappyPathUpToPack();
+        SessionPackPurchase paused = pack(UUID.randomUUID(), PARENT_ID);
+        // Starts after today (so findActivePacks lists it) and covers the duplicate's start (now + 1 day).
+        paused.setPausedFrom(Instant.now().plus(12, ChronoUnit.HOURS));
+        paused.setPausedUntil(Instant.now().plus(30, ChronoUnit.DAYS));
+        UUID usable = UUID.randomUUID();
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(List.of(paused, pack(usable, PARENT_ID)));
+
+        service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID);
+
+        ArgumentCaptor<Booking> captor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepository).save(captor.capture());
+        assertThat(captor.getValue().getSessionPackPurchaseId()).isEqualTo(usable);
+    }
+
+    /** fix/audit3-booking-scheduling-integrity: every remaining session already claimed by open bookings. */
+    @Test
+    void duplicateNextWeek_packSessionsAllReserved_refusedNotSilentlyCardPriced() {
+        Instant originalStart = Instant.now().minus(6, ChronoUnit.DAYS);
+        completedBooking.setRequestedStartTime(originalStart);
+        completedBooking.setRequestedEndTime(originalStart.plus(1, ChronoUnit.HOURS));
+        stubHappyPathUpToPack();
+        SessionPackPurchase full = pack(UUID.randomUUID(), PARENT_ID);
+        when(sessionPackPurchaseRepository.findActivePacks(eq(PLAYER_ID), eq(COACH_ID), any()))
+            .thenReturn(List.of(full));
+        when(bookingService.hasUnreservedPackSession(full)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.duplicateNextWeek(ORIGINAL_BOOKING_ID, COACH_USER_ID))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.packSessionsReserved");
+        verify(bookingRepository, never()).save(any());
+        verify(bookingService, never()).requireRequestTimePrice(any());
     }
 
     private static SessionPackPurchase pack(UUID purchaseId, Long parentId) {
@@ -420,7 +486,9 @@ class BookingDuplicationServiceTest {
             eq(COACH_ID),
             eq(originalStart.atZone(java.time.ZoneId.of("Europe/Berlin")).plusWeeks(1).toInstant()),
             eq(originalStart.plus(1, ChronoUnit.HOURS).atZone(java.time.ZoneId.of("Europe/Berlin")).plusWeeks(1).toInstant()),
-            eq(BookingService.ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED),
+            // fix/audit3-booking-scheduling-integrity: REQUESTED included — a pending request or an earlier
+            // proposal for the slot blocks the duplicate (a double-click no longer proposes it twice).
+            eq(BookingService.ACTIVE_SLOT_STATUSES),
             isNull());
         verify(bookingRepository, never()).save(any());
         verify(sessionPackPurchaseRepository, never()).findActivePacks(any(), any(), any());
