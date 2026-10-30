@@ -175,11 +175,11 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:883',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:891',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:894',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:902',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {

@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.admin.service.DisputeService;
 import com.softropic.skillars.platform.booking.contract.ActorRole;
 import com.softropic.skillars.platform.booking.contract.BookingError;
 import com.softropic.skillars.platform.booking.contract.ForceCompleteOutcome;
+import com.softropic.skillars.platform.booking.contract.ScheduleBookingItem;
 import com.softropic.skillars.platform.booking.contract.WrapUpRequest;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.payment.BasePaymentIT;
@@ -176,6 +177,20 @@ class CompletionDisputeIntegrityIT extends BasePaymentIT {
         bookingCompletionService.initiateQuickComplete(bookingId, COACH_USER_ID);
         bookingCompletionService.confirmCompletion(bookingId, PARENT_ID);
         int payoutOutbox = payoutOutboxRows(bookingId);
+
+        // Re-review MAJOR: the coach is routed to the wrap-up, never the recap-only dialog.
+        Instant start = jdbcTemplate.queryForObject(
+            "SELECT requested_start_time FROM booking.bookings WHERE id = ?", Timestamp.class, bookingId).toInstant();
+        ScheduleBookingItem item = transactionTemplate.execute(s -> bookingService.getCoachWeekSchedule(coachId,
+                start.atZone(java.time.ZoneOffset.UTC).toLocalDate()).stream()
+            .filter(i -> i.bookingId().equals(bookingId)).findFirst().orElseThrow());
+        assertThat(item.awaitingWrapUp()).isTrue();
+        assertThat(item.wrapUpSubmitted()).isFalse();
+        assertThatThrownBy(() -> bookingCompletionService.updateRecap(bookingId, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("text only", "next", null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.WRAP_UP_AWAITED));
 
         bookingCompletionService.submitWrapUp(bookingId, COACH_USER_ID, new WrapUpRequest(
             true, 4, 3, 5, List.of(), "QUICK", "Passing drills", "Finishing", null));

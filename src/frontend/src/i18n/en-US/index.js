@@ -2137,6 +2137,8 @@ export default {
       windowClosedError: 'This session is too old to edit its recap.',
       erasedError: 'This recap can no longer be edited.',
       disputedError: 'This session was disputed, so its recap can no longer be edited.',
+      wrapUpAwaitedError:
+        'The family confirmed this session before your wrap-up. Use “Resume wrap-up” instead, so the attendance, ratings and homework are recorded.',
       missingTitle: 'Sessions without a recap',
       missingBanner: '{count} session needs a recap | {count} sessions need a recap',
       missingToggle: 'Show',

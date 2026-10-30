@@ -1139,9 +1139,11 @@ public class BookingService {
                     b.getStatus(),
                     b.getCanonicalTimezone(),
                     pendingReschedules.get(b.getId()),
-                    scd != null,
+                    // fix/audit3-completion-dispute-integrity: an awaiting placeholder is not a submitted wrap-up.
+                    scd != null && !scd.isAwaitingWrapUp(),
                     scd != null && (scd.getWhatWeDid() != null || scd.getWhatsNext() != null),
-                    b.getLiveStartedAt() != null);
+                    b.getLiveStartedAt() != null,
+                    scd != null && scd.isAwaitingWrapUp());
             })
             .toList();
     }

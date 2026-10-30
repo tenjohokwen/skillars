@@ -220,7 +220,13 @@ public enum BookingError implements ErrorCode {
      * started (Start pressed), even one ended early and awaiting the family's confirmation — the family
      * disputes it instead. A never-started (Quick Completed) session can still be reported.
      */
-    SESSION_WAS_STARTED;
+    SESSION_WAS_STARTED,
+    /**
+     * fix/audit3-completion-dispute-integrity: the family confirmed this session before the coach's wrap-up. The
+     * recap-only dialog is refused: the coach submits the wrap-up, which also records the attendance, ratings and
+     * homework (and the session's SLU / timeline / homework). Mirrors {@link #RECAP_STILL_EDITABLE_AFTER_FORCE_COMPLETE}.
+     */
+    WRAP_UP_AWAITED;
 
     @Override
     public String getErrorCode() {
@@ -263,6 +269,7 @@ public enum BookingError implements ErrorCode {
             case REQUEST_EXPIRED           -> "booking.requestExpired";
             case SESSION_IN_PROGRESS       -> "booking.sessionInProgress";
             case SESSION_WAS_STARTED       -> "booking.sessionWasStarted";
+            case WRAP_UP_AWAITED           -> "booking.wrapUpAwaited";
         };
     }
 

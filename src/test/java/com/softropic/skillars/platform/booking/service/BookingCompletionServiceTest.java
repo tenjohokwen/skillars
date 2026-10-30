@@ -1330,4 +1330,44 @@ class BookingCompletionServiceTest {
         lenient().when(configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS)).thenReturn(30L);
         lenient().when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
     }
+
+    /** Re-review MAJOR: the recap-only dialog is refused for an awaiting row — the coach finishes the wrap-up. */
+    @Test
+    void updateRecap_onAnAwaitingPlaceholder_isRefusedWithWrapUpAwaited_andGetReportsIt() {
+        arrangeEditableRecap(Instant.now().minusSeconds(3600));
+        SessionCompletionData awaiting = new SessionCompletionData();
+        awaiting.setBookingId(BOOKING_ID);
+        awaiting.setAwaitingWrapUp(true);
+        when(completionDataRepository.findForUpdateByBookingId(BOOKING_ID)).thenReturn(Optional.of(awaiting));
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(awaiting));
+
+        assertThatThrownBy(() -> service.updateRecap(BOOKING_ID, COACH_USER_ID,
+            new com.softropic.skillars.platform.booking.contract.UpdateSessionRecapRequest("d", "n", null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(BookingError.WRAP_UP_AWAITED);
+        verify(completionDataRepository, never()).save(any());
+        assertThat(awaiting.isAwaitingWrapUp()).isTrue();
+
+        var recap = service.getRecap(BOOKING_ID, COACH_USER_ID);
+        assertThat(recap.editable()).isFalse();
+        assertThat(recap.notEditableReason()).isEqualTo("booking.wrapUpAwaited");
+    }
+
+    @Test
+    void getMissingRecaps_flagsASessionAwaitingTheWrapUp() {
+        when(configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS)).thenReturn(30L);
+        when(bookingRepository.countBookingsMissingRecap(eq(COACH_ID), any())).thenReturn(1L);
+        booking.setRequestedEndTime(Instant.now().minusSeconds(3600));
+        when(bookingRepository.findBookingsMissingRecap(eq(COACH_ID), any(), any())).thenReturn(List.of(booking));
+        when(bookingService.resolvePlayerNames(any())).thenReturn(java.util.Map.of(PLAYER_ID, "Alex"));
+        SessionCompletionData awaiting = new SessionCompletionData();
+        awaiting.setBookingId(BOOKING_ID);
+        awaiting.setAwaitingWrapUp(true);
+        when(completionDataRepository.findByBookingIdIn(List.of(BOOKING_ID))).thenReturn(List.of(awaiting));
+
+        var response = service.getMissingRecaps(COACH_USER_ID);
+
+        assertThat(response.items().get(0).awaitingWrapUp()).isTrue();
+    }
 }

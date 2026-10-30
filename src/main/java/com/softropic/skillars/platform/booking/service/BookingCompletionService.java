@@ -355,6 +355,10 @@ public class BookingCompletionService {
         UUID bookingId = booking.getId();
         Editability verdict = recapEditability(booking, coach, Instant.now(ClockProvider.getClock()));
         if (!verdict.editable()) {
+            // The development side (SLU, timeline, homework) of this already-paid session is then never recorded
+            // — an erased player / coach, a recap-locking dispute or the closed edit window all win over it.
+            log.warn("[AWAITED_WRAP_UP_REFUSED] booking {} — wrap-up after the family's confirm refused ({}); "
+                + "its SLU / timeline / homework will not be recorded", bookingId, verdict.reason());
             throw new OperationNotAllowedException("Recap cannot be edited", verdict.reason());
         }
         List<UUID> homeworkDrillIds = validateHomeworkDrills(req.homeworkDrillIds(), coach);
@@ -569,7 +573,12 @@ public class BookingCompletionService {
         SessionCompletionData scd = completionDataRepository.findByBookingId(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
         Instant now = Instant.now(ClockProvider.getClock());
-        return toRecapResponse(booking, scd, recapEditability(booking, coach, now));
+        // fix/audit3-completion-dispute-integrity: an awaiting placeholder is completed through the wrap-up, never
+        // the recap-only dialog (see updateRecap).
+        Editability verdict = scd.isAwaitingWrapUp()
+            ? new Editability(false, BookingError.WRAP_UP_AWAITED)
+            : recapEditability(booking, coach, now);
+        return toRecapResponse(booking, scd, verdict);
     }
 
     @Transactional
@@ -583,6 +592,13 @@ public class BookingCompletionService {
         // the REQUIRES_NEW same-row self-deadlock trap does not apply.
         SessionCompletionData scd = completionDataRepository.findForUpdateByBookingId(bookingId)
             .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
+        if (scd.isAwaitingWrapUp()) {
+            // fix/audit3-completion-dispute-integrity: the family confirmed before the wrap-up. Saving the recap text
+            // here would leave attendance / ratings / homework unrecorded and the development side never run —
+            // point the coach at the wrap-up instead (submitWrapUp → completeAwaitedWrapUp).
+            throw new OperationNotAllowedException("Finish the wrap-up for this session instead",
+                BookingError.WRAP_UP_AWAITED);
+        }
         Instant now = Instant.now(ClockProvider.getClock());
         Editability verdict = recapEditability(booking, coach, now);
         if (!verdict.editable()) {
@@ -617,8 +633,14 @@ public class BookingCompletionService {
             coach.getId(), cutoff, PageRequest.of(0, MISSING_RECAP_LIST_CAP));
         Map<Long, String> names = bookingService.resolvePlayerNames(
             bookings.stream().map(Booking::getPlayerId).distinct().toList());
+        // fix/audit3-completion-dispute-integrity: one batched lookup — a session the family confirmed before the
+        // wrap-up is listed too (no recap yet), flagged so the nudge resumes the wrap-up instead of the recap dialog.
+        Set<UUID> awaiting = completionDataRepository.findByBookingIdIn(bookings.stream().map(Booking::getId).toList())
+            .stream().filter(SessionCompletionData::isAwaitingWrapUp).map(SessionCompletionData::getBookingId)
+            .collect(Collectors.toSet());
         List<MissingRecapItem> items = bookings.stream()
-            .map(b -> new MissingRecapItem(b.getId(), b.getPlayerId(), names.get(b.getPlayerId()), b.getRequestedEndTime()))
+            .map(b -> new MissingRecapItem(b.getId(), b.getPlayerId(), names.get(b.getPlayerId()), b.getRequestedEndTime(),
+                awaiting.contains(b.getId())))
             .toList();
         return new MissingRecapsResponse((int) total, items);
     }

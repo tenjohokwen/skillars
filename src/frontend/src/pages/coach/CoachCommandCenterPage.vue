@@ -110,8 +110,12 @@
               dense
               color="primary"
               data-testid="missing-recap-add"
-              :label="t('booking.recap.addAction')"
-              @click="openRecapDialog({ bookingId: item.bookingId, playerName: item.playerName })"
+              :label="
+                item.awaitingWrapUp
+                  ? t('booking.schedule.resumeWrapUp')
+                  : t('booking.recap.addAction')
+              "
+              @click="openMissingRecap(item)"
             />
           </q-item-section>
         </q-item>
@@ -240,10 +244,14 @@
                 class="q-mt-xs"
                 @click="openRecapDialog(booking)"
               />
+              <!-- fix/audit3-completion-dispute-integrity: also for a COMPLETED booking the family confirmed
+                   before the wrap-up (awaitingWrapUp) — submitWrapUp fills in attendance, ratings and homework
+                   there; the recap-only dialog would lose them (the server refuses it: booking.wrapUpAwaited). -->
               <q-btn
                 v-if="
-                  booking.status === 'COMPLETED_PENDING_CONFIRMATION' &&
-                  booking.wrapUpSubmitted === false
+                  (booking.status === 'COMPLETED_PENDING_CONFIRMATION' &&
+                    booking.wrapUpSubmitted === false) ||
+                  (booking.status === 'COMPLETED' && booking.awaitingWrapUp === true)
                 "
                 flat
                 dense
@@ -988,6 +996,21 @@ async function loadMissingRecaps() {
   } finally {
     missingRecapsLoading.value = false
   }
+}
+
+// fix/audit3-completion-dispute-integrity: a session the family confirmed before the wrap-up resumes the
+// wrap-up (attendance, ratings, homework); every other missing recap opens the recap dialog.
+function openMissingRecap(item) {
+  if (item.awaitingWrapUp === true) {
+    handleResumeWrapUp({
+      bookingId: item.bookingId,
+      playerName: item.playerName,
+      playerId: item.playerId,
+      startedLive: false,
+    })
+    return
+  }
+  openRecapDialog({ bookingId: item.bookingId, playerName: item.playerName })
 }
 
 function openRecapDialog(booking) {

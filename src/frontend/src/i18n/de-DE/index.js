@@ -462,6 +462,8 @@ export default {
       erasedError: 'Dieser Rückblick kann nicht mehr bearbeitet werden.',
       disputedError:
         'Diese Sitzung wurde beanstandet, daher kann der Rückblick nicht mehr bearbeitet werden.',
+      wrapUpAwaitedError:
+        'Die Familie hat diese Sitzung vor Ihrem Abschluss bestätigt. Nutzen Sie stattdessen „Abschluss fortsetzen“, damit Anwesenheit, Bewertungen und Hausaufgaben erfasst werden.',
       missingTitle: 'Sitzungen ohne Rückblick',
       missingBanner:
         '{count} Sitzung braucht einen Rückblick | {count} Sitzungen brauchen einen Rückblick',

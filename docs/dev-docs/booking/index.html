@@ -462,6 +462,12 @@ sequenceDiagram
       the completion row with the booking still <code>COMPLETED_PENDING_CONFIRMATION</code> (QUICK) and returns, or finds the
       booking <code>COMPLETED</code> (LIVE) and gets the status mismatch. The old catch of the UNIQUE <code>booking_id</code>
       violation was removed — it could never fire, because the insert only flushed at commit.
+     The coach is routed to the wrap-up, never the recap-only dialog: <code>ScheduleBookingItem.awaitingWrapUp</code>
+      (and <code>wrapUpSubmitted = false</code>) shows "Resume wrap-up" on the COMPLETED block, the missing-recap list
+      flags the row (<code>MissingRecapItem.awaitingWrapUp</code>) and resumes the wrap-up, and <code>GET</code>/<code>PUT /recap</code>
+      refuse an awaiting row with <code>booking.wrapUpAwaited</code>. The late wrap-up still passes the recap-editability
+      verdict (erasure, a recap-locking dispute, the edit window); a refusal there is logged at WARN
+      (<code>[AWAITED_WRAP_UP_REFUSED]</code>) and that session's SLU / timeline / homework are then never recorded.
     </p>
 
     <h3 id="abandoned-wrap-ups-sweeper-and-admin-force-complete">Abandoned wrap-ups: sweeper and admin force-complete</h3>

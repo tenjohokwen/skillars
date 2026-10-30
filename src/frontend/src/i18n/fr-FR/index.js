@@ -2618,6 +2618,8 @@ export default {
       erasedError: 'Ce bilan ne peut plus être modifié.',
       disputedError:
         'Cette séance a fait l’objet d’une contestation ; son bilan ne peut plus être modifié.',
+      wrapUpAwaitedError:
+        'La famille a confirmé cette séance avant votre clôture. Utilisez plutôt « Reprendre la clôture », afin que la présence, les évaluations et les devoirs soient enregistrés.',
       missingTitle: 'Séances sans bilan',
       missingBanner: "{count} séance a besoin d'un bilan | {count} séances ont besoin d'un bilan",
       missingToggle: 'Afficher',
