@@ -78,22 +78,23 @@ flowchart LR
     <ol>
       <li><code>/player/locker-room/:playerId</code> ("Player Locker Room") shows assigned drills as cards, labelled "Assigned by {coach}" when more than one coach has set homework. Tick "I've done this" to mark one complete; it then reads "Done!" and can't be unticked.</li>
       <li>With nothing assigned you see "No homework yet".</li>
-      <li><code>/player/dashboard</code> ("My Dashboard", the drawer's Dashboard entry) shows three tiles: <strong>Upcoming Sessions</strong> ("{n} upcoming"), <strong>Credit Wallet</strong> (your balance, opens the Credit Statement) and <strong>Pending Approvals</strong> ("{n} awaiting coach response" — your requests the coach hasn't answered).</li>
-      <li>The drawer also lists Find a Coach, My bookings, Messages, Locker room, My videos, Credit Statement, Your session packs and Player Development.</li>
+      <li><code>/player/dashboard</code> ("My Dashboard", the drawer's Dashboard entry) shows three tiles: <strong>Upcoming Sessions</strong> ("{n} upcoming"), <strong>Credit Wallet</strong> (your balance, opens the Credit Wallet page) and <strong>Pending Approvals</strong> ("{n} awaiting coach response" — your requests the coach hasn't answered).</li>
+      <li>The drawer also lists Find a Coach, My bookings, Messages, Locker room, My videos, Credit wallet, Credit Statement, Your session packs and Player Development.</li>
     </ol>
 
     <h3>4. Finding a coach and booking a session</h3>
     <ol>
       <li>Go to <code>/marketplace</code> ("Find a Coach", also public). Type a city and search — there is no default/nearby listing. Filters (District, Age group, Language, Sort) then appear; results are coach cards with "Load more".</li>
       <li>A card opens <code>/coaches/:coachId</code>: photo, verification badge, availability, rating and reviews, bio, specialties, languages, per-session price and the coach's session pack.</li>
-      <li>Without remaining pack credits the button reads "Buy sessions" → <code>/parent/coaches/:coachId/purchase-sessions</code>: select the "{n}-session bundle" and "Confirm purchase" (a saved card is required — "Add card" if prompted).</li>
-      <li>With credits it reads "Book a session" → <code>/parent/coaches/:coachId/request-booking</code>: pick a slot under "Select a time slot" (shown in the coach's time zone), choose a pack or "Per session" under "Use a session pack", check your "Payment Method" card, add optional notes and press "Request session". "Multi-select" lets you request several slots at once (paid by credit/card, never from a pack).</li>
+      <li>The main button reads "Book a session" whenever you hold credits with the coach or the coach has a per-session price — no pack needed → <code>/parent/coaches/:coachId/request-booking</code>: pick a slot under "Select a time slot" (shown in the coach's time zone), choose a pack or "Per session" under "Use a session pack" (without credits it defaults to "Per session": you pay the coach's price when they accept, wallet credit first, then your saved card), check your "Payment Method" card, add optional notes and press "Request session". "Multi-select" lets you request several slots at once (paid by credit/card, never from a pack).</li>
+      <li>Optional: if the coach sells a pack, an outlined "Buy sessions" button (the main button only for a coach with a pack and no per-session price) → <code>/parent/coaches/:coachId/purchase-sessions</code>: select the "{n}-session bundle" (it shows "Valid for {days} days from purchase") and "Confirm purchase" (a saved card is required — "Add card" if prompted).</li>
       <li>The same request limits as for parents apply: up to 10 requests waiting on one coach, at most 120 days ahead, and the price is locked when you request. Nothing is charged until the coach accepts.</li>
     </ol>
 
     <h3>5. Managing your bookings</h3>
     <p><code>/parent/bookings</code> ("My bookings") gives you exactly the parent's actions on your own bookings: Confirm / Decline a session your coach proposed (payment is taken on Confirm), "Withdraw request" while the coach hasn't answered, "Request Change", "Cancel", "Request for the coach", "Message coach", "Coach didn't show" (from start + 30 minutes), "Confirm session" after the coach ends it, "Raise a dispute" (within 14 days, or while a started session is in progress) and "Receipt". The refund and forfeit rules are the same as for parents — 24 hours' notice measured from the original start, forfeits pay the coach, the coach may report you as a no-show from start + 15 minutes — see the table on the <a href="../parent/index.html">Parent</a> page.</p>
-    <p>Money pages you can use: "Your session packs" (<code>/parent/players/:playerId/packs</code>, including "Pause pack"), the "Credit Statement" (<code>/parent/credit-statement</code>) with receipts, and the player subscription page (<code>/parent/player/:playerId/subscription</code>, reachable from the storage-quota bar on <code>/player/videos</code>). The <strong>Credit Wallet page with "Cash Out" is parent-only</strong>, so a player's wallet credit can only be spent on bookings.</p>
+    <p>Money pages you can use: "Your session packs" (<code>/parent/players/:playerId/packs</code>, including "Pause pack"), the "Credit Statement" (<code>/parent/credit-statement</code>) with receipts, and the player subscription page (<code>/parent/player/:playerId/subscription</code>, reachable from the storage-quota bar on <code>/player/videos</code>). You also have the <strong>Credit Wallet</strong> (<code>/parent/credit-wallet</code>, the drawer's "Credit wallet" entry or the dashboard tile): your balance, your card, and "Cash Out" under exactly the parent's rules — 2.5% + €0.25 fee, refunded to the card payment that funded the credit (or your latest one), blocked while a dispute on your payments is open, and booking-only credit never cashable. This works because you pay for your own sessions, so your refunds land in your own wallet.</p>
+    <p>If the coach reports you as a no-show, or you cancel inside 24 hours, you get an email and an inbox notice saying the session is forfeited and no refund is due, with 14 days to dispute it.</p>
 
     <h3>6. Tracking your development</h3>
     <p><strong>Why it matters:</strong> this is Skillars' core value proposition beyond scheduling — a visible, ongoing record of skill growth.</p>
@@ -134,7 +135,7 @@ flowchart LR
       <p><strong>Players must finish the profile-builder step before anything else works.</strong> Without a player profile there is no player ID, so the Locker Room, packs, development links and booking can't resolve — <code>/player/home</code> keeps sending you back to <code>/player/profile-builder</code>.</p>
     </div>
     <div class="callout">
-      <p><strong>Your money pages live under <code>/parent/...</code> URLs</strong> (bookings, packs, statement, receipts). That is intentional reuse; the page hides parent-only controls such as cash-out.</p>
+      <p><strong>Your money pages live under <code>/parent/...</code> URLs</strong> (bookings, packs, statement, receipts). That is intentional reuse: the same pages, wallet cash-out included, serve both a parent and a self-registered adult player who pays for themselves.</p>
     </div>
 
     <h2>Related Personas</h2>

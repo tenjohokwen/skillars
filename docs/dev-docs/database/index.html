@@ -124,7 +124,7 @@
       into two generated files: <code>V138__baseline_schema.sql</code> (pure DDL from
       <code>pg_dump --schema-only</code>) and <code>V139__baseline_seed_data.sql</code> (160 seed rows:
       <code>platform_config</code>, authorities, <code>skill_definitions</code>, platform drills). There are
-      currently <strong>61 files, <code>V138</code>–<code>V210</code></strong>, with gaps — <code>V174</code>,
+      currently <strong>63 files, <code>V138</code>–<code>V212</code></strong>, with gaps — <code>V174</code>,
       <code>V176</code>–<code>V177</code>, <code>V179</code>–<code>V180</code>, <code>V190</code>, <code>V194</code>,
       <code>V196</code> and <code>V201</code>–<code>V204</code> were never used, which Flyway does not mind —
       but never back-fill a gap: always take a number above the current latest. Older migration numbers you'll see quoted in code comments
@@ -174,7 +174,7 @@
     <p>
       Many recent migrations take a documented "same-release exception" justified by "no production
       deployment yet / prod is not live": <code>V169</code> and <code>V173</code> ship an index with the code
-      that needs it, and almost every migration from <code>V182</code> to <code>V210</code> skips
+      that needs it, and almost every migration from <code>V182</code> to <code>V212</code> skips
       <code>NOT VALID</code>/<code>VALIDATE</code> (marker <code>allow-validating-constraint</code>), builds a
       plain index (<code>allow-blocking-index</code>), runs a single-transaction backfill
       (<code>allow-full-table-dml</code>, <code>V178</code>) or ships a CHECK widening together with its first write
@@ -183,7 +183,7 @@
       its status CHECKs are re-added <code>NOT VALID</code>.)
     </p>
 
-    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V210)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V212)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -206,7 +206,7 @@
         <tr><td><code>V187</code></td><td><code>main.app_instance_heartbeat</code> — one row per running app instance, upserted every minute by <code>InstanceHeartbeatMonitor</code> to WARN on an unsupported second instance (decisions ADR 20).</td></tr>
         <tr><td><code>V178</code></td><td><code>bookings.status_changed_at</code> — when the booking entered its <em>current</em> status, stamped by <code>Booking.setStatus</code>. The dispute window and review maturity are measured from it instead of <code>updated_at</code> (which every recap edit or reminder stamp bumped). Deliberately no default; terminal rows backfilled from <code>updated_at</code>, readers <code>COALESCE</code> to <code>updated_at</code> while NULL.</td></tr>
         <tr><td><code>V181</code>, <code>V186</code></td><td>Pack money locked at purchase on <code>session_pack_purchases</code>: <code>amount_charged</code>, <code>commission_rate</code>, <code>session_count</code>, plus running <code>payout_sessions_allocated</code>/<code>payout_gross_allocated</code> (the last session takes the remainder). <code>V186</code> also adds <code>coach_payouts.session_pack_purchase_id</code>, payout status <code>FROZEN</code>, <code>payment.coach_payout_freezes</code> (per-coach safety-hold freeze) and <code>payment.cash_out_reconciliations</code> (durable record per credit cash-out, open rows indexed by <code>idx_cash_out_reconciliations_open</code>).</td></tr>
-        <tr><td><code>V182</code>, <code>V183</code>, <code>V185</code>, <code>V189</code>, <code>V198</code></td><td><code>envelope_entity_email_template_check</code> widenings (video approval, admin-outcome notices, <code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>, <code>BOOKING_CANCELLED_BY_SKILLARS</code>, <code>DISPUTE_COACH_UPHELD</code>). Each one rebuilds the <em>whole</em> list as the union of the previous one plus its own — see the merge note under <a href="#enum-columns-carry-check-constraints">Enum columns</a>. <code>V182</code> also adds <code>ADMIN_DELETION</code> to the <code>video_deletion_log</code>/<code>_outbox</code> <code>triggered_by</code> CHECKs; <code>V183</code>/<code>V189</code> add <code>DISPUTE_DISMISS</code>, <code>APPEAL_UPHOLD</code>, <code>APPEAL_OVERTURN</code>, <code>COACH_SAFETY_HOLD</code>, <code>BOOKING_ADMIN_CANCEL</code> to <code>admin_action_log_action_type_check</code>.</td></tr>
+        <tr><td><code>V182</code>, <code>V183</code>, <code>V185</code>, <code>V189</code>, <code>V198</code>, <code>V212</code></td><td><code>envelope_entity_email_template_check</code> widenings (video approval, admin-outcome notices, <code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code>, <code>BOOKING_CANCELLED_BY_SKILLARS</code>, <code>DISPUTE_COACH_UPHELD</code>; <code>V212</code> adds the family forfeit notices <code>SESSION_FORFEITED_NO_SHOW</code> and <code>SESSION_FORFEITED_LATE_CANCEL</code>, 57 values in all). Each one rebuilds the <em>whole</em> list as the union of the previous one plus its own — see the merge note under <a href="#enum-columns-carry-check-constraints">Enum columns</a>. <code>V182</code> also adds <code>ADMIN_DELETION</code> to the <code>video_deletion_log</code>/<code>_outbox</code> <code>triggered_by</code> CHECKs; <code>V183</code>/<code>V189</code> add <code>DISPUTE_DISMISS</code>, <code>APPEAL_UPHOLD</code>, <code>APPEAL_OVERTURN</code>, <code>COACH_SAFETY_HOLD</code>, <code>BOOKING_ADMIN_CANCEL</code> to <code>admin_action_log_action_type_check</code>.</td></tr>
         <tr><td><code>V184</code></td><td><code>videos.subject_booking_id</code>/<code>subject_player_id</code> (both or neither — <code>chk_videos_subject_pair</code>; partial index <code>idx_videos_subject_player</code>) so a coach video names the session and child it shows. <code>main.video_approval_requests</code> lost its last reader but is deliberately not dropped yet (a later guarded <code>DROP</code> with <code>drop-prepared-in: V184</code>).</td></tr>
         <tr><td><code>V185</code>, <code>V186</code>, <code>V193</code>, <code>V208</code>, <code>V209</code></td><td><code>admin_alerts_type_check</code> widenings: <code>SAFETY_HOLD_BOOKING</code>, <code>CASH_OUT_UNRESOLVED</code>, <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code>, <code>SESSION_NEVER_STARTED</code> (16 types now); <code>admin_alerts_reference_type_check</code> gains <code>CASH_OUT</code> and <code>PAYMENT_INTENT</code>.</td></tr>
         <tr><td><code>V188</code>, <code>V197</code></td><td><code>version bigint NOT NULL DEFAULT 0</code> — <code>@Version</code> for <code>CoachProfile</code>/<code>Session</code> (C5), then <code>coach_subscriptions</code>/<code>player_subscriptions</code>. <code>V197</code> also adds <code>last_stripe_event_at</code> (a late, older Stripe event can't overwrite newer state) and widens <code>chk_pcs_status</code>/<code>chk_pps_status</code> with <code>INCOMPLETE</code>, <code>UNPAID</code>, <code>PAUSED</code>.</td></tr>
@@ -217,6 +217,7 @@
         <tr><td><code>V205</code></td><td><code>coach_payouts.original_*_amount</code>, <code>topup_amount</code>/<code>topup_transfer_id</code>, <code>debt_offset_amount</code>; new <code>payment.coach_payout_debts</code> (money a failed transfer reversal could not recover, <code>OPEN</code>/<code>RECOVERED</code>/<code>WAIVED</code>, deducted from the coach's next transfers oldest first).</td></tr>
         <tr><td><code>V207</code>, <code>V208</code></td><td><code>booking_payments.charge_idempotency_key</code> (persisted before the Stripe call, partial index <code>idx_bp_charge_key_pending</code> — read by <code>ChargeOutcomeReconciler</code>); <code>subscribe_attempt_key</code>/<code>_at</code> on both subscription tables; <code>idx_bp_stripe_payment_intent</code>.</td></tr>
         <tr><td><code>V209</code></td><td><code>bookings.auto_ended_at</code> and <code>unresolved_alerted_at</code>, written by <code>UnresolvedSessionSweeperService</code>.</td></tr>
+        <tr><td><code>V211</code></td><td>Data-only: deletes the duplicate <code>platform.commission_rate</code> config row. <code>platform.commission.rate</code> is the one commission key (<code>ProjectedRevenueService</code> now reads it too).</td></tr>
       </tbody>
     </table>
 
@@ -334,7 +335,7 @@
       enum constant without a migration fails at <em>INSERT</em> time, not at startup —
       <code>admin_alerts_type_check</code> (<code>V152</code>/<code>V153</code> … <code>V209</code>),
       <code>admin_action_log_action_type_check</code> (<code>V162</code>/<code>V171</code>/<code>V183</code>/<code>V189</code>),
-      <code>envelope_entity_email_template_check</code> (<code>V168</code> … <code>V198</code>) and
+      <code>envelope_entity_email_template_check</code> (<code>V168</code> … <code>V212</code>) and
       <code>chk_ledger_type</code> (<code>V198</code>/<code>V199</code>/<code>V208</code>) are the worked examples: drop and
       recreate the constraint with the widened list in one <code>ALTER TABLE</code>. Grep for the constraint name before
       adding a constant, and take the list from the <em>latest</em> migration that rebuilt it. <strong>Merge

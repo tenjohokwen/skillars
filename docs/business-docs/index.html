@@ -49,10 +49,10 @@
     <h2>How the business makes money</h2>
     <ul>
       <li><strong>Commission on every paid session</strong> — Skillars keeps an 8% commission (<code>platform.commission.rate</code>) of the session price and pays the coach the rest after the session is completed and a 48-hour hold has passed. Stripe card fees are paid by the platform, not deducted from the coach.</li>
-      <li><strong>Session packs</strong> — a coach publishes one active pack (a session count at a total price). The family pays up front; the coach is paid each session's share as it completes. Sessions left unused when a pack expires (60 days after purchase, extendable once by the coach) are kept by the platform.</li>
-      <li><strong>Per-session payment</strong> — sessions can also be paid at the coach's per-session price, wallet balance first and then the saved card, charged when the coach accepts (or when a parent confirms a coach's proposal).</li>
+      <li><strong>Per-session payment</strong> — the default way in: every coach sets a per-session price, and a family can book a single session without buying anything first. It is paid wallet balance first and then the saved card, charged when the coach accepts (or when a parent confirms a coach's proposal).</li>
+      <li><strong>Session packs (optional)</strong> — a coach can also publish one active pack (a session count at a discounted total price). The family pays up front; the coach is paid each session's share as it completes. A pack is valid for 90 / 180 / 365 / 548 days from purchase for 1 / 2–5 / 6–10 / 11+ sessions (admin-tunable, extendable once by the coach), and sessions left unused when it expires are kept by the platform.</li>
       <li><strong>Subscriptions</strong> — coaches sit on tiers (Scout / Instructor / Academy; Scout is feature-gated, e.g. no session builder and no video storage), and a family can buy a player subscription (ATHLETE / SEMI_PRO / PRO) for video and development features. Upgrades unlock only once the payment succeeds.</li>
-      <li><strong>Credit wallet</strong> — refunds land as wallet credit. Cashable credit can be cashed out by a parent for a 2.5% + €0.25 fee; "booking credit only" (e.g. a refund from an expired pack) can only be spent on bookings.</li>
+      <li><strong>Credit wallet</strong> — refunds land as wallet credit. Cashable credit can be cashed out by the payer (a parent, or a self-registered adult player) for a 2.5% + €0.25 fee; "booking credit only" (e.g. a refund from an expired pack) can only be spent on bookings.</li>
       <li><strong>Forfeits still pay the coach</strong> — on a player no-show or a parent cancelling inside 24 hours, the family gets no refund and the coach receives their normal net amount; the platform keeps only its commission.</li>
     </ul>
 
@@ -70,8 +70,9 @@ flowchart TB
     subgraph Parent["Parent"]
       P1["Register, verify email, log in"] --> P2["Add a child player"]
       P2 --> M1
-      M2 --> P3["Buy the coach's session pack"]
-      P3 --> P4["Request a booking<br/>(price locked)"]
+      M2 --> P4["Request a booking<br/>(price locked)"]
+      M2 -. "optional" .-> P3["Buy the coach's session pack"]
+      P3 --> P4
     end
     subgraph Player["Player (18+ self-registered)"]
       PL1["Register, verify email, log in"] --> PL2["Profile builder"]
@@ -87,30 +88,28 @@ flowchart TB
     C6 -. "repeat next week" .-> P5["Parent confirms or declines<br/>the coach's proposal"]
     P5 --> C5
     </pre>
-    <p>An adult self-registered Player books and pays through the same pack-purchase and booking-request pages as a Parent. Phone verification is off by default (<code>security.registration.phone-otp-required</code>), so every persona goes from the email link straight to login.</p>
+    <p>An adult self-registered Player books and pays through the same booking-request and (optional) pack-purchase pages as a Parent, and cashes out their own wallet credit the same way. Phone verification is off by default (<code>security.registration.phone-otp-required</code>), so every persona goes from the email link straight to login.</p>
 
     <div class="callout warn">
-      <p><strong>Two things make a coach unbookable — check them first when someone reports "nobody can book me."</strong></p>
+      <p><strong>What makes a coach unbookable — check this first when someone reports "nobody can book me."</strong></p>
       <ul>
         <li><strong>No working Stripe account.</strong> Booking requests to a coach whose Stripe Connect account isn't payment-ready are refused. The coach sees a "Complete your Stripe setup" banner in their Command Center.</li>
-        <li><strong>No session pack.</strong> The coach profile's main button reads "Buy sessions" and leads to pack purchase until the family holds unused credits with that coach; only then does it switch to "Book a session". A coach without a published pack shows "This coach has no session pack available for purchase", so a new family has no way in, even if the coach has set a per-session price.</li>
+        <li><strong>Neither a per-session price nor a session pack.</strong> The coach profile then shows a disabled "Not bookable yet" button with the hint "This coach hasn't set a session price or a session pack yet, so they can't be booked right now." The profile builder requires a per-session price, so a coach who finished it never lands here.</li>
       </ul>
+      <p>Not having a session pack is <em>not</em> a blocker: the profile's main button is "Book a session" whenever the family holds pack credits with the coach or the coach has a per-session price, with an outlined "Buy sessions" button underneath when the coach also sells a pack. "Buy sessions" is the main button only for a coach with a pack and no per-session price. Signed-out visitors see "Sign up to book".</p>
     </div>
 
     <h2>Known gaps (read this before promising a flow)</h2>
     <p>These are real product behaviours in the current build, not bugs in this documentation. Details are on the linked pages.</p>
     <ul>
-      <li><strong>Per-session booking is hard to reach for a new family</strong> — see the callout above. <a href="money/index.html">Money</a></li>
-      <li><strong>Families are not emailed when a session is forfeited</strong> (player no-show or late parent cancel) — only the coach is. <a href="money/index.html">Money</a></li>
-      <li><strong>Adult players can't cash out wallet credit</strong> — the wallet cash-out page is parent-only. <a href="player/index.html">Player</a></li>
-      <li><strong>A paused session pack is shown with an "Active" badge</strong>, and a pack frozen by a dispute has no label of its own. <a href="parent/index.html">Parent</a></li>
-      <li><strong>Pack validity is a flat 60 days.</strong> The per-size validity settings (<code>pack.expiry.days.tier1</code>–<code>tier4</code>, 90 to 548 days) are seeded but not used. <a href="money/index.html">Money</a></li>
       <li><strong>Admin alerts are not pushed</strong> (except video moderation alerts, which are emailed) — staff have to check <code>/admin/moderation</code>. There is also no admin screen for manual refunds or alert rules. <a href="admin/index.html">Admin / Staff</a></li>
-      <li><strong>A coach in "pending review"</strong> (5 strikes) is hidden from search but can still be booked through a direct link, and reduced/pending-review status never recovers on its own. <a href="trust-and-safety/index.html">Trust &amp; Safety</a></li>
       <li><strong>Teen (13–17) independent messaging can't happen</strong> — minors have no login, so every conversation about a minor goes through the parent's account. <a href="trust-and-safety/index.html">Trust &amp; Safety</a></li>
     </ul>
     <div class="callout">
-      <p><strong>Previously listed here and now resolved:</strong> the admin console (moderation, disputes, GDPR, coach enforcement and more) exists; the broken <code>/admin/tenants</code> screens were removed; review submission, player self-booking and the parent dashboard hub all work.</p>
+      <p><strong>By design, not a gap:</strong> a coach in "pending review" (5 strikes) is hidden from search but can still be booked through a direct link. The spec says the coach keeps operating while flagged for admin attention, with no automatic suspension without an admin's decision. Reduced-visibility and pending-review status also never recover on their own: an admin reinstates the coach on <code>/admin/coaches</code>. <a href="trust-and-safety/index.html">Trust &amp; Safety</a></p>
+    </div>
+    <div class="callout">
+      <p><strong>Previously listed here and now resolved:</strong> the admin console (moderation, disputes, GDPR, coach enforcement and more) exists; the broken <code>/admin/tenants</code> screens were removed; review submission, player self-booking and the parent dashboard hub all work. Since then: a new family can book a coach per session without buying a pack; families are emailed when a session is forfeited; self-registered adult players can cash out their wallet credit; pack badges show Paused, Frozen and Withdrawn correctly; and pack validity follows the per-size tiers instead of a flat 60 days.</p>
     </div>
 
     <h2>Explore by persona</h2>

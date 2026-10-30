@@ -79,7 +79,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
   (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
   `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209 and V210 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210 and V212 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -819,7 +819,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `platform.payment.currency` | `eur` | V139 | Keep; it must match the Stripe prices |
 | `disputes.submissionWindowDays` | 14 | V139 | Keep |
 | `pack.pause.maxDays` | 90 | V139 | Keep |
-| `pack.expiry.days.tier1..tier4` | 90 / 180 / 365 / 548 | V139 | Keep |
+| `pack.expiry.days.tier1..tier4` | 90 / 180 / 365 / 548 (seed = code default, range 14–3650) | V139, `SessionPackValidity` | Keep. Read since #369 (before it every pack got a flat 60 days): validity from purchase for 1 / 2–5 / 6–10 / 11+ session packs. A bad or out-of-range value falls back to the default; a change applies only to packs bought afterwards |
 | `subscription.pastDue.gracePeriodDays` | 7 | V139 | Keep |
 | `booking.request_expiry_hours` | 48 | V139 | Keep |
 | `booking.quick_complete_timeout_hours` | 24 | V139 | Keep |
@@ -1041,3 +1041,12 @@ an operator must now do.
   - `phone-otp-required=true` is now refused while no SMS gateway exists.
   - Blank launch keys log an ERROR at boot.
   - No new Stripe webhook events.
+- 2026-10-30: #366 (per-session booking from the coach profile), #367 (adult player wallet cash-out),
+  #368 (pack status badges, Pause/Extend guards), #369 (pack validity tiers) and #370
+  (fix/forfeit-family-emails, V212). #369 starts reading `pack.expiry.days.tier1..tier4`
+  ([section 7](#7-application-config-and-policy-keys)): check the seeded rows are still 90 / 180 / 365 / 548
+  (or the agreed values). Existing packs keep their expiry; no backfill. V212 rebuilds
+  `envelope_entity_email_template_check` with the two family forfeit templates. It is a validating CHECK
+  swap over a superset list, so there is no pre-migration check, and it joins the "prod is not live" list
+  in section 0. Per-session booking and player cash-out need no config. No new env vars, jobs or Stripe
+  webhook events.

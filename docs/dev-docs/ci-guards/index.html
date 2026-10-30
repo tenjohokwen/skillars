@@ -338,9 +338,9 @@ npx vitest run src/i18n/__tests__
         <code>@TransactionalEventListener</code> or <code>@EventListener</code>. (b) The email data map survives the outbox JSON round trip with value
         types intact (an <code>Instant</code> comes back a <code>String</code>, <code>BigDecimal</code> a <code>Double</code>, small <code>Long</code>
         an <code>Integer</code>).</li>
-      <li><strong>Trips it:</strong> adding a handler — both pin the count (<code>BookingEmailListener</code> 20, <code>SessionPackEmailListener</code>
-        3, total "all 23 on*(Event) handlers"); putting a non-String value in the data map.</li>
-      <li><strong>Looks like:</strong> <code>[BookingEmailListener's on*(Event) handlers] expected: 20 but was: 21</code>; or
+      <li><strong>Trips it:</strong> adding a handler — both pin the count (<code>BookingEmailListener</code> 24, <code>SessionPackEmailListener</code>
+        3, <code>AdminOutcomeEmailListener</code> 8; the round-trip test's "all 27 on*(Event) handlers" covers the first two); putting a non-String value in the data map.</li>
+      <li><strong>Looks like:</strong> <code>[BookingEmailListener's on*(Event) handlers] expected: 24 but was: 25</code>; or
         <code>[…: 'amount' went into the outbox as a BigDecimal and came back as a Double …]</code>.</li>
       <li><strong>Fix:</strong> annotate the handler, bump both counts, format values to strings before <code>data.put</code>.</li>
       <li><strong>Run alone:</strong> <code>mvn -o test -DskipFrontend -Dtest='EmailListenerAnnotationCoverageTest,EmailDataRoundTripContractTest'</code></li>

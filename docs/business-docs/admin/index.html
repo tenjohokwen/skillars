@@ -122,7 +122,7 @@ flowchart LR
     <p>"Video review" shows videos needing attention. The "Show" filter offers All needing attention, Locked by moderation, Failed, and Playback blocked. To find a specific video, enter its Video ID and click "Open". On a video you can "Block playback", "Restore playback", "Reconcile with provider" or "Delete", and load its upload sessions.</p>
 
     <h3>11. Platform configuration — <code>/admin/config</code></h3>
-    <p>"Platform configuration" lists every stored setting (Setting, Value, Type, Allowed range, Last changed), with a "Search settings" box. Click "Edit" to change a value. Changes take effect at once on the server that handled the change, and on all other servers within five minutes. This is where policy numbers like strike thresholds, grace periods, request limits and the commission rate are tuned. A setting that has never been stored shows "Not set (default <em>n</em>)".</p>
+    <p>"Platform configuration" lists every stored setting (Setting, Value, Type, Allowed range, Last changed), with a "Search settings" box. Click "Edit" to change a value. Changes take effect at once on the server that handled the change, and on all other servers within five minutes. This is where policy numbers like strike thresholds, grace periods, request limits, the commission rate and session pack validity (<code>pack.expiry.days.tier1</code>–<code>tier4</code>: 90 / 180 / 365 / 548 days for 1 / 2–5 / 6–10 / 11+ sessions, range 14–3650, applied only to packs bought after the change) are tuned. A setting that has never been stored shows "Not set (default <em>n</em>)".</p>
 
     <h2>What's real but API-only (no admin UI yet)</h2>
     <p>Every <code>/api/admin/**</code> endpoint the backend exposes now has a caller in the admin console. What remains without a screen:</p>
@@ -142,8 +142,9 @@ flowchart LR
     </div>
     <div class="callout warn">
       <p><strong>Strike thresholds don't suspend anyone automatically.</strong> 3 strikes in 30 days reduces the coach's
-      visibility. 5 strikes moves the coach to Pending review and raises a "Coach strike threshold" alert. Suspension is
-      always an admin decision.</p>
+      visibility. 5 strikes moves the coach to Pending review and raises a "Coach strike threshold" alert. A pending-review coach
+      is hidden from search but stays bookable through a direct link, by design: the coach keeps operating while
+      flagged for your attention. Suspension is always an admin decision.</p>
     </div>
     <div class="callout">
       <p><strong>A child-safety hold is different from a suspension.</strong> When a coach's upload matches a known-abuse

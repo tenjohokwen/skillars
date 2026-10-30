@@ -33,8 +33,9 @@
     <div class="callout">
       <p>Figures on this page are the current defaults. Most are runtime-tunable by an admin on the
       <code>/admin/config</code> page without a redeploy, so treat them as <em>current defaults</em> rather than
-      constants. A few are fixed in code and need a release to change: the 24-hour refund window, the 60-day pack
-      validity, and the 30-day / 14-day pack-extension rule.</p>
+      constants. A few are fixed in code and need a release to change: the 24-hour refund window and the 30-day / 14-day
+      pack-extension rule. Pack validity (90 / 180 / 365 / 548 days by pack size) <em>is</em> tunable there, but only for
+      packs bought after the change.</p>
     </div>
 
     <h2>How a session gets paid for</h2>
@@ -55,11 +56,14 @@ flowchart LR
     <ul>
       <li><strong>The price is locked when the request is made.</strong> If the coach changes their price later, the
         family still pays what they were quoted. A coach with no per-session price set cannot be booked per session
-        at all (the booking page says so); only pack bookings work for them.</li>
-      <li><strong>In practice the first purchase is a pack.</strong> The "Book a session" button on a coach's profile
-        only appears once the family holds unused pack credits with that coach. Until then it reads "Buy sessions" and
-        leads to the pack purchase page. Per-session (wallet/card) payment is offered on the booking request page and
-        for coach proposals, so a family with no pack and a coach with no pack effectively can't start.</li>
+        at all; only pack bookings work for them, and the booking page warns "This coach can only be booked with a
+        session pack. Buy one to request a booking." (The profile builder requires a price, so this is rare.)</li>
+      <li><strong>No pack is needed to start.</strong> The coach profile's main button reads "Book a session" whenever
+        the family holds pack credits with that coach <em>or</em> the coach has a per-session price. If the coach also
+        sells a pack, an outlined "Buy sessions" button sits underneath. "Buy sessions" is the main button only for a
+        coach with a pack and no per-session price, and a coach with neither shows a disabled "Not bookable yet".
+        Without credits the booking request page defaults to "Per session" and says "No session pack needed: you pay
+        this coach's per-session price when they accept your request (wallet credit first, then your saved card)."</li>
       <li><strong>Nothing is charged until the booking is confirmed.</strong> Requests are free. A request the coach
         never answers expires after 48 hours (or at its start time). A failed card charge declines the booking.</li>
       <li><strong>The coach is paid per completed session.</strong> This applies to card, wallet and pack sessions alike.
@@ -92,14 +96,16 @@ flowchart LR
     <table>
       <thead><tr><th>Rule</th><th>Detail</th></tr></thead>
       <tbody>
+        <tr><td>Optional</td><td>Packs are a discount for families who want several sessions. Families can always book single sessions at the coach's per-session price instead.</td></tr>
         <tr><td>One active pack per coach</td><td>A coach defines a session count, a total price, and a label. Publishing a new pack deactivates the previous one. Packs already sold are unaffected, including their price.</td></tr>
         <tr><td>Paid up front</td><td>The full pack price is charged to the saved card at purchase. Parents and self-registered adult players can both buy packs.</td></tr>
         <tr><td>Scoped to one coach and one player</td><td>Credits can't be moved to another coach or another child.</td></tr>
-        <tr><td>Expiry</td><td>60 days from purchase.</td></tr>
+        <tr><td>Expiry</td><td>Set by pack size, from purchase: <strong>90 days</strong> for 1 session, <strong>180</strong> for 2–5, <strong>365</strong> for 6–10, <strong>548</strong> for 11+ (<code>pack.expiry.days.tier1</code>–<code>tier4</code>, editable at <code>/admin/config</code> within 14–3650 days; an invalid value falls back to the default). The validity is fixed at purchase, so a later change never moves an existing pack's expiry. The purchase page and the coach's offer card show "Valid for {days} days from purchase".</td></tr>
         <tr><td>Extension</td><td>The <strong>coach</strong> can extend a pack by 30 days, once only, and only within the 14 days before it expires (the <strong>Extend</strong> action on their pack page).</td></tr>
         <tr><td>Expiry warning</td><td>One email when a pack with sessions remaining is 14 days from expiry.</td></tr>
         <tr><td>Forfeiture</td><td>Unused sessions are <strong>forfeited</strong> at expiry: not refunded, not returned to the wallet. The parent is emailed how many they lost. The coach is not paid for them, so the platform keeps that money.</td></tr>
-        <tr><td>Frozen or revoked</td><td>While a card dispute (chargeback) on the pack purchase is open, the pack can't be spent. If the platform loses that dispute, or the charge is refunded outside the app, the remaining sessions are revoked. If the coach is suspended, the unused sessions are refunded to the wallet and the pack is closed.</td></tr>
+        <tr><td>Frozen or revoked</td><td>While a card dispute (chargeback) on the pack purchase is open, the pack is <strong>Frozen</strong>: it can't be spent or paused. If the platform loses that dispute, or the charge is refunded outside the app, the remaining sessions are revoked and the pack shows <strong>Withdrawn</strong> with the reason. If the coach is suspended, the unused sessions are refunded to the wallet and the pack is withdrawn. A withdrawn pack can't be paused or extended.</td></tr>
+        <tr><td>Status badges</td><td>The family's pack page shows one of Active, Paused ("Paused until {date}"), Frozen, Withdrawn, Expired or Exhausted. A pause that hasn't started yet keeps the pack Active with a "Pause scheduled" note. The coach's sold-packs list shows the same states, with "Used up" for an exhausted pack.</td></tr>
       </tbody>
     </table>
 
@@ -123,7 +129,7 @@ flowchart LR
       <tbody>
         <tr><td>Platform commission</td><td><strong>8%</strong></td><td>Deducted from the coach's payout for every paid session, whether paid by card, wallet or pack, and also for forfeited sessions. The rate is fixed when the payment is taken (for a pack, at purchase), so changing it later doesn't affect money already collected.</td></tr>
         <tr><td>Stripe card fees</td><td>paid by the platform</td><td>Coaches don't pay card processing fees. Their revenue dashboard says so: payout = session amount minus commission. The admin finance page shows an <em>estimate</em> of these fees (2.5% + €0.25 per charge).</td></tr>
-        <tr><td>Cash-out fee</td><td><strong>2.5% + €0.25</strong></td><td>Charged to a parent who cashes wallet credit back to their card. It comes out of the amount they withdraw.</td></tr>
+        <tr><td>Cash-out fee</td><td><strong>2.5% + €0.25</strong></td><td>Charged to a parent or self-registered adult player who cashes wallet credit back to their card. It comes out of the amount they withdraw.</td></tr>
         <tr><td>Expired pack sessions</td><td>kept by the platform</td><td>Unused sessions of an expired pack are never paid to the coach.</td></tr>
       </tbody>
     </table>
@@ -147,8 +153,10 @@ flowchart LR
         (minus the fee above). Some credit is <em>booking-only</em> and can never be cashed out. Today this is only the
         refund for cancelling (with more than 24h notice) a session drawn on an <em>expired</em> pack. The wallet page
         shows both amounts separately, and booking-only credit is spent first.</li>
-      <li>Cash-out is <strong>parent accounts only</strong>, and is blocked while any dispute or chargeback involving
-        that payer is open. The money goes back to the card charge that originally funded the credit.</li>
+      <li>Cash-out is for <strong>the payer</strong>: a parent, or a self-registered adult player (no parent) who books
+        and pays for themselves. Both use <code>/parent/credit-wallet</code> under the same rules. It is blocked while
+        any dispute or chargeback involving that payer is open. The money goes back to the card charge that originally
+        funded the credit (or the payer's latest card payment).</li>
     </ul>
 
     <h2>Subscriptions</h2>
@@ -213,7 +221,7 @@ flowchart LR
     <ul>
       <li><strong>3 strikes</strong> → visibility reduced: the coach is listed below all coaches in good standing in search results.</li>
       <li><strong>5 strikes</strong> → <em>pending review</em>: hidden from search and sent to the admin queue. This
-        is not an automatic suspension. An admin decides on <code>/admin/coaches</code> whether to suspend,
+        is not an automatic suspension, and by design the coach stays bookable through a direct link while flagged. An admin decides on <code>/admin/coaches</code> whether to suspend,
         reinstate, or add or remove strikes.</li>
     </ul>
     <p>
@@ -247,10 +255,12 @@ flowchart LR
 
     <h2>Gotchas worth knowing before you quote a number</h2>
     <div class="callout warn">
-      <p><strong>Forfeiture hits the family, and they aren't emailed about it.</strong> A family can lose a paid
-      session in three ways: pack expiry, a cancellation inside 24 hours, or a player no-show. Only pack expiry
-      emails the parent. The cancel dialog warns about the 24-hour rule, but the late-cancel and no-show emails go to the
-      coach only. This is the most likely source of billing complaints, so be upfront about it in marketing copy.</p>
+      <p><strong>Forfeiture hits the family.</strong> A family can lose a paid session in three ways: pack expiry, a
+      cancellation inside 24 hours, or a player no-show. Each one emails the family (the parent, or the adult player
+      who booked) and adds an inbox notice. The late-cancel and no-show emails say the session is forfeited, no refund
+      is due, and the family can raise a dispute from their bookings page within 14 days. A refunded cancellation or a
+      withdrawn request sends the family nothing. Forfeits are still the most likely source of billing complaints, so
+      be upfront about them in marketing copy.</p>
     </div>
     <div class="callout warn">
       <p><strong>A card must be saved before buying a pack or a subscription.</strong> Their confirm buttons stay
