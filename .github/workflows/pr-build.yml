@@ -9,7 +9,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # No-build gate for documentation-only PRs. Add the `no-build` label when opening the PR
+  # (`gh pr create --label no-build`) and build, docker-image and frontend-quality are skipped,
+  # which GitHub counts as passing for the required status checks. The label is only honoured
+  # when every changed file is non-code (see .github/scripts/classify-no-build.sh); otherwise the
+  # full build runs.
+  #
+  # Labels are read from the API, not the event payload, so adding the label after opening works
+  # by re-running this workflow. There is deliberately no `labeled` trigger: a run fired by an
+  # unrelated label could otherwise overwrite a code PR's check results, and every label added
+  # would cancel and restart an in-flight build.
+  #
+  # The three jobs below run unless this job explicitly answers skip=true — `!cancelled()` keeps
+  # them running if this job fails, so a broken gate costs a build, never a skipped one.
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      skip: ${{ steps.classify.outputs.skip }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify PR
+        id: classify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          labels=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json labels --jq '.labels[].name' || true)
+          .github/scripts/classify-no-build.sh "$BASE_SHA" "$HEAD_SHA" "$labels"
+
   build:
+    needs: classify
+    if: ${{ !cancelled() && needs.classify.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     # AC10.5. Measured post-refactor duration is 15m19s-15m34s across four consecutive runs
     # (31190871807, 31192540977, 31194113235). 25 leaves ~60% headroom for runner variance
@@ -120,6 +159,8 @@ jobs:
   # away, never published, so gating it on `build`/`test` buys nothing and would cost ~4 minutes
   # on every green PR; the trade is a few wasted runner-minutes on a red one.
   docker-image:
+    needs: classify
+    if: ${{ !cancelled() && needs.classify.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     # AC2b: step pair measured at 4m03s on run 37530194292 (build 3m28s + scan 0m35s). 20
     # leaves ~5x headroom for the degraded shared-runner throughput `build`'s own
@@ -163,6 +204,8 @@ jobs:
   # copies already drifting from each other despite a comment (previously here) asking humans to
   # keep them in sync manually; the composite action is what actually keeps them in sync now.
   frontend-quality:
+    needs: classify
+    if: ${{ !cancelled() && needs.classify.outputs.skip != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
