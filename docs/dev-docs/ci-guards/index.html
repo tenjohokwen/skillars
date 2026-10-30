@@ -72,6 +72,25 @@
       i18n spec does not block a merge, which is exactly why it is easy to merge one.</p>
     </div>
 
+    <h3 id="pr-labels">PR labels</h3>
+    <p>Two labels change what CI does. Every other label in the repo is informational only.</p>
+    <div style="overflow-x:auto">
+    <table>
+      <thead><tr><th>Label</th><th>Effect</th><th>When to use it</th><th>Rules</th></tr></thead>
+      <tbody>
+        <tr><td><code>no-build</code></td><td><code>pr-build.yml</code> skips <code>build</code>, <code>docker-image</code> and <code>frontend-quality</code>; the required checks pass as skipped.</td><td>A documentation-only PR (dev docs, business docs, deployment docs, story files). Open it with <code>gh pr create --label no-build</code>.</td><td>Honoured only when every changed file is documentation; otherwise the full build runs. Added later: re-run the workflow or push. Details below.</td></tr>
+        <tr><td><code>frontend-tests</code></td><td><code>frontend-unit-tests.yml</code> runs the Vitest suite (two time zones) even when the PR doesn't touch <code>src/frontend/**</code>.</td><td>A change outside <code>src/frontend/</code> that the frontend tests depend on, or to force a run. A PR that touches <code>src/frontend/**</code> runs the suite without it.</td><td>Not a required check, but don't merge red. See <code>docs/testing/frontend-unit-tests.md</code>.</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p>
+      Informational only, with no CI effect: GitHub's defaults (<code>bug</code>, <code>documentation</code>,
+      <code>duplicate</code>, <code>enhancement</code>, <code>good first issue</code>, <code>help wanted</code>,
+      <code>invalid</code>, <code>question</code>, <code>wontfix</code>) and the ones Dependabot adds to its PRs
+      (<code>dependencies</code>, <code>github_actions</code>, <code>java</code>). <code>gh label list</code> shows the
+      current set. A new label that changes CI belongs in this table.
+    </p>
+
     <h3 id="docs-only-prs-the-no-build-label">Docs-only PRs: the <code>no-build</code> label</h3>
     <p>
       A PR that only changes documentation can skip the three required jobs. Open it with the label
