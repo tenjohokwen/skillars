@@ -92,6 +92,7 @@ class BookingCompletionServiceTest {
         coach.setDisplayName("Test Coach");
 
         booking = new Booking();
+        booking.setId(BOOKING_ID);
         booking.setCoachId(COACH_ID);
         booking.setPlayerId(PLAYER_ID);
         booking.setParentId(PARENT_ID);
@@ -102,6 +103,7 @@ class BookingCompletionServiceTest {
         // tests below set status to UPCOMING and expect startSession/initiateQuickComplete to
         // proceed past this gate.
         booking.setRequestedStartTime(Instant.now().minusSeconds(1));
+        booking.setRequestedEndTime(booking.getRequestedStartTime().plusSeconds(3600));
         booking.setCanonicalTimezone("Europe/Berlin");
         booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
         // fix/booking-completion-integrity: submitWrapUp derives the mode server-side — LIVE needs a session the
@@ -685,6 +687,7 @@ class BookingCompletionServiceTest {
     @Test
     void confirmCompletion_concurrentModification_throwsRetryableException() {
         booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(new SessionCompletionData()));
         doThrow(new OptimisticLockingFailureException("stale version"))
             .when(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE), any(TransitionContext.class));
 
@@ -1131,5 +1134,121 @@ class BookingCompletionServiceTest {
         assertThat(response.count()).isEqualTo(1);
         assertThat(response.items().get(0).playerName()).isEqualTo("Alex");
         assertThat(response.items().get(0).bookingId()).isEqualTo(BOOKING_ID);
+    }
+
+    // ---- fix/audit3-completion-dispute-integrity ------------------------------------------------------------
+
+    private void stubConfirmationRecipients() {
+        User parent = new User();
+        parent.setEmail("parent@test.com");
+        PlayerProfile player = new PlayerProfile();
+        player.setName("Test Player");
+        lenient().when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(parent));
+        lenient().when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+    }
+
+    /** Exploit 1: Quick Complete at start+0 used to leave the family un-notified until a wrap-up that may never come. */
+    @Test
+    void initiateQuickComplete_asksTheFamilyToConfirmAtOnce_andStampsTheRequest() {
+        booking.setStatus(BookingStatus.UPCOMING.name());
+        booking.setLiveStartedAt(null);
+        stubConfirmationRecipients();
+
+        service.initiateQuickComplete(BOOKING_ID, COACH_USER_ID);
+
+        ArgumentCaptor<QuickCompleteConfirmationRequiredEvent> captor =
+            ArgumentCaptor.forClass(QuickCompleteConfirmationRequiredEvent.class);
+        verify(eventPublisher).publishEvent(captor.capture());
+        assertThat(captor.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(captor.getValue().getParentEmail()).isEqualTo("parent@test.com");
+        assertThat(captor.getValue().getCoachDisplayName()).isEqualTo("Test Coach");
+        assertThat(booking.getConfirmationRequestedAt()).isNotNull();
+    }
+
+    /** No duplicate email: the wrap-up of an already-announced Quick Complete sends nothing more. */
+    @Test
+    void submitWrapUp_quickMode_afterTheFamilyWasAsked_doesNotEmailAgain() {
+        booking.setLiveStartedAt(null);
+        booking.setConfirmationRequestedAt(Instant.now().minusSeconds(60));
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        WrapUpRequest req = new WrapUpRequest(true, 3, 4, 4, List.of(), "QUICK",
+            "Worked on passing accuracy", "Focus on finishing next session", null);
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        verify(eventPublisher, never()).publishEvent(any(QuickCompleteConfirmationRequiredEvent.class));
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.QUICK_COMPLETE), any());
+    }
+
+    /** Exploit 2: Start then End a few minutes later is not a LIVE completion — the family is asked. */
+    @Test
+    void endSession_belowTheMinimumLiveDuration_asksTheFamilyToConfirm() {
+        booking.setStatus(BookingStatus.IN_PROGRESS.name());
+        booking.setLiveStartedAt(Instant.now().minusSeconds(5 * 60)); // 5 of 60 booked minutes
+        when(configService.getBoundedLong(ConfigBounds.BOOKING_LIVE_MIN_DURATION_PERCENT)).thenReturn(50L);
+        stubConfirmationRecipients();
+
+        service.endSession(BOOKING_ID, COACH_USER_ID);
+
+        verify(eventPublisher).publishEvent(any(QuickCompleteConfirmationRequiredEvent.class));
+        assertThat(booking.getConfirmationRequestedAt()).isNotNull();
+    }
+
+    @Test
+    void endSession_atOrAboveTheMinimumLiveDuration_staysLive_andAsksNothing() {
+        booking.setStatus(BookingStatus.IN_PROGRESS.name());
+        booking.setLiveStartedAt(Instant.now().minusSeconds(45 * 60)); // 45 of 60 booked minutes
+        when(configService.getBoundedLong(ConfigBounds.BOOKING_LIVE_MIN_DURATION_PERCENT)).thenReturn(50L);
+
+        service.endSession(BOOKING_ID, COACH_USER_ID);
+
+        verify(eventPublisher, never()).publishEvent(any());
+        assertThat(booking.getConfirmationRequestedAt()).isNull();
+    }
+
+    /** Exploit 2: the wrap-up of a too-short live session is QUICK whatever the client sends — no payout yet. */
+    @Test
+    void submitWrapUp_ofAShortLiveSession_isQuick_andDoesNotComplete() {
+        booking.setLiveStartedAt(Instant.now().minusSeconds(5 * 60));
+        booking.setConfirmationRequestedAt(Instant.now().minusSeconds(60));
+        when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "LIVE",
+            "Worked on first touch", "Continue weak-foot drills", null);
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        verify(bookingService, never()).transition(any(), eq(BookingEvent.QUICK_COMPLETE), any());
+        verify(eventPublisher, never()).publishEvent(any(BookingCompletedEvent.class));
+        ArgumentCaptor<SessionCompletionData> scd = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scd.capture());
+        assertThat(scd.getValue().getCompletionMode()).isEqualTo("QUICK");
+    }
+
+    @Test
+    void isShortLiveSession_neverStarted_isNotShortLive() {
+        booking.setLiveStartedAt(null);
+        assertThat(service.isShortLiveSession(booking, Instant.now())).isFalse();
+    }
+
+    /** Exploit 7: confirming before any wrap-up used to 404 after the transition. */
+    @Test
+    void confirmCompletion_withNoWrapUp_completesWithAPlaceholderRow() {
+        booking.setStatus(BookingStatus.COMPLETED_PENDING_CONFIRMATION.name());
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.empty());
+
+        service.confirmCompletion(BOOKING_ID, PARENT_ID);
+
+        verify(bookingService).lockBookingForUpdate(BOOKING_ID);
+        ArgumentCaptor<SessionCompletionData> scd = ArgumentCaptor.forClass(SessionCompletionData.class);
+        verify(completionDataRepository).save(scd.capture());
+        assertThat(scd.getValue().getBookingId()).isEqualTo(BOOKING_ID);
+        assertThat(scd.getValue().getWhatWeDid()).isNull();
+        assertThat(scd.getValue().getCompletionMode()).isEqualTo("QUICK");
+        verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE),
+            eq(new TransitionContext(com.softropic.skillars.platform.booking.contract.ActorRole.PARENT, PARENT_ID)));
+        ArgumentCaptor<BookingCompletedEvent> event = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getHomeworkDrillIds()).isEmpty();
     }
 }

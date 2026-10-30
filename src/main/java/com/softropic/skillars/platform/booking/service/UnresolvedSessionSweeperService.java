@@ -35,7 +35,8 @@ import java.util.concurrent.TimeUnit;
  *       could settle it (no parent cancel of a live session, no admin cancel), so it sat with the money
  *       captured forever. It is moved to COMPLETED_PENDING_CONFIRMATION ({@code auto_ended_at} stamped):
  *       the coach's later wrap-up is then a QUICK one ({@code BookingCompletionService.submitWrapUp}), so the
- *       parent's confirm / dispute window applies, and with no wrap-up at all
+ *       parent's confirm / dispute window applies (the family is asked at once —
+ *       fix/audit3-completion-dispute-integrity), and with no wrap-up at all
  *       {@link StuckCompletionSweeperService} takes over as for any abandoned wrap-up.</li>
  *   <li><b>UPCOMING</b> — the session ended without ever being started. Never auto-paid and never
  *       auto-refunded (the coach may genuinely have coached and forgotten the app): one
@@ -55,6 +56,7 @@ public class UnresolvedSessionSweeperService {
 
     private final BookingRepository bookingRepository;
     private final BookingService bookingService;
+    private final BookingCompletionService bookingCompletionService;
     private final ConfigService configService;
     private final TransactionTemplate transactionTemplate;
     private final ApplicationEventPublisher eventPublisher;
@@ -81,6 +83,9 @@ public class UnresolvedSessionSweeperService {
                     // The same managed instance transition() refreshed under its lock: flushed at commit.
                     Booking booking = bookingService.getBookingOrThrow(bookingId);
                     booking.setAutoEndedAt(Instant.now(ClockProvider.getClock()));
+                    // fix/audit3-completion-dispute-integrity: the family is asked to confirm (or dispute) now —
+                    // with no wrap-up, StuckCompletionSweeperService would otherwise pay the coach unasked.
+                    bookingCompletionService.requestFamilyConfirmation(booking);
                 });
                 log.info("Auto-ended live session left open past its end: booking {}", bookingId);
             } catch (BookingStateTransitionException | OptimisticLockingFailureException e) {

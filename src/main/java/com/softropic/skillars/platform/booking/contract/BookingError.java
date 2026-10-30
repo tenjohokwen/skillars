@@ -214,7 +214,13 @@ public enum BookingError implements ErrorCode {
      * (IN_PROGRESS or PAUSED). Cancelling a PAUSED session used to be a forfeit that paid the coach in
      * full; a grievance about a live session goes through a dispute instead.
      */
-    SESSION_IN_PROGRESS;
+    SESSION_IN_PROGRESS,
+    /**
+     * fix/audit3-completion-dispute-integrity: a coach no-show cannot be reported for a session the coach
+     * started (Start pressed), even one ended early and awaiting the family's confirmation — the family
+     * disputes it instead. A never-started (Quick Completed) session can still be reported.
+     */
+    SESSION_WAS_STARTED;
 
     @Override
     public String getErrorCode() {
@@ -256,6 +262,7 @@ public enum BookingError implements ErrorCode {
             case BEYOND_BOOKING_HORIZON    -> "booking.beyondBookingHorizon";
             case REQUEST_EXPIRED           -> "booking.requestExpired";
             case SESSION_IN_PROGRESS       -> "booking.sessionInProgress";
+            case SESSION_WAS_STARTED       -> "booking.sessionWasStarted";
         };
     }
 

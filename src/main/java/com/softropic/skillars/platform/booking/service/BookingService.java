@@ -1618,8 +1618,21 @@ public class BookingService {
                 "Cannot report a coach no-show before the grace period after the scheduled start has passed",
                 Map.of("reportable at", reportableAt), BookingError.NO_SHOW_TOO_EARLY);
         }
-        // C6: NO_SHOW_COACH only leaves UPCOMING, so payment was always captured — refund what the payer
-        // actually paid, not the coach's current price.
+        // fix/audit3-completion-dispute-integrity: also from COMPLETED_PENDING_CONFIRMATION when the coach never
+        // started the session (a Quick Complete — allowed at start+0, while this report opens at start+30, so the
+        // coach always won the race and the family was left with nothing to report). Decided under the row
+        // lock: Start then End between the read above and the transition would otherwise slip through. A
+        // session that was started (liveStartedAt) is disputed instead, never reported as a no-show.
+        booking = lockBookingForUpdate(bookingId);
+        if (BookingStatus.COMPLETED_PENDING_CONFIRMATION.name().equals(booking.getStatus())
+                && booking.getLiveStartedAt() != null) {
+            throw new OperationNotAllowedException(
+                "The coach started this session — raise a dispute instead of reporting a no-show",
+                Map.of("booking id", bookingId), BookingError.SESSION_WAS_STARTED);
+        }
+        // C6: NO_SHOW_COACH leaves only UPCOMING or a never-started COMPLETED_PENDING_CONFIRMATION, so payment
+        // was always captured and no coach payout exists yet (one is written only on completion) — refund what
+        // the payer actually paid, not the coach's current price.
         BigDecimal sessionPrice = resolveAmountPaid(booking);
         String parentEmail = resolveEmail(parentUserId, bookingId);
 
@@ -1881,7 +1894,8 @@ public class BookingService {
             b.getPlayerRequest(),
             receiptAvailable,
             b.getRequestedStartTime() == null ? null : coachNoShowReportableAt(b.getRequestedStartTime()),
-            b.isProposedByCoach()
+            b.isProposedByCoach(),
+            b.getLiveStartedAt() != null
         );
     }
 }

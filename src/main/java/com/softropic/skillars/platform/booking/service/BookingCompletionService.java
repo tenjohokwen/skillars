@@ -111,6 +111,59 @@ public class BookingCompletionService {
         } catch (OptimisticLockingFailureException e) {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
+        // fix/audit3-completion-dispute-integrity: Start then End a minute later used to be a LIVE completion —
+        // paid at once, the family never asked. Below booking.live.minDurationPercent of the booked length the
+        // session waits for the family's confirmation (or dispute) like a Quick Complete; the stamp also makes
+        // the coach's wrap-up QUICK (submitWrapUp). transition() refreshed this same managed instance.
+        if (isShortLiveSession(booking, Instant.now(ClockProvider.getClock()))) {
+            log.info("Live session {} ended below the minimum live duration — awaiting the family's confirmation",
+                bookingId);
+            requestFamilyConfirmation(booking);
+        }
+    }
+
+    /**
+     * fix/audit3-completion-dispute-integrity: the session was started (Start pressed) but ran for less than
+     * {@code booking.live.minDurationPercent} of its booked length, Start to now. Pauses are not tracked, so a
+     * paused stretch counts as live time. A never-started booking is not "short live" — it never was live.
+     */
+    boolean isShortLiveSession(Booking booking, Instant endedAt) {
+        if (booking.getLiveStartedAt() == null) {
+            return false;
+        }
+        long minPercent = configService.getBoundedLong(ConfigBounds.BOOKING_LIVE_MIN_DURATION_PERCENT);
+        long bookedMillis = java.time.Duration.between(
+            booking.getRequestedStartTime(), booking.getRequestedEndTime()).toMillis();
+        long liveMillis = Math.max(0L, java.time.Duration.between(booking.getLiveStartedAt(), endedAt).toMillis());
+        return liveMillis * 100 < bookedMillis * minPercent;
+    }
+
+    /**
+     * fix/audit3-completion-dispute-integrity: asks the family to confirm (or dispute) a session that has just
+     * entered COMPLETED_PENDING_CONFIRMATION without a full live run — a Quick Complete, a live session ended
+     * below the minimum duration, or one {@link UnresolvedSessionSweeperService} ended. Sent here, at entry,
+     * rather than only at wrap-up submit: a coach who never submitted one was later paid by
+     * {@link StuckCompletionSweeperService} with the family never told. Once per booking
+     * ({@code confirmation_requested_at}), so the wrap-up submit does not send it again. Joins the caller's
+     * transaction; the caller holds the booking row lock (transition() / lockBookingForUpdate), and
+     * {@code booking} is that managed instance, so the stamp flushes with the status change.
+     */
+    void requestFamilyConfirmation(Booking booking) {
+        if (booking.getConfirmationRequestedAt() != null) {
+            return;
+        }
+        booking.setConfirmationRequestedAt(Instant.now(ClockProvider.getClock()));
+        bookingRepository.save(booking);
+        String parentEmail = userRepository.findById(booking.getParentId())
+            .map(User::getEmail).orElse("");
+        String coachDisplayName = coachProfileRepository.findById(booking.getCoachId())
+            .map(CoachProfile::getDisplayName).orElse(null);
+        String playerName = playerProfileRepository.findById(booking.getPlayerId())
+            .map(PlayerProfile::getName).orElse("Player");
+        eventPublisher.publishEvent(new QuickCompleteConfirmationRequiredEvent(
+            this, booking.getId(), booking.getParentId(), parentEmail, coachDisplayName,
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), playerName
+        ));
     }
 
     @Transactional
@@ -155,6 +208,9 @@ public class BookingCompletionService {
         } catch (OptimisticLockingFailureException e) {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
+        // fix/audit3-completion-dispute-integrity: the family hears it now, not only once a wrap-up is submitted
+        // (which may never happen). transition() refreshed this same managed instance under its row lock.
+        requestFamilyConfirmation(booking);
     }
 
     @Transactional
@@ -213,7 +269,11 @@ public class BookingCompletionService {
         // UnresolvedSessionSweeperService ended (autoEndedAt), is QUICK: it stays pending until the parent
         // confirms or the quick-complete timeout passes. A coach used to quick-complete and then submit
         // mode=LIVE, completing and getting paid with no parent confirmation window at all.
-        String mode = booking.getLiveStartedAt() != null && booking.getAutoEndedAt() == null ? "LIVE" : "QUICK";
+        // fix/audit3-completion-dispute-integrity: and not when the family was already asked to confirm
+        // (confirmation_requested_at) — a live session ended below booking.live.minDurationPercent of its
+        // booked length is QUICK too (endSession).
+        String mode = booking.getLiveStartedAt() != null && booking.getAutoEndedAt() == null
+            && booking.getConfirmationRequestedAt() == null ? "LIVE" : "QUICK";
         if (!mode.equals(req.mode())) {
             log.warn("submitWrapUp for booking {}: client sent mode={}, server derived {} — using {}",
                 bookingId, req.mode(), mode, mode);
@@ -266,15 +326,10 @@ public class BookingCompletionService {
                 scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell()
             ));
         } else {
-            String parentEmail = userRepository.findById(booking.getParentId())
-                .map(u -> u.getEmail()).orElse("");
-            String coachDisplayName = coach.getDisplayName();
-            String playerName = playerProfileRepository.findById(booking.getPlayerId())
-                .map(PlayerProfile::getName).orElse("Player");
-            eventPublisher.publishEvent(new QuickCompleteConfirmationRequiredEvent(
-                this, bookingId, booking.getParentId(), parentEmail, coachDisplayName,
-                booking.getRequestedStartTime(), booking.getCanonicalTimezone(), playerName
-            ));
+            // fix/audit3-completion-dispute-integrity: normally already sent when the booking entered
+            // COMPLETED_PENDING_CONFIRMATION (a no-op then); still sent here for a booking that entered it
+            // before V214 stamped confirmation_requested_at.
+            requestFamilyConfirmation(booking);
         }
     }
 
@@ -379,6 +434,18 @@ public class BookingCompletionService {
             return ForceCompleteOutcome.ALREADY_RESOLVED;
         }
 
+        completeWithPlaceholderData(booking, actorRole, actorUserId);
+        return ForceCompleteOutcome.FORCE_COMPLETED;
+    }
+
+    /**
+     * Writes the placeholder completion row (see {@link #forceCompleteWithPlaceholderData}), completes the
+     * booking and publishes {@link BookingCompletedEvent}. Shared with {@link #confirmCompletion}'s
+     * no-wrap-up path (fix/audit3-completion-dispute-integrity). The caller has checked the status and that no
+     * completion row exists.
+     */
+    private void completeWithPlaceholderData(Booking booking, ActorRole actorRole, Long actorUserId) {
+        UUID bookingId = booking.getId();
         SessionCompletionData scd = new SessionCompletionData();
         scd.setBookingId(bookingId);
         scd.setCoachId(booking.getCoachId());
@@ -393,7 +460,6 @@ public class BookingCompletionService {
             this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
             scd.isPlayerAttended(), null, null, null, List.of(), null, null
         ));
-        return ForceCompleteOutcome.FORCE_COMPLETED;
     }
 
     // ---- skillars-12-7: recap lifecycle (edit / resume / nudge) -----------------------------------
@@ -508,19 +574,33 @@ public class BookingCompletionService {
 
     @Transactional
     public void confirmCompletion(UUID bookingId, Long parentUserId) {
-        Booking booking = bookingService.getBookingOrThrow(bookingId);
-        if (!Objects.equals(booking.getParentId(), parentUserId)) {
+        Booking unlocked = bookingService.getBookingOrThrow(bookingId);
+        if (!Objects.equals(unlocked.getParentId(), parentUserId)) {
             throw new ResourceNotFoundException("Booking not found", "booking");
         }
+        // fix/audit3-completion-dispute-integrity: the family is now asked to confirm as soon as the coach
+        // quick-completes, so they can confirm before any wrap-up exists. Lock the row first (after the
+        // ownership check, so a non-owner cannot pin it): a concurrent submitWrapUp, which takes the same lock,
+        // then either committed its completion row before this read or sees COMPLETED and gets its
+        // "add the recap instead" answer — never a second completion row.
+        Booking booking = bookingService.lockBookingForUpdate(bookingId);
         verifyStatus(booking, BookingStatus.COMPLETED_PENDING_CONFIRMATION);
+        Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
+        if (existing.isEmpty()) {
+            // fix/audit3-completion-dispute-integrity: confirmed before the coach submitted a wrap-up. This used
+            // to 404 after the transition. Complete with the same placeholder row the stuck-completion sweeper
+            // writes (no recap, no homework) — the coach can still add the recap afterwards (submitWrapUp
+            // recognises the placeholder and points them at the recap dialog).
+            completeWithPlaceholderData(booking, ActorRole.PARENT, parentUserId);
+            return;
+        }
         try {
             bookingService.transition(bookingId, BookingEvent.COMPLETE, new TransitionContext(ActorRole.PARENT, parentUserId));
         } catch (OptimisticLockingFailureException e) {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
 
-        SessionCompletionData scd = completionDataRepository.findByBookingId(bookingId)
-            .orElseThrow(() -> new ResourceNotFoundException("Session completion data not found", "session_completion_data"));
+        SessionCompletionData scd = existing.get();
 
         List<UUID> homeworkDrillIds = HomeworkDrillIds.parse(objectMapper, scd.getHomeworkDrillIds());
         eventPublisher.publishEvent(new BookingCompletedEvent(

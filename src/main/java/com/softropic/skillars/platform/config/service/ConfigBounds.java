@@ -226,6 +226,18 @@ public final class ConfigBounds {
             168L);
 
     /**
+     * fix/audit3-completion-dispute-integrity: {@code BookingCompletionService.endSession} — a live session
+     * (Start pressed) ended in under this percentage of its booked length is not a LIVE completion: it waits
+     * for the family's confirmation, which they may dispute, like a Quick Complete. Before this a coach could
+     * press Start then End a minute later and be paid at once with no parent confirmation at all. Pauses are
+     * not tracked, so a paused stretch counts as live time. 0 = never (every ended live session is LIVE);
+     * 100 = only a session run for its full booked length.
+     */
+    public static final BoundedKey BOOKING_LIVE_MIN_DURATION_PERCENT =
+        new BoundedKey("booking.live.minDurationPercent", 0L, 100L, false,
+            "out-of-range falls back to the coded default (50); 0 → a one-minute live session completes and pays at once", 50L);
+
+    /**
      * fix/booking-cancel-policy-loopholes: {@code CancellationRefundService.onBookingCancelledByCoach}
      * — excused (self-declared) coach cancellations allowed per rolling window before an excused one
      * also issues a {@code COACH_CANCELLATION_EXCUSED_LIMIT} strike. 0 = every excused cancel strikes.
@@ -607,6 +619,7 @@ public final class ConfigBounds {
         BOOKING_REQUEST_MAX_HORIZON_DAYS.key(),
         BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES.key(),
         BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES.key(),
+        BOOKING_LIVE_MIN_DURATION_PERCENT.key(),
         PACK_EXPIRY_DAYS_TIER1.key(),
         PACK_EXPIRY_DAYS_TIER2.key(),
         PACK_EXPIRY_DAYS_TIER3.key(),
@@ -661,6 +674,7 @@ public final class ConfigBounds {
             BOOKING_REQUEST_MAX_HORIZON_DAYS,
             BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES,
             BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES,
+            BOOKING_LIVE_MIN_DURATION_PERCENT,
             PACK_EXPIRY_DAYS_TIER1,
             PACK_EXPIRY_DAYS_TIER2,
             PACK_EXPIRY_DAYS_TIER3,

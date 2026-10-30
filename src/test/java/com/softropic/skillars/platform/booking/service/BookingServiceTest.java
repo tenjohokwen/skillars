@@ -2683,6 +2683,47 @@ class BookingServiceTest {
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
     }
 
+    // ---- fix/audit3-completion-dispute-integrity ----
+
+    /** Exploit 1: a Quick Complete at start+0 (never started) no longer shuts the family out of a no-show report. */
+    @Test
+    void recordNoShowCoach_onANeverStartedQuickComplete_transitionsAndPublishesEvent() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "COMPLETED_PENDING_CONFIRMATION");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(3600));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
+        booking.setLiveStartedAt(null);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+
+        bookingService.recordNoShowCoach(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("NO_SHOW_COACH");
+        verify(eventPublisher).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    /** A session the coach actually started is disputed, never reported as a coach no-show. */
+    @Test
+    void recordNoShowCoach_onAStartedSessionAwaitingConfirmation_isRefused() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "COMPLETED_PENDING_CONFIRMATION");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(3600));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
+        booking.setLiveStartedAt(Instant.now().minusSeconds(3500));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_WAS_STARTED));
+        assertThat(booking.getStatus()).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+        verify(eventPublisher, never()).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
     // ---- setPlayerRequest tests (skillars-deferred-155 AC5/AC8) ----
 
     @Test
