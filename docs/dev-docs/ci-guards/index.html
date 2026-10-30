@@ -72,12 +72,36 @@
       i18n spec does not block a merge, which is exactly why it is easy to merge one.</p>
     </div>
 
+    <h3 id="docs-only-prs-the-no-build-label">Docs-only PRs: the <code>no-build</code> label</h3>
+    <p>
+      A PR that only changes documentation can skip the three required jobs. Open it with the label
+      (<code>gh pr create --label no-build</code>). <code>pr-build.yml</code>'s <code>classify</code> job runs
+      <code>.github/scripts/classify-no-build.sh</code>, and when it answers <code>skip=true</code> the
+      <code>build</code>, <code>docker-image</code> and <code>frontend-quality</code> jobs are skipped, which GitHub
+      counts as passing. <code>docs-check.yml</code> still runs for <code>docs/dev-docs/**</code> changes.
+    </p>
+    <ul>
+      <li><strong>The label is a request, not a bypass.</strong> It is honoured only when every changed file is under
+        <code>docs/</code> or <code>_bmad-output/</code>, or is a <code>*.md</code> at the repository root. Anything
+        else, and <code>docs/deployment/monitoring.md</code> (read by <code>AlertDocumentationParityTest</code>), gets the
+        full build with a warning annotation. If a test starts reading another doc, add it to the script's
+        <code>NEEDS_BUILD</code> pattern.</li>
+      <li><strong>Every failure path builds.</strong> No label, an unreadable label list, a diff that can't be computed,
+        or a failed <code>classify</code> job all leave the three jobs running (<code>!cancelled()</code> in their
+        <code>if:</code>).</li>
+      <li><strong>Adding the label later:</strong> labels are read from the API, so re-run the workflow
+        (<code>gh run rerun &lt;id&gt;</code>) or push a commit. There is deliberately no <code>labeled</code> trigger:
+        a run fired by an unrelated label could overwrite a code PR's check results.</li>
+      <li>The merge to <code>master</code> still runs <code>ci.yml</code> in full (tests, image publish).</li>
+    </ul>
+
     <h2 id="ci-jobs">CI jobs</h2>
     <div style="overflow-x:auto">
     <table>
       <thead><tr><th>Workflow → job</th><th>Trigger</th><th>Runs</th><th>Blocks</th></tr></thead>
       <tbody>
-        <tr><td><code>pr-build.yml</code> → <code>build</code></td><td>PR to <code>master</code></td><td>JDK 17, <code>mvn -B verify</code> (frontend build via <code>frontend-maven-plugin</code>, surefire unit tests incl. every <code>*Test</code> guard below, failsafe <code>*IT</code>s against Testcontainers). In the same shell: <code>.github/scripts/assert-context-count.sh build.log 17</code>. Around it: <code>container-sampler.sh</code> start/assert (at most one Postgres / Redis / SeaweedFS container alive at once). Uploads surefire/failsafe reports. 35-min timeout.</td><td>Merge (required)</td></tr>
+        <tr><td><code>pr-build.yml</code> → <code>classify</code></td><td>PR to <code>master</code></td><td><code>.github/scripts/classify-no-build.sh</code>: <code>skip=true</code> only for a <code>no-build</code>-labelled PR whose every changed file is documentation (see above). The three jobs below need it.</td><td>Nothing itself, decides whether the three below run</td></tr>
+        <tr><td><code>pr-build.yml</code> → <code>build</code></td><td>PR to <code>master</code> (skipped for an honoured <code>no-build</code>)</td><td>JDK 17, <code>mvn -B verify</code> (frontend build via <code>frontend-maven-plugin</code>, surefire unit tests incl. every <code>*Test</code> guard below, failsafe <code>*IT</code>s against Testcontainers). In the same shell: <code>.github/scripts/assert-context-count.sh build.log 17</code>. Around it: <code>container-sampler.sh</code> start/assert (at most one Postgres / Redis / SeaweedFS container alive at once). Uploads surefire/failsafe reports. 35-min timeout.</td><td>Merge (required)</td></tr>
         <tr><td><code>pr-build.yml</code> → <code>docker-image</code></td><td>PR to <code>master</code></td><td><code>.github/actions/docker-build</code> (no push, <code>load: true</code>), <code>.github/scripts/assert-git-provenance.sh</code>, Trivy scan <code>CRITICAL,HIGH</code>, <code>exit-code: 1</code>, ignores from <code>.trivyignore</code>. Runs in parallel with <code>build</code>.</td><td>Merge (required)</td></tr>
         <tr><td><code>pr-build.yml</code> → <code>frontend-quality</code></td><td>PR to <code>master</code></td><td><code>.github/actions/frontend-quality</code>: Node 22.16.0, <code>npm ci</code>, <code>npx prettier --check "**/*.{js,vue,scss,json}" --ignore-path ../../.gitignore</code>, then <code>NODE_ENV=production npx eslint .</code> (both run even if the first fails).</td><td><strong>Merge</strong> (required check)</td></tr>
         <tr><td><code>ci.yml</code> → <code>test</code></td><td>push to <code>master</code>, manual</td><td><code>mvn -B verify</code> (no context-count gate, no container sampler — those live only in <code>pr-build</code>).</td><td>Image publish</td></tr>
