@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -80,6 +81,36 @@ public class CreditWalletService {
     @Transactional
     public void debitForCashOut(Long parentId, UUID cashOutId, BigDecimal netAmount, BigDecimal feeAmount,
                                 String paymentIntentId) {
+        debitForCashOut(parentId, List.of(new CashOutLeg(cashOutId, paymentIntentId, netAmount, feeAmount, null)));
+    }
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: one leg of a cash-out — the part refunded onto one card charge. Each
+     * leg is a cash-out of its own downstream: its own {@code cashOutId} (ledger {@code reference_id}, Stripe
+     * idempotency key {@code cashout-{cashOutId}}) and its own {@code cash_out_reconciliations} row, so the
+     * re-check job and the 4xx credit restore act on each refund independently — a rejected leg restores only
+     * its own net + fee, never a sibling's that reached the card. {@code note} ("leg i/n req &lt;request id&gt;", null
+     * for a single-leg cash-out) ties the legs of one request together on their ledger rows and
+     * admin alerts.
+     */
+    public record CashOutLeg(UUID cashOutId, String paymentIntentId, BigDecimal netAmount, BigDecimal feeAmount,
+                             String note) {
+        public CashOutLeg(UUID cashOutId, String paymentIntentId, BigDecimal netAmount, BigDecimal feeAmount) {
+            this(cashOutId, paymentIntentId, netAmount, feeAmount, null);
+        }
+
+        private String suffix() {
+            return note == null ? "" : " (" + note + ")";
+        }
+    }
+
+    /**
+     * As {@link #debitForCashOut(Long, UUID, BigDecimal, BigDecimal, String)} for a cash-out split across
+     * several charges (fix/audit3-wallet-cashout-integrity): ONE locked balance check for the whole request,
+     * then every leg's debit rows and PENDING record, all in this one transaction.
+     */
+    @Transactional
+    public void debitForCashOut(Long parentId, List<CashOutLeg> legs) {
         lockRetryer.withBoundedRetry("CreditWalletService.debitForCashOut",
             () -> stripeCustomerRepository.findByIdForUpdate(parentId)
                 .orElseThrow(() -> new PaymentGatewayException("payment.noPaymentMethod")));
@@ -97,7 +128,8 @@ public class CreditWalletService {
         if (chargeDisputeRepository.existsOpenAdminDisputeForPayer(parentId)) {
             throw new PaymentGatewayException("payment.cashOutBlockedByDispute");
         }
-        BigDecimal requested = netAmount.add(feeAmount);
+        BigDecimal requested = legs.stream().map(l -> l.netAmount().add(l.feeAmount()))
+            .reduce(BigDecimal.ZERO, BigDecimal::add);
         // Only the cashable pool leaves as cash; spend-only credit stays for bookings.
         WalletBalance balance = getWalletBalance(parentId);
         if (balance.total().compareTo(requested) < 0) {
@@ -106,14 +138,20 @@ public class CreditWalletService {
         if (balance.cashable().compareTo(requested) < 0) {
             throw new PaymentGatewayException("payment.cashOutExceedsCashable");
         }
-        writeLedgerEntry(parentId, netAmount.negate(), CreditLedgerEntryType.CASH_OUT_DEBIT, cashOutId,
-            "Credit cash-out");
-        if (feeAmount.signum() > 0) {
-            writeLedgerEntry(parentId, feeAmount.negate(), CreditLedgerEntryType.STRIPE_FEE_DEBIT, cashOutId,
-                "Stripe processing fee for cash-out");
+        for (CashOutLeg leg : legs) {
+            writeLedgerEntry(parentId, leg.netAmount().negate(), CreditLedgerEntryType.CASH_OUT_DEBIT,
+                leg.cashOutId(), "Credit cash-out" + leg.suffix());
+            if (leg.feeAmount().signum() > 0) {
+                writeLedgerEntry(parentId, leg.feeAmount().negate(), CreditLedgerEntryType.STRIPE_FEE_DEBIT,
+                    leg.cashOutId(), "Stripe processing fee for cash-out" + leg.suffix());
+            }
+            CashOutReconciliation record = CashOutReconciliation.pending(leg.cashOutId(), parentId,
+                leg.paymentIntentId(), leg.netAmount(), leg.feeAmount());
+            // The leg note rides on last_error until the first transition, which keeps it as a prefix
+            // (CashOutReconciliationService.withLegNote) — no schema change.
+            record.setLastError(leg.note());
+            cashOutReconciliationRepository.save(record);
         }
-        cashOutReconciliationRepository.save(
-            CashOutReconciliation.pending(cashOutId, parentId, paymentIntentId, netAmount, feeAmount));
     }
 
     /**
@@ -160,6 +198,18 @@ public class CreditWalletService {
     @Transactional(propagation = Propagation.MANDATORY)
     public BigDecimal debitRefundReversal(Long parentId, UUID bookingId, BigDecimal refundAmount,
                                           boolean spendOnlyRefund) {
+        return debitRefundReversal(parentId, bookingId, refundAmount, spendOnlyRefund ? refundAmount : BigDecimal.ZERO);
+    }
+
+    /**
+     * As {@link #debitRefundReversal(Long, UUID, BigDecimal)}; fix/audit3-wallet-cashout-integrity: a refund can
+     * now be part spend-only (the share its booking's deduction took from that pool), so the reversal takes
+     * {@code spendOnlyRefunded} from the spend-only pool first, the rest from the cashable pool, and only what
+     * the cashable pool cannot cover from the spend-only pool again.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal debitRefundReversal(Long parentId, UUID bookingId, BigDecimal refundAmount,
+                                          BigDecimal spendOnlyRefunded) {
         lockAndGetBalance(parentId);
         WalletBalance balance = getWalletBalance(parentId);
         BigDecimal recovered = refundAmount.min(balance.total().max(BigDecimal.ZERO));
@@ -167,10 +217,48 @@ public class CreditWalletService {
             log.info("Refund reversal for booking {}: payer {} has no wallet balance — nothing recovered", bookingId, parentId);
             return BigDecimal.ZERO;
         }
+        BigDecimal pool = balance.spendOnly().max(BigDecimal.ZERO);
+        BigDecimal spendOnly = (spendOnlyRefunded == null ? BigDecimal.ZERO : spendOnlyRefunded.max(BigDecimal.ZERO))
+            .min(pool).min(recovered);
+        BigDecimal rest = recovered.subtract(spendOnly);
+        BigDecimal uncoveredByCashable = rest.subtract(balance.cashable().max(BigDecimal.ZERO)).max(BigDecimal.ZERO);
+        spendOnly = spendOnly.add(uncoveredByCashable.min(pool.subtract(spendOnly)));
         writeLedgerEntry(parentId, recovered.negate(), CreditLedgerEntryType.BOOKING_REFUND_REVERSAL, bookingId,
-            "Dispute resolved in the coach's favour — refund reversed", null, null,
-            spendOnlyPart(balance, recovered, spendOnlyRefund).negate());
+            "Dispute resolved in the coach's favour — refund reversed", null, null, spendOnly.negate());
         return recovered;
+    }
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: how much of a credit given back for {@code bookingId} (its cancellation
+     * {@code BOOKING_REFUND} or an admin {@code DISPUTE_CREDIT}) belongs in the spend-only pool — what the
+     * booking's own {@code BOOKING_DEDUCTION}(s) took from that pool, minus the spend-only part already given back
+     * for it (a failed settlement's {@code BOOKING_DEDUCTION_REVERSAL}, earlier refunds and dispute credits, net of
+     * an {@code UPHOLD_COACH} {@code BOOKING_REFUND_REVERSAL}). Without this every refund was cashable, so
+     * spend-only credit spent on a booking came back cashable on cancellation and could be cashed out.
+     *
+     * <p>Every deduction is written under {@code reference_id = bookingId} — single settles
+     * ({@code BookingPaymentPersistenceService.persistPaymentSuccess}) and, since fix/payment-charge-idempotency
+     * (#359, before spend-only credit existed in V208), each batch booking's own share
+     * ({@code PaymentLifecycleService}); older batch deductions under a batch id carry no spend-only part.
+     *
+     * <p>Takes the payer's wallet lock ({@link #lockAndGetBalance}), so a refund and a dispute credit for the
+     * same booking cannot both return the same spend-only share. <strong>Lock order:</strong> a caller that goes
+     * on to touch card-dispute rows must lock them FIRST
+     * ({@code ChargebackCreditReversalService.lockDisputesForCredit}) — the card-dispute webhook takes the
+     * dispute row, then this wallet lock.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal bookingSpendOnlyOutstanding(Long parentId, UUID bookingId) {
+        lockAndGetBalance(parentId);
+        BigDecimal deducted = ledgerRepository.sumSpendOnlyByParentIdAndReferenceIdAndType(
+            parentId, bookingId, CreditLedgerEntryType.BOOKING_DEDUCTION).negate();
+        if (deducted.signum() <= 0) {
+            return BigDecimal.ZERO;
+        }
+        BigDecimal returned = ledgerRepository.sumSpendOnlyByParentIdAndReferenceIdAndTypes(parentId, bookingId,
+            List.of(CreditLedgerEntryType.BOOKING_DEDUCTION_REVERSAL, CreditLedgerEntryType.BOOKING_REFUND,
+                CreditLedgerEntryType.DISPUTE_CREDIT, CreditLedgerEntryType.BOOKING_REFUND_REVERSAL));
+        return deducted.subtract(returned == null ? BigDecimal.ZERO : returned).max(BigDecimal.ZERO);
     }
 
     /**

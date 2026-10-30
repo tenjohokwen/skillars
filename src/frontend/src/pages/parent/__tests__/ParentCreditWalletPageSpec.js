@@ -69,6 +69,9 @@ describe('ParentCreditWalletPage.vue — cash-out error messages', () => {
     ['payment.cashOutExceedsCashable', 'payment.credits.cashOutExceedsCashable'],
     ['payment.refundFailed', 'payment.credits.refundFailed'],
     ['payment.refundOutcomeUnknown', 'payment.credits.refundOutcomeUnknown'],
+    // fix/audit3-wallet-cashout-integrity: a cash-out split across several card charges
+    ['payment.cashOutPartiallyRefunded', 'payment.credits.cashOutPartiallyRefunded'],
+    ['payment.cashOutTargetUnavailable', 'payment.credits.cashOutTargetUnavailable'],
   ])('maps backend helpCode %s to %s', async (helpCode, i18nKey) => {
     const wrapper = await mountPage()
     wrapper.vm.cashoutAmount = 50
@@ -78,6 +81,27 @@ describe('ParentCreditWalletPage.vue — cash-out error messages', () => {
 
     expect(wrapper.vm.cashoutError).toBe(i18nKey)
   })
+
+  it.each([
+    'payment.cashOutPartiallyRefunded',
+    'payment.refundOutcomeUnknown',
+    'payment.refundFailed',
+  ])(
+    'refreshes the balance after a failed cash-out (%s) — money may have moved',
+    async (helpCode) => {
+      const wrapper = await mountPage()
+      const { usePaymentStore } = await import('src/stores/payment.store')
+      const store = usePaymentStore()
+      store.fetchCreditBalance.mockClear()
+      wrapper.vm.cashoutAmount = 50
+      rejectWith(helpCode)
+
+      await wrapper.vm.handleCashOut()
+
+      expect(store.fetchCreditBalance).toHaveBeenCalledTimes(1)
+      expect(wrapper.vm.cashoutError).toBe(helpCode.replace('payment.', 'payment.credits.'))
+    },
+  )
 
   it('falls back to a generic message for an unknown failure, not "insufficient credit"', async () => {
     const wrapper = await mountPage()

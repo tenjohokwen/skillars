@@ -282,12 +282,14 @@ class RefundEnqueueListenerTest {
             eq(PARENT_ID), eq(new BigDecimal("40.00")), eq(BOOKING_ID), eq("Pack pause — full refund"));
     }
 
+    /** fix/audit3-wallet-cashout-integrity: the parent paused — an expired-pack refund is spend-only. */
     @Test
-    void onBookingCancelledDueToPause_capturedExpiredPack_refundsTheShare() {
+    void onBookingCancelledDueToPause_capturedExpiredPack_refundsTheShareAsSpendOnly() {
         listener.onBookingCancelledDueToPause(pauseEvent(UUID.randomUUID(), true, true, SESSION_PRICE));
 
-        verify(refundOutboxSupport).enqueueBookingRefund(
-            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), eq("Pack pause — expired pack refund"));
+        verify(refundOutboxSupport).enqueueSpendOnlyBookingRefund(
+            eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), eq("Pack pause — expired pack refund (booking credit only)"));
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
     @Test
@@ -348,9 +350,14 @@ class RefundEnqueueListenerTest {
     }
 
     private BookingCancelledByCoachEvent coachCancelEvent(UUID packId, boolean packExpired, boolean captured) {
+        return coachCancelEvent(packId, packExpired, captured, "OTHER_UNEXCUSED");
+    }
+
+    private BookingCancelledByCoachEvent coachCancelEvent(UUID packId, boolean packExpired, boolean captured,
+                                                          String reason) {
         return new BookingCancelledByCoachEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID,
-            "MUTUAL_AGREEMENT", packId, SESSION_PRICE, packExpired, captured,
+            reason, packId, SESSION_PRICE, packExpired, captured,
             "parent@test.com", Instant.now(), "UTC"
         );
     }
@@ -389,6 +396,49 @@ class RefundEnqueueListenerTest {
         listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true));
 
         verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
+    }
+
+    // ========== fix/audit3-wallet-cashout-integrity: excused coach cancels (owner decision) ==========
+
+    /** Any excused reason (the strike logic's classification): an expired-pack refund is spend-only. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"MUTUAL_AGREEMENT", "WEATHER", "HEALTH_MEDICAL",
+        "FAMILY_EMERGENCY"})
+    void onBookingCancelledByCoach_excusedReason_expiredPack_refundIsSpendOnly(String reason) {
+        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true, true, reason));
+
+        verify(refundOutboxSupport).enqueueSpendOnlyBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID),
+            anyString());
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+    }
+
+    /** An unexcused coach cancel is the coach's fault: the expired-pack refund stays cashable. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"OTHER_UNEXCUSED", "SCHEDULING_PREFERENCE"})
+    void onBookingCancelledByCoach_unexcusedReason_expiredPack_refundIsCashable(String reason) {
+        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true, true, reason));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
+    }
+
+    /** A card booking's excused-cancel refund is not forced spend-only (the outbox handler splits it). */
+    @Test
+    void onBookingCancelledByCoach_excused_cardBooking_notForcedSpendOnly() {
+        listener.onBookingCancelledByCoach(coachCancelEvent(null, false, true, "MUTUAL_AGREEMENT"));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
+    }
+
+    /** Excused cancel on an unexpired pack: the restore carries the reason, so an expiry meanwhile is spend-only. */
+    @Test
+    void onBookingCancelledByCoach_excused_packRestore_carriesTheExcusedReason() {
+        UUID packId = UUID.randomUUID();
+        listener.onBookingCancelledByCoach(coachCancelEvent(packId, false, true, "WEATHER"));
+
+        verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID,
+            PackSessionService.RESTORE_REASON_COACH_EXCUSED_CANCELLATION);
     }
 
     private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {

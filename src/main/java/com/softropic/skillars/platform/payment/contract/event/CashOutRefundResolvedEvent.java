@@ -14,13 +14,21 @@ public class CashOutRefundResolvedEvent extends ApplicationEvent {
 
     private final UUID cashOutId;
     private final String outcome;
+    /** fix/audit3-wallet-cashout-integrity: "leg i/n req &lt;id&gt;" for one leg of a split cash-out, else null. */
+    private final String legNote;
 
     public CashOutRefundResolvedEvent(Object source, UUID cashOutId, String outcome) {
+        this(source, cashOutId, outcome, null);
+    }
+
+    public CashOutRefundResolvedEvent(Object source, UUID cashOutId, String outcome, String legNote) {
         super(source);
         this.cashOutId = cashOutId;
         this.outcome = outcome;
+        this.legNote = legNote;
     }
 
     public UUID getCashOutId() { return cashOutId; }
     public String getOutcome() { return outcome; }
+    public String getLegNote() { return legNote; }
 }

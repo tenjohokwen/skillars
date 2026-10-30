@@ -99,8 +99,15 @@ public interface PaymentGateway {
      * what has already been refunded on it. Stripe rejects a refund above this, so a caller that
      * computes its own refund amount (credit cash-out) checks against it first and fails with a
      * clear error instead of a generic refund failure.
+     *
+     * <p>fix/audit3-wallet-cashout-integrity: throws {@code PaymentGatewayException} with
+     * {@link #REFUND_TARGET_INVALID} when the PaymentIntent can never be read (unknown / invalid / not permitted),
+     * and {@code payment.refundLookupFailed} when the lookup may succeed on a retry.
      */
     BigDecimal getRefundableAmount(String stripePaymentIntentId);
+
+    /** Error code of a refundable-amount lookup that will never succeed (see {@link #getRefundableAmount}). */
+    String REFUND_TARGET_INVALID = "payment.refundTargetInvalid";
 
     /**
      * Creates a Stripe Customer for a parent and returns the Stripe customer ID (cus_...).

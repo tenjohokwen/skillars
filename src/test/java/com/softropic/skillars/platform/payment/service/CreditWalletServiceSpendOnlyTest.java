@@ -193,4 +193,104 @@ class CreditWalletServiceSpendOnlyTest {
             CreditLedgerEntryType.BOOKING_DEDUCTION, UUID.randomUUID(), "x", null, null, new BigDecimal("5.00")))
             .isInstanceOf(IllegalArgumentException.class);
     }
+
+    // ── fix/audit3-wallet-cashout-integrity: refunds give back the spend-only share the booking took ──────
+
+    private void bookingRows(UUID booking, String deductedSpendOnly, String returnedSpendOnly) {
+        when(ledgerRepository.sumSpendOnlyByParentIdAndReferenceIdAndType(PARENT, booking,
+            CreditLedgerEntryType.BOOKING_DEDUCTION)).thenReturn(new BigDecimal(deductedSpendOnly));
+        lenient().when(ledgerRepository.sumSpendOnlyByParentIdAndReferenceIdAndTypes(org.mockito.ArgumentMatchers.eq(PARENT),
+            org.mockito.ArgumentMatchers.eq(booking), any())).thenReturn(new BigDecimal(returnedSpendOnly));
+    }
+
+    /** Regression (the laundering exploit): a booking paid 40.00 from spend-only credit owes 40.00 back spend-only. */
+    @Test
+    void bookingSpendOnlyOutstanding_isWhatTheDeductionTookFromTheSpendOnlyPool() {
+        UUID booking = UUID.randomUUID();
+        bookingRows(booking, "-40.00", "0.00");
+
+        assertThat(service.bookingSpendOnlyOutstanding(PARENT, booking)).isEqualByComparingTo("40.00");
+        verify(stripeCustomerRepository).findByIdForUpdateWaiting(PARENT);
+    }
+
+    @Test
+    void bookingSpendOnlyOutstanding_netOfWhatAlreadyWentBack() {
+        UUID booking = UUID.randomUUID();
+        bookingRows(booking, "-40.00", "25.00");
+
+        assertThat(service.bookingSpendOnlyOutstanding(PARENT, booking)).isEqualByComparingTo("15.00");
+    }
+
+    @Test
+    void bookingSpendOnlyOutstanding_cashablePaidBooking_isZero() {
+        UUID booking = UUID.randomUUID();
+        bookingRows(booking, "0.00", "0.00");
+
+        assertThat(service.bookingSpendOnlyOutstanding(PARENT, booking)).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void bookingSpendOnlyOutstanding_neverNegative() {
+        UUID booking = UUID.randomUUID();
+        bookingRows(booking, "-10.00", "30.00");
+
+        assertThat(service.bookingSpendOnlyOutstanding(PARENT, booking)).isEqualByComparingTo("0.00");
+    }
+
+    /** A part spend-only refund is clawed back from each pool by its own share. */
+    @Test
+    void refundReversal_mixedRefund_takesTheSpendOnlyShareFromThatPool() {
+        wallet("100.00", "50.00");
+
+        service.debitRefundReversal(PARENT, UUID.randomUUID(), new BigDecimal("60.00"), new BigDecimal("20.00"));
+
+        ParentCreditLedger row = savedRow();
+        assertThat(row.getAmount()).isEqualByComparingTo("-60.00");
+        assertThat(row.getSpendOnlyAmount()).isEqualByComparingTo("-20.00");
+    }
+
+    @Test
+    void refundReversal_cashableShort_takesTheRestFromSpendOnly() {
+        wallet("50.00", "45.00"); // cashable 5.00
+
+        service.debitRefundReversal(PARENT, UUID.randomUUID(), new BigDecimal("30.00"), new BigDecimal("10.00"));
+
+        ParentCreditLedger row = savedRow();
+        assertThat(row.getAmount()).isEqualByComparingTo("-30.00");
+        // 10 spend-only share + (20 cashable part − 5 cashable available) = 25 from the spend-only pool
+        assertThat(row.getSpendOnlyAmount()).isEqualByComparingTo("-25.00");
+    }
+
+    @Test
+    void debitForCashOut_legs_oneBalanceCheck_rowsAndRecordPerLeg() {
+        when(lockRetryer.withBoundedRetry(any(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        when(stripeCustomerRepository.findByIdForUpdate(PARENT)).thenReturn(Optional.of(new StripeCustomer()));
+        wallet("100.00", "0.00");
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+
+        service.debitForCashOut(PARENT, java.util.List.of(
+            new CreditWalletService.CashOutLeg(a, "pi_a", new BigDecimal("60.00"), new BigDecimal("1.69")),
+            new CreditWalletService.CashOutLeg(b, "pi_b", new BigDecimal("37.25"), new BigDecimal("1.06"))));
+
+        ArgumentCaptor<ParentCreditLedger> rows = ArgumentCaptor.forClass(ParentCreditLedger.class);
+        verify(ledgerRepository, org.mockito.Mockito.times(4)).save(rows.capture());
+        assertThat(rows.getAllValues()).extracting(ParentCreditLedger::getReferenceId).containsExactly(a, a, b, b);
+        verify(cashOutReconciliationRepository, org.mockito.Mockito.times(2)).save(any());
+    }
+
+    @Test
+    void debitForCashOut_legs_sumAboveCashable_refused() {
+        when(lockRetryer.withBoundedRetry(any(), any()))
+            .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
+        when(stripeCustomerRepository.findByIdForUpdate(PARENT)).thenReturn(Optional.of(new StripeCustomer()));
+        wallet("100.00", "40.00");
+
+        assertThatThrownBy(() -> service.debitForCashOut(PARENT, java.util.List.of(
+            new CreditWalletService.CashOutLeg(UUID.randomUUID(), "pi_a", new BigDecimal("40.00"), BigDecimal.ZERO),
+            new CreditWalletService.CashOutLeg(UUID.randomUUID(), "pi_b", new BigDecimal("30.00"), BigDecimal.ZERO))))
+            .hasMessageContaining("payment.cashOutExceedsCashable");
+        verify(ledgerRepository, never()).save(any());
+    }
 }

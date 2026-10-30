@@ -512,8 +512,28 @@ public class StripePaymentGateway implements PaymentGateway {
             // Nothing has been debited or refunded yet — a distinct code, so the payer is not told a
             // refund failed.
             log.error("Stripe refundable-amount lookup failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());
-            throw new PaymentGatewayException("payment.refundLookupFailed");
+            // fix/audit3-wallet-cashout-integrity: a lookup that can never succeed (unknown / invalid PaymentIntent,
+            // no permission on it) gets its own code, so a cash-out can skip that charge instead of failing on it
+            // forever; anything that may pass on a retry stays payment.refundLookupFailed.
+            throw new PaymentGatewayException(isPermanentLookupFailure(e)
+                ? PaymentGateway.REFUND_TARGET_INVALID : "payment.refundLookupFailed");
         }
+    }
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: true for a Stripe error no retry will fix — a 4xx bad request (e.g. 404
+     * {@code resource_missing}) or a permission error on the object. Network errors, 429 / rate limits
+     * ({@code RateLimitException} extends {@code InvalidRequestException}, so checked first), 5xx and anything
+     * unmapped are transient (fail safe).
+     */
+    static boolean isPermanentLookupFailure(StripeException e) {
+        Integer status = e.getStatusCode();
+        if (e instanceof ApiConnectionException || e instanceof com.stripe.exception.RateLimitException
+                || (status != null && (status == 429 || status >= 500))) {
+            return false;
+        }
+        return e instanceof com.stripe.exception.InvalidRequestException
+            || e instanceof com.stripe.exception.PermissionException;
     }
 
     @Override

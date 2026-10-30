@@ -71,16 +71,26 @@ public class RefundEnqueueListener {
         // C6: only money actually taken is refunded. isWalletRefund() is false for an ACCEPTED booking
         // (nothing charged yet) and for an unexpired pack booking (its session is restored by
         // CancellationRefundService instead) — the same rule as onBookingCancelledByAdmin.
+        // fix/audit3-wallet-cashout-integrity (owner decision): a coach cancel with an EXCUSED reason (weather,
+        // illness, family emergency, mutual agreement — CancellationRefundService's strike classification) is not
+        // the coach's fault, so an expired-pack refund is SPEND-ONLY, exactly as for the parent's own >24h cancel
+        // (otherwise a parent could turn an expired pack into cash by asking for an excused cancel). An
+        // unexcused coach cancel stays cashable. A card / credit booking's refund is split by
+        // CreditWalletRefundOutboxHandler either way.
+        boolean excused = CancellationRefundService.isExcusedReason(event.getCancelReason());
         if (event.isWalletRefund()) {
+            boolean expiredPack = event.getSessionPackPurchaseId() != null;
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
                 event.getSessionPrice(),
-                event.getSessionPackPurchaseId() != null
-                    ? "Coach cancellation — expired pack refund"
-                    : "Coach cancellation — full refund", false);
+                expiredPack
+                    ? (excused ? "Coach cancellation — expired pack refund (booking credit only)"
+                               : "Coach cancellation — expired pack refund")
+                    : "Coach cancellation — full refund", expiredPack && excused);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
-                event.getSessionPackPurchaseId(), event.getBookingId(), "COACH_CANCELLATION");
+                event.getSessionPackPurchaseId(), event.getBookingId(),
+                excused ? PackSessionService.RESTORE_REASON_COACH_EXCUSED_CANCELLATION : "COACH_CANCELLATION");
         }
     }
 
@@ -127,8 +137,11 @@ public class RefundEnqueueListener {
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
                 event.getRefundAmount(),
                 event.getSessionPackPurchaseId() != null
-                    ? "Pack pause — expired pack refund"
-                    : "Pack pause — full refund", false);
+                    ? "Pack pause — expired pack refund (booking credit only)"
+                    : "Pack pause — full refund",
+                // fix/audit3-wallet-cashout-integrity: the parent paused — an expired-pack refund is spend-only,
+                // as for the parent's own >24h cancel (PackSessionService does the same at restore time).
+                event.getSessionPackPurchaseId() != null);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(

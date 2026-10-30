@@ -39,6 +39,7 @@ class CashOutServiceTest {
     @Mock ConfigService configService;
     @Mock CashOutReconciliationService cashOutReconciliationService;
     @Mock ParentCreditLedgerRepository ledgerRepository;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @InjectMocks CashOutService cashOutService;
 
@@ -66,6 +67,26 @@ class CashOutServiceTest {
         when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
     }
 
+    /** fix/audit3-wallet-cashout-integrity: the legs the cash-out was debited as (one debit call per request). */
+    @SuppressWarnings("unchecked")
+    private List<CreditWalletService.CashOutLeg> debitedLegs() {
+        ArgumentCaptor<List<CreditWalletService.CashOutLeg>> c = ArgumentCaptor.forClass(List.class);
+        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), c.capture());
+        return c.getValue();
+    }
+
+    /** The one leg of a single-charge cash-out, asserted to carry the whole net and fee onto {@code pi}. */
+    private CreditWalletService.CashOutLeg singleLeg(String pi) {
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        assertThat(legs).hasSize(1);
+        CreditWalletService.CashOutLeg leg = legs.get(0);
+        assertThat(leg.paymentIntentId()).isEqualTo(pi);
+        assertThat(leg.netAmount()).isEqualByComparingTo(NET);
+        assertThat(leg.feeAmount()).isEqualByComparingTo(FEE);
+        assertThat(leg.note()).as("a single-leg cash-out carries no leg note").isNull();
+        return leg;
+    }
+
     private void stubHappyPath(BigDecimal balance) {
         stubFeeConfig();
         when(creditWalletService.getWalletBalance(PARENT_ID)).thenReturn(cashable(balance));
@@ -81,7 +102,7 @@ class CashOutServiceTest {
         cashOutService.processCashOut(PARENT_ID, AMOUNT);
 
         // The wallet loses exactly what was asked for (net + fee = 100.00), not requested + fee.
-        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), any(UUID.class), eq(NET), eq(FEE), eq(PAYMENT_INTENT_ID));
+        singleLeg(PAYMENT_INTENT_ID);
         assertThat(NET.add(FEE)).isEqualByComparingTo(AMOUNT);
         verify(paymentGateway).refund(eq(PAYMENT_INTENT_ID), eq(NET), anyString());
     }
@@ -92,7 +113,7 @@ class CashOutServiceTest {
 
         cashOutService.processCashOut(PARENT_ID, AMOUNT);
 
-        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), any(UUID.class), eq(NET), eq(FEE), eq(PAYMENT_INTENT_ID));
+        singleLeg(PAYMENT_INTENT_ID);
         verify(paymentGateway).refund(eq(PAYMENT_INTENT_ID), eq(NET), anyString());
     }
 
@@ -104,14 +125,15 @@ class CashOutServiceTest {
         cashOutService.processCashOut(PARENT_ID, AMOUNT);
 
         ArgumentCaptor<String> keys = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<UUID> cashOutIds = ArgumentCaptor.forClass(UUID.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<CreditWalletService.CashOutLeg>> legs = ArgumentCaptor.forClass(List.class);
         verify(paymentGateway, times(2)).refund(eq(PAYMENT_INTENT_ID), eq(NET), keys.capture());
-        verify(creditWalletService, times(2)).debitForCashOut(eq(PARENT_ID), cashOutIds.capture(), eq(NET), eq(FEE), eq(PAYMENT_INTENT_ID));
+        verify(creditWalletService, times(2)).debitForCashOut(eq(PARENT_ID), legs.capture());
         List<String> k = keys.getAllValues();
         assertThat(k).doesNotHaveDuplicates()
             .noneMatch(key -> key.contains(PAYMENT_INTENT_ID))
-            .containsExactly("cashout-" + cashOutIds.getAllValues().get(0),
-                "cashout-" + cashOutIds.getAllValues().get(1));
+            .containsExactly("cashout-" + legs.getAllValues().get(0).get(0).cashOutId(),
+                "cashout-" + legs.getAllValues().get(1).get(0).cashOutId());
     }
 
     @Test
@@ -125,7 +147,7 @@ class CashOutServiceTest {
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.cashOutExceedsRefundable");
 
-        verify(creditWalletService, never()).debitForCashOut(any(), any(), any(), any(), any());
+        verify(creditWalletService, never()).debitForCashOut(any(), any(List.class));
         verify(paymentGateway, never()).refund(any(), any(), any());
     }
 
@@ -138,7 +160,7 @@ class CashOutServiceTest {
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.insufficientCredit");
 
-        verify(creditWalletService, never()).debitForCashOut(any(), any(), any(), any(), any());
+        verify(creditWalletService, never()).debitForCashOut(any(), any(List.class));
         verify(paymentGateway, never()).refund(any(), any(), any());
     }
 
@@ -146,7 +168,7 @@ class CashOutServiceTest {
     void processCashOut_lockedCheckFails_noRefund() {
         stubHappyPath(new BigDecimal("200.00"));
         doThrow(new PaymentGatewayException("payment.insufficientCredit"))
-            .when(creditWalletService).debitForCashOut(eq(PARENT_ID), any(UUID.class), any(), any(), any());
+            .when(creditWalletService).debitForCashOut(eq(PARENT_ID), any(List.class));
 
         assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
             .isInstanceOf(PaymentGatewayException.class)
@@ -187,10 +209,9 @@ class CashOutServiceTest {
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.refundFailed");
 
-        ArgumentCaptor<UUID> cashOutId = ArgumentCaptor.forClass(UUID.class);
-        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), cashOutId.capture(), eq(NET), eq(FEE), eq(PAYMENT_INTENT_ID));
+        UUID cashOutId = singleLeg(PAYMENT_INTENT_ID).cashOutId();
         // Reversal restores what was debited, together with closing the record (exactly-once).
-        verify(cashOutReconciliationService).reverseAfterRejection(eq(cashOutId.getValue()), anyString());
+        verify(cashOutReconciliationService).reverseAfterRejection(eq(cashOutId), anyString());
         verify(cashOutReconciliationService, never()).markCompleted(any());
     }
 
@@ -247,10 +268,8 @@ class CashOutServiceTest {
 
         cashOutService.processCashOut(PARENT_ID, AMOUNT);
 
-        ArgumentCaptor<UUID> cashOutId = ArgumentCaptor.forClass(UUID.class);
-        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), cashOutId.capture(), eq(NET), eq(FEE),
-            eq(PAYMENT_INTENT_ID));
-        verify(cashOutReconciliationService).markCompleted(cashOutId.getValue());
+        UUID cashOutId = singleLeg(PAYMENT_INTENT_ID).cashOutId();
+        verify(cashOutReconciliationService).markCompleted(cashOutId);
     }
 
     @Test
@@ -275,22 +294,158 @@ class CashOutServiceTest {
 
         cashOutService.processCashOut(PARENT_ID, AMOUNT);
 
-        verify(creditWalletService).debitForCashOut(eq(PARENT_ID), any(UUID.class), eq(NET), eq(FEE), eq("pi_funding"));
+        singleLeg("pi_funding");
         verify(paymentGateway).refund(eq("pi_funding"), eq(NET), anyString());
         verify(paymentGateway, never()).refund(eq(PAYMENT_INTENT_ID), any(), any());
     }
 
+    // ── fix/audit3-wallet-cashout-integrity: split across funding charges ───────────────────
+
+    /**
+     * Regression: the credit came from a 60.00 and a 50.00 charge. The cash-out used to go wholly onto the latest
+     * (unrelated) charge because neither funding charge could take 97.25 alone — leaving both fully disputable,
+     * so a chargeback after the cash-out paid the parent twice. It is now split across them.
+     */
     @Test
-    void processCashOut_fundingChargeWithoutHeadroom_fallsBackToTheLatestCharge() {
+    void processCashOut_splitsAcrossFundingCharges_mostRecentFirst_neverTouchingTheLatestCharge() {
         stubHappyPath(new BigDecimal("200.00"));
         when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
-            .thenReturn(List.of("pi_small", "pi_unreadable"));
-        when(paymentGateway.getRefundableAmount("pi_small")).thenReturn(new BigDecimal("10.00"));
-        when(paymentGateway.getRefundableAmount("pi_unreadable")).thenThrow(new PaymentGatewayException("payment.stripeError"));
+            .thenReturn(List.of("pi_a", "pi_b"));
+        when(paymentGateway.getRefundableAmount("pi_a")).thenReturn(new BigDecimal("60.00"));
+        when(paymentGateway.getRefundableAmount("pi_b")).thenReturn(new BigDecimal("50.00"));
 
         cashOutService.processCashOut(PARENT_ID, AMOUNT);
 
-        verify(paymentGateway).refund(eq(PAYMENT_INTENT_ID), eq(NET), anyString());
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        assertThat(legs).extracting(CreditWalletService.CashOutLeg::paymentIntentId).containsExactly("pi_a", "pi_b");
+        assertThat(legs.get(0).netAmount()).isEqualByComparingTo("60.00");
+        assertThat(legs.get(1).netAmount()).isEqualByComparingTo("37.25");
+        // the fee is split pro rata, the last leg taking the rounding rest — the legs add up to the request
+        assertThat(legs.get(0).feeAmount().add(legs.get(1).feeAmount())).isEqualByComparingTo(FEE);
+        assertThat(legs.get(0).feeAmount()).isEqualByComparingTo("1.69");
+        assertThat(legs.get(0).cashOutId()).isNotEqualTo(legs.get(1).cashOutId());
+        verify(paymentGateway).refund("pi_a", new BigDecimal("60.00"), "cashout-" + legs.get(0).cashOutId());
+        verify(paymentGateway).refund(eq("pi_b"), eq(new BigDecimal("37.25")), eq("cashout-" + legs.get(1).cashOutId()));
+        verify(paymentGateway, never()).refund(eq(PAYMENT_INTENT_ID), any(), any());
+        verify(cashOutReconciliationService).markCompleted(legs.get(0).cashOutId());
+        verify(cashOutReconciliationService).markCompleted(legs.get(1).cashOutId());
+    }
+
+    /** Only the remainder no funding charge can take goes onto the latest charge. */
+    @Test
+    void processCashOut_remainderBeyondTheFundingCharges_goesOntoTheLatestCharge() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_small"));
+        when(paymentGateway.getRefundableAmount("pi_small")).thenReturn(new BigDecimal("10.00"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        assertThat(legs).extracting(CreditWalletService.CashOutLeg::paymentIntentId)
+            .containsExactly("pi_small", PAYMENT_INTENT_ID);
+        verify(paymentGateway).refund(eq("pi_small"), eq(new BigDecimal("10.00")), anyString());
+        verify(paymentGateway).refund(eq(PAYMENT_INTENT_ID), eq(new BigDecimal("87.25")), anyString());
+    }
+
+    /** Fail closed: an unreadable funding charge is not routed around (it would stay disputable). */
+    @Test
+    void processCashOut_unreadableFundingCharge_refusedBeforeAnyDebit() {
+        stubFeeConfig();
+        when(creditWalletService.getWalletBalance(PARENT_ID)).thenReturn(cashable(new BigDecimal("200.00")));
+        stubCustomer();
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_unreadable"));
+        when(paymentGateway.getRefundableAmount("pi_unreadable")).thenThrow(new PaymentGatewayException("payment.stripeError"));
+
+        assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
+            .hasMessageContaining("payment.cashOutTargetUnavailable");
+
+        verify(creditWalletService, never()).debitForCashOut(any(), any(List.class));
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    /**
+     * Review fix: a funding charge Stripe will never return (404 → REFUND_TARGET_INVALID) is skipped, not a
+     * permanent block on the payer's cash-outs, and an operator is alerted.
+     */
+    @Test
+    void processCashOut_permanentlyUnreadableFundingCharge_isSkippedAndAlerted() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_gone", "pi_ok"));
+        when(paymentGateway.getRefundableAmount("pi_gone"))
+            .thenThrow(new PaymentGatewayException(PaymentGateway.REFUND_TARGET_INVALID));
+        when(paymentGateway.getRefundableAmount("pi_ok")).thenReturn(new BigDecimal("500.00"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        singleLeg("pi_ok");
+        ArgumentCaptor<com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent> alert =
+            ArgumentCaptor.forClass(com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent.class);
+        verify(eventPublisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().getReferenceId()).isEqualTo("pi_gone");
+        assertThat(alert.getValue().getReason()).startsWith("CASH_OUT_TARGET_INVALID");
+    }
+
+    /** Review fix: the legs of one request carry one "leg i/n req <id>" note; a single leg carries none. */
+    @Test
+    void processCashOut_legsOfOneRequest_shareARequestNote() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_a", "pi_b"));
+        when(paymentGateway.getRefundableAmount("pi_a")).thenReturn(new BigDecimal("60.00"));
+        when(paymentGateway.getRefundableAmount("pi_b")).thenReturn(new BigDecimal("50.00"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        assertThat(legs.get(0).note()).matches("leg 1/2 req [0-9a-f]{8}");
+        assertThat(legs.get(1).note()).isEqualTo(legs.get(0).note().replace("leg 1/2", "leg 2/2"));
+    }
+
+    /**
+     * A partial outcome: one leg reaches the card, the other is rejected — only the rejected leg's credit is
+     * restored (never the completed one's), and the request reports the partial refund.
+     */
+    @Test
+    void processCashOut_oneLegRejected_restoresOnlyThatLeg() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_a", "pi_b"));
+        when(paymentGateway.getRefundableAmount("pi_a")).thenReturn(new BigDecimal("60.00"));
+        when(paymentGateway.getRefundableAmount("pi_b")).thenReturn(new BigDecimal("50.00"));
+        // lenient: the pi_a leg's refund is a different call (strict stubs would flag it as an arg mismatch)
+        lenient().doThrow(new PaymentGatewayException("payment.refundFailed"))
+            .when(paymentGateway).refund(eq("pi_b"), any(), any());
+
+        assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
+            .hasMessageContaining("payment.cashOutPartiallyRefunded");
+
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        verify(cashOutReconciliationService).markCompleted(legs.get(0).cashOutId());
+        verify(cashOutReconciliationService).reverseAfterRejection(eq(legs.get(1).cashOutId()), anyString());
+        verify(cashOutReconciliationService, never()).reverseAfterRejection(eq(legs.get(0).cashOutId()), any());
+    }
+
+    /** One leg's unknown outcome leaves only that leg open for the re-check job; the others still run. */
+    @Test
+    void processCashOut_oneLegUnknown_othersStillRefunded_requestReportsUnknown() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_a", "pi_b"));
+        when(paymentGateway.getRefundableAmount("pi_a")).thenReturn(new BigDecimal("60.00"));
+        when(paymentGateway.getRefundableAmount("pi_b")).thenReturn(new BigDecimal("50.00"));
+        lenient().doThrow(new PaymentGatewayException("payment.refundOutcomeUnknown"))
+            .when(paymentGateway).refund(eq("pi_a"), any(), any());
+
+        assertThatThrownBy(() -> cashOutService.processCashOut(PARENT_ID, AMOUNT))
+            .hasMessageContaining("payment.refundOutcomeUnknown");
+
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        verify(cashOutReconciliationService).markUnknown(eq(legs.get(0).cashOutId()), anyString());
+        verify(cashOutReconciliationService).markCompleted(legs.get(1).cashOutId());
+        verify(cashOutReconciliationService, never()).reverseAfterRejection(any(), any());
     }
 
     @Test
@@ -304,7 +459,7 @@ class CashOutServiceTest {
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.cashOutExceedsCashable");
 
-        verify(creditWalletService, never()).debitForCashOut(any(), any(), any(), any(), any());
+        verify(creditWalletService, never()).debitForCashOut(any(), any(List.class));
         verify(paymentGateway, never()).refund(any(), any(), any());
     }
 }

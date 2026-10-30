@@ -77,6 +77,34 @@ class CashOutReconciliationServiceTest {
         assertThat(row.getAttempts()).isEqualTo(2);
     }
 
+    /** fix/audit3-wallet-cashout-integrity: a split cash-out's leg note reaches the alert and stays on the row. */
+    @Test
+    void legNote_isCarriedIntoTheUnresolvedAlertAndKeptOnTheRow() {
+        row.setLastError("leg 2/3 req 1a2b3c4d");
+
+        service.markUnknown(cashOutId, "payment.refundOutcomeUnknown");
+        service.markUnknown(cashOutId, "boom");
+
+        org.mockito.ArgumentCaptor<CashOutRefundUnresolvedEvent> alert =
+            org.mockito.ArgumentCaptor.forClass(CashOutRefundUnresolvedEvent.class);
+        verify(eventPublisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().getReason()).isEqualTo("leg 2/3 req 1a2b3c4d: payment.refundOutcomeUnknown");
+        assertThat(row.getLastError()).isEqualTo("leg 2/3 req 1a2b3c4d: boom");
+
+        assertThat(service.reverseAfterRejection(cashOutId, "payment.refundFailed")).isTrue();
+        org.mockito.ArgumentCaptor<com.softropic.skillars.platform.payment.contract.event.CashOutRefundResolvedEvent> resolved =
+            org.mockito.ArgumentCaptor.forClass(com.softropic.skillars.platform.payment.contract.event.CashOutRefundResolvedEvent.class);
+        verify(eventPublisher).publishEvent(resolved.capture());
+        assertThat(resolved.getValue().getLegNote()).isEqualTo("leg 2/3 req 1a2b3c4d");
+    }
+
+    @Test
+    void singleLegCashOut_hasNoLegNote() {
+        service.markUnknown(cashOutId, "payment.refundOutcomeUnknown");
+
+        assertThat(row.getLastError()).isEqualTo("payment.refundOutcomeUnknown");
+    }
+
     @Test
     void recheck_success_retriesUnderTheOriginalKey_andCompletes() {
         row.setStatus(CashOutReconciliation.UNKNOWN);

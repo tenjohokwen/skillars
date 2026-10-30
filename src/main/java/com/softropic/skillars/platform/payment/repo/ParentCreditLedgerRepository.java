@@ -32,6 +32,13 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
                                                          @Param("referenceId") UUID referenceId,
                                                          @Param("type") String type);
 
+    /** fix/audit3-wallet-cashout-integrity: as above, over several types (what went back for one booking). */
+    @Query("SELECT COALESCE(SUM(l.spendOnlyAmount), 0) FROM ParentCreditLedger l WHERE l.parentId = :parentId "
+        + "AND l.referenceId = :referenceId AND l.type IN :types")
+    BigDecimal sumSpendOnlyByParentIdAndReferenceIdAndTypes(@Param("parentId") Long parentId,
+                                                          @Param("referenceId") UUID referenceId,
+                                                          @Param("types") java.util.Collection<String> types);
+
     /**
      * fix/payment-payout-recovery: refunds credited in {@code [from, to]} for the coach's bookings, net of what
      * an {@code UPHOLD_COACH} dispute took back ({@code BOOKING_REFUND_REVERSAL}, negative) — whatever happened
@@ -185,7 +192,8 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
      * The card charges this payer's cashable refund credit came from, most recently credited first — where a
      * cash-out should be refunded, so the charge a credit came from is the one whose disputable amount drops
      * (a cash-out onto another charge left the funding charge fully disputable). Same source rules as
-     * {@link #findCreditFundedByPaymentIntent}; spend-only credit is left out (it is never cashed out).
+     * {@link #findCreditFundedByPaymentIntent}; spend-only credit is left out (it is never cashed out) —
+     * fix/audit3-wallet-cashout-integrity: a refund that is only part spend-only still names its charge.
      */
     @Query(value = """
         SELECT s.pi FROM (
@@ -199,7 +207,7 @@ public interface ParentCreditLedgerRepository extends JpaRepository<ParentCredit
           LEFT JOIN payment.session_pack_purchases sp ON sp.purchase_id = b.session_pack_purchase_id
           WHERE l.parent_id = :parentId
             AND l.type IN ('BOOKING_REFUND', 'DISPUTE_CREDIT', 'BATCH_SHARE_REFUND')
-            AND l.spend_only_amount = 0
+            AND l.amount > l.spend_only_amount
         ) s
         WHERE s.pi IS NOT NULL
         GROUP BY s.pi

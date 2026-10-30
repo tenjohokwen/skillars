@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.platform.outbox.contract.OutboxMessageHandler;
+import com.softropic.skillars.platform.payment.contract.CreditLedgerEntryType;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.service.RefundOutboxSupport.BookingRefundPayload;
 
@@ -60,8 +61,23 @@ public class CreditWalletRefundOutboxHandler implements OutboxMessageHandler {
             return;
         }
         // fix/payment-wallet-dispute-integrity: a spend-only refund puts the whole amount in the spend-only pool.
+        // fix/audit3-wallet-cashout-integrity: any other cancellation refund gives back to the spend-only pool the
+        // share the booking's own deduction took from it (computed here, under the payer's wallet lock, at write
+        // time) — the rest (the card-charged / cashable part) stays cashable. A batch-share refund is card money
+        // for a booking whose credit share was never debited, so it stays cashable.
+        BigDecimal spendOnly;
+        if (p.spendOnly()) {
+            spendOnly = p.amount();
+        } else if (CreditLedgerEntryType.BOOKING_REFUND.equals(type)) {
+            // Lock order: card-dispute rows, then the wallet (as ChargeDisputeWebhookService) — see
+            // ChargebackCreditReversalService.lockDisputesForCredit. onRefundCredited below re-uses these locks.
+            chargebackCreditReversalService.lockDisputesForCredit(p.bookingId(), p.sourcePaymentIntentId());
+            spendOnly = creditWalletService.bookingSpendOnlyOutstanding(p.parentId(), p.bookingId()).min(p.amount());
+        } else {
+            spendOnly = BigDecimal.ZERO;
+        }
         creditWalletService.writeLedgerEntry(p.parentId(), p.amount(), type, p.bookingId(), p.description(),
-            p.sourcePaymentIntentId(), p.sourceCardAmount(), p.spendOnly() ? p.amount() : BigDecimal.ZERO);
+            p.sourcePaymentIntentId(), p.sourceCardAmount(), spendOnly);
         // fix/payment-dispute-credit-trace-and-lost-dispute: credit funded by a charge that already lost a
         // card dispute is taken back at once (the bank refunded the payer).
         chargebackCreditReversalService.onRefundCredited(p.bookingId(), p.sourcePaymentIntentId());

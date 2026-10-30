@@ -2292,11 +2292,15 @@ export default {
       cashOutExceedsCashable:
         'Part of your credit can only be used for bookings. You can cash out up to the amount shown as cashable.',
       cashOutExceedsRefundable:
-        'Cash-outs are refunded to your most recent card payment, which cannot take this much. Try a smaller amount.',
+        'Cash-outs are refunded to the card payments your credit came from, which cannot take this much. Try a smaller amount.',
       refundFailed: 'The refund to your card failed. Your credit has been restored.',
       cashoutFailed: 'The cash-out could not be completed. Please try again.',
       refundOutcomeUnknown:
         'We could not confirm the refund with the card processor. Your cash-out is being checked — please do not submit it again.',
+      cashOutPartiallyRefunded:
+        'Part of your cash-out could not be refunded to your card. That part has been restored to your credit; the rest is on its way to your card.',
+      cashOutTargetUnavailable:
+        'We could not reach the card payment your credit came from right now. Nothing was taken from your credit — please try again later.',
     },
     sessionPack: {
       title: 'Session Pack',
@@ -2412,6 +2416,15 @@ export default {
     viewReceipt: 'View Receipt',
     stripeFeeNote:
       'Stripe processing fees are paid by the platform, not by you: your payout is the session amount minus the platform commission.',
+    newCoachHold: {
+      banner:
+        'While your account is new, your first {count} payouts are held for {hold} after the session instead of {normal}, so card disputes can be settled before the money leaves the platform.',
+      minNote: 'Only payouts of at least {amount} count towards this.',
+      remaining: '{remaining} remaining.',
+      days: '{n} day | {n} days',
+      hours: '{n} hour | {n} hours',
+    },
+    releasesOn: 'Releases {date}',
     receipt: {
       title: 'Session Receipt',
       print: 'Print',

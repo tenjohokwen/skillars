@@ -132,6 +132,29 @@ class RevenueReportingServiceTest {
         assertThat(dto.pendingReleaseCount()).isZero();
     }
 
+    /** fix/audit3-wallet-cashout-integrity: the summary tells a new coach about their longer payout hold. */
+    @Test
+    void summary_newCoach_reportsTheLongerHoldAndHowManyFirstPayoutsRemain() {
+        when(configService.getBoundedLong(eq("payment.payout.hold_hours"), org.mockito.ArgumentMatchers.anyLong(),
+            org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong())).thenReturn(48L);
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_RELEASED_COUNT))
+            .thenReturn(5L);
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_HOLD_HOURS))
+            .thenReturn(168L);
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_MIN_RELEASED_NET))
+            .thenReturn(20L);
+        when(coachPayoutRepository.countQualifyingReleasedByCoach(coachId, BigDecimal.valueOf(20L))).thenReturn(2L);
+
+        RevenueSummaryDto.PayoutHoldDto hold = service.getCoachRevenueSummary(coachId, from, to).payoutHold();
+
+        assertThat(hold.newCoach()).isTrue();
+        assertThat(hold.normalHoldHours()).isEqualTo(48L);
+        assertThat(hold.newCoachHoldHours()).isEqualTo(168L);
+        assertThat(hold.newCoachPayoutCount()).isEqualTo(5L);
+        assertThat(hold.newCoachPayoutsRemaining()).isEqualTo(3L);
+        assertThat(hold.minReleasedNet()).isEqualByComparingTo("20");
+    }
+
     // ── Running balance pagination ───────────────────────────────
 
     @Test
