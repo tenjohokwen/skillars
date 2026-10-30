@@ -1552,12 +1552,14 @@ public class BookingService {
 
         String resolvedReason = cancelReason != null ? cancelReason : "OTHER_UNEXCUSED";
         // fix/audit3-completion-dispute-integrity: decided under the row lock. A coach cancel at or after the start
-        // of a session that was never started (CONFIRMED / UPCOMING, no live start) is a no-show in disguise — an
+        // of a session that was never started (ACCEPTED / CONFIRMED / UPCOMING, no live start) is a no-show in
+        // disguise — an
         // excused reason (HEALTH_MEDICAL, WEATHER, ...) picked then used to dodge the strike.
         // CancellationRefundService strikes it whatever the reason, and does not count it toward the
         // excused-cancellation cap. Owner decision: a PAUSED session was actually run, so calling it off keeps
         // the ordinary excused / unexcused rules.
-        boolean neverStarted = (statusBeforeCancel == BookingStatus.CONFIRMED
+        boolean neverStarted = (statusBeforeCancel == BookingStatus.ACCEPTED
+                || statusBeforeCancel == BookingStatus.CONFIRMED
                 || statusBeforeCancel == BookingStatus.UPCOMING)
             && booking.getLiveStartedAt() == null;
         boolean cancelledAfterStart = neverStarted

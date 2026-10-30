@@ -27,8 +27,9 @@ public class BookingCancelledByCoachEvent extends ApplicationEvent {
     private final Instant requestedStartTime;
     private final String canonicalTimezone;
     /**
-     * fix/audit3-completion-dispute-integrity: the coach cancelled a never-started (CONFIRMED / UPCOMING) booking at
-     * or after its start — a no-show in disguise. Never set for a PAUSED session, which was actually run. Always a strike, whatever the reason, and not counted toward the excused-cancellation cap.
+     * fix/audit3-completion-dispute-integrity: the coach cancelled a never-started (ACCEPTED / CONFIRMED / UPCOMING)
+     * booking at or after its start — a no-show in disguise. Never set for a PAUSED session, which was actually
+     * run. Always a strike, whatever the reason, and not counted toward the excused-cancellation cap.
      */
     private final boolean cancelledAfterStart;
 

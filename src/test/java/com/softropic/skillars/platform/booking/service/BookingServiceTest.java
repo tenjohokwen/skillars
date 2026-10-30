@@ -2743,6 +2743,24 @@ class BookingServiceTest {
         assertThat(capturedEvent(BookingCancelledByCoachEvent.class).isCancelledAfterStart()).isTrue();
     }
 
+    /** Owner decision (re-review MINOR 3): an ACCEPTED booking never started either — cancelled after its start, it strikes. */
+    @Test
+    void cancelBookingAsCoach_acceptedBookingAfterTheStart_isFlaggedAfterStart() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "ACCEPTED");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(600));
+        booking.setRequestedEndTime(Instant.now().plusSeconds(3000));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "WEATHER");
+
+        assertThat(capturedEvent(BookingCancelledByCoachEvent.class).isCancelledAfterStart()).isTrue();
+    }
+
     /** Owner decision (review MINOR 5): a PAUSED session was actually run — no forced no-show strike. */
     @Test
     void cancelBookingAsCoach_pausedSession_isNotFlaggedAfterStart() {

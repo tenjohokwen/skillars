@@ -311,8 +311,13 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
         bookingService.cancelBookingAsParent(neverStarted, PARENT_ID);
 
         assertThat(refundRows(neverStarted)).isEqualTo(1);
+        // fix/audit3-completion-dispute-integrity: the coach never started the session past start + grace — that is
+        // a coach no-show, so the refund-eligible late cancel now records exactly one COACH_NO_SHOW strike
+        // (CancellationRefundService.onBookingCancelledByParent, issued after commit).
         assertThat(count("SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ?"))
-            .as("refund-only: still no coach strike on the parent-cancel path").isZero();
+            .as("one coach no-show strike for the never-started session").isEqualTo(1);
+        assertThat(count("SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE coach_id = ? "
+            + "AND reason = 'COACH_NO_SHOW'")).isEqualTo(1);
     }
 
     @Test
