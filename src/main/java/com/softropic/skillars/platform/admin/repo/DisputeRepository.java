@@ -6,18 +6,62 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 public interface DisputeRepository extends JpaRepository<Dispute, UUID> {
 
+    /**
+     * fix/audit3-completion-dispute-integrity: an open dispute raised by one side of the booking — the coach
+     * ({@code raisedByRole} COACH) or the family (PARENT / PLAYER). One open dispute per booking PER SIDE
+     * ({@code idx_disputes_unique_open_per_booking_side}, V214): a coach who disputed first no longer blocks
+     * the family's own dispute.
+     */
     @Query("""
-        SELECT d FROM Dispute d
+        SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END
+        FROM Dispute d
         WHERE d.bookingId = :bookingId
+          AND d.raisedByRole IN :roles
           AND d.status NOT IN ('RESOLVED', 'DISMISSED')
         """)
-    Optional<Dispute> findOpenByBookingId(@Param("bookingId") UUID bookingId);
+    boolean existsOpenByBookingIdAndRaisedByRoleIn(@Param("bookingId") UUID bookingId,
+                                                   @Param("roles") Collection<String> roles);
+
+    /**
+     * fix/audit3-completion-dispute-integrity: another dispute on the booking is still open — the payout stays
+     * dispute-frozen and the booking's DISPUTE_RAISED alert stays open until the last one is settled.
+     */
+    @Query("""
+        SELECT CASE WHEN COUNT(d) > 0 THEN true ELSE false END
+        FROM Dispute d
+        WHERE d.bookingId = :bookingId
+          AND d.id <> :disputeId
+          AND d.status NOT IN ('RESOLVED', 'DISMISSED')
+        """)
+    boolean existsOtherOpenForBooking(@Param("bookingId") UUID bookingId, @Param("disputeId") UUID disputeId);
+
+    /**
+     * fix/audit3-completion-dispute-integrity: every dispute one user raised on one booking, whatever its
+     * status — capped by {@code disputes.maxPerBookingPerRaiser}.
+     */
+    long countByBookingIdAndRaisedBy(UUID bookingId, Long raisedBy);
+
+    /**
+     * fix/audit3-completion-dispute-integrity: serialises the resolution / dismissal of disputes on ONE booking.
+     * Two disputes can now be open on a booking at once (one per side), and each is guarded only by its own row's
+     * optimistic lock — two admins resolving both concurrently would each read the same
+     * {@code remainingRefundable} and credit it twice, or each see the other still open and leave the payout
+     * frozen (or both see none and release it). Transaction-scoped; taken before the payout row lock, and no
+     * path holds that row lock while waiting on this one. Not {@code @Modifying}: a SELECT of a void function,
+     * same shape as {@code CoachCancellationHistoryRepository.acquireCoachCancellationLock}.
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(" + BOOKING_DISPUTE_LOCK_NAMESPACE + ", hashtext(:bookingId))",
+        nativeQuery = true)
+    void acquireBookingDisputeLock(@Param("bookingId") String bookingId);
+
+    /** {@code pg_advisory_xact_lock(int, int)} namespace for {@link #acquireBookingDisputeLock} ("DSPL"). */
+    int BOOKING_DISPUTE_LOCK_NAMESPACE = 0x4453504C;
 
     List<Dispute> findByRaisedBy(Long raisedBy);
 

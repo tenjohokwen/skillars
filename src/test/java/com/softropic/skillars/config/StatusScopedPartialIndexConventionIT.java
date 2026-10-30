@@ -27,10 +27,12 @@ import static org.assertj.core.api.Assertions.assertThat;
  * a future migration cannot reintroduce a status-scoped blacklist unnoticed.
  *
  * <p><strong>The one intentional exception</strong> is {@code admin.disputes}'
- * {@code idx_disputes_unique_open_per_booking … WHERE status NOT IN ('RESOLVED','DISMISSED')}
- * ({@code V74}) — there "any non-terminal status = an open dispute" is the correct model, and
- * {@code V74:9-10} explicitly reserves {@code UNDER_REVIEW} as a future non-terminal status that
- * <em>should</em> fall inside it. It is allowlisted by name here; do not "fix" {@code V74}.
+ * {@code idx_disputes_unique_open_per_booking_side … WHERE status NOT IN ('RESOLVED','DISMISSED')}
+ * ({@code V74}; one open dispute per booking per side since {@code V214},
+ * fix/audit3-completion-dispute-integrity, which replaced {@code idx_disputes_unique_open_per_booking}) — there
+ * "any non-terminal status = an open dispute" is the correct model, and {@code V74:9-10} explicitly reserves
+ * {@code UNDER_REVIEW} as a future non-terminal status that <em>should</em> fall inside it. It is allowlisted by
+ * name here; do not "fix" it into a whitelist.
  *
  * <p>Reuses {@link AbstractIntegrationTest}'s context verbatim — no {@code @MockitoBean} /
  * {@code @TestPropertySource} / extra config, so the CI context count is unchanged.
@@ -41,7 +43,7 @@ class StatusScopedPartialIndexConventionIT extends AbstractIntegrationTest {
      * Deliberate blacklist predicates. Adding to this set is a design decision (a status model where
      * "not terminal" is the natural predicate), not a fix — document the rationale on the migration.
      */
-    private static final Set<String> BLACKLIST_ALLOWLIST = Set.of("idx_disputes_unique_open_per_booking");
+    private static final Set<String> BLACKLIST_ALLOWLIST = Set.of("idx_disputes_unique_open_per_booking_side");
 
     // The catalog renders a status-column reference as `status` or `(status)::text`. Match the bare
     // column AND compound names (`moderation_status`, `verification_status`, `payment_status`, …) —
@@ -124,8 +126,9 @@ class StatusScopedPartialIndexConventionIT extends AbstractIntegrationTest {
         // Guards against a rename quietly making the allowlist entry dead (and the exception
         // un-audited).
         assertThat(statusScopedPartialIndexes())
-            .as("BLACKLIST_ALLOWLIST names idx_disputes_unique_open_per_booking — it must still be a "
+            .as("BLACKLIST_ALLOWLIST names idx_disputes_unique_open_per_booking_side — it must still be a "
                 + "status-scoped partial index, or the allowlist entry is stale")
-            .anySatisfy(idx -> assertThat(idx.get("index_name")).isEqualTo("idx_disputes_unique_open_per_booking"));
+            .anySatisfy(idx -> assertThat(idx.get("index_name"))
+                .isEqualTo("idx_disputes_unique_open_per_booking_side"));
     }
 }

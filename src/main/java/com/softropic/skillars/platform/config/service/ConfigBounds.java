@@ -115,6 +115,16 @@ public final class ConfigBounds {
         new BoundedKey("pack.expiry.days.tier4", 14L, 3650L, false,
             "too low → 11+ session packs warn/expire almost at once; out of range → falls back to 548", 548L);
 
+    /**
+     * fix/audit3-completion-dispute-integrity: {@code DisputeService.raiseDispute} — how many disputes one user
+     * may raise on one booking in total (open, resolved or dismissed). Each raise re-freezes the coach payout,
+     * so without a cap a dismissed raiser could refile for the whole submission window and keep the coach's
+     * money frozen. Appeals ({@code AppealService}) are the route past a decision.
+     */
+    public static final BoundedKey DISPUTES_MAX_PER_BOOKING_PER_RAISER =
+        new BoundedKey("disputes.maxPerBookingPerRaiser", 1L, 100L, false,
+            "out-of-range falls back to the coded default (2); huge → a raiser can re-freeze the payout repeatedly", 2L);
+
     /** {@code DisputeService} — 0/neg → no dispute can ever be filed. */
     public static final BoundedKey DISPUTES_SUBMISSION_WINDOW_DAYS =
         new BoundedKey("disputes.submissionWindowDays", 1L, 365L, true,
@@ -620,6 +630,7 @@ public final class ConfigBounds {
         BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES.key(),
         BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES.key(),
         BOOKING_LIVE_MIN_DURATION_PERCENT.key(),
+        DISPUTES_MAX_PER_BOOKING_PER_RAISER.key(),
         PACK_EXPIRY_DAYS_TIER1.key(),
         PACK_EXPIRY_DAYS_TIER2.key(),
         PACK_EXPIRY_DAYS_TIER3.key(),
@@ -675,6 +686,7 @@ public final class ConfigBounds {
             BOOKING_PLAYER_NO_SHOW_GRACE_MINUTES,
             BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES,
             BOOKING_LIVE_MIN_DURATION_PERCENT,
+            DISPUTES_MAX_PER_BOOKING_PER_RAISER,
             PACK_EXPIRY_DAYS_TIER1,
             PACK_EXPIRY_DAYS_TIER2,
             PACK_EXPIRY_DAYS_TIER3,
