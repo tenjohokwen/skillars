@@ -724,3 +724,29 @@ describe('ParentBookingsPage.vue — coach proposals and request withdrawal (boo
     )
   })
 })
+
+// fix/audit3-booking-scheduling-integrity: accepting the coach's proposed time used to show the generic
+// failure for every refusal; the server's reason (e.g. the pack is paused at the new time) is now shown.
+describe('ParentBookingsPage.vue — accepting a coach reschedule', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  it.each([
+    ['payment.packPaused', 'payment.sessionPack.packPaused'],
+    ['booking.slotUnavailable', 'booking.errors.slotUnavailable'],
+    ['booking.rescheduleNotPending', 'booking.errors.rescheduleNotPending'],
+    ['something.unmapped', 'booking.reschedule.acceptFailed'],
+  ])('a %s refusal is shown as %s', async (errorKey, message) => {
+    const { wrapper, bookingStore } = mountPage({ booking: { parentBookings: [] } })
+    await flushPromises()
+    bookingStore.handleAcceptRescheduleAsParent.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey } } },
+    })
+
+    await wrapper.vm.handleAcceptRescheduleAsParent(42, 'r-1')
+
+    expect(notifySpy).toHaveBeenCalledWith({ message, type: 'negative' })
+  })
+})

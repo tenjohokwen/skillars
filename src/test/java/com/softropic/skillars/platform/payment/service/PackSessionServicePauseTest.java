@@ -544,6 +544,44 @@ class PackSessionServicePauseTest {
             eq(pauseStart), eq(pauseStart.plus(14, ChronoUnit.DAYS)), anyList());
     }
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: an accepted booking mid-settlement (PAYMENT_PENDING) is a
+     * conflict — it used to escape the check and settle inside the new pause — and a blocking one: the pause
+     * cannot cancel it (no CANCEL_DUE_TO_PAUSE from PAYMENT_PENDING, its pack session may be being deducted).
+     */
+    @Test
+    void pausePack_paymentPendingBookingInTheWindow_blocksThePauseEvenWhenConfirmed() {
+        SessionPackPurchase purchase = buildPurchase();
+        when(sessionPackPurchaseRepository.findByIdForUpdate(PURCHASE_ID)).thenReturn(Optional.of(purchase));
+        when(configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)).thenReturn(90L);
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile("UTC")));
+
+        Instant sessionStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        Booking settling = mock(Booking.class);
+        UUID bookingId = UUID.randomUUID();
+        when(settling.getId()).thenReturn(bookingId);
+        when(settling.getRequestedStartTime()).thenReturn(sessionStart);
+        when(settling.getRequestedEndTime()).thenReturn(sessionStart.plusSeconds(3600));
+        when(settling.getStatus()).thenReturn("PAYMENT_PENDING");
+        when(settling.getCanonicalTimezone()).thenReturn("UTC");
+        when(bookingRepository.findConflictingBookingsForPause(eq(PURCHASE_ID), any(), any(), any(), any(),
+                org.mockito.ArgumentMatchers.argThat((List<String> statuses) -> statuses.contains("PAYMENT_PENDING"))))
+            .thenReturn(List.of(settling));
+
+        PauseConflictResponse response = packSessionService.pausePack(PARENT_ID, PURCHASE_ID,
+            new PausePackRequest(Instant.now().plus(1, ChronoUnit.DAYS), 30, List.of(bookingId)));
+
+        assertThat(response.pauseApplied()).isFalse();
+        assertThat(response.conflictingBookings()).singleElement()
+            .satisfies(item -> {
+                assertThat(item.cancellable()).isFalse();
+                assertThat(item.status()).isEqualTo("PAYMENT_PENDING");
+            });
+        verify(bookingService, never()).cancelDueToPause(any(), any(), any(), any());
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        assertThat(purchase.getPausedUntil()).isNull();
+    }
+
     private SessionPackPurchase buildPurchase() {
         SessionPackPurchase purchase = new SessionPackPurchase();
         purchase.setPurchaseId(PURCHASE_ID);

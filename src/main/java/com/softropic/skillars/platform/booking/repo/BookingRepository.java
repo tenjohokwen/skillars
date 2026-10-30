@@ -137,6 +137,20 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """)
     long countPendingParentRequests(@Param("parentId") Long parentId, @Param("coachId") UUID coachId);
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: open, not-yet-settled bookings drawing on a pack — the input to
+     * {@code BookingService.hasUnreservedPackSession}, read under the coach and pack row locks. The statuses are
+     * literals, not a parameter, so the planner can always match the V214 partial index
+     * {@code idx_bkg_open_pack_reservation}, whose predicate lists the same three; they must stay equal to
+     * {@code BookingService.PACK_RESERVING_STATUSES} (pinned by BookingServiceTest).
+     */
+    @Query("""
+        SELECT COUNT(b) FROM Booking b
+        WHERE b.sessionPackPurchaseId = :purchaseId
+          AND b.status IN ('REQUESTED', 'ACCEPTED', 'PAYMENT_PENDING')
+        """)
+    long countOpenPackReservations(@Param("purchaseId") UUID purchaseId);
+
     List<Booking> findByBatchId(UUID batchId);
 
     List<Booking> findByBatchIdAndStatus(UUID batchId, String status);

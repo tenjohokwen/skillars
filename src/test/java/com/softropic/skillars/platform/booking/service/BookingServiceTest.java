@@ -1292,8 +1292,10 @@ class BookingServiceTest {
         when(bookingRepository.save(any(Booking.class))).thenReturn(savedBooking);
         when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
 
+        // fix/audit3-booking-scheduling-integrity: 09:30, the second 90-minute slot of the 08:00 window —
+        // 10:00 is off that grid and is now refused (SLOT_NOT_ON_GRID).
         ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
-            .plusDays(1).withHour(10).withMinute(0).withSecond(0).withNano(0);
+            .plusDays(1).withHour(9).withMinute(30).withSecond(0).withNano(0);
 
         assertThat(bookingService.createBookingRequest(PARENT_ID, new CreateBookingRequest(
             COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusMinutes(90).toInstant(), null, null, null)))
@@ -1548,6 +1550,260 @@ class BookingServiceTest {
         when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
         when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
             .thenReturn(List.of());
+    }
+
+    // ---- fix/audit3-booking-scheduling-integrity: slot-grid alignment (requireStartOnSlotGrid) ----
+
+    private static CoachAvailabilityWindow gridWindow(java.time.LocalDate date, LocalTime from, LocalTime to) {
+        CoachAvailabilityWindow w = new CoachAvailabilityWindow();
+        w.setCoachId(COACH_ID);
+        w.setDayOfWeek((short) date.getDayOfWeek().getValue());
+        w.setStartTime(from);
+        w.setEndTime(to);
+        return w;
+    }
+
+    private void assertNotOnGrid(Instant start, Duration length, List<CoachAvailabilityWindow> windows, String zone) {
+        assertThatThrownBy(() -> bookingService.requireStartOnSlotGrid(start, start.plus(length), windows,
+                COACH_ID, zone, length))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_NOT_ON_GRID));
+    }
+
+    private void assertOnGrid(Instant start, Duration length, List<CoachAvailabilityWindow> windows, String zone) {
+        assertThatCode(() -> bookingService.requireStartOnSlotGrid(start, start.plus(length), windows,
+                COACH_ID, zone, length))
+            .doesNotThrowAnyException();
+    }
+
+    /** An off-grid start inside the window used to pass (only "inside a window" was checked). */
+    @Test
+    void requireStartOnSlotGrid_offGridStartInsideTheWindow_isRefused() {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 11, 10);
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        List<CoachAvailabilityWindow> windows = List.of(gridWindow(day, LocalTime.of(9, 0), LocalTime.of(17, 0)));
+
+        assertNotOnGrid(day.atTime(9, 7).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertNotOnGrid(day.atTime(9, 30).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertOnGrid(day.atTime(9, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertOnGrid(day.atTime(16, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        // 45-minute sessions: 09:00, 09:45, 10:30 ... (the step is the session length, not the hour).
+        assertOnGrid(day.atTime(10, 30).atZone(berlin).toInstant(), Duration.ofMinutes(45), windows, "Europe/Berlin");
+        assertNotOnGrid(day.atTime(10, 0).atZone(berlin).toInstant(), Duration.ofMinutes(45), windows, "Europe/Berlin");
+    }
+
+    /**
+     * The calendar re-anchors the grid after a block (AvailabilityService.computeAvailableSlots): with a
+     * 12:00-12:45 block the offered slots after it are 12:45, 13:45 ... — those must be accepted and the
+     * window-grid 13:00 refused, exactly as the calendar shows them.
+     */
+    @Test
+    void requireStartOnSlotGrid_afterABlock_followsTheCalendarsReAnchoredGrid() {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 11, 10);
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        List<CoachAvailabilityWindow> windows = List.of(gridWindow(day, LocalTime.of(9, 0), LocalTime.of(17, 0)));
+        com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlock block =
+            new com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlock();
+        block.setStartDatetime(day.atTime(12, 0).atZone(berlin).toInstant());
+        block.setEndDatetime(day.atTime(12, 45).atZone(berlin).toInstant());
+        lenient().when(coachAvailabilityBlockRepository.findByCoachIdAndEndDatetimeAfterAndStartDatetimeBefore(
+                eq(COACH_ID), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of(block));
+
+        assertOnGrid(day.atTime(12, 45).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertOnGrid(day.atTime(13, 45).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertOnGrid(day.atTime(11, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertNotOnGrid(day.atTime(13, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+    }
+
+    /** An existing booking re-anchors the grid the same way (the calendar treats it as a pseudo-block). */
+    @Test
+    void requireStartOnSlotGrid_afterAnExistingBooking_followsItsEnd() {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 11, 10);
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        List<CoachAvailabilityWindow> windows = List.of(gridWindow(day, LocalTime.of(9, 0), LocalTime.of(17, 0)));
+        Booking existing = makeBooking(PARENT_ID, 999L, COACH_ID, "CONFIRMED");
+        existing.setRequestedStartTime(day.atTime(9, 0).atZone(berlin).toInstant());
+        existing.setRequestedEndTime(day.atTime(10, 20).atZone(berlin).toInstant());
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class),
+                eq(List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED")),
+                isNull()))
+            .thenReturn(List.of(existing));
+
+        assertOnGrid(day.atTime(10, 20).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertNotOnGrid(day.atTime(11, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+    }
+
+    /**
+     * DST: the grid steps in elapsed time from the window's start materialized in the coach's zone, as the
+     * calendar does. Berlin springs forward on 2026-03-29 (02:00 → 03:00): a 00:00-06:00 window's 60-minute
+     * slots are 00:00, 01:00, 03:00, 04:00, 05:00 local — 03:00 local is the slot after 01:00.
+     */
+    @Test
+    void requireStartOnSlotGrid_acrossASpringForwardGap_matchesTheCalendarsElapsedTimeGrid() {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 3, 29);
+        ZoneId berlin = ZoneId.of("Europe/Berlin");
+        List<CoachAvailabilityWindow> windows = List.of(gridWindow(day, LocalTime.of(0, 0), LocalTime.of(6, 0)));
+
+        assertOnGrid(day.atTime(3, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertOnGrid(day.atTime(4, 0).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+        assertNotOnGrid(day.atTime(3, 30).atZone(berlin).toInstant(), Duration.ofMinutes(60), windows, "Europe/Berlin");
+    }
+
+    /** The grid is the coach's local one: 09:00 Los Angeles is on it, 09:00 UTC is not. */
+    @Test
+    void requireStartOnSlotGrid_usesTheCoachsZone() {
+        java.time.LocalDate day = java.time.LocalDate.of(2026, 11, 10);
+        List<CoachAvailabilityWindow> windows = List.of(gridWindow(day, LocalTime.of(9, 0), LocalTime.of(17, 0)));
+
+        assertOnGrid(day.atTime(9, 0).atZone(ZoneId.of("America/Los_Angeles")).toInstant(), Duration.ofMinutes(90),
+            windows, "America/Los_Angeles");
+        // 09:00 Sydney is 14:00 the previous day in LA — outside the LA window.
+        assertNotOnGrid(day.atTime(9, 0).atZone(ZoneId.of("Australia/Sydney")).toInstant(), Duration.ofMinutes(90),
+            windows, "America/Los_Angeles");
+    }
+
+    /** End to end through createBookingRequest: an off-grid request is refused and nothing is written. */
+    @Test
+    void createBookingRequest_offGridStart_isRefusedSlotNotOnGrid() {
+        PlayerProfile player = makePlayer(PLAYER_ID, PARENT_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeCoveringWindow(COACH_ID);
+
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID)).thenReturn(List.of(window));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+
+        ZonedDateTime slotStart = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .plusDays(1).withHour(10).withMinute(7).withSecond(0).withNano(0);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, new CreateBookingRequest(
+                COACH_ID, PLAYER_ID, slotStart.toInstant(), slotStart.plusHours(1).toInstant(), null, null, null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SLOT_NOT_ON_GRID));
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: the reservation count query and the V214 partial index carry
+     * the open statuses as literals; they must stay exactly PACK_RESERVING_STATUSES.
+     */
+    @Test
+    void packReservingStatuses_matchTheCountQueryAndTheV214IndexLiterals() throws Exception {
+        String jpql = BookingRepository.class.getMethod("countOpenPackReservations", UUID.class)
+            .getAnnotation(org.springframework.data.jpa.repository.Query.class).value();
+        String expectedInList = BookingService.PACK_RESERVING_STATUSES.stream()
+            .map(st -> "'" + st + "'").collect(java.util.stream.Collectors.joining(", ", "IN (", ")"));
+        assertThat(jpql).contains(expectedInList);
+        String migration = new String(getClass().getResourceAsStream(
+            "/db/migration/V214__bookings_open_pack_reservation_index.sql").readAllBytes(),
+            java.nio.charset.StandardCharsets.UTF_8);
+        assertThat(migration).contains("status " + expectedInList);
+    }
+
+    // ---- fix/audit3-booking-scheduling-integrity: reschedule-accept pause check locks only while a pause can begin ----
+
+    private com.softropic.skillars.platform.payment.repo.SessionPackPurchase packFixture(UUID id) {
+        var p = new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
+        p.setPurchaseId(id);
+        p.setRemainingSessions(3);
+        p.setExpiresAt(Instant.now().plus(Duration.ofDays(60)));
+        return p;
+    }
+
+    @Test
+    void requirePackNotPausedAtUnderLock_pauseStillPossible_readsThePackUnderItsRowLock() {
+        UUID packId = UUID.randomUUID();
+        var pack = packFixture(packId);
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack));
+
+        bookingService.requirePackNotPausedAtUnderLock(packId, Instant.now().plus(Duration.ofDays(3)));
+
+        verify(sessionPackPurchaseRepository).findByIdForUpdate(packId);
+    }
+
+    @Test
+    void requirePackNotPausedAtUnderLock_pauseAlreadyUsed_checksUnlocked_andStillRefusesInsideIt() {
+        UUID packId = UUID.randomUUID();
+        var pack = packFixture(packId);
+        Instant start = Instant.now().plus(Duration.ofDays(3));
+        pack.setPausedFrom(start.minus(Duration.ofDays(1)));
+        pack.setPausedUntil(start.plus(Duration.ofDays(10)));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+
+        assertThatThrownBy(() -> bookingService.requirePackNotPausedAtUnderLock(packId, start))
+            .hasMessageContaining("payment.packPaused");
+        assertThatCode(() -> bookingService.requirePackNotPausedAtUnderLock(packId, start.plus(Duration.ofDays(20))))
+            .doesNotThrowAnyException();
+        verify(sessionPackPurchaseRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void requirePackNotPausedAtUnderLock_revokedPack_takesNoLock() {
+        UUID packId = UUID.randomUUID();
+        var pack = packFixture(packId);
+        pack.setRevokedAt(Instant.now().minus(Duration.ofDays(1)));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+
+        bookingService.requirePackNotPausedAtUnderLock(packId, Instant.now().plus(Duration.ofDays(3)));
+
+        verify(sessionPackPurchaseRepository, never()).findByIdForUpdate(any());
+    }
+
+    // ---- fix/audit3-booking-scheduling-integrity: getCoachWeekSchedule bounded at the coach's midnight ----
+
+    @Test
+    void getCoachWeekSchedule_boundsTheWeekAtTheCoachsLocalMidnight() {
+        java.time.LocalDate monday = java.time.LocalDate.of(2026, 11, 9);
+        when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(eq(COACH_ID), anyList(), any(Instant.class),
+                any(Instant.class)))
+            .thenReturn(List.of());
+
+        bookingService.getCoachWeekSchedule(COACH_ID, monday, ZoneId.of("Australia/Sydney"));
+        bookingService.getCoachWeekSchedule(COACH_ID, monday, ZoneId.of("America/Los_Angeles"));
+
+        // Sydney is UTC+11 (AEDT) in November, Los Angeles UTC-8 (PST).
+        verify(bookingRepository).findByCoachIdAndStatusInAndTimeBetween(eq(COACH_ID), anyList(),
+            eq(Instant.parse("2026-11-08T13:00:00Z")), eq(Instant.parse("2026-11-15T13:00:00Z")));
+        verify(bookingRepository).findByCoachIdAndStatusInAndTimeBetween(eq(COACH_ID), anyList(),
+            eq(Instant.parse("2026-11-09T08:00:00Z")), eq(Instant.parse("2026-11-16T08:00:00Z")));
+    }
+
+    // ---- fix/audit3-booking-scheduling-integrity: accept refuses a pack session inside the pack's pause ----
+
+    @Test
+    void acceptBooking_packPausedAtTheSessionStart_isRefusedPackPaused() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "REQUESTED");
+        UUID packId = UUID.randomUUID();
+        booking.setSessionPackPurchaseId(packId);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchase pack =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
+        pack.setPricePerSession(new BigDecimal("40.00"));
+        // A pause scheduled after the request was made, covering its start.
+        pack.setPausedFrom(booking.getRequestedStartTime().minus(Duration.ofDays(1)));
+        pack.setPausedUntil(booking.getRequestedStartTime().plus(Duration.ofDays(30)));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachProfileRepository.findByIdForUpdate(COACH_ID)).thenReturn(Optional.of(coach));
+        when(bookingRepository.findOverlappingBookings(eq(COACH_ID), any(Instant.class), any(Instant.class), anyList(), any()))
+            .thenReturn(List.of());
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+
+        assertThatThrownBy(() -> bookingService.acceptBooking(booking.getId(), COACH_USER_ID))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException.class)
+            .hasMessageContaining("payment.packPaused");
+        assertThat(booking.getStatus()).isEqualTo("REQUESTED");
+        verify(eventPublisher, never()).publishEvent(any(BookingAcceptedEvent.class));
     }
 
     // ---- acceptBooking tests ----

@@ -82,6 +82,23 @@ public interface SessionPackPurchaseRepository extends JpaRepository<SessionPack
                                               @Param("coachId") UUID coachId,
                                               @Param("now") Instant now);
 
+    /**
+     * fix/audit3-booking-scheduling-integrity: findActivePacks without its "not paused now" condition — the
+     * packs a family still holds for this player and coach (sessions left, not expired, not dispute-frozen),
+     * paused or not, in the same order. BookingDuplicationService decides pause and reservation itself, so a
+     * paused pack is a reason to refuse the duplicate rather than invisible (which fell back to card pricing).
+     */
+    @Query("""
+        SELECT p FROM SessionPackPurchase p
+        WHERE p.playerId = :playerId AND p.coachId = :coachId
+          AND p.remainingSessions > 0 AND p.expiresAt > :now
+          AND p.disputeFrozenAt IS NULL
+        ORDER BY p.expiresAt ASC, p.createdAt DESC, p.purchaseId ASC
+        """)
+    List<SessionPackPurchase> findUnexpiredPacksWithSessions(@Param("playerId") Long playerId,
+                                                             @Param("coachId") UUID coachId,
+                                                             @Param("now") Instant now);
+
     Optional<SessionPackPurchase> findTopByPlayerIdAndCoachIdOrderByCreatedAtDesc(Long playerId, UUID coachId);
 
     // Story Deferred-75 AC6: batch form of findActivePacks' own filter conditions, copied exactly

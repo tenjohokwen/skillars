@@ -15,6 +15,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -23,6 +25,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -52,7 +55,7 @@ class ProjectedRevenueServiceTest {
         pricing.setPerSessionPrice(new BigDecimal("50.00"));
         when(coachPricingRepository.findByCoachId(coachId)).thenReturn(Optional.of(pricing));
 
-        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart);
+        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart, ZoneOffset.UTC);
 
         assertThat(result.grossRevenue()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(result.commissionDeduction()).isEqualByComparingTo(BigDecimal.ZERO);
@@ -69,7 +72,7 @@ class ProjectedRevenueServiceTest {
         pricing.setPerSessionPrice(new BigDecimal("50.00"));
         when(coachPricingRepository.findByCoachId(coachId)).thenReturn(Optional.of(pricing));
 
-        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart);
+        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart, ZoneOffset.UTC);
 
         assertThat(result.grossRevenue()).isEqualByComparingTo(new BigDecimal("150.00"));
         assertThat(result.commissionDeduction()).isEqualByComparingTo(new BigDecimal("12.00"));
@@ -88,7 +91,7 @@ class ProjectedRevenueServiceTest {
         pricing.setPerSessionPrice(new BigDecimal("60.00"));
         when(coachPricingRepository.findByCoachId(coachId)).thenReturn(Optional.of(pricing));
 
-        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart);
+        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart, ZoneOffset.UTC);
 
         assertThat(result.grossRevenue()).isEqualByComparingTo(new BigDecimal("120.00"));
     }
@@ -100,10 +103,39 @@ class ProjectedRevenueServiceTest {
             .thenReturn(List.of(new Booking()));
         when(coachPricingRepository.findByCoachId(coachId)).thenReturn(Optional.empty());
 
-        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart);
+        ProjectedRevenueResult result = service.calculateWeeklyRevenue(coachId, weekStart, ZoneOffset.UTC);
 
         assertThat(result.grossRevenue()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(result.commissionDeduction()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(result.netRevenue()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: the week is bounded at the coach's local midnight, the same
+     * week AvailabilityService.getAvailabilityCalendar returns beside it — not UTC midnight. Sydney is
+     * UTC+10 in June (no DST), Los Angeles UTC-7 (PDT).
+     */
+    @Test
+    void weekBounds_areTheCoachsLocalMidnight_sydney() {
+        when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
+            eq(coachId), anyList(), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of());
+
+        service.calculateWeeklyRevenue(coachId, weekStart, ZoneId.of("Australia/Sydney"));
+
+        verify(bookingRepository).findByCoachIdAndStatusInAndTimeBetween(eq(coachId), anyList(),
+            eq(Instant.parse("2026-06-08T14:00:00Z")), eq(Instant.parse("2026-06-15T14:00:00Z")));
+    }
+
+    @Test
+    void weekBounds_areTheCoachsLocalMidnight_losAngeles() {
+        when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
+            eq(coachId), anyList(), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of());
+
+        service.calculateWeeklyRevenue(coachId, weekStart, ZoneId.of("America/Los_Angeles"));
+
+        verify(bookingRepository).findByCoachIdAndStatusInAndTimeBetween(eq(coachId), anyList(),
+            eq(Instant.parse("2026-06-09T07:00:00Z")), eq(Instant.parse("2026-06-16T07:00:00Z")));
     }
 }

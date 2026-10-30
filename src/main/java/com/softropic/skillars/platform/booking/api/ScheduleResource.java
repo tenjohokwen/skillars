@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 
@@ -56,13 +57,17 @@ public class ScheduleResource {
         CoachProfile coach = coachProfileRepository.findByUserId(coachUserId)
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
 
-        List<ScheduleBookingItem> bookings = bookingService.getCoachWeekSchedule(coach.getId(), weekStart);
+        // fix/audit3-booking-scheduling-integrity: one zone for all three parts of the response — the
+        // bookings and the revenue used to be bounded at UTC midnight, the availability at the coach's.
+        ZoneId coachZone = AvailabilityService.resolveCoachZone(coach);
+
+        List<ScheduleBookingItem> bookings = bookingService.getCoachWeekSchedule(coach.getId(), weekStart, coachZone);
 
         var availability = availabilityService.getAvailabilityCalendar(coach.getId(), weekStart);
 
-        ProjectedRevenueResult revenue = projectedRevenueService.calculateWeeklyRevenue(coach.getId(), weekStart);
+        ProjectedRevenueResult revenue = projectedRevenueService.calculateWeeklyRevenue(coach.getId(), weekStart, coachZone);
 
-        String coachTimezone = coach.getCanonicalTimezone() != null ? coach.getCanonicalTimezone() : "UTC";
+        String coachTimezone = coachZone.getId();
 
         return ResponseEntity.ok(new CoachScheduleResponse(
             weekStart.toString(),

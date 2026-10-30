@@ -86,7 +86,7 @@ public class AvailabilityService {
         // AC1 reverses skillars-deferred-63/-64's per-window timezone divergence — every window is
         // now stamped with this same profile zone, so this value also drives per-window slot
         // computation below (see AC1.3's loop simplification).
-        ZoneId zoneId = resolveCoachZoneOrUtc(profile.getCanonicalTimezone(), profile.getId());
+        ZoneId zoneId = resolveCoachZone(profile);
 
         // Deferred-18 AC2 (padding retained post-skillars-deferred-140): every window is now
         // materialized in this same `zoneId` (AC1.3), so the per-window zone divergence this padding
@@ -346,13 +346,18 @@ public class AvailabilityService {
      * 13:45 ... — the post-block run is anchored to the block's end because that is genuinely when
      * the coach next becomes free. Anchoring the whole window to 09:00 instead would silently
      * discard the 12:45-13:00 quarter-hour and every equivalent fragment. Do not "tidy" this into a
-     * window-anchored grid; {@code BookingService} deliberately enforces exact duration only, never
-     * grid alignment, for the same reason.
+     * window-anchored grid.
+     *
+     * <p>fix/audit3-booking-scheduling-integrity: {@code BookingService.requireStartOnSlotGrid} now
+     * requires a parent-initiated request to start on one of the slots this method returns (it used to
+     * check exact duration only, so an off-grid start left unbookable fragments either side of it).
+     * Static so that check reuses this exact slicing, not a copy of it — the per-segment anchoring
+     * above is what it must match.
      *
      * <p>Any remainder shorter than one slot is dropped, so a segment shorter than {@code
      * slotLength} yields nothing at all.
      */
-    List<AvailableSlotResponse> computeAvailableSlots(
+    static List<AvailableSlotResponse> computeAvailableSlots(
             Instant windowStart, Instant windowEnd,
             List<CoachAvailabilityBlock> blocks, Duration slotLength) {
         // SessionDurationResolver.getBoundedLong already refuses a non-positive length; this makes
@@ -410,6 +415,18 @@ public class AvailabilityService {
 
     private AvailabilityBlockResponse toBlockResponse(CoachAvailabilityBlock b) {
         return new AvailabilityBlockResponse(b.getId(), b.getStartDatetime(), b.getEndDatetime(), b.getReason());
+    }
+
+    /**
+     * fix/audit3-booking-scheduling-integrity: the zone every reader of a coach's week uses — the
+     * availability calendar, {@code BookingService.getCoachWeekSchedule} and
+     * {@code ProjectedRevenueService.calculateWeeklyRevenue}. The latter two used to bound the week at UTC
+     * midnight while the calendar bounded it at the coach's local midnight, so {@code ScheduleResource}
+     * returned three different weeks side by side for any coach outside UTC (a Sydney coach's Monday 08:00
+     * session sat in the previous week's bookings and revenue).
+     */
+    public static ZoneId resolveCoachZone(CoachProfile profile) {
+        return resolveCoachZoneOrUtc(profile.getCanonicalTimezone(), profile.getId());
     }
 
     /**

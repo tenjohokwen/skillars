@@ -387,6 +387,84 @@ class RescheduleServiceTest {
             .hasMessageContaining("pending reschedule");
     }
 
+    // ---- fix/audit3-booking-scheduling-integrity: pack pause + booking horizon on a reschedule ----
+
+    @Test
+    void requestReschedule_checksThePackPauseAndTheHorizonAgainstTheProposedStart() {
+        UUID packId = UUID.randomUUID();
+        confirmedBooking.setSessionPackPurchaseId(packId);
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(rescheduleRepo.findFirstByBookingIdAndStatusOrderByCreatedAtDesc(BOOKING_ID, "PENDING"))
+            .thenReturn(Optional.empty());
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        when(rescheduleRepo.save(any())).thenAnswer(i -> i.getArgument(0));
+
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        service.requestReschedule(BOOKING_ID, PARENT_ID,
+            new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null));
+
+        verify(bookingService).requirePackNotPausedAt(packId, proposedStart);
+        verify(bookingService).requireWithinBookingHorizon(List.of(proposedStart));
+    }
+
+    @Test
+    void requestReschedule_intoThePacksPause_isRefusedAndNothingIsSaved() {
+        UUID packId = UUID.randomUUID();
+        confirmedBooking.setSessionPackPurchaseId(packId);
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        Instant proposedStart = Instant.now().plus(3, ChronoUnit.DAYS);
+        doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.packPaused"))
+            .when(bookingService).requirePackNotPausedAt(packId, proposedStart);
+
+        assertThatThrownBy(() -> service.requestRescheduleAsCoach(BOOKING_ID, COACH_USER_ID,
+                new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null)))
+            .hasMessageContaining("payment.packPaused");
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    @Test
+    void requestReschedule_beyondTheBookingHorizon_isRefusedAndNothingIsSaved() {
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        Instant proposedStart = Instant.now().plus(400, ChronoUnit.DAYS);
+        doThrow(new OperationNotAllowedException("beyond", BookingError.BEYOND_BOOKING_HORIZON))
+            .when(bookingService).requireWithinBookingHorizon(List.of(proposedStart));
+
+        assertThatThrownBy(() -> service.requestReschedule(BOOKING_ID, PARENT_ID,
+                new CreateRescheduleRequest(proposedStart, proposedStart.plus(1, ChronoUnit.HOURS), null)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.BEYOND_BOOKING_HORIZON));
+        verify(rescheduleRepo, never()).save(any());
+    }
+
+    /** The pause can be scheduled after the proposal was made — re-checked at accept, under the locks. */
+    @Test
+    void acceptReschedule_proposalNowInsideThePacksPause_isRefusedAndTheBookingKeepsItsTime() {
+        UUID packId = UUID.randomUUID();
+        confirmedBooking.setSessionPackPurchaseId(packId);
+        Instant originalStart = confirmedBooking.getRequestedStartTime();
+        when(bookingService.getBookingOrThrow(BOOKING_ID)).thenReturn(confirmedBooking);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        Instant proposedStart = Instant.now().plus(5, ChronoUnit.DAYS);
+        BookingRescheduleRequest pending = new BookingRescheduleRequest();
+        pending.setBookingId(BOOKING_ID);
+        pending.setStatus("PENDING");
+        pending.setProposedBy("PARENT");
+        pending.setProposedStartTime(proposedStart);
+        pending.setProposedEndTime(proposedStart.plus(1, ChronoUnit.HOURS));
+        when(rescheduleRepo.findById(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        when(rescheduleRepo.findByIdForUpdate(RESCHEDULE_ID)).thenReturn(Optional.of(pending));
+        doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.packPaused"))
+            .when(bookingService).requirePackNotPausedAtUnderLock(packId, proposedStart);
+
+        assertThatThrownBy(() -> service.acceptReschedule(BOOKING_ID, RESCHEDULE_ID, COACH_USER_ID))
+            .hasMessageContaining("payment.packPaused");
+        assertThat(confirmedBooking.getRequestedStartTime()).isEqualTo(originalStart);
+        assertThat(pending.getStatus()).isEqualTo("PENDING");
+        verify(bookingRepository, never()).save(any());
+    }
+
     @Test
     void acceptReschedule_coachOwnsBooking_updatesTimesAndStatus() {
         Instant confirmedStart = confirmedBooking.getRequestedStartTime();

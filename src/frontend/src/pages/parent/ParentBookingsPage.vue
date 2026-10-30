@@ -659,6 +659,8 @@ const PROPOSAL_ERROR_MESSAGES = {
   'booking.coachUnavailable': 'booking.errors.coachUnavailable',
   'booking.requestExpired': 'booking.errors.requestExpired',
   'booking.concurrentModification': 'booking.errors.concurrentModification',
+  // fix/audit3-booking-scheduling-integrity: confirming a proposal whose start falls in the pack's pause.
+  'payment.packPaused': 'payment.sessionPack.packPaused',
   'booking.invalidTransition': 'booking.errors.requestNotPending',
 }
 
@@ -783,8 +785,34 @@ async function handleAcceptRescheduleAsParent(bookingId, rescheduleId) {
   try {
     await bookingStore.handleAcceptRescheduleAsParent(bookingId, rescheduleId)
     $q.notify({ message: t('booking.reschedule.accepted'), type: 'positive' })
-  } catch {
-    $q.notify({ message: t('booking.reschedule.acceptFailed'), type: 'negative' })
+  } catch (err) {
+    // fix/audit3-booking-scheduling-integrity: RescheduleService.acceptRescheduleAsParent re-validates the
+    // proposal under the locks (the coach's hours, blocks, overlap, the pack pause), so each refusal gets
+    // its own message instead of the generic accept failure — same keys as the coach's accept.
+    const errorKey = err?.response?.data?.errorMsg?.errorKey
+    if (errorKey === 'payment.packPaused') {
+      $q.notify({ message: t('payment.sessionPack.packPaused'), type: 'negative' })
+    } else if (errorKey === 'booking.coachUnavailable') {
+      $q.notify({ message: t('booking.errors.coachUnavailable'), type: 'negative' })
+    } else if (errorKey === 'booking.slotUnavailable') {
+      $q.notify({ message: t('booking.errors.slotUnavailable'), type: 'negative' })
+    } else if (errorKey === 'booking.slotBlockedByCoach') {
+      $q.notify({ message: t('booking.errors.slotBlockedByCoach'), type: 'negative' })
+    } else if (errorKey === 'booking.slotOutsideAvailability') {
+      $q.notify({ message: t('booking.errors.slotOutsideAvailability'), type: 'negative' })
+    } else if (errorKey === 'booking.rescheduleNotPending') {
+      $q.notify({ message: t('booking.errors.rescheduleNotPending'), type: 'negative' })
+    } else if (errorKey === 'booking.notReschedulable') {
+      $q.notify({ message: t('booking.errors.notReschedulable'), type: 'negative' })
+    } else if (errorKey === 'booking.startTimeInPast') {
+      $q.notify({ message: t('booking.errors.startTimeInPast'), type: 'negative' })
+    } else if (errorKey === 'booking.concurrentModification') {
+      $q.notify({ message: t('booking.errors.concurrentModification'), type: 'negative' })
+    } else if (errorKey === 'MISSING_RIGHTS') {
+      $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
+    } else {
+      $q.notify({ message: t('booking.reschedule.acceptFailed'), type: 'negative' })
+    }
   } finally {
     respondingId.value = null
   }
@@ -873,6 +901,12 @@ async function submitReschedule() {
       $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
     } else if (errorKey === 'booking.rescheduleAlreadyPending') {
       $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
+    } else if (errorKey === 'booking.beyondBookingHorizon') {
+      // fix/audit3-booking-scheduling-integrity: the request-time horizon applies to the new start too.
+      $q.notify({ message: t('booking.errors.beyondBookingHorizon'), type: 'negative' })
+    } else if (errorKey === 'payment.packPaused') {
+      // fix/audit3-booking-scheduling-integrity: a pack session cannot be moved into the pack's pause.
+      $q.notify({ message: t('payment.sessionPack.packPaused'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {

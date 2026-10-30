@@ -179,4 +179,27 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     await flushPromises()
     expect(notifyMock).toHaveBeenCalledWith({ message, type: 'negative' })
   })
+
+  // fix/audit3-booking-scheduling-integrity: a booking mid-settlement (PAYMENT_PENDING) inside the pause
+  // window blocks the pause; it is explained as "payment still processing", not as the 24h-notice rule.
+  it('a PAYMENT_PENDING conflict blocks the pause with its own explanation', async () => {
+    const wrapper = await mountPage([BASE])
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const store = useBookingStore()
+    const setup = wrapper.vm.$.setupState
+
+    store.packPauseConflicts = [{ id: 'b-1', status: 'PAYMENT_PENDING', cancellable: false }]
+    await flushPromises()
+    expect(setup.hasBlockingConflict).toBe(true)
+    expect(setup.hasPaymentPendingConflict).toBe(true)
+    expect(setup.hasInsideNoticeConflict).toBe(false)
+
+    store.packPauseConflicts = [
+      { id: 'b-1', status: 'PAYMENT_PENDING', cancellable: false },
+      { id: 'b-2', status: 'UPCOMING', cancellable: false },
+    ]
+    await flushPromises()
+    expect(setup.hasPaymentPendingConflict).toBe(true)
+    expect(setup.hasInsideNoticeConflict).toBe(true)
+  })
 })

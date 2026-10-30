@@ -150,14 +150,23 @@
                 }}</q-item-label>
                 <q-item-label caption>{{ b.status }}</q-item-label>
                 <q-item-label v-if="b.cancellable === false" caption class="text-negative">
-                  {{ t('booking.packs.pauseConflictInsideNotice') }}
+                  {{
+                    b.status === 'PAYMENT_PENDING'
+                      ? t('booking.packs.pauseConflictPaymentPending')
+                      : t('booking.packs.pauseConflictInsideNotice')
+                  }}
                 </q-item-label>
               </q-item-section>
             </q-item>
           </q-list>
-          <div v-if="hasBlockingConflict" class="text-caption text-negative q-mt-sm">
-            {{ t('booking.packs.pauseBlockedInsideNotice') }}
-          </div>
+          <template v-if="hasBlockingConflict">
+            <div v-if="hasPaymentPendingConflict" class="text-caption text-negative q-mt-sm">
+              {{ t('booking.packs.pauseBlockedPaymentPending') }}
+            </div>
+            <div v-if="hasInsideNoticeConflict" class="text-caption text-negative q-mt-sm">
+              {{ t('booking.packs.pauseBlockedInsideNotice') }}
+            </div>
+          </template>
           <div v-else class="text-caption text-negative q-mt-sm">
             {{ t('booking.packs.pauseConflictsWarning') }}
           </div>
@@ -268,8 +277,20 @@ const minPauseStartDate = computed(() => {
 })
 
 // A paid session within 24h of its start cannot be cancelled by a pause: the pause is refused.
+// fix/audit3-booking-scheduling-integrity: so is a session whose payment is still settling
+// (PAYMENT_PENDING) — the parent retries once it has settled. Each cause gets its own explanation.
 const hasBlockingConflict = computed(() =>
   bookingStore.packPauseConflicts.some((b) => b.cancellable === false),
+)
+const hasPaymentPendingConflict = computed(() =>
+  bookingStore.packPauseConflicts.some(
+    (b) => b.cancellable === false && b.status === 'PAYMENT_PENDING',
+  ),
+)
+const hasInsideNoticeConflict = computed(() =>
+  bookingStore.packPauseConflicts.some(
+    (b) => b.cancellable === false && b.status !== 'PAYMENT_PENDING',
+  ),
 )
 
 function expiryClass(pack) {
