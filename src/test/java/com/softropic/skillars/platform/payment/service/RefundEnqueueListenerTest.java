@@ -441,6 +441,20 @@ class RefundEnqueueListenerTest {
             PackSessionService.RESTORE_REASON_COACH_EXCUSED_CANCELLATION);
     }
 
+    /**
+     * fix/audit3-completion-dispute-integrity: an excused reason picked when cancelling a never-started booking at or
+     * after its start is a coach no-show in disguise — the expired-pack refund stays cashable, as a no-show's does.
+     */
+    @Test
+    void onBookingCancelledByCoach_excusedReasonAfterTheStart_expiredPack_refundIsCashable() {
+        listener.onBookingCancelledByCoach(new BookingCancelledByCoachEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, "WEATHER", UUID.randomUUID(), SESSION_PRICE, true, true,
+            "parent@test.com", Instant.now(), "UTC", true));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
+    }
+
     private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {
         return new BookingCancelledByAdminEvent(
             this, BOOKING_ID, PARENT_ID, COACH_ID, packId, SESSION_PRICE, captured, packExpired,

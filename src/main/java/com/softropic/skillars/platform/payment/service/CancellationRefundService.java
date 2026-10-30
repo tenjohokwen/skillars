@@ -50,6 +50,16 @@ public class CancellationRefundService {
         return cancelReason != null && EXCUSED_REASONS.contains(cancelReason);
     }
 
+    /**
+     * fix/audit3-completion-dispute-integrity: the classification of one coach cancellation — an excused reason AND
+     * not a cancel at or after the start of a never-started booking (a no-show in disguise, whatever reason was
+     * picked). Both the strike below and {@code RefundEnqueueListener}'s expired-pack refund read this, so an
+     * after-start cancel is treated as the coach's fault on both sides, as a coach no-show is.
+     */
+    static boolean isExcusedCancellation(BookingCancelledByCoachEvent event) {
+        return !event.isCancelledAfterStart() && isExcusedReason(event.getCancelReason());
+    }
+
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final ConfigService configService;
@@ -90,7 +100,7 @@ public class CancellationRefundService {
             // no-show in disguise, whatever reason was picked. Always a no-show strike; its history row is
             // flagged after_start, so it never counts toward (or uses up) the excused-cancellation cap.
             strikeReason = "COACH_NO_SHOW";
-        } else if (!EXCUSED_REASONS.contains(reason)) {
+        } else if (!isExcusedCancellation(event)) {
             strikeReason = "COACH_CANCELLATION_UNEXCUSED";
         } else if (exceedsExcusedCancellationCap(event.getCoachId())) {
             strikeReason = "COACH_CANCELLATION_EXCUSED_LIMIT";

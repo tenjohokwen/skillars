@@ -140,7 +140,7 @@
         <code>windowDays</code> (90), <code>booking.request.maxPendingPerCoach</code> (10) and <code>booking.request.maxHorizonDays</code> (120), and the new-coach
         payout hold <code>payment.payout.newCoach.releasedCount</code> (5) / <code>minReleasedNet</code> (20) / <code>holdHours</code> (168)) plus generated
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
-        <code>HAS_CODE_DEFAULT</code> (38 keys) marks keys whose call site has a code default. Also holds
+        <code>HAS_CODE_DEFAULT</code> (40 keys) marks keys whose call site has a code default. Also holds
         <code>MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code> (7), the one definition of the review-window gap.
         Since C5 every <code>HAS_CODE_DEFAULT</code> key is read straight from its <code>BoundedKey</code>
         (<code>getBoundedLong/Int(BoundedKey)</code>), so its default and range live only here. Only the no-code-default

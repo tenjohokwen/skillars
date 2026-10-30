@@ -230,7 +230,9 @@
       <code>coach.excusedCancellations.maxPerWindow</code> (3) per <code>windowDays</code> (90) strike as
       <code>COACH_CANCELLATION_EXCUSED_LIMIT</code>. A coach cancel at or after the start of a never-started booking (CONFIRMED / UPCOMING; a PAUSED session keeps the excused rules)
       (<code>BookingCancelledByCoachEvent.cancelledAfterStart</code>) always strikes as <code>COACH_NO_SHOW</code>, whatever the
-      reason, and its history row is flagged <code>after_start</code> (V213) so it is not counted toward that cap; a parent's
+      reason, and its history row is flagged <code>after_start</code> (V213) so it is not counted toward that cap. It is also never
+      excused for the refund: <code>CancellationRefundService.isExcusedCancellation(event)</code> is the one classification
+      both the strike and <code>RefundEnqueueListener</code>'s expired-pack refund read, so that refund stays cashable; a parent's
       refund-eligible late cancel after the coach never started (<code>BookingCancelledByParentEvent.coachNoShow</code>) strikes
       <code>COACH_NO_SHOW</code> too (<code>onBookingCancelledByParent</code>, after commit). The count-and-strike runs under a per-coach
       transaction-scoped advisory lock (<code>CoachCancellationHistoryRepository.acquireCoachCancellationLock</code>),

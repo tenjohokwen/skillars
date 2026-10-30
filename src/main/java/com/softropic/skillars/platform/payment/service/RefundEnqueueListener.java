@@ -77,7 +77,9 @@ public class RefundEnqueueListener {
         // (otherwise a parent could turn an expired pack into cash by asking for an excused cancel). An
         // unexcused coach cancel stays cashable. A card / credit booking's refund is split by
         // CreditWalletRefundOutboxHandler either way.
-        boolean excused = CancellationRefundService.isExcusedReason(event.getCancelReason());
+        // fix/audit3-completion-dispute-integrity: a cancel at or after the start of a never-started booking is a
+        // no-show in disguise — never excused, so its expired-pack refund stays cashable as a coach no-show's does.
+        boolean excused = CancellationRefundService.isExcusedCancellation(event);
         if (event.isWalletRefund()) {
             boolean expiredPack = event.getSessionPackPurchaseId() != null;
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
