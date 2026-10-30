@@ -22,6 +22,8 @@ import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedByPare
 import com.softropic.skillars.platform.booking.contract.RescheduleDeclinedEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedByCoachEvent;
 import com.softropic.skillars.platform.booking.contract.RescheduleRequestedEvent;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import lombok.RequiredArgsConstructor;
@@ -52,12 +54,15 @@ public class BookingEmailListener {
 
     private final com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport;
     private final FrontendLinkBuilder frontendLinks;
+    /** fix/forfeit-family-emails: the dispute window the forfeit notices quote (disputes.submissionWindowDays). */
+    private final ConfigService configService;
 
     public BookingEmailListener(
             com.softropic.skillars.platform.notification.service.NotificationOutboxSupport notificationOutboxSupport,
-            FrontendLinkBuilder frontendLinks) {
+            FrontendLinkBuilder frontendLinks, ConfigService configService) {
         this.notificationOutboxSupport = notificationOutboxSupport;
         this.frontendLinks = frontendLinks;
+        this.configService = configService;
     }
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
@@ -603,6 +608,83 @@ public class BookingEmailListener {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.PLAYER_NO_SHOW),
                 kv("bookingId", event.getBookingId()), e);
         }
+    }
+
+    /**
+     * fix/forfeit-family-emails: the family side of a player no-show. The coach's report forfeits the session —
+     * no refund, and the coach is paid ({@code CoachPayoutEnqueueListener}) — so the payer must hear it, with
+     * how to dispute a report they believe is wrong ({@code DisputeService} accepts NO_SHOW_PLAYER within
+     * {@code disputes.submissionWindowDays}). Sent to {@code PlayerNoShowEvent.getParentEmail()}: the user
+     * {@code Booking.parentId} names — the parent, or the adult player who booked for themselves.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onPlayerNoShowNotifyFamily(PlayerNoShowEvent event) {
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send no-show forfeit email: family email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("disputeWindowDays", disputeWindowDays());
+            data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.SESSION_FORFEITED_NO_SHOW, recipient, data, UUID.randomUUID().toString());
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.SESSION_FORFEITED_NO_SHOW),
+                kv("bookingId", event.getBookingId()), e);
+        }
+    }
+
+    /**
+     * fix/forfeit-family-emails: the family side of a late parent cancellation. Before this the payer got no
+     * email at all for their own cancellation (only the coach, {@link #onBookingCancelledByParent}); a forfeit
+     * — captured, not refund-eligible ({@code BookingCancelledByParentEvent.isForfeit()}) — now tells them no
+     * refund is due and why. A refunded or pre-capture cancellation still sends the family nothing.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onBookingCancelledByParentForfeit(BookingCancelledByParentEvent event) {
+        if (!event.isForfeit()) {
+            return;
+        }
+        try {
+            if (event.getParentEmail() == null || event.getParentEmail().isBlank()) {
+                log.warn("Cannot send late-cancel forfeit email: family email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            // PACK: the pack session stays used; CHARGE: the amount paid is not refunded.
+            data.put("paidWith", event.getSessionPackPurchaseId() != null ? "PACK" : "CHARGE");
+            data.put("sessionPrice", event.getSessionPackPurchaseId() == null && event.getSessionPrice() != null
+                ? event.getSessionPrice().setScale(2, RoundingMode.HALF_UP).toPlainString() : "");
+            data.put("disputeWindowDays", disputeWindowDays());
+            data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getParentEmail());
+            recipient.setLangKey("en");
+
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.SESSION_FORFEITED_LATE_CANCEL, recipient, data, UUID.randomUUID().toString());
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.SESSION_FORFEITED_LATE_CANCEL),
+                kv("bookingId", event.getBookingId()), e);
+        }
+    }
+
+    /** A String, as every email data value must be (EmailDataRoundTripContractTest). */
+    private String disputeWindowDays() {
+        return Long.toString(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS));
     }
 
     /**

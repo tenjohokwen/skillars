@@ -82,7 +82,7 @@ class EmailListenerAnnotationCoverageTest {
     void guardSeesEveryHandler() {
         assertThat(candidateHandlers(BookingEmailListener.class).count())
             .as("BookingEmailListener's on*(Event) handlers")
-            .isEqualTo(22);
+            .isEqualTo(24); // fix/forfeit-family-emails: + onPlayerNoShowNotifyFamily, onBookingCancelledByParentForfeit
         assertThat(candidateHandlers(SessionPackEmailListener.class).count())
             .as("SessionPackEmailListener's on*(Event) handlers")
             .isEqualTo(3);

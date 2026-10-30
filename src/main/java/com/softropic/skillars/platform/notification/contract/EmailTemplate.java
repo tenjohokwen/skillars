@@ -77,6 +77,19 @@ public enum EmailTemplate {
     BOOKING_CANCELLED_BY_SKILLARS("email.booking.cancelled_by_skillars.title"),
     COACH_NO_SHOW("email.booking.coach_no_show.title"),
     PLAYER_NO_SHOW("email.booking.player_no_show.title"),
+    /**
+     * fix/forfeit-family-emails (V212): to the paying family (the booking's parent, or the adult player who
+     * booked for themselves) when the coach reports a player no-show — the session is forfeited, no refund is
+     * due, and how to dispute the report. {@link #PLAYER_NO_SHOW} is the coach's own confirmation.
+     */
+    SESSION_FORFEITED_NO_SHOW("email.booking.session_forfeited_no_show.title"),
+    /**
+     * fix/forfeit-family-emails (V212): to the paying family when their own cancellation was too late for a
+     * refund (a forfeit: captured and not refund-eligible). The family's only email for that cancellation —
+     * a refunded or pre-capture parent cancellation sends the family nothing; the coach gets
+     * {@link #BOOKING_CANCELLED_BY_PARENT} either way.
+     */
+    SESSION_FORFEITED_LATE_CANCEL("email.booking.session_forfeited_late_cancel.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),
     /**
      * RETIRED — no producer since the parental-approval flow was removed (ADR "Minors never upload",

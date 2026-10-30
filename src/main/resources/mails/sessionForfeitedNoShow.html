@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.session_forfeited_no_show.title}">Session Forfeited — No-Show Reported</title>
+</head>
+<body>
+    <h2 th:text="#{email.booking.session_forfeited_no_show.title}">Session Forfeited — No-Show Reported</h2>
+    <p>Your coach has reported that the player did not attend the session on <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>).</p>
+    <p>Under our cancellation policy a no-show forfeits the session: no refund is due, and a session paid from a session pack is not returned to the pack.</p>
+    <p>If you believe this report is wrong, you can raise a dispute from your bookings page within <strong th:text="${map.disputeWindowDays}">14</strong> days. Our team will review it.</p>
+    <p>Your bookings on Skillars: <a th:href="${map.bookingsUrl}" th:text="${map.bookingsUrl}">bookings</a></p>
+</body>
+</html>

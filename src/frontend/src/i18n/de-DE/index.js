@@ -2698,6 +2698,10 @@ export default {
         'Für die Trainingseinheit am {requestedStartTime} wurde ein Nichterscheinen des Coaches erfasst.',
       PLAYER_NO_SHOW:
         'Für die Trainingseinheit am {requestedStartTime} wurde ein Nichterscheinen des Spielers erfasst.',
+      SESSION_FORFEITED_NO_SHOW:
+        'Der Coach hat für die Trainingseinheit am {requestedStartTime} ein Nichterscheinen gemeldet. Die Einheit verfällt, eine Erstattung erfolgt nicht.',
+      SESSION_FORFEITED_LATE_CANCEL:
+        'Ihre kurzfristige Stornierung der Trainingseinheit am {requestedStartTime} wird nicht erstattet: Die Einheit verfällt.',
       BOOKING_REMINDER:
         'Erinnerung: Trainingseinheit mit {coachDisplayName} am {requestedStartTime}.',
       SESSION_PACK_EXPIRY_WARNING:

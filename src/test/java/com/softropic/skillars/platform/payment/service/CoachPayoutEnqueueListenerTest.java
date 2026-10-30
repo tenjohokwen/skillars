@@ -34,7 +34,7 @@ class CoachPayoutEnqueueListenerTest {
 
     @Test
     void playerNoShow_enqueuesThePayout() {
-        listener.onPlayerNoShow(new PlayerNoShowEvent(this, bookingId, 1L, coachId, "c@x.test", Instant.now(), "UTC"));
+        listener.onPlayerNoShow(new PlayerNoShowEvent(this, bookingId, 1L, coachId, "c@x.test", "p@x.test", Instant.now(), "UTC"));
         verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
     }
 

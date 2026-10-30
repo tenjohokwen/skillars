@@ -49,6 +49,9 @@ class BookingCancellationEmailRenderingTest {
         data.put("bookingsUrl", "https://app.test/#/parent/bookings");
         data.put("coachDisplayName", "Coach Kim");
         data.put("cancelledBy", "COACH_UNAVAILABLE");
+        data.put("disputeWindowDays", "14");
+        data.put("paidWith", "CHARGE");
+        data.put("sessionPrice", "40.00");
         return data;
     }
 
@@ -61,7 +64,7 @@ class BookingCancellationEmailRenderingTest {
     @ParameterizedTest
     @EnumSource(value = EmailTemplate.class, names = {
         "BOOKING_CANCELLED_BY_PARENT", "BOOKING_CANCELLED_BY_COACH", "COACH_NO_SHOW", "PLAYER_NO_SHOW",
-        "BOOKING_CANCELLED_BY_SKILLARS"})
+        "BOOKING_CANCELLED_BY_SKILLARS", "SESSION_FORFEITED_NO_SHOW", "SESSION_FORFEITED_LATE_CANCEL"})
     void rendersInEveryBundledLocale(EmailTemplate template) {
         for (String lang : List.of("en", "de", "fr")) {
             Recipient recipient = new Recipient();
@@ -112,5 +115,27 @@ class BookingCancellationEmailRenderingTest {
         single.put("cancelledBy", "SKILLARS");
         assertThat(render(EmailTemplate.BOOKING_CANCELLED_COACH_UNAVAILABLE, single))
             .contains("cancelled by the Skillars team").doesNotContain("the coach is unavailable");
+    }
+
+    /** fix/forfeit-family-emails: the family is told the session is forfeited, why, and how to dispute. */
+    @Test
+    void playerNoShowForfeit_statesNoRefundAndTheDisputeWindow() {
+        assertThat(render(EmailTemplate.SESSION_FORFEITED_NO_SHOW, data("NONE", "")))
+            .contains("did not attend").contains("forfeits the session").contains("no refund is due")
+            .contains("raise a dispute").contains("<strong>14</strong> days");
+    }
+
+    @Test
+    void lateCancelForfeit_statesWhatIsNotRefunded() {
+        Map<String, Object> card = data("NONE", "");
+        assertThat(render(EmailTemplate.SESSION_FORFEITED_LATE_CANCEL, card))
+            .contains("less than 24 hours").contains("no refund is due").contains("40.00")
+            .contains("raise a dispute").doesNotContain("session pack");
+
+        Map<String, Object> pack = data("NONE", "");
+        pack.put("paidWith", "PACK");
+        pack.put("sessionPrice", "");
+        assertThat(render(EmailTemplate.SESSION_FORFEITED_LATE_CANCEL, pack))
+            .contains("not returned to the pack").doesNotContain("40.00");
     }
 }

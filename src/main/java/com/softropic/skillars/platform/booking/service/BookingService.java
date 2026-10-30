@@ -1584,6 +1584,9 @@ public class BookingService {
                 Map.of("reportable at", reportableAt), BookingError.NO_SHOW_TOO_EARLY);
         }
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
+        // fix/forfeit-family-emails: the family is told too — the payer, Booking.parentId (a User id; for a
+        // self-booking adult player it is the player's own user id). Never via playerId (a PlayerProfile key).
+        String parentEmail = resolveEmail(booking.getParentId(), bookingId);
 
         try {
             transition(bookingId, BookingEvent.NO_SHOW_PLAYER, new TransitionContext(ActorRole.COACH, coachUserId));
@@ -1593,7 +1596,7 @@ public class BookingService {
 
         eventPublisher.publishEvent(new PlayerNoShowEvent(
             this, bookingId, booking.getParentId(), booking.getCoachId(),
-            coachEmail, booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            coachEmail, parentEmail, booking.getRequestedStartTime(), booking.getCanonicalTimezone()
         ));
     }
 

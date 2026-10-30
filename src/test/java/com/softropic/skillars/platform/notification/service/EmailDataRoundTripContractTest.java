@@ -137,7 +137,8 @@ class EmailDataRoundTripContractTest {
     @DisplayName("every data map both listeners actually produce round-trips with its types intact")
     void everyProducedDataMapSurvivesTheRoundTrip() throws Exception {
         NotificationOutboxSupport support = mock(NotificationOutboxSupport.class);
-        BookingEmailListener bookingListener = new BookingEmailListener(support, new com.softropic.skillars.infrastructure.web.FrontendLinkBuilder("http://localhost:9000"));
+        BookingEmailListener bookingListener = new BookingEmailListener(support, new com.softropic.skillars.infrastructure.web.FrontendLinkBuilder("http://localhost:9000"),
+            mock(com.softropic.skillars.platform.config.service.ConfigService.class));
         SessionPackEmailListener packListener = new SessionPackEmailListener(support);
 
         List<String> invoked = new ArrayList<>();
@@ -168,6 +169,12 @@ class EmailDataRoundTripContractTest {
                     spec = spec.set(Select.field("cancelReason"),
                         com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT);
                 }
+                // fix/forfeit-family-emails: the family's late-cancel notice is only sent for a forfeit
+                // (captured, not refund-eligible) — random flags would make it return before a payload.
+                if (eventType == com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent.class) {
+                    spec = spec.set(Select.field("paymentCaptured"), true)
+                        .set(Select.field("refundEligible"), false);
+                }
                 Object event = spec.create();
                 m.setAccessible(true);
                 m.invoke(listener, event);
@@ -176,8 +183,8 @@ class EmailDataRoundTripContractTest {
         }
 
         assertThat(invoked)
-            .as("all 25 on*(Event) handlers across both listeners must have been driven")
-            .hasSize(25);
+            .as("all 27 on*(Event) handlers across both listeners must have been driven")
+            .hasSize(27);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
