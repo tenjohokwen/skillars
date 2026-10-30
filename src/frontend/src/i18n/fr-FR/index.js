@@ -502,6 +502,8 @@ export default {
     notEligible: "Vous n'êtes pas autorisé à signaler un litige pour cette réservation.",
     windowExpired: 'Le délai pour signaler un litige pour cette réservation est expiré.',
     alreadyRaised: 'Un litige a déjà été signalé pour cette réservation.',
+    limitReached:
+      'Vous avez déjà ouvert le nombre maximal de litiges pour cette réservation. Si vous contestez la décision, vous pouvez faire appel depuis le litige.',
     invalidReason: 'Veuillez sélectionner un motif valide.',
     statusDialogTitle: 'Statut du litige',
     statusLabel: 'Statut',
@@ -2249,6 +2251,8 @@ export default {
     noShowCoachConfirmBody:
       'Confirmez que le coach ne s’est pas présenté à cette séance. La séance est remboursée et le coach reçoit un avertissement de fiabilité. Cette action est irréversible.',
     noShowCoachFailed: 'Impossible de signaler l’absence. Veuillez réessayer.',
+    noShowCoachSessionStarted:
+      'Le coach a démarré cette séance : elle ne peut pas être signalée comme une absence. Ouvrez plutôt un litige.',
     noShowCoachAvailableFrom: 'Vous pourrez signaler l’absence du coach à partir de {time}.',
     title: 'Annuler la séance',
     selectReason: "Sélectionner un motif d'annulation",
@@ -2614,6 +2618,8 @@ export default {
       erasedError: 'Ce bilan ne peut plus être modifié.',
       disputedError:
         'Cette séance a fait l’objet d’une contestation ; son bilan ne peut plus être modifié.',
+      wrapUpAwaitedError:
+        'La famille a confirmé cette séance avant votre clôture. Utilisez plutôt « Reprendre la clôture », afin que la présence, les évaluations et les devoirs soient enregistrés.',
       missingTitle: 'Séances sans bilan',
       missingBanner: "{count} séance a besoin d'un bilan | {count} séances ont besoin d'un bilan",
       missingToggle: 'Afficher',
@@ -2663,7 +2669,7 @@ export default {
         "Votre réservation avec {coachDisplayName} n'a pas pu être finalisée — le résultat du paiement est en cours de vérification.",
       BOOKING_EXPIRED: 'Votre demande de séance avec {coachDisplayName} a expiré sans réponse.',
       BOOKING_QUICK_COMPLETE_CONFIRM:
-        '{coachDisplayName} a marqué une séance comme terminée — veuillez la confirmer.',
+        '{coachDisplayName} a marqué une séance comme terminée — veuillez la confirmer, ou ouvrir un litige si elle n’a pas eu lieu.',
       BOOKING_RESCHEDULE_REQUESTED:
         '{parentName} souhaite déplacer une séance au {proposedStartTime}.',
       BOOKING_RESCHEDULE_ACCEPTED: 'Le report a été accepté — nouvel horaire : {newStartTime}.',
@@ -2690,7 +2696,7 @@ export default {
       PLAYER_NO_SHOW:
         'Une absence du joueur a été enregistrée pour la séance du {requestedStartTime}.',
       SESSION_FORFEITED_NO_SHOW:
-        'Le coach a signalé une absence pour la séance du {requestedStartTime}. La séance est perdue et aucun remboursement n’est dû.',
+        'Le coach a signalé une absence pour la séance du {requestedStartTime}. La séance est perdue et aucun remboursement n’est dû. Si c’est une erreur, ouvrez un litige depuis vos réservations.',
       SESSION_FORFEITED_LATE_CANCEL:
         'Votre annulation tardive de la séance du {requestedStartTime} n’est pas remboursée : la séance est perdue.',
       BOOKING_REMINDER: 'Rappel : séance avec {coachDisplayName} le {requestedStartTime}.',

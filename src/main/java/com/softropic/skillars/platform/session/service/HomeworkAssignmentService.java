@@ -64,6 +64,10 @@ public class HomeworkAssignmentService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async("taskExecutor")
     public void handleBookingCompleted(BookingCompletedEvent event) {
+        // fix/audit3-completion-dispute-integrity: homework comes with the coach's wrap-up (DEVELOPMENT_ONLY).
+        if (!event.isDevelopment()) {
+            return;
+        }
         if (event.getHomeworkDrillIds() == null || event.getHomeworkDrillIds().isEmpty()) {
             return;
         }

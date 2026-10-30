@@ -296,20 +296,25 @@ describe('ParentBookingsPage.vue — dispute action visibility (deferred-165 AC2
     expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
   })
 
-  it.each(['CANCELLED', 'CANCELLED_PARENT', 'CANCELLED_COACH', 'NO_SHOW_PLAYER', 'NO_SHOW_COACH'])(
-    'renders the dispute action for a %s booking',
-    async (status) => {
-      const { wrapper } = mountPage({
-        auth: { role: 'PARENT' },
-        booking: { parentBookings: [{ ...BOOKING_1H, status }] },
-      })
-      await flushPromises()
+  // fix/audit3-completion-dispute-integrity: a session awaiting the family's confirmation is disputable.
+  it.each([
+    'CANCELLED',
+    'CANCELLED_PARENT',
+    'CANCELLED_COACH',
+    'NO_SHOW_PLAYER',
+    'NO_SHOW_COACH',
+    'COMPLETED_PENDING_CONFIRMATION',
+  ])('renders the dispute action for a %s booking', async (status) => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [{ ...BOOKING_1H, status }] },
+    })
+    await flushPromises()
 
-      expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
-    },
-  )
+    expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+  })
 
-  it.each(['CONFIRMED', 'UPCOMING', 'COMPLETED_PENDING_CONFIRMATION'])(
+  it.each(['CONFIRMED', 'UPCOMING'])(
     'does not render the dispute action for a %s booking',
     async (status) => {
       const { wrapper } = mountPage({
@@ -488,6 +493,74 @@ describe('ParentBookingsPage.vue — coach no-show report (A13)', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(false)
     expect(wrapper.find('[data-testid="no-show-coach-pending"]').exists()).toBe(true)
+  })
+
+  // fix/audit3-completion-dispute-integrity: a Quick Complete the coach never started stays reportable.
+  it('offers the action on a never-started session awaiting confirmation', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: {
+        parentBookings: [
+          {
+            ...BOOKING_1H,
+            status: 'COMPLETED_PENDING_CONFIRMATION',
+            liveStarted: false,
+            requestedStartTime: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+            coachNoShowReportableAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          },
+        ],
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+  })
+
+  it('hides the action on a started session awaiting confirmation (dispute instead)', async () => {
+    const { wrapper } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: {
+        parentBookings: [
+          {
+            ...BOOKING_1H,
+            status: 'COMPLETED_PENDING_CONFIRMATION',
+            liveStarted: true,
+            requestedStartTime: new Date(Date.now() - 40 * 60 * 1000).toISOString(),
+            coachNoShowReportableAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+          },
+        ],
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dispute-raise-btn"]').exists()).toBe(true)
+  })
+
+  it('a session-was-started rejection maps to its copy', async () => {
+    const booking = {
+      ...BOOKING_1H,
+      status: 'COMPLETED_PENDING_CONFIRMATION',
+      liveStarted: false,
+      requestedStartTime: PAST,
+    }
+    const { wrapper, bookingStore } = mountPage({
+      auth: { role: 'PARENT' },
+      booking: { parentBookings: [booking] },
+    })
+    await flushPromises()
+    bookingStore.handleRecordNoShowCoach.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'booking.sessionWasStarted' } } },
+    })
+
+    wrapper.vm.openNoShowCoachDialog(booking)
+    await wrapper.vm.submitNoShowCoach()
+
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'negative',
+        message: 'cancellation.noShowCoachSessionStarted',
+      }),
+    )
   })
 
   it('offers the action once the grace has passed', async () => {

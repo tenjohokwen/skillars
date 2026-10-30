@@ -64,6 +64,11 @@ public class TimelineEventListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async("taskExecutor")
     public void onBookingCompleted(BookingCompletedEvent event) {
+        // fix/audit3-completion-dispute-integrity: written by the coach's later wrap-up instead (DEVELOPMENT_ONLY),
+        // so the one SESSION_COMPLETED row (insertSessionCompletedIfAbsent) carries the real attendance/ratings.
+        if (!event.isDevelopment()) {
+            return;
+        }
         try {
             // skillars-12-2 AC3: Map.of(...) rejects null values outright, and null recap
             // fields are a real possibility here from two sources — not just the back-compat

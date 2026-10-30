@@ -49,6 +49,7 @@ class UnresolvedSessionSweeperServiceTest {
 
     @Mock private BookingRepository bookingRepository;
     @Mock private BookingService bookingService;
+    @Mock private BookingCompletionService bookingCompletionService;
     @Mock private ConfigService configService;
     @Mock private ApplicationEventPublisher eventPublisher;
 
@@ -63,7 +64,8 @@ class UnresolvedSessionSweeperServiceTest {
                 return action.doInTransaction(null);
             }
         };
-        service = new UnresolvedSessionSweeperService(bookingRepository, bookingService, configService, txTemplate,
+        service = new UnresolvedSessionSweeperService(bookingRepository, bookingService, bookingCompletionService,
+            configService, txTemplate,
             eventPublisher);
         lenient().when(configService.getBoundedLong(ConfigBounds.BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES))
             .thenReturn(GRACE_MINUTES);
@@ -112,6 +114,8 @@ class UnresolvedSessionSweeperServiceTest {
         verify(bookingService).transition(eq(id), eq(BookingEvent.COMPLETE_PENDING), ctx.capture());
         assertThat(ctx.getValue().actorRole()).isEqualTo(ActorRole.SYSTEM);
         assertThat(b.getAutoEndedAt()).isEqualTo(NOW);
+        // fix/audit3-completion-dispute-integrity: the family is asked to confirm or dispute it at once.
+        verify(bookingCompletionService).requestFamilyConfirmation(b);
     }
 
     @Test

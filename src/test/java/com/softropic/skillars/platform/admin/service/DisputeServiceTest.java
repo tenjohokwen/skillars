@@ -89,6 +89,9 @@ class DisputeServiceTest {
         // fix/payment-wallet-dispute-integrity: by default nothing was refunded yet — the whole price remains.
         org.mockito.Mockito.lenient().when(disputeCreditService.remainingRefundable(any(), any()))
             .thenAnswer(inv -> inv.getArgument(1));
+        // fix/audit3-completion-dispute-integrity: the per-raiser cap at its default (2); no earlier disputes.
+        org.mockito.Mockito.lenient().when(configService.getBoundedLong(ConfigBounds.DISPUTES_MAX_PER_BOOKING_PER_RAISER))
+            .thenReturn(2L);
     }
 
     private Dispute buildDispute() {
@@ -136,7 +139,7 @@ class DisputeServiceTest {
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
         when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
-        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(eq(bookingId), any())).thenReturn(false);
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);
             d.setId(UUID.randomUUID());
@@ -204,7 +207,7 @@ class DisputeServiceTest {
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.of(playerProfile));
         when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
-        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(eq(bookingId), any())).thenReturn(false);
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);
             d.setId(UUID.randomUUID());
@@ -260,7 +263,7 @@ class DisputeServiceTest {
         when(playerProfileRepository.findById(booking.getPlayerId())).thenReturn(Optional.empty());
         when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
         when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
-        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(eq(bookingId), any())).thenReturn(false);
         when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
             Dispute d = inv.getArgument(0);
             d.setId(UUID.randomUUID());
@@ -385,7 +388,7 @@ class DisputeServiceTest {
             payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.PENDING_RELEASE);
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
-        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(eq(bookingId), any())).thenReturn(false);
         when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
 
         service.raiseDispute(bookingId, "OTHER", "details", 1L, "PARENT");
@@ -403,7 +406,7 @@ class DisputeServiceTest {
         booking.setUpdatedAt(Instant.now());
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
-        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(eq(bookingId), any())).thenReturn(false);
 
         service.raiseDispute(bookingId, "COACH_NO_SHOW", "started then paused, never coached", 1L, "PARENT");
 
@@ -460,7 +463,7 @@ class DisputeServiceTest {
             payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.RELEASED);
         when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
         when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
-        when(disputeRepository.findOpenByBookingId(bookingId)).thenReturn(Optional.empty());
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(eq(bookingId), any())).thenReturn(false);
         when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
 
         service.raiseDispute(bookingId, "OTHER", "details", 1L, "PARENT");
@@ -815,5 +818,165 @@ class DisputeServiceTest {
             .isInstanceOfSatisfying(org.springframework.web.server.ResponseStatusException.class, e ->
                 assertThat(e.getReason()).isEqualTo(DisputeError.INVALID_CREDIT_AMOUNT.getErrorCode()));
         verify(disputeCreditService, never()).credit(any(), any(), any(), any(), any());
+    }
+
+    // ── fix/audit3-completion-dispute-integrity ──
+
+    private void stubRaisable(Booking booking) {
+        booking.setUpdatedAt(Instant.now());
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS)).thenReturn(14L);
+        org.mockito.Mockito.lenient().when(disputeRepository.save(any(Dispute.class))).thenAnswer(inv -> {
+            Dispute d = inv.getArgument(0);
+            d.setId(UUID.randomUUID());
+            return d;
+        });
+    }
+
+    /** Exploit 1: a Quick Completed session awaiting confirmation is disputable by the family. */
+    @Test
+    void raiseDispute_parentOnASessionAwaitingConfirmation_isEligible_andFreezes() {
+        Booking booking = buildBooking();
+        booking.setStatus("COMPLETED_PENDING_CONFIRMATION");
+        stubRaisable(booking);
+
+        UUID id = service.raiseDispute(bookingId, "COACH_NO_SHOW", "never came", 1L, "PARENT");
+
+        assertThat(id).isNotNull();
+        verify(coachPayoutRepository).findByIdForUpdate(bookingId); // freezeForDispute
+    }
+
+    @Test
+    void raiseDispute_coachOnASessionAwaitingConfirmation_isNotEligible() {
+        Booking booking = buildBooking();
+        booking.setStatus("COMPLETED_PENDING_CONFIRMATION");
+        CoachProfile coachProfile = new CoachProfile();
+        coachProfile.setId(booking.getCoachId());
+        coachProfile.setUserId(500L);
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findById(booking.getCoachId())).thenReturn(Optional.of(coachProfile));
+
+        assertThatThrownBy(() -> service.raiseDispute(bookingId, "OTHER", "x", 500L, "COACH"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .extracting(t -> ((OperationNotAllowedException) t).getErrorCode())
+            .isEqualTo(com.softropic.skillars.platform.admin.contract.DisputeError.NOT_ELIGIBLE);
+        verify(disputeRepository, never()).save(any());
+    }
+
+    /** Exploit 6: only the family side's own open dispute blocks a family raise — not the coach's. */
+    @Test
+    void raiseDispute_parent_checksOnlyTheFamilySideForAnOpenDispute() {
+        Booking booking = buildBooking();
+        stubRaisable(booking);
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER")))
+            .thenReturn(false);
+
+        service.raiseDispute(bookingId, "SESSION_QUALITY", "x", 1L, "PARENT");
+
+        verify(disputeRepository).save(any(Dispute.class));
+        verify(disputeRepository, never()).existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("COACH"));
+    }
+
+    @Test
+    void raiseDispute_familySideAlreadyOpen_is409AlreadyRaised() {
+        Booking booking = buildBooking();
+        stubRaisable(booking);
+        when(disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER")))
+            .thenReturn(true);
+
+        assertThatThrownBy(() -> service.raiseDispute(bookingId, "SESSION_QUALITY", "x", 1L, "PARENT"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("disputes.alreadyRaised");
+        verify(disputeRepository, never()).save(any());
+    }
+
+    /**
+     * Exploit 5: a dismissed raiser can no longer refile (and re-freeze the payout) without limit. The cap is per
+     * SIDE — a parent and a child with their own login share it.
+     */
+    @Test
+    void raiseDispute_familySideAtTheCap_is409LimitReached_andFreezesNothing() {
+        Booking booking = buildBooking();
+        stubRaisable(booking);
+        when(disputeRepository.countByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER")))
+            .thenReturn(2L);
+
+        assertThatThrownBy(() -> service.raiseDispute(bookingId, "SESSION_QUALITY", "again", 1L, "PARENT"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .satisfies(e -> assertThat(((org.springframework.web.server.ResponseStatusException) e).getStatusCode().value())
+                .isEqualTo(409))
+            .hasMessageContaining("disputes.limitReached");
+        verify(disputeRepository, never()).save(any());
+        verify(coachPayoutRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void raiseDispute_familySideBelowTheCap_isAccepted_andTakesTheBookingLockFirst() {
+        Booking booking = buildBooking();
+        stubRaisable(booking);
+        when(disputeRepository.countByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER")))
+            .thenReturn(1L);
+
+        assertThat(service.raiseDispute(bookingId, "SESSION_QUALITY", "again", 1L, "PARENT")).isNotNull();
+        var order = org.mockito.Mockito.inOrder(disputeRepository, coachPayoutRepository);
+        order.verify(disputeRepository).acquireBookingDisputeLock(bookingId.toString());
+        order.verify(disputeRepository).existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER"));
+        order.verify(coachPayoutRepository).findByIdForUpdate(bookingId);
+    }
+
+    /** Minor 2: the recorded role comes from the relationship to the booking, not the caller's authorities. */
+    @Test
+    void raiseDispute_recordsTheRoleFromTheBookingRelationship_notTheCallersAuthority() {
+        Booking booking = buildBooking();
+        stubRaisable(booking);
+        org.mockito.ArgumentCaptor<Dispute> saved = org.mockito.ArgumentCaptor.forClass(Dispute.class);
+
+        // The booking's parent, calling with a COACH authority (e.g. a coach who is also a parent).
+        service.raiseDispute(bookingId, "SESSION_QUALITY", "x", 1L, "COACH");
+
+        verify(disputeRepository).save(saved.capture());
+        assertThat(saved.getValue().getRaisedByRole()).isEqualTo("PARENT");
+        verify(disputeRepository).existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER"));
+    }
+
+    /** Exploit 6: settling one side's dispute keeps the payout frozen while the other side's is open. */
+    @Test
+    void resolveDispute_withTheOtherSidesDisputeStillOpen_keepsThePayoutFrozen_andTheAlertOpen() {
+        Dispute dispute = buildDispute();
+        Booking booking = buildBooking();
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        payout.setDisputeFrozen(true);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(buildPayment("CAPTURED")));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+        when(disputeRepository.existsOtherOpenForBooking(bookingId, disputeId)).thenReturn(true);
+
+        service.resolveDispute(disputeId, "NO_ACTION", null, "note", 99L);
+
+        verify(disputeRepository).acquireBookingDisputeLock(bookingId.toString());
+        assertThat(payout.isDisputeFrozen()).isTrue();
+        assertThat(payout.getStatus()).isEqualTo(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        verify(coachPayoutOutboxSupport, never()).enqueueTransfer(any(), any());
+        verify(adminAlertRepository, never()).findFirstByReferenceIdAndTypeAndStatus(any(), any(), any());
+    }
+
+    @Test
+    void dismissDispute_withTheOtherSidesDisputeStillOpen_keepsThePayoutFrozen() {
+        Dispute dispute = buildDispute();
+        com.softropic.skillars.platform.payment.repo.CoachPayout payout =
+            payout(com.softropic.skillars.platform.payment.contract.CoachPayoutStatus.FROZEN);
+        payout.setDisputeFrozen(true);
+        when(disputeRepository.findById(disputeId)).thenReturn(Optional.of(dispute));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(payout));
+        when(disputeRepository.existsOtherOpenForBooking(bookingId, disputeId)).thenReturn(true);
+
+        service.dismissDispute(disputeId, "no merit", 99L);
+
+        verify(disputeRepository).acquireBookingDisputeLock(bookingId.toString());
+        assertThat(payout.isDisputeFrozen()).isTrue();
+        verify(coachPayoutOutboxSupport, never()).enqueueTransfer(any(), any());
+        verify(adminAlertRepository, never()).findFirstByReferenceIdAndTypeAndStatus(any(), any(), any());
     }
 }

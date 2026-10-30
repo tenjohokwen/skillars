@@ -124,7 +124,7 @@
       into two generated files: <code>V138__baseline_schema.sql</code> (pure DDL from
       <code>pg_dump --schema-only</code>) and <code>V139__baseline_seed_data.sql</code> (160 seed rows:
       <code>platform_config</code>, authorities, <code>skill_definitions</code>, platform drills). There are
-      currently <strong>63 files, <code>V138</code>–<code>V212</code></strong>, with gaps — <code>V174</code>,
+      currently <strong>64 files, <code>V138</code>–<code>V213</code></strong>, with gaps — <code>V174</code>,
       <code>V176</code>–<code>V177</code>, <code>V179</code>–<code>V180</code>, <code>V190</code>, <code>V194</code>,
       <code>V196</code> and <code>V201</code>–<code>V204</code> were never used, which Flyway does not mind —
       but never back-fill a gap: always take a number above the current latest. Older migration numbers you'll see quoted in code comments
@@ -183,7 +183,7 @@
       its status CHECKs are re-added <code>NOT VALID</code>.)
     </p>
 
-    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V212)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V213)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -217,6 +217,7 @@
         <tr><td><code>V205</code></td><td><code>coach_payouts.original_*_amount</code>, <code>topup_amount</code>/<code>topup_transfer_id</code>, <code>debt_offset_amount</code>; new <code>payment.coach_payout_debts</code> (money a failed transfer reversal could not recover, <code>OPEN</code>/<code>RECOVERED</code>/<code>WAIVED</code>, deducted from the coach's next transfers oldest first).</td></tr>
         <tr><td><code>V207</code>, <code>V208</code></td><td><code>booking_payments.charge_idempotency_key</code> (persisted before the Stripe call, partial index <code>idx_bp_charge_key_pending</code> — read by <code>ChargeOutcomeReconciler</code>); <code>subscribe_attempt_key</code>/<code>_at</code> on both subscription tables; <code>idx_bp_stripe_payment_intent</code>.</td></tr>
         <tr><td><code>V209</code></td><td><code>bookings.auto_ended_at</code> and <code>unresolved_alerted_at</code>, written by <code>UnresolvedSessionSweeperService</code>.</td></tr>
+        <tr><td><code>V213</code></td><td><code>bookings.confirmation_requested_at</code> (the family was asked to confirm a session that entered <code>COMPLETED_PENDING_CONFIRMATION</code> without a full live run — one email, and the wrap-up is QUICK); <code>coach_cancellation_history.after_start</code> (a coach cancel at/after the start of a never-started booking: always a strike, never counted toward the excused cap); <code>session_completion_data.awaiting_wrap_up</code> (the family confirmed before the coach's wrap-up, which later fills the row in); <code>idx_disputes_unique_open_per_booking</code> replaced by <code>idx_disputes_unique_open_per_booking_side</code> on <code>(booking_id, raised_by_role = 'COACH')</code> — one open dispute per booking per side.</td></tr>
         <tr><td><code>V211</code></td><td>Data-only: deletes the duplicate <code>platform.commission_rate</code> config row. <code>platform.commission.rate</code> is the one commission key (<code>ProjectedRevenueService</code> now reads it too).</td></tr>
       </tbody>
     </table>

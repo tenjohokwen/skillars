@@ -29,5 +29,9 @@ public record BookingResponse(
     Instant coachNoShowReportableAt,
     // fix/booking-request-consent: a coach-proposed booking ("repeat next week"). While REQUESTED, only the
     // parent can act on it (confirm or decline); the coach sees it as awaiting parent confirmation.
-    boolean proposedByCoach
+    boolean proposedByCoach,
+    // fix/audit3-completion-dispute-integrity: the coach pressed Start (liveStartedAt). A started session awaiting
+    // the family's confirmation can be disputed but not reported as a coach no-show
+    // (BookingService.recordNoShowCoach) — a display hint; the server decides.
+    boolean liveStarted
 ) {}

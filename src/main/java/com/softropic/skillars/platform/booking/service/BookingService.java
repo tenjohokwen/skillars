@@ -1139,9 +1139,11 @@ public class BookingService {
                     b.getStatus(),
                     b.getCanonicalTimezone(),
                     pendingReschedules.get(b.getId()),
-                    scd != null,
+                    // fix/audit3-completion-dispute-integrity: an awaiting placeholder is not a submitted wrap-up.
+                    scd != null && !scd.isAwaitingWrapUp(),
                     scd != null && (scd.getWhatWeDid() != null || scd.getWhatsNext() != null),
-                    b.getLiveStartedAt() != null);
+                    b.getLiveStartedAt() != null,
+                    scd != null && scd.isAwaitingWrapUp());
             })
             .toList();
     }
@@ -1450,8 +1452,15 @@ public class BookingService {
         // BookingStateMachine/event-type change. Stays entirely on the ordinary CANCEL_PARENT path.
         // fix/booking-cancel-policy-loopholes: narrowed by a grace window and a reschedule anchor —
         // see isParentCancelRefundEligible.
+        Instant cancelledAt = Instant.now();
         boolean refundEligible = paymentWasCaptured && isParentCancelRefundEligible(
-            booking.getRequestedStartTime(), booking.getOriginalStartTime(), Instant.now(), lateCancelGrace());
+            booking.getRequestedStartTime(), booking.getOriginalStartTime(), cancelledAt, lateCancelGrace());
+        // fix/audit3-completion-dispute-integrity: the refund-eligible LATE cancel — still CONFIRMED / UPCOMING
+        // (never started) once start + grace has passed — is the coach's no-show, the same facts
+        // recordNoShowCoach strikes on. It used to refund the family and record nothing against the coach.
+        // Only this branch: a >24h-notice cancel is the family's own choice.
+        boolean coachNoShow = paymentWasCaptured
+            && cancelledAt.isAfter(booking.getRequestedStartTime().plus(lateCancelGrace()));
         // C6: the refund is what the payer actually paid (resolveAmountPaid), not the coach's current
         // price; nothing is owed — and no price lookup can fail the cancel — before capture.
         BigDecimal sessionPrice = paymentWasCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
@@ -1470,7 +1479,7 @@ public class BookingService {
             this, bookingId, parentUserId, booking.getCoachId(),
             booking.getSessionPackPurchaseId(), hoursBeforeSession, refundEligible,
             sessionPrice, parentEmail, coachEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken, packExpired
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken, packExpired, coachNoShow
         ));
     }
 
@@ -1542,6 +1551,19 @@ public class BookingService {
         }
 
         String resolvedReason = cancelReason != null ? cancelReason : "OTHER_UNEXCUSED";
+        // fix/audit3-completion-dispute-integrity: decided under the row lock. A coach cancel at or after the start
+        // of a session that was never started (ACCEPTED / CONFIRMED / UPCOMING, no live start) is a no-show in
+        // disguise — an
+        // excused reason (HEALTH_MEDICAL, WEATHER, ...) picked then used to dodge the strike.
+        // CancellationRefundService strikes it whatever the reason, and does not count it toward the
+        // excused-cancellation cap. Owner decision: a PAUSED session was actually run, so calling it off keeps
+        // the ordinary excused / unexcused rules.
+        boolean neverStarted = (statusBeforeCancel == BookingStatus.ACCEPTED
+                || statusBeforeCancel == BookingStatus.CONFIRMED
+                || statusBeforeCancel == BookingStatus.UPCOMING)
+            && booking.getLiveStartedAt() == null;
+        boolean cancelledAfterStart = neverStarted
+            && !Instant.now(ClockProvider.getClock()).isBefore(booking.getRequestedStartTime());
         try {
             transition(bookingId, BookingEvent.CANCEL_COACH, new TransitionContext(ActorRole.COACH, coachUserId));
             booking.setCancelReason(resolvedReason);
@@ -1554,7 +1576,7 @@ public class BookingService {
             this, bookingId, booking.getParentId(), booking.getCoachId(),
             resolvedReason, booking.getSessionPackPurchaseId(),
             sessionPrice, packExpired, paymentCaptured, parentEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), cancelledAfterStart
         ));
     }
 
@@ -1618,8 +1640,21 @@ public class BookingService {
                 "Cannot report a coach no-show before the grace period after the scheduled start has passed",
                 Map.of("reportable at", reportableAt), BookingError.NO_SHOW_TOO_EARLY);
         }
-        // C6: NO_SHOW_COACH only leaves UPCOMING, so payment was always captured — refund what the payer
-        // actually paid, not the coach's current price.
+        // fix/audit3-completion-dispute-integrity: also from COMPLETED_PENDING_CONFIRMATION when the coach never
+        // started the session (a Quick Complete — allowed at start+0, while this report opens at start+30, so the
+        // coach always won the race and the family was left with nothing to report). Decided under the row
+        // lock: Start then End between the read above and the transition would otherwise slip through. A
+        // session that was started (liveStartedAt) is disputed instead, never reported as a no-show.
+        booking = lockBookingForUpdate(bookingId);
+        if (BookingStatus.COMPLETED_PENDING_CONFIRMATION.name().equals(booking.getStatus())
+                && booking.getLiveStartedAt() != null) {
+            throw new OperationNotAllowedException(
+                "The coach started this session — raise a dispute instead of reporting a no-show",
+                Map.of("booking id", bookingId), BookingError.SESSION_WAS_STARTED);
+        }
+        // C6: NO_SHOW_COACH leaves only UPCOMING or a never-started COMPLETED_PENDING_CONFIRMATION, so payment
+        // was always captured and no coach payout exists yet (one is written only on completion) — refund what
+        // the payer actually paid, not the coach's current price.
         BigDecimal sessionPrice = resolveAmountPaid(booking);
         String parentEmail = resolveEmail(parentUserId, bookingId);
 
@@ -1881,7 +1916,8 @@ public class BookingService {
             b.getPlayerRequest(),
             receiptAvailable,
             b.getRequestedStartTime() == null ? null : coachNoShowReportableAt(b.getRequestedStartTime()),
-            b.isProposedByCoach()
+            b.isProposedByCoach(),
+            b.getLiveStartedAt() != null
         );
     }
 }

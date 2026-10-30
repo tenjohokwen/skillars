@@ -2683,6 +2683,140 @@ class BookingServiceTest {
                 .isEqualTo(BookingError.CONCURRENT_MODIFICATION));
     }
 
+    // ---- fix/audit3-completion-dispute-integrity ----
+
+    /** Exploit 1: a Quick Complete at start+0 (never started) no longer shuts the family out of a no-show report. */
+    @Test
+    void recordNoShowCoach_onANeverStartedQuickComplete_transitionsAndPublishesEvent() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "COMPLETED_PENDING_CONFIRMATION");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(3600));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
+        booking.setLiveStartedAt(null);
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+
+        bookingService.recordNoShowCoach(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).isEqualTo("NO_SHOW_COACH");
+        verify(eventPublisher).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    /** A session the coach actually started is disputed, never reported as a coach no-show. */
+    @Test
+    void recordNoShowCoach_onAStartedSessionAwaitingConfirmation_isRefused() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "COMPLETED_PENDING_CONFIRMATION");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(3600));
+        booking.setRequestedEndTime(Instant.now().minusSeconds(1800));
+        booking.setLiveStartedAt(Instant.now().minusSeconds(3500));
+
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_WAS_STARTED));
+        assertThat(booking.getStatus()).isEqualTo("COMPLETED_PENDING_CONFIRMATION");
+        verify(eventPublisher, never()).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    /** Exploit 3: a coach cancel at or after the start is flagged so it always strikes, whatever the reason. */
+    @Test
+    void cancelBookingAsCoach_afterTheStart_isFlaggedAfterStart() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(600));
+        booking.setRequestedEndTime(Instant.now().plusSeconds(3000));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "WEATHER");
+
+        assertThat(capturedEvent(BookingCancelledByCoachEvent.class).isCancelledAfterStart()).isTrue();
+    }
+
+    /** Owner decision (re-review MINOR 3): an ACCEPTED booking never started either — cancelled after its start, it strikes. */
+    @Test
+    void cancelBookingAsCoach_acceptedBookingAfterTheStart_isFlaggedAfterStart() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "ACCEPTED");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(600));
+        booking.setRequestedEndTime(Instant.now().plusSeconds(3000));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "WEATHER");
+
+        assertThat(capturedEvent(BookingCancelledByCoachEvent.class).isCancelledAfterStart()).isTrue();
+    }
+
+    /** Owner decision (review MINOR 5): a PAUSED session was actually run — no forced no-show strike. */
+    @Test
+    void cancelBookingAsCoach_pausedSession_isNotFlaggedAfterStart() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "PAUSED");
+        booking.setRequestedStartTime(Instant.now().minusSeconds(600));
+        booking.setRequestedEndTime(Instant.now().plusSeconds(3000));
+        booking.setLiveStartedAt(Instant.now().minusSeconds(500));
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "WEATHER");
+
+        assertThat(capturedEvent(BookingCancelledByCoachEvent.class).isCancelledAfterStart()).isFalse();
+    }
+
+    @Test
+    void cancelBookingAsCoach_beforeTheStart_isNotFlaggedAfterStart() {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(coach));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("50.00"))));
+        when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+
+        bookingService.cancelBookingAsCoach(booking.getId(), COACH_USER_ID, "WEATHER");
+
+        assertThat(capturedEvent(BookingCancelledByCoachEvent.class).isCancelledAfterStart()).isFalse();
+    }
+
+    /** Exploit 4: the refund-eligible late cancel after start + grace is the coach's no-show. */
+    @Test
+    void cancelBookingAsParent_31MinutesAfterStartStillUnstarted_isACoachNoShow() {
+        cancelConfirmedAsParent(Instant.now().minus(31, java.time.temporal.ChronoUnit.MINUTES), null);
+        assertThat(capturedParentCancellation().isCoachNoShow()).isTrue();
+    }
+
+    @Test
+    void cancelBookingAsParent_withAmpleNotice_isNotACoachNoShow() {
+        cancelConfirmedAsParent(Instant.now().plus(3, java.time.temporal.ChronoUnit.DAYS), null);
+        assertThat(capturedParentCancellation().isRefundEligible()).isTrue();
+        assertThat(capturedParentCancellation().isCoachNoShow()).isFalse();
+    }
+
+    @Test
+    void cancelBookingAsParent_insideTheGrace_isNotACoachNoShow() {
+        cancelConfirmedAsParent(Instant.now().minus(10, java.time.temporal.ChronoUnit.MINUTES), null);
+        assertThat(capturedParentCancellation().isCoachNoShow()).isFalse();
+    }
+
     // ---- setPlayerRequest tests (skillars-deferred-155 AC5/AC8) ----
 
     @Test

@@ -351,4 +351,12 @@ class TimelineEventListenerTest {
             .insertSessionCompletedIfAbsent(eq(7L), eq(bookingId), any(), anyString(), eq(coachId));
         verify(timelineRepository, never()).save(any());
     }
+
+    /** fix/audit3-completion-dispute-integrity: the family's confirm before the wrap-up writes no timeline row yet. */
+    @Test
+    void settlementOnlyCompletion_writesNothing() {
+        listener.onBookingCompleted(new BookingCompletedEvent(this, bookingId, coachId, 7L, 9L, false, null, null, null,
+            List.of(), null, null, null, BookingCompletedEvent.Scope.SETTLEMENT_ONLY));
+        org.mockito.Mockito.verifyNoInteractions(timelineRepository, completionDataRepository);
+    }
 }

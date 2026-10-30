@@ -89,6 +89,17 @@ describe('SessionRecapDialog.vue (skillars-12-7)', () => {
     expect(save(w).exists()).toBe(false)
   })
 
+  // fix/audit3-completion-dispute-integrity: the family confirmed before the wrap-up — point at the wrap-up.
+  it('shows the wrap-up-awaited message when the server says the wrap-up is still owed', async () => {
+    getSessionRecap.mockResolvedValue(
+      RECAP({ editable: false, notEditableReason: 'booking.wrapUpAwaited' }),
+    )
+    const w = await mountDialog()
+
+    expect(w.find('[data-testid="recap-closed"]').text()).toBe('booking.recap.wrapUpAwaitedError')
+    expect(save(w).exists()).toBe(false)
+  })
+
   it('maps the disputed errorKey on save to the disputed message', async () => {
     getSessionRecap.mockResolvedValue(RECAP())
     updateSessionRecap.mockRejectedValueOnce({

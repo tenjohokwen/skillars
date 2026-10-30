@@ -175,11 +175,11 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:883',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:891',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:894',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:902',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
@@ -296,12 +296,12 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:615',
+    at: 'src/pages/parent/ParentBookingsPage.vue:629',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:653',
+    at: 'src/pages/parent/ParentBookingsPage.vue:667',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },

@@ -184,7 +184,7 @@ flowchart LR
         <tr><td><a href="monitoring/index.html">monitoring</a></td><td><em>Cross-cutting.</em> No code package any more (its only class, a vestigial TLS startup assertion, was removed); the logging, access-log, actuator/metrics/tracing and LGTM story.</td></tr>
         <tr><td><a href="infrastructure/index.html">infrastructure</a></td><td><em>Cross-cutting.</em> Blob storage, email transport port, provider clients, routing DataSource with isolated pools, NOWAIT lock retry, executor shutdown budgets, rate limiting, frontend link builder, exceptions/validation.</td></tr>
         <tr><td><a href="scheduled-jobs/index.html">scheduled jobs</a></td><td><em>Cross-cutting.</em> All 46 <code>@Scheduled</code> methods (36 ShedLock-guarded) — what each recovers, schedule/config keys, multi-instance rules.</td></tr>
-        <tr><td><a href="database/index.html">database</a></td><td><em>Cross-cutting.</em> Postgres schemas, Flyway from the V138 squashed baseline to V212, migration lint rules, locking conventions, test-database behaviour.</td></tr>
+        <tr><td><a href="database/index.html">database</a></td><td><em>Cross-cutting.</em> Postgres schemas, Flyway from the V138 squashed baseline to V213, migration lint rules, locking conventions, test-database behaviour.</td></tr>
         <tr><td><a href="frontend/index.html">frontend</a></td><td><em>Cross-cutting.</em> The Vue 3 + Quasar hash-routed SPA serving all four personas: router and role guards, Pinia stores, axios/session layer, SSE, i18n, design system, Vitest.</td></tr>
       </tbody>
     </table>
@@ -226,7 +226,7 @@ flowchart LR
       <p><strong>Session-pack credits live in <code>payment</code>, not <code>booking</code>.</strong> Booking's old parallel <code>SessionPackService</code>/<code>session_packs_purchased</code> system is gone. <code>payment.service.PackSessionService</code> and <code>payment.repo.SessionPackPurchase</code> are the only credit system; booking still <em>declares</em> pack lifecycle events in <code>booking.contract</code>, which payment publishes.</p>
     </div>
     <div class="callout">
-      <p><strong>Migrations were rebaselined.</strong> V02–V137 were squashed into <code>V138</code> (schema) and <code>V139</code> (seed data); new migrations continue from there (currently up to V212). Old migration numbers cited in commits or comments exist only in git history. See <a href="database/index.html">Database</a>.</p>
+      <p><strong>Migrations were rebaselined.</strong> V02–V137 were squashed into <code>V138</code> (schema) and <code>V139</code> (seed data); new migrations continue from there (currently up to V213). Old migration numbers cited in commits or comments exist only in git history. See <a href="database/index.html">Database</a>.</p>
     </div>
     <div class="callout">
       <p><strong>Background work is centrally catalogued.</strong> 46 <code>@Scheduled</code> methods run across 12 platform modules plus infrastructure; 36 are ShedLock-guarded and the other 10 are safe per instance by design (per-node state or <code>SKIP LOCKED</code> claims). Start at <a href="scheduled-jobs/index.html">Scheduled Jobs</a>.</p>

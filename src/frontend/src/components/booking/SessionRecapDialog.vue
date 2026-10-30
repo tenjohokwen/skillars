@@ -45,6 +45,9 @@
             <template v-else-if="notEditableReason === 'booking.recapNotEditableDisputed'">
               {{ t('booking.recap.disputedError') }}
             </template>
+            <template v-else-if="notEditableReason === 'booking.wrapUpAwaited'">
+              {{ t('booking.recap.wrapUpAwaitedError') }}
+            </template>
             <template v-else-if="untilLabel">
               {{ t('booking.recap.closedWindow', { date: untilLabel }) }}
             </template>
@@ -217,6 +220,7 @@ function saveErrorMessage(err) {
   if (errorKey === 'booking.recapEditWindowClosed') return t('booking.recap.windowClosedError')
   if (errorKey === 'booking.recapNotEditableErased') return t('booking.recap.erasedError')
   if (errorKey === 'booking.recapNotEditableDisputed') return t('booking.recap.disputedError')
+  if (errorKey === 'booking.wrapUpAwaited') return t('booking.recap.wrapUpAwaitedError')
   return t('booking.recap.saveError')
 }
 

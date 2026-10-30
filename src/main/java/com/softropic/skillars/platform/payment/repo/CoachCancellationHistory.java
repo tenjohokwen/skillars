@@ -34,6 +34,14 @@ public class CoachCancellationHistory {
     @Column(name = "cancel_reason", nullable = false, length = 50)
     private String cancelReason;
 
+    /**
+     * fix/audit3-completion-dispute-integrity (V213): the coach cancelled a never-started booking (ACCEPTED /
+     * CONFIRMED / UPCOMING, no live start — never a PAUSED one) at or after its start. Always a strike, whatever
+     * the reason, and never counted toward the excused-cancellation cap.
+     */
+    @Column(name = "after_start", nullable = false)
+    private boolean afterStart;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

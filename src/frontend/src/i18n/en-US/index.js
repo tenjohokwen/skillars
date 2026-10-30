@@ -502,6 +502,8 @@ export default {
     notEligible: 'You are not eligible to raise a dispute for this booking.',
     windowExpired: 'The window to raise a dispute for this booking has expired.',
     alreadyRaised: 'A dispute has already been raised for this booking.',
+    limitReached:
+      'You have already raised the maximum number of disputes for this booking. If you disagree with the decision, you can appeal it from the dispute.',
     invalidReason: 'Please select a valid reason.',
     statusDialogTitle: 'Dispute status',
     statusLabel: 'Status',
@@ -2135,6 +2137,8 @@ export default {
       windowClosedError: 'This session is too old to edit its recap.',
       erasedError: 'This recap can no longer be edited.',
       disputedError: 'This session was disputed, so its recap can no longer be edited.',
+      wrapUpAwaitedError:
+        'The family confirmed this session before your wrap-up. Use “Resume wrap-up” instead, so the attendance, ratings and homework are recorded.',
       missingTitle: 'Sessions without a recap',
       missingBanner: '{count} session needs a recap | {count} sessions need a recap',
       missingToggle: 'Show',
@@ -2454,6 +2458,8 @@ export default {
     noShowCoachConfirmBody:
       'Confirm that the coach did not turn up for this session. The session is refunded and the coach receives a reliability strike. This cannot be undone.',
     noShowCoachFailed: 'Unable to report the no-show. Please try again.',
+    noShowCoachSessionStarted:
+      'The coach started this session, so it cannot be reported as a no-show. Raise a dispute instead.',
     noShowCoachAvailableFrom: 'You can report a coach no-show from {time}.',
     title: 'Cancel Session',
     selectReason: 'Select cancellation reason',
@@ -2639,7 +2645,7 @@ export default {
         'Your booking with {coachDisplayName} could not be completed — the payment outcome is still being checked.',
       BOOKING_EXPIRED: 'Your session request with {coachDisplayName} expired without a response.',
       BOOKING_QUICK_COMPLETE_CONFIRM:
-        '{coachDisplayName} marked a session as complete — please confirm it.',
+        '{coachDisplayName} marked a session as complete — please confirm it, or raise a dispute if it did not happen.',
       BOOKING_RESCHEDULE_REQUESTED: '{parentName} asked to move a session to {proposedStartTime}.',
       BOOKING_RESCHEDULE_ACCEPTED: 'The reschedule was accepted — the new time is {newStartTime}.',
       BOOKING_RESCHEDULE_DECLINED: '{coachDisplayName} declined your reschedule request.',
@@ -2663,7 +2669,7 @@ export default {
       COACH_NO_SHOW: 'A coach no-show was recorded for the session on {requestedStartTime}.',
       PLAYER_NO_SHOW: 'A player no-show was recorded for the session on {requestedStartTime}.',
       SESSION_FORFEITED_NO_SHOW:
-        'The coach reported a no-show for the session on {requestedStartTime}. The session is forfeited and no refund is due.',
+        'The coach reported a no-show for the session on {requestedStartTime}. The session is forfeited and no refund is due. If this is wrong, raise a dispute from your bookings.',
       SESSION_FORFEITED_LATE_CANCEL:
         'Your late cancellation of the session on {requestedStartTime} is not refunded: the session is forfeited.',
       BOOKING_REMINDER: 'Reminder: session with {coachDisplayName} on {requestedStartTime}.',

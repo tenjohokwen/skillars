@@ -87,6 +87,8 @@ class BookingStateMachineTest {
             Arguments.of(COMPLETED_PENDING_CONFIRMATION, COMPLETE, COMPLETED),
             Arguments.of(COMPLETED_PENDING_CONFIRMATION, QUICK_COMPLETE, COMPLETED),
             Arguments.of(COMPLETED_PENDING_CONFIRMATION, DISPUTE, DISPUTED),
+            // fix/audit3-completion-dispute-integrity: the family's no-show report on a never-started Quick Complete.
+            Arguments.of(COMPLETED_PENDING_CONFIRMATION, BookingEvent.NO_SHOW_COACH, BookingStatus.NO_SHOW_COACH),
             Arguments.of(COMPLETED, DISPUTE, DISPUTED),
             Arguments.of(DISPUTED, SETTLE_REFUND, REFUND_PENDING),
             Arguments.of(DISPUTED, SETTLE_COMPLETE, COMPLETED),

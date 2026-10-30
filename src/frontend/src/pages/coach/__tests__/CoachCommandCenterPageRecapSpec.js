@@ -168,6 +168,52 @@ describe('CoachCommandCenterPage.vue — recap lifecycle (skillars-12-7)', () =>
     expect(wrapUp.props('isLiveMode')).toBe(true)
   })
 
+  // fix/audit3-completion-dispute-integrity: the family confirmed before the wrap-up — the coach resumes the
+  // WRAP-UP (attendance, ratings, homework), never the recap-only dialog.
+  it('a COMPLETED block awaiting the wrap-up shows "Resume wrap-up", not the recap button', async () => {
+    getMissingRecaps.mockResolvedValue({ count: 0, items: [] })
+    const awaiting = {
+      ...COMPLETED_NO_WRAP_UP,
+      bookingId: 'b-aw',
+      wrapUpSubmitted: false,
+      awaitingWrapUp: true,
+    }
+    const w = await mountPage([awaiting])
+
+    expect(byTestId(w, 'recap-btn')).toHaveLength(0)
+    expect(byTestId(w, 'resume-wrap-up-btn')).toHaveLength(1)
+    await byTestId(w, 'resume-wrap-up-btn')[0].trigger('click')
+    const wrapUp = w.findComponent({ name: 'WrapUpSequence' })
+    expect(wrapUp.exists()).toBe(true)
+    expect(wrapUp.props('bookingId')).toBe('b-aw')
+  })
+
+  it('a missing-recap item awaiting the wrap-up resumes the wizard instead of the recap dialog', async () => {
+    getMissingRecaps.mockResolvedValue({
+      count: 1,
+      items: [
+        {
+          bookingId: 'm-aw',
+          playerId: 3,
+          playerName: 'Kim',
+          sessionDate: '2026-03-01T10:00:00Z',
+          awaitingWrapUp: true,
+        },
+      ],
+    })
+    const w = await mountPage([])
+    await byTestId(w, 'missing-recaps-toggle')[0].trigger('click')
+
+    const action = byTestId(w, 'missing-recap-add')[0]
+    expect(action.text()).toBe('booking.schedule.resumeWrapUp')
+    await action.trigger('click')
+
+    expect(w.findComponent(SessionRecapDialog).props('modelValue')).toBe(false)
+    const wrapUp = w.findComponent({ name: 'WrapUpSequence' })
+    expect(wrapUp.props('bookingId')).toBe('m-aw')
+    expect(wrapUp.props('isLiveMode')).toBe(false)
+  })
+
   it('hides the banner at count 0', async () => {
     getMissingRecaps.mockResolvedValue({ count: 0, items: [] })
     const w = await mountPage([])

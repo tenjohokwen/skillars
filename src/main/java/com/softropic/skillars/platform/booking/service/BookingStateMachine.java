@@ -83,10 +83,14 @@ public class BookingStateMachine {
             BookingEvent.DISPUTE,          BookingStatus.DISPUTED,
             BookingEvent.CANCEL_COACH,     BookingStatus.CANCELLED_COACH
         ));
+        // fix/audit3-completion-dispute-integrity: NO_SHOW_COACH — the family's report on a Quick Completed
+        // session the coach never started (BookingService.recordNoShowCoach refuses a started one). No coach
+        // payout exists in this status, so the no-show refund / strike listeners act exactly as from UPCOMING.
         t.put(BookingStatus.COMPLETED_PENDING_CONFIRMATION, Map.of(
             BookingEvent.COMPLETE,       BookingStatus.COMPLETED,
             BookingEvent.QUICK_COMPLETE, BookingStatus.COMPLETED,
-            BookingEvent.DISPUTE,        BookingStatus.DISPUTED
+            BookingEvent.DISPUTE,        BookingStatus.DISPUTED,
+            BookingEvent.NO_SHOW_COACH,  BookingStatus.NO_SHOW_COACH
         ));
         t.put(BookingStatus.COMPLETED, Map.of(
             BookingEvent.DISPUTE, BookingStatus.DISPUTED

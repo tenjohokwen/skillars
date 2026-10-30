@@ -70,6 +70,14 @@ public class SessionCompletionData {
     @Column(name = "completion_mode", nullable = false, length = 10)
     private String completionMode;
 
+    /**
+     * fix/audit3-completion-dispute-integrity (V213): a placeholder written because the family confirmed the
+     * session before the coach's wrap-up ({@code BookingCompletionService.confirmCompletion}). The coach's later
+     * wrap-up fills this row in and clears the flag; the sweeper / admin force-complete placeholder never sets it.
+     */
+    @Column(name = "awaiting_wrap_up", nullable = false)
+    private boolean awaitingWrapUp;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

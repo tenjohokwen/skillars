@@ -21,6 +21,17 @@ public class BookingCompletedEvent extends ApplicationEvent {
     private final String whatWeDid;
     private final String whatsNext;
     private final String whatWentWell;
+    /** fix/audit3-completion-dispute-integrity: which side of the completion this event carries. */
+    private final Scope scope;
+
+    /**
+     * fix/audit3-completion-dispute-integrity: a completion has a settlement side (coach payout, session plan
+     * locked) and a development side (SLU, timeline, homework). They normally travel together ({@link #FULL}).
+     * When the family confirms before the coach's wrap-up, the confirm settles ({@link #SETTLEMENT_ONLY}) and the
+     * coach's later wrap-up — with the real attendance, ratings and homework — records the development side
+     * ({@link #DEVELOPMENT_ONLY}), so neither runs twice and the development side never runs on placeholder data.
+     */
+    public enum Scope { FULL, SETTLEMENT_ONLY, DEVELOPMENT_ONLY }
 
     public BookingCompletedEvent(Object source, UUID bookingId, UUID coachId, Long playerId,
                                   Long parentId, boolean playerAttended, Integer effortRating,
@@ -43,6 +54,16 @@ public class BookingCompletedEvent extends ApplicationEvent {
                                   Integer focusRating, Integer techniqueRating,
                                   List<UUID> homeworkDrillIds, String whatWeDid, String whatsNext,
                                   String whatWentWell) {
+        this(source, bookingId, coachId, playerId, parentId, playerAttended, effortRating,
+            focusRating, techniqueRating, homeworkDrillIds, whatWeDid, whatsNext, whatWentWell, Scope.FULL);
+    }
+
+    @SuppressWarnings("java:S107") // an immutable event: one field per fact its listeners need
+    public BookingCompletedEvent(Object source, UUID bookingId, UUID coachId, Long playerId,
+                                  Long parentId, boolean playerAttended, Integer effortRating,
+                                  Integer focusRating, Integer techniqueRating,
+                                  List<UUID> homeworkDrillIds, String whatWeDid, String whatsNext,
+                                  String whatWentWell, Scope scope) {
         super(source);
         this.bookingId = bookingId;
         this.coachId = coachId;
@@ -56,5 +77,16 @@ public class BookingCompletedEvent extends ApplicationEvent {
         this.whatWeDid = whatWeDid;
         this.whatsNext = whatsNext;
         this.whatWentWell = whatWentWell;
+        this.scope = scope;
+    }
+
+    /** Payout and session-plan listeners act on this event. */
+    public boolean isSettlement() {
+        return scope != Scope.DEVELOPMENT_ONLY;
+    }
+
+    /** SLU, timeline and homework listeners act on this event. */
+    public boolean isDevelopment() {
+        return scope != Scope.SETTLEMENT_ONLY;
     }
 }

@@ -71,18 +71,6 @@ public class CoachPayoutAdjustmentService {
         return row.getStatus();
     }
 
-    /** Clears the in-app dispute freeze (dispute resolved or dismissed) and releases the payout if nothing else holds it. */
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void clearDisputeFreeze(UUID bookingId) {
-        coachPayoutRepository.findByIdForUpdate(bookingId).ifPresent(row -> {
-            if (!row.isDisputeFrozen()) {
-                return;
-            }
-            row.setDisputeFrozen(false);
-            releaseIfUnfrozen(row);
-        });
-    }
-
     /** Card dispute opened: freeze a locked, not-yet-released payout. @return true when it was frozen. */
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean freezeForChargeback(CoachPayout row) {
@@ -212,8 +200,12 @@ public class CoachPayoutAdjustmentService {
                 .map(CoachPayout::getEffectiveNetAmount)
                 .orElse(BigDecimal.ZERO);
         }
-        row.setDisputeFrozen(false);
         String status = row.getStatus();
+        // fix/audit3-completion-dispute-integrity: one open dispute per booking PER SIDE (V213) — the other side's
+        // dispute may still be open, and it keeps a not-yet-released payout frozen. The caller flushed the
+        // upheld dispute RESOLVED first, so it is not counted. (A released payout is never dispute-frozen.)
+        row.setDisputeFrozen((isUnreleased(status) || CoachPayoutStatus.CANCELLED.equals(status))
+            && coachPayoutRepository.existsOpenDisputeForBooking(bookingId));
         if (CoachPayoutStatus.REVERSAL_FAILED.equals(status) && row.getStripeTransferId() != null) {
             // A reversal Stripe refused before V205 left the money with the coach — which UPHOLD_COACH now says
             // is theirs. Back to RELEASED (reported as earned again).

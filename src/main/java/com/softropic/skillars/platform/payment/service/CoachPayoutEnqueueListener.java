@@ -50,6 +50,10 @@ public class CoachPayoutEnqueueListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCompleted(BookingCompletedEvent event) {
+        if (!event.isSettlement()) {
+            // fix/audit3-completion-dispute-integrity: a late wrap-up after the family's confirm — already paid.
+            return;
+        }
         coachPayoutOutboxSupport.enqueuePayout(event.getBookingId(), event.getCoachId());
     }
 

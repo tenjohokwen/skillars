@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
@@ -29,7 +30,8 @@ import java.util.UUID;
  * fix/payment-wallet-dispute-integrity the coach-cancellation history row is written BEFORE_COMMIT, in the
  * cancellation's transaction, so it is never lost. Money (wallet refunds and, since
  * fix/payment-session-pack-integrity, pack session restores) is enqueued BEFORE_COMMIT by
- * {@link RefundEnqueueListener}; parent and admin cancellations therefore need no listener here.
+ * {@link RefundEnqueueListener}; admin cancellations therefore need no listener here, and a parent cancellation
+ * only for the coach no-show strike of a refund-eligible late cancel (fix/audit3-completion-dispute-integrity).
  */
 @Service
 @RequiredArgsConstructor
@@ -46,6 +48,16 @@ public class CancellationRefundService {
      */
     static boolean isExcusedReason(String cancelReason) {
         return cancelReason != null && EXCUSED_REASONS.contains(cancelReason);
+    }
+
+    /**
+     * fix/audit3-completion-dispute-integrity: the classification of one coach cancellation — an excused reason AND
+     * not a cancel at or after the start of a never-started booking (a no-show in disguise, whatever reason was
+     * picked). Both the strike below and {@code RefundEnqueueListener}'s expired-pack refund read this, so an
+     * after-start cancel is treated as the coach's fault on both sides, as a coach no-show is.
+     */
+    static boolean isExcusedCancellation(BookingCancelledByCoachEvent event) {
+        return !event.isCancelledAfterStart() && isExcusedReason(event.getCancelReason());
     }
 
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
@@ -80,10 +92,15 @@ public class CancellationRefundService {
         // cancellation's commit. Taken for unexcused reasons too: their history rows are not counted, but one
         // code path keeps the ordering obvious and the lock is held for milliseconds.
         cancellationHistoryRepository.acquireCoachCancellationLock(event.getCoachId().toString());
-        saveCancellationHistory(event.getCoachId(), event.getBookingId(), reason);
+        saveCancellationHistory(event.getCoachId(), event.getBookingId(), reason, event.isCancelledAfterStart());
 
         String strikeReason = null;
-        if (!EXCUSED_REASONS.contains(reason)) {
+        if (event.isCancelledAfterStart()) {
+            // fix/audit3-completion-dispute-integrity: at or after the start the family is already waiting — a
+            // no-show in disguise, whatever reason was picked. Always a no-show strike; its history row is
+            // flagged after_start, so it never counts toward (or uses up) the excused-cancellation cap.
+            strikeReason = "COACH_NO_SHOW";
+        } else if (!isExcusedCancellation(event)) {
             strikeReason = "COACH_CANCELLATION_UNEXCUSED";
         } else if (exceedsExcusedCancellationCap(event.getCoachId())) {
             strikeReason = "COACH_CANCELLATION_EXCUSED_LIMIT";
@@ -107,7 +124,8 @@ public class CancellationRefundService {
     private boolean exceedsExcusedCancellationCap(UUID coachId) {
         long maxPerWindow = configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW);
         long windowDays = configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS);
-        long excusedInWindow = cancellationHistoryRepository.countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+        // fix/audit3-completion-dispute-integrity: after-start cancels are struck on their own and not counted here.
+        long excusedInWindow = cancellationHistoryRepository.countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(
             coachId, EXCUSED_REASONS, Instant.now().minus(windowDays, ChronoUnit.DAYS));
         return excusedInWindow > maxPerWindow;
     }
@@ -119,6 +137,22 @@ public class CancellationRefundService {
         // by RefundEnqueueListener (BEFORE_COMMIT, durable outbox).
         issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
         log.info("Coach no-show processed: bookingId={}", event.getBookingId());
+    }
+
+    /**
+     * fix/audit3-completion-dispute-integrity: a parent's refund-eligible late cancel — the session never started
+     * and start + {@code booking.lateCancel.graceMinutes} has passed — is the coach's no-show, the same facts
+     * {@link #onCoachNoShow} strikes on. It used to refund the family and record nothing against the coach. The
+     * refund itself is enqueued by {@link RefundEnqueueListener}; this only strikes, once, after the commit.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onBookingCancelledByParent(BookingCancelledByParentEvent event) {
+        if (!event.isCoachNoShow()) {
+            return;
+        }
+        issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
+        log.info("Parent late cancel after a coach no-show: bookingId={} — coach strike issued", event.getBookingId());
     }
 
     /**
@@ -174,11 +208,12 @@ public class CancellationRefundService {
         });
     }
 
-    private void saveCancellationHistory(UUID coachId, UUID bookingId, String reason) {
+    private void saveCancellationHistory(UUID coachId, UUID bookingId, String reason, boolean afterStart) {
         CoachCancellationHistory history = new CoachCancellationHistory();
         history.setCoachId(coachId);
         history.setBookingId(bookingId);
         history.setCancelReason(reason);
+        history.setAfterStart(afterStart);
         cancellationHistoryRepository.save(history);
     }
 }

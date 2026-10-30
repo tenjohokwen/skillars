@@ -62,4 +62,21 @@ class CoachPayoutEnqueueListenerTest {
             false, BigDecimal.TEN, "p@x.test", "c@x.test", Instant.now(), "UTC"));
         verify(coachPayoutOutboxSupport, never()).enqueuePayout(any(), any());
     }
+
+    /** fix/audit3-completion-dispute-integrity: a late wrap-up after the family's confirm pays nothing again. */
+    @Test
+    void developmentOnlyCompletion_paysNothing() {
+        listener.onBookingCompleted(new com.softropic.skillars.platform.booking.contract.BookingCompletedEvent(this, bookingId, coachId, 2L, 1L,
+            true, 4, 4, 4, java.util.List.of(java.util.UUID.randomUUID()), "a", "b", null,
+            com.softropic.skillars.platform.booking.contract.BookingCompletedEvent.Scope.DEVELOPMENT_ONLY));
+        verify(coachPayoutOutboxSupport, never()).enqueuePayout(any(), any());
+    }
+
+    @Test
+    void settlementOnlyCompletion_enqueuesThePayout() {
+        listener.onBookingCompleted(new com.softropic.skillars.platform.booking.contract.BookingCompletedEvent(this, bookingId, coachId, 2L, 1L,
+            true, 4, 4, 4, java.util.List.of(java.util.UUID.randomUUID()), "a", "b", null,
+            com.softropic.skillars.platform.booking.contract.BookingCompletedEvent.Scope.SETTLEMENT_ONLY));
+        verify(coachPayoutOutboxSupport).enqueuePayout(bookingId, coachId);
+    }
 }

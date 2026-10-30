@@ -16,8 +16,10 @@ public interface CoachCancellationHistoryRepository extends JpaRepository<CoachC
     List<CoachCancellationHistory> findByBookingId(UUID bookingId);
 
     // fix/booking-cancel-policy-loopholes: rolling-window excused-cancellation count.
-    long countByCoachIdAndCancelReasonInAndCreatedAtAfter(UUID coachId, Collection<String> cancelReasons,
-                                                          Instant after);
+    // fix/audit3-completion-dispute-integrity: excluding after-start cancels (struck on their own).
+    long countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(UUID coachId,
+                                                                          Collection<String> cancelReasons,
+                                                                          Instant after);
 
     /**
      * fix/booking-price-and-excused-race: per-coach serialisation of the excused-cancellation

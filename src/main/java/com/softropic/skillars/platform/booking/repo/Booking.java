@@ -142,6 +142,16 @@ public class Booking {
     private Instant unresolvedAlertedAt;
 
     /**
+     * fix/audit3-completion-dispute-integrity (V213): when the family was asked to confirm (or dispute) this
+     * session — stamped as it enters COMPLETED_PENDING_CONFIRMATION without a full live run (Quick Complete, a
+     * sweeper-ended live session, or one ended below {@code booking.live.minDurationPercent} of its length).
+     * Sends the confirmation email exactly once, and makes the coach's wrap-up QUICK (parent confirm / dispute)
+     * rather than LIVE. NULL = not asked: a full live session, or a row from before V213.
+     */
+    @Column(name = "confirmation_requested_at")
+    private Instant confirmationRequestedAt;
+
+    /**
      * fix/booking-integrity (B2, V178): when the booking entered its CURRENT status. Unlike
      * {@code updatedAt}, later writes that do not change the status (a recap edit, a reminder stamp,
      * GDPR note anonymisation, a plan note) leave it alone — so for a terminal status it is the moment
