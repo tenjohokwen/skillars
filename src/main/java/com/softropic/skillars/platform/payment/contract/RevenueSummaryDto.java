@@ -37,9 +37,10 @@ public record RevenueSummaryDto(
     /**
      * fix/audit3-wallet-cashout-integrity: the coach's payout hold. {@code newCoach} is true while their payouts
      * are held {@code newCoachHoldHours} instead of {@code normalHoldHours}; {@code newCoachPayoutsRemaining} of
-     * their first {@code newCoachPayoutCount} payouts are still to be transferred.
+     * their first {@code newCoachPayoutCount} payouts are still to be transferred — only payouts of at least
+     * {@code minReleasedNet} (platform currency) count toward it.
      */
     public record PayoutHoldDto(long normalHoldHours, long newCoachHoldHours, long newCoachPayoutCount,
-                                long newCoachPayoutsRemaining, boolean newCoach) {
+                                long newCoachPayoutsRemaining, boolean newCoach, BigDecimal minReleasedNet) {
     }
 }

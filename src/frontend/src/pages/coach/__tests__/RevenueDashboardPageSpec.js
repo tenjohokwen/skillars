@@ -19,6 +19,7 @@ import RevenueDashboardPage from 'src/pages/coach/RevenueDashboardPage.vue'
 const mounted = []
 
 const summary = (payoutHold) => ({
+  currency: 'EUR',
   grossEarnings: 0,
   commissionDeducted: 0,
   netPayout: 0,
@@ -60,6 +61,7 @@ describe('RevenueDashboardPage.vue — new-coach payout hold', () => {
         newCoachPayoutCount: 5,
         newCoachPayoutsRemaining: 3,
         newCoach: true,
+        minReleasedNet: 20,
       }),
     })
     const banner = wrapper.find('.new-coach-hold-banner')
@@ -67,6 +69,8 @@ describe('RevenueDashboardPage.vue — new-coach payout hold', () => {
     expect(banner.text()).toContain('your first 5 payouts are held for 7 days')
     expect(banner.text()).toContain('instead of 2 days')
     expect(wrapper.find('.new-coach-hold-remaining').text()).toBe('3 remaining.')
+    // fix review: only payouts of at least minReleasedNet count — shown with the platform currency
+    expect(wrapper.find('.new-coach-hold-min').text()).toContain('€20.00')
   })
 
   it('renders other configured values, in hours when not whole days', async () => {

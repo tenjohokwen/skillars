@@ -207,6 +207,16 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (5); 0 → new coaches get the normal hold", 5L);
 
     /**
+     * fix/audit3-wallet-cashout-integrity: the smallest released payout (net the coach kept, in whole units of the
+     * platform currency — {@code platform.payment.currency}; every payout is in it) that counts toward
+     * {@link #PAYOUT_NEW_COACH_RELEASED_COUNT}, so a few tiny sock-puppet sessions do not end the longer hold.
+     * 0 = every released payout counts.
+     */
+    public static final BoundedKey PAYOUT_NEW_COACH_MIN_RELEASED_NET =
+        new BoundedKey("payment.payout.newCoach.minReleasedNet", 0L, 10000L, false,
+            "out-of-range falls back to the coded default (20); 0 → tiny payouts end the new-coach hold", 20L);
+
+    /**
      * fix/audit3-wallet-cashout-integrity: the payout hold (hours) for a new coach (see above). Same ceiling as
      * {@code payment.payout.hold_hours} (336 = 14 days).
      */
@@ -602,6 +612,7 @@ public final class ConfigBounds {
         PACK_EXPIRY_DAYS_TIER3.key(),
         PACK_EXPIRY_DAYS_TIER4.key(),
         PAYOUT_NEW_COACH_RELEASED_COUNT.key(),
+        PAYOUT_NEW_COACH_MIN_RELEASED_NET.key(),
         PAYOUT_NEW_COACH_HOLD_HOURS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
@@ -655,6 +666,7 @@ public final class ConfigBounds {
             PACK_EXPIRY_DAYS_TIER3,
             PACK_EXPIRY_DAYS_TIER4,
             PAYOUT_NEW_COACH_RELEASED_COUNT,
+            PAYOUT_NEW_COACH_MIN_RELEASED_NET,
             PAYOUT_NEW_COACH_HOLD_HOURS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {

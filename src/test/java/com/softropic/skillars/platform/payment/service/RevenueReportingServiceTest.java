@@ -141,7 +141,9 @@ class RevenueReportingServiceTest {
             .thenReturn(5L);
         when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_HOLD_HOURS))
             .thenReturn(168L);
-        when(coachPayoutRepository.countByCoachIdAndReleasedAtIsNotNull(coachId)).thenReturn(2L);
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_MIN_RELEASED_NET))
+            .thenReturn(20L);
+        when(coachPayoutRepository.countQualifyingReleasedByCoach(coachId, BigDecimal.valueOf(20L))).thenReturn(2L);
 
         RevenueSummaryDto.PayoutHoldDto hold = service.getCoachRevenueSummary(coachId, from, to).payoutHold();
 
@@ -150,6 +152,7 @@ class RevenueReportingServiceTest {
         assertThat(hold.newCoachHoldHours()).isEqualTo(168L);
         assertThat(hold.newCoachPayoutCount()).isEqualTo(5L);
         assertThat(hold.newCoachPayoutsRemaining()).isEqualTo(3L);
+        assertThat(hold.minReleasedNet()).isEqualByComparingTo("20");
     }
 
     // ── Running balance pagination ───────────────────────────────

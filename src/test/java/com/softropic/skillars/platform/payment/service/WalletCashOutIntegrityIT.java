@@ -234,6 +234,40 @@ class WalletCashOutIntegrityIT extends BasePaymentIT {
             + "WHERE purchase_id = ?", Integer.class, packId)).isEqualTo(2);
     }
 
+    @Autowired com.softropic.skillars.platform.config.service.ConfigService configService;
+
+    private void releasedPayout(UUID coachId, String status, String net, String reversed) {
+        jdbcTemplate.update("INSERT INTO payment.coach_payouts (booking_id, coach_id, gross_amount, commission_amount, "
+                + "net_amount, reversed_amount, currency, status, release_after, released_at, attempts, created_at, "
+                + "updated_at) VALUES (?, ?, ?::numeric, 0, ?::numeric, ?::numeric, 'eur', ?, now(), now(), 0, now(), now())",
+            UUID.randomUUID(), coachId, net, net, reversed, status);
+    }
+
+    /**
+     * Review fix: only RELEASED payouts the coach kept at least payment.payout.newCoach.minReleasedNet (20) of count
+     * toward the threshold — a reversed payout, a tiny one, or one reversed below the minimum does not.
+     */
+    @Test
+    void newCoachThreshold_countsOnlyReleasedPayoutsOfAtLeastTheMinimumNet() {
+        UUID coachId = UUID.randomUUID();
+        transactionTemplate.execute(s -> {
+            releasedPayout(coachId, "RELEASED", "45.00", "0.00");   // counts
+            releasedPayout(coachId, "RELEASED", "20.00", "0.00");   // counts (at the minimum)
+            releasedPayout(coachId, "RELEASED", "5.00", "0.00");    // tiny
+            releasedPayout(coachId, "RELEASED", "45.00", "30.00");  // kept 15
+            releasedPayout(coachId, "REVERSED", "45.00", "45.00");  // reversed
+            return null;
+        });
+
+        CoachPayoutOutboxSupport.PayoutHold hold =
+            CoachPayoutOutboxSupport.resolveHold(configService, coachPayoutRepository, coachId);
+
+        assertThat(hold.releasedCount()).isEqualTo(2L);
+        assertThat(hold.newCoach()).isTrue();
+        assertThat(hold.newCoachPayoutsRemaining()).isEqualTo(3L);
+        assertThat(hold.minReleasedNet()).isEqualTo(20L);
+    }
+
     /** A coach with no payout released yet is held 168h (the default), not the normal 48h. */
     @Test
     void newCoach_payoutIsHeldTheLongerHold() {

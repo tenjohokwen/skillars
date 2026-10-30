@@ -238,16 +238,23 @@ public class CoachPayoutOutboxSupport {
      * charge a card payment back, so a coach paid out at once and then gone left the platform to absorb every
      * chargeback. A coach with fewer than {@code payment.payout.newCoach.releasedCount} (5) payouts ever
      * transferred is held {@code payment.payout.newCoach.holdHours} (168h) instead — never less than the normal
-     * hold. Read when the payout row is written, so a payout keeps the hold it was enqueued with. Static so the
+     * hold. Only RELEASED payouts with a net of at least {@code payment.payout.newCoach.minReleasedNet} (20) count,
+     * so a few tiny sessions cannot end it. Read when the payout row is written, so a payout keeps the hold it was enqueued with. Static so the
      * coach revenue page ({@code RevenueReportingService}) shows exactly the rule applied here.
      *
      * @param normalHoldHours     {@code payment.payout.hold_hours}
      * @param newCoachHoldHours   {@code payment.payout.newCoach.holdHours}
      * @param newCoachPayoutCount {@code payment.payout.newCoach.releasedCount} — how many first payouts are held longer
-     * @param releasedCount       the coach's payouts transferred so far
+     * @param releasedCount       the coach's qualifying payouts released so far — status RELEASED with a net of at
+     *                            least {@code payment.payout.newCoach.minReleasedNet}
+     * @param minReleasedNet      {@code payment.payout.newCoach.minReleasedNet}, in the platform currency
      */
     public record PayoutHold(long normalHoldHours, long newCoachHoldHours, long newCoachPayoutCount,
-                             long releasedCount) {
+                             long releasedCount, long minReleasedNet) {
+        public PayoutHold(long normalHoldHours, long newCoachHoldHours, long newCoachPayoutCount, long releasedCount) {
+            this(normalHoldHours, newCoachHoldHours, newCoachPayoutCount, releasedCount, 0L);
+        }
+
         /** True while the coach still gets the longer new-coach hold. */
         public boolean newCoach() {
             return releasedCount < newCoachPayoutCount && newCoachHoldHours > normalHoldHours;
@@ -269,8 +276,10 @@ public class CoachPayoutOutboxSupport {
             "payment.payout.hold_hours", HOLD_HOURS_DEFAULT, HOLD_HOURS_MIN, HOLD_HOURS_MAX);
         long newCoachCount = configService.getBoundedLong(ConfigBounds.PAYOUT_NEW_COACH_RELEASED_COUNT);
         long newCoachHours = configService.getBoundedLong(ConfigBounds.PAYOUT_NEW_COACH_HOLD_HOURS);
-        long released = newCoachCount > 0 ? coachPayoutRepository.countByCoachIdAndReleasedAtIsNotNull(coachId) : 0L;
-        return new PayoutHold(normal, newCoachHours, newCoachCount, released);
+        long minNet = configService.getBoundedLong(ConfigBounds.PAYOUT_NEW_COACH_MIN_RELEASED_NET);
+        long released = newCoachCount > 0
+            ? coachPayoutRepository.countQualifyingReleasedByCoach(coachId, BigDecimal.valueOf(minNet)) : 0L;
+        return new PayoutHold(normal, newCoachHours, newCoachCount, released, minNet);
     }
 
     /**

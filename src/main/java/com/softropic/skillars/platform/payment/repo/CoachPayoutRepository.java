@@ -32,11 +32,15 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
     Optional<CoachPayout> findByIdForUpdate(@Param("bookingId") UUID bookingId);
 
     /**
-     * fix/audit3-wallet-cashout-integrity: how many of the coach's payouts have ever been transferred
-     * ({@code released_at} is stamped by the transfer and kept through a later reversal) — fewer than
-     * {@code payment.payout.newCoach.releasedCount} makes the coach "new" for the longer payout hold.
+     * fix/audit3-wallet-cashout-integrity: how many of the coach's payouts count as "released" for the new-coach
+     * payout hold — status {@code RELEASED} only (a reversed payout does not count; served by the partial index
+     * {@code idx_coach_payouts_coach_released}) and only those whose net the coach kept (net − reversed) is at
+     * least {@code minNet}, so a handful of tiny sessions cannot clear the threshold. Fewer than
+     * {@code payment.payout.newCoach.releasedCount} makes the coach "new".
      */
-    long countByCoachIdAndReleasedAtIsNotNull(UUID coachId);
+    @Query("SELECT COUNT(p) FROM CoachPayout p WHERE p.coachId = :coachId AND p.status = 'RELEASED' "
+        + "AND (p.netAmount - p.reversedAmount) >= :minNet")
+    long countQualifyingReleasedByCoach(@Param("coachId") UUID coachId, @Param("minNet") BigDecimal minNet);
 
     /**
      * feat/coach-payouts-pack-and-credit: a CSAM safety hold freezes the coach's not-yet-released

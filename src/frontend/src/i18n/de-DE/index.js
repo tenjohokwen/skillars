@@ -2427,6 +2427,7 @@ export default {
     newCoachHold: {
       banner:
         'Solange Ihr Konto neu ist, werden Ihre ersten {count} Auszahlungen nach der Sitzung {hold} statt {normal} zurückgehalten, damit Kartenrückbuchungen geklärt werden können, bevor das Geld die Plattform verlässt.',
+      minNote: 'Es zählen nur Auszahlungen ab {amount}.',
       remaining: 'Noch {remaining}.',
       days: '{n} Tag | {n} Tage',
       hours: '{n} Stunde | {n} Stunden',

@@ -114,7 +114,8 @@ public class RevenueReportingService {
         CoachPayoutOutboxSupport.PayoutHold hold =
             CoachPayoutOutboxSupport.resolveHold(configService, coachPayoutRepository, coachId);
         RevenueSummaryDto.PayoutHoldDto payoutHold = new RevenueSummaryDto.PayoutHoldDto(hold.normalHoldHours(),
-            hold.newCoachHoldHours(), hold.newCoachPayoutCount(), hold.newCoachPayoutsRemaining(), hold.newCoach());
+            hold.newCoachHoldHours(), hold.newCoachPayoutCount(), hold.newCoachPayoutsRemaining(), hold.newCoach(),
+            BigDecimal.valueOf(hold.minReleasedNet()));
 
         return new RevenueSummaryDto(grossEarnings, commissionDeducted, netPayout,
             sessionCount, refundsIssued, platformCurrency(), pendingReleaseAmount, pendingReleaseCount,

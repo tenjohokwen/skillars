@@ -2214,6 +2214,7 @@ export default {
     newCoachHold: {
       banner:
         'Tant que votre compte est nouveau, vos {count} premiers versements sont retenus {hold} après la séance au lieu de {normal}, afin que les contestations de paiement puissent être réglées avant que l’argent ne quitte la plateforme.',
+      minNote: 'Seuls les versements d’au moins {amount} sont comptés.',
       remaining: 'Encore {remaining}.',
       days: '{n} jour | {n} jours',
       hours: '{n} heure | {n} heures',

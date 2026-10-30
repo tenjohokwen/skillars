@@ -45,6 +45,11 @@
             normal: formatHold(payoutHold.normalHoldHours),
           })
         }}
+        <span v-if="Number(payoutHold.minReleasedNet) > 0" class="new-coach-hold-min">
+          {{
+            t('revenue.newCoachHold.minNote', { amount: formatMoney(payoutHold.minReleasedNet) })
+          }}
+        </span>
         <span class="new-coach-hold-remaining text-weight-bold">
           {{
             t('revenue.newCoachHold.remaining', {
@@ -206,6 +211,14 @@ function openReceipt(bookingId) {
 
 function fmt(val) {
   return val != null ? Number(val).toFixed(2) : '0.00'
+}
+
+// The platform currency comes with the summary (RevenueSummaryDto.currency).
+function formatMoney(amount) {
+  return new Intl.NumberFormat(locale.value, {
+    style: 'currency',
+    currency: summary.value?.currency || 'EUR',
+  }).format(Number(amount))
 }
 
 // Whole days read better than hours ("7 days" rather than "168 hours").

@@ -2419,6 +2419,7 @@ export default {
     newCoachHold: {
       banner:
         'While your account is new, your first {count} payouts are held for {hold} after the session instead of {normal}, so card disputes can be settled before the money leaves the platform.',
+      minNote: 'Only payouts of at least {amount} count towards this.',
       remaining: '{remaining} remaining.',
       days: '{n} day | {n} days',
       hours: '{n} hour | {n} hours',

@@ -399,7 +399,9 @@ class CoachPayoutOutboxSupportTest {
             .thenReturn(5L);
         when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_HOLD_HOURS))
             .thenReturn(newCoachHours);
-        when(coachPayoutRepository.countByCoachIdAndReleasedAtIsNotNull(coachId)).thenReturn(releasedCount);
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_MIN_RELEASED_NET))
+            .thenReturn(20L);
+        when(coachPayoutRepository.countQualifyingReleasedByCoach(coachId, BigDecimal.valueOf(20L))).thenReturn(releasedCount);
     }
 
     @Test
