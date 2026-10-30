@@ -106,12 +106,19 @@
     <p>
       <strong>4. Dispute resolution.</strong> A Parent, a self-registered Player, or the booking's (non-suspended)
       Coach can raise a dispute on a terminal booking within <code>disputes.submissionWindowDays</code> (default 14);
-      the parent/player side may also dispute a live (<code>IN_PROGRESS</code>/<code>PAUSED</code>) session. Raising
-      freezes the not-yet-released coach payout. An admin reviews it alongside the payment breakdown and coach
+      the parent/player side may also dispute a live (<code>IN_PROGRESS</code>/<code>PAUSED</code>) session, or one awaiting
+      their confirmation (<code>COMPLETED_PENDING_CONFIRMATION</code> — fix/audit3-completion-dispute-integrity). Raising
+      freezes the not-yet-released coach payout. One open dispute per booking <em>per side</em> (coach vs family, V214),
+      and at most <code>disputes.maxPerBookingPerRaiser</code> (default 2) per raiser per booking — open, resolved and
+      dismissed all count (409 <code>disputes.limitReached</code>), so a dismissed raiser cannot refile to keep the
+      payout frozen. An admin reviews it alongside the payment breakdown and coach
       cancellation history, then resolves it with <code>FULL_CREDIT</code>, <code>PARTIAL_CREDIT</code>,
       <code>NO_ACTION</code>, <code>COACH_WARNING</code> or <code>UPHOLD_COACH</code> (V198: the payer's earlier refund
       was not owed — claw it back and pay the coach in full), or dismisses it. Resolution also reconciles the coach's
-      payout and lifts the freeze.
+      payout and lifts the freeze — only once no other dispute on the booking is still open; the booking's single
+      <code>DISPUTE_RAISED</code> alert is resolved with the last one too. Resolve and dismiss serialise per booking on a
+      transaction-scoped advisory lock (<code>DisputeRepository.acquireBookingDisputeLock</code>), so the per-booking
+      credit cap and the freeze decision see each other's outcome.
     </p>
     <p>
       <strong>5. Appeals</strong> (<code>AppealService</code>, V172, FR-ADM-004 / FR-TSC-003). A user subject to an
@@ -165,7 +172,7 @@
       <tbody>
         <tr><td><code>AdminActionLog</code></td><td><code>admin.admin_action_log</code></td><td>Immutable audit trail (admin id, <code>AdminActionType</code>, reference id, reason). <code>action_type</code> is CHECK-constrained (20 values); last widened by V189 (<code>BOOKING_ADMIN_CANCEL</code>), before that V183 (<code>DISPUTE_DISMISS</code>, <code>APPEAL_UPHOLD</code>, <code>APPEAL_OVERTURN</code>, <code>COACH_SAFETY_HOLD</code>), V171 (<code>COACH_TIER_CHANGE</code>, <code>USER_SUSPEND</code>, <code>USER_REACTIVATE</code>, <code>USER_LOGIN_UNLOCK</code>) and V162 (<code>BOOKING_FORCE_COMPLETE</code>).</td></tr>
         <tr><td><code>AdminAlert</code></td><td><code>admin.admin_alerts</code></td><td>Backs the moderation queue. Partial unique index <code>admin_alerts_unique_open_per_ref (reference_id, type) WHERE status='OPEN'</code>. <code>type</code>/<code>reference_type</code> CHECKs last widened by V152 (<code>GDPR_ERASURE_DEADLINE</code> / <code>GDPR_REQUEST</code>) V153 (<code>SUBSCRIPTION_ORPHANED</code>) V185 (<code>SAFETY_HOLD_BOOKING</code>, reference type <code>BOOKING</code>), V186 (<code>CASH_OUT_UNRESOLVED</code> / <code>CASH_OUT</code>), V193 (<code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, reference type <code>PAYMENT_INTENT</code>), V208 (<code>BOOKING_ACTION_REQUIRED</code>) and V209 (<code>SESSION_NEVER_STARTED</code>). Those last six form <code>AdminAlertType.PAYMENT_INTEGRITY</code>: one queue bucket, one resolve action.</td></tr>
-        <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute from raise to RESOLVED/DISMISSED; optimistic-locked (<code>@Version</code>). V198 added <code>recovered_amount</code> / <code>absorbed_amount</code> (what an <code>UPHOLD_COACH</code> took back from the payer, and what the platform absorbed) and widened <code>disputes_resolution_check</code> with <code>UPHOLD_COACH</code>.</td></tr>
+        <tr><td><code>Dispute</code></td><td><code>admin.disputes</code></td><td>A booking dispute from raise to RESOLVED/DISMISSED; optimistic-locked (<code>@Version</code>). V198 added <code>recovered_amount</code> / <code>absorbed_amount</code> (what an <code>UPHOLD_COACH</code> took back from the payer, and what the platform absorbed) and widened <code>disputes_resolution_check</code> with <code>UPHOLD_COACH</code>. Partial unique index <code>idx_disputes_unique_open_per_booking_side (booking_id, raised_by_role = 'COACH') WHERE status NOT IN ('RESOLVED','DISMISSED')</code> (V214): one open dispute per side.</td></tr>
         <tr><td><code>Appeal</code></td><td><code>admin.appeals</code> (V172)</td><td>One appeal against one enforcement action: <code>subject_type</code> + <code>subject_id</code> + <code>enforced_at</code>, status OPEN/UPHELD/OVERTURNED, <code>reversal_applied</code>. Unique <code>uq_appeals_per_enforcement</code> and partial unique <code>uq_appeals_one_open_per_subject</code>; CHECK <code>appeals_decision_consistent</code>. Deliberately no <code>@Version</code>.</td></tr>
         <tr><td><code>GdprRequest</code></td><td><code>admin.gdpr_requests</code></td><td>One EXPORT or ERASURE request: PENDING → PROCESSING → COMPLETED/FAILED, signed <code>download_url</code> + <code>expires_at</code> for exports, <code>retry_count</code> + <code>failed_at</code> (V154) for the retry sweep, and nullable <code>player_id</code> (V172) — non-null means a parent-requested, child-scoped request where <code>user_id</code> is the <em>parent</em>. Partial unique indexes <code>idx_gdpr_requests_unique_active_self</code> / <code>_player</code> allow one active request per type per subject.</td></tr>
         <tr><td><code>ReviewModerationLog</code></td><td><code>reviews.review_moderation_log</code></td><td>Audit trail for review approve/block. Lives in <code>admin.repo</code> but is mapped into the <code>reviews</code> schema.</td></tr>

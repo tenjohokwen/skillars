@@ -140,7 +140,7 @@
       <a href="../database/index.html">Database</a> and <code>docs/deployment/migration-conventions.md</code>.</p>
     <ol>
       <li><strong>Name</strong> <code>src/main/resources/db/migration/V&lt;next&gt;__&lt;schema&gt;_&lt;table&gt;_&lt;what&gt;.sql</code>.
-        Check the highest number on <em>master</em> right before you push (currently <code>V212</code>; the sequence has unused gaps such as <code>V174</code> and <code>V201</code>–<code>V204</code>, so always take highest + 1) —
+        Check the highest number on <em>master</em> right before you push (currently <code>V214</code>; the sequence has unused gaps such as <code>V174</code> and <code>V201</code>–<code>V204</code>, so always take highest + 1) —
         two open PRs picking the same number is the usual collision. Never edit a migration that has run anywhere.</li>
       <li><strong>Header comment</strong> explaining why, and any "same-release exception" you are taking.</li>
       <li><strong>Schema</strong>: put the table in its owning module's schema (<code>booking</code>, <code>payment</code>,

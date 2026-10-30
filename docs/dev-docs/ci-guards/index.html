@@ -447,7 +447,7 @@ npx vitest run src/i18n/__tests__
       <li><strong>Where:</strong> <code>src/test/java/com/softropic/skillars/config/StatusScopedPartialIndexConventionIT.java</code> — queries the live
         migrated schema.</li>
       <li><strong>Protects:</strong> a status-scoped partial index written as a blacklist (<code>status &lt;&gt; 'X'</code>, <code>NOT IN</code>)
-        silently widens the day a new status is added. Only <code>admin.idx_disputes_unique_open_per_booking</code> is allowlisted.</li>
+        silently widens the day a new status is added. Only <code>admin.idx_disputes_unique_open_per_booking_side</code> (V214; formerly <code>idx_disputes_unique_open_per_booking</code>) is allowlisted.</li>
       <li><strong>Looks like:</strong> <code>[status-scoped partial index idx_x on y uses a BLACKLIST predicate `…` — a future status would silently fall inside it. Rewrite as a whitelist …]</code></li>
       <li><strong>Fix:</strong> <code>WHERE status IN ('A','B')</code>; if the blacklist is intentional, add it to <code>BLACKLIST_ALLOWLIST</code>
         with a rationale on the migration.</li>

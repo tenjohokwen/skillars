@@ -228,7 +228,11 @@
       <code>booking.lateCancel.graceMinutes</code> (default 30) after its start (Deferred-64, narrowed by
       fix/booking-cancel-policy-loopholes). A coach's excused cancellations beyond
       <code>coach.excusedCancellations.maxPerWindow</code> (3) per <code>windowDays</code> (90) strike as
-      <code>COACH_CANCELLATION_EXCUSED_LIMIT</code>; the count-and-strike runs under a per-coach
+      <code>COACH_CANCELLATION_EXCUSED_LIMIT</code>. A coach cancel at or after the booking's start
+      (<code>BookingCancelledByCoachEvent.cancelledAfterStart</code>) always strikes as <code>COACH_NO_SHOW</code>, whatever the
+      reason, and its history row is flagged <code>after_start</code> (V214) so it is not counted toward that cap; a parent's
+      refund-eligible late cancel after the coach never started (<code>BookingCancelledByParentEvent.coachNoShow</code>) strikes
+      <code>COACH_NO_SHOW</code> too (<code>onBookingCancelledByParent</code>, after commit). The count-and-strike runs under a per-coach
       transaction-scoped advisory lock (<code>CoachCancellationHistoryRepository.acquireCoachCancellationLock</code>),
       so two concurrent excused cancels cannot both count before the other commits. It is an advisory lock and not
       the coach row because <code>ReliabilityStrikeService.issue</code> (<code>REQUIRES_NEW</code>) locks that
