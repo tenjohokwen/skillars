@@ -181,7 +181,9 @@
 
           <!-- Coach no-show report (FR: parent/self-booking-player). Mirrors
                BookingService.recordNoShowCoach for visibility only: the NO_SHOW_COACH transition
-               exists only from UPCOMING, and the backend refuses a report before the scheduled
+               exists from UPCOMING and — fix/audit3-completion-dispute-integrity — from a
+               COMPLETED_PENDING_CONFIRMATION session the coach never started (a Quick Complete;
+               booking.liveStarted false), and the backend refuses a report before the scheduled
                start + the late-cancel grace (BookingError.NO_SHOW_TOO_EARLY;
                feat/payment-forfeit-payouts-and-clawback — booking.coachNoShowReportableAt). The
                server stays authoritative. -->
@@ -455,6 +457,8 @@ import {
 // skillars-deferred-165 AC2: mirrors DisputeService.ELIGIBLE_STATUSES client-side, purely for UX —
 // the server is the real gate. fix/booking-completion-integrity: a started (IN_PROGRESS / PAUSED) session is
 // disputable by the parent / player — it cannot be cancelled once the coach has started it.
+// fix/audit3-completion-dispute-integrity: and a session awaiting the family's confirmation, which they used to
+// be able only to confirm (DisputeService.AWAITING_CONFIRMATION_STATUSES).
 const DISPUTE_ELIGIBLE_STATUSES = [
   'COMPLETED',
   'CANCELLED',
@@ -464,6 +468,7 @@ const DISPUTE_ELIGIBLE_STATUSES = [
   'NO_SHOW_COACH',
   'IN_PROGRESS',
   'PAUSED',
+  'COMPLETED_PENDING_CONFIRMATION',
 ]
 function isDisputeEligible(status) {
   return DISPUTE_ELIGIBLE_STATUSES.includes(status)
@@ -565,8 +570,16 @@ function coachNoShowReportableMs(booking) {
   return new Date(booking.coachNoShowReportableAt || booking.requestedStartTime).getTime()
 }
 
+// fix/audit3-completion-dispute-integrity: a Quick Complete the coach never started (no live start) can still be
+// reported — the coach could quick-complete at start+0, before this report opens. A started session is
+// disputed instead (the server answers booking.sessionWasStarted).
+function isCoachNoShowReportableStatus(booking) {
+  if (booking.status === 'UPCOMING') return true
+  return booking.status === 'COMPLETED_PENDING_CONFIRMATION' && booking.liveStarted === false
+}
+
 function canReportCoachNoShow(booking) {
-  if (booking.status !== 'UPCOMING') return false
+  if (!isCoachNoShowReportableStatus(booking)) return false
   const reportable = coachNoShowReportableMs(booking)
   // Unparseable instant: fail closed (hide) rather than offer an action the server would refuse.
   return !Number.isNaN(reportable) && reportable <= nowMs.value
@@ -574,7 +587,7 @@ function canReportCoachNoShow(booking) {
 
 /** The session has started but the grace has not passed yet: say when the report opens. */
 function coachNoShowPending(booking) {
-  if (booking.status !== 'UPCOMING' || !booking.coachNoShowReportableAt) return false
+  if (!isCoachNoShowReportableStatus(booking) || !booking.coachNoShowReportableAt) return false
   const start = new Date(booking.requestedStartTime).getTime()
   const reportable = coachNoShowReportableMs(booking)
   return (
@@ -610,6 +623,7 @@ async function submitNoShowCoach() {
       'booking.noShowTooEarly': 'booking.errors.coachNoShowTooEarly',
       'booking.alreadyCompleted': 'cancellation.alreadyCompleted',
       'booking.invalidTransition': 'cancellation.invalidTransition',
+      'booking.sessionWasStarted': 'cancellation.noShowCoachSessionStarted',
     }
     $q.notify({
       message: t(messages[errorKey] || 'cancellation.noShowCoachFailed'),

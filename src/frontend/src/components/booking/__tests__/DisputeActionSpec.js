@@ -129,6 +129,25 @@ describe('DisputeAction.vue (skillars-deferred-165 AC2)', () => {
     )
   })
 
+  // fix/audit3-completion-dispute-integrity: disputes.maxPerBookingPerRaiser reached.
+  it('a 409 disputes.limitReached shows the mapped error', async () => {
+    raiseDispute.mockRejectedValue({
+      response: {
+        data: { errorMsg: { errorKey: 'generic.requestError', message: 'disputes.limitReached' } },
+      },
+    })
+    const wrapper = await mountAction()
+
+    wrapper.vm.openRaiseDialog()
+    wrapper.vm.reason = 'OTHER'
+    await wrapper.vm.submitDispute()
+
+    expect(wrapper.vm.disputeId).toBeNull()
+    expect(notifySpy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'negative', message: 'disputes.limitReached' }),
+    )
+  })
+
   it('a 400 disputes.invalidReason shows the mapped error', async () => {
     raiseDispute.mockRejectedValue({
       response: {

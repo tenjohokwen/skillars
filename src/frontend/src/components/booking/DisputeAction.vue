@@ -201,6 +201,9 @@ async function submitDispute() {
       $q.notify({ message: t('disputes.windowExpired'), type: 'negative' })
     } else if (message === 'disputes.alreadyRaised') {
       $q.notify({ message: t('disputes.alreadyRaised'), type: 'negative' })
+    } else if (message === 'disputes.limitReached') {
+      // fix/audit3-completion-dispute-integrity: disputes.maxPerBookingPerRaiser reached (409).
+      $q.notify({ message: t('disputes.limitReached'), type: 'negative' })
     } else if (message === 'disputes.invalidReason') {
       $q.notify({ message: t('disputes.invalidReason'), type: 'negative' })
     } else {

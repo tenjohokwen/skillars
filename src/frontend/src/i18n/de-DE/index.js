@@ -1012,6 +1012,8 @@ export default {
     notEligible: 'Sie sind nicht berechtigt, für diese Buchung einen Streitfall zu melden.',
     windowExpired: 'Die Frist zur Meldung eines Streitfalls für diese Buchung ist abgelaufen.',
     alreadyRaised: 'Für diese Buchung wurde bereits ein Streitfall gemeldet.',
+    limitReached:
+      'Du hast für diese Buchung bereits die maximale Anzahl an Streitfällen eröffnet. Wenn du mit der Entscheidung nicht einverstanden bist, kannst du im Streitfall Einspruch einlegen.',
     invalidReason: 'Bitte wählen Sie einen gültigen Grund aus.',
     statusDialogTitle: 'Streitfallstatus',
     statusLabel: 'Status',
@@ -2294,6 +2296,8 @@ export default {
       'Bestätige, dass der Coach zu dieser Sitzung nicht erschienen ist. Die Sitzung wird erstattet und der Coach erhält eine Zuverlässigkeitsverwarnung. Dies kann nicht rückgängig gemacht werden.',
     noShowCoachFailed:
       'Das Nichterscheinen konnte nicht gemeldet werden. Bitte versuche es erneut.',
+    noShowCoachSessionStarted:
+      'Der Coach hat diese Sitzung gestartet, daher kann sie nicht als Nichterscheinen gemeldet werden. Eröffne stattdessen einen Streitfall.',
     noShowCoachAvailableFrom: 'Du kannst ein Nichterscheinen des Coaches ab {time} melden.',
     title: 'Sitzung stornieren',
     selectReason: 'Stornierungsgrund auswählen',
@@ -2684,7 +2688,7 @@ export default {
         'Ihre Buchung bei {coachDisplayName} konnte nicht abgeschlossen werden — das Zahlungsergebnis wird noch geprüft.',
       BOOKING_EXPIRED: 'Ihre Anfrage bei {coachDisplayName} ist ohne Antwort abgelaufen.',
       BOOKING_QUICK_COMPLETE_CONFIRM:
-        '{coachDisplayName} hat eine Trainingseinheit als abgeschlossen markiert — bitte bestätigen Sie sie.',
+        '{coachDisplayName} hat eine Trainingseinheit als abgeschlossen markiert — bitte bestätigen Sie sie oder eröffnen Sie einen Streitfall, falls sie nicht stattgefunden hat.',
       BOOKING_RESCHEDULE_REQUESTED:
         '{parentName} möchte eine Trainingseinheit auf {proposedStartTime} verschieben.',
       BOOKING_RESCHEDULE_ACCEPTED:
@@ -2712,7 +2716,7 @@ export default {
       PLAYER_NO_SHOW:
         'Für die Trainingseinheit am {requestedStartTime} wurde ein Nichterscheinen des Spielers erfasst.',
       SESSION_FORFEITED_NO_SHOW:
-        'Der Coach hat für die Trainingseinheit am {requestedStartTime} ein Nichterscheinen gemeldet. Die Einheit verfällt, eine Erstattung erfolgt nicht.',
+        'Der Coach hat für die Trainingseinheit am {requestedStartTime} ein Nichterscheinen gemeldet. Die Einheit verfällt, eine Erstattung erfolgt nicht. Falls das nicht stimmt, eröffnen Sie in Ihren Buchungen einen Streitfall.',
       SESSION_FORFEITED_LATE_CANCEL:
         'Ihre kurzfristige Stornierung der Trainingseinheit am {requestedStartTime} wird nicht erstattet: Die Einheit verfällt.',
       BOOKING_REMINDER:
