@@ -1981,6 +1981,8 @@ export default {
         "Ce pack de séances est bloqué tant qu'une contestation de paiement le concernant est ouverte.",
       packExpired: 'Ce pack de séances a expiré.',
       packExhausted: "Ce pack de séances n'a plus de séances restantes.",
+      packSessionsReserved:
+        'Toutes les séances restantes de ce pack sont déjà retenues par des réservations en attente.',
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
       tierLabel: '{label} — {count} séances pour {price} €',
       noActiveTier: "Ce coach n'a aucun pack de séances actif disponible.",
@@ -2432,6 +2434,10 @@ export default {
         'Moins de 24 heures avant la séance — ne peut pas être annulée par une pause',
       pauseBlockedInsideNotice:
         "Une séance payée qui commence dans moins de 24 heures ne peut pas être annulée par une pause. Commencez la pause après elle, ou annulez la séance selon les règles d'annulation habituelles.",
+      pauseConflictPaymentPending:
+        'Paiement en cours de traitement — ne peut pas être annulée par une pause',
+      pauseBlockedPaymentPending:
+        'Une séance dont le paiement est en cours de traitement ne peut pas être annulée par une pause. Réessayez la pause dans quelques minutes.',
       pauseDurationHint: '1 à 90 jours',
       pauseConflictsTitle: 'Séances en conflit',
       pauseConflictsWarning:
@@ -2571,6 +2577,8 @@ export default {
         'Vous avez déjà le nombre maximal de demandes en attente auprès de ce coach. Attendez une réponse ou retirez une demande.',
       beyondBookingHorizon:
         'Cette date est trop éloignée pour réserver. Choisissez une date plus proche.',
+      slotNotOnGrid:
+        'Cette heure de début ne fait pas partie des créneaux réservables du coach. Actualisez et choisissez un créneau dans la liste.',
       batchNoneAccepted: "Aucune des séances de cette demande n'a pu être acceptée.",
       notReschedulable: 'Cette séance ne peut plus être reprogrammée.',
       rescheduleAlreadyPending:

@@ -199,6 +199,9 @@ async function handleAccept(id) {
     } else if (errorKey === 'booking.requestExpired') {
       // fix/booking-completion-integrity: a request whose start time has passed cannot be accepted.
       $q.notify({ type: 'negative', message: t('booking.errors.requestExpired') })
+    } else if (errorKey === 'payment.packPaused') {
+      // fix/audit3-booking-scheduling-integrity: the family's pack is paused at this session's start.
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packPaused') })
     } else {
       $q.notify({ type: 'negative', message: t('booking.requests.acceptError') })
     }

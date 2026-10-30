@@ -927,6 +927,8 @@ async function handleAcceptReschedule(booking) {
       'booking.notReschedulable': 'booking.errors.notReschedulable',
       'booking.startTimeInPast': 'booking.errors.startTimeInPast',
       'booking.slotOutsideAvailability': 'booking.errors.slotOutsideAvailability',
+      // fix/audit3-booking-scheduling-integrity: the family's pack is paused at the proposed time.
+      'payment.packPaused': 'payment.sessionPack.packPaused',
       MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
     },
     genericErrorMessage: 'booking.reschedule.acceptFailed',
@@ -1137,6 +1139,9 @@ async function submitCoachReschedule() {
       'booking.slotOutsideAvailability': 'booking.errors.slotOutsideAvailability',
       'booking.sessionCrossesMidnight': 'booking.errors.sessionCrossesMidnight',
       'booking.rescheduleAlreadyPending': 'booking.errors.rescheduleAlreadyPending',
+      // fix/audit3-booking-scheduling-integrity: booking horizon and pack pause apply to the new start.
+      'booking.beyondBookingHorizon': 'booking.errors.beyondBookingHorizon',
+      'payment.packPaused': 'payment.sessionPack.packPaused',
       MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
     },
     genericErrorMessage: 'booking.reschedule.requestFailed',
@@ -1146,16 +1151,20 @@ async function submitCoachReschedule() {
 
 async function handleRepeatNextWeek(booking) {
   if (duplicatingId.value !== null) return
-  duplicatingId.value = booking.bookingId
-  try {
-    await bookingStore.handleDuplicateNextWeek(booking.bookingId)
-    await bookingStore.loadCoachSchedule(selectedWeek.value)
-    $q.notify({ message: t('booking.schedule.repeatProposed'), type: 'positive' })
-  } catch {
-    $q.notify({ message: t('booking.schedule.repeatFailed'), type: 'negative' })
-  } finally {
-    duplicatingId.value = null
-  }
+  await runCoachAction({
+    actionIdRef: duplicatingId,
+    actionId: booking.bookingId,
+    mutate: () => bookingStore.handleDuplicateNextWeek(booking.bookingId),
+    successMessage: 'booking.schedule.repeatProposed',
+    // fix/audit3-booking-scheduling-integrity: the slot is already held (an earlier proposal or a pending
+    // request), or the family's pack is paused / fully reserved for that week.
+    errorMessages: {
+      'booking.slotUnavailable': 'booking.errors.slotUnavailable',
+      'payment.packPaused': 'payment.sessionPack.packPaused',
+      'payment.packSessionsReserved': 'payment.sessionPack.packSessionsReserved',
+    },
+    genericErrorMessage: 'booking.schedule.repeatFailed',
+  })
 }
 
 async function shareSlot(slotWindow) {

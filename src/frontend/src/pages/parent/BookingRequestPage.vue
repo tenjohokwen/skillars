@@ -663,6 +663,9 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packPlayerMismatch') })
     } else if (errorKey === 'payment.packPaused') {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packPaused') })
+    } else if (errorKey === 'payment.packSessionsReserved') {
+      // fix/audit3-booking-scheduling-integrity: every remaining session is held by an open booking.
+      $q.notify({ type: 'negative', message: t('payment.sessionPack.packSessionsReserved') })
     } else if (errorKey === 'payment.packFrozen') {
       $q.notify({ type: 'negative', message: t('payment.sessionPack.packFrozen') })
     } else if (errorKey === 'booking.startTimeInPast') {
@@ -673,6 +676,11 @@ async function submit() {
       $q.notify({ type: 'negative', message: t('booking.errors.slotOutsideAvailability') })
     } else if (errorKey === 'booking.availabilityChanged') {
       $q.notify({ type: 'negative', message: t('booking.errors.availabilityChanged') })
+      await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
+    } else if (errorKey === 'booking.slotNotOnGrid') {
+      // fix/audit3-booking-scheduling-integrity: the start is no longer one of the offered slots (a block
+      // or booking re-anchored the grid since this view loaded) — refetch, like availabilityChanged.
+      $q.notify({ type: 'negative', message: t('booking.errors.slotNotOnGrid') })
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ type: 'negative', message: t('booking.errors.sessionCrossesMidnight') })
@@ -768,6 +776,9 @@ async function submitBatchRequest() {
       // Mirrors submit()'s single-booking branch (skillars-deferred-71 AC2) — same wire code, same
       // refetch-then-toast shape, now also reachable from the batch path (skillars-deferred-72 AC3).
       $q.notify({ type: 'negative', message: t('booking.errors.availabilityChanged') })
+      await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
+    } else if (errorKey === 'booking.slotNotOnGrid') {
+      $q.notify({ type: 'negative', message: t('booking.errors.slotNotOnGrid') })
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })

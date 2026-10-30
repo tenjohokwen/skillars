@@ -1947,6 +1947,10 @@ export default {
       pauseConflictInsideNotice: 'Within 24 hours of the session — cannot be cancelled by a pause',
       pauseBlockedInsideNotice:
         'A paid session within 24 hours of its start cannot be cancelled by a pause. Start the pause after it, or cancel the session under the usual cancellation rules.',
+      pauseConflictPaymentPending:
+        'Payment is still being processed — cannot be cancelled by a pause',
+      pauseBlockedPaymentPending:
+        'A session whose payment is still being processed cannot be cancelled by a pause. Try the pause again in a few minutes.',
       pauseDurationHint: '1–90 days',
       pauseConflictsTitle: 'Conflicting sessions',
       pauseConflictsWarning:
@@ -2079,6 +2083,8 @@ export default {
       tooManyPendingRequests:
         'You already have the maximum number of requests waiting for this coach. Wait for an answer or withdraw one first.',
       beyondBookingHorizon: 'That date is too far ahead to book yet. Pick an earlier date.',
+      slotNotOnGrid:
+        'That start time is not one of the coach’s bookable slots. Refresh and pick a slot from the list.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',
       notReschedulable: 'This session can no longer be rescheduled.',
       rescheduleAlreadyPending:
@@ -2322,6 +2328,8 @@ export default {
       packFrozen: 'This session pack is on hold while a payment dispute on it is open.',
       packExpired: 'This session pack has expired.',
       packExhausted: 'This session pack has no remaining sessions.',
+      packSessionsReserved:
+        'Every remaining session in this pack is already held by a pending booking.',
       extendSuccess: 'Your session pack has been extended to {date}',
       tierLabel: '{label} — {count} sessions for €{price}',
       noActiveTier: 'This coach has no active session pack available.',

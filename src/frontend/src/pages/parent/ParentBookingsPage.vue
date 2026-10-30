@@ -659,6 +659,8 @@ const PROPOSAL_ERROR_MESSAGES = {
   'booking.coachUnavailable': 'booking.errors.coachUnavailable',
   'booking.requestExpired': 'booking.errors.requestExpired',
   'booking.concurrentModification': 'booking.errors.concurrentModification',
+  // fix/audit3-booking-scheduling-integrity: confirming a proposal whose start falls in the pack's pause.
+  'payment.packPaused': 'payment.sessionPack.packPaused',
   'booking.invalidTransition': 'booking.errors.requestNotPending',
 }
 
@@ -873,6 +875,12 @@ async function submitReschedule() {
       $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
     } else if (errorKey === 'booking.rescheduleAlreadyPending') {
       $q.notify({ message: t('booking.errors.rescheduleAlreadyPending'), type: 'negative' })
+    } else if (errorKey === 'booking.beyondBookingHorizon') {
+      // fix/audit3-booking-scheduling-integrity: the request-time horizon applies to the new start too.
+      $q.notify({ message: t('booking.errors.beyondBookingHorizon'), type: 'negative' })
+    } else if (errorKey === 'payment.packPaused') {
+      // fix/audit3-booking-scheduling-integrity: a pack session cannot be moved into the pack's pause.
+      $q.notify({ message: t('payment.sessionPack.packPaused'), type: 'negative' })
     } else if (errorKey === 'MISSING_RIGHTS') {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else {

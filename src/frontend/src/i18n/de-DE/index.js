@@ -585,6 +585,10 @@ export default {
         'Weniger als 24 Stunden vor der Sitzung – kann nicht durch eine Pause storniert werden',
       pauseBlockedInsideNotice:
         'Eine bezahlte Sitzung, die in weniger als 24 Stunden beginnt, kann nicht durch eine Pause storniert werden. Beginne die Pause danach oder storniere die Sitzung nach den üblichen Stornierungsregeln.',
+      pauseConflictPaymentPending:
+        'Zahlung wird noch verarbeitet – kann nicht durch eine Pause storniert werden',
+      pauseBlockedPaymentPending:
+        'Eine Sitzung, deren Zahlung noch verarbeitet wird, kann nicht durch eine Pause storniert werden. Versuche die Pause in ein paar Minuten erneut.',
       pauseDurationHint: '1–90 Tage',
       pauseConflictsTitle: 'Widersprüchliche Sitzungen',
       pauseConflictsWarning:
@@ -726,6 +730,8 @@ export default {
         'Sie haben bereits die maximale Anzahl offener Anfragen bei diesem Trainer. Warten Sie auf eine Antwort oder ziehen Sie eine Anfrage zurück.',
       beyondBookingHorizon:
         'Dieses Datum liegt zu weit in der Zukunft. Bitte wählen Sie ein früheres Datum.',
+      slotNotOnGrid:
+        'Diese Startzeit ist keiner der buchbaren Termine des Trainers. Bitte aktualisieren und einen Termin aus der Liste wählen.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
       notReschedulable: 'Diese Sitzung kann nicht mehr verschoben werden.',
       rescheduleAlreadyPending:
@@ -1557,6 +1563,8 @@ export default {
         'Dieses Sitzungspaket ist gesperrt, solange eine Zahlungsreklamation dazu offen ist.',
       packExpired: 'Dieses Sitzungspaket ist abgelaufen.',
       packExhausted: 'Dieses Sitzungspaket hat keine verbleibenden Sitzungen.',
+      packSessionsReserved:
+        'Alle verbleibenden Sitzungen dieses Pakets sind bereits durch offene Buchungen belegt.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',
       tierLabel: '{label} — {count} Sitzungen für €{price}',
       noActiveTier: 'Dieser Coach hat kein aktives Sitzungspaket verfügbar.',
