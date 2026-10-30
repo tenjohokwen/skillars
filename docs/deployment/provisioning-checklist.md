@@ -813,6 +813,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.request.maxPendingPerCoach` | 10 (code default, range 1–100) | `ConfigBounds` | Keep. A parent's own requests awaiting one coach's answer at once (single and batch; coach proposals not counted). Raise only if `booking.batch.maxSize` is raised above it |
 | `booking.request.maxHorizonDays` | 120 (code default, range 1–730) | `ConfigBounds` | Keep. How many days ahead a session can be requested |
 | `payment.payout.hold_hours` | 48 (seed; code default 48, range 0–336) | V139, `CoachPayoutOutboxSupport` | Keep at or above the dispute window you are comfortable with **(confirm)** |
+| `payment.payout.newCoach.releasedCount` | 5 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A coach with fewer payouts ever released than this is "new" and gets the longer hold below. 0 = no new-coach hold. Shown to the coach on the Revenue Dashboard |
+| `payment.payout.newCoach.holdHours` | 168 (code default, range 0–336) | `ConfigBounds` | Keep **(confirm)**. Payout hold for a new coach (never shorter than `payment.payout.hold_hours`); sized against the card-chargeback window |
 | `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
 | `platform.commission.rate` | 0.08 | V139 | Set to the agreed rate. The only commission key since V211 (`fix/prod-readiness-gaps` deleted the duplicate `platform.commission_rate`; `ProjectedRevenueService` now reads this one too) |
 | `payment.stripe.feeRate` / `feeFixed` | 0.025 / 0.25 | V139 | Match the Stripe contract **(confirm)** |
@@ -1049,4 +1051,11 @@ an operator must now do.
   `envelope_entity_email_template_check` with the two family forfeit templates. It is a validating CHECK
   swap over a superset list, so there is no pre-migration check, and it joins the "prod is not live" list
   in section 0. Per-session booking and player cash-out need no config. No new env vars, jobs or Stripe
+  webhook events.
+- 2026-10-30: fix/audit3-wallet-cashout-integrity. New config keys `payment.payout.newCoach.releasedCount` (5)
+  and `payment.payout.newCoach.holdHours` (168), code defaults in `ConfigBounds` with no seed row
+  ([section 7](#7-application-config-and-policy-keys)): confirm the values. From deploy, a coach with fewer than
+  5 released payouts has new payouts held 7 days instead of 48h; payouts already enqueued keep their release
+  time. No migration: cash-outs split across funding charges reuse `cash_out_reconciliations` (one row per
+  leg), and refunds' spend-only share is computed from existing ledger rows. No new env vars, jobs or Stripe
   webhook events.
