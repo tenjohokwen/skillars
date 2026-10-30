@@ -1707,6 +1707,56 @@ class BookingServiceTest {
         assertThat(migration).contains("status " + expectedInList);
     }
 
+    // ---- fix/audit3-booking-scheduling-integrity: reschedule-accept pause check locks only while a pause can begin ----
+
+    private com.softropic.skillars.platform.payment.repo.SessionPackPurchase packFixture(UUID id) {
+        var p = new com.softropic.skillars.platform.payment.repo.SessionPackPurchase();
+        p.setPurchaseId(id);
+        p.setRemainingSessions(3);
+        p.setExpiresAt(Instant.now().plus(Duration.ofDays(60)));
+        return p;
+    }
+
+    @Test
+    void requirePackNotPausedAtUnderLock_pauseStillPossible_readsThePackUnderItsRowLock() {
+        UUID packId = UUID.randomUUID();
+        var pack = packFixture(packId);
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack));
+
+        bookingService.requirePackNotPausedAtUnderLock(packId, Instant.now().plus(Duration.ofDays(3)));
+
+        verify(sessionPackPurchaseRepository).findByIdForUpdate(packId);
+    }
+
+    @Test
+    void requirePackNotPausedAtUnderLock_pauseAlreadyUsed_checksUnlocked_andStillRefusesInsideIt() {
+        UUID packId = UUID.randomUUID();
+        var pack = packFixture(packId);
+        Instant start = Instant.now().plus(Duration.ofDays(3));
+        pack.setPausedFrom(start.minus(Duration.ofDays(1)));
+        pack.setPausedUntil(start.plus(Duration.ofDays(10)));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+
+        assertThatThrownBy(() -> bookingService.requirePackNotPausedAtUnderLock(packId, start))
+            .hasMessageContaining("payment.packPaused");
+        assertThatCode(() -> bookingService.requirePackNotPausedAtUnderLock(packId, start.plus(Duration.ofDays(20))))
+            .doesNotThrowAnyException();
+        verify(sessionPackPurchaseRepository, never()).findByIdForUpdate(any());
+    }
+
+    @Test
+    void requirePackNotPausedAtUnderLock_revokedPack_takesNoLock() {
+        UUID packId = UUID.randomUUID();
+        var pack = packFixture(packId);
+        pack.setRevokedAt(Instant.now().minus(Duration.ofDays(1)));
+        when(sessionPackPurchaseRepository.findById(packId)).thenReturn(Optional.of(pack));
+
+        bookingService.requirePackNotPausedAtUnderLock(packId, Instant.now().plus(Duration.ofDays(3)));
+
+        verify(sessionPackPurchaseRepository, never()).findByIdForUpdate(any());
+    }
+
     // ---- fix/audit3-booking-scheduling-integrity: getCoachWeekSchedule bounded at the coach's midnight ----
 
     @Test

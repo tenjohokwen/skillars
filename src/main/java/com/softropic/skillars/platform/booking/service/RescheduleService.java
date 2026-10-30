@@ -426,11 +426,13 @@ public class RescheduleService {
         }
 
         // fix/audit3-booking-scheduling-integrity: the proposal may predate the pause — a parent can propose
-        // a move, then schedule a pause over the new time, and have the move accepted into it. Read under the
-        // pack row lock so a pausePackTransactional racing this accept is serialised against it: the pause's
-        // conflict re-check then sees the moved booking, or this check sees the pause. Lock order here:
-        // reschedule row → coach row → pack row, then the booking write; the pause takes pack → booking and
-        // never the coach or reschedule row, so no cycle.
+        // a move, then schedule a pause over the new time, and have the move accepted into it. While a pause
+        // can still begin, read under the pack row lock so a pausePackTransactional racing this accept is
+        // serialised against it (the pause's conflict re-check sees the moved booking, or this check sees the
+        // pause). Lock order here: reschedule row → coach row → pack row, then the booking write. The pause
+        // (pack → booking) cannot cycle with it. A cancellation's BEFORE_COMMIT pack listeners on this same
+        // booking take booking → pack, so a cancel racing this accept loses with a retryable conflict (NOWAIT
+        // + bounded retry on both locks, no hang) — see BookingService.lockPackRow.
         bookingService.requirePackNotPausedAtUnderLock(booking.getSessionPackPurchaseId(),
             lockedReq.getProposedStartTime());
 

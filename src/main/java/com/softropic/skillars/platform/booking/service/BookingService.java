@@ -1028,12 +1028,21 @@ public class BookingService {
     /**
      * fix/audit3-booking-scheduling-integrity: takes the pack row lock ({@code findByIdForUpdate}, NOWAIT +
      * bounded retry) and re-reads the managed instance in place. Lock order on every caller: coach row →
-     * (player row) → pack row — createBookingRequest, BookingDuplicationService, and
-     * RescheduleService.acceptRescheduleShared (coach → pack, then the booking write). Safe against
-     * {@code PackSessionService}: a pause takes pack → booking rows and settlement ({@code deductSession})
-     * takes the pack row alone, and neither ever takes the coach row. Never call it from
-     * {@link #acceptAndInitiatePayment}, which already holds the booking row (booking → pack would invert
-     * the pause's pack → booking order).
+     * (player row) → pack row — createBookingRequest and BookingDuplicationService, which then only insert a
+     * new booking, and RescheduleService.acceptRescheduleShared (coach → pack, then the existing booking's
+     * write at flush). The other pack-row holders never take the coach row: a pause takes pack → booking
+     * rows, settlement (handlePackBasedBooking / the batch per-booking transaction) takes pack → booking.
+     *
+     * <p>One overlap is real, on the reschedule-accept path only: a cancellation's BEFORE_COMMIT listeners
+     * ({@code CoachPayoutEnqueueListener} → allocatePackShare, {@code RefundEnqueueListener} →
+     * allocateSessionRefund) take booking → pack, the reverse of reschedule-accept's pack → booking. Both
+     * locks are NOWAIT with a bounded retry, so this is not a hang: one side — in practice the cancel, which
+     * reaches the pack second — exhausts its retries (~3s) and fails with a retryable conflict. Keeping pack
+     * first is deliberate (booking first would make pause and reschedule-accept clash NOWAIT-on-NOWAIT), and
+     * {@link #requirePackNotPausedAtUnderLock} takes the pack lock only while a pause can still begin.
+     *
+     * <p>Never call it from {@link #acceptAndInitiatePayment}, which already holds the booking row (booking →
+     * pack would invert the pause's and settlement's pack → booking order).
      */
     SessionPackPurchase lockPackRow(UUID packId) {
         SessionPackPurchase locked = lockRetryer.withBoundedRetry("BookingService.lockPackRow",
@@ -1046,15 +1055,25 @@ public class BookingService {
     }
 
     /**
-     * fix/audit3-booking-scheduling-integrity: {@link #requirePackNotPausedAt} with the pack read under its row
-     * lock ({@link #lockPackRow}), so a concurrent {@code pausePackTransactional} either commits first (and is
-     * seen here) or waits for this transaction. For RescheduleService.acceptRescheduleShared only.
+     * fix/audit3-booking-scheduling-integrity: {@link #requirePackNotPausedAt} for
+     * RescheduleService.acceptRescheduleShared, serialised against {@code pausePackTransactional}: while a pause
+     * can still begin, the pack is read under its row lock ({@link #lockPackRow}), so the pause either commits
+     * first (and is seen here) or waits for this transaction (and its conflict re-check sees the moved
+     * booking). Once no pause can ever begin, the unlocked read is final and the lock is skipped — narrowing
+     * the booking → pack overlap with cancellation listeners described on {@link #lockPackRow}. Both
+     * conditions are irreversible: {@code pausedUntil} is set by the pack's one pause
+     * ({@code pausePackTransactional} refuses a second, and nothing clears it), and {@code revokedAt} is never
+     * cleared (a revoked pack cannot be paused). Frozen, used-up and expired packs are not skipped: a won
+     * dispute, a restored session and an extension each make a pause possible again.
      */
     void requirePackNotPausedAtUnderLock(UUID packId, Instant sessionStart) {
         if (packId == null) {
             return;
         }
-        if (lockPackRow(packId).isPausedAt(sessionStart)) {
+        SessionPackPurchase pack = sessionPackPurchaseRepository.findById(packId).orElse(null);
+        boolean noPauseCanBegin = pack != null && (pack.getPausedUntil() != null || pack.isRevoked());
+        SessionPackPurchase checked = noPauseCanBegin ? pack : lockPackRow(packId);
+        if (checked.isPausedAt(sessionStart)) {
             throw new PaymentGatewayException("payment.packPaused");
         }
     }
