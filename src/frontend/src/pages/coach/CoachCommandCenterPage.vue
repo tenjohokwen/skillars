@@ -928,7 +928,7 @@ async function handleAcceptReschedule(booking) {
       'booking.startTimeInPast': 'booking.errors.startTimeInPast',
       'booking.slotOutsideAvailability': 'booking.errors.slotOutsideAvailability',
       // fix/audit3-booking-scheduling-integrity: the family's pack is paused at the proposed time.
-      'payment.packPaused': 'payment.sessionPack.packPaused',
+      'payment.packPaused': 'payment.sessionPack.coachPackPaused',
       MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
     },
     genericErrorMessage: 'booking.reschedule.acceptFailed',
@@ -1141,7 +1141,7 @@ async function submitCoachReschedule() {
       'booking.rescheduleAlreadyPending': 'booking.errors.rescheduleAlreadyPending',
       // fix/audit3-booking-scheduling-integrity: booking horizon and pack pause apply to the new start.
       'booking.beyondBookingHorizon': 'booking.errors.beyondBookingHorizon',
-      'payment.packPaused': 'payment.sessionPack.packPaused',
+      'payment.packPaused': 'payment.sessionPack.coachPackPaused',
       MISSING_RIGHTS: 'booking.errors.requestNotAllowed',
     },
     genericErrorMessage: 'booking.reschedule.requestFailed',
@@ -1160,8 +1160,8 @@ async function handleRepeatNextWeek(booking) {
     // request), or the family's pack is paused / fully reserved for that week.
     errorMessages: {
       'booking.slotUnavailable': 'booking.errors.slotUnavailable',
-      'payment.packPaused': 'payment.sessionPack.packPaused',
-      'payment.packSessionsReserved': 'payment.sessionPack.packSessionsReserved',
+      'payment.packPaused': 'payment.sessionPack.coachPackPaused',
+      'payment.packSessionsReserved': 'payment.sessionPack.coachPackSessionsReserved',
     },
     genericErrorMessage: 'booking.schedule.repeatFailed',
   })

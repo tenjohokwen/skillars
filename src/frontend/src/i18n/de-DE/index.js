@@ -1565,6 +1565,10 @@ export default {
       packExhausted: 'Dieses Sitzungspaket hat keine verbleibenden Sitzungen.',
       packSessionsReserved:
         'Alle verbleibenden Sitzungen dieses Pakets sind bereits durch offene Buchungen belegt.',
+      coachPackPaused:
+        'Das Sitzungspaket der Familie ist zu dieser Zeit pausiert. Lehne die Anfrage ab oder wähle eine Zeit außerhalb der Pause.',
+      coachPackSessionsReserved:
+        'Das Sitzungspaket der Familie hat keine freie Sitzung mehr für eine weitere Buchung.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',
       tierLabel: '{label} — {count} Sitzungen für €{price}',
       noActiveTier: 'Dieser Coach hat kein aktives Sitzungspaket verfügbar.',

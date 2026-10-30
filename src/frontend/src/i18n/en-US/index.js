@@ -2330,6 +2330,10 @@ export default {
       packExhausted: 'This session pack has no remaining sessions.',
       packSessionsReserved:
         'Every remaining session in this pack is already held by a pending booking.',
+      coachPackPaused:
+        'The family’s session pack is paused at that time. Decline the request, or choose a time outside the pause.',
+      coachPackSessionsReserved:
+        'The family’s session pack has no free sessions left for another booking.',
       extendSuccess: 'Your session pack has been extended to {date}',
       tierLabel: '{label} — {count} sessions for €{price}',
       noActiveTier: 'This coach has no active session pack available.',

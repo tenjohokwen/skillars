@@ -1983,6 +1983,10 @@ export default {
       packExhausted: "Ce pack de séances n'a plus de séances restantes.",
       packSessionsReserved:
         'Toutes les séances restantes de ce pack sont déjà retenues par des réservations en attente.',
+      coachPackPaused:
+        'Le pack de séances de la famille est en pause à ce moment-là. Refusez la demande ou choisissez un horaire en dehors de la pause.',
+      coachPackSessionsReserved:
+        "Le pack de séances de la famille n'a plus de séance libre pour une autre réservation.",
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
       tierLabel: '{label} — {count} séances pour {price} €',
       noActiveTier: "Ce coach n'a aucun pack de séances actif disponible.",
