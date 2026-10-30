@@ -357,10 +357,10 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void raiseDispute_coach_bookingAlreadyDisputedByParent_returns409() {
-        // Deferred-63 AC5 (story-review Finding 1): the widened eligibility is raise-only, not a
-        // contest mechanism — a coach still cannot raise a second dispute once the parent already
-        // has one open on the same booking.
+    void raiseDispute_coach_bookingAlreadyDisputedByParent_isAccepted_butASecondParentDisputeIs409() {
+        // fix/audit3-completion-dispute-integrity (V214): one open dispute per booking PER SIDE. The coach's own
+        // dispute no longer collides with the parent's open one (it used to be 409); a second open dispute on
+        // the SAME side still is.
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);
         httpTestClient.makeHttpRequest(
             baseUrl() + DISPUTES_BASE,
@@ -370,11 +370,19 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
             Map.class);
 
         String coachCookies = loginAndGetCookies(COACH_EMAIL);
+        ResponseEntity<Map> coachResp = httpTestClient.makeHttpRequest(
+            baseUrl() + DISPUTES_BASE,
+            HttpMethod.POST,
+            Map.of("bookingId", bookingId.toString(), "reason", "OTHER", "details", "Coach: contesting"),
+            authenticatedHeaders(coachCookies),
+            Map.class);
+        assertThat(coachResp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + DISPUTES_BASE,
             HttpMethod.POST,
-            Map.of("bookingId", bookingId.toString(), "reason", "OTHER", "details", "Coach: trying to contest"),
-            authenticatedHeaders(coachCookies),
+            Map.of("bookingId", bookingId.toString(), "reason", "OTHER", "details", "Parent again"),
+            authenticatedHeaders(parentCookies),
             Map.class))
             .isInstanceOf(HttpClientErrorException.class)
             .satisfies(e -> {
