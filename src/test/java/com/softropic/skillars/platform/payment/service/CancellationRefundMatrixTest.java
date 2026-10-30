@@ -86,7 +86,7 @@ class CancellationRefundMatrixTest {
         var order = inOrder(cancellationHistoryRepository, reliabilityStrikeService);
         order.verify(cancellationHistoryRepository).acquireCoachCancellationLock(COACH_ID.toString());
         order.verify(cancellationHistoryRepository).save(any());
-        order.verify(cancellationHistoryRepository).countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+        order.verify(cancellationHistoryRepository).countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(
             eq(COACH_ID), anyCollection(), any());
         order.verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_CANCELLATION_EXCUSED_LIMIT");
     }
@@ -97,7 +97,7 @@ class CancellationRefundMatrixTest {
         Instant before = Instant.now();
         service.onBookingCancelledByCoach(coachEvent(null, "FAMILY_EMERGENCY", false));
 
-        verify(cancellationHistoryRepository).countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+        verify(cancellationHistoryRepository).countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(
             eq(COACH_ID),
             argThat((Collection<String> reasons) -> Set.copyOf(reasons).equals(
                 Set.of("MUTUAL_AGREEMENT", "HEALTH_MEDICAL", "FAMILY_EMERGENCY", "WEATHER"))),
@@ -112,7 +112,7 @@ class CancellationRefundMatrixTest {
         service.onBookingCancelledByCoach(coachEvent(null, "SCHEDULING_PREFERENCE", false));
 
         verify(cancellationHistoryRepository, never())
-            .countByCoachIdAndCancelReasonInAndCreatedAtAfter(any(), anyCollection(), any());
+            .countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(any(), anyCollection(), any());
         verify(reliabilityStrikeService, never()).issue(any(), any(), eq("COACH_CANCELLATION_EXCUSED_LIMIT"));
     }
 
@@ -125,7 +125,7 @@ class CancellationRefundMatrixTest {
     private void stubExcusedCap(long excusedInWindow) {
         when(configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW)).thenReturn(3L);
         when(configService.getBoundedLong(ConfigBounds.COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS)).thenReturn(90L);
-        when(cancellationHistoryRepository.countByCoachIdAndCancelReasonInAndCreatedAtAfter(
+        when(cancellationHistoryRepository.countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(
             eq(COACH_ID), anyCollection(), any())).thenReturn(excusedInWindow);
     }
 
@@ -226,6 +226,52 @@ class CancellationRefundMatrixTest {
         } finally {
             org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
         }
+    }
+
+    // --- fix/audit3-completion-dispute-integrity ---
+
+    /** Exploit 3: an excused reason picked at or after the start no longer dodges the strike. */
+    @Test
+    void coachCancel_afterStart_excusedReason_strikesAsNoShow_andSkipsTheExcusedCap() {
+        service.onBookingCancelledByCoach(new BookingCancelledByCoachEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, "HEALTH_MEDICAL", null, SESSION_PRICE, false, true,
+            "parent@test.com", Instant.now().minusSeconds(600), "UTC", true));
+
+        verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
+        verify(cancellationHistoryRepository).save(argThat(h -> h.isAfterStart()
+            && "HEALTH_MEDICAL".equals(h.getCancelReason())));
+        verify(cancellationHistoryRepository, never())
+            .countByCoachIdAndCancelReasonInAndAfterStartFalseAndCreatedAtAfter(any(), anyCollection(), any());
+    }
+
+    @Test
+    void coachCancel_beforeStart_excusedReasonWithinTheCap_doesNotStrike_andIsNotFlagged() {
+        stubExcusedCap(1L);
+        service.onBookingCancelledByCoach(coachEvent(null, "HEALTH_MEDICAL", false));
+
+        verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+        verify(cancellationHistoryRepository).save(argThat(h -> !h.isAfterStart()));
+    }
+
+    /** Exploit 4: the parent's refund-eligible late cancel after the coach never showed records a no-show strike. */
+    @Test
+    void parentLateCancel_afterACoachNoShow_strikesTheCoach() {
+        service.onBookingCancelledByParent(parentEvent(true));
+
+        verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
+    }
+
+    @Test
+    void parentCancel_notACoachNoShow_neverStrikes() {
+        service.onBookingCancelledByParent(parentEvent(false));
+
+        verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+    }
+
+    private com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent parentEvent(boolean coachNoShow) {
+        return new com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent(
+            this, BOOKING_ID, PARENT_ID, COACH_ID, null, -1L, true, SESSION_PRICE,
+            "parent@test.com", "coach@test.com", Instant.now().minusSeconds(3600), "UTC", true, false, coachNoShow);
     }
 
     private BookingCancelledByCoachEvent coachEvent(UUID packId, String reason, boolean packExpired) {

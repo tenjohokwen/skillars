@@ -31,6 +31,12 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
      * value to the wallet instead ({@link #isWalletRefund()}), as the coach / admin / no-show paths do.
      */
     private final boolean packExpiredAtCancellation;
+    /**
+     * fix/audit3-completion-dispute-integrity: the refund-eligible late cancel — captured, never started, and
+     * start + {@code booking.lateCancel.graceMinutes} has passed. The coach did not show: a coach no-show strike
+     * is recorded ({@code CancellationRefundService}), as for a reported coach no-show.
+     */
+    private final boolean coachNoShow;
 
     public BookingCancelledByParentEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
                                           UUID sessionPackPurchaseId, long hoursBeforeSession,
@@ -59,6 +65,19 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
                                           BigDecimal sessionPrice, String parentEmail, String coachEmail,
                                           Instant requestedStartTime, String canonicalTimezone,
                                           boolean paymentCaptured, boolean packExpiredAtCancellation) {
+        this(source, bookingId, parentId, coachId, sessionPackPurchaseId, hoursBeforeSession, refundEligible,
+            sessionPrice, parentEmail, coachEmail, requestedStartTime, canonicalTimezone, paymentCaptured,
+            packExpiredAtCancellation, false);
+    }
+
+    @SuppressWarnings("java:S107") // an immutable event: one field per fact its listeners need
+    public BookingCancelledByParentEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
+                                          UUID sessionPackPurchaseId, long hoursBeforeSession,
+                                          boolean refundEligible,
+                                          BigDecimal sessionPrice, String parentEmail, String coachEmail,
+                                          Instant requestedStartTime, String canonicalTimezone,
+                                          boolean paymentCaptured, boolean packExpiredAtCancellation,
+                                          boolean coachNoShow) {
         super(source);
         this.bookingId = bookingId;
         this.parentId = parentId;
@@ -73,6 +92,7 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
         this.canonicalTimezone = canonicalTimezone;
         this.paymentCaptured = paymentCaptured;
         this.packExpiredAtCancellation = packExpiredAtCancellation;
+        this.coachNoShow = coachNoShow;
     }
 
     public UUID getBookingId() { return bookingId; }
@@ -88,6 +108,7 @@ public class BookingCancelledByParentEvent extends ApplicationEvent {
     public String getCanonicalTimezone() { return canonicalTimezone; }
     public boolean isPaymentCaptured() { return paymentCaptured; }
     public boolean isPackExpiredAtCancellation() { return packExpiredAtCancellation; }
+    public boolean isCoachNoShow() { return coachNoShow; }
 
     /**
      * Refund-eligible and paid by card / credit, or by a pack that has since expired: the session's value is

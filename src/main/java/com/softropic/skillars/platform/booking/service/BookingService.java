@@ -1450,8 +1450,15 @@ public class BookingService {
         // BookingStateMachine/event-type change. Stays entirely on the ordinary CANCEL_PARENT path.
         // fix/booking-cancel-policy-loopholes: narrowed by a grace window and a reschedule anchor —
         // see isParentCancelRefundEligible.
+        Instant cancelledAt = Instant.now();
         boolean refundEligible = paymentWasCaptured && isParentCancelRefundEligible(
-            booking.getRequestedStartTime(), booking.getOriginalStartTime(), Instant.now(), lateCancelGrace());
+            booking.getRequestedStartTime(), booking.getOriginalStartTime(), cancelledAt, lateCancelGrace());
+        // fix/audit3-completion-dispute-integrity: the refund-eligible LATE cancel — still CONFIRMED / UPCOMING
+        // (never started) once start + grace has passed — is the coach's no-show, the same facts
+        // recordNoShowCoach strikes on. It used to refund the family and record nothing against the coach.
+        // Only this branch: a >24h-notice cancel is the family's own choice.
+        boolean coachNoShow = paymentWasCaptured
+            && cancelledAt.isAfter(booking.getRequestedStartTime().plus(lateCancelGrace()));
         // C6: the refund is what the payer actually paid (resolveAmountPaid), not the coach's current
         // price; nothing is owed — and no price lookup can fail the cancel — before capture.
         BigDecimal sessionPrice = paymentWasCaptured ? resolveAmountPaid(booking) : BigDecimal.ZERO;
@@ -1470,7 +1477,7 @@ public class BookingService {
             this, bookingId, parentUserId, booking.getCoachId(),
             booking.getSessionPackPurchaseId(), hoursBeforeSession, refundEligible,
             sessionPrice, parentEmail, coachEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken, packExpired
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), moneyTaken, packExpired, coachNoShow
         ));
     }
 
@@ -1542,6 +1549,11 @@ public class BookingService {
         }
 
         String resolvedReason = cancelReason != null ? cancelReason : "OTHER_UNEXCUSED";
+        // fix/audit3-completion-dispute-integrity: decided under the row lock. A coach cancel at or after the
+        // session's start is a no-show in disguise — an excused reason (HEALTH_MEDICAL, WEATHER, ...) picked
+        // then used to dodge the strike. CancellationRefundService strikes it whatever the reason, and does not
+        // count it toward the excused-cancellation cap.
+        boolean cancelledAfterStart = !Instant.now(ClockProvider.getClock()).isBefore(booking.getRequestedStartTime());
         try {
             transition(bookingId, BookingEvent.CANCEL_COACH, new TransitionContext(ActorRole.COACH, coachUserId));
             booking.setCancelReason(resolvedReason);
@@ -1554,7 +1566,7 @@ public class BookingService {
             this, bookingId, booking.getParentId(), booking.getCoachId(),
             resolvedReason, booking.getSessionPackPurchaseId(),
             sessionPrice, packExpired, paymentCaptured, parentEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), cancelledAfterStart
         ));
     }
 

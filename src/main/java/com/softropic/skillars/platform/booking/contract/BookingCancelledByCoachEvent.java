@@ -26,12 +26,27 @@ public class BookingCancelledByCoachEvent extends ApplicationEvent {
     private final String parentEmail;
     private final Instant requestedStartTime;
     private final String canonicalTimezone;
+    /**
+     * fix/audit3-completion-dispute-integrity: the coach cancelled at or after the booking's start — a no-show in
+     * disguise. Always a strike, whatever the reason, and not counted toward the excused-cancellation cap.
+     */
+    private final boolean cancelledAfterStart;
 
     public BookingCancelledByCoachEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
                                          String cancelReason, UUID sessionPackPurchaseId,
                                          BigDecimal sessionPrice, boolean packExpiredAtCancellation,
                                          boolean paymentCaptured, String parentEmail, Instant requestedStartTime,
                                          String canonicalTimezone) {
+        this(source, bookingId, parentId, coachId, cancelReason, sessionPackPurchaseId, sessionPrice,
+            packExpiredAtCancellation, paymentCaptured, parentEmail, requestedStartTime, canonicalTimezone, false);
+    }
+
+    @SuppressWarnings("java:S107") // an immutable event: one field per fact its listeners need
+    public BookingCancelledByCoachEvent(Object source, UUID bookingId, Long parentId, UUID coachId,
+                                         String cancelReason, UUID sessionPackPurchaseId,
+                                         BigDecimal sessionPrice, boolean packExpiredAtCancellation,
+                                         boolean paymentCaptured, String parentEmail, Instant requestedStartTime,
+                                         String canonicalTimezone, boolean cancelledAfterStart) {
         super(source);
         this.bookingId = bookingId;
         this.parentId = parentId;
@@ -44,6 +59,7 @@ public class BookingCancelledByCoachEvent extends ApplicationEvent {
         this.parentEmail = parentEmail;
         this.requestedStartTime = requestedStartTime;
         this.canonicalTimezone = canonicalTimezone;
+        this.cancelledAfterStart = cancelledAfterStart;
     }
 
     public UUID getBookingId() { return bookingId; }
@@ -58,6 +74,7 @@ public class BookingCancelledByCoachEvent extends ApplicationEvent {
     public String getParentEmail() { return parentEmail; }
     public Instant getRequestedStartTime() { return requestedStartTime; }
     public String getCanonicalTimezone() { return canonicalTimezone; }
+    public boolean isCancelledAfterStart() { return cancelledAfterStart; }
 
     /** True when the payer gets a credit-wallet refund: a captured card/credit booking, or a captured booking on a pack that has since expired. */
     public boolean isWalletRefund() {
