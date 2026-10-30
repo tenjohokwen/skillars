@@ -1013,7 +1013,7 @@ export default {
     windowExpired: 'Die Frist zur Meldung eines Streitfalls für diese Buchung ist abgelaufen.',
     alreadyRaised: 'Für diese Buchung wurde bereits ein Streitfall gemeldet.',
     limitReached:
-      'Du hast für diese Buchung bereits die maximale Anzahl an Streitfällen eröffnet. Wenn du mit der Entscheidung nicht einverstanden bist, kannst du im Streitfall Einspruch einlegen.',
+      'Für diese Buchung wurde bereits die maximale Anzahl an Streitfällen eröffnet. Gegen die Entscheidung kann im Streitfall Einspruch eingelegt werden.',
     invalidReason: 'Bitte wählen Sie einen gültigen Grund aus.',
     statusDialogTitle: 'Streitfallstatus',
     statusLabel: 'Status',

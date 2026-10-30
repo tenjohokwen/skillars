@@ -79,7 +79,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
   (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
   `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212 and V214 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212 and V213 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -338,9 +338,9 @@ WHERE amount_charged IS NOT NULL
   AND payout_gross_allocated + refund_gross_issued > amount_charged;
 ```
 
-**V214: completion and dispute integrity** (`V214__completion_dispute_integrity.sql`). Adds
+**V213: completion and dispute integrity** (`V213__completion_dispute_integrity.sql`). Adds
 `booking.bookings.confirmation_requested_at` (nullable) and `payment.coach_cancellation_history.after_start`
-(`NOT NULL DEFAULT false`, catalog-only), and replaces the partial unique index
+(`NOT NULL DEFAULT false`, catalog-only) and `booking.session_completion_data.awaiting_wrap_up` (same), and replaces the partial unique index
 `idx_disputes_unique_open_per_booking` with `idx_disputes_unique_open_per_booking_side` (one open dispute per
 booking per side). The new index is looser than the old one, so every existing row satisfies it: nothing to
 check before it runs. It is a non-concurrent index build on the small `admin.disputes` table. After deploy:
@@ -824,7 +824,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.playerNoShow.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V209 | Owner decision 2026-10-29: 15. Minutes after the start before a coach may report a player no-show |
 | `booking.unresolvedSession.graceMinutes` | 120 (code default, range 30–10080) | `ConfigBounds`, V209 | Keep. Minutes after a session's end before `UnresolvedSessionSweeperService` acts on it |
 | `booking.live.minDurationPercent` | 50 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A live session ended in under this share of its booked length (Start to End; pauses count as live) waits for the family's confirmation or dispute instead of paying the coach at once. 0 turns the check off |
-| `disputes.maxPerBookingPerRaiser` | 2 (code default, range 1–100) | `ConfigBounds` | Keep **(confirm)**. Disputes one person may raise on one booking in total (open, resolved or dismissed). Past it: 409 `disputes.limitReached`; an appeal is the route past a decision |
+| `disputes.maxPerBookingPerRaiser` | 2 (code default, range 1–100) | `ConfigBounds` | Keep **(confirm)**. Disputes one side (the coach, or the family's logins together) may raise on one booking in total (open, resolved or dismissed). Past it: 409 `disputes.limitReached`; an appeal is the route past a decision |
 | `coach.excusedCancellations.maxPerWindow` | 3 (code default, 0–100) | `ConfigBounds` | Keep unless policy changes |
 | `coach.excusedCancellations.windowDays` | 90 (code default, 1–3650) | `ConfigBounds` | Keep |
 | `booking.request.maxPendingPerCoach` | 10 (code default, range 1–100) | `ConfigBounds` | Keep. A parent's own requests awaiting one coach's answer at once (single and batch; coach proposals not counted). Raise only if `booking.batch.maxSize` is raised above it |
@@ -1082,15 +1082,16 @@ an operator must now do.
   Only RELEASED payouts of at least that net count toward the new-coach threshold. Still no migration and no new
   admin alert type: a cash-out funding charge Stripe will never return raises a `BOOKING_ACTION_REQUIRED` alert
   (`CASH_OUT_TARGET_INVALID`) on that PaymentIntent — check it and settle the credit by hand.
-- 2026-10-30: fix/audit3-completion-dispute-integrity (V214): new config keys `booking.live.minDurationPercent`
+- 2026-10-30: fix/audit3-completion-dispute-integrity (V213): new config keys `booking.live.minDurationPercent`
   (50) and `disputes.maxPerBookingPerRaiser` (2), both code defaults ([section 7](#7-application-config-and-policy-keys));
-  confirm both values with the owner. V214 adds `bookings.confirmation_requested_at` and
+  confirm both values with the owner. V213 adds `bookings.confirmation_requested_at` and
   `coach_cancellation_history.after_start` and swaps the disputes partial unique index to one open dispute per
-  side. It is a non-concurrent index build, so V214 joins the "prod is not live" list in section 0. Run its backlog
+  side. It is a non-concurrent index build, so V213 joins the "prod is not live" list in section 0. Run its backlog
   query ([3.2](#32-pre-migration-data-checks)) for families never asked to confirm. Behaviour changes:
   - the family is emailed (`BOOKING_QUICK_COMPLETE_CONFIRM`) as soon as a session waits for their confirmation,
     and can dispute it or, if it was never started, report a coach no-show;
-  - a coach cancel at or after the start time, and a parent's refund-eligible late cancel, now issue a
+  - a coach cancel of a never-started session at or after its start time (not a PAUSED one), and a parent's
+    refund-eligible late cancel, now issue a
     `COACH_NO_SHOW` reliability strike.
 
   No new env vars, jobs, email templates or Stripe webhook events.

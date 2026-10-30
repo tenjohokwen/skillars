@@ -214,7 +214,7 @@ flowchart LR
         <tr><td>Parent cancels when the coach still hasn't started 30+ min after the start time</td><td>Full</td><td>No</td><td><strong>Yes</strong> (coach no-show)</td></tr>
         <tr><td>Player no-show (coach can report it from 15 min after the start)</td><td>Nothing: forfeited</td><td><strong>Yes</strong>, normal payout</td><td>No</td></tr>
         <tr><td>Coach cancels a paid booking before its start time</td><td>Full</td><td>No</td><td><strong>Yes</strong>, unless excused</td></tr>
-        <tr><td>Coach cancels at or after the start time</td><td>Full</td><td>No</td><td><strong>Yes</strong> (coach no-show), whatever the reason</td></tr>
+        <tr><td>Coach cancels a never-started session at or after its start time</td><td>Full</td><td>No</td><td><strong>Yes</strong> (coach no-show), whatever the reason</td></tr>
         <tr><td>Coach no-show (parent can report it from 30 min after the start — also on a session the coach marked complete without ever starting it)</td><td>Full</td><td>No</td><td><strong>Yes</strong></td></tr>
         <tr><td>Skillars cancels (coach suspension, safety hold, or an admin cancelling one booking)</td><td>Full</td><td>No</td><td>No</td></tr>
       </tbody>
@@ -233,7 +233,7 @@ flowchart LR
       <li><strong>Excused coach cancellations</strong> (mutual agreement, health/medical, family emergency, weather)
         still refund the family in full but don't count against the coach, up to <strong>3 in any rolling 90 days</strong>.
         Any more excused cancellations in that window earn a strike, so that coaches can't avoid strikes by always picking
-        an excused reason. A cancellation at or after the start time is never excused: it is a coach no-show strike and
+        an excused reason. Cancelling a never-started session at or after its start time is never excused (calling off a paused, actually-run session is): it is a coach no-show strike and
         does not use up the excused allowance.</li>
       <li>A refunded pack session goes back to the pack, or to the wallet if the pack has expired since.</li>
     </ul>
@@ -241,7 +241,7 @@ flowchart LR
     <h3>Reliability strikes</h3>
     <p>
       Unexcused coach cancellations, excused cancellations over the cap, and coach no-shows (reported, a coach cancel
-      at or after the start, or a family cancel after the coach never started) each add a strike.
+      of a never-started session at or after its start, or a family cancel after the coach never started) each add a strike.
       Strikes count over a rolling 30-day window:
     </p>
     <ul>
@@ -262,7 +262,7 @@ flowchart LR
       within 14 days, and a family can also dispute a session that is in progress or awaiting their confirmation.
       While a dispute is open, the coach's payout for that session is frozen (a session completed meanwhile is paid out
       frozen). The coach and the family can each have one open dispute on a booking; the payout stays frozen until both
-      are settled. One person can raise at most 2 disputes on a booking (<code>disputes.maxPerBookingPerRaiser</code>). An admin resolves it on <code>/admin/disputes</code>:
+      are settled. Each side (coach, or the family) can raise at most 2 disputes on a booking (<code>disputes.maxPerBookingPerRaiser</code>). An admin resolves it on <code>/admin/disputes</code>:
     </p>
     <table>
       <thead><tr><th>Resolution</th><th>Family</th><th>Coach</th></tr></thead>
