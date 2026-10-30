@@ -29,6 +29,31 @@
         />
       </div>
 
+      <!-- fix/audit3-wallet-cashout-integrity: a new coach's first payouts are held longer (numbers from config) -->
+      <q-banner
+        v-if="payoutHold && payoutHold.newCoach"
+        rounded
+        class="new-coach-hold-banner glass-card q-mb-lg"
+      >
+        <template #avatar>
+          <q-icon name="mdi-timer-sand" color="warning" />
+        </template>
+        {{
+          t('revenue.newCoachHold.banner', {
+            count: payoutHold.newCoachPayoutCount,
+            hold: formatHold(payoutHold.newCoachHoldHours),
+            normal: formatHold(payoutHold.normalHoldHours),
+          })
+        }}
+        <span class="new-coach-hold-remaining text-weight-bold">
+          {{
+            t('revenue.newCoachHold.remaining', {
+              remaining: payoutHold.newCoachPayoutsRemaining,
+            })
+          }}
+        </span>
+      </q-banner>
+
       <!-- Summary cards -->
       <div v-if="summary" class="row q-gutter-md q-mb-lg">
         <div class="col summary-card glass-card q-pa-md text-center">
@@ -84,6 +109,17 @@
         <template #body-cell-creditUsed="props">
           <q-td :props="props">€{{ fmt(props.row.creditUsed) }}</q-td>
         </template>
+        <template #body-cell-status="props">
+          <q-td :props="props">
+            <div>{{ props.row.status }}</div>
+            <div
+              v-if="props.row.status === 'PENDING_RELEASE' && props.row.releaseAfter"
+              class="release-after text-caption text-secondary"
+            >
+              {{ t('revenue.releasesOn', { date: formatDate(props.row.releaseAfter) }) }}
+            </div>
+          </q-td>
+        </template>
         <template #body-cell-actions="props">
           <q-td :props="props">
             <q-btn
@@ -129,6 +165,8 @@ const fromDate = ref(firstOfMonth.toISOString().slice(0, 10))
 const toDate = ref(today.toISOString().slice(0, 10))
 
 const summary = computed(() => paymentStore.revenueSummary)
+// fix/audit3-wallet-cashout-integrity: the coach's payout hold rule (RevenueSummaryDto.payoutHold)
+const payoutHold = computed(() => summary.value?.payoutHold ?? null)
 const transactionPage = computed(() => paymentStore.transactionPage)
 
 const columns = [
@@ -168,6 +206,14 @@ function openReceipt(bookingId) {
 
 function fmt(val) {
   return val != null ? Number(val).toFixed(2) : '0.00'
+}
+
+// Whole days read better than hours ("7 days" rather than "168 hours").
+function formatHold(hours) {
+  const h = Number(hours)
+  return h >= 24 && h % 24 === 0
+    ? t('revenue.newCoachHold.days', h / 24)
+    : t('revenue.newCoachHold.hours', h)
 }
 
 function formatDate(iso) {

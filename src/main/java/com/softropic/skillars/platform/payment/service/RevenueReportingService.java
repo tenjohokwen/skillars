@@ -109,9 +109,16 @@ public class RevenueReportingService {
         BigDecimal heldAmount = coachPayoutRepository.sumHeldNetByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
         long heldCount = coachPayoutRepository.countHeldByCoachAndPeriod(coachId, effectiveFrom, effectiveTo);
 
+        // fix/audit3-wallet-cashout-integrity: the hold rule the coach's next payouts get, for the revenue page's
+        // new-coach notice — computed by the same rule CoachPayoutOutboxSupport applies when a payout is written.
+        CoachPayoutOutboxSupport.PayoutHold hold =
+            CoachPayoutOutboxSupport.resolveHold(configService, coachPayoutRepository, coachId);
+        RevenueSummaryDto.PayoutHoldDto payoutHold = new RevenueSummaryDto.PayoutHoldDto(hold.normalHoldHours(),
+            hold.newCoachHoldHours(), hold.newCoachPayoutCount(), hold.newCoachPayoutsRemaining(), hold.newCoach());
+
         return new RevenueSummaryDto(grossEarnings, commissionDeducted, netPayout,
             sessionCount, refundsIssued, platformCurrency(), pendingReleaseAmount, pendingReleaseCount,
-            heldAmount, heldCount);
+            heldAmount, heldCount, payoutHold);
     }
 
     /**
@@ -170,7 +177,8 @@ public class RevenueReportingService {
                 payout.getEffectiveCommissionAmount(),
                 payout.getEffectiveNetAmount(),
                 payout.getStatus(),
-                creditByBooking.getOrDefault(payout.getBookingId(), BigDecimal.ZERO)
+                creditByBooking.getOrDefault(payout.getBookingId(), BigDecimal.ZERO),
+                CoachPayoutStatus.PENDING_RELEASE.equals(payout.getStatus()) ? payout.getReleaseAfter() : null
             );
         });
     }

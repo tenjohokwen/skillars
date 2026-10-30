@@ -197,6 +197,25 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (120); tiny → overrunning live sessions are cut off", 120L);
 
     /**
+     * fix/audit3-wallet-cashout-integrity: {@code CoachPayoutOutboxSupport.enqueuePayout} — a coach with fewer
+     * than this many payouts already released (transferred) is "new": their payouts are held
+     * {@link #PAYOUT_NEW_COACH_HOLD_HOURS} instead of {@code payment.payout.hold_hours}, so a chargeback inside
+     * the card network's window lands while the money is still on the platform. 0 = no new-coach hold.
+     */
+    public static final BoundedKey PAYOUT_NEW_COACH_RELEASED_COUNT =
+        new BoundedKey("payment.payout.newCoach.releasedCount", 0L, 100L, false,
+            "out-of-range falls back to the coded default (5); 0 → new coaches get the normal hold", 5L);
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: the payout hold (hours) for a new coach (see above). Same ceiling as
+     * {@code payment.payout.hold_hours} (336 = 14 days).
+     */
+    public static final BoundedKey PAYOUT_NEW_COACH_HOLD_HOURS =
+        new BoundedKey("payment.payout.newCoach.holdHours", 0L, 336L, false,
+            "out-of-range falls back to the coded default (168); tiny → a new coach is paid before chargebacks land",
+            168L);
+
+    /**
      * fix/booking-cancel-policy-loopholes: {@code CancellationRefundService.onBookingCancelledByCoach}
      * — excused (self-declared) coach cancellations allowed per rolling window before an excused one
      * also issues a {@code COACH_CANCELLATION_EXCUSED_LIMIT} strike. 0 = every excused cancel strikes.
@@ -581,7 +600,9 @@ public final class ConfigBounds {
         PACK_EXPIRY_DAYS_TIER1.key(),
         PACK_EXPIRY_DAYS_TIER2.key(),
         PACK_EXPIRY_DAYS_TIER3.key(),
-        PACK_EXPIRY_DAYS_TIER4.key());
+        PACK_EXPIRY_DAYS_TIER4.key(),
+        PAYOUT_NEW_COACH_RELEASED_COUNT.key(),
+        PAYOUT_NEW_COACH_HOLD_HOURS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -632,7 +653,9 @@ public final class ConfigBounds {
             PACK_EXPIRY_DAYS_TIER1,
             PACK_EXPIRY_DAYS_TIER2,
             PACK_EXPIRY_DAYS_TIER3,
-            PACK_EXPIRY_DAYS_TIER4));
+            PACK_EXPIRY_DAYS_TIER4,
+            PAYOUT_NEW_COACH_RELEASED_COUNT,
+            PAYOUT_NEW_COACH_HOLD_HOURS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

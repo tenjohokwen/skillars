@@ -12,5 +12,8 @@ public record TransactionDto(
     BigDecimal commissionAmount,
     BigDecimal netAmount,
     String status,
-    BigDecimal creditUsed
+    BigDecimal creditUsed,
+    // fix/audit3-wallet-cashout-integrity: when a PENDING_RELEASE payout's transfer is due (it reflects the
+    // longer new-coach hold); null once released.
+    Instant releaseAfter
 ) {}

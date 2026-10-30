@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.outbox.service.OutboxService;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutReversalPayload;
@@ -167,9 +168,9 @@ public class CoachPayoutOutboxSupport {
         BigDecimal commission = gross.multiply(rate).setScale(2, RoundingMode.HALF_UP);
         BigDecimal net = gross.subtract(commission);
 
-        long holdHours = configService.getBoundedLong(
-            "payment.payout.hold_hours", HOLD_HOURS_DEFAULT, HOLD_HOURS_MIN, HOLD_HOURS_MAX);
-        Instant releaseAfter = Instant.now().plus(Duration.ofHours(holdHours));
+        // fix/audit3-wallet-cashout-integrity: a new coach's payout is held longer (see resolveHold).
+        PayoutHold hold = resolveHold(configService, coachPayoutRepository, coachId);
+        Instant releaseAfter = Instant.now().plus(Duration.ofHours(hold.appliedHoldHours()));
 
         CoachPayout row = newRow(bookingId, coachId, currency, gross, commission, net, releaseAfter);
         row.setSessionPackPurchaseId(packId);
@@ -229,6 +230,47 @@ public class CoachPayoutOutboxSupport {
         enqueue(AGGREGATE_TYPE_TRANSFER, new CoachPayoutTransferPayload(bookingId), releaseAfter, bookingId);
         log.info("[COACH_PAYOUT] enqueued transfer for booking {} coach {} gross {} net {} pack {} releaseAfter {}",
             bookingId, coachId, row.getGrossAmount(), row.getNetAmount(), packId, releaseAfter);
+    }
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: the payout hold for one coach, and why. The normal hold
+     * ({@code payment.payout.hold_hours}, 48h) is shorter than the window in which a payer's bank can still
+     * charge a card payment back, so a coach paid out at once and then gone left the platform to absorb every
+     * chargeback. A coach with fewer than {@code payment.payout.newCoach.releasedCount} (5) payouts ever
+     * transferred is held {@code payment.payout.newCoach.holdHours} (168h) instead — never less than the normal
+     * hold. Read when the payout row is written, so a payout keeps the hold it was enqueued with. Static so the
+     * coach revenue page ({@code RevenueReportingService}) shows exactly the rule applied here.
+     *
+     * @param normalHoldHours     {@code payment.payout.hold_hours}
+     * @param newCoachHoldHours   {@code payment.payout.newCoach.holdHours}
+     * @param newCoachPayoutCount {@code payment.payout.newCoach.releasedCount} — how many first payouts are held longer
+     * @param releasedCount       the coach's payouts transferred so far
+     */
+    public record PayoutHold(long normalHoldHours, long newCoachHoldHours, long newCoachPayoutCount,
+                             long releasedCount) {
+        /** True while the coach still gets the longer new-coach hold. */
+        public boolean newCoach() {
+            return releasedCount < newCoachPayoutCount && newCoachHoldHours > normalHoldHours;
+        }
+
+        /** How many of the first payouts are still to be transferred (0 once past them). */
+        public long newCoachPayoutsRemaining() {
+            return newCoach() ? newCoachPayoutCount - releasedCount : 0L;
+        }
+
+        public long appliedHoldHours() {
+            return newCoach() ? newCoachHoldHours : normalHoldHours;
+        }
+    }
+
+    public static PayoutHold resolveHold(ConfigService configService, CoachPayoutRepository coachPayoutRepository,
+                                         UUID coachId) {
+        long normal = configService.getBoundedLong(
+            "payment.payout.hold_hours", HOLD_HOURS_DEFAULT, HOLD_HOURS_MIN, HOLD_HOURS_MAX);
+        long newCoachCount = configService.getBoundedLong(ConfigBounds.PAYOUT_NEW_COACH_RELEASED_COUNT);
+        long newCoachHours = configService.getBoundedLong(ConfigBounds.PAYOUT_NEW_COACH_HOLD_HOURS);
+        long released = newCoachCount > 0 ? coachPayoutRepository.countByCoachIdAndReleasedAtIsNotNull(coachId) : 0L;
+        return new PayoutHold(normal, newCoachHours, newCoachCount, released);
     }
 
     /**

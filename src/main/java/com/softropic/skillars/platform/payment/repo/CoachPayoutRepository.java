@@ -32,6 +32,13 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
     Optional<CoachPayout> findByIdForUpdate(@Param("bookingId") UUID bookingId);
 
     /**
+     * fix/audit3-wallet-cashout-integrity: how many of the coach's payouts have ever been transferred
+     * ({@code released_at} is stamped by the transfer and kept through a later reversal) — fewer than
+     * {@code payment.payout.newCoach.releasedCount} makes the coach "new" for the longer payout hold.
+     */
+    long countByCoachIdAndReleasedAtIsNotNull(UUID coachId);
+
+    /**
      * feat/coach-payouts-pack-and-credit: a CSAM safety hold freezes the coach's not-yet-released
      * payouts. A plain conditional UPDATE: it waits on a row a {@code CoachPayoutTransferHandler} drain
      * has locked, and re-evaluates {@code status} after that drain commits, so a row the drain released

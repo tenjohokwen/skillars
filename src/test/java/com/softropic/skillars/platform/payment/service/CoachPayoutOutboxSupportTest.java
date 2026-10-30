@@ -391,4 +391,53 @@ class CoachPayoutOutboxSupportTest {
         verify(coachPayoutRepository, never()).save(any());
         verify(outboxService, never()).enqueue(any(), any(), any());
     }
+
+    // ── fix/audit3-wallet-cashout-integrity: longer payout hold for a new coach ──────────────
+
+    private void newCoachRule(long releasedCount, long newCoachHours) {
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_RELEASED_COUNT))
+            .thenReturn(5L);
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PAYOUT_NEW_COACH_HOLD_HOURS))
+            .thenReturn(newCoachHours);
+        when(coachPayoutRepository.countByCoachIdAndReleasedAtIsNotNull(coachId)).thenReturn(releasedCount);
+    }
+
+    @Test
+    void newCoach_fewerReleasedPayoutsThanTheThreshold_heldTheLongerHold() {
+        newCoachRule(4L, 168L);
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getReleaseAfter()).isAfter(Instant.now().plusSeconds(167 * 3600));
+        verify(outboxService).enqueue(eq(CoachPayoutOutboxSupport.AGGREGATE_TYPE_TRANSFER), any(),
+            eq(row.getReleaseAfter()));
+    }
+
+    @Test
+    void establishedCoach_atTheThreshold_normalHold() {
+        newCoachRule(5L, 168L);
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getReleaseAfter()).isBefore(Instant.now().plusSeconds(49 * 3600));
+    }
+
+    @Test
+    void payoutHold_neverShorterThanTheNormalHold_andCountsDown() {
+        newCoachRule(2L, 24L);
+        CoachPayoutOutboxSupport.PayoutHold hold =
+            CoachPayoutOutboxSupport.resolveHold(configService, coachPayoutRepository, coachId);
+        assertThat(hold.newCoach()).isFalse();
+        assertThat(hold.appliedHoldHours()).isEqualTo(48L);
+
+        CoachPayoutOutboxSupport.PayoutHold longer = new CoachPayoutOutboxSupport.PayoutHold(48L, 168L, 5L, 2L);
+        assertThat(longer.newCoach()).isTrue();
+        assertThat(longer.newCoachPayoutsRemaining()).isEqualTo(3L);
+        assertThat(longer.appliedHoldHours()).isEqualTo(168L);
+        assertThat(new CoachPayoutOutboxSupport.PayoutHold(48L, 168L, 0L, 0L).newCoach()).isFalse();
+    }
 }

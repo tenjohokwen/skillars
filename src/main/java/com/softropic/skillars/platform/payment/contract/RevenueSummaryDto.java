@@ -16,6 +16,10 @@ import java.math.BigDecimal;
  * is FROZEN (a dispute or safety hold) or HOLD (the Stripe account cannot receive yet) — money the coach has
  * earned but cannot see moving, previously invisible. {@code refundsIssued} is every refund on the coach's
  * bookings in the period (fully refunded sessions included), and {@code currency} the platform currency.
+ *
+ * <p>fix/audit3-wallet-cashout-integrity: {@code payoutHold} is the coach's payout hold rule as it applies to
+ * them now — the normal hold, the longer hold for a new coach's first payouts, and how many of those first
+ * payouts are still to come — so the revenue page can say why a payout is not released yet. Not period-bound.
  */
 public record RevenueSummaryDto(
     BigDecimal grossEarnings,
@@ -27,5 +31,15 @@ public record RevenueSummaryDto(
     BigDecimal pendingReleaseAmount,
     long pendingReleaseCount,
     BigDecimal heldAmount,
-    long heldCount
-) {}
+    long heldCount,
+    PayoutHoldDto payoutHold
+) {
+    /**
+     * fix/audit3-wallet-cashout-integrity: the coach's payout hold. {@code newCoach} is true while their payouts
+     * are held {@code newCoachHoldHours} instead of {@code normalHoldHours}; {@code newCoachPayoutsRemaining} of
+     * their first {@code newCoachPayoutCount} payouts are still to be transferred.
+     */
+    public record PayoutHoldDto(long normalHoldHours, long newCoachHoldHours, long newCoachPayoutCount,
+                                long newCoachPayoutsRemaining, boolean newCoach) {
+    }
+}
