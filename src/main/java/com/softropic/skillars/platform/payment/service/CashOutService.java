@@ -2,12 +2,14 @@ package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.ParentCreditLedgerRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -52,6 +54,7 @@ public class CashOutService {
     private final ConfigService configService;
     private final CashOutReconciliationService cashOutReconciliationService;
     private final ParentCreditLedgerRepository ledgerRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     static final String REFUND_OUTCOME_UNKNOWN = "payment.refundOutcomeUnknown";
     /** Total refund attempts under one idempotency key when Stripe's answer is ambiguous. */
@@ -194,9 +197,10 @@ public class CashOutService {
      * payer's latest charge (capped at what it has left after any leg already on it) — by then every funding
      * charge read has been refunded down to zero headroom, so it can no longer be disputed for that money.
      *
-     * <p>Fails closed: when a funding charge cannot be read from Stripe the cash-out is refused
+     * <p>Fails closed on a transient error reading a funding charge (network, 5xx, 429): the cash-out is refused
      * ({@code payment.cashOutTargetUnavailable}, nothing debited) rather than routed past it onto another
-     * charge — the payer can retry later. The processing fee (a wallet-only debit) is split across the legs in
+     * charge — the payer can retry later. A charge Stripe will never return ({@link PaymentGateway#REFUND_TARGET_INVALID},
+     * e.g. 404) is skipped instead, with a {@code BOOKING_ACTION_REQUIRED} admin alert on that PaymentIntent. The processing fee (a wallet-only debit) is split across the legs in
      * proportion to their net, the last leg taking the rounding remainder.
      */
     List<CreditWalletService.CashOutLeg> planLegs(Long parentId, BigDecimal netAmount, BigDecimal feeAmount,
@@ -210,6 +214,22 @@ public class CashOutService {
             BigDecimal refundable;
             try {
                 refundable = paymentGateway.getRefundableAmount(candidate);
+            } catch (PaymentGatewayException e) {
+                if (!PaymentGateway.REFUND_TARGET_INVALID.equals(e.getErrorCode())) {
+                    // Transient (network, 5xx, 429): fail closed — the payer retries later.
+                    log.warn("Cash-out refund target {} unreadable for parentId={} — cash-out refused", candidate,
+                        parentId, e);
+                    throw new PaymentGatewayException("payment.cashOutTargetUnavailable");
+                }
+                // Permanent (unknown / invalid PaymentIntent): no retry will ever read it, so it is skipped as a
+                // target — refusing would block this payer's cash-outs forever — and an operator is told, since
+                // the credit it funded is now refunded elsewhere.
+                log.error("[CASH_OUT_TARGET_INVALID] funding charge {} of parentId={} can never be read from Stripe "
+                    + "— skipped as a cash-out target, admin alert raised", candidate, parentId, e);
+                eventPublisher.publishEvent(new PaymentIntegrityAlertEvent(this,
+                    PaymentIntegrityAlertEvent.Kind.BOOKING_ACTION_REQUIRED, refOf(candidate),
+                    PaymentIntegrityAlertEvent.Reference.PAYMENT_INTENT, "CASH_OUT_TARGET_INVALID parent " + parentId));
+                continue;
             } catch (RuntimeException e) {
                 log.warn("Cash-out refund target {} unreadable for parentId={} — cash-out refused", candidate, parentId, e);
                 throw new PaymentGatewayException("payment.cashOutTargetUnavailable");
@@ -236,15 +256,24 @@ public class CashOutService {
         }
         List<CreditWalletService.CashOutLeg> legs = new ArrayList<>();
         BigDecimal feeLeft = feeAmount;
+        // fix/audit3-wallet-cashout-integrity: the legs of one request share a request id, shown as "leg i/n req
+        // <id>" on their ledger rows and admin alerts (short: an alert reason is 64 chars), so ops can tie them
+        // together. A single-leg cash-out carries no note (as before).
+        String requestId = UUID.randomUUID().toString().substring(0, 8);
         int i = 0;
         for (Map.Entry<String, BigDecimal> e : plan.entrySet()) {
             boolean last = ++i == plan.size();
             BigDecimal legFee = last ? feeLeft
                 : feeAmount.multiply(e.getValue()).divide(netAmount, 2, RoundingMode.DOWN);
             feeLeft = feeLeft.subtract(legFee);
-            legs.add(new CreditWalletService.CashOutLeg(UUID.randomUUID(), e.getKey(), e.getValue(), legFee));
+            String note = plan.size() > 1 ? "leg " + i + "/" + plan.size() + " req " + requestId : null;
+            legs.add(new CreditWalletService.CashOutLeg(UUID.randomUUID(), e.getKey(), e.getValue(), legFee, note));
         }
         return legs;
+    }
+
+    private static String refOf(String id) {
+        return id.length() > 36 ? id.substring(0, 36) : id;
     }
 
     /** Best effort: if even this write fails, the record stays PENDING and the re-check job escalates it. */

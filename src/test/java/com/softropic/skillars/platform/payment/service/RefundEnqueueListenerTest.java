@@ -350,7 +350,7 @@ class RefundEnqueueListenerTest {
     }
 
     private BookingCancelledByCoachEvent coachCancelEvent(UUID packId, boolean packExpired, boolean captured) {
-        return coachCancelEvent(packId, packExpired, captured, "HEALTH_MEDICAL");
+        return coachCancelEvent(packId, packExpired, captured, "OTHER_UNEXCUSED");
     }
 
     private BookingCancelledByCoachEvent coachCancelEvent(UUID packId, boolean packExpired, boolean captured,
@@ -398,35 +398,47 @@ class RefundEnqueueListenerTest {
         verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
     }
 
-    // ========== fix/audit3-wallet-cashout-integrity: mutual-agreement coach cancels ==========
+    // ========== fix/audit3-wallet-cashout-integrity: excused coach cancels (owner decision) ==========
 
-    /** The parent agreed to drop the session: an expired-pack refund is spend-only, like their own cancel. */
-    @Test
-    void onBookingCancelledByCoach_mutualAgreement_expiredPack_refundIsSpendOnly() {
-        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true, true, "MUTUAL_AGREEMENT"));
+    /** Any excused reason (the strike logic's classification): an expired-pack refund is spend-only. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"MUTUAL_AGREEMENT", "WEATHER", "HEALTH_MEDICAL",
+        "FAMILY_EMERGENCY"})
+    void onBookingCancelledByCoach_excusedReason_expiredPack_refundIsSpendOnly(String reason) {
+        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true, true, reason));
 
         verify(refundOutboxSupport).enqueueSpendOnlyBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID),
             anyString());
         verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
     }
 
-    /** A card booking's mutual-agreement refund is not forced spend-only (the outbox handler splits it). */
+    /** An unexcused coach cancel is the coach's fault: the expired-pack refund stays cashable. */
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"OTHER_UNEXCUSED", "SCHEDULING_PREFERENCE"})
+    void onBookingCancelledByCoach_unexcusedReason_expiredPack_refundIsCashable(String reason) {
+        listener.onBookingCancelledByCoach(coachCancelEvent(UUID.randomUUID(), true, true, reason));
+
+        verify(refundOutboxSupport).enqueueBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
+        verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
+    }
+
+    /** A card booking's excused-cancel refund is not forced spend-only (the outbox handler splits it). */
     @Test
-    void onBookingCancelledByCoach_mutualAgreement_cardBooking_notForcedSpendOnly() {
+    void onBookingCancelledByCoach_excused_cardBooking_notForcedSpendOnly() {
         listener.onBookingCancelledByCoach(coachCancelEvent(null, false, true, "MUTUAL_AGREEMENT"));
 
         verify(refundOutboxSupport).enqueueBookingRefund(eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
         verify(refundOutboxSupport, never()).enqueueSpendOnlyBookingRefund(any(), any(), any(), any());
     }
 
-    /** Mutual agreement on an unexpired pack: the restore carries the reason, so an expiry meanwhile is spend-only. */
+    /** Excused cancel on an unexpired pack: the restore carries the reason, so an expiry meanwhile is spend-only. */
     @Test
-    void onBookingCancelledByCoach_mutualAgreement_packRestore_carriesTheMutualReason() {
+    void onBookingCancelledByCoach_excused_packRestore_carriesTheExcusedReason() {
         UUID packId = UUID.randomUUID();
-        listener.onBookingCancelledByCoach(coachCancelEvent(packId, false, true, "MUTUAL_AGREEMENT"));
+        listener.onBookingCancelledByCoach(coachCancelEvent(packId, false, true, "WEATHER"));
 
         verify(packRestoreOutboxSupport).enqueuePackRestore(packId, BOOKING_ID,
-            PackSessionService.RESTORE_REASON_COACH_MUTUAL_AGREEMENT);
+            PackSessionService.RESTORE_REASON_COACH_EXCUSED_CANCELLATION);
     }
 
     private BookingCancelledByAdminEvent adminCancelEvent(UUID packId, boolean captured, boolean packExpired) {

@@ -39,6 +39,15 @@ public class CancellationRefundService {
     private static final Set<String> EXCUSED_REASONS =
         Set.of("MUTUAL_AGREEMENT", "HEALTH_MEDICAL", "FAMILY_EMERGENCY", "WEATHER");
 
+    /**
+     * fix/audit3-wallet-cashout-integrity: the one excused / unexcused classification of a coach cancel reason —
+     * the strike logic here and {@code RefundEnqueueListener} (an excused cancel of an expired-pack booking
+     * refunds spend-only credit; owner decision) both read it. A null reason is unexcused.
+     */
+    static boolean isExcusedReason(String cancelReason) {
+        return cancelReason != null && EXCUSED_REASONS.contains(cancelReason);
+    }
+
     private final CoachCancellationHistoryRepository cancellationHistoryRepository;
     private final ReliabilityStrikeService reliabilityStrikeService;
     private final ConfigService configService;

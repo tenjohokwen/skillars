@@ -81,7 +81,7 @@ public class CreditWalletService {
     @Transactional
     public void debitForCashOut(Long parentId, UUID cashOutId, BigDecimal netAmount, BigDecimal feeAmount,
                                 String paymentIntentId) {
-        debitForCashOut(parentId, List.of(new CashOutLeg(cashOutId, paymentIntentId, netAmount, feeAmount)));
+        debitForCashOut(parentId, List.of(new CashOutLeg(cashOutId, paymentIntentId, netAmount, feeAmount, null)));
     }
 
     /**
@@ -89,9 +89,19 @@ public class CreditWalletService {
      * leg is a cash-out of its own downstream: its own {@code cashOutId} (ledger {@code reference_id}, Stripe
      * idempotency key {@code cashout-{cashOutId}}) and its own {@code cash_out_reconciliations} row, so the
      * re-check job and the 4xx credit restore act on each refund independently — a rejected leg restores only
-     * its own net + fee, never a sibling's that reached the card.
+     * its own net + fee, never a sibling's that reached the card. {@code note} ("leg i/n req &lt;request id&gt;", null
+     * for a single-leg cash-out) ties the legs of one request together on their ledger rows and
+     * admin alerts.
      */
-    public record CashOutLeg(UUID cashOutId, String paymentIntentId, BigDecimal netAmount, BigDecimal feeAmount) {
+    public record CashOutLeg(UUID cashOutId, String paymentIntentId, BigDecimal netAmount, BigDecimal feeAmount,
+                             String note) {
+        public CashOutLeg(UUID cashOutId, String paymentIntentId, BigDecimal netAmount, BigDecimal feeAmount) {
+            this(cashOutId, paymentIntentId, netAmount, feeAmount, null);
+        }
+
+        private String suffix() {
+            return note == null ? "" : " (" + note + ")";
+        }
     }
 
     /**
@@ -130,13 +140,17 @@ public class CreditWalletService {
         }
         for (CashOutLeg leg : legs) {
             writeLedgerEntry(parentId, leg.netAmount().negate(), CreditLedgerEntryType.CASH_OUT_DEBIT,
-                leg.cashOutId(), "Credit cash-out");
+                leg.cashOutId(), "Credit cash-out" + leg.suffix());
             if (leg.feeAmount().signum() > 0) {
                 writeLedgerEntry(parentId, leg.feeAmount().negate(), CreditLedgerEntryType.STRIPE_FEE_DEBIT,
-                    leg.cashOutId(), "Stripe processing fee for cash-out");
+                    leg.cashOutId(), "Stripe processing fee for cash-out" + leg.suffix());
             }
-            cashOutReconciliationRepository.save(CashOutReconciliation.pending(leg.cashOutId(), parentId,
-                leg.paymentIntentId(), leg.netAmount(), leg.feeAmount()));
+            CashOutReconciliation record = CashOutReconciliation.pending(leg.cashOutId(), parentId,
+                leg.paymentIntentId(), leg.netAmount(), leg.feeAmount());
+            // The leg note rides on last_error until the first transition, which keeps it as a prefix
+            // (CashOutReconciliationService.withLegNote) — no schema change.
+            record.setLastError(leg.note());
+            cashOutReconciliationRepository.save(record);
         }
     }
 
@@ -228,7 +242,10 @@ public class CreditWalletService {
      * ({@code PaymentLifecycleService}); older batch deductions under a batch id carry no spend-only part.
      *
      * <p>Takes the payer's wallet lock ({@link #lockAndGetBalance}), so a refund and a dispute credit for the
-     * same booking cannot both return the same spend-only share.
+     * same booking cannot both return the same spend-only share. <strong>Lock order:</strong> a caller that goes
+     * on to touch card-dispute rows must lock them FIRST
+     * ({@code ChargebackCreditReversalService.lockDisputesForCredit}) — the card-dispute webhook takes the
+     * dispute row, then this wallet lock.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public BigDecimal bookingSpendOnlyOutstanding(Long parentId, UUID bookingId) {

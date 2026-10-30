@@ -39,6 +39,7 @@ class CashOutServiceTest {
     @Mock ConfigService configService;
     @Mock CashOutReconciliationService cashOutReconciliationService;
     @Mock ParentCreditLedgerRepository ledgerRepository;
+    @Mock org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     @InjectMocks CashOutService cashOutService;
 
@@ -82,6 +83,7 @@ class CashOutServiceTest {
         assertThat(leg.paymentIntentId()).isEqualTo(pi);
         assertThat(leg.netAmount()).isEqualByComparingTo(NET);
         assertThat(leg.feeAmount()).isEqualByComparingTo(FEE);
+        assertThat(leg.note()).as("a single-leg cash-out carries no leg note").isNull();
         return leg;
     }
 
@@ -361,6 +363,45 @@ class CashOutServiceTest {
 
         verify(creditWalletService, never()).debitForCashOut(any(), any(List.class));
         verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    /**
+     * Review fix: a funding charge Stripe will never return (404 → REFUND_TARGET_INVALID) is skipped, not a
+     * permanent block on the payer's cash-outs, and an operator is alerted.
+     */
+    @Test
+    void processCashOut_permanentlyUnreadableFundingCharge_isSkippedAndAlerted() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_gone", "pi_ok"));
+        when(paymentGateway.getRefundableAmount("pi_gone"))
+            .thenThrow(new PaymentGatewayException(PaymentGateway.REFUND_TARGET_INVALID));
+        when(paymentGateway.getRefundableAmount("pi_ok")).thenReturn(new BigDecimal("500.00"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        singleLeg("pi_ok");
+        ArgumentCaptor<com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent> alert =
+            ArgumentCaptor.forClass(com.softropic.skillars.platform.payment.contract.event.PaymentIntegrityAlertEvent.class);
+        verify(eventPublisher).publishEvent(alert.capture());
+        assertThat(alert.getValue().getReferenceId()).isEqualTo("pi_gone");
+        assertThat(alert.getValue().getReason()).startsWith("CASH_OUT_TARGET_INVALID");
+    }
+
+    /** Review fix: the legs of one request carry one "leg i/n req <id>" note; a single leg carries none. */
+    @Test
+    void processCashOut_legsOfOneRequest_shareARequestNote() {
+        stubHappyPath(new BigDecimal("200.00"));
+        when(ledgerRepository.findCashOutRefundTargets(PARENT_ID, CashOutService.MAX_REFUND_TARGET_CANDIDATES))
+            .thenReturn(List.of("pi_a", "pi_b"));
+        when(paymentGateway.getRefundableAmount("pi_a")).thenReturn(new BigDecimal("60.00"));
+        when(paymentGateway.getRefundableAmount("pi_b")).thenReturn(new BigDecimal("50.00"));
+
+        cashOutService.processCashOut(PARENT_ID, AMOUNT);
+
+        List<CreditWalletService.CashOutLeg> legs = debitedLegs();
+        assertThat(legs.get(0).note()).matches("leg 1/2 req [0-9a-f]{8}");
+        assertThat(legs.get(1).note()).isEqualTo(legs.get(0).note().replace("leg 1/2", "leg 2/2"));
     }
 
     /**

@@ -205,8 +205,10 @@ public class AdminAlertEventListener {
                 alert.setStatus(AdminAlertStatus.RESOLVED);
                 alert.setResolvedAt(java.time.Instant.now());
                 adminAlertRepository.save(alert);
-                log.info("CASH_OUT_UNRESOLVED alert for cash-out {} resolved automatically ({})",
-                    event.getCashOutId(), event.getOutcome());
+                // fix/audit3-wallet-cashout-integrity: the leg note ties a split cash-out's legs together.
+                log.info("CASH_OUT_UNRESOLVED alert for cash-out {} resolved automatically ({}){}",
+                    event.getCashOutId(), event.getOutcome(),
+                    event.getLegNote() == null ? "" : " — " + event.getLegNote());
             });
     }
 

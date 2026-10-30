@@ -94,7 +94,7 @@ public class CashOutReconciliationService {
             repository.save(r);
             if (wasUnknown) {
                 eventPublisher.publishEvent(
-                    new CashOutRefundResolvedEvent(this, cashOutId, CashOutReconciliation.COMPLETED));
+                    new CashOutRefundResolvedEvent(this, cashOutId, CashOutReconciliation.COMPLETED, legNote(r)));
             }
         });
     }
@@ -111,12 +111,14 @@ public class CashOutReconciliationService {
             return false;
         }
         creditWalletService.reverseCashOut(r.getParentId(), cashOutId, r.getNetAmount(), r.getFeeAmount());
+        String note = legNote(r);
         r.setStatus(CashOutReconciliation.REVERSED);
         r.setAttempts(r.getAttempts() + 1);
-        r.setLastError(truncate(error));
+        r.setLastError(truncate(withLegNote(note, error)));
         r.setResolvedAt(Instant.now());
         repository.save(r);
-        eventPublisher.publishEvent(new CashOutRefundResolvedEvent(this, cashOutId, CashOutReconciliation.REVERSED));
+        eventPublisher.publishEvent(
+            new CashOutRefundResolvedEvent(this, cashOutId, CashOutReconciliation.REVERSED, note));
         return true;
     }
 
@@ -128,17 +130,18 @@ public class CashOutReconciliationService {
     public void markUnknown(UUID cashOutId, String error) {
         repository.findByIdForUpdate(cashOutId).filter(CashOutReconciliation::isOpen).ifPresent(r -> {
             boolean firstTime = CashOutReconciliation.PENDING.equals(r.getStatus());
+            String note = legNote(r);
             r.setStatus(CashOutReconciliation.UNKNOWN);
             r.setAttempts(r.getAttempts() + 1);
-            r.setLastError(truncate(error));
+            r.setLastError(truncate(withLegNote(note, error)));
             repository.save(r);
             if (firstTime) {
                 log.error("[CASH_OUT_UNRESOLVED] cashOutId={} parentId={} intentId={} net={} fee={} key={} — refund "
                     + "outcome unknown, wallet debit kept; re-checked automatically for {}h, then by hand",
                     cashOutId, r.getParentId(), r.getPaymentIntentId(), r.getNetAmount(), r.getFeeAmount(),
                     r.idempotencyKey(), RETRY_WINDOW.toHours());
-                eventPublisher.publishEvent(
-                    new CashOutRefundUnresolvedEvent(this, cashOutId, r.getParentId(), truncate(error)));
+                eventPublisher.publishEvent(new CashOutRefundUnresolvedEvent(this, cashOutId, r.getParentId(),
+                    truncate(withLegNote(note, error))));
             }
         });
     }
@@ -199,6 +202,24 @@ public class CashOutReconciliationService {
         }
         self.markCompleted(cashOutId);
         log.info("[CASH_OUT_RECHECK] cash-out {} refund confirmed on re-check", cashOutId);
+    }
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: the "leg i/n req &lt;id&gt;" note of a cash-out split across several
+     * charges ({@code CashOutService.planLegs}). Written into {@code last_error} with the PENDING row and kept as
+     * the prefix of every later {@code last_error}, so it needs no column; null for a single-leg cash-out.
+     */
+    static String legNote(CashOutReconciliation r) {
+        String last = r.getLastError();
+        if (last == null || !last.startsWith("leg ")) {
+            return null;
+        }
+        int colon = last.indexOf(": ");
+        return colon < 0 ? last : last.substring(0, colon);
+    }
+
+    static String withLegNote(String note, String error) {
+        return note == null ? error : note + ": " + error;
     }
 
     private static String truncate(String s) {

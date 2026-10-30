@@ -679,6 +679,32 @@ class StripePaymentGatewayTest {
             .hasMessageContaining("payment.refundLookupFailed");
     }
 
+    /** fix/audit3-wallet-cashout-integrity: a lookup no retry will fix has its own code (the cash-out skips it). */
+    @Test
+    void getRefundableAmount_missingPaymentIntent_isPermanent() throws StripeException {
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_gone"))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("No such payment_intent", "payment_intent",
+                "req_1", "resource_missing", 404, null));
+
+        assertThatThrownBy(() -> stripePaymentGateway.getRefundableAmount("pi_gone"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining(com.softropic.skillars.platform.payment.contract.PaymentGateway.REFUND_TARGET_INVALID);
+    }
+
+    @Test
+    void lookupFailureClassification_transientVersusPermanent() {
+        assertThat(StripePaymentGateway.isPermanentLookupFailure(
+            new com.stripe.exception.ApiConnectionException("down"))).isFalse();
+        assertThat(StripePaymentGateway.isPermanentLookupFailure(
+            new com.stripe.exception.RateLimitException("slow", null, "req", "rate_limit", 429, null))).isFalse();
+        assertThat(StripePaymentGateway.isPermanentLookupFailure(
+            new com.stripe.exception.ApiException("boom", "req", "api_error", 500, null))).isFalse();
+        assertThat(StripePaymentGateway.isPermanentLookupFailure(
+            new com.stripe.exception.InvalidRequestException("bad", "id", "req", "resource_missing", 404, null))).isTrue();
+        assertThat(StripePaymentGateway.isPermanentLookupFailure(
+            new com.stripe.exception.PermissionException("no", "req", "permission", 403))).isTrue();
+    }
+
     @Test
     void refund_idempotencyConflict_isOutcomeUnknown_soCreditIsNeverRestoredWhileAnotherAttemptRuns()
             throws StripeException {

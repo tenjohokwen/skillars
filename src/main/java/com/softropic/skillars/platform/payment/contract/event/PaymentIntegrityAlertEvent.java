@@ -23,6 +23,8 @@ public class PaymentIntegrityAlertEvent extends ApplicationEvent {
         /**
          * fix/payment-wallet-dispute-integrity: a booking an automatic path could not finish — e.g. an admin
          * cancellation owing a refund whose amount is unknown (nothing is enqueued; refund by hand).
+         * fix/audit3-wallet-cashout-integrity: also a cash-out funding charge Stripe will never return
+         * ({@code CASH_OUT_TARGET_INVALID}, reference = that PaymentIntent) — skipped as a refund target.
          */
         BOOKING_ACTION_REQUIRED
     }

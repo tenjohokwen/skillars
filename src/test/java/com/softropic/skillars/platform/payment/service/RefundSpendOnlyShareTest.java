@@ -66,6 +66,35 @@ class RefundSpendOnlyShareTest {
             eq(new BigDecimal("40.00")));
     }
 
+    /**
+     * Lock order (deadlock 40P01 otherwise): the card-dispute rows are locked before the wallet lock that
+     * bookingSpendOnlyOutstanding takes — the order ChargeDisputeWebhookService uses.
+     */
+    @Test
+    void bookingRefund_locksTheDisputeRowsBeforeTheWallet() throws Exception {
+        when(creditWalletService.bookingSpendOnlyOutstanding(PARENT, BOOKING)).thenReturn(BigDecimal.ZERO);
+
+        handler.handle(payload(new BookingRefundPayload(PARENT, new BigDecimal("40.00"), BOOKING, "refund")));
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(chargebackCreditReversalService, creditWalletService);
+        order.verify(chargebackCreditReversalService).lockDisputesForCredit(BOOKING, null);
+        order.verify(creditWalletService).bookingSpendOnlyOutstanding(PARENT, BOOKING);
+        order.verify(chargebackCreditReversalService).onRefundCredited(BOOKING, null);
+    }
+
+    @Test
+    void disputeCredit_locksTheDisputeRowsBeforeTheWallet() {
+        UUID dispute = UUID.randomUUID();
+        when(creditWalletService.bookingSpendOnlyOutstanding(PARENT, BOOKING)).thenReturn(BigDecimal.ZERO);
+
+        disputeCreditService.credit(PARENT, BOOKING, dispute, new BigDecimal("10.00"), "credit");
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(chargebackCreditReversalService, creditWalletService);
+        order.verify(chargebackCreditReversalService).lockDisputesForCredit(BOOKING, null);
+        order.verify(creditWalletService).bookingSpendOnlyOutstanding(PARENT, BOOKING);
+        order.verify(chargebackCreditReversalService).onCreditWritten(dispute, BOOKING, null);
+    }
+
     /** A mixed booking (spend-only credit + card): only the spend-only share stays spend-only. */
     @Test
     void bookingRefund_mixedBooking_onlyTheSpendOnlyShareIsSpendOnly() throws Exception {

@@ -147,6 +147,14 @@ async function handleCashOut() {
     await store.fetchCreditBalance()
   } catch (err) {
     cashoutError.value = cashoutErrorMessage(err)
+    // fix/audit3-wallet-cashout-integrity: a failed cash-out may still have moved money (a split cash-out
+    // partly refunded, or an outcome still being checked), so show the real balance, not the stale one.
+    // Best effort: a failed refresh must not replace the cash-out error.
+    try {
+      await store.fetchCreditBalance()
+    } catch {
+      // keep the cash-out error on screen
+    }
   } finally {
     cashingOut.value = false
   }

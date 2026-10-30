@@ -60,10 +60,11 @@ public class PackSessionService {
         BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
 
     /**
-     * fix/audit3-wallet-cashout-integrity: the restore reason of a coach cancellation the parent agreed to
-     * ({@code MUTUAL_AGREEMENT}) — on an expired pack it is refunded spend-only, like the parent's own cancel.
+     * fix/audit3-wallet-cashout-integrity: the restore reason of a coach cancellation with an EXCUSED reason
+     * (weather, illness, family emergency, mutual agreement) — on an expired pack it is refunded spend-only, like
+     * the parent's own cancel (owner decision).
      */
-    public static final String RESTORE_REASON_COACH_MUTUAL_AGREEMENT = "COACH_MUTUAL_AGREEMENT";
+    public static final String RESTORE_REASON_COACH_EXCUSED_CANCELLATION = "COACH_EXCUSED_CANCELLATION";
 
     /**
      * fix/payment-pack-integrity: restore reasons that, had the pack already expired when the booking was
@@ -74,14 +75,14 @@ public class PackSessionService {
      */
     private static final Set<String> WALLET_ON_EXPIRY_REASONS =
         Set.of("COACH_CANCELLATION", "COACH_NO_SHOW", "ADMIN_CANCELLATION",
-            "PARENT_CANCELLATION", "PACK_PAUSE", RESTORE_REASON_COACH_MUTUAL_AGREEMENT);
+            "PARENT_CANCELLATION", "PACK_PAUSE", RESTORE_REASON_COACH_EXCUSED_CANCELLATION);
 
     /**
      * fix/audit3-wallet-cashout-integrity: the parent-side reasons, whose expired-pack refund is SPEND-ONLY
      * credit (owner decision 2026-10-29: an expired-pack >24h parent cancel is never cashed out).
      */
     private static final Set<String> SPEND_ONLY_ON_EXPIRY_REASONS =
-        Set.of("PARENT_CANCELLATION", "PACK_PAUSE", RESTORE_REASON_COACH_MUTUAL_AGREEMENT);
+        Set.of("PARENT_CANCELLATION", "PACK_PAUSE", RESTORE_REASON_COACH_EXCUSED_CANCELLATION);
 
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -265,7 +266,7 @@ public class PackSessionService {
         }
         // CASHABLE (spend-only part 0) for coach-side / suspension reasons — paid money the payer is owed back.
         // fix/audit3-wallet-cashout-integrity: SPEND-ONLY for a parent-side reason (a parent cancel / pack pause /
-        // mutual-agreement cancel whose pack expired before the restore ran) — the same as C6's expired-pack path.
+        // excused coach cancel whose pack expired before the restore ran) — the same as C6's expired-pack path.
         creditWalletService.writeLedgerEntry(purchase.getParentId(), amount, CreditLedgerEntryType.BOOKING_REFUND,
             bookingId, description, null, null, spendOnly ? amount : BigDecimal.ZERO);
         log.info("[PACK_SESSION_RESTORE] booking={} pack={} — session refunded to the wallet ({}) instead of restored",

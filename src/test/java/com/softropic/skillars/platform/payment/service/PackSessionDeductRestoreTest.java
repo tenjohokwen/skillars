@@ -228,7 +228,7 @@ class PackSessionDeductRestoreTest {
     @Test
     void restoreSessionForBooking_packExpiredSinceTheCancel_parentSideReasons_refundSpendOnly() {
         for (String reason : List.of("PARENT_CANCELLATION", "PACK_PAUSE",
-                PackSessionService.RESTORE_REASON_COACH_MUTUAL_AGREEMENT)) {
+                PackSessionService.RESTORE_REASON_COACH_EXCUSED_CANCELLATION)) {
             org.mockito.Mockito.clearInvocations(creditWalletService);
             SessionPackPurchase pack = pack(0);
             pack.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS));

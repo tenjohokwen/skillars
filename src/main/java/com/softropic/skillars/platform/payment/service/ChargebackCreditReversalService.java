@@ -150,14 +150,7 @@ public class ChargebackCreditReversalService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void onCreditWritten(UUID creditReference, UUID bookingId, String sourcePaymentIntentId) {
-        List<String> intents = sourcePaymentIntentId != null
-            ? List.of(sourcePaymentIntentId)
-            : chargeDisputeRepository.findFundingPaymentIntents(bookingId);
-        if (intents.isEmpty()) {
-            return;
-        }
-        for (ChargeDispute dispute : chargeDisputeRepository.findByPaymentIntentsAndStatusesForUpdate(
-                intents, List.of(ChargeDispute.STATUS_OPEN, ChargeDispute.STATUS_LOST))) {
+        for (ChargeDispute dispute : lockDisputesForCredit(bookingId, sourcePaymentIntentId)) {
             if (ChargeDispute.STATUS_OPEN.equals(dispute.getStatus())) {
                 log.warn("[CHARGEBACK_CREDIT] booking={} refunded to credit while dispute {} is open on {} — taken "
                     + "back if the dispute is lost", bookingId, dispute.getStripeDisputeId(), dispute.getPaymentIntentId());
@@ -166,6 +159,27 @@ public class ChargebackCreditReversalService {
             reverse(dispute, lateReference(dispute.getStripeDisputeId(), creditReference), "LATE");
             chargeDisputeRepository.save(dispute);
         }
+    }
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: locks (in id order) the open / lost card disputes on the charges that
+     * funded {@code bookingId}'s money — the rows {@link #onCreditWritten} acts on. <strong>Lock order:</strong>
+     * card-dispute rows BEFORE the payer's wallet lock ({@code stripe_customers} row), the order
+     * {@code ChargeDisputeWebhookService} takes them in (dispute row, then {@code debitChargebackCredit}). A
+     * credit writer that needs the wallet lock first (the refund outbox handler and {@code DisputeCreditService},
+     * through {@code CreditWalletService.bookingSpendOnlyOutstanding}) calls this before it, so the two paths
+     * cannot deadlock (40P01). Re-locking the same rows later in the transaction is a no-op.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public List<ChargeDispute> lockDisputesForCredit(UUID bookingId, String sourcePaymentIntentId) {
+        List<String> intents = sourcePaymentIntentId != null
+            ? List.of(sourcePaymentIntentId)
+            : chargeDisputeRepository.findFundingPaymentIntents(bookingId);
+        if (intents.isEmpty()) {
+            return List.of();
+        }
+        return chargeDisputeRepository.findByPaymentIntentsAndStatusesForUpdate(
+            intents, List.of(ChargeDispute.STATUS_OPEN, ChargeDispute.STATUS_LOST));
     }
 
     /**

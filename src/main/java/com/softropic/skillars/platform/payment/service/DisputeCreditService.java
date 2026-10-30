@@ -64,6 +64,9 @@ public class DisputeCreditService {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void credit(Long parentId, UUID bookingId, UUID disputeId, BigDecimal amount, String description) {
+        // Lock order: card-dispute rows, then the wallet (as ChargeDisputeWebhookService) — see
+        // ChargebackCreditReversalService.lockDisputesForCredit. onCreditWritten below re-uses these locks.
+        chargebackCreditReversalService.lockDisputesForCredit(bookingId, null);
         BigDecimal spendOnly = creditWalletService.bookingSpendOnlyOutstanding(parentId, bookingId).min(amount);
         creditWalletService.writeLedgerEntry(parentId, amount, CreditLedgerEntryType.DISPUTE_CREDIT, bookingId,
             description, null, null, spendOnly);

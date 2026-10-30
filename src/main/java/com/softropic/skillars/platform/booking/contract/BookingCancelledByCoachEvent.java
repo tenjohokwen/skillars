@@ -15,12 +15,6 @@ import java.util.UUID;
  */
 public class BookingCancelledByCoachEvent extends ApplicationEvent {
 
-    /**
-     * fix/audit3-wallet-cashout-integrity: the {@code cancelReason} for a cancellation the parent agreed to — its
-     * expired-pack refund is spend-only, like the parent's own cancellation ({@code RefundEnqueueListener}).
-     */
-    public static final String REASON_MUTUAL_AGREEMENT = "MUTUAL_AGREEMENT";
-
     private final UUID bookingId;
     private final Long parentId;
     private final UUID coachId;

@@ -69,6 +69,9 @@ public class CreditWalletRefundOutboxHandler implements OutboxMessageHandler {
         if (p.spendOnly()) {
             spendOnly = p.amount();
         } else if (CreditLedgerEntryType.BOOKING_REFUND.equals(type)) {
+            // Lock order: card-dispute rows, then the wallet (as ChargeDisputeWebhookService) — see
+            // ChargebackCreditReversalService.lockDisputesForCredit. onRefundCredited below re-uses these locks.
+            chargebackCreditReversalService.lockDisputesForCredit(p.bookingId(), p.sourcePaymentIntentId());
             spendOnly = creditWalletService.bookingSpendOnlyOutstanding(p.parentId(), p.bookingId()).min(p.amount());
         } else {
             spendOnly = BigDecimal.ZERO;
