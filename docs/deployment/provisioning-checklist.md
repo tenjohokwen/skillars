@@ -814,6 +814,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.request.maxHorizonDays` | 120 (code default, range 1–730) | `ConfigBounds` | Keep. How many days ahead a session can be requested |
 | `payment.payout.hold_hours` | 48 (seed; code default 48, range 0–336) | V139, `CoachPayoutOutboxSupport` | Keep at or above the dispute window you are comfortable with **(confirm)** |
 | `payment.payout.newCoach.releasedCount` | 5 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A coach with fewer payouts ever released than this is "new" and gets the longer hold below. 0 = no new-coach hold. Shown to the coach on the Revenue Dashboard |
+| `payment.payout.newCoach.minReleasedNet` | 20 (code default, range 0–10000, whole units of `platform.payment.currency`) | `ConfigBounds` | Keep **(confirm)**. Only RELEASED payouts the coach kept at least this much of count toward `releasedCount`, so tiny sessions cannot end the new-coach hold. 0 = all count |
 | `payment.payout.newCoach.holdHours` | 168 (code default, range 0–336) | `ConfigBounds` | Keep **(confirm)**. Payout hold for a new coach (never shorter than `payment.payout.hold_hours`); sized against the card-chargeback window |
 | `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
 | `platform.commission.rate` | 0.08 | V139 | Set to the agreed rate. The only commission key since V211 (`fix/prod-readiness-gaps` deleted the duplicate `platform.commission_rate`; `ProjectedRevenueService` now reads this one too) |
@@ -1059,3 +1060,8 @@ an operator must now do.
   time. No migration: cash-outs split across funding charges reuse `cash_out_reconciliations` (one row per
   leg), and refunds' spend-only share is computed from existing ledger rows. No new env vars, jobs or Stripe
   webhook events.
+- 2026-10-30: fix/audit3-wallet-cashout-integrity review follow-up: new config key
+  `payment.payout.newCoach.minReleasedNet` (20, code default, whole units of the platform currency) — confirm it.
+  Only RELEASED payouts of at least that net count toward the new-coach threshold. Still no migration and no new
+  admin alert type: a cash-out funding charge Stripe will never return raises a `BOOKING_ACTION_REQUIRED` alert
+  (`CASH_OUT_TARGET_INVALID`) on that PaymentIntent — check it and settle the credit by hand.

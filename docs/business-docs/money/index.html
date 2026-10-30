@@ -141,7 +141,8 @@ flowchart LR
     </p>
     <p>
       <strong>New coaches wait longer.</strong> A coach's first <strong>5</strong> payouts
-      (<code>payment.payout.newCoach.releasedCount</code>) are held <strong>7 days</strong>
+      (<code>payment.payout.newCoach.releasedCount</code>; only payouts of at least <strong>€20</strong>,
+      <code>payment.payout.newCoach.minReleasedNet</code>, that were not taken back count) are held <strong>7 days</strong>
       (<code>payment.payout.newCoach.holdHours</code>, 168h) instead of 48h. A card chargeback can arrive well after
       48h, and with a brand-new coach there is no payout history to recover it from. The revenue dashboard tells the
       coach while this applies ("Your first 5 payouts are held for 7 days … 3 remaining.") and shows each pending
@@ -159,19 +160,22 @@ flowchart LR
       <li>Wallet balance is used first on every per-session booking; only the remainder is charged to the card.</li>
       <li><strong>Cashable vs. booking-only credit.</strong> Most credit can be <strong>cashed out</strong> to the card
         (minus the fee above). Some credit is <em>booking-only</em> and can never be cashed out: the refund for a session
-        drawn on an <em>expired</em> pack when the family gave it up — cancelling with more than 24h notice, pausing the
-        pack, or agreeing with the coach to cancel ("mutual agreement"), including when the pack expires between the
-        cancellation and the moment the session would have been given back. The wallet page shows both amounts
+        drawn on an <em>expired</em> pack when the cancellation is not the coach's fault — the family cancelling with
+        more than 24h notice or pausing the pack, or the coach cancelling for an excused reason (mutual agreement,
+        weather, illness, family emergency) — including when the pack expires between the cancellation and the moment
+        the session would have been given back. The wallet page shows both amounts
         separately, and booking-only credit is spent first. <strong>Booking-only credit stays booking-only:</strong> if
         it paid for a session that is later cancelled or credited after a dispute, that part comes back booking-only
-        too (only the part paid by card or cashable credit is cashable). Coach-fault cancellations, coach no-shows and
-        Skillars cancellations of an expired-pack session refund cashable credit.</li>
+        too (only the part paid by card or cashable credit is cashable). Unexcused coach cancellations, coach no-shows
+        and Skillars cancellations of an expired-pack session refund cashable credit.</li>
       <li>Cash-out is for <strong>the payer</strong>: a parent, or a self-registered adult player (no parent) who books
         and pays for themselves. Both use <code>/parent/credit-wallet</code> under the same rules. It is blocked while
         any dispute or chargeback involving that payer is open. The money goes back to the card charges that originally
         funded the credit — split across several of them if one can't take it all — and only what they can't take goes
         to the payer's latest card payment. If one part can't be refunded, that part goes back into the wallet and the
-        payer is told; the rest still reaches the card.</li>
+        payer is told; the rest still reaches the card. A card payment Stripe no longer knows is skipped and staff are
+        alerted; one that is only temporarily unreachable makes the cash-out fail with nothing taken (try again
+        later).</li>
     </ul>
 
     <h2>Subscriptions</h2>
