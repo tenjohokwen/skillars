@@ -116,8 +116,9 @@ public final class ConfigBounds {
             "too low → 11+ session packs warn/expire almost at once; out of range → falls back to 548", 548L);
 
     /**
-     * fix/audit3-completion-dispute-integrity: {@code DisputeService.raiseDispute} — how many disputes one user
-     * may raise on one booking in total (open, resolved or dismissed). Each raise re-freezes the coach payout,
+     * fix/audit3-completion-dispute-integrity: {@code DisputeService.raiseDispute} — how many disputes one raising
+     * side (the coach, or the family: parent and player logins together) may raise on one booking in total (open,
+     * resolved or dismissed). Each raise re-freezes the coach payout,
      * so without a cap a dismissed raiser could refile for the whole submission window and keep the coach's
      * money frozen. Appeals ({@code AppealService}) are the route past a decision.
      */

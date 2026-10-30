@@ -80,9 +80,11 @@ class CoachPayoutAdjustmentServiceTest {
         CoachPayout r = row(CoachPayoutStatus.FROZEN);
         r.setDisputeFrozen(true);
         r.setChargebackFrozen(true);
-        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
 
-        service.clearDisputeFreeze(bookingId);
+        // The dispute freeze lifted (as DisputeService does once no dispute on the booking is open —
+        // fix/audit3-completion-dispute-integrity removed clearDisputeFreeze, which skipped that check).
+        r.setDisputeFrozen(false);
+        service.releaseIfUnfrozen(r);
 
         assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.FROZEN);
         assertThat(r.getLastError()).isEqualTo(CoachPayoutAdjustmentService.REASON_CHARGEBACK_OPEN);

@@ -15,7 +15,7 @@ public interface DisputeRepository extends JpaRepository<Dispute, UUID> {
     /**
      * fix/audit3-completion-dispute-integrity: an open dispute raised by one side of the booking — the coach
      * ({@code raisedByRole} COACH) or the family (PARENT / PLAYER). One open dispute per booking PER SIDE
-     * ({@code idx_disputes_unique_open_per_booking_side}, V214): a coach who disputed first no longer blocks
+     * ({@code idx_disputes_unique_open_per_booking_side}, V213): a coach who disputed first no longer blocks
      * the family's own dispute.
      */
     @Query("""
@@ -42,10 +42,11 @@ public interface DisputeRepository extends JpaRepository<Dispute, UUID> {
     boolean existsOtherOpenForBooking(@Param("bookingId") UUID bookingId, @Param("disputeId") UUID disputeId);
 
     /**
-     * fix/audit3-completion-dispute-integrity: every dispute one user raised on one booking, whatever its
-     * status — capped by {@code disputes.maxPerBookingPerRaiser}.
+     * fix/audit3-completion-dispute-integrity: every dispute one SIDE of the booking raised (roles as for
+     * {@link #existsOpenByBookingIdAndRaisedByRoleIn}), whatever its status — capped by
+     * {@code disputes.maxPerBookingPerRaiser}.
      */
-    long countByBookingIdAndRaisedBy(UUID bookingId, Long raisedBy);
+    long countByBookingIdAndRaisedByRoleIn(UUID bookingId, Collection<String> raisedByRoles);
 
     /**
      * fix/audit3-completion-dispute-integrity: serialises the resolution / dismissal of disputes on ONE booking.

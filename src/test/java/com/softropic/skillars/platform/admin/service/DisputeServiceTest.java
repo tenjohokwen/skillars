@@ -890,12 +890,16 @@ class DisputeServiceTest {
         verify(disputeRepository, never()).save(any());
     }
 
-    /** Exploit 5: a dismissed raiser can no longer refile (and re-freeze the payout) without limit. */
+    /**
+     * Exploit 5: a dismissed raiser can no longer refile (and re-freeze the payout) without limit. The cap is per
+     * SIDE — a parent and a child with their own login share it.
+     */
     @Test
-    void raiseDispute_raiserAtTheCap_is409LimitReached_andFreezesNothing() {
+    void raiseDispute_familySideAtTheCap_is409LimitReached_andFreezesNothing() {
         Booking booking = buildBooking();
         stubRaisable(booking);
-        when(disputeRepository.countByBookingIdAndRaisedBy(bookingId, 1L)).thenReturn(2L);
+        when(disputeRepository.countByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER")))
+            .thenReturn(2L);
 
         assertThatThrownBy(() -> service.raiseDispute(bookingId, "SESSION_QUALITY", "again", 1L, "PARENT"))
             .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
@@ -907,12 +911,32 @@ class DisputeServiceTest {
     }
 
     @Test
-    void raiseDispute_raiserBelowTheCap_isAccepted() {
+    void raiseDispute_familySideBelowTheCap_isAccepted_andTakesTheBookingLockFirst() {
         Booking booking = buildBooking();
         stubRaisable(booking);
-        when(disputeRepository.countByBookingIdAndRaisedBy(bookingId, 1L)).thenReturn(1L);
+        when(disputeRepository.countByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER")))
+            .thenReturn(1L);
 
         assertThat(service.raiseDispute(bookingId, "SESSION_QUALITY", "again", 1L, "PARENT")).isNotNull();
+        var order = org.mockito.Mockito.inOrder(disputeRepository, coachPayoutRepository);
+        order.verify(disputeRepository).acquireBookingDisputeLock(bookingId.toString());
+        order.verify(disputeRepository).existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER"));
+        order.verify(coachPayoutRepository).findByIdForUpdate(bookingId);
+    }
+
+    /** Minor 2: the recorded role comes from the relationship to the booking, not the caller's authorities. */
+    @Test
+    void raiseDispute_recordsTheRoleFromTheBookingRelationship_notTheCallersAuthority() {
+        Booking booking = buildBooking();
+        stubRaisable(booking);
+        org.mockito.ArgumentCaptor<Dispute> saved = org.mockito.ArgumentCaptor.forClass(Dispute.class);
+
+        // The booking's parent, calling with a COACH authority (e.g. a coach who is also a parent).
+        service.raiseDispute(bookingId, "SESSION_QUALITY", "x", 1L, "COACH");
+
+        verify(disputeRepository).save(saved.capture());
+        assertThat(saved.getValue().getRaisedByRole()).isEqualTo("PARENT");
+        verify(disputeRepository).existsOpenByBookingIdAndRaisedByRoleIn(bookingId, List.of("PARENT", "PLAYER"));
     }
 
     /** Exploit 6: settling one side's dispute keeps the payout frozen while the other side's is open. */

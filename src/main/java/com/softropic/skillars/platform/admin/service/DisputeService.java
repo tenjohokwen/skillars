@@ -84,7 +84,7 @@ public class DisputeService {
      */
     private static final List<String> AWAITING_CONFIRMATION_STATUSES = List.of("COMPLETED_PENDING_CONFIRMATION");
 
-    /** fix/audit3-completion-dispute-integrity: the two sides of a booking, one open dispute each (V214). */
+    /** fix/audit3-completion-dispute-integrity: the two sides of a booking, one open dispute each (V213). */
     private static final List<String> COACH_SIDE_ROLES = List.of("COACH");
     private static final List<String> FAMILY_SIDE_ROLES = List.of("PARENT", "PLAYER");
 
@@ -140,13 +140,12 @@ public class DisputeService {
         // ReviewSubmissionService.checkEligibility) — resolve it through PlayerProfile.getUserId()
         // rather than comparing raisedBy against it directly. booking.getParentId() is already
         // correctly a User id, so that disjunct is left untouched.
-        boolean ownerEligible = raisedBy.equals(booking.getParentId());
-        if (!ownerEligible) {
-            ownerEligible = playerProfileRepository.findById(booking.getPlayerId())
-                .map(PlayerProfile::getUserId)
-                .map(raisedBy::equals)
-                .orElse(false);
-        }
+        // fix/audit3-completion-dispute-integrity: the player's own login is looked up once — it decides both the
+        // ownership and the recorded role (below).
+        Long playerUserId = playerProfileRepository.findById(booking.getPlayerId())
+            .map(PlayerProfile::getUserId).orElse(null);
+        boolean raisedByPlayer = raisedBy.equals(playerUserId);
+        boolean ownerEligible = raisedBy.equals(booking.getParentId()) || raisedByPlayer;
         boolean raisedByPayerSide = ownerEligible;
         // Deferred-63 AC5: a coach may raise their own dispute on a booking (e.g. contesting a
         // NO_SHOW_COACH claim), not only the parent/player. booking.getCoachId() is the coach
@@ -176,6 +175,17 @@ public class DisputeService {
         }
 
         // skillars-deferred-107 AC2: 0/neg → no dispute can ever be filed (failFast). Clamps to 14 + WARN.
+        // fix/audit3-completion-dispute-integrity: the side — and so the role recorded, which the per-side unique
+        // index keys on — comes from the raiser's relationship to THIS booking, never from their ROLE_*
+        // authorities (DisputeResource passes those): a user holding both a coach and a parent authority must not
+        // land on the wrong side. COACH only for the booking's own coach; PLAYER for the player's own login
+        // (incl. an adult who booked for themselves), PARENT otherwise.
+        String sideRole = !raisedByPayerSide ? "COACH" : raisedByPlayer ? "PLAYER" : "PARENT";
+        if (!sideRole.equals(raisedByRole)) {
+            log.info("raiseDispute booking={} raisedBy={}: caller role {} recorded as {} (booking relationship)",
+                bookingId, raisedBy, raisedByRole, sideRole);
+        }
+
         long windowDays = configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS);
         // B2: anchored on when the booking reached its (terminal) status, not updatedAt — any later
         // write (recap edit, reminder stamp, GDPR anonymisation) bumps updatedAt and used to reopen
@@ -184,25 +194,30 @@ public class DisputeService {
             throw new OperationNotAllowedException("Dispute window expired", DisputeError.WINDOW_EXPIRED);
         }
 
+        // fix/audit3-completion-dispute-integrity: serialised per booking with resolve / dismiss (same lock, taken
+        // before the payout row lock freezeForDispute takes below — the same order as theirs). Otherwise a
+        // resolve of the other side's dispute could check "no other dispute open", release the payout and close
+        // the alert while this raise was committing.
+        disputeRepository.acquireBookingDisputeLock(bookingId.toString());
+        List<String> sideRoles = raisedByPayerSide ? FAMILY_SIDE_ROLES : COACH_SIDE_ROLES;
         // fix/audit3-completion-dispute-integrity: one open dispute per booking PER SIDE (coach vs family) — the
-        // unique index idx_disputes_unique_open_per_booking_side (V214) backs this up under a concurrent raise.
-        if (disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(
-                bookingId, raisedByPayerSide ? FAMILY_SIDE_ROLES : COACH_SIDE_ROLES)) {
+        // unique index idx_disputes_unique_open_per_booking_side (V213) backs this up.
+        if (disputeRepository.existsOpenByBookingIdAndRaisedByRoleIn(bookingId, sideRoles)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "disputes.alreadyRaised");
         }
         // fix/audit3-completion-dispute-integrity: every raise re-freezes the coach payout, and only an OPEN
         // dispute used to block another — a dismissed raiser could refile for the whole window and keep the
-        // coach's money frozen. Capped per raiser per booking (open, resolved and dismissed all count); an
-        // appeal is the route past a decision. A concurrent double-raise is stopped by the unique index above.
-        long maxPerRaiser = configService.getBoundedLong(ConfigBounds.DISPUTES_MAX_PER_BOOKING_PER_RAISER);
-        if (disputeRepository.countByBookingIdAndRaisedBy(bookingId, raisedBy) >= maxPerRaiser) {
+        // coach's money frozen. Capped per SIDE per booking (open, resolved and dismissed all count), so a parent
+        // and a child with their own login share one allowance; an appeal is the route past a decision.
+        long maxPerSide = configService.getBoundedLong(ConfigBounds.DISPUTES_MAX_PER_BOOKING_PER_RAISER);
+        if (disputeRepository.countByBookingIdAndRaisedByRoleIn(bookingId, sideRoles) >= maxPerSide) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, LIMIT_REACHED);
         }
 
         Dispute dispute = new Dispute();
         dispute.setBookingId(bookingId);
         dispute.setRaisedBy(raisedBy);
-        dispute.setRaisedByRole(raisedByRole);
+        dispute.setRaisedByRole(sideRole);
         dispute.setReason(reason);
         dispute.setDetails(details);
         disputeRepository.save(dispute);
@@ -517,7 +532,7 @@ public class DisputeService {
 
     /**
      * fix/audit3-completion-dispute-integrity: lifts the payout's dispute freeze unless another dispute on the
-     * booking (the other side's — V214) is still open. {@code row} is locked by the caller, and the check runs
+     * booking (the other side's — V213) is still open. {@code row} is locked by the caller, and the check runs
      * after that lock: a concurrent raise freezes this same row under the same lock, so it has either
      * committed (and is seen here) or freezes the row again after this transaction.
      */
