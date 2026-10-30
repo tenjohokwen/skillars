@@ -28,7 +28,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p><strong>The one intentional exception</strong> is {@code admin.disputes}'
  * {@code idx_disputes_unique_open_per_booking_side … WHERE status NOT IN ('RESOLVED','DISMISSED')}
- * ({@code V74}; one open dispute per booking per side since {@code V214},
+ * ({@code V74}; one open dispute per booking per side since {@code V213},
  * fix/audit3-completion-dispute-integrity, which replaced {@code idx_disputes_unique_open_per_booking}) — there
  * "any non-terminal status = an open dispute" is the correct model, and {@code V74:9-10} explicitly reserves
  * {@code UNDER_REVIEW} as a future non-terminal status that <em>should</em> fall inside it. It is allowlisted by

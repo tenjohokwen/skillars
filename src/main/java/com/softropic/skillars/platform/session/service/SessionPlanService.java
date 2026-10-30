@@ -197,6 +197,9 @@ public class SessionPlanService {
     @Async("taskExecutor")
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void handleBookingCompleted(BookingCompletedEvent event) {
+        if (!event.isSettlement()) {
+            return; // fix/audit3-completion-dispute-integrity: locked at the family's confirm already
+        }
         int updated = sessionRepository.markCompletedByBookingId(event.getBookingId(), Instant.now());
         if (updated == 0) {
             log.debug("No open session plan for completed booking {} — nothing to transition", event.getBookingId());

@@ -1247,8 +1247,87 @@ class BookingCompletionServiceTest {
         assertThat(scd.getValue().getCompletionMode()).isEqualTo("QUICK");
         verify(bookingService).transition(eq(BOOKING_ID), eq(BookingEvent.COMPLETE),
             eq(new TransitionContext(com.softropic.skillars.platform.booking.contract.ActorRole.PARENT, PARENT_ID)));
+        assertThat(scd.getValue().isAwaitingWrapUp()).as("flagged for the coach's later wrap-up").isTrue();
         ArgumentCaptor<BookingCompletedEvent> event = ArgumentCaptor.forClass(BookingCompletedEvent.class);
         verify(eventPublisher).publishEvent(event.capture());
         assertThat(event.getValue().getHomeworkDrillIds()).isEmpty();
+        assertThat(event.getValue().getScope()).isEqualTo(BookingCompletedEvent.Scope.SETTLEMENT_ONLY);
+    }
+
+    /** Review MAJOR 1: the wrap-up after the family's confirm fills the row in and records development once. */
+    @Test
+    void submitWrapUp_afterTheFamilyConfirmed_fillsThePlaceholder_andPublishesOnlyTheDevelopmentSide() {
+        booking.setStatus(BookingStatus.COMPLETED.name());
+        booking.setLiveStartedAt(null);
+        booking.setRequestedEndTime(Instant.now().minusSeconds(60));
+        SessionCompletionData placeholder = new SessionCompletionData();
+        placeholder.setBookingId(BOOKING_ID);
+        placeholder.setPlayerAttended(false);
+        placeholder.setCompletionMode("QUICK");
+        placeholder.setAwaitingWrapUp(true);
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
+        stubEditable();
+        WrapUpRequest req = new WrapUpRequest(true, 4, 3, 5, List.of(), "QUICK",
+            "Worked on first touch", "Weak foot next", null);
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, req);
+
+        assertThat(placeholder.isAwaitingWrapUp()).isFalse();
+        assertThat(placeholder.isPlayerAttended()).isTrue();
+        assertThat(placeholder.getEffortRating()).isEqualTo(4);
+        assertThat(placeholder.getWhatWeDid()).isEqualTo("Worked on first touch");
+        verify(completionDataRepository).save(placeholder);
+        verify(bookingService, never()).transition(any(), any(), any());
+        ArgumentCaptor<BookingCompletedEvent> event = ArgumentCaptor.forClass(BookingCompletedEvent.class);
+        verify(eventPublisher).publishEvent(event.capture());
+        assertThat(event.getValue().getScope()).isEqualTo(BookingCompletedEvent.Scope.DEVELOPMENT_ONLY);
+        assertThat(event.getValue().isSettlement()).isFalse();
+        assertThat(event.getValue().isPlayerAttended()).isTrue();
+    }
+
+    /** "Did not attend" after the family confirmed is recorded as such — never turned into a no-show. */
+    @Test
+    void submitWrapUp_afterTheFamilyConfirmed_notAttended_recordsAttendanceOnly() {
+        booking.setStatus(BookingStatus.COMPLETED.name());
+        booking.setRequestedEndTime(Instant.now().minusSeconds(60));
+        SessionCompletionData placeholder = new SessionCompletionData();
+        placeholder.setPlayerAttended(false);
+        placeholder.setAwaitingWrapUp(true);
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(placeholder));
+        stubEditable();
+
+        service.submitWrapUp(BOOKING_ID, COACH_USER_ID, new WrapUpRequest(false, null, null, null, List.of(),
+            "QUICK", "Player absent", "Rebook", null));
+
+        assertThat(placeholder.isPlayerAttended()).isFalse();
+        assertThat(booking.getStatus()).isEqualTo(BookingStatus.COMPLETED.name());
+        verify(bookingService, never()).transition(any(), any(), any());
+    }
+
+    /** A second submit finds an ordinary completed row: refused, nothing published twice. */
+    @Test
+    void submitWrapUp_twiceAfterTheFamilyConfirmed_secondIsRefused() {
+        booking.setStatus(BookingStatus.COMPLETED.name());
+        SessionCompletionData filled = new SessionCompletionData();
+        filled.setPlayerAttended(true);
+        filled.setWhatWeDid("done");
+        filled.setAwaitingWrapUp(false);
+        when(completionDataRepository.findByBookingId(BOOKING_ID)).thenReturn(Optional.of(filled));
+
+        assertThatThrownBy(() -> service.submitWrapUp(BOOKING_ID, COACH_USER_ID, new WrapUpRequest(true, 4, 4, 4,
+            List.of(), "QUICK", "again", "again", null)))
+            .isInstanceOf(OperationNotAllowedException.class);
+        verify(eventPublisher, never()).publishEvent(any());
+    }
+
+    private void stubEditable() {
+        lenient().when(coachProfileRepository.isRecapDataErased(COACH_ID)).thenReturn(false);
+        User coachUser = new User();
+        lenient().when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(coachUser));
+        PlayerProfile player = new PlayerProfile();
+        lenient().when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        lenient().when(bookingDisputeLookup.isRecapLockedByDispute(BOOKING_ID)).thenReturn(false);
+        lenient().when(configService.getBoundedLong(ConfigBounds.BOOKING_RECAP_EDIT_WINDOW_DAYS)).thenReturn(30L);
+        lenient().when(completionDataRepository.save(any())).thenAnswer(i -> i.getArgument(0));
     }
 }

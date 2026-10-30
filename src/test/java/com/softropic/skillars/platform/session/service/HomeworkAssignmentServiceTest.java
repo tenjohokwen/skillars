@@ -424,4 +424,13 @@ class HomeworkAssignmentServiceTest {
             .set(field(Drill::getId), id)
             .create();
     }
+
+    /** fix/audit3-completion-dispute-integrity: homework is assigned by the coach's later wrap-up, not the confirm. */
+    @Test
+    void settlementOnlyCompletion_assignsNothing() {
+        service.handleBookingCompleted(new com.softropic.skillars.platform.booking.contract.BookingCompletedEvent(
+            this, UUID.randomUUID(), UUID.randomUUID(), 2L, 1L, true, null, null, null, List.of(UUID.randomUUID()),
+            null, null, null, com.softropic.skillars.platform.booking.contract.BookingCompletedEvent.Scope.SETTLEMENT_ONLY));
+        org.mockito.Mockito.verifyNoInteractions(homeworkAssignmentRepository, sessionRepository);
+    }
 }

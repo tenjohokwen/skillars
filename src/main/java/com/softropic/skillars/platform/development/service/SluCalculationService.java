@@ -52,6 +52,11 @@ public class SluCalculationService {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Async("taskExecutor")
     public void onBookingCompleted(BookingCompletedEvent event) {
+        // fix/audit3-completion-dispute-integrity: a family confirm before the wrap-up has no attendance or plan
+        // data yet — the coach's later wrap-up publishes the development side (DEVELOPMENT_ONLY).
+        if (!event.isDevelopment()) {
+            return;
+        }
         // No-show: player did not attend — SLU is only earned for attended sessions (AC 8)
         if (!event.isPlayerAttended()) {
             log.debug("Player did not attend booking {} — SLU skipped", event.getBookingId());

@@ -243,6 +243,13 @@ public class BookingCompletionService {
         // verdict's own reason instead, never a "you can still save it" redirect into a read-only dialog.
         // The message names no cause: "automatically" would be false for an admin force-complete.
         Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
+        if (BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED
+                && existing.isPresent() && existing.get().isAwaitingWrapUp()) {
+            // fix/audit3-completion-dispute-integrity: the family confirmed before this wrap-up. Fill the
+            // placeholder in and record the development side once; payout and completion already happened.
+            completeAwaitedWrapUp(booking, coach, existing.get(), req);
+            return;
+        }
         if (BookingStatus.valueOf(booking.getStatus()) == BookingStatus.COMPLETED) {
             if (existing.isPresent() && isSweeperPlaceholder(existing.get())) {
                 Editability verdict = recapEditability(booking, coach, Instant.now(ClockProvider.getClock()));
@@ -328,9 +335,52 @@ public class BookingCompletionService {
         } else {
             // fix/audit3-completion-dispute-integrity: normally already sent when the booking entered
             // COMPLETED_PENDING_CONFIRMATION (a no-op then); still sent here for a booking that entered it
-            // before V214 stamped confirmation_requested_at.
+            // before V213 stamped confirmation_requested_at.
             requestFamilyConfirmation(booking);
         }
+    }
+
+    /**
+     * fix/audit3-completion-dispute-integrity: the coach's wrap-up of a session the family already confirmed
+     * ({@link #confirmCompletion} with no wrap-up wrote an {@code awaitingWrapUp} placeholder and published only
+     * the settlement side). Fills that row in with the real attendance, ratings, homework and recap, clears the
+     * flag — under the booking row lock the caller holds, so a duplicate submit then finds an ordinary completed
+     * row and is refused — and publishes the development side (SLU, timeline, homework) exactly once. No status
+     * change and no payout: the booking is already COMPLETED and paid. A wrap-up saying the player did not attend
+     * is recorded as such (no SLU, no coach timeline access), but the booking is NOT turned into a no-show after
+     * the family confirmed it — that would be a forfeit decided after the fact; a dispute is the route for it.
+     */
+    private void completeAwaitedWrapUp(Booking booking, CoachProfile coach, SessionCompletionData scd,
+                                       WrapUpRequest req) {
+        UUID bookingId = booking.getId();
+        Editability verdict = recapEditability(booking, coach, Instant.now(ClockProvider.getClock()));
+        if (!verdict.editable()) {
+            throw new OperationNotAllowedException("Recap cannot be edited", verdict.reason());
+        }
+        List<UUID> homeworkDrillIds = validateHomeworkDrills(req.homeworkDrillIds(), coach);
+        scd.setPlayerAttended(Boolean.TRUE.equals(req.playerAttended()));
+        scd.setEffortRating(req.effortRating());
+        scd.setFocusRating(req.focusRating());
+        scd.setTechniqueRating(req.techniqueRating());
+        scd.setWhatWeDid(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.recapWhatWeDid(), 500));
+        scd.setWhatsNext(BookingService.sanitizeAndTruncate(contactDetailSanitizer, req.recapWhatsNext(), 500));
+        scd.setWhatWentWell(BookingService.sanitizeAndTruncate(contactDetailSanitizer, blankToNull(req.recapWhatWentWell()), 500));
+        if (!homeworkDrillIds.isEmpty()) {
+            try {
+                scd.setHomeworkDrillIds(objectMapper.writeValueAsString(homeworkDrillIds));
+            } catch (JsonProcessingException e) {
+                log.warn("Failed to serialize homeworkDrillIds for booking {}", bookingId, e);
+            }
+        }
+        // The plan was locked at the family's confirm (SessionPlanService), so this snapshot is what was planned.
+        scd.setPlanBlocksSnapshot(capturePlanBlocksSnapshot(bookingId));
+        scd.setAwaitingWrapUp(false);
+        completionDataRepository.save(scd);
+        eventPublisher.publishEvent(new BookingCompletedEvent(
+            this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
+            scd.isPlayerAttended(), scd.getEffortRating(), scd.getFocusRating(), scd.getTechniqueRating(),
+            homeworkDrillIds, scd.getWhatWeDid(), scd.getWhatsNext(), scd.getWhatWentWell(),
+            BookingCompletedEvent.Scope.DEVELOPMENT_ONLY));
     }
 
     /**
@@ -434,17 +484,20 @@ public class BookingCompletionService {
             return ForceCompleteOutcome.ALREADY_RESOLVED;
         }
 
-        completeWithPlaceholderData(booking, actorRole, actorUserId);
+        completeWithPlaceholderData(booking, actorRole, actorUserId, false);
         return ForceCompleteOutcome.FORCE_COMPLETED;
     }
 
     /**
      * Writes the placeholder completion row (see {@link #forceCompleteWithPlaceholderData}), completes the
      * booking and publishes {@link BookingCompletedEvent}. Shared with {@link #confirmCompletion}'s
-     * no-wrap-up path (fix/audit3-completion-dispute-integrity). The caller has checked the status and that no
-     * completion row exists.
+     * no-wrap-up path (fix/audit3-completion-dispute-integrity), which passes {@code awaitingWrapUp}: the row is
+     * flagged for the coach's later wrap-up to fill in, and only the settlement side is published (payout, plan
+     * lock) — SLU, timeline and homework wait for that wrap-up ({@link #completeAwaitedWrapUp}). The caller has
+     * checked the status and that no completion row exists.
      */
-    private void completeWithPlaceholderData(Booking booking, ActorRole actorRole, Long actorUserId) {
+    private void completeWithPlaceholderData(Booking booking, ActorRole actorRole, Long actorUserId,
+                                             boolean awaitingWrapUp) {
         UUID bookingId = booking.getId();
         SessionCompletionData scd = new SessionCompletionData();
         scd.setBookingId(bookingId);
@@ -452,13 +505,15 @@ public class BookingCompletionService {
         scd.setPlayerId(booking.getPlayerId());
         scd.setPlayerAttended(false);
         scd.setCompletionMode("QUICK");
+        scd.setAwaitingWrapUp(awaitingWrapUp);
         completionDataRepository.save(scd);
 
         bookingService.transition(bookingId, BookingEvent.COMPLETE, new TransitionContext(actorRole, actorUserId));
 
         eventPublisher.publishEvent(new BookingCompletedEvent(
             this, bookingId, booking.getCoachId(), booking.getPlayerId(), booking.getParentId(),
-            scd.isPlayerAttended(), null, null, null, List.of(), null, null
+            scd.isPlayerAttended(), null, null, null, List.of(), null, null, null,
+            awaitingWrapUp ? BookingCompletedEvent.Scope.SETTLEMENT_ONLY : BookingCompletedEvent.Scope.FULL
         ));
     }
 
@@ -588,10 +643,10 @@ public class BookingCompletionService {
         Optional<SessionCompletionData> existing = completionDataRepository.findByBookingId(bookingId);
         if (existing.isEmpty()) {
             // fix/audit3-completion-dispute-integrity: confirmed before the coach submitted a wrap-up. This used
-            // to 404 after the transition. Complete with the same placeholder row the stuck-completion sweeper
-            // writes (no recap, no homework) — the coach can still add the recap afterwards (submitWrapUp
-            // recognises the placeholder and points them at the recap dialog).
-            completeWithPlaceholderData(booking, ActorRole.PARENT, parentUserId);
+            // to 404 after the transition. Complete (and pay) now with a placeholder row flagged awaitingWrapUp:
+            // the coach's later wrap-up fills in attendance, ratings, homework and recap and records SLU /
+            // timeline / homework then (submitWrapUp → completeAwaitedWrapUp).
+            completeWithPlaceholderData(booking, ActorRole.PARENT, parentUserId, true);
             return;
         }
         try {
@@ -634,7 +689,8 @@ public class BookingCompletionService {
      * detect the placeholder signature.
      */
     private boolean isSweeperPlaceholder(SessionCompletionData existing) {
-        return !existing.isPlayerAttended()
+        return !existing.isAwaitingWrapUp()
+            && !existing.isPlayerAttended()
             && existing.getWhatWeDid() == null
             && existing.getWhatsNext() == null;
     }

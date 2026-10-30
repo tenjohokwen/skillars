@@ -358,7 +358,7 @@ class DisputeSubmissionIT extends AbstractIntegrationTest {
 
     @Test
     void raiseDispute_coach_bookingAlreadyDisputedByParent_isAccepted_butASecondParentDisputeIs409() {
-        // fix/audit3-completion-dispute-integrity (V214): one open dispute per booking PER SIDE. The coach's own
+        // fix/audit3-completion-dispute-integrity (V213): one open dispute per booking PER SIDE. The coach's own
         // dispute no longer collides with the parent's open one (it used to be 409); a second open dispute on
         // the SAME side still is.
         String parentCookies = loginAndGetCookies(PARENT_EMAIL);

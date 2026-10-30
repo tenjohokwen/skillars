@@ -28,14 +28,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * fix/audit3-completion-dispute-integrity, against a real database (V214):
+ * fix/audit3-completion-dispute-integrity, against a real database (V213):
  * <ul>
  *   <li>a Quick Complete asks the family at once (one email), they can dispute it, and a session completed while
  *       that dispute is open gets a frozen payout;</li>
  *   <li>a never-started Quick Complete can be reported as a coach no-show (refund path + strike), a started one
  *       cannot; a one-minute live session is not a LIVE completion;</li>
  *   <li>a confirm before any wrap-up completes instead of 404ing;</li>
- *   <li>coach and family can each hold an open dispute on one booking (V214 index), the payout stays frozen and
+ *   <li>coach and family can each hold an open dispute on one booking (V213 index), the payout stays frozen and
  *       the alert open until the last one is settled, and a raiser's refiling is capped;</li>
  *   <li>a coach cancel after the start, and a parent's refund-eligible late cancel, strike the coach.</li>
  * </ul>
@@ -150,9 +150,12 @@ class CompletionDisputeIntegrityIT extends BasePaymentIT {
         assertThat(coachPayoutRepository.findById(bookingId)).isEmpty();
     }
 
-    /** Exploit 7: confirming before any wrap-up used to 404 after the transition. */
+    /**
+     * Exploit 7: confirming before any wrap-up used to 404 after the transition. It now completes and pays, with a
+     * placeholder flagged awaiting_wrap_up and no timeline row yet (the development side waits for the wrap-up).
+     */
     @Test
-    void confirmBeforeAnyWrapUp_completesWithAPlaceholderRow() {
+    void confirmBeforeAnyWrapUp_completesWithAnAwaitingPlaceholderRow() {
         UUID bookingId = seedBooking("UPCOMING", Instant.now().minus(40, ChronoUnit.MINUTES));
         bookingCompletionService.initiateQuickComplete(bookingId, COACH_USER_ID);
 
@@ -160,8 +163,51 @@ class CompletionDisputeIntegrityIT extends BasePaymentIT {
 
         assertThat(statusOf(bookingId)).isEqualTo("COMPLETED");
         assertThat(jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM booking.session_completion_data WHERE booking_id = ?", Integer.class, bookingId))
-            .isEqualTo(1);
+            "SELECT awaiting_wrap_up FROM booking.session_completion_data WHERE booking_id = ?", Boolean.class,
+            bookingId)).isTrue();
+        assertThat(coachPayoutRepository.findById(bookingId)).as("settled at the confirm").isPresent();
+        assertThat(timelineRows(bookingId)).as("development side waits for the wrap-up").isZero();
+    }
+
+    /** Review MAJOR 1: the coach's wrap-up after the family's confirm fills the row in and credits development. */
+    @Test
+    void confirmThenWrapUp_recordsAttendanceAndTheTimelineOnce_withoutPayingAgain() {
+        UUID bookingId = seedBooking("UPCOMING", Instant.now().minus(40, ChronoUnit.MINUTES));
+        bookingCompletionService.initiateQuickComplete(bookingId, COACH_USER_ID);
+        bookingCompletionService.confirmCompletion(bookingId, PARENT_ID);
+        int payoutOutbox = payoutOutboxRows(bookingId);
+
+        bookingCompletionService.submitWrapUp(bookingId, COACH_USER_ID, new WrapUpRequest(
+            true, 4, 3, 5, List.of(), "QUICK", "Passing drills", "Finishing", null));
+
+        assertThat(statusOf(bookingId)).isEqualTo("COMPLETED");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT player_attended AND NOT awaiting_wrap_up AND effort_rating = 4 AND what_we_did = 'Passing drills' "
+                + "FROM booking.session_completion_data WHERE booking_id = ?", Boolean.class, bookingId)).isTrue();
+        assertThat(payoutOutboxRows(bookingId)).as("no second payout").isEqualTo(payoutOutbox);
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(20)).untilAsserted(() ->
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM development.player_timeline_events WHERE reference_id = ? "
+                    + "AND event_type = 'SESSION_COMPLETED' AND coach_id = ?", Integer.class, bookingId, coachId))
+                .as("credited to the coach, attended").isEqualTo(1));
+
+        // A second submit is refused and changes nothing.
+        assertThatThrownBy(() -> bookingCompletionService.submitWrapUp(bookingId, COACH_USER_ID, new WrapUpRequest(
+            false, null, null, null, List.of(), "QUICK", "again", "again", null)))
+            .isInstanceOf(OperationNotAllowedException.class);
+        assertThat(timelineRows(bookingId)).isEqualTo(1);
+    }
+
+    private int timelineRows(UUID bookingId) {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE reference_id = ? "
+                + "AND event_type = 'SESSION_COMPLETED'", Integer.class, bookingId);
+    }
+
+    private int payoutOutboxRows(UUID bookingId) {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.outbox_messages WHERE payload->>'bookingId' = ?", Integer.class,
+            bookingId.toString());
     }
 
     // ── exploit 2: Start then End in a minute ──
@@ -253,6 +299,24 @@ class CompletionDisputeIntegrityIT extends BasePaymentIT {
         assertThat(jdbcTemplate.queryForObject(
             "SELECT after_start FROM payment.coach_cancellation_history WHERE booking_id = ?", Boolean.class, bookingId))
             .isTrue();
+    }
+
+    /** Owner decision (review MINOR 5): calling off a PAUSED (actually run) session keeps the excused rules. */
+    @Test
+    void coachCancelOfAPausedSession_withAnExcusedReason_doesNotStrike() {
+        UUID bookingId = seedBooking("PAUSED", Instant.now().minus(20, ChronoUnit.MINUTES));
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE booking.bookings SET live_started_at = now() - interval '19 minutes' WHERE id = ?", bookingId));
+
+        bookingService.cancelBookingAsCoach(bookingId, COACH_USER_ID, "WEATHER");
+
+        assertThat(statusOf(bookingId)).isEqualTo("CANCELLED_COACH");
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_reliability_strikes WHERE booking_id = ?", Integer.class, bookingId))
+            .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT after_start FROM payment.coach_cancellation_history WHERE booking_id = ?", Boolean.class, bookingId))
+            .isFalse();
     }
 
     @Test
