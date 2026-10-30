@@ -79,7 +79,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
   (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
   `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212 and V213 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213 and V214 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -538,6 +538,14 @@ blocked from the moment it was scheduled; from V210 on, a new pause is only in f
 SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
+
+**V214: open pack-reservation index** (`V214__bookings_open_pack_reservation_index.sql`).
+One partial btree index, `idx_bkg_open_pack_reservation` on `booking.bookings (session_pack_purchase_id)`
+`WHERE session_pack_purchase_id IS NOT NULL AND status IN ('REQUESTED','ACCEPTED','PAYMENT_PENDING')`, for
+the request-time pack reservation count. Built non-concurrently (marker `allow-blocking-index`) with
+`lock_timeout = 5s`: it blocks writes to `booking.bookings` while it builds, so on a database with real
+traffic run the deploy in a quiet window; if the migration times out on the lock, re-run the deploy. No
+data check needed.
 
 V187, V188, V191 and V193's new columns and tables are additive (new tables, `NOT NULL DEFAULT`
 constants, nullable columns) and need no data check. V186's backfill `UPDATE` of
@@ -1095,3 +1103,6 @@ an operator must now do.
     `COACH_NO_SHOW` reliability strike.
 
   No new env vars, jobs, email templates or Stripe webhook events.
+- 2026-10-30: fix/audit3-booking-scheduling-integrity (V214). New partial index
+  `idx_bkg_open_pack_reservation` on `booking.bookings`, built non-concurrently: deploy in a quiet window
+  once PROD has traffic (section 3.2). No new config keys, jobs or webhooks.

@@ -124,7 +124,7 @@
       into two generated files: <code>V138__baseline_schema.sql</code> (pure DDL from
       <code>pg_dump --schema-only</code>) and <code>V139__baseline_seed_data.sql</code> (160 seed rows:
       <code>platform_config</code>, authorities, <code>skill_definitions</code>, platform drills). There are
-      currently <strong>64 files, <code>V138</code>–<code>V213</code></strong>, with gaps — <code>V174</code>,
+      currently <strong>65 files, <code>V138</code>–<code>V214</code></strong>, with gaps — <code>V174</code>,
       <code>V176</code>–<code>V177</code>, <code>V179</code>–<code>V180</code>, <code>V190</code>, <code>V194</code>,
       <code>V196</code> and <code>V201</code>–<code>V204</code> were never used, which Flyway does not mind —
       but never back-fill a gap: always take a number above the current latest. Older migration numbers you'll see quoted in code comments
@@ -174,7 +174,7 @@
     <p>
       Many recent migrations take a documented "same-release exception" justified by "no production
       deployment yet / prod is not live": <code>V169</code> and <code>V173</code> ship an index with the code
-      that needs it, and almost every migration from <code>V182</code> to <code>V212</code> skips
+      that needs it, and almost every migration from <code>V182</code> to <code>V214</code> skips
       <code>NOT VALID</code>/<code>VALIDATE</code> (marker <code>allow-validating-constraint</code>), builds a
       plain index (<code>allow-blocking-index</code>), runs a single-transaction backfill
       (<code>allow-full-table-dml</code>, <code>V178</code>) or ships a CHECK widening together with its first write
@@ -183,7 +183,7 @@
       its status CHECKs are re-added <code>NOT VALID</code>.)
     </p>
 
-    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V213)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V214)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -213,6 +213,7 @@
         <tr><td><code>V191</code>, <code>V192</code>, <code>V206</code></td><td>Booking request integrity: <code>bookings.original_start_time</code> (the 24h refund window is measured from the earlier of it and the current start), <code>bookings.agreed_price</code> (non-pack price locked at request time; <code>chk_bp_status</code> gains <code>REFUNDED_TO_CREDIT</code>), <code>bookings.proposed_by_coach</code> (a coach-created booking needs the parent's confirmation) and batch status <code>ACCEPTING</code> (serialises concurrent accept-all).</td></tr>
         <tr><td><code>V193</code></td><td>Payout/dispute/webhook integrity: <code>coach_payouts.reversed_amount</code>, <code>dispute_frozen</code>, <code>chargeback_frozen</code> (a <code>FROZEN</code> payout is released only when no freeze reason stands); <code>coach_stripe_accounts.transfers_capability</code>, <code>last_event_created_at</code>; new <code>payment.charge_disputes</code> (PK = Stripe dispute id, status <code>OPEN</code>/<code>WON</code>/<code>LOST</code>).</td></tr>
         <tr><td><code>V195</code>, <code>V200</code>, <code>V210</code></td><td>Session-pack integrity: partial unique <code>uq_spp_stripe_payment_intent_id</code> (one charge funds at most one pack); <code>payment.pack_session_restores</code> and <code>payment.pack_session_refunds</code> (per-booking idempotency markers, PK <code>booking_id</code>, FK to the purchase); <code>refund_sessions_issued</code>/<code>refund_gross_issued</code>; then <code>paused_from</code>, <code>dispute_frozen_at</code>, <code>revoked_at</code>, <code>revoked_reason</code> with <code>chk_spp_pause_window</code> and <code>chk_spp_revoked_reason</code> (<code>CHARGEBACK_LOST</code>, <code>EXTERNAL_REFUND</code>, <code>COACH_SUSPENDED</code>).</td></tr>
+        <tr><td><code>V214</code></td><td>Partial index <code>idx_bkg_open_pack_reservation</code> on <code>booking.bookings (session_pack_purchase_id)</code> for open, unsettled bookings (<code>REQUESTED</code>/<code>ACCEPTED</code>/<code>PAYMENT_PENDING</code>) — the request-time pack-session reservation count (<code>BookingRepository.countOpenPackReservations</code>, whose literal status list must match). Plain (blocking) build, <code>allow-blocking-index</code>.</td></tr>
         <tr><td><code>V198</code>, <code>V199</code>, <code>V208</code></td><td>Parent credit ledger: new types <code>BOOKING_REFUND_REVERSAL</code>, <code>CHARGEBACK_CREDIT_REVERSAL</code>, <code>CHARGEBACK_CREDIT_RESTORE</code>, <code>DISPUTE_CREDIT</code>, <code>BATCH_SHARE_REFUND</code> (11 in all) — all but <code>DISPUTE_CREDIT</code> get a partial unique index (<code>uq_pcl_*</code>) so a replayed webhook or retried write cannot double-post; <code>source_payment_intent_id</code>/<code>source_card_amount</code>; <code>spend_only_amount</code> with <code>chk_ledger_spend_only</code> (credit usable for bookings but never cashed out). <code>V198</code> also adds <code>disputes.recovered_amount</code>/<code>absorbed_amount</code> and resolution <code>UPHOLD_COACH</code>; <code>V199</code> adds <code>charge_disputes.credit_reversal_target</code>/<code>payout_loss_fraction</code> and seeds <code>payment.payout.stale_alert_days</code> (14).</td></tr>
         <tr><td><code>V205</code></td><td><code>coach_payouts.original_*_amount</code>, <code>topup_amount</code>/<code>topup_transfer_id</code>, <code>debt_offset_amount</code>; new <code>payment.coach_payout_debts</code> (money a failed transfer reversal could not recover, <code>OPEN</code>/<code>RECOVERED</code>/<code>WAIVED</code>, deducted from the coach's next transfers oldest first).</td></tr>
         <tr><td><code>V207</code>, <code>V208</code></td><td><code>booking_payments.charge_idempotency_key</code> (persisted before the Stripe call, partial index <code>idx_bp_charge_key_pending</code> — read by <code>ChargeOutcomeReconciler</code>); <code>subscribe_attempt_key</code>/<code>_at</code> on both subscription tables; <code>idx_bp_stripe_payment_intent</code>.</td></tr>
