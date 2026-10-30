@@ -71,16 +71,24 @@ public class RefundEnqueueListener {
         // C6: only money actually taken is refunded. isWalletRefund() is false for an ACCEPTED booking
         // (nothing charged yet) and for an unexpired pack booking (its session is restored by
         // CancellationRefundService instead) — the same rule as onBookingCancelledByAdmin.
+        // fix/audit3-wallet-cashout-integrity: a MUTUAL_AGREEMENT cancel is the parent agreeing to drop the session,
+        // so an expired-pack refund is SPEND-ONLY exactly as for the parent's own >24h cancel (otherwise a parent
+        // could turn an expired pack into cash by asking the coach to cancel). Other coach reasons stay cashable.
+        // A card / credit booking's refund is split by CreditWalletRefundOutboxHandler either way.
+        boolean mutual = isMutualAgreement(event.getCancelReason());
         if (event.isWalletRefund()) {
+            boolean expiredPack = event.getSessionPackPurchaseId() != null;
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
                 event.getSessionPrice(),
-                event.getSessionPackPurchaseId() != null
-                    ? "Coach cancellation — expired pack refund"
-                    : "Coach cancellation — full refund", false);
+                expiredPack
+                    ? (mutual ? "Coach cancellation (mutual agreement) — expired pack refund (booking credit only)"
+                              : "Coach cancellation — expired pack refund")
+                    : "Coach cancellation — full refund", expiredPack && mutual);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
-                event.getSessionPackPurchaseId(), event.getBookingId(), "COACH_CANCELLATION");
+                event.getSessionPackPurchaseId(), event.getBookingId(),
+                mutual ? PackSessionService.RESTORE_REASON_COACH_MUTUAL_AGREEMENT : "COACH_CANCELLATION");
         }
     }
 
@@ -127,8 +135,11 @@ public class RefundEnqueueListener {
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
                 event.getRefundAmount(),
                 event.getSessionPackPurchaseId() != null
-                    ? "Pack pause — expired pack refund"
-                    : "Pack pause — full refund", false);
+                    ? "Pack pause — expired pack refund (booking credit only)"
+                    : "Pack pause — full refund",
+                // fix/audit3-wallet-cashout-integrity: the parent paused — an expired-pack refund is spend-only,
+                // as for the parent's own >24h cancel (PackSessionService does the same at restore time).
+                event.getSessionPackPurchaseId() != null);
         }
         if (event.isPackRestore()) {
             packRestoreOutboxSupport.enqueuePackRestore(
@@ -169,6 +180,10 @@ public class RefundEnqueueListener {
         } else {
             refundOutboxSupport.enqueueBookingRefund(parentId, amount, bookingId, description);
         }
+    }
+
+    static boolean isMutualAgreement(String cancelReason) {
+        return BookingCancelledByCoachEvent.REASON_MUTUAL_AGREEMENT.equals(cancelReason);
     }
 
     /**

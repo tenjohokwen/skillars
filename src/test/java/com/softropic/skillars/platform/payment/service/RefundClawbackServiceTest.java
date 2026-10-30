@@ -76,7 +76,7 @@ class RefundClawbackServiceTest {
     void walletRefund_isDebitedUpToTheBalance() {
         when(ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND))
             .thenReturn(Optional.of(refund("40.00")));
-        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("40.00"), false))
+        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("40.00"), BigDecimal.ZERO))
             .thenReturn(new BigDecimal("15.00"));
 
         RefundClawbackService.RefundClawback result = service.clawBack(bookingId, null).orElseThrow();
@@ -98,7 +98,7 @@ class RefundClawbackServiceTest {
         credit.setType(CreditLedgerEntryType.DISPUTE_CREDIT);
         when(ledgerRepository.findByReferenceIdAndTypeOrderByParentId(bookingId, CreditLedgerEntryType.DISPUTE_CREDIT))
             .thenReturn(java.util.List.of(credit));
-        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("20.00"), false))
+        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("20.00"), BigDecimal.ZERO))
             .thenReturn(new BigDecimal("20.00"));
 
         RefundClawbackService.RefundClawback result = service.clawBack(bookingId, packId).orElseThrow();
@@ -112,7 +112,7 @@ class RefundClawbackServiceTest {
     void expiredPackWalletRefund_isUnsettledOnThePack_soThePayoutThatFollowsSettlesItInstead() {
         when(ledgerRepository.findFirstByReferenceIdAndType(bookingId, CreditLedgerEntryType.BOOKING_REFUND))
             .thenReturn(Optional.of(refund("33.34")));
-        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("33.34"), false))
+        when(creditWalletService.debitRefundReversal(5L, bookingId, new BigDecimal("33.34"), BigDecimal.ZERO))
             .thenReturn(new BigDecimal("33.34"));
 
         service.clawBack(bookingId, packId).orElseThrow();

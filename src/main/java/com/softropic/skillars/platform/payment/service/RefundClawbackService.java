@@ -93,9 +93,9 @@ public class RefundClawbackService {
                 }
             }
             // A spend-only refund is taken back from the spend-only pool first, a cashable one from the cashable
-            // pool first.
-            BigDecimal recovered = creditWalletService.debitRefundReversal(parentId, bookingId, refunded,
-                spendOnly.signum() > 0);
+            // pool first. fix/audit3-wallet-cashout-integrity: a refund can be part spend-only, part cashable —
+            // each part is taken back from its own pool.
+            BigDecimal recovered = creditWalletService.debitRefundReversal(parentId, bookingId, refunded, spendOnly);
             if (walletRefund.isPresent()) {
                 // fix/payment-pack-refund-rounding: an expired-pack session refunded as money is un-settled on the
                 // pack's ledger — the caller now pays it to the coach, which settles it again through the payout

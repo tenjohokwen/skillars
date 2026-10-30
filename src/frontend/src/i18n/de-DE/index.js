@@ -1524,13 +1524,17 @@ export default {
       cashOutExceedsCashable:
         'Ein Teil Ihres Guthabens kann nur für Buchungen verwendet werden. Sie können höchstens den als auszahlbar angezeigten Betrag auszahlen.',
       cashOutExceedsRefundable:
-        'Auszahlungen werden auf Ihre letzte Kartenzahlung erstattet, die diesen Betrag nicht aufnehmen kann. Bitte wählen Sie einen kleineren Betrag.',
+        'Auszahlungen werden auf die Kartenzahlungen erstattet, aus denen Ihr Guthaben stammt, und diese können diesen Betrag nicht aufnehmen. Bitte wählen Sie einen kleineren Betrag.',
       refundFailed:
         'Die Erstattung auf Ihre Karte ist fehlgeschlagen. Ihr Guthaben wurde wiederhergestellt.',
       cashoutFailed:
         'Die Auszahlung konnte nicht abgeschlossen werden. Bitte versuchen Sie es erneut.',
       refundOutcomeUnknown:
         'Wir konnten die Erstattung beim Zahlungsdienstleister nicht bestätigen. Ihre Auszahlung wird geprüft – bitte reichen Sie sie nicht erneut ein.',
+      cashOutPartiallyRefunded:
+        'Ein Teil Ihrer Auszahlung konnte nicht auf Ihre Karte erstattet werden. Dieser Teil wurde Ihrem Guthaben wieder gutgeschrieben; der Rest ist auf dem Weg zu Ihrer Karte.',
+      cashOutTargetUnavailable:
+        'Die Kartenzahlung, aus der Ihr Guthaben stammt, ist gerade nicht erreichbar. Ihrem Guthaben wurde nichts abgezogen – bitte versuchen Sie es später erneut.',
     },
     sessionPack: {
       title: 'Sitzungspaket',
@@ -2420,6 +2424,14 @@ export default {
     viewReceipt: 'Quittung anzeigen',
     stripeFeeNote:
       'Die Stripe-Bearbeitungsgebühren trägt die Plattform, nicht Sie: Ihre Auszahlung ist der Sitzungsbetrag abzüglich der Plattformprovision.',
+    newCoachHold: {
+      banner:
+        'Solange Ihr Konto neu ist, werden Ihre ersten {count} Auszahlungen nach der Sitzung {hold} statt {normal} zurückgehalten, damit Kartenrückbuchungen geklärt werden können, bevor das Geld die Plattform verlässt.',
+      remaining: 'Noch {remaining}.',
+      days: '{n} Tag | {n} Tage',
+      hours: '{n} Stunde | {n} Stunden',
+    },
+    releasesOn: 'Freigabe am {date}',
     receipt: {
       title: 'Sitzungsquittung',
       print: 'Drucken',

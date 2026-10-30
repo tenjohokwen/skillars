@@ -221,11 +221,34 @@ class PackSessionDeductRestoreTest {
             isNull(), isNull(), eq(BigDecimal.ZERO));
     }
 
-    /** A parent's own cancellation is not turned into (cashable) wallet credit here — restored as before. */
+    /**
+     * fix/audit3-wallet-cashout-integrity: a parent's own cancellation whose pack expired before the restore ran
+     * used to restore the session to the expired pack — worthless. It is refunded as SPEND-ONLY wallet credit.
+     */
     @Test
-    void restoreSessionForBooking_packExpiredSinceTheCancel_parentCancellation_restoresAsBefore() {
+    void restoreSessionForBooking_packExpiredSinceTheCancel_parentSideReasons_refundSpendOnly() {
+        for (String reason : List.of("PARENT_CANCELLATION", "PACK_PAUSE",
+                PackSessionService.RESTORE_REASON_COACH_MUTUAL_AGREEMENT)) {
+            org.mockito.Mockito.clearInvocations(creditWalletService);
+            SessionPackPurchase pack = pack(0);
+            pack.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS));
+            when(sessionPackPurchaseRepository.findByIdForUpdate(PACK_ID)).thenReturn(Optional.of(pack));
+            when(packRefundAllocationService.allocateSessionRefund(eq(PACK_ID), eq(BOOKING_ID), any()))
+                .thenReturn(new BigDecimal("20.00"));
+
+            packSessionService.restoreSessionForBooking(PACK_ID, BOOKING_ID, reason);
+
+            assertThat(pack.getRemainingSessions()).as(reason).isZero();
+            verify(creditWalletService).writeLedgerEntry(eq(1L), eq(new BigDecimal("20.00")), eq("BOOKING_REFUND"),
+                eq(BOOKING_ID), anyString(), isNull(), isNull(), eq(new BigDecimal("20.00")));
+        }
+        verify(sessionPackPurchaseRepository, never()).insertRestoreMarker(any(), any(), any());
+    }
+
+    /** An unexpired pack still gets the session back for a parent cancellation. */
+    @Test
+    void restoreSessionForBooking_parentCancellation_unexpiredPack_restores() {
         SessionPackPurchase pack = pack(0);
-        pack.setExpiresAt(Instant.now().minus(1, ChronoUnit.HOURS));
         when(sessionPackPurchaseRepository.findByIdForUpdate(PACK_ID)).thenReturn(Optional.of(pack));
         when(sessionPackPurchaseRepository.insertRestoreMarker(BOOKING_ID, PACK_ID, "PARENT_CANCELLATION")).thenReturn(1);
 

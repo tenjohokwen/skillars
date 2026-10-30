@@ -60,13 +60,28 @@ public class PackSessionService {
         BookingStatus.CONFIRMED.name(), BookingStatus.UPCOMING.name());
 
     /**
+     * fix/audit3-wallet-cashout-integrity: the restore reason of a coach cancellation the parent agreed to
+     * ({@code MUTUAL_AGREEMENT}) — on an expired pack it is refunded spend-only, like the parent's own cancel.
+     */
+    public static final String RESTORE_REASON_COACH_MUTUAL_AGREEMENT = "COACH_MUTUAL_AGREEMENT";
+
+    /**
      * fix/payment-pack-integrity: restore reasons that, had the pack already expired when the booking was
      * cancelled, would have been refunded to the wallet (the coach / admin cancellation and coach no-show
-     * paths) — a restore that reaches an expired pack is refunded the same way. A parent's own cancellation
-     * is not in the list: its expired-pack outcome is the spend-only credit owned by the wallet chunk.
+     * paths) — a restore that reaches an expired pack is refunded the same way.
+     * fix/audit3-wallet-cashout-integrity: the parent-side reasons too ({@link #SPEND_ONLY_ON_EXPIRY_REASONS}) —
+     * a session restored to a pack that expired between the cancel and the restore used to be lost.
      */
     private static final Set<String> WALLET_ON_EXPIRY_REASONS =
-        Set.of("COACH_CANCELLATION", "COACH_NO_SHOW", "ADMIN_CANCELLATION");
+        Set.of("COACH_CANCELLATION", "COACH_NO_SHOW", "ADMIN_CANCELLATION",
+            "PARENT_CANCELLATION", "PACK_PAUSE", RESTORE_REASON_COACH_MUTUAL_AGREEMENT);
+
+    /**
+     * fix/audit3-wallet-cashout-integrity: the parent-side reasons, whose expired-pack refund is SPEND-ONLY
+     * credit (owner decision 2026-10-29: an expired-pack >24h parent cancel is never cashed out).
+     */
+    private static final Set<String> SPEND_ONLY_ON_EXPIRY_REASONS =
+        Set.of("PARENT_CANCELLATION", "PACK_PAUSE", RESTORE_REASON_COACH_MUTUAL_AGREEMENT);
 
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -195,7 +210,7 @@ public class PackSessionService {
         // the pack may have been revoked or may have expired, and a session given back to it would be worthless.
         if (purchase.isRevoked()) {
             if (SessionPackPurchase.REVOKED_COACH_SUSPENDED.equals(purchase.getRevokedReason())) {
-                refundSessionToWallet(purchase, bookingId, "Coach unavailable — pack session refunded");
+                refundSessionToWallet(purchase, bookingId, "Coach unavailable — pack session refunded", false);
             } else {
                 // CHARGEBACK_LOST / EXTERNAL_REFUND: the payer already has the pack's money back.
                 log.warn("[PACK_SESSION_RESTORE] pack {} was revoked ({}) — session for booking {} NOT restored",
@@ -205,8 +220,12 @@ public class PackSessionService {
         }
         if (purchase.getExpiresAt().isBefore(Instant.now(ClockProvider.getClock())) && WALLET_ON_EXPIRY_REASONS.contains(reason)) {
             // The same outcome as the cancellation would have had, had the pack already expired at the time:
-            // a coach / admin cancellation or a coach no-show on an expired pack is refunded to the wallet.
-            refundSessionToWallet(purchase, bookingId, "Pack expired — session refunded (" + reason + ")");
+            // a coach / admin cancellation or a coach no-show on an expired pack is refunded to the wallet
+            // (cashable); a parent-side one as spend-only credit.
+            boolean spendOnly = SPEND_ONLY_ON_EXPIRY_REASONS.contains(reason);
+            refundSessionToWallet(purchase, bookingId, spendOnly
+                ? "Pack expired — session refunded as booking credit (" + reason + ")"
+                : "Pack expired — session refunded (" + reason + ")", spendOnly);
             return;
         }
         if (sessionPackPurchaseRepository.insertRestoreMarker(bookingId, purchaseId, reason) == 0) {
@@ -226,7 +245,8 @@ public class PackSessionService {
      * outbox would write, with its existence check). No restore marker is written, so an {@code UPHOLD_COACH}
      * clawback finds the wallet refund.
      */
-    private void refundSessionToWallet(SessionPackPurchase purchase, UUID bookingId, String description) {
+    private void refundSessionToWallet(SessionPackPurchase purchase, UUID bookingId, String description,
+                                       boolean spendOnly) {
         if (sessionPackPurchaseRepository.existsRestoreMarker(bookingId)) {
             log.info("[PACK_SESSION_RESTORE] session for booking {} was already restored to pack {} — no refund",
                 bookingId, purchase.getPurchaseId());
@@ -243,10 +263,11 @@ public class PackSessionService {
             log.info("[PACK_SESSION_RESTORE] booking {} already has a BOOKING_REFUND — no second credit", bookingId);
             return;
         }
-        // CASHABLE (spend-only part 0): only coach-side / suspension reasons reach here — paid money the payer is
-        // owed back. A parent's own expired-pack cancellation is C6's spend-only path, never routed here.
+        // CASHABLE (spend-only part 0) for coach-side / suspension reasons — paid money the payer is owed back.
+        // fix/audit3-wallet-cashout-integrity: SPEND-ONLY for a parent-side reason (a parent cancel / pack pause /
+        // mutual-agreement cancel whose pack expired before the restore ran) — the same as C6's expired-pack path.
         creditWalletService.writeLedgerEntry(purchase.getParentId(), amount, CreditLedgerEntryType.BOOKING_REFUND,
-            bookingId, description, null, null, BigDecimal.ZERO);
+            bookingId, description, null, null, spendOnly ? amount : BigDecimal.ZERO);
         log.info("[PACK_SESSION_RESTORE] booking={} pack={} — session refunded to the wallet ({}) instead of restored",
             bookingId, purchase.getPurchaseId(), amount);
     }

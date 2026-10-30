@@ -54,13 +54,19 @@ public class DisputeCreditService {
 
     /**
      * Credits {@code amount} to the payer as a {@code DISPUTE_CREDIT} for {@code bookingId}, then runs it
-     * through the chargeback credit trace. Cashable credit. The caller has checked it against
+     * through the chargeback credit trace. The caller has checked it against
      * {@link #remainingRefundable} in the same transaction, under the dispute row's optimistic lock.
+     *
+     * <p>fix/audit3-wallet-cashout-integrity: cashable only for what the booking was paid from cashable funds —
+     * the spend-only share its deduction took (and no refund has yet given back) goes back to the spend-only
+     * pool first ({@link CreditWalletService#bookingSpendOnlyOutstanding}); it used to be all cashable, a way to
+     * turn spend-only credit into cash.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void credit(Long parentId, UUID bookingId, UUID disputeId, BigDecimal amount, String description) {
+        BigDecimal spendOnly = creditWalletService.bookingSpendOnlyOutstanding(parentId, bookingId).min(amount);
         creditWalletService.writeLedgerEntry(parentId, amount, CreditLedgerEntryType.DISPUTE_CREDIT, bookingId,
-            description);
+            description, null, null, spendOnly);
         chargebackCreditReversalService.onCreditWritten(disputeId, bookingId, null);
         log.info("[DISPUTE_CREDIT] dispute={} booking={} payer={} amount={}", disputeId, bookingId, parentId, amount);
     }

@@ -69,6 +69,9 @@ describe('ParentCreditWalletPage.vue — cash-out error messages', () => {
     ['payment.cashOutExceedsCashable', 'payment.credits.cashOutExceedsCashable'],
     ['payment.refundFailed', 'payment.credits.refundFailed'],
     ['payment.refundOutcomeUnknown', 'payment.credits.refundOutcomeUnknown'],
+    // fix/audit3-wallet-cashout-integrity: a cash-out split across several card charges
+    ['payment.cashOutPartiallyRefunded', 'payment.credits.cashOutPartiallyRefunded'],
+    ['payment.cashOutTargetUnavailable', 'payment.credits.cashOutTargetUnavailable'],
   ])('maps backend helpCode %s to %s', async (helpCode, i18nKey) => {
     const wrapper = await mountPage()
     wrapper.vm.cashoutAmount = 50

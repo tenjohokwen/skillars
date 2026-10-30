@@ -123,6 +123,8 @@ const CASHOUT_ERROR_MESSAGES = {
   'payment.cashOutExceedsCashable': () => t('payment.credits.cashOutExceedsCashable'),
   'payment.refundFailed': () => t('payment.credits.refundFailed'),
   'payment.refundOutcomeUnknown': () => t('payment.credits.refundOutcomeUnknown'),
+  'payment.cashOutPartiallyRefunded': () => t('payment.credits.cashOutPartiallyRefunded'),
+  'payment.cashOutTargetUnavailable': () => t('payment.credits.cashOutTargetUnavailable'),
 }
 
 function cashoutErrorMessage(err) {

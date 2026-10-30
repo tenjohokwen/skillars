@@ -1952,11 +1952,15 @@ export default {
       cashOutExceedsCashable:
         'Une partie de votre crédit ne peut servir que pour des réservations. Vous pouvez retirer au plus le montant indiqué comme retirable.',
       cashOutExceedsRefundable:
-        'Les retraits sont remboursés sur votre dernier paiement par carte, qui ne peut pas recevoir ce montant. Essayez un montant plus petit.',
+        "Les retraits sont remboursés sur les paiements par carte d'où provient votre crédit, qui ne peuvent pas recevoir ce montant. Essayez un montant plus petit.",
       refundFailed: 'Le remboursement sur votre carte a échoué. Votre crédit a été restauré.',
       cashoutFailed: "Le retrait n'a pas pu être effectué. Veuillez réessayer.",
       refundOutcomeUnknown:
         "Nous n'avons pas pu confirmer le remboursement auprès du prestataire de paiement. Votre retrait est en cours de vérification — merci de ne pas le soumettre à nouveau.",
+      cashOutPartiallyRefunded:
+        "Une partie de votre retrait n'a pas pu être remboursée sur votre carte. Cette partie a été restaurée sur votre crédit ; le reste est en route vers votre carte.",
+      cashOutTargetUnavailable:
+        "Le paiement par carte d'où provient votre crédit est momentanément inaccessible. Rien n'a été prélevé sur votre crédit — veuillez réessayer plus tard.",
     },
     sessionPack: {
       title: 'Pack de séances',
@@ -2207,6 +2211,14 @@ export default {
     viewReceipt: 'Voir le reçu',
     stripeFeeNote:
       'Les frais de traitement Stripe sont payés par la plateforme, pas par vous : votre versement correspond au montant de la séance moins la commission de la plateforme.',
+    newCoachHold: {
+      banner:
+        'Tant que votre compte est nouveau, vos {count} premiers versements sont retenus {hold} après la séance au lieu de {normal}, afin que les contestations de paiement puissent être réglées avant que l’argent ne quitte la plateforme.',
+      remaining: 'Encore {remaining}.',
+      days: '{n} jour | {n} jours',
+      hours: '{n} heure | {n} heures',
+    },
+    releasesOn: 'Versement le {date}',
     receipt: {
       title: 'Reçu de séance',
       print: 'Imprimer',
