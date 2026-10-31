@@ -422,7 +422,7 @@ Full service health reference — run `docker compose` commands from `/opt/skill
 |---|---|
 | app | `curl -s https://<DOMAIN>/actuator/health` → `{"status":"UP"}` |
 | postgres | `docker compose exec postgres pg_isready -U <POSTGRES_USER> -d <POSTGRES_DB>` |
-| redis | `docker compose exec redis redis-cli ping` → `PONG` |
+| redis | `docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'` → `PONG` |
 | traefik | `docker compose exec traefik traefik healthcheck --ping` |
 | prometheus | `docker compose exec prometheus wget -qO- http://localhost:9090/-/ready` |
 | grafana | `curl -s https://<MONITORING_DOMAIN>/api/health` → `{"database":"ok"}` |
@@ -540,7 +540,8 @@ All `docker compose` commands below must be run from `/opt/skillars/app` on the 
 - Internal ports (9990, 8367, 5432, 6379, 3000, 9090, 3100, 3200) are not exposed to the host; they are internal to the Docker bridge networks
 - Only ports 80 and 443 are published to the host
 
-**Network topology (two bridge networks):**
+**Network topology (three bridge networks):**
 - `skillars-internal` — `traefik`, `postgres`, `app`, `grafana`. Has an egress route: `app` needs OTLP/email/Bunny.net/Stripe, `grafana` needs email/Slack alert delivery, `traefik` needs ACME.
-- `skillars-observability` — `internal: true` (no gateway, **no outbound internet**): `prometheus`, `loki`, `tempo`, `redis`, `node_exporter`. None of them need egress; a compromised one cannot exfiltrate or call home.
-- `app` and `grafana` are members of **both** networks so they can still reach the observability services while keeping their own egress. Every service still shares a network with every peer it talks to, so no internal traffic is affected. No host `iptables` rules involved — this is compose-only.
+- `skillars-observability` — `internal: true` (no gateway, **no outbound internet**): `prometheus`, `loki`, `tempo`, `node_exporter`. None of them need egress; a compromised one cannot exfiltrate or call home.
+- `skillars-data` — `internal: true`: `redis` and `app` only (S-24). Redis also requires `REDIS_PASSWORD`, so a compromised Grafana/Loki/Tempo can neither resolve nor authenticate to it.
+- `app` is a member of **all three** networks and `grafana` of the first two, so they can still reach their peers while keeping their own egress. Every service still shares a network with every peer it talks to, so no internal traffic is affected. No host `iptables` rules involved — this is compose-only.

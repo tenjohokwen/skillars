@@ -67,6 +67,8 @@ services:
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET}
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=${APP_VIDEO_PLAYBACK_SIGNING_SECRET}
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      # S-24: shared secret with the redis service below; DeployedSecretsValidator rejects blank / dev default.
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env.uat, generate it with openssl rand and base64 of 32 bytes}
       # Base64, >= 64 bytes (`openssl rand -base64 64`); app refuses to boot otherwise. Never the dev value.
       - JWT_SIGNING_KEY=${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env.uat, generate it with openssl rand and base64 of 64 bytes}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
@@ -139,6 +141,9 @@ services:
           memory: 220m
 
   redis:
+    # S-24: see docker-compose.uat.yml.
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env.uat, generate it with openssl rand and base64 of 32 bytes}
     deploy:
       resources:
         limits:

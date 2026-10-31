@@ -14,6 +14,10 @@ services:
       - SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD}
       - SPRING_DATA_REDIS_HOST=redis
       - SPRING_DATA_REDIS_PORT=6379
+      # S-24: redis requires a password. `:-` like the other secrets so docker-compose.local.yml, which
+      # layers on this file, still interpolates; the gates are the redis container (refuses to start
+      # blank) and DeployedSecretsValidator (prod/uat app refuses to boot blank or on the dev default).
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - LOKI_URL=http://loki:3100
       - LOKI_ENABLED=true
       - MANAGEMENT_OTLP_TRACING_ENDPOINT=http://tempo:4318/v1/traces
@@ -189,6 +193,7 @@ services:
     networks:
       - skillars-internal
       - skillars-observability
+      - skillars-data
     depends_on:
       postgres:
         condition: service_healthy
@@ -245,13 +250,32 @@ services:
 
   redis:
     image: redis:7-alpine
-    command: redis-server --appendonly yes
+    # S-24: password-protected and reachable ONLY from `app` (network skillars-data). The password is
+    # written to a config file in the container's /tmp by the shell builtin printf, so it never appears
+    # in any process argument list (`ps`, /proc/<pid>/cmdline, `docker top`). A blank REDIS_PASSWORD
+    # makes the container exit instead of starting an open redis. Overriding `command` bypasses the
+    # image entrypoint's gosu step, hence `user:` (uid/gid of the redis image, owner of the data dir,
+    # see provision.sh); /tmp is world-writable so that user can create the file.
+    # Changing the password needs only `docker compose up -d redis app`: the AOF holds data, not the
+    # password. No quotes or whitespace in the value (openssl rand -base64 32 output is fine).
+    user: "999:1000"
+    command:
+      - sh
+      - -c
+      - |
+        [ -n "$$REDIS_PASSWORD" ] || { echo "REDIS_PASSWORD is not set; refusing to start redis without a password" >&2; exit 1; }
+        printf 'requirepass %s\n' "$$REDIS_PASSWORD" > /tmp/redis-auth.conf
+        exec redis-server /tmp/redis-auth.conf --appendonly yes
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
     volumes:
       # On the Hetzner Volume, like every other stateful service. A Docker named volume lives on
       # the root disk, so redis was the only one whose data a server rebuild destroyed.
       - /opt/skillars/data/redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      # REDISCLI_AUTH authenticates redis-cli without a -a flag (no password in argv, no warning).
+      # Compare against PONG: an unauthenticated ping prints NOAUTH but may still exit 0.
+      test: ["CMD-SHELL", "[ \"$$(REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping)\" = PONG ]"]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -261,7 +285,7 @@ services:
           cpus: "0.25"
           memory: 256m
     networks:
-      - skillars-observability
+      - skillars-data
     stop_grace_period: 30s
     restart: unless-stopped
     logging: *default-logging
@@ -540,10 +564,10 @@ services:
     #  1. node_exporter has no published host ports and sits on `skillars-observability`, which is
     #     `internal: true` (no gateway) — it is unreachable off-host.
     #  2. On-host, EVERY container on `skillars-observability` can reach `node_exporter:9100`:
-    #     `prometheus` (must — it scrapes it), `loki`, `tempo`, `redis`, plus `app` and `grafana`
-    #     (which also join it for egress). loki/tempo/redis are third-party images; `app`/`grafana`
-    #     are first-party.
-    #  3. But `skillars-observability` is `internal: true`, so a compromised loki/tempo/redis/
+    #     `prometheus` (must — it scrapes it), `loki`, `tempo`, plus `app` and `grafana`
+    #     (which also join it for egress). loki/tempo are third-party images; `app`/`grafana`
+    #     are first-party. (redis left this network in S-24, see `skillars-data` below.)
+    #  3. But `skillars-observability` is `internal: true`, so a compromised loki/tempo/
     #     prometheus has NO route off-host and cannot exfiltrate anything it scrapes from
     #     node_exporter. The only members with egress are `app` and `grafana` — and a compromised
     #     `app` already holds the Postgres password, Stripe/Bunny.net keys and the OTLP endpoint, so
@@ -562,10 +586,17 @@ networks:
     # OTLP/email/Bunny.net/Stripe and ACME.
   # skillars-deferred-88 AC8: egress firewall for the observability stack. internal: true means no
   # gateway is attached, so containers on THIS network alone have no route off-host — a compromised
-  # prometheus/loki/tempo/redis/node_exporter cannot exfiltrate or call home. app and grafana join
+  # prometheus/loki/tempo/node_exporter cannot exfiltrate or call home. app and grafana join
   # BOTH networks (they legitimately need egress AND must reach these services); every other peer
   # edge is preserved because the two parties still share a network. No host iptables involved.
   skillars-observability:
+    driver: bridge
+    internal: true
+  # S-24: redis lives alone with the app. Nothing on skillars-observability (grafana, loki, tempo,
+  # prometheus, node_exporter) shares a network with it, so a compromised monitoring component cannot
+  # even resolve `redis`; the password is the second layer. internal: true because redis needs no
+  # egress. Anything that ever needs redis (e.g. a redis_exporter) must join this network explicitly.
+  skillars-data:
     driver: bridge
     internal: true
 
