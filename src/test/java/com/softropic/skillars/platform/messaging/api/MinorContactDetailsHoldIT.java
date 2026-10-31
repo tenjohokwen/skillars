@@ -169,7 +169,9 @@ class MinorContactDetailsHoldIT extends AbstractIntegrationTest {
         Long conversationId = ensureConversation(coachCookies);
         send(coachCookies, conversationId, "hello there");
 
-        jdbcTemplate.update("UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", coachProfileId);
+        // Wrapped: a bare jdbcTemplate write in an IT body never commits (hikari auto-commit=false).
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE marketplace.coach_profiles SET status = 'SUSPENDED' WHERE id = ?", coachProfileId));
 
         org.assertj.core.api.Assertions.assertThatThrownBy(() -> send(coachCookies, conversationId, "still here"))
             .isInstanceOf(org.springframework.web.client.HttpClientErrorException.class)
