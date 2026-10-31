@@ -88,6 +88,14 @@ public class PasswordResetIT extends AbstractIntegrationTest {
     
     @Test
     @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
+    void testPasswordResetInit_NoMatchingAccount_AnswersLikeASuccessfulSend() {
+        changePasswordDto.setCurrentEmail("nobody@example.com");
+
+        assertThat(accountManagementFacade.sendPasswordResetMail(changePasswordDto)).isNotBlank();
+    }
+
+    @Test
+    @Sql(scripts = {"/sql/authorityData.sql", "/sql/userData.sql", "/sql/secData.sql"})
     void testFinishPasswordReset_WithInvalidKey() {
         KeyAndPasswordDto keyAndPasswordDto = new KeyAndPasswordDto("invalidKey", "newPassword");
         

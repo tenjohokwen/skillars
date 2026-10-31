@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import com.softropic.skillars.infrastructure.security.RateLimited;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.Map;
@@ -88,6 +89,7 @@ public class AccountResource {
      * @param key is the string used for activation
      * @return response status
      */
+    @RateLimited(key = "account_activate", capacity = 10, duration = 15) // per IP: activation keys are guess targets
     @PostMapping(value = "/activate",  produces = MediaType.APPLICATION_JSON_VALUE)
     @Timed
     public Success activateAccount(@RequestParam("key")final  String key) {

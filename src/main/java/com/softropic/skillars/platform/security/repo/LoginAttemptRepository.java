@@ -33,6 +33,10 @@ public interface LoginAttemptRepository extends JpaRepository<LoginAttempt, Long
     /** V171: failed attempts for one account (any IP) since {@code windowStart} — admin read-out only. */
     long countBySubjectHashAndAttemptedAtAfter(String subjectHash, Instant windowStart);
 
+    /** Oldest failed attempt for one account (any IP) inside the window — Retry-After of the per-account limit. */
+    Optional<LoginAttempt> findFirstBySubjectHashAndAttemptedAtAfterOrderByAttemptedAtAsc(String subjectHash,
+                                                                                          Instant windowStart);
+
     /**
      * V171: admin "unlock login" — removes every recorded failed attempt for one account across all
      * IPs, which is what lifts {@code AuthService.login}'s per-(email, ip) rate limit for that account.

@@ -229,6 +229,8 @@ public class ParentRegistrationService {
         }
 
         if (!otpHasher.matches(otpToken.getOtpHash(), userId, otp)) {
+            // Hard cap on this token, persisted (the in-memory bucket above resets on restart/eviction).
+            otpTokenRepository.recordFailedGuess(otpToken.getId(), PhoneOtpToken.MAX_FAILED_ATTEMPTS);
             throw new OtpVerificationException("security.otpMismatch");
         }
 
@@ -241,6 +243,12 @@ public class ParentRegistrationService {
 
     @RateLimited(key = "parent_resend_verification", capacity = 3, duration = 30)
     public void resendVerificationEmail(String email) {
+        // Per-email bucket on top of the per-IP @RateLimited one: a rotating-IP caller cannot mail-bomb one
+        // address. Exhaustion is a silent no-op, keeping the always-200 no-enumeration contract.
+        if (email == null || !rateLimitingService.tryConsume(
+                email.toLowerCase(), "parent_resend_verification_email", 3, 30, TimeUnit.MINUTES)) {
+            return;
+        }
         userRepository.findOneByEmail(email).ifPresent(user -> {
             // AC11 / code-review decision (2026-08-31): a locked account cannot self-resume.
             // Silent no-op (not a throw) so this endpoint keeps its always-200

@@ -162,4 +162,18 @@ class AuthServiceTest {
 
         assertThat(user.getSecuritySessionInvalidatedAt()).isEqualTo(invalidatedAt);
     }
+
+    // S-14: an unknown login must cost one bcrypt comparison, like a wrong password, so timing does not
+    // reveal which logins exist.
+    @Test
+    void login_unknownUser_stillRunsABcryptComparison() {
+        when(userRepository.findOneByLogin("nobody@skillars-test.com")).thenReturn(Optional.empty());
+        when(passwordEncoder.encode(any())).thenReturn("dummy-hash");
+
+        assertThatThrownBy(() -> authService.login("nobody@skillars-test.com", "raw-password", "127.0.0.1", response))
+            .isInstanceOf(org.springframework.security.authentication.BadCredentialsException.class);
+
+        verify(passwordEncoder).matches("raw-password", "dummy-hash");
+        verify(loginRateLimiter).recordFailure("nobody@skillars-test.com", "127.0.0.1");
+    }
 }

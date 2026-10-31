@@ -103,4 +103,42 @@ class LoginRateLimiterTest {
 
         assertThat(limiter.countRecentFailures("a@b.com")).isEqualTo(5L);
     }
+
+    @Test
+    void perAccountBudgetSpentAcrossIps_isLimitedEvenWhenThisIpIsUnderItsOwnBudget() {
+        when(repository.tryAcquireIdentifierLock(anyString())).thenReturn(true);
+        when(repository.countByIdentifierAndAttemptedAtAfter(anyString(), any())).thenReturn(1L);
+        when(repository.countBySubjectHashAndAttemptedAtAfter(anyString(), any())).thenReturn(20L);
+        LoginAttempt inWindow = new LoginAttempt("id", "subject", Instant.now().minus(5, ChronoUnit.MINUTES));
+        when(repository.findFirstBySubjectHashAndAttemptedAtAfterOrderByAttemptedAtAsc(anyString(), any()))
+            .thenReturn(Optional.of(inWindow));
+
+        LoginRateLimiter.Limited limited = limiter.checkLimited("a@b.com", "1.2.3.4").orElseThrow();
+
+        assertThat(limited.recentAttempts()).isEqualTo(20L);
+        assertThat(limited.retryAfterSeconds()).isBetween(590L, 600L);
+    }
+
+    @Test
+    void perAccountBudgetNotSpent_isNotLimited() {
+        when(repository.tryAcquireIdentifierLock(anyString())).thenReturn(true);
+        when(repository.countByIdentifierAndAttemptedAtAfter(anyString(), any())).thenReturn(1L);
+        when(repository.countBySubjectHashAndAttemptedAtAfter(anyString(), any())).thenReturn(19L);
+
+        assertThat(limiter.checkLimited("a@b.com", "1.2.3.4")).isEmpty();
+    }
+
+    @Test
+    void ipv6AddressesInTheSame64_shareOnePerIpKey_andOtherPrefixesDoNot() {
+        when(repository.tryAcquireIdentifierLock(anyString())).thenReturn(true);
+        ArgumentCaptor<String> id = ArgumentCaptor.forClass(String.class);
+
+        limiter.checkLimited("a@b.com", "2001:db8:1:2::1");
+        limiter.checkLimited("a@b.com", "2001:db8:1:2:ffff:ffff:ffff:ffff");
+        limiter.checkLimited("a@b.com", "2001:db8:1:3::1");
+
+        verify(repository, times(3)).countByIdentifierAndAttemptedAtAfter(id.capture(), any());
+        assertThat(id.getAllValues().get(0)).isEqualTo(id.getAllValues().get(1));
+        assertThat(id.getAllValues().get(0)).isNotEqualTo(id.getAllValues().get(2));
+    }
 }

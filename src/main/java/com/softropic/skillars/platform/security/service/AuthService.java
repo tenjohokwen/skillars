@@ -57,6 +57,9 @@ public class AuthService {
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil securityUtil;
 
+    /** Lazily encoded with the live encoder so its cost factor always matches real users' hashes. */
+    private volatile String dummyPasswordHash;
+
     // noRollbackFor BadCredentialsException: the failed-attempt row loginRateLimiter.recordFailure() writes (joining this transaction) just before
     // that throw is the ONLY thing this rate limiter counts. With the class-level @Transactional's
     // default rollback-on-RuntimeException it was rolled back together with the very failure it
@@ -78,6 +81,9 @@ public class AuthService {
         });
 
         var user = userRepository.findOneByLogin(email.toLowerCase()).orElseThrow(() -> {
+            // Burn one bcrypt comparison so an unknown login takes as long as a wrong password,
+            // otherwise response time tells an attacker which logins exist.
+            passwordEncoder.matches(rawPassword, dummyPasswordHash());
             loginRateLimiter.recordFailure(email, clientIp);
             return new BadCredentialsException("Invalid credentials");
         });
@@ -125,6 +131,15 @@ public class AuthService {
         new SkillarsProfileCookie(String.valueOf(user.getId()), role).writeTo(res);
 
         return new LoginResponse(user.getId(), role, principal.getDisplayName());
+    }
+
+    private String dummyPasswordHash() {
+        String hash = dummyPasswordHash;
+        if (hash == null) {
+            hash = passwordEncoder.encode(UUID.randomUUID().toString());
+            dummyPasswordHash = hash;
+        }
+        return hash;
     }
 
     public LoginResponse refresh(HttpServletRequest req, HttpServletResponse res) {

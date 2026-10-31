@@ -89,11 +89,12 @@ public class AccountManagementFacade {
                                               dataMap,
                                               user);
                           }
-                          ).orElseThrow(() -> new OperationNotAllowedException("The given data or account state does not permit the reset of the password.",
-                                                                               Map.of("email", changePasswordDto.getCurrentEmail(),
-                                                                                      "loginId", changePasswordDto.getLoginId(),
-                                                                                      "dob", changePasswordDto.getDob()),
-                                                                               PWD_RESET_REJECTED));
+                          ).orElseGet(() -> {
+                              // Same answer as a real send: a distinct rejection would confirm that an
+                              // email/login/date-of-birth combination does (or does not) match an account.
+                              LOGGER.info("Password reset requested for no eligible account; answering as if sent");
+                              return ShortCode.shortenInt(UUID.randomUUID().hashCode());
+                          });
     }
 
     @RateLimited(key = "password_reset_finish", capacity = 5, duration = 10)

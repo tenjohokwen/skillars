@@ -863,6 +863,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `reliability.strike.visibilityThreshold` / `suspensionThreshold` | 3 / 5 | V139 | Keep |
 | `platform.strike_threshold.admin_alert` / `auto_suspension` | 3 / 5 | V139 | Keep |
 | `security.login.max-attempts` / `lock-window-minutes` | 5 / 15 | V139 | Keep |
+| `security.login.max-attempts-per-account` | 20 (code default, no seed row) | `LoginRateLimiter` | Keep. Failed logins for one account from any IP in the window; past it the login is refused like the per-IP limit (429), even with the right password, until the oldest failure ages out. Admin "unlock login" clears it |
 | `security.registration.phone-otp-required` | `false` | V139 (code fallback `true`) | Keep `false` until SMS exists. `PUT /api/config` rejects `true` while no gateway exists |
 | `security.age-policy.*` | u10 9, young-teen 12, teen 17 | V139 | Keep |
 | `platform.message_retention_months` | 24 (failFast) | V139 | Legal/GDPR decision **(confirm)** |
@@ -1043,6 +1044,11 @@ an operator must now do.
   that stay cashable. New admin alert type `BOOKING_ACTION_REQUIRED` (payment-integrity bucket): an admin
   cancel whose refund amount is unknown, or a booking a coach suspension could not cancel. Finish it by
   hand and mark it handled.
+- 2026-10-31: fix/security-auth-hardening (V216, additive `phone_otp_tokens.failed_attempts`). The app now
+  refuses to start with `activate.security=false` while profile `prod` or `uat` is active: make sure no
+  `ACTIVATE_SECURITY=false` override is set on either. New activation/reset keys are 22-character URL-safe
+  tokens (old 10-digit keys keep working until they expire). New code-default key
+  `security.login.max-attempts-per-account` (20, see the config table).
 - 2026-10-29: fix/booking-completion-integrity (V209): new config keys `booking.playerNoShow.graceMinutes`
   (15) and `booking.unresolvedSession.graceMinutes` (120), both code defaults with no seed row. New 5-minute
   job `UnresolvedSessionSweeperService` (ShedLock) and a new admin alert type `SESSION_NEVER_STARTED`

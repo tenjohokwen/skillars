@@ -77,15 +77,15 @@ public class User extends Customer implements Serializable {
     @Column(nullable = false)
     private boolean locked = false;
 
-    @Size(max = 20)
-    @Column(name = "activation_key", length = 20, columnDefinition = "text")
+    @Size(max = 32)
+    @Column(name = "activation_key", length = 32, columnDefinition = "text")
     private String activationKey;
 
     @Column(name = "activation_date")
     private Instant activationDate;
 
-    @Size(max = 20)
-    @Column(name = "reset_key", length = 20, columnDefinition = "text")
+    @Size(max = 32)
+    @Column(name = "reset_key", length = 32, columnDefinition = "text")
     private String resetKey;
 
     @Column(name = "reset_expiration")
