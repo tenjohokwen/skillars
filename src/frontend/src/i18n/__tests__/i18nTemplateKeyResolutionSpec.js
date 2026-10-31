@@ -237,11 +237,11 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: '$t on noContributionsKey, the Parent-portal twin of the Coach-side computed above',
   },
   {
-    at: 'src/pages/VideoManagementPage.vue:41',
+    at: 'src/pages/VideoManagementPage.vue:47',
     reason: 'coach upload-type label keyed by each COACH_VIDEO_TYPES entry (video.type.*)',
   },
   {
-    at: 'src/pages/VideoManagementPage.vue:42',
+    at: 'src/pages/VideoManagementPage.vue:48',
     reason: 'coach upload-type hint keyed by each COACH_VIDEO_TYPES entry (video.typeHint.*)',
   },
   {

@@ -98,7 +98,9 @@ class FileStorageServiceTest {
         verify(presigner, never()).presignGetObject(any(GetObjectPresignRequest.class));
 
         when(repo.findByKey("k-clean")).thenReturn(Optional.of(scanned("k-clean", ScanStatus.CLEAN)));
-        stubPresign();
+        var presigned = mock(PresignedGetObjectRequest.class);
+        when(presigned.url()).thenReturn(URI.create("http://s3/b/x").toURL());
+        when(presigner.presignGetObject(any(GetObjectPresignRequest.class))).thenReturn(presigned);
         assertThat(service.signedDownloadUrl("k-clean")).isEqualTo("http://s3/b/x");
         // A server-written object has no row: not scanned, still served.
         assertThat(service.signedDownloadUrl("server-written")).isEqualTo("http://s3/b/x");

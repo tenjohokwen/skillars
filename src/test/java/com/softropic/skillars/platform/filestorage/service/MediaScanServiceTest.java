@@ -109,8 +109,12 @@ class MediaScanServiceTest {
     @Test
     void match_suspensionFails_raisesASecondUrgentAlert() {
         when(arachnidClient.scan(any())).thenReturn(new ArachnidScanResult(true, "CSAM"));
-        org.mockito.Mockito.doThrow(new IllegalStateException("gone")).when(publisher)
-            .publishEvent(org.mockito.ArgumentMatchers.isA(UserSuspensionRequestedEvent.class));
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (inv.getArgument(0) instanceof UserSuspensionRequestedEvent) {
+                throw new IllegalStateException("gone");
+            }
+            return null;
+        }).when(publisher).publishEvent(org.mockito.ArgumentMatchers.<Object>any());
 
         service.scan(1L);
 

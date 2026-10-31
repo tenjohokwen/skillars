@@ -71,6 +71,7 @@ class VideoSseWebMvcTest {
     @MockitoBean com.softropic.skillars.platform.marketplace.service.CoachProfileService coachProfileService;
     @MockitoBean com.softropic.skillars.platform.config.service.ConfigService configService;
     @MockitoBean VideoAccessCache videoAccessCache;
+    @MockitoBean VideoSharingPolicy videoSharingPolicy;
 
     private static final UUID VIDEO_ID = UUID.fromString("11111111-1111-1111-1111-111111111111");
     private static final String OWNER = "owner@example.com";

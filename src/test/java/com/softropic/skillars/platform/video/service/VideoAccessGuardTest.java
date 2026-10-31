@@ -101,6 +101,7 @@ class VideoAccessGuardTest {
         stubPlayerCurrentUser(PARENT_LONG_ID);
         when(playerProfileRepository.existsByIdAndUserId(PLAYER_LONG_ID, PARENT_LONG_ID)).thenReturn(false);
         when(videoSharingPolicy.maySharePastOwner(video)).thenReturn(false);
+        lenient().when(securityUtil.getCurrentUserName()).thenReturn("parent@example.com");
 
         assertThatThrownBy(() -> guard.canPlay(null, VIDEO_ID)).isInstanceOf(PlaybackDeniedException.class);
         org.mockito.Mockito.verifyNoInteractions(parentPlayerLinkRepository, bookingRepository);
