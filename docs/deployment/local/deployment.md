@@ -9,7 +9,7 @@ it just prints the one command that starts the app. The rest of this document
 is the detailed reference behind what that script automates.
 
 Run Skillars on your own machine using Docker — no domain or TLS required. This
-trims the production [`docker-compose.yml`](../../docker-compose.yml) down to
+trims the production [`docker-compose.yml`](../../../docker-compose.yml) down to
 the services the app needs to run (`app`, `postgres`, `redis`, `storage` — a
 local S3-compatible store for file uploads, running SeaweedFS as of
 2026-09-24, see [Step 3](#step-3-the-local-compose-override) — with `loki`
@@ -19,7 +19,7 @@ instead of relying solely on `docker logs` (see
 [Step 6.1](#step-61-browse-grafana-optional) and the [Logs](#logs) section).
 
 For the full production stack (Traefik/TLS, backups), see
-[`first-time-setup.md`](first-time-setup.md) instead.
+[`first-time-setup.md`](../first-time-setup.md) instead.
 
 ---
 
@@ -102,9 +102,9 @@ Once both are set, you'll reach Grafana at
 Everything else the app reads (mail credentials, video/payment/AI provider
 keys, PIN encryption secret) resolves to safe placeholder defaults **only**
 when the Spring `dev` profile is active — which is what the override file in
-the next step turns on. You do not need to set `JWT_SECRET`; the JWT signing
-key is stored in the database, not read from an environment variable (see
-Step 4).
+the next step turns on. You do not need to set `JWT_SIGNING_KEY`
+or `REDIS_PASSWORD` either: `docker-compose.local.yml` carries clearly-labelled dev-only values for both (see
+Step 3 and Step 5).
 
 **Important:** `.env.local` only feeds `${VAR}` placeholders written directly
 in the compose YAML files — it is *not* automatically injected into a
@@ -146,109 +146,19 @@ Grafana's port so you can reach its UI from the host, and adds a local
 S3-compatible store (the `storage` service, `app`'s newest hard dependency —
 see below) plus a one-shot bucket creator. In full:
 
-```yaml
-services:
-  app:
-    # Without this, `docker compose build app` exits 0 having done nothing —
-    # the base docker-compose.yml only carries `image: ${APP_IMAGE}`.
-    build:
-      context: .
-      dockerfile: Dockerfile
-    environment:
-      - SPRING_PROFILES_ACTIVE=dev
-      - APP_VIDEO_BUNNY_LIBRARY_ID=123456
-      - MANAGEMENT_HEALTH_MAIL_ENABLED=false
-      - APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder
-      - GMAIL_PASSWORD=${GMAIL_PASSWORD:-dev_gmail_password}
-      - GMX_PASSWORD=${GMX_PASSWORD:-dev_gmx_password}
-      - APP_STORAGE_S3_ACCESS_KEY=minioadmin
-      - APP_STORAGE_S3_SECRET_KEY=minioadmin123
-      - APP_STORAGE_ENDPOINT_URL=http://storage:9500
-      - APP_SES_FROM_ADDRESS=dev@localhost
-      - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
-      - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
-      - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
-      - SPRING_DATA_REDIS_PASSWORD=dev-redis-password-NOT-for-prod
-      - PLATFORM_REGISTRATION_VERIFICATION_SECRET=dev-registration-verification-secret-32-bytes!
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
-    # ses-1.5: dev runs app.email.transport=log, which writes each rendered email to /app/target/mails.
-    # Bind-mounted to the host so you can read OTP codes / verification links; setup.sh creates ./target/mails
-    # (mode 777, dev-only) because the container user cannot write to a root-owned or Docker-created directory.
-    volumes:
-      - ./target/mails:/app/target/mails
-    ports:
-      - "9990:9990"   # main app
-      - "8367:8367"   # actuator/health (management port)
-    depends_on:
-      storage:
-        condition: service_healthy
-  postgres:
-    volumes:
-      - skillars-local-postgres:/var/lib/postgresql/data
-  redis:
-    environment:
-      - REDIS_PASSWORD=dev-redis-password-NOT-for-prod
-    volumes:
-      - skillars-local-redis:/data
-  loki:
-    volumes:
-      - skillars-local-loki:/loki
-  tempo:
-    volumes:
-      - skillars-local-tempo:/var/tempo
-  prometheus:
-    volumes:
-      - skillars-local-prometheus:/prometheus
-  grafana:
-    ports:
-      - "3000:3000"   # Grafana UI
-    volumes:
-      - skillars-local-grafana:/var/lib/grafana
+The file itself is the reference (its comments explain each line); `setup.sh` checks it and restores it from git if it is
+missing. What it does:
 
-  # Local S3-compatible storage so uploads (coach profile photos, drill videos)
-  # don't need real AWS credentials in dev. Runs on 9500, not MinIO's old
-  # default 9000/9001, since this project's Quasar dev server already owns 9000.
-  storage:
-    image: chrislusf/seaweedfs:3.97
-    command: >
-      server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
-      -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=1024
-    volumes:
-      - skillars-local-storage:/data
-      - ./deploy/seaweedfs/s3-identity.json:/etc/seaweedfs/s3.json:ro
-    ports:
-      - "9500:9500"   # S3 API
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 9500"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  # One-shot: creates the dev bucket on every startup (no-op if it already exists).
-  storage-init:
-    image: amazon/aws-cli:2.31.13
-    depends_on:
-      storage:
-        condition: service_healthy
-    environment:
-      - AWS_ACCESS_KEY_ID=minioadmin
-      - AWS_SECRET_ACCESS_KEY=minioadmin123
-      - AWS_DEFAULT_REGION=us-east-1
-    entrypoint: >
-      /bin/sh -c "
-      aws --endpoint-url http://storage:9500 s3 mb s3://skillars-dev || true
-      "
-
-volumes:
-  skillars-local-postgres:
-  skillars-local-redis:
-  skillars-local-loki:
-  skillars-local-tempo:
-  skillars-local-prometheus:
-  skillars-local-grafana:
-  skillars-local-storage:
-```
+| Part | What and why |
+|---|---|
+| `app.build` | `docker compose build app` needs a `build:` block, or it exits 0 having built nothing |
+| `app.environment` | Turns on the `dev` profile and restates `application-dev.yaml`'s own defaults, because the base file passes each variable with an empty `${VAR:-}` default and an empty value overrides a profile default: `APP_FRONTEND_URL`, `APP_STORAGE_*`, `APP_VIDEO_*_SECRET`, `PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`, `GMAIL_PASSWORD`/`GMX_PASSWORD`, `APP_SES_FROM_ADDRESS`, `ALLOWED_CLIENTS`, `GEMINI_API_KEY` |
+| `app.environment` (startup blockers) | `APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder`, `APP_VIDEO_BUNNY_LIBRARY_ID=123456`, `MANAGEMENT_HEALTH_MAIL_ENABLED=false`; see the list after the next paragraphs |
+| `app.environment` (security round) | `JWT_SIGNING_KEY` (the published dev key) and `SPRING_DATA_REDIS_PASSWORD` plus `redis`'s `REDIS_PASSWORD` (`dev-redis-password-NOT-for-prod`). `DeployedSecretsValidator` rejects both values on `prod`/`uat`, so they can never leak into a deployed environment |
+| `app.volumes`, `ports` | `./target/mails` for the dev email dump; publishes `9990` (app) and `8367` (management) |
+| `postgres`, `redis`, `loki`, `tempo`, `prometheus`, `grafana` | Named volumes instead of the `/opt/skillars/data/*` bind mounts; publishes Grafana on `3000` |
+| `storage`, `storage-init` | SeaweedFS S3 API on `9500` (credentials from `deploy/seaweedfs/s3-identity.json`), and a one-shot job that creates the `skillars-dev` bucket and its CORS policy |
+| `volumes:` | The named volumes the above use |
 
 Compose merges `volumes:` entries by matching container target path, so each
 of these overrides only replaces the matching production bind mount — the
@@ -256,9 +166,9 @@ other mounts on `loki`/`tempo`/`prometheus`/`grafana` (their read-only
 `./deploy/lgtm/*.yml` config files, relative paths, not a problem) are
 untouched. The top-level `volumes:` block declares all the named volumes this
 stack needs; `docker-compose.yml` itself declares none for `redis` since
-UAT.2 moved it onto the Hetzner Volume bind mount, and declares no `storage`
-service at all (it's UAT/local-only — production talks to real AWS S3), which
-is why both need an override here. `traefik` has the same kind of fixed
+UAT.2 moved it onto the Hetzner Volume bind mount, and its production `storage`
+service runs a shell entrypoint that writes the S3 identity from `STORAGE_ROOT_*`
+and routes through Traefik, so both need an override here. `traefik` has the same kind of fixed
 host-path/config dependency, but since it never starts in this trimmed stack,
 it's never evaluated and doesn't need an override.
 

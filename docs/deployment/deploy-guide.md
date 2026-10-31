@@ -108,6 +108,17 @@ The production deploy is triggered manually via the GitHub Actions UI — no CLI
 3. In the **`image_tag`** field, enter the tag from Step 1 (e.g., `sha-abc1234`)
 4. Click **Run workflow**
 
+> **`deploy.yml` changes the app image only.** It rewrites `APP_IMAGE` in `/opt/skillars/.env`, pulls, and recreates `app` with `--no-deps`.
+> It does not `git pull` the checkout in `/opt/skillars/app`, and it does not recreate `redis`, `storage`, `grafana`, `traefik` or any
+> other service. A release that adds a `.env` variable, changes `docker-compose.yml` (a new `app` environment entry, a network, an
+> image tag such as Grafana) or needs a new secret therefore needs these steps **before** you trigger the workflow:
+> 1. Add the variable to `/opt/skillars/.env` (`secrets-reference.md`; a missing required secret makes the new `app` refuse to boot).
+> 2. `cd /opt/skillars/app && git pull`.
+> 3. Recreate the services whose definition changed, e.g. `docker compose up -d redis` or `docker compose up -d grafana`. The release's
+>    entry in the [`provisioning-checklist.md` changelog](provisioning-checklist.md#changelog) names them.
+>
+> `app` itself is then recreated by the workflow; for a config-only change on the same image, `docker compose up -d app` does it.
+
 The workflow will:
 
 - SSH into the Node

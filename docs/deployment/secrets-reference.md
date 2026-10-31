@@ -76,20 +76,12 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `STORAGE_ROOT_USER` | String, e.g. `skillars-app` | Access key of the SeaweedFS `storage` service's single S3 identity (production and UAT; renamed from `MINIO_ROOT_USER` 2026-09-28). The app uses the same value as its S3 access key (`docker-compose.yml` passes it as `APP_STORAGE_S3_ACCESS_KEY`). **Required:** the production `storage` container refuses to start if it is blank. Pick any non-guessable name; there is no default |
 | `STORAGE_ROOT_PASSWORD` | 24+ character random string | Secret key of that identity, also used by the app (`APP_STORAGE_S3_SECRET_KEY`) and by `storage-init` (production and UAT; renamed from `MINIO_ROOT_PASSWORD` 2026-09-28). `openssl rand -base64 24`. **Required** — blank stops the `storage` container at boot. Rotating it: change `.env`, then `docker compose up -d storage storage-init app` together |
 | `STORAGE_DOMAIN` | FQDN, e.g. `storage.skillars.com` | Public hostname Traefik routes to the `storage` service (its own Let's Encrypt certificate), in production and UAT. Needs a DNS A record to the server. Must be reachable **by the browser**, not just from inside the compose network: `docker-compose.yml` sets `APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN}`, and every presigned upload/download URL is built from it |
-| `BACKUP_STORAGE_TYPE` | String: `hetzner` or `s3-compatible` | **Production only.** Backup destination storage type. Use `hetzner` for Hetzner Object Storage, or `s3-compatible` for another S3-compatible provider |
-| `HOS_ACCESS_KEY` | String | Hetzner Object Storage access key (if `BACKUP_STORAGE_TYPE=hetzner`). Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
-| `HOS_SECRET_KEY` | String | Hetzner Object Storage secret key (if `BACKUP_STORAGE_TYPE=hetzner`). Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
-| `HOS_BUCKET` | String, e.g. `skillars-backups` | Hetzner Object Storage bucket name (if `BACKUP_STORAGE_TYPE=hetzner`). Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
-| `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region (if `BACKUP_STORAGE_TYPE=hetzner`). Examples: `https://s3.fsn1.hetzner.com` (Falkenstein), `https://s3.nbg1.hetzner.com` (Nuremberg), `https://s3.hel1.hetzner.com` (Helsinki) |
-| `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for Hetzner Object Storage (if `BACKUP_STORAGE_TYPE=hetzner`). Choose a prefix to organize backups within the bucket; default `pg-backups/` |
-| `HOS_VOLUME_BACKUP_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for Hetzner Object Storage (if `BACKUP_STORAGE_TYPE=hetzner`). Choose a prefix to organize file-level volume backups; default `volume-backups/` |
-| `S3_BACKUP_ACCESS_KEY` | String | S3-compatible backup storage access key (if `BACKUP_STORAGE_TYPE=s3-compatible`). E.g., the provider's access key or IAM credentials |
-| `S3_BACKUP_SECRET_KEY` | String | S3-compatible backup storage secret key (if `BACKUP_STORAGE_TYPE=s3-compatible`) |
-| `S3_BACKUP_BUCKET` | String, e.g. `skillars-backups` | S3-compatible backup storage bucket name (if `BACKUP_STORAGE_TYPE=s3-compatible`) |
-| `S3_BACKUP_ENDPOINT` | HTTPS URL, e.g. `https://s3.eu-central-003.backblazeb2.com` | S3-compatible backup storage endpoint (if `BACKUP_STORAGE_TYPE=s3-compatible`): a third-party S3-compatible provider. Never the app's own `storage` service — backups must live off this server |
-| `S3_BACKUP_REGION` | String, e.g. `us-east-1` | S3-compatible backup storage region (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `us-east-1` |
-| `S3_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for S3-compatible storage (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `pg-backups/` |
-| `S3_BACKUP_VOLUME_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for S3-compatible storage (if `BACKUP_STORAGE_TYPE=s3-compatible`). Default `volume-backups/` |
+| `HOS_ACCESS_KEY` | String | **Production only** (read by `deploy/backup/*.sh`, not by the app). Hetzner Object Storage access key. Hetzner Cloud Console → Object Storage → your bucket → Access Keys → Create access key; copy Access Key ID |
+| `HOS_SECRET_KEY` | String | Hetzner Object Storage secret key. Same creation flow as `HOS_ACCESS_KEY`; copy Secret Access Key (shown once) |
+| `HOS_BUCKET` | String, e.g. `skillars-backups` | Hetzner Object Storage bucket name. Create a private bucket in Hetzner Cloud Console → Object Storage; use the exact bucket name here |
+| `HOS_ENDPOINT` | HTTPS URL, e.g. `https://s3.fsn1.hetzner.com` | Hetzner Object Storage endpoint for your datacenter region. Examples: `https://s3.fsn1.hetzner.com` (Falkenstein), `https://s3.nbg1.hetzner.com` (Nuremberg), `https://s3.hel1.hetzner.com` (Helsinki) |
+| `HOS_BACKUP_PREFIX` | String ending in `/`, e.g. `pg-backups/` | Backup key prefix for Hetzner Object Storage. Choose a prefix to organize backups within the bucket; default `pg-backups/` |
+| `HOS_VOLUME_BACKUP_PREFIX` | String ending in `/`, e.g. `volume-backups/` | Volume backup key prefix for Hetzner Object Storage. Choose a prefix to organize file-level volume backups; default `volume-backups/` |
 | `BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of PostgreSQL dumps `prune-backups.sh` keeps; default `14` (~56 dumps at the 6-hourly cadence) |
 | `BACKUP_RETENTION_MIN_KEEP` | Integer, e.g. `8` | **Tuning knob, not a secret.** Newest dumps retained unconditionally regardless of age — the floor that stops a bad cutoff emptying the bucket; default `8` |
 | `VOLUME_BACKUP_RETENTION_DAYS` | Integer, e.g. `14` | **Tuning knob, not a secret.** How many days of file-level volume backups `prune-backups.sh` keeps; default `14` (~14 backups at the daily cadence) |
@@ -125,9 +117,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 
 **Backup Storage:**
 - PostgreSQL dumps and volume backups are stored off-server (never in the app's own `storage` service)
-- Configure via `BACKUP_STORAGE_TYPE`:
-  - `hetzner`: Use Hetzner Object Storage (HOS_* variables)
-  - `s3-compatible`: Use another S3-compatible provider (S3_BACKUP_* variables)
+- The scripts in `deploy/backup/` read only the `HOS_*` variables (S3 API via `aws s3` with `--endpoint-url ${HOS_ENDPOINT}`),
+  so any S3-compatible provider works if you put its endpoint and keys in those variables. There is no
+  `BACKUP_STORAGE_TYPE` or `S3_BACKUP_*` switch (an earlier version of this document described one; no code reads it)
 - Backup schedule: PostgreSQL every 6 hours, volumes daily; retention: 14 days by default
 
 ### Application secrets
@@ -144,12 +136,13 @@ application read them but no deploy supplied them. Defaults below are the applic
 | `APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID` | `ca_…` | *empty* | Stripe Dashboard → Settings → Connect → Integration. Required for coach Connect onboarding |
 | `APP_PAYMENT_STRIPE_PUBLISHABLE_KEY` | `pk_test_…` / `pk_live_…` | *empty* | Stripe Dashboard → Developers → API keys. Served to the browser by `/api/payment/stripe/config`; card entry, `SetupIntent` and pack purchase are all non-functional without it |
 | `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | Absolute URL | relative path (`/api/payment/coaches/me/stripe/callback`) | Must be absolute in any real environment — Stripe rejects a relative `redirect_uri`. `PaymentConfig` logs a warning, it does not fail |
-| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Base64 string decoding to ≥32 bytes | `""` under `prod` — see the profile note below | `openssl rand -base64 32`. Signs video playback URLs (HS256) |
-| `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | String | `""` under `prod` — see the profile note below | Bunny.net Stream → your library → Webhook signing secret |
-| `PLATFORM_PIN_ENCRYPTION_SECRET` | String | dev placeholder (`S3CR3TW0RD`) | `openssl rand -base64 32`. Encrypts parent-approval PINs — **rotating it invalidates every stored PIN** |
+| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Base64 string decoding to ≥32 bytes | `""` under `prod` — see the profile note below | `openssl rand -base64 32`. Signs video playback URLs (HS256). **Required on prod/uat**: `DeployedSecretsValidator` aborts boot when blank, not Base64, under 32 bytes, or the dev value |
+| `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | String | `""` under `prod` — see the profile note below | Bunny.net Stream → your library → Webhook signing secret. **Required on prod/uat** (blank or the dev value aborts boot) |
+| `JWT_SIGNING_KEY` | Base64, ≥ 64 bytes decoded | *empty* (a dev-only value on the `dev` profile and in tests) — **prod/uat refuse to boot** | `openssl rand -base64 64`. Signs the 15-minute access tokens (HS512, property `app.security.jwt.signing-key`). Replaced the database-stored key (S-03): **the first deploy with it, and every rotation, signs every user out**. Never reuse a value across environments. See "JWT signing key" below |
+| `PLATFORM_PIN_ENCRYPTION_SECRET` | String | dev placeholder (`S3CR3TW0RD`) | `openssl rand -base64 32`. Encrypts parent-approval PINs and pending safeguarding-certificate uploads — **rotating it invalidates every stored PIN** (and any upload not yet processed). **Required on prod/uat**: blank or the dev placeholder aborts boot |
 | `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | String | dev placeholder; **empty under `prod`/`uat` — `RegistrationVerificationTokenService` aborts startup if unset** | `openssl rand -base64 32`. HMAC key for the phone-verification handle returned by `/verify-email` and required by `/verify-phone` and `/resend-otp`. Also the root of the phone-OTP hash key (`OtpHasher`, skillars-deferred-162), so **rotating it also invalidates in-flight phone OTPs** (10 min TTL; the user resends) as well as registration handles issued in the last 24h |
 | `APP_STORAGE_BUCKET` | String, e.g. `skillars-prod` | `skillars-prod` (compose default; `docker-compose.local.yml` pins `skillars-dev`) | Bucket name. `storage-init` creates it in the SeaweedFS `storage` service on every `up`. Set it in `.env` for production; don't rely on the default |
-| `APP_STORAGE_ENDPOINT_URL` | URL | **set by `docker-compose.yml`** to `https://${STORAGE_DOMAIN}`, not read from `.env` | The S3 endpoint the app signs requests and presigned URLs for, so it must be reachable **by the browser**. Overlays restate it (`docker-compose.local.yml`: `http://storage:9500`; `docker-compose.uat-hostwinds.yml`: `http://${DOMAIN}:9500`). When moving to a managed provider, restore the `.env` passthrough (runbook) |
+| `APP_STORAGE_ENDPOINT_URL` | URL | **set by `docker-compose.yml`** to `https://${STORAGE_DOMAIN}`, not read from `.env` | The S3 endpoint the app signs requests and presigned URLs for, so it must be reachable **by the browser**. Overlays restate it (`docker-compose.local.yml`: `http://storage:9500`; `docker-compose.uat.yml` and `docker-compose.uat-hostwinds.yml`: `https://${STORAGE_DOMAIN}`, which is required there). In `prod`/`uat` the app refuses to boot unless it is an `https://` URL (`DeployedSecretsValidator`). When moving to a managed provider, restore the `.env` passthrough (runbook) |
 | `APP_STORAGE_REGION` | String | `us-east-1` | S3 signing region. SeaweedFS accepts any region; keep `us-east-1` unless a managed provider needs its own |
 | `APP_STORAGE_S3_ACCESS_KEY` / `APP_STORAGE_S3_SECRET_KEY` | String | **set by `docker-compose.yml`** from `STORAGE_ROOT_USER` / `STORAGE_ROOT_PASSWORD` | Static S3 credentials. Bound on every profile (`application.yaml`). If both are blank, `BlobstoreConfig` falls back to the AWS default credential chain. Production never does: the chain is shared with SES, so storage must not depend on it |
 | `APP_STORAGE_S3_PATH_STYLE_ACCESS` | Boolean | `false` in `application.yaml`; **`true` from `docker-compose.yml`**; dev/uat profiles pin `true` | `true` for a single-hostname endpoint such as SeaweedFS on `STORAGE_DOMAIN`. Most managed providers (AWS S3, Hetzner Object Storage) prefer `false` (virtual-hosted `{bucket}.host`) |
@@ -289,6 +282,24 @@ application read them but no deploy supplied them. Defaults below are the applic
 > silently no-op. (The `${GF_*}` placeholders are kept in the file — Grafana expands them at load;
 > the secrets are never written there.)
 
+### Boot-time checks on `prod` and `uat`
+
+A deployed instance aborts startup (`AppSetupException`, container exits, deploy smoke test fails and auto-reverts) when
+any of these hold. The message names the property. `dev` and tests are exempt.
+
+| Check | Class | Fix |
+|---|---|---|
+| `skillars.platform.pin-encryption-secret`, `skillars.platform.registration-verification-secret`, `app.video.playback.signing-secret`, `app.video.bunny.webhook-signing-secret`, `spring.data.redis.password`, `app.security.jwt.signing-key` is blank or still a published dev default | `DeployedSecretsValidator` | Set `PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`, `APP_VIDEO_PLAYBACK_SIGNING_SECRET`, `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`, `REDIS_PASSWORD`, `JWT_SIGNING_KEY` |
+| Playback secret is not Base64 or decodes to under 32 bytes; JWT key under 64 bytes | `DeployedSecretsValidator` | `openssl rand -base64 32` / `openssl rand -base64 64` |
+| `app.storage.endpoint-url` blank or not `https://` (also a set `app.storage.replication.backup.endpoint-url`), with `app.storage.provider=s3` | `DeployedSecretsValidator` | Compose sets `https://${STORAGE_DOMAIN}`; make sure `STORAGE_DOMAIN` has DNS and a certificate |
+| `activate.security=false` (e.g. an `ACTIVATE_SECURITY=false` override) | `SecurityConfiguration` | Remove the override |
+| Image scanning off (`ARACHNID_ENABLED` not `true`), or on with a blank `ARACHNID_API_KEY`, or `features.toggles.videointel-enabled=true` with the stub video scanner | `DeployedMediaScanningValidator` | Set `ARACHNID_ENABLED=true` and `ARACHNID_API_KEY`. Pre-launch only: `ALLOW_UNSCANNED_MEDIA=true` boots anyway, logs ERROR and raises the `MediaScanningUnsafe` alert; **remove it before real users upload** |
+| `APP_SES_FROM_ADDRESS` blank (prod, `transport=ses`); `GMX_PASSWORD`/`GMAIL_PASSWORD` blank (uat, `transport=smtp`); `APP_PAYMENT_STRIPE_API_KEY` blank or a live key outside `prod`; first-admin email and password set without a phone | `SesPropertiesValidator`, `ProviderConfigsValidator`, `PaymentConfig`, `AdminBootstrapRunner` | see the rows above |
+| `platform.admin_alert_email` (a `platform_config` row, seeded blank) is blank while `ARACHNID_ENABLED=true` | `VideoModerationEmailListener` | On a new database the first boot aborts once Flyway has run. Set it by SQL, then restart: `UPDATE main.platform_config SET value = '<address>' WHERE key = 'platform.admin_alert_email';` (`runbook.md` "Admin alert recipient") |
+
+Not a boot failure, but a loud signal: `GEMINI_MODE=developer` in prod logs a daily `COMPLIANCE:` WARN, shows an admin health banner and
+sets the gauge `skillars_gemini_developer_api_in_prod` to 1.
+
 ### Optional application variables
 
 Passed through `docker-compose.yml` with defaults that mirror `application.yaml` (added by
@@ -299,8 +310,9 @@ Passed through `docker-compose.yml` with defaults that mirror `application.yaml`
 | `ALLOWED_CLIENTS` | blank (no machine client) | Comma-separated `X-Client-Id` values accepted from non-browser API clients (`allowed.clients`). A machine client skips the browser fingerprint-cookie check, so use long random ids and never the dev placeholders (`myClientId`, ...). UAT testers who curl the admin API (`uat-deployment.md` 8.3) need one listed here |
 | `APP_BOOTSTRAP_ADMIN_FIRST_NAME` / `APP_BOOTSTRAP_ADMIN_LAST_NAME` | `Platform` / `Administrator` | Display name of the admin created by `AdminBootstrapRunner` |
 | `APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL` | `/coach/payment-settings` | SPA route the Stripe OAuth callback redirects the coach to. Relative to `APP_FRONTEND_URL` |
-| `APP_STORAGE_BACKUP_ENDPOINT_URL`, `_BUCKET`, `_REGION`, `_ACCESS_KEY`, `_SECRET_KEY` | blank, `us-east-1` for the region | Optional second S3 bucket that uploads are copied to (`app.storage.backup.*`). All blank = off |
-| `ARACHNID_API_BASE_URL` | `https://api.c3p.ca` | Project Arachnid endpoint. Used only with `features.toggles.arachnid-enabled` |
+| `APP_STORAGE_BACKUP_ENDPOINT_URL`, `_BUCKET`, `_REGION`, `_ACCESS_KEY`, `_SECRET_KEY` | blank, `us-east-1` for the region | Credentials for an optional second S3 bucket that uploads are copied to (`app.storage.replication.backup.*`). **Inert**: replication itself is switched by `app.storage.replication.enabled`, which is `false` in `application.yaml` and has no `.env` passthrough. A set backup endpoint must be `https://` in prod/uat |
+| `APP_PAYMENT_STRIPE_CONNECT_TIMEOUT_MS`, `_READ_TIMEOUT_MS`, `_MAX_NETWORK_RETRIES` | `10000`, `30000`, `2` | Stripe SDK timeouts and retries (`PaymentConfig`). **Not passed through compose**: they only apply when the jar runs outside compose. The defaults suit PROD and UAT |
+| `ARACHNID_API_BASE_URL` | `https://api.c3p.ca` | Project Arachnid endpoint. Used only when `ARACHNID_ENABLED=true` |
 | `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH` | blank | Google Video Intelligence project and credentials file path (inside the container). Used only with `features.toggles.videointel-enabled` |
 | `APP_STORAGE_LOCAL_BASE_DIR` | `/tmp/skillars-storage` | Only for `app.storage.provider=local`; not passed through compose, since PROD and UAT run the S3 backend |
 

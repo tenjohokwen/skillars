@@ -169,8 +169,38 @@ to non-`dev`, so a developer who hand-edits a row to test still sees the signal.
 | `reviews.autoHoldFlagThreshold` | `[1, 1000]` | — | 0 → the first flag on any review auto-holds it |
 | `reviews.minSessionAgeDays` | `[1, 358]` | — | out-of-range (incl. 0, or above 358 — unreachable under the minimum-7-day cross-field gap since `reviews.updateCooldownDays` caps at 365) falls back to the coded default (7), never to an unbounded floor; also cross-checked against `reviews.updateCooldownDays` (must leave a minimum 7-day gap, at both boot and `PUT /api/config` — a bad combination fails fast even though neither key does alone) |
 | `reviews.updateCooldownDays` | `[1, 365]` | — | out-of-range (incl. 0) falls back to the coded default (30), never to an unbounded cooldown; same cross-check as `reviews.minSessionAgeDays` above |
-| `video.quota.{scout,instructor,academy,athlete}.storageBytes` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no upload" sentinel — scout is seeded 0) |
-| `video.quota.{scout,instructor,academy,athlete}.bandwidthBytesMonthly` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no streaming" sentinel) |
+| `pack.expiry.days.tier1..tier4` | `[14, 3650]` | — | too low → packs warn/expire almost at once; out of range → falls back to the default (90 / 180 / 365 / 548 for 1 / 2-5 / 6-10 / 11+ sessions) |
+| `disputes.maxPerBookingPerRaiser` | `[1, 100]` | — | out-of-range falls back to the coded default (2); huge → a raiser can re-freeze the payout repeatedly |
+| `booking.stuck_completion_timeout_hours` | `[6, 720]` | — | 0/neg → every unconfirmed, row-less Quick Complete is force-completed near-instantly (code default 72) |
+| `booking.lateCancel.graceMinutes` | `[5, 1440]` | — | out-of-range falls back to the coded default (15); tiny → parents cancel at start for a full refund |
+| `booking.coachNoShow.reportWindowHours` | `[1, 168]` | — | out-of-range falls back to the coded default (5); tiny → families cannot claim a no-show in time |
+| `booking.playerNoShow.graceMinutes` | `[5, 1440]` | — | out-of-range falls back to the coded default (15); tiny → coaches forfeit late families at start |
+| `booking.unresolvedSession.graceMinutes` | `[30, 10080]` | — | out-of-range falls back to the coded default (120); tiny → overrunning live sessions are cut off |
+| `booking.unresolvedSession.autoRefundHours` | `[2, 720]` | — | out-of-range falls back to the coded default (48); tiny → a coach who forgot the app loses the session before they can quick-complete |
+| `booking.coachNoShow.repeatClaimAlertThreshold` | `[1, 1000]` | — | out-of-range falls back to the coded default (3); 1 → every claim alerts |
+| `booking.coachNoShow.repeatClaimAlertWindowDays` | `[1, 3650]` | — | out-of-range falls back to the coded default (90); tiny → a repeat claimant is never seen |
+| `identity.ageVerification.maxAttemptsPerDay` | `[1, 100]` | — | out-of-range falls back to the coded default (3); huge → one player can run up Stripe Identity charges |
+| `payment.payout.newCoach.releasedCount` | `[0, 100]` | — | out-of-range falls back to the coded default (5); 0 → new coaches get the normal hold |
+| `payment.payout.newCoach.minReleasedNet` | `[0, 10000]` | — | out-of-range falls back to the coded default (20); 0 → tiny payouts end the new-coach hold |
+| `payment.payout.newCoach.holdHours` | `[0, 336]` | — | out-of-range falls back to the coded default (168); tiny → a new coach is paid before chargebacks land |
+| `payment.payout.accountChange.holdHours` | `[0, 336]` | — | out-of-range falls back to the coded default (72); 0 → a replaced payout destination is paid at once |
+| `payment.payout.relatedParty.holdDays` | `[7, 120]` | — | out-of-range falls back to the coded default (60); tiny → a related-party payout is released inside the chargeback window |
+| `booking.live.minDurationPercent` | `[0, 100]` | — | out-of-range falls back to the coded default (50); 0 → a one-minute live session completes and pays at once |
+| `coach.excusedCancellations.maxPerWindow` | `[0, 100]` | — | out-of-range falls back to the coded default (3); huge → excused reasons never strike |
+| `coach.excusedCancellations.windowDays` | `[1, 3650]` | — | out-of-range falls back to the coded default (90); tiny → the excused-cancel cap never bites |
+| `booking.request.maxPendingPerCoach` | `[1, 100]` | — | out-of-range falls back to the coded default (10); huge → one account can block a coach's calendar |
+| `booking.request.maxHorizonDays` | `[1, 730]` | — | out-of-range falls back to the coded default (120); tiny → families cannot book next week |
+| `development.roster.dormantAfterDays` | `[1, 3650]` | — | 0/neg/absurd → every roster player reads as dormant, or none ever do (code default 30) |
+| `development.roster.maxPlayers` | `[1, 10000]` | — | 0/neg/absurd → the roster endpoint returns an empty or unreasonably tiny candidate set (code default 150) |
+| `reviews.moderationOrphanGraceMinutes` | `[5, 1440]` | — | out-of-range falls back to the coded default (30); too small would hold slow-but-live verdicts |
+| `platform.moderation_sla_batch_size` | `[1, 500]` | — | 0 → SLA monitor makes no progress on stuck videos; huge → batch lock-contention spike (code default 50) |
+| `security.rate_limiting.bucket_ttl_hours` | `[1, 8760]` | — | too low → an actively-cycled bucket could be evicted mid-window (harmless — a fresh bucket behaves identically — but defeats the point of keeping it) (code default 24) |
+| `platform.radar_composite_lock_timeout_seconds` | `[2, 120]` | — | too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as an ordinary lock timeout; too high → the upsert wait this AC bounds stops failing fast (code default 5) |
+| `platform.gdpr_erase_statement_lock_timeout_seconds` | `[2, 120]` | — | too low (near Postgres's ~1s deadlock_timeout) → a genuine deadlock could misreport as an ordinary lock timeout; too high → a blocked erasure statement stops failing fast, extending how long the player_profiles lock is held (code default 5) |
+| `coach.safeguarding.validityYears` | `[1, 100]` | — | out-of-range falls back to the coded default (5); huge → a badge outlives the certificate behind it |
+| `coach.safeguarding.uploadRetentionDays` | `[1, 100]` | — | out-of-range falls back to the coded default (14); huge → certificates linger in storage |
+| `video.quota.{scout,instructor,academy,athlete,semiPro,pro}.storageBytes` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no upload" sentinel — scout is seeded 0) |
+| `video.quota.{scout,instructor,academy,athlete,semiPro,pro}.bandwidthBytesMonthly` | `[0, 2^63-1]` | — | neg → quota math breaks (0 is a legitimate "no streaming" sentinel) |
 | `video.{homework,drillDemo,coachReview}.maxSizeBytes` | `[1, 2^63-1]` | — | 0 → every upload of that type rejected |
 | `video.{homework,drillDemo,coachReview}.maxDurationSeconds` | `[1, 86400]` | — | 0 → every upload of that type rejected |
 

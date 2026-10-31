@@ -20,11 +20,13 @@ against the code.
 - Section 0 lists blocking issues found while compiling this checklist. Clear them before the first
   production go-live.
 
-Verified against master `fea08bae` (2026-10-29).
+Verified against master `cd7136bc` (2026-10-31), after the security-hardening round (#381-#399).
 
 ---
 
 ## Contents
+
+Start: [Start here: first production deploy](#start-here-first-production-deploy)
 
 0. [Open issues found while compiling this checklist](#0-open-issues-found-while-compiling-this-checklist)
 1. [Infrastructure](#1-infrastructure)
@@ -37,6 +39,82 @@ Verified against master `fea08bae` (2026-10-29).
 8. [Accounts and seed data](#8-accounts-and-seed-data)
 9. [Release and post-deploy smoke tests](#9-release-and-post-deploy-smoke-tests)
 10. [Changelog](#changelog)
+
+---
+
+## Start here: first production deploy
+
+The ordered path for a new environment. Each step names the section or guide with the detail. Do not skip ahead: later steps assume
+the earlier ones (DNS before the first `up`, secrets before the first boot, Stripe endpoints before the first real charge).
+
+**1. Obtain accounts and keys (several have lead times; start now).**
+- Project Arachnid / C3P API access (vetting is on their side). Without it the only way to boot is the pre-launch override in step 3.
+- AWS SES production access, a verified sender identity and an IAM principal with `ses:SendEmail` and `ses:GetAccount` ([section 5](#email)).
+- Stripe **live** account: Connect with OAuth for Standard accounts, live API keys, the Connect `ca_` client ID ([section 4](#4-stripe)).
+- Bunny.net Stream library (API key, library ID, CDN hostname, webhook signing secret); Hetzner Object Storage bucket for backups (`HOS_*`);
+  a Slack webhook and/or alert email for Grafana; GHCR PAT and SSH deploy key for GitHub Actions ([2.2](#22-github-actions-secrets-prod-deploy-workflow));
+  a Google AI key for Gemini, or a Vertex AI project ([section 5](#ai-moderation-and-safety-optional-off-by-default)).
+
+**2. Server, DNS, TLS.** Create the server and volume, add A records for `DOMAIN`, `MONITORING_DOMAIN` **and** `STORAGE_DOMAIN`, wait until
+`dig +short` returns the Node IP for all three, run `deploy/provision.sh`, apply the firewall ([`first-time-setup.md`](first-time-setup.md) Steps 1 to 4).
+Every host under `DOMAIN` must be https-only: the app sends HSTS with `includeSubDomains` for a year.
+
+**3. Generate the secrets** (one value per environment, never reused between UAT and PROD; keep them in the password manager):
+
+```bash
+openssl rand -base64 64   # JWT_SIGNING_KEY
+openssl rand -base64 32   # POSTGRES_PASSWORD, REDIS_PASSWORD, PLATFORM_PIN_ENCRYPTION_SECRET,
+                          # PLATFORM_REGISTRATION_VERIFICATION_SECRET, APP_VIDEO_PLAYBACK_SIGNING_SECRET
+openssl rand -base64 24   # GF_SECURITY_ADMIN_PASSWORD, STORAGE_ROOT_PASSWORD, APP_BOOTSTRAP_ADMIN_PASSWORD
+```
+
+Then `cp .env.example .env`, fill every value ([`secrets-reference.md`](secrets-reference.md); [section 2.1](#21-required-no-safe-default-boot-fails-or-the-feature-is-dead)
+is the required-ness matrix), copy it to `/opt/skillars/.env` and re-run `provision.sh` (mode 600). The app refuses to boot on a blank or
+dev-default secret, a non-https storage endpoint, or image scanning off ([boot checks](secrets-reference.md#boot-time-checks-on-prod-and-uat)).
+
+**Pre-launch overrides: set only if you must, and MUST be removed before real users arrive.**
+
+| Setting | Why it exists | Remove when |
+|---|---|---|
+| `ALLOW_UNSCANNED_MEDIA=true` | boots without C3P access (`ARACHNID_ENABLED=false` or no key); raises the critical `MediaScanningUnsafe` alert while set | `ARACHNID_ENABLED=true` and `ARACHNID_API_KEY` are set; **confirm unset at go-live** |
+| `APP_BOOTSTRAP_ADMIN_PASSWORD` (with `_EMAIL`, `_PHONE`) | creates the first admin once | the log shows `admin_bootstrap ... created`; remove the password and redeploy |
+| `GEMINI_MODE=developer` (default) | no DPA or EU residency; prod logs a daily `COMPLIANCE:` warning | Vertex AI is configured ([section 5](#ai-moderation-and-safety-optional-off-by-default)) |
+| `skip_backup` deploy input | emergency only | never for a release that carries a migration |
+
+**4. Stripe dashboard (live mode)** ([section 4](#4-stripe)): create the two webhook endpoints (account and Connect) and copy each `whsec_` into `.env`;
+register the OAuth redirect URI `https://<DOMAIN>/api/payment/coaches/me/stripe/callback`; create the products and recurring prices; optional Identity
+([4.5](#45-stripe-identity-age-verification-of-self-registered-players)).
+
+**5. First deploy** ([`first-time-setup.md`](first-time-setup.md) Step 6): `cd /opt/skillars/app && docker compose up -d`. This brings up everything,
+including `storage` and `storage-init`. On a **new database** nobody is signed in, so there is no sign-out. On an **existing environment** moving to this release,
+`JWT_SIGNING_KEY` replaces the stored key and **every user is signed out once** ([2.4](#24-jwt-signing-key-jwt_signing_key)); `redis` is recreated with a password on a new
+network ([2.5](#25-redis-password-redis_password)); deploy in a quiet window with `git pull` and `docker compose up -d redis app` (`deploy.yml` recreates `app` only).
+If the first boot stops with `STARTUP ABORTED ... platform.admin_alert_email` (Arachnid on, row seeded blank), set the row by SQL and `docker compose up -d app`
+(`runbook.md` "Admin alert recipient").
+
+**6. Configure through the admin API** (log in as the bootstrapped admin; `ROLE_ADMIN` only): `platform.admin_alert_email`, the seven `subscription.*.priceId` keys,
+`platform.commission.rate`, and review [section 7](#7-application-config-and-policy-keys). Remove the pre-launch overrides above and redeploy.
+
+**7. Verify** (from `/opt/skillars/app` on the Node):
+
+```bash
+docker compose ps                                                        # every service healthy, storage-init Exited (0)
+curl -s https://<DOMAIN>/actuator/health                                 # {"status":"UP"}
+curl -s -o /dev/null -w '%{http_code}\n' https://<STORAGE_DOMAIN>/       # 403 with a valid certificate
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'    # PONG
+docker compose exec app wget -qO- http://localhost:8367/manage/health/notification   # UP once SES has production access
+docker compose logs app | grep -E "AppSetupException|STARTUP ABORTED|MEDIA_SCANNING_UNSAFE|config.value.misconfigured"   # nothing
+```
+
+Then the SES preflight (`ready: true`), a Stripe test delivery to each endpoint (200), Grafana at `https://<MONITORING_DOMAIN>` with the alert rules healthy,
+and the [section 9](#9-release-and-post-deploy-smoke-tests) smoke tests.
+
+**8. Backups and monitoring.** `bash /opt/skillars/app/deploy/backup/install-crons.sh`, one `pg-backup.sh` run ending in `Upload verified`, a tested restore
+(`backup-restore.md`), and the external uptime monitor ([`uptime-monitor.md`](uptime-monitor.md)). Do not call the environment production-ready before these.
+
+**9. Rollback.** Record the running image and the pre-deploy dump key before every later deploy ([section 9](#before-each-release)). `deploy.yml` reverts the
+image on a failed smoke test; migrations are not undone, so restore from the dump ([`rollback.md`](rollback.md)). Rotating `JWT_SIGNING_KEY` or `REDIS_PASSWORD`
+is "edit `.env`, `docker compose up -d app` (or `redis app`)"; rotating `JWT_SIGNING_KEY` signs everyone out again.
 
 ---
 
@@ -74,7 +152,12 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
   (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
   `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215 and V219 use
+- [ ] **First boot with Arachnid on aborts until `platform.admin_alert_email` is set.** Production and UAT must now run with
+  `ARACHNID_ENABLED=true` (`DeployedMediaScanningValidator`), but `VideoModerationEmailListener` aborts startup while that
+  `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
+  the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
+  `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221 and V223 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -89,8 +172,8 @@ and [`uat-hostwinds-deployment.md`](uat-hostwinds-deployment.md) (UAT).
 ### Hosts and Docker
 
 - [ ] Server created with enough resources (`first-time-setup.md` → "Resource Requirements"). PROD
-  container limits sum to about 5.4 GB (`deploy.resources.limits` in `docker-compose.yml`:
-  app 2g, postgres 1536m, prometheus 768m, loki 768m, tempo 512m, grafana 512m, redis 256m,
+  container limits sum to about 7.3 GiB (`deploy.resources.limits` in `docker-compose.yml`:
+  app 2g, postgres 1536m, storage 768m, prometheus 768m, loki 768m, tempo 512m, grafana 512m, redis 256m,
   traefik 256m, node_exporter 64m).
   - UAT (Hostwinds): app heap capped at `-Xmx256m` with SerialGC, plus swap
     (`docker-compose.uat-hostwinds.yml`, `uat-hostwinds-deployment.md` Steps 2 and "Resource budget").
@@ -116,8 +199,8 @@ and [`uat-hostwinds-deployment.md`](uat-hostwinds-deployment.md) (UAT).
   open (SMTP/SES, Let's Encrypt, Stripe, Bunny, Gemini).
   - UAT (Hostwinds): 80 and 443 on the host (`ufw allow 'Nginx Full'`). Port 9500 stays closed: storage is bound to
     `127.0.0.1` and reached over https on 443 (`uat-hostwinds-deployment.md` Step 6).
-- [ ] Compose networks: `skillars-internal` (has egress) and `skillars-observability`
-  (`internal: true`, no egress) (`docker-compose.yml` → `networks:`; `first-time-setup.md`
+- [ ] Compose networks: `skillars-internal` (has egress), `skillars-observability`
+  and `skillars-data` (both `internal: true`, no egress; `skillars-data` holds only `app` and `redis`) (`docker-compose.yml` → `networks:`; `first-time-setup.md`
   troubleshooting section).
 - [ ] Management port 8367 (actuator, Prometheus) is **not** published. Only `/actuator/health` is
   routed, rewritten to `/manage/health/smoke` (Traefik labels `app-health` / `health-rewrite` in
@@ -138,15 +221,15 @@ and [`uat-hostwinds-deployment.md`](uat-hostwinds-deployment.md) (UAT).
   rate limits before you recreate `acme.json` (`traefik-tls.md` → Scenario C).
 - [ ] Certificates issued for every host. Check expiry with `traefik-tls.md` → "Checking the
   Current Certificate Status".
-  - UAT (Hostwinds): nginx in front, plain HTTP on the host name (`uat-hostwinds-deployment.md`).
-    Stripe requires HTTPS webhook URLs in live mode. Test mode may accept HTTP **(confirm)**.
+  - UAT (Hostwinds): nginx in front, plain HTTP for the app on the host name, https for `STORAGE_DOMAIN` only
+    (`uat-hostwinds-deployment.md`). Stripe requires HTTPS webhook URLs in live mode. Test mode may accept HTTP **(confirm)**.
 
 ### Backups (configured and a restore tested)
 
 Detail: [`backup-restore.md`](backup-restore.md), `deploy/backup/`.
 
-- [ ] Off-server backup target chosen: `BACKUP_STORAGE_TYPE=hetzner` (`HOS_*`) or
-  `s3-compatible` (`S3_BACKUP_*`). PROD only (`secrets-reference.md`).
+- [ ] Off-server backup target configured: `HOS_ACCESS_KEY`, `HOS_SECRET_KEY`, `HOS_BUCKET`, `HOS_ENDPOINT` in `/opt/skillars/.env`
+  (any S3-compatible provider works; there is no other backup switch). PROD only (`secrets-reference.md`).
 - [ ] Crons installed: `bash /opt/skillars/app/deploy/backup/install-crons.sh`, once per node and
   idempotent. It installs `pg-backup.sh` every 6 h (`0 */6 * * *`), `volume-backup.sh` daily at
   02:00 and `prune-backups.sh` at 03:30 (`deploy/backup/install-crons.sh`).
@@ -228,7 +311,7 @@ Spring `${X:default}` default.
 | `ALLOWED_CLIENTS` | blank (no machine client) unless a real integration needs one | set it if testers call the API with `X-Client-Id` (`uat-deployment.md` 8.3) | a request with an unlisted `X-Client-Id` gets 403 | `application.yaml` `allowed.clients`, `docker-compose.yml` |
 | `GF_SECURITY_ADMIN_PASSWORD`, `MONITORING_DOMAIN` | required | required where Grafana runs | compose `:?` error | `docker-compose.yml` |
 | `GF_ALERT_NOTIFY_EMAIL` or `GF_SLACK_WEBHOOK_URL` | at least one | at least one where Grafana runs | `provision.sh` exits 1 | `deploy/provision.sh` |
-| Backup `HOS_*` / `S3_BACKUP_*` | required | n/a | no off-site backups | `deploy/backup/*.sh` |
+| Backup `HOS_*` | required | n/a | no off-site backups, and the pre-deploy dump in `deploy.yml` fails | `deploy/backup/*.sh` |
 | `APP_BOOTSTRAP_ADMIN_EMAIL`/`PASSWORD`/`PHONE` | first deploy only, then remove the password | same | setting email and password without the phone aborts boot | `AdminBootstrapRunner` |
 
 ### 2.2 GitHub Actions secrets (PROD deploy workflow)
@@ -411,8 +494,8 @@ WHERE b.status = 'COMPLETED_PENDING_CONFIRMATION'
 `SESSION_NEVER_STARTED`. Nothing to check before it runs (the CHECK only widens). After deploy, the new
 `UnresolvedSessionSweeperService` picks up sessions that already ended unsettled, 200 per 5-minute tick:
 live sessions (IN_PROGRESS / PAUSED) whose end is more than `booking.unresolvedSession.graceMinutes` (120)
-ago move to COMPLETED_PENDING_CONFIRMATION, and ended never-started UPCOMING sessions each raise one
-`SESSION_NEVER_STARTED` alert (payment-integrity bucket). To see that backlog before deploying:
+ago move to COMPLETED_PENDING_CONFIRMATION. (V209 also made ended never-started UPCOMING sessions raise one
+`SESSION_NEVER_STARTED` alert; since V219 they are refunded instead, see below.) To see that backlog before deploying:
 ```sql
 SELECT status, count(*) FROM booking.bookings
 WHERE status IN ('IN_PROGRESS', 'PAUSED', 'UPCOMING')
@@ -599,6 +682,15 @@ WHERE paused_from IS NULL AND paused_until > now();
 supersets of the old lists so every existing row passes; `lock_timeout = 5s`. Nothing to check before it runs.
 The email list is the union of V219's 58 values plus the new one and the action-type list is V189's 20 plus four; a later migration that widens either CHECK must re-union it (merge note in the file header).
 
+**V222: age verifications** (`V222__age_verifications.sql`). One new empty table, `main.age_verifications` (own CHECK on `status`, FK to
+`"user"`), no change to existing tables. Nothing to check before it runs. See [4.5](#45-stripe-identity-age-verification-of-self-registered-players).
+
+**V221: media scan status** (`V221__file_storage_objects_scan_status.sql`). Three columns on `main.file_storage_objects`
+(`scan_status NOT NULL DEFAULT 'NOT_REQUIRED'`, `scan_attempts`, `last_scan_attempt_at`, all catalog-only) and a partial index
+`idx_storage_objects_scan_pending` built non-concurrently (marker `allow-blocking-index`; it blocks writes to that table while it builds, so
+deploy in a quiet window once PROD has uploads). No validating CHECK. Existing rows become `NOT_REQUIRED`: they were never scanned and are
+not rescanned. Nothing to check before it runs.
+
 **V220: related-party signals and review flag** (`V220__related_party_signals_and_review_flag.sql`).
 Additive only: two new empty tables, `main.user_identity_signals` (hashed email / phone / card / browser
 fingerprints per user; a unique index and `idx_uis_kind_hash`) and `payment.related_party_bookings` (PK
@@ -632,6 +724,9 @@ Additive only: a new empty `payment.stripe_oauth_states` table (single-use OAuth
 nullable `coach_stripe_accounts.payout_hold_until`. Nothing to check before it runs. Onboarding links minted
 before the deploy carry the old state (the coach id) and are rejected by the callback; the coach just clicks
 "Connect" again.
+
+**V216: phone OTP failed attempts** (`V216__phone_otp_failed_attempts.sql`). One `integer NOT NULL DEFAULT 0` column on
+`main.phone_otp_tokens` (catalog-only). Nothing to check before it runs.
 
 **V214: open pack-reservation index** (`V214__bookings_open_pack_reservation_index.sql`).
 One partial btree index, `idx_bkg_open_pack_reservation` on `booking.bookings (session_pack_purchase_id)`
@@ -903,7 +998,8 @@ chat with a coach opens only after a COMPLETED session with that coach), so UAT 
   4. Create a service account with role **Vertex AI User** (`roles/aiplatform.user`) only, and download a JSON key.
   5. Accept the **Google Cloud Data Processing Addendum** (Cloud Console, Account settings / Legal and compliance)
      and record Google Cloud as a processor in the records of processing (Art. 30), with the EU location.
-  6. Mount the key file read-only into the app container (e.g. `/run/secrets/gemini-sa.json`) and set
+  6. Mount the key file read-only into the app container (e.g. `/run/secrets/gemini-sa.json`; `docker-compose.yml` has no `volumes:` on `app`
+     today, so this needs a small compose change merged through a PR) and set
      `GEMINI_MODE=vertex`, `GEMINI_VERTEX_PROJECT=<project id>`, `GEMINI_VERTEX_LOCATION=europe-west4`,
      `GEMINI_VERTEX_CREDENTIALS_PATH=/run/secrets/gemini-sa.json`. `GEMINI_API_KEY` is then unused.
   7. Redeploy; startup aborts with a clear message if a vertex setting or the key file is missing. After the
@@ -929,7 +1025,7 @@ chat with a coach opens only after a COMPLETED session with that coach), so UAT 
     alert. Do not purge a flagged object before that advice.
   - Migration `V221` adds `file_storage_objects.scan_status` (existing rows become `NOT_REQUIRED`; PROD is not live).
 - [ ] `features.toggles.videointel-enabled: false` (Google Video Intelligence,
-  `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH`). Neither is passed through compose. **There is no real video
+  `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH`; both are passed through compose). **There is no real video
   scanner yet (decision C is open):** the client is a fail-closed stub and `app.video.moderation.requires-real-scanner`
   (default `true`) keeps every video visible to its uploader (and admins) only. Do not change it.
 
@@ -972,6 +1068,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
 | `GeminiComplianceMonitor.remind` | 24 h | hard-coded; log-only, per instance, no ShedLock. Repeats the `COMPLIANCE:` WARN while prod runs `GEMINI_MODE=developer` |
 | `CoachSafeguardingScheduler` sweep / reminder | daily 03:15 / 09:00 | hard-coded; upload retention `coach.safeguarding.uploadRetentionDays` (14), reminder lead 30 days (code). Sweep deletes unprocessed safeguarding-certificate uploads, reminder emails the coach once before the check expires |
+| `MediaScanRetryScheduler` | 60 s | `infrastructure.arachnid.sweep-delay-ms`; ShedLock `MediaScanRetryScheduler_retryPending` (`PT15M` / `PT30S`). Re-scans images left `PENDING` (withheld) because the scanner could not judge them; a no-op while `ARACHNID_ENABLED=false` |
 | `SubscriptionChangeApplicator` | daily 02:00 | hard-coded |
 | `SubscriptionGracePeriodChecker` | daily 03:00 | hard-coded |
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
@@ -1002,7 +1099,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `NeglectedSkillDetectionService` | Mondays 06:00 | `app.development.neglected-detection-cron` |
 | `SluSnapshotAppliedRetentionService` | daily 03:30 | `app.slu.snapshot-applied.prune-cron` |
 
-Source: `git grep -n "@Scheduled(" src/main/java`.
+Source: `git grep -n "@Scheduled(" src/main/java`; the ShedLock names are the `@SchedulerLock(name = ...)` values (41 today, listed with their lock windows in the dev-docs Scheduled Jobs page).
 
 - [ ] **UAT vs PROD:** nothing *must* differ. The defaults are the same on both profiles, and no
   scheduler property appears in `application-uat.yaml` or `application-prod.yaml`. The only
@@ -1102,6 +1199,8 @@ callout.
   first administrator`. Then **remove the password** and redeploy (`AdminBootstrapRunner`). Use an
   address no coach, parent or player owns, or the runner silently skips. Store the password in the
   password manager first.
+- [ ] **Admin alert recipient**: `platform.admin_alert_email` set (SQL on the very first boot when Arachnid is on, otherwise the config API;
+  `runbook.md` "Admin alert recipient"). Section 0 explains why the first boot needs the SQL route.
 - [ ] Exactly the intended admins exist:
   ```sql
   SELECT u.id, u.email, u.created_date FROM main."user" u
@@ -1178,7 +1277,7 @@ Detail: [`deploy-guide.md`](deploy-guide.md), [`rollback.md`](rollback.md), [`ru
   UP (SES production access, `GetAccount` permission).
 - [ ] First live deploy only: SES preflight `ready: true` ([section 5](#email)). Webhook endpoints
   show a 200 for a real or resent event.
-- [ ] Logs show no `AppSetupException`, `config.value.misconfigured` or `MULTIPLE_INSTANCES`. The
+- [ ] Logs show no `AppSetupException`, `STARTUP ABORTED`, `MEDIA_SCANNING_UNSAFE`, `config.value.misconfigured` or `MULTIPLE_INSTANCES`. The
   `skillars_app_instances_live` gauge is 1.
 - [ ] Grafana: error rate and latency are normal (`deploy-guide.md` Step 4).
 - [ ] If anything is wrong, follow [`rollback.md`](rollback.md) and use the pointer recorded above.
@@ -1244,11 +1343,6 @@ an operator must now do.
   that stay cashable. New admin alert type `BOOKING_ACTION_REQUIRED` (payment-integrity bucket): an admin
   cancel whose refund amount is unknown, or a booking a coach suspension could not cancel. Finish it by
   hand and mark it handled.
-- 2026-10-31: fix/security-auth-hardening (V216, additive `phone_otp_tokens.failed_attempts`). The app now
-  refuses to start with `activate.security=false` while profile `prod` or `uat` is active: make sure no
-  `ACTIVATE_SECURITY=false` override is set on either. New activation/reset keys are 22-character URL-safe
-  tokens (old 10-digit keys keep working until they expire). New code-default key
-  `security.login.max-attempts-per-account` (20, see the config table).
 - 2026-10-29: fix/booking-completion-integrity (V209): new config keys `booking.playerNoShow.graceMinutes`
   (15) and `booking.unresolvedSession.graceMinutes` (120), both code defaults with no seed row. New 5-minute
   job `UnresolvedSessionSweeperService` (ShedLock) and a new admin alert type `SESSION_NEVER_STARTED`
@@ -1272,7 +1366,7 @@ an operator must now do.
   - V211 deletes the duplicate `platform.commission_rate` key. It is data-only, so there is no
     pre-migration check.
   - New daily job `CoachStripeAccountResyncScheduler` (07:00, ShedLock).
-  - New passthroughs: `APP_BOOTSTRAP_JWT_SECRET_ENABLED`, `APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL`,
+  - New passthroughs: `APP_BOOTSTRAP_JWT_SECRET_ENABLED` (removed again by S-03), `APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL`,
     `APP_BOOTSTRAP_ADMIN_FIRST_NAME`/`_LAST_NAME`, `APP_STORAGE_BACKUP_*`, `ARACHNID_API_BASE_URL`,
     `VIDEOINTEL_*` and `ALLOWED_CLIENTS`.
   - `PLATFORM_NOTIFICATION_EMAIL` was removed.
@@ -1318,17 +1412,18 @@ an operator must now do.
   once PROD has traffic (section 3.2). No new config keys, jobs or webhooks.
 - 2026-10-31: feat/lgtm-application-dashboards. V215 runs automatically and joins the "prod is not live" list in section 0. Grafana dashboards moved to `deploy/lgtm/dashboards/`, so recreate the container after pulling: `docker compose up -d --force-recreate grafana`. The rewritten alert rules start notifying on the app and business alerts, so confirm a channel is set and check **Alerting → Alert rules** shows every rule healthy.
 - 2026-10-31: fix/backlog-metrics-staleness-and-timeout. New optional property `platform.backlog-metrics.query-timeout-seconds` (default 10), no action needed. New Grafana alert `BacklogMetricsStale`: recreate the Grafana container after deploying so it loads.
+- 2026-10-31: #383 (fail-fast on weak deployed secrets, security headers). New boot check `DeployedSecretsValidator` (`prod`/`uat`): a blank or published
+  dev-default `PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`, `APP_VIDEO_PLAYBACK_SIGNING_SECRET` (also must be Base64 of at least
+  32 bytes) or `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` stops the app; set real values in `.env` / `.env.uat` BEFORE deploying (the playback secret used to fail only
+  on the first playback). The app now sends HSTS (one year, `includeSubDomains`, only on requests Traefik forwards as https), `frame-ancestors 'self'`, a referrer
+  policy and a permissions policy, and redacts tokens in the access log: every host under `DOMAIN` must be served over https. No migration, job or webhook.
 - 2026-10-31: fix/security-pack-caps-gdpr-stripe-erasure (S-10, S-19). No migration, config key, job or webhook. New outbox aggregate `STRIPE_CUSTOMER_ERASURE` (enqueued by GDPR erasure, drained by the existing outbox drain and sweep): detaches the user's saved cards and deletes their Stripe Customer, or blanks its name/email/phone/description/`userId` metadata if Stripe refuses the delete. If the Stripe secret key is a restricted key, it needs write access to Customers and PaymentMethods. A row stuck in the outbox DLQ means Stripe kept rejecting the call: finish it in the Stripe dashboard (delete or edit the customer named in the row's `stripeCustomerId`). Pack tiers are now capped at 100 sessions and 50000.00 per pack (400 beyond that).
+- 2026-10-31: fix/security-auth-hardening (V216, additive `phone_otp_tokens.failed_attempts`). The app now
+  refuses to start with `activate.security=false` while profile `prod` or `uat` is active: make sure no
+  `ACTIVATE_SECURITY=false` override is set on either. New activation/reset keys are 22-character URL-safe
+  tokens (old 10-digit keys keep working until they expire). New code-default key
+  `security.login.max-attempts-per-account` (20, see the config table).
 - 2026-10-31: fix/security-payout-oauth-session-revocation (V217, additive). Stripe Connect onboarding now uses a single-use OAuth `state`: a link generated before the deploy fails with `state_mismatch`, the coach reconnects. Replacing a connected Stripe account with a different one holds payouts for `payment.payout.accountChange.holdHours` (default 72, `platform_config`, see section 7) and emails the coach (`profileChange` template, new i18n key in all four bundles). Password reset and password change now revoke all sessions. No new env vars, jobs or webhooks.
-- 2026-10-31: S-25 (security/s25-grafana). Grafana image 11.4.0 -> 11.6.16. No config, migration or provisioning
-  change. Pull and recreate only Grafana: `docker compose pull grafana && docker compose up -d grafana`. Its data
-  directory is migrated in place on first start (take a copy of `/opt/skillars/data/grafana` first if you want a
-  rollback path; a downgrade needs that copy). Afterwards check `/api/health` reports 11.6.16, the three datasources
-  and six dashboards are present, and the alert rules list shows no provisioning error.
-- 2026-10-31: S-25 (security/s25-uat-storage-tls). UAT Hostwinds only; PROD and full UAT (Traefik) already use
-  https. The app now refuses to boot in `prod`/`uat` if `app.storage.endpoint-url` (or a set backup endpoint) is not
-  `https://`. Hostwinds needs `STORAGE_DOMAIN` DNS, a certificate, the nginx site and `ufw` cleanup BEFORE
-  redeploying (section "Object storage"); redeploy `app storage` after.
 - 2026-10-31: S-03 (fix/security-jwt-key-from-env). New REQUIRED secret `JWT_SIGNING_KEY` (section 2.4): generate with
   `openssl rand -base64 64` and set it in `.env` / `.env.uat` BEFORE deploying, or the app will not boot. Use a
   fresh value, not the old DB key. All logged-in users are signed out at deploy (the SPA does not refresh on 401).
@@ -1359,12 +1454,31 @@ an operator must now do.
   `latest_charge` and carry `payerUserId` in metadata; new Stripe Customers carry the user's email. Radar rules to
   review in the Stripe dashboard are listed in the PR description. Watch the counter
   `skillars.payment.related_party.flagged` and the log `[RELATED_PARTY_FLAGGED]`. No new env var, job or webhook event.
+- 2026-10-31: S-20 (#393). New optional `GEMINI_MODE` (`developer` default | `vertex`), `GEMINI_MODEL`, `GEMINI_VERTEX_PROJECT`, `GEMINI_VERTEX_LOCATION`,
+  `GEMINI_VERTEX_CREDENTIALS_PATH` (all passed through compose, now in `.env.example`). `developer` in prod logs a daily `COMPLIANCE:` WARN, shows an admin health banner
+  and sets the gauge `skillars_gemini_developer_api_in_prod`; it never blocks boot. To move to Vertex AI follow the steps in [section 5](#ai-moderation-and-safety-optional-off-by-default).
+  Log-only job `GeminiComplianceMonitor.remind` (24 h, no ShedLock). No migration or webhook.
 - 2026-10-31: S-24 (security/s24-redis-hardening). New REQUIRED secret `REDIS_PASSWORD` (section 2.5): generate with
   `openssl rand -base64 32` and set it in `.env` / `.env.uat` BEFORE deploying, or `redis` will not start (UAT
   `docker compose` stops with a message). `redis` moves from `skillars-observability` to a new internal network
   `skillars-data` shared only with `app`; deploy with `docker compose up -d redis app`. A few seconds of Redis
   downtime, no data loss (AOF kept), no user-visible effect (rate limiting is in-memory). No migration, job or webhook.
+- 2026-10-31: S-18 (#392, V221). New env vars `ARACHNID_ENABLED`, `ARACHNID_API_KEY`, `ALLOW_UNSCANNED_MEDIA`. `prod`/`uat` now REFUSE TO BOOT unless image scanning is on with a key
+  (`DeployedMediaScanningValidator`); until C3P grants access the pre-launch override is `ALLOW_UNSCANNED_MEDIA=true` (ERROR log, critical `MediaScanningUnsafe` alert), which MUST be removed
+  before real users upload. Enabling Arachnid also needs `platform.admin_alert_email` set, and on a new database the first boot aborts until it is set by SQL (section 0). With scanning on, uploaded
+  images start `PENDING` and are withheld until scanned; videos stay uploader-only until a real scanner exists (`app.video.moderation.requires-real-scanner`). V221 adds scan
+  columns and a non-concurrent index on `file_storage_objects` (section 3.2). New job `MediaScanRetryScheduler` (60 s, ShedLock `MediaScanRetryScheduler_retryPending`); new Grafana alert `MediaScanningUnsafe`
+  (recreate Grafana after pulling). The abuse-media reporting duty needs a lawyer's confirmation.
+- 2026-10-31: S-25 (security/s25-grafana). Grafana image 11.4.0 -> 11.6.16. No config, migration or provisioning
+  change. Pull and recreate only Grafana: `docker compose pull grafana && docker compose up -d grafana`. Its data
+  directory is migrated in place on first start (take a copy of `/opt/skillars/data/grafana` first if you want a
+  rollback path; a downgrade needs that copy). Afterwards check `/api/health` reports 11.6.16, the three datasources
+  and six dashboards are present, and the alert rules list shows no provisioning error.
 - 2026-10-31: S-27 (V222, `main.age_verifications`): Stripe Identity age verification of self-registered players. New config keys `identity.ageVerification.enabled` (off) and `...maxAttemptsPerDay` (3). To switch on: enable Identity in the Stripe Dashboard, add the four `identity.verification_session.*` events to the Account webhook endpoint, ensure the API key can read verified outputs ([4.5](#45-stripe-identity-age-verification-of-self-registered-players)), then set the flag. No new endpoint, secret or job.
+- 2026-10-31: S-25 (security/s25-uat-storage-tls). UAT Hostwinds only; PROD and full UAT (Traefik) already use
+  https. The app now refuses to boot in `prod`/`uat` if `app.storage.endpoint-url` (or a set backup endpoint) is not
+  `https://`. Hostwinds needs `STORAGE_DOMAIN` DNS, a certificate, the nginx site and `ufw` cleanup BEFORE
+  redeploying (section "Object storage"); redeploy `app storage` after.
 - 2026-10-31: feat/coach-safeguarding-check (S-09, V223). New optional coach safeguarding check (no gate, badge
   only). New tables, two CHECK widenings, two code-default keys `coach.safeguarding.validityYears` (5) and
   `coach.safeguarding.uploadRetentionDays` (14), two daily ShedLock jobs (`CoachSafeguardingScheduler`, 03:15 and
@@ -1372,3 +1486,9 @@ an operator must now do.
   (application-encrypted with `PLATFORM_PIN_ENCRYPTION_SECRET`). Staff need `ROLE_ADMIN` (not `ROLE_LTD_ADMIN`) to
   use `/admin/safeguarding`. Decide with the lawyer how long a deleted certificate may remain in the daily volume
   backup. No new env var, Stripe event or webhook.
+- 2026-10-31: S-28 (#398). `ROLE_LTD_ADMIN` is now a genuinely limited back-office tier (read and moderate only). No role-grant API exists: create such an account with
+  `runbook.md` "Create a limited administrator", and re-check that every `ROLE_ADMIN` holder needs full power (section 8). No migration, env var, job or webhook.
+- 2026-10-31: docs reconciliation after #381-#399. Added the ordered "Start here: first production deploy" section. Corrected: backups use only the `HOS_*` variables (the
+  `BACKUP_STORAGE_TYPE` / `S3_BACKUP_*` switch never existed in code); container memory limits sum to about 7.3 GiB; V216, V221 and V222 pre-migration entries; V221 and V223
+  joined the "prod is not live" list; `MediaScanRetryScheduler` in the job table; `.env.example` lost the dead `APP_BOOTSTRAP_JWT_SECRET_ENABLED` and gained the `GEMINI_*`
+  variables and the optional passthroughs. `deploy.yml` recreates `app` only, so a release that adds `.env` variables or changes compose needs the steps in `deploy-guide.md`.

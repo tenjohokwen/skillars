@@ -41,12 +41,10 @@ For a trimmed-down, no-domain/no-TLS setup on your own machine instead, see
 
 ## Step 1: Why a separate compose override is needed
 
-`docker-compose.yml` (shared with production, unmodified) doesn't set
-`SPRING_PROFILES_ACTIVE` and doesn't pass most `app.*` config through to the
-container's environment — only `SPRING_DATASOURCE_*`, Redis, and the LGTM
-endpoints are wired today. Without a profile explicitly active, the app boots
-on the base profile only, and `application-uat.yaml`'s overrides (including
-the Stripe test-key safety check) never apply.
+`docker-compose.yml` (shared with production, unmodified) sets
+`SPRING_PROFILES_ACTIVE=prod` and passes every app-facing variable through from `.env`.
+Without a `uat` profile explicitly active, the app would boot as production, and
+`application-uat.yaml`'s overrides (including the Stripe test-key safety check) would never apply.
 
 `docker-compose.uat.yml` (checked into the repo, next to
 `docker-compose.local.yml`) fixes this for UAT: it sets
@@ -173,13 +171,11 @@ container and every browser resolve the identical HTTPS host.
 
 There's no web console (bucket browser) — SeaweedFS has no drop-in
 equivalent to MinIO's at this scope. To inspect a bucket, run the AWS CLI
-against the S3 API directly (needs an SSH session on the box, or the port
-tunnelled to your laptop first):
+against the public S3 endpoint (port 9500 is not published on the host; the
+endpoint is `https://<STORAGE_DOMAIN>` through Traefik):
 ```bash
-ssh -L 9500:localhost:9500 root@<UAT_NODE_IP>
-# then, locally:
-aws --endpoint-url http://localhost:9500 s3 ls s3://<APP_STORAGE_BUCKET> \
-  --profile <a profile with STORAGE_ROOT_USER/STORAGE_ROOT_PASSWORD as its keys>
+AWS_ACCESS_KEY_ID=<STORAGE_ROOT_USER> AWS_SECRET_ACCESS_KEY=<STORAGE_ROOT_PASSWORD> \
+  aws --endpoint-url https://<STORAGE_DOMAIN> s3 ls s3://<APP_STORAGE_BUCKET>
 ```
 
 ---
@@ -216,7 +212,12 @@ below, which is specific to UAT / not in `secrets-reference.md` yet:
 | `APP_PAYMENT_STRIPE_OAUTH_CLIENT_ID` | Only if testing Connect onboarding | The test-mode Connect client ID from Step 2 |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | **Yes — app refuses to start without it** | `Cryptopher` throws `EncryptionException(MISSING_SECRET)` and the whole context fails if this is blank, profile-independent, not new to UAT. Generate: `openssl rand -base64 32` |
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | **Yes — app refuses to start without it** | `BunnyVideoProviderAdapter`'s constructor throws if blank, and it's built eagerly (non-lazy bean) whenever `app.video.provider=bunny`, the default — so this crashes the *entire* app context on boot even if UAT never touches video. Any non-blank value unblocks startup; only real Bunny webhook verification needs the real Bunny Read-Only API key — generate a placeholder with `openssl rand -base64 24` if video isn't in scope for this UAT round |
-| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | Yes, before anyone tries to watch a video | Not fail-fast at boot — only fails the first time a playback JWT is signed (`Base64.getDecoder().decode(...)` needs ≥32 raw bytes). Generate: `openssl rand -base64 32` |
+| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | **Yes — app refuses to start without it** | `DeployedSecretsValidator` aborts boot on `uat`/`prod` when it is blank, not Base64, under 32 bytes, or the dev value. Generate: `openssl rand -base64 32` |
+| `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | **Yes — app refuses to start without it** | `openssl rand -base64 32`. The dev value is rejected too |
+| `JWT_SIGNING_KEY` | **Yes — app refuses to start without it** | `openssl rand -base64 64` (Base64, ≥ 64 bytes). `docker-compose.uat.yml` requires it (`:?`). Never reuse production's. Changing it signs every tester out |
+| `REDIS_PASSWORD` | **Yes** | `openssl rand -base64 32`, no spaces or quotes. `docker-compose.uat.yml` requires it (`:?`); the app rejects blank or the local dev value |
+| `ARACHNID_ENABLED` / `ARACHNID_API_KEY` | **Yes, or the override below** | `uat` runs the same media-scanning boot check as production (`DeployedMediaScanningValidator`): `ARACHNID_ENABLED=true` with a key from C3P, or, until you have one, `ALLOW_UNSCANNED_MEDIA=true` (UAT only; it raises the `MediaScanningUnsafe` alert). Enabling Arachnid also needs `platform.admin_alert_email` set first (`runbook.md` "Admin alert recipient") |
+| `GEMINI_API_KEY` | No | AI moderation/narratives are off without it. `GEMINI_MODE` stays `developer` on UAT (the compliance warning is for prod only) |
 | `BUNNY_LIBRARY_ID` / `BUNNY_API_KEY` / `BUNNY_CDN_HOSTNAME` | No | Reuses the same variables as `.env` (production); omit `BUNNY_LIBRARY_ID` to fall back to the `123456` placeholder that unblocks app startup without real video features |
 | `ENVIRONMENT` | **Yes — set to `uat`** | `docker-compose.uat.yml` defaults it to `uat`, but `.env.example` seeds `prod`, and a copied `prod` wins. Left as `prod`, every uat log line and Loki stream is labelled `prod`. |
 | `APP_FRONTEND_URL` | **Yes — your UAT URL** | `docker-compose.uat.yml` requires it (`:?`), so `docker compose up` stops if it is missing. Without it, `docker-compose.yml`'s `https://skillars.com` default would beat `application-uat.yaml`, and every verification / password-reset link in uat email would point at **production**. |
@@ -261,6 +262,9 @@ connected accounts. Each endpoint has its own signing secret.
        invisible to the app and the coach is paid anyway
    - Copy its **Signing secret** (`whsec_...`) into
      `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` in `.env.uat`
+   - Only if you test Stripe Identity age verification (S-27, off by default): also add the four
+     `identity.verification_session.*` events (`verified`, `requires_input`, `processing`, `canceled`) to this
+     endpoint. See `provisioning-checklist.md` section 4.5
 3. **Connect endpoint** ("events on connected accounts"): add a second endpoint
    - URL: `https://<DOMAIN>/api/payment/webhooks/stripe/connect`
    - Events (the only Connect events the app acts on):
@@ -319,13 +323,13 @@ ssh root@<UAT_NODE_IP> "cd /opt/skillars/app && git pull"
 scp .env.uat root@<UAT_NODE_IP>:/opt/skillars/.env.uat
 ssh root@<UAT_NODE_IP> "chmod 600 /opt/skillars/.env.uat"
 ssh root@<UAT_NODE_IP> \
-  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
+  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file /opt/skillars/.env.uat up -d"
 ```
 
 Watch startup status the same way as `first-time-setup.md` Step 6:
 
 ```bash
-ssh root@<UAT_NODE_IP> "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat ps"
+ssh root@<UAT_NODE_IP> "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file /opt/skillars/.env.uat ps"
 ```
 
 `docker compose up -d` with no explicit service list brings up everything
@@ -362,10 +366,9 @@ any future expiry, any CVC) and confirm:
 Then upload something through a feature that stores a file (e.g. a coach
 profile photo) and confirm:
 
-- `aws --endpoint-url http://localhost:9500 s3 ls s3://<APP_STORAGE_BUCKET>`
+- `aws --endpoint-url https://<STORAGE_DOMAIN> s3 ls s3://<APP_STORAGE_BUCKET>`
   (with `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` set to
-  `STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD`, run from an SSH tunnel to port
-  9500 as in Step 3) shows the uploaded object
+  `STORAGE_ROOT_USER`/`STORAGE_ROOT_PASSWORD`, as in Step 3) shows the uploaded object
 - The image actually renders in the browser — confirms `STORAGE_DOMAIN`'s
   TLS cert is valid and the presigned GET URL `S3Presigner` generated is
   reachable from outside the compose network, not just from the `app`
@@ -409,11 +412,11 @@ Add three variables to `.env.uat`, deploy, then take the password back out:
 scp .env.uat root@<UAT_NODE_IP>:/opt/skillars/.env.uat
 ssh root@<UAT_NODE_IP> "chmod 600 /opt/skillars/.env.uat"
 ssh root@<UAT_NODE_IP> \
-  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat up -d"
+  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file /opt/skillars/.env.uat up -d"
 
 # 3. Confirm the account was created — look for this line, once:
 ssh root@<UAT_NODE_IP> \
-  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file .env.uat logs app | grep admin_bootstrap"
+  "cd /opt/skillars/app && docker compose -f docker-compose.yml -f docker-compose.uat.yml --env-file /opt/skillars/.env.uat logs app | grep admin_bootstrap"
 #    ... "Admin bootstrap created the first administrator" ... login=admin@yourdomain.com ... authority=ROLE_ADMIN
 
 # 4. Remove APP_BOOTSTRAP_ADMIN_PASSWORD from .env.uat, re-scp, and redeploy.
@@ -448,7 +451,7 @@ Notes on the behaviour, so nothing here is surprising:
 |---|---|---|
 | **Coach** | Public registration UI → email verification → phone OTP | The coach must then complete **all five profile-builder steps and publish**. Until publish the profile is `DRAFT`, and coach search only returns `ACTIVE`/`REDUCED` — an unpublished coach is invisible to parents |
 | **Parent** | Public registration UI → email verification → phone OTP | Creates player profiles for their children from the parent portal |
-| **Player** | Player self-registration (adults, 18+) | Can register, log in and browse. **Cannot book** — every booking-creation endpoint is parent-only today. Scope the player leg of your script to register-and-browse |
+| **Player** | Player self-registration (adults, 18+) | Can register, log in, browse, book and pay for their own profile (booking endpoints accept parent or player). With `identity.ageVerification.enabled` off, chat with a coach opens only after a completed session with that coach |
 | **Admin** | Step 8.1 above | API-only — see 8.3 |
 
 ### 8.3 There is no admin UI — this is expected
@@ -494,14 +497,6 @@ yet. Say so in the UAT brief.
   `docker-compose.uat.yml` changes. Production deploys must keep using
   `docker-compose.yml` alone (no `-f docker-compose.uat.yml`), the same as
   today, or they'd pick up UAT's Stripe test key and storage service.
-- Two of the secrets in Step 4 (`PLATFORM_PIN_ENCRYPTION_SECRET`,
-  `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`) are fail-fast **everywhere**, not
-  UAT-specific — production presumably has real values for these set
-  somewhere already (the app couldn't have booted otherwise), but
-  `docker-compose.yml`/`secrets-reference.md` don't currently document how
-  they reach the container, the same gap already noted for
-  `APP_PAYMENT_STRIPE_*`/`APP_STORAGE_*`. Worth reconciling separately from
-  this doc.
 - This guide was assembled from the verified `first-time-setup.md` /
   `local/deployment.md` content plus the actual current `PaymentConfig`,
   `application-uat.yaml`, and compose files, and `docker compose config` was
