@@ -73,7 +73,7 @@ import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
 import { useI18n } from 'vue-i18n'
 
-const { t, te } = useI18n()
+const { t } = useI18n()
 
 const $q = useQuasar()
 const health = ref(null)
@@ -88,8 +88,8 @@ const warnings = computed(() =>
 )
 
 function warningText(item) {
-  const key = `admin.health.warnings.${item.name}`
-  return te(key) ? t(key) : (item.details?.warning ?? item.name)
+  if (item.name === 'geminiCompliance') return t('admin.health.warnings.geminiCompliance')
+  return item.details?.warning ?? item.name
 }
 
 function statusClass(status) {
