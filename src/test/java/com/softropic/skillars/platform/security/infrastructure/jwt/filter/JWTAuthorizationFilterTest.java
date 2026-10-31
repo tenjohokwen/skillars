@@ -56,6 +56,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doThrow;
@@ -549,6 +550,32 @@ class JWTAuthorizationFilterTest {
 
         assertTrue(responseBody.toString().matches("(?s).*\"helpCode\":\"[^\"]+\".*"),
                 "401 body must carry a non-null helpCode, was: " + responseBody);
+    }
+
+    @Test
+    @DisplayName("a request with no client identifier is expected traffic: 401, WARN, no stack trace, no alert")
+    void testMissingClientId_isLoggedAsExpectedTraffic() throws ServletException, IOException {
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.security.contract.exception.MissingClientIdException(
+            "Missing post-login client identifier")).when(loginTokenManager).ensureClientHasPostLoginId();
+        ch.qos.logback.classic.Logger filterLog =
+            (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(JWTAuthorizationFilter.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> events =
+            new ch.qos.logback.core.read.ListAppender<>();
+        events.start();
+        filterLog.addAppender(events);
+        try {
+            filter.doFilterInternal(request, response, filterChain);
+        } finally {
+            filterLog.detachAppender(events);
+        }
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(eventPublisher, never()).publishEvent(any(SecurityAlertEvent.class));
+        assertThat(events.list).filteredOn(e -> e.getFormattedMessage().contains("Filter-origin 401")).hasSize(1)
+            .allSatisfy(e -> {
+                assertThat(e.getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+                assertThat(e.getThrowableProxy()).isNull();
+            });
     }
 
     @Test

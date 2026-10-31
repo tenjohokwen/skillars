@@ -132,6 +132,36 @@ class ApiAdviceTest {
     }
 
     @Test
+    void notFoundHandler_unmappedPath_returns404WithHelpCode_notA500() {
+        org.springframework.web.servlet.resource.NoResourceFoundException ex =
+            new org.springframework.web.servlet.resource.NoResourceFoundException(
+                org.springframework.http.HttpMethod.GET, "wp-login.php");
+
+        ErrorDto body = apiAdvice.notFoundHandler(ex);
+
+        assertThat(body.getErrorMsg().errorKey()).isEqualTo("generic.notFound");
+        assertThat(body.getHelpCode()).isNotBlank();
+    }
+
+    @Test
+    void notFoundHandler_logsAtWarnWithoutAStackTrace_soAProbeIsNotAnError() {
+        ch.qos.logback.classic.Logger advice = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(ApiAdvice.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> events = new ch.qos.logback.core.read.ListAppender<>();
+        events.start();
+        advice.addAppender(events);
+        try {
+            apiAdvice.notFoundHandler(new org.springframework.web.servlet.resource.NoResourceFoundException(
+                org.springframework.http.HttpMethod.GET, "manage/health"));
+        } finally {
+            advice.detachAppender(events);
+        }
+
+        assertThat(events.list).hasSize(1);
+        assertThat(events.list.get(0).getLevel()).isEqualTo(ch.qos.logback.classic.Level.WARN);
+        assertThat(events.list.get(0).getThrowableProxy()).isNull();
+    }
+
+    @Test
     void illegalStateExceptionHandler_mapsTo500_notConflict_withHelpCode() throws NoSuchMethodException {
         // AC17: IllegalStateException always signals a server invariant / missing platform_config
         // key, never a client conflict — it must surface as 500 so 5xx alerting sees it.

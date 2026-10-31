@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.security.contract.exception.InvalidJWTDat
 import com.softropic.skillars.platform.security.contract.exception.JWTExpiredException;
 import com.softropic.skillars.platform.security.contract.exception.JWTTheftException;
 import com.softropic.skillars.platform.security.contract.exception.MissingAuthenticationException;
+import com.softropic.skillars.platform.security.contract.exception.MissingClientIdException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.platform.security.infrastructure.SecuredHttpEndpointGuard;
@@ -307,7 +308,12 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         // SecurityAlertEvent away from them (maybePublishSecurityAlert below). Genuine denials keep
         // ERROR + stack trace. The helpCode is minted and returned either way.
         final String logMsg = "Filter-origin 401 (" + errorKey + ")";
+        // A request with no client identifier cookie at all (MissingClientIdException) is the same
+        // crawler / scanner traffic as a tokenless one, and arrives first: ensureClientHasPostLoginId
+        // runs before the token check. It was logged at ERROR with a stack trace, so every bot probe
+        // of a secured URL read as an application error.
         final boolean expectedTraffic = cause instanceof MissingAuthenticationException
+                || cause instanceof MissingClientIdException
                 || cause instanceof JWTExpiredException;
         return expectedTraffic
                 ? ErrorLog.logExpected(log, cause, logMsg)

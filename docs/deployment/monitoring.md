@@ -493,7 +493,7 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
 
 **Meaning:** More than 50 ERROR lines in 10 minutes.
 
-**Response:** Operations Overview, "Errors". Group by logger in Explore to find the source. Anonymous 401s are logged at ERROR too (`Filter-origin 401`) and are excluded, so they cannot trip this alert.
+**Response:** Operations Overview, "Errors". Group by logger in Explore to find the source. Filter-origin 401 denials (a bad or tampered token) log at ERROR too and are excluded, so a burst of them cannot trip this alert. A request with no token or no client cookie is logged at WARN.
 
 ---
 

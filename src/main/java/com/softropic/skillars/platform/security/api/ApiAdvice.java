@@ -46,6 +46,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.MessageSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
@@ -109,6 +111,20 @@ public class ApiAdvice {
     public ErrorDto methodNotSupportedHandler(final HttpRequestMethodNotSupportedException exception) {
         final String defaultMsg = "HTTP method not supported";
         return logErrorAndReturnDTO(exception, defaultMsg, "generic.methodNotAllowed");
+    }
+
+    /**
+     * A path nothing maps to. Spring 6.1+ raises {@link NoResourceFoundException} for it, which the
+     * {@link Throwable} handler below used to answer with a 500 and an ERROR stack trace, so every
+     * crawler probe (/wp-login.php, /manage/health on the public port) counted as a server failure.
+     * It is client traffic, not an error: 404, WARN without the stack, helpCode still minted.
+     */
+    @ExceptionHandler({NoResourceFoundException.class, NoHandlerFoundException.class})
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorDto notFoundHandler(final Exception exception) {
+        final String defaultMsg = "Resource not found";
+        final String helpCode = ErrorLog.logExpected(log, exception, defaultMsg);
+        return toErrorDTO("generic.notFound", defaultMsg, helpCode);
     }
 
     @ExceptionHandler(ResponseStatusException.class)
