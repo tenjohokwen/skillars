@@ -391,6 +391,39 @@ export default {
       approvalsNone: 'Alles erledigt',
       tileUnavailable: 'Nicht verfügbar',
     },
+    // S-27: Stripe Identity age verification of self-registered players.
+    ageVerification: {
+      title: 'Alter bestätigen',
+      intro:
+        'Skillars richtet sich an Erwachsene. Spieler unter 18 Jahren werden über ein Elternkonto betreut. Bevor du das erste Mal chattest oder buchst, müssen wir deshalb bestätigen, dass du mindestens 18 bist.',
+      how: 'Das dauert etwa zwei Minuten: Du fotografierst ein Ausweisdokument (Reisepass, Personalausweis oder Führerschein) bei Stripe, unserem Identitätspartner.',
+      privacy:
+        'Skillars speichert nur das Ergebnis und dein Geburtsdatum. Die Bilder deines Dokuments bleiben bei Stripe und werden nach der Prüfung gelöscht.',
+      required: 'Du musst dein Alter bestätigen, bevor du chatten oder buchen kannst.',
+      start: 'Mein Alter bestätigen',
+      retry: 'Erneut versuchen',
+      resume: 'Bestätigung fortsetzen',
+      checking: 'Dokument wird geprüft',
+      pending:
+        'Wir prüfen dein Dokument. Das dauert meist eine Minute — diese Seite aktualisiert sich selbst.',
+      failed:
+        'Wir konnten dein Dokument nicht bestätigen. Achte darauf, dass es scharf, vollständig sichtbar und gültig ist, und versuche es erneut.',
+      verified: 'Dein Alter ist bestätigt. Du kannst mit Trainern chatten und Einheiten buchen.',
+      blocked:
+        'Unsere Prüfung hat ergeben, dass du unter 18 bist. Spieler unter 18 werden über ein Elternkonto betreut; dein Konto wurde gesperrt. Wende dich an den Support, falls das ein Irrtum ist.',
+      attemptsLeft: 'Verbleibende Versuche heute: {count}',
+      attemptsExhausted:
+        'Du hast die heutigen Versuche aufgebraucht. Bitte versuche es morgen erneut.',
+      unavailable:
+        'Die Altersbestätigung ist nicht aktiviert. Du kannst wie gewohnt buchen und bezahlen; der Chat öffnet sich nach deiner ersten abgeschlossenen Einheit mit einem Trainer.',
+      startError:
+        'Die Bestätigung konnte nicht gestartet werden. Bitte versuche es gleich noch einmal.',
+      backToWhere: 'Dort weitermachen, wo du aufgehört hast',
+      dashboardTitle: 'Altersbestätigung',
+      dashboardPending: 'Alter bestätigen, um zu chatten und zu buchen',
+      dashboardVerified: 'Alter bestätigt',
+      dashboardFailed: 'Bestätigung fehlgeschlagen — erneut versuchen',
+    },
   },
   booking: {
     requests: {
@@ -2558,6 +2591,12 @@ export default {
         'Eltern können im Gespräch eines volljährigen Spielers keine Nachrichten senden.',
       conversationBlocked:
         'Dieses Gespräch ist blockiert — es können keine neuen Nachrichten gesendet werden.',
+      ageVerificationRequired:
+        'Bitte bestätige zuerst dein Alter — du wirst zur Bestätigungsseite weitergeleitet.',
+      playerNotAgeVerified:
+        'Dieser Spieler hat die Altersbestätigung noch nicht abgeschlossen, daher kannst du ihm vorerst nicht schreiben.',
+      completedSessionRequired:
+        'Der Chat öffnet sich nach deiner ersten abgeschlossenen Einheit mit diesem Trainer.',
     },
     reportReason: {
       HARASSMENT: 'Belästigung',

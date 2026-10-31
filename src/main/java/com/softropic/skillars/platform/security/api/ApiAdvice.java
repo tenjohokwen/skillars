@@ -27,6 +27,8 @@ import com.softropic.skillars.platform.security.contract.exception.PlayerProfile
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.security.contract.exception.SkillarsAccountNotVerifiedException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
+import com.softropic.skillars.platform.security.contract.AgeVerificationErrorCode;
+import com.softropic.skillars.platform.security.contract.exception.AgeVerificationException;
 import com.softropic.skillars.platform.security.contract.exception.PlayerRegistrationException;
 import com.softropic.skillars.platform.security.contract.exception.ShadowAccountException;
 import com.softropic.skillars.platform.security.contract.exception.EmailTokenException;
@@ -564,6 +566,18 @@ public class ApiAdvice {
     @ResponseStatus(HttpStatus.CONFLICT)
     public ErrorDto playerRegistrationExceptionHandler(final PlayerRegistrationException ex) {
         return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
+    }
+
+    /** S-27: 403 for a gate, 429 for the attempts cap, 503 when verification is switched off / unconfigured. */
+    @ExceptionHandler(AgeVerificationException.class)
+    public ResponseEntity<ErrorDto> ageVerificationExceptionHandler(final AgeVerificationException ex) {
+        final AgeVerificationErrorCode code = ex.getErrorCode();
+        final HttpStatus status = switch (code) {
+            case ATTEMPTS_EXCEEDED -> HttpStatus.TOO_MANY_REQUESTS;
+            case UNAVAILABLE -> HttpStatus.SERVICE_UNAVAILABLE;
+            default -> HttpStatus.FORBIDDEN;
+        };
+        return ResponseEntity.status(status).body(logErrorAndReturnDTO(ex, ex.getMessage(), code.getErrorCode()));
     }
 
     @ExceptionHandler(ShadowAccountException.class)

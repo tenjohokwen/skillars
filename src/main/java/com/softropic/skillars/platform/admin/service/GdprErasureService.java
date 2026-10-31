@@ -48,6 +48,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.security.service.AgeVerificationService;
 import com.zaxxer.hikari.HikariDataSource;
 import com.zaxxer.hikari.HikariPoolMXBean;
 import jakarta.annotation.PostConstruct;
@@ -127,6 +128,7 @@ public class GdprErasureService {
     private final CoachBrandingRepository coachBrandingRepository;
     // S-19: the user's Stripe Customer + saved cards, erased at Stripe after commit via the outbox.
     private final StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
+    private final AgeVerificationService ageVerificationService;
 
     /**
      * The owner-bound upload slots (FileStorageService.OWNER_BOUND_ENTITIES) a coach's own images live
@@ -426,6 +428,10 @@ public class GdprErasureService {
         // feat/security-s06-related-party: the hashed email / phone / card / browser identifiers recorded for this
         // user (main.user_identity_signals). The related-party flags keep only ids, which no longer identify anyone.
         userIdentitySignalService.eraseForUser(userId);
+
+        // S-27: the Stripe Identity outcome rows (status, session id, verified tier) go with the account, and the
+        // provider is asked to redact its copy after commit. No document data was ever stored here.
+        ageVerificationService.eraseForUser(userId);
 
         // skillars-deferred-155 code review, Decision 1(a): declared HERE, above the COACH block — not
         // just above the PLAYER branch further down, which is where it used to live. The coach-side

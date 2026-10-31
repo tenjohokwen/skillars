@@ -19,6 +19,13 @@ const BACKEND_CODES = [
   'messaging.conversationBlocked',
 ]
 
+// S-27: the age-verification gates are owned by the security module, so their codes are 'security.*'.
+const AGE_GATE_CODES = {
+  'security.ageVerificationRequired': 'messaging.errors.ageVerificationRequired',
+  'security.playerNotAgeVerified': 'messaging.errors.playerNotAgeVerified',
+  'security.completedSessionRequired': 'messaging.errors.completedSessionRequired',
+}
+
 const RUNTIME_PAGE_KEYS = [
   'messaging.errors.generic',
   'messaging.moderation.pendingReviewOwn',
@@ -39,6 +46,10 @@ describe('messagingErrors', () => {
     )
   })
 
+  it.each(Object.entries(AGE_GATE_CODES))('maps the age gate %s to %s', (code, key) => {
+    expect(messagingErrorI18nKey(errorFor(code))).toBe(key)
+  })
+
   it('falls back to the generic key for unknown codes, network errors and nullish input', () => {
     expect(messagingErrorI18nKey(errorFor('messaging.somethingNew'))).toBe(
       'messaging.errors.generic',
@@ -55,6 +66,7 @@ describe('messagingErrors', () => {
   ])('every runtime-chosen messaging key resolves to a string in %s', (_locale, messages) => {
     const keys = [
       ...BACKEND_CODES.map((c) => messagingErrorI18nKey(errorFor(c))),
+      ...Object.values(AGE_GATE_CODES),
       ...RUNTIME_PAGE_KEYS,
     ]
     for (const key of keys) {

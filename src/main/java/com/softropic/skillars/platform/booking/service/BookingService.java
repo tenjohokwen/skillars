@@ -61,6 +61,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.security.service.AgeVerificationService;
 import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
@@ -157,6 +158,8 @@ public class BookingService {
     // fix/booking-cancel-policy-loopholes: late-cancel grace window (cancelBookingAsParent only).
     private final ConfigService configService;
     private final UserIdentitySignalService userIdentitySignalService;
+    /** S-27: Stripe Identity age gate for self-registered players. */
+    private final AgeVerificationService ageVerificationService;
 
     // skillars-deferred-155 AC5: the two statuses representing "this session is genuinely still
     // going to happen" — the only window in which a player/parent's session-prep request can be
@@ -394,6 +397,9 @@ public class BookingService {
             if (!Objects.equals(player.getUserId(), parentId)) {
                 throw new OperationNotAllowedException("Player does not own this profile", Map.of("submitted caller id", parentId), SecurityError.MISSING_RIGHTS);
             }
+            // S-27: a self-registered player proves they are 18+ before their first booking (no-op when the
+            // verification feature is off, or once verified).
+            ageVerificationService.requireVerifiedToBook(player.getUserId());
         }
         // B2: unlocked fast-fail only — the authoritative re-check runs under the player row lock
         // below (requirePlayerBookableUnderLock).

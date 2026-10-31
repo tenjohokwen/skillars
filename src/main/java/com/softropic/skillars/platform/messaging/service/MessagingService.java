@@ -19,11 +19,14 @@ import com.softropic.skillars.platform.messaging.repo.Conversation;
 import com.softropic.skillars.platform.messaging.repo.ConversationRepository;
 import com.softropic.skillars.platform.messaging.repo.Message;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
+import com.softropic.skillars.platform.security.contract.AgeVerificationErrorCode;
+import com.softropic.skillars.platform.security.contract.exception.AgeVerificationException;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.softropic.skillars.platform.security.service.AgePolicyService;
+import com.softropic.skillars.platform.security.service.AgeVerificationService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
@@ -78,6 +81,8 @@ public class MessagingService {
     private final ContactDetailSanitizer contactDetailSanitizer;
     private final RateLimitingService rateLimitingService;
     private final UserRepository userRepository;
+    /** S-27: age gate for chats with a self-registered player. */
+    private final AgeVerificationService ageVerificationService;
 
     /** Same switch RateLimitingAspect honours, so ITs that send many messages can turn limiting off. */
     @Value("${rate.limiting.enabled:true}")
@@ -110,6 +115,8 @@ public class MessagingService {
         // existence check that throws.
         var player = playerProfileRepository.findById(playerId)
             .orElseThrow(() -> new ResourceNotFoundException("Player not found", "player"));
+
+        requireSelfRegisteredPlayerMayChat(player, coachId, role);
 
         if ("PARENT".equals(role)) {
             AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(playerId));
@@ -232,6 +239,11 @@ public class MessagingService {
                 MessagingErrorCode.CONVERSATION_BLOCKED);
         }
 
+        // S-27: an existing thread with a self-registered player who is not (yet) age-verified is frozen too —
+        // this also covers players registered before the gate existed.
+        playerProfileRepository.findById(conv.getPlayerId())
+            .ifPresent(p -> requireSelfRegisteredPlayerMayChat(p, conv.getCoachId(), role));
+
         // After verifyIsParty (a non-party cannot burn another user's budget) and before any write or
         // Gemini call. Two buckets: one sender cannot flood, and a conversation cannot be flooded by
         // several accounts.
@@ -296,6 +308,32 @@ public class MessagingService {
         Message finalMessage = messageRepository.findById(messageId)
             .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
         return toMessageDto(finalMessage, senderUserId);
+    }
+
+    /**
+     * S-27: a self-registered adult player (profile owned by a user, not a parent) may start or take part in a chat
+     * only once age-verified. With verification unavailable the fallback applies instead: they and the coach may
+     * message each other only after at least one COMPLETED session between them. Parent-managed players are not
+     * affected — a parent is in the loop. The coach-side message names no cause beyond "not verified".
+     */
+    private void requireSelfRegisteredPlayerMayChat(PlayerProfile player, UUID coachId, String role) {
+        if (player.getUserId() == null || ageVerificationService.isVerified(player.getUserId())) {
+            return;
+        }
+        boolean playerSide = "PLAYER".equals(role);
+        if (ageVerificationService.isEnabled()) {
+            throw playerSide
+                ? new AgeVerificationException(AgeVerificationErrorCode.AGE_VERIFICATION_REQUIRED,
+                    "Age verification is required before chatting")
+                : new AgeVerificationException(AgeVerificationErrorCode.PLAYER_NOT_AGE_VERIFIED,
+                    "This player has not completed age verification yet");
+        }
+        if (!bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, player.getId(), List.of("COMPLETED"))) {
+            throw new AgeVerificationException(
+                playerSide ? AgeVerificationErrorCode.COMPLETED_SESSION_REQUIRED
+                           : AgeVerificationErrorCode.PLAYER_NOT_AGE_VERIFIED,
+                "Chat opens after a first completed session with this coach");
+        }
     }
 
     public Page<MessageDto> getMessages(Long conversationId, Long callerUserId, String role, Pageable pageable) {

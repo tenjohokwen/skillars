@@ -23,6 +23,7 @@ import com.softropic.skillars.platform.payment.repo.SessionPackTierRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
+import com.softropic.skillars.platform.security.service.AgeVerificationService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -68,6 +69,8 @@ public class SessionPackPaymentService {
     private final ConfigService configService;
     private final SubscriptionService subscriptionService;
     private final UserIdentitySignalService userIdentitySignalService;
+    /** S-27: Stripe Identity age gate for self-registered players. */
+    private final AgeVerificationService ageVerificationService;
 
     /**
      * Purchase a session pack for a player.
@@ -115,6 +118,9 @@ public class SessionPackPaymentService {
             if (!Objects.equals(player.getUserId(), parentId)) {
                 throw new OperationNotAllowedException("Player does not own this profile", SecurityError.MISSING_RIGHTS);
             }
+            // S-27: no money moves for a self-registered player who has not proved they are 18+ (the pack is only
+            // useful for bookings, which are gated the same way).
+            ageVerificationService.requireVerifiedToBook(player.getUserId());
         }
 
         SessionPackTier tier = sessionPackTierRepository.findById(packTierId)

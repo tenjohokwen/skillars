@@ -352,6 +352,37 @@ export default {
       approvalsNone: 'All caught up',
       tileUnavailable: 'Unavailable',
     },
+    // S-27: Stripe Identity age verification of self-registered players.
+    ageVerification: {
+      title: 'Verify your age',
+      intro:
+        'Skillars is for adults. Players under 18 are served through a parent account, so before your first chat or booking we need to confirm you are 18 or older.',
+      how: 'It takes about two minutes: you photograph an ID document (passport, ID card or driving licence) with Stripe, our identity partner.',
+      privacy:
+        'Skillars keeps only the result and your date of birth. Your document images stay with Stripe and are deleted after the check.',
+      required: 'You need to verify your age before you can chat or book.',
+      start: 'Verify my age',
+      retry: 'Try again',
+      resume: 'Continue verification',
+      checking: 'Checking your document',
+      pending:
+        'We are checking your document. This usually takes a minute — this page updates by itself.',
+      failed:
+        'We could not verify your document. Check that it is sharp, uncovered and not expired, then try again.',
+      verified: 'Your age is verified. You can chat with coaches and book sessions.',
+      blocked:
+        'Our check found that you are under 18. Players under 18 are served through a parent account; your account has been blocked. Please contact support if this is a mistake.',
+      attemptsLeft: 'Attempts left today: {count}',
+      attemptsExhausted: "You have used today's verification attempts. Please try again tomorrow.",
+      unavailable:
+        'Age verification is not switched on. You can book sessions and pay as usual; chat opens after your first completed session with a coach.',
+      startError: 'Verification could not be started. Please try again in a moment.',
+      backToWhere: 'Continue where you left off',
+      dashboardTitle: 'Age verification',
+      dashboardPending: 'Verify your age to chat and book',
+      dashboardVerified: 'Age verified',
+      dashboardFailed: 'Verification failed — try again',
+    },
   },
   marketplace: {
     sharedSlot: 'Your coach shared this time slot: {slot} (coach local time)',
@@ -2644,6 +2675,11 @@ export default {
       parentMessagingRestrictedForAdult:
         "Parents can't send messages in an adult player's conversation.",
       conversationBlocked: 'This conversation is blocked — new messages can no longer be sent.',
+      ageVerificationRequired:
+        'Please verify your age first — you will be taken to the verification page.',
+      playerNotAgeVerified:
+        "This player has not completed age verification yet, so you can't message them for now.",
+      completedSessionRequired: 'Chat opens after your first completed session with this coach.',
     },
     reportReason: {
       HARASSMENT: 'Harassment',

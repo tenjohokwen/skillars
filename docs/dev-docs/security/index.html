@@ -135,6 +135,7 @@
       <tr><td><code>PhoneOtpToken</code></td><td><code>phone_otp_tokens</code></td><td>Keyed-HMAC 6-digit OTP (10-min TTL) for the phone-verification step, shared across the three registration flows. Partial unique index <code>uq_pot_one_active_per_user</code> allows one live OTP per user (a concurrent re-issue &rarr; 409 <code>security.otpResendInProgress</code>).</td></tr>
       <tr><td><code>LoginAttempt</code></td><td><code>main.login_attempts</code></td><td>One row per failed <code>/api/auth/login</code>, keyed by <code>identifier = SHA-256(email|ip)</code> plus (V171) <code>subject_hash = SHA-256(email)</code>, so an admin can count/clear an account's failures across all IPs. Purged after 24h by <code>AuthCleanupService</code>.</td></tr>
       <tr><td><code>UserIdentitySignal</code></td><td><code>main.user_identity_signals</code></td><td>Hashed identifiers observed per user (V220): <code>kind</code> EMAIL / PHONE / CARD / BROWSER and a SHA-256 <code>value_hash</code> of the normalised value, unique per (user, kind, hash), with <code>first_seen</code> / <code>last_seen</code>. Written by <code>UserIdentitySignalService</code> (login records the browser fingerprint cookie and the account's email and phone; the payment module adds card fingerprints), compared by <code>RelatedPartyService</code> to link a coach to a second account (see <a href="../payment/index.html">Payment</a>). Best-effort writes, never fail a login. Raw values are never stored, and <code>GdprErasureService</code> deletes every row of an erased user.</td></tr>
+      <tr><td><code>AgeVerification</code></td><td><code>main.age_verifications</code> (V222)</td><td>One row per Stripe Identity session a self-registered player started: <code>status</code> (<code>CREATED</code>, <code>PROCESSING</code>, <code>REQUIRES_INPUT</code>, <code>VERIFIED</code>, <code>UNDERAGE</code>, <code>CANCELED</code>), <code>stripe_session_id</code> (unique), <code>verified_tier</code>, <code>verified_at</code>. No document data and no date of birth. "Is verified" means a <code>VERIFIED</code> row exists; the per-day attempt cap counts rows by <code>created_at</code>. Deleted by GDPR erasure.</td></tr>
       <tr><td><code>PersistentToken</code></td><td><code>persistent_token</code></td><td>Per-user session/device info (IP, user agent, blacklist flag); cleared by <code>UserErasedEventListener</code>.</td></tr>
       <tr><td><code>SecKey</code> / <code>Secret</code></td><td><code>sec_key</code> / <code>sec</code></td><td>Jasypt-encrypted key material keyed by (<code>version</code>, <code>busId</code>). The JWT signing key no longer lives here: it comes from the <code>JWT_SIGNING_KEY</code> env var (Base64, at least 64 bytes), and the <code>sec</code> row <code>(v1, jot)</code> is unused legacy data.</td></tr>
     </table>
@@ -150,6 +151,7 @@
       <tr><td><code>OtpHasher</code></td><td>Sole owner of <code>phone_otp_tokens.otp_hash</code>: <code>HmacSHA256(otpKey, userId:otp)</code>, with <code>otpKey</code> derived from <code>registration-verification-secret</code> under a fixed purpose label (never equal to the handle-signing key).</td></tr>
       <tr><td><code>ShadowAccountService</code></td><td>Creates/lists/fetches <code>PlayerProfile</code>s for parent-managed minors (with consent enforcement) and self-registered adults; updates position (<code>updateOwnPosition</code>/<code>updateChildPosition</code>); hides GDPR-erased children from listings. There is no "link another parent" path: one parent per player is enforced by <code>uq_ppl_player_id</code>.</td></tr>
       <tr><td><code>UserService</code> / <code>UserProfileService</code></td><td>User/profile lookups and self-service profile mutations (email, password, phone, address, info), each publishing an <code>AccountChangeEvent</code> for audit/notification.</td></tr>
+      <tr><td><code>AgeVerificationService</code></td><td>S-27 Stripe Identity age verification (see the flow below): the booking gate <code>requireVerifiedToBook</code>, the chat gate's <code>isVerified</code>/<code>isEnabled</code>, <code>start</code> (create or resume a session, daily cap, idempotency key), <code>applyOutcome</code> (webhook state machine, DOB correction, underage lock), <code>eraseForUser</code>. It talks to the provider only through the <code>AgeVerificationGateway</code> port (implemented by payment's <code>StripeIdentityGateway</code>), so security never imports Stripe types.</td></tr>
       <tr><td><code>AgePolicyService</code></td><td>Config-driven age-tier calculation and derived <code>MessagingPolicy</code> (<code>getMessagingPolicy</code>, <code>findMessagingPolicy</code>, batch <code>findMessagingPoliciesByPlayerIds</code>), shared by shadow-account creation, player self-registration and messaging.</td></tr>
       <tr><td><code>LoginRateLimiter</code></td><td>The one failed-login limiter, in <code>main.login_attempts</code> keyed by SHA-256(login|ip): <code>checkLimited</code>, <code>recordFailure</code>, admin <code>clear</code>/<code>countRecentFailures</code>. Budget/window from <code>security.login.max-attempts</code> / <code>lock-window-minutes</code>. Used by <code>AuthService.login</code>, the only password entry point. <code>checkLimited</code> (<code>MANDATORY</code> propagation) first claims <code>pg_try_advisory_xact_lock(hashtext('login_attempt:' || key))</code>, held until the login transaction ends: a parallel burst never records more than the budget, and an attempt that finds another one for the same key in flight re-tries the try-lock for up to 2 s (<code>CLAIM_WAIT</code>), then gets 429 — a bounded wait instead of parking a pooled connection behind a blocking lock. No account-wide (all IPs) cap, to avoid account-DoS.</td></tr>
       <tr><td><code>LoginTokenManager</code> / <code>JwtManagerImpl</code></td><td>Mint, extend and delete the JWT cookie set (<code>potc</code>, <code>user</code>, <code>rint</code>, <code>ION</code>, <code>skp</code>…). The JWT carries <code>ROLES</code> and <code>sessIat</code> (<code>SESSION_ISSUED_AT</code>); role precedence for a multi-role claim set is explicit ADMIN &gt; COACH &gt; PARENT &gt; PLAYER, and a null/non-string <code>ROLES</code> claim is rejected cleanly.</td></tr>
@@ -165,6 +167,8 @@
     <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
+      <tr><td>GET</td><td><code>/api/security/age-verification</code></td><td>S-27: the caller's age-verification state (<code>applicable</code>, <code>enabled</code>, <code>state</code> = NOT_STARTED / PENDING / FAILED / VERIFIED / BLOCKED, <code>attemptsRemainingToday</code>)</td><td>ROLE_PLAYER</td></tr>
+      <tr><td>POST</td><td><code>/api/security/age-verification/session</code></td><td>S-27: start or resume a Stripe Identity session; returns <code>{state, url}</code> (the hosted Stripe page). <code>@RateLimited</code> 5 per 10 min per IP, daily cap per user. 403 gate / 429 <code>security.ageVerificationAttemptsExceeded</code> / 503 <code>security.ageVerificationUnavailable</code></td><td>ROLE_PLAYER</td></tr>
       <tr><td>POST</td><td><code>/api/auth/login</code></td><td>SPA password login; issues JWT + refresh-token + <code>skp</code> cookies</td><td>Public</td></tr>
       <tr><td>POST</td><td><code>/api/auth/refresh</code></td><td>Rotate refresh token, reissue JWT</td><td>Public (refresh-token cookie)</td></tr>
       <tr><td>POST</td><td><code>/api/auth/logout</code></td><td>Revoke the refresh token, clear cookies</td><td>Public</td></tr>
@@ -314,6 +318,72 @@ sequenceDiagram
       resend starts a fresh budget. An <code>EMAIL_VERIFIED</code> user whose handle expired can re-click a freshly sent
       verification email to get a new OTP and handle (the status is not advanced twice).
     </p>
+
+    <h3 id="age-verification-of-self-registered-players">Age verification of self-registered players (S-27)</h3>
+    <p>
+      The date of birth a player types at signup is only a claim, so a minor could register as an adult and chat with
+      coaches or book with no parent in the loop. A self-registered player (a <code>PlayerProfile</code> with
+      <code>user_id</code>, never a parent-managed child) therefore proves they are 18+ with a Stripe Identity document
+      check, <em>lazily</em>: at the first chat or first booking, not at signup. Parent-managed children never self-register
+      and are untouched.
+    </p>
+    <pre class="mermaid">
+sequenceDiagram
+  participant SPA
+  participant G as Gate (booking, pack purchase, chat)
+  participant AV as AgeVerificationService
+  participant GW as StripeIdentityGateway
+  participant Stripe
+  participant WH as StripeWebhookService
+
+  SPA->>G: first booking or chat
+  G->>AV: isEnabled and not isVerified
+  G-->>SPA: 403 security.ageVerificationRequired
+  SPA->>AV: POST /api/security/age-verification/session
+  AV->>AV: lock user, daily cap, resume an open session
+  AV->>GW: createSession(userId, idempotencyKey)
+  GW->>Stripe: VerificationSession.create (document only)
+  AV-->>SPA: url (hosted Stripe page)
+  SPA->>Stripe: player photographs the ID
+  Stripe->>WH: identity.verification_session.verified or requires_input
+  WH->>Stripe: retrieve with verified_outputs expanded (dob)
+  WH->>AV: applyOutcome(sessionId, status, dob)
+  AV->>AV: adult: VERIFIED and DOB corrected / under 18: user locked, sessions revoked
+  AV-->>Stripe: after commit: redact (verified) or cancel (failed)
+    </pre>
+    <ul>
+      <li><strong>Gated endpoints.</strong> <code>POST /api/bookings/requests</code> (<code>BookingService.createBookingRequest</code>),
+        <code>POST /api/bookings/batches</code> (<code>BookingBatchService.createBatch</code>),
+        <code>POST /api/payment/session-packs/purchase</code> (<code>SessionPackPaymentService.purchasePack</code>) and, in
+        <code>MessagingService</code>, <code>initiateConversation</code> and <code>sendMessage</code> for either party. A gate refuses with
+        <code>AgeVerificationException</code> (403, errorKey <code>security.ageVerificationRequired</code> for the player,
+        <code>security.playerNotAgeVerified</code> for the coach, which reveals nothing more). Deliberately not an
+        <code>OperationNotAllowedException</code>: that handler raises a security alert per hit. The SPA's axios 403 interceptor
+        turns <code>security.ageVerificationRequired</code> into a redirect to <code>/player/age-verification?next=...</code>.</li>
+      <li><strong>Fallback (B).</strong> When <code>identity.ageVerification.enabled</code> is false (code default) or no Stripe API key is
+        set, <code>isEnabled()</code> is false: booking and paying are not gated, and an unverified self-registered player and the
+        coach may message each other only once at least one <code>COMPLETED</code> booking exists between them
+        (<code>security.completedSessionRequired</code> for the player). Dev and UAT run in this mode.</li>
+      <li><strong>Outcome.</strong> Only <code>VERIFIED</code> (verified age is not a minor per <code>AgePolicyService.isMinor</code>) unlocks the
+        gates. A differing verified DOB overwrites <code>main."user".dob</code> and the self-owned profile's DOB and age tier. A verified minor is
+        <code>UNDERAGE</code>: <code>user.locked</code>, legacy tokens, JWT sessions (<code>invalidateSessionsForUserInCurrentTransaction</code>)
+        and refresh tokens are revoked, the same three steps as <code>AdminUserService.suspendUser</code> minus its admin audit row (security cannot
+        depend on admin). Nothing is cancelled or refunded. There is no admin alert type for it (the alert CHECK was not widened); the log line is
+        <code>AGE_VERIFICATION_UNDERAGE</code>.</li>
+      <li><strong>Cost control.</strong> Stripe Identity bills per verification. A fresh session is capped per user per rolling 24 h
+        (<code>identity.ageVerification.maxAttemptsPerDay</code>, default 3), an unsubmitted session is resumed rather than recreated, a
+        <code>requires_input</code> session is cancelled so a retry is a new counted one, the Stripe call is keyed
+        <code>age-verification-{userId}-{n}</code> so a retried request replays the same session, and the start endpoint is rate limited.</li>
+      <li><strong>Data minimisation / GDPR.</strong> Sent to Stripe: the internal user id and a <code>purpose</code> tag. Stored: status, session id,
+        verified tier, <code>verified_at</code>. After the outcome commits, <code>StripeIdentityConclusionListener</code> redacts the session at Stripe
+        (best effort, logged on failure). <code>GdprErasureService</code> calls <code>eraseForUser</code>, which deletes the rows and redacts again.</li>
+      <li><strong>Grandfathering.</strong> Players registered before the gate are simply unverified and get prompted at their next chat or booking;
+        nothing is backfilled.</li>
+      <li><strong>Webhook.</strong> The four <code>identity.verification_session.*</code> events arrive on the platform endpoint and go through the
+        same signature check and <code>stripe_webhook_events</code> idempotency as every other event; <code>StripeIdentityWebhookService</code>
+        maps them. A terminal row is never overwritten by a late or replayed event. A <code>verified</code> event whose date of birth cannot be read
+        throws, so Stripe redelivers.</li>
+    </ul>
 
     <h3 id="parent-creates-a-shadow-player-profile-minor">Parent creates a shadow player profile (minor)</h3>
     <pre class="mermaid">

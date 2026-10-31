@@ -231,6 +231,23 @@ api.interceptors.response.use(
           message,
           data?.helpCode ? `(Help code: ${data.helpCode})` : '',
         )
+
+        // S-27: a self-registered player's first chat / booking / pack purchase is refused until they have proved
+        // they are 18+. Send them to the verification flow and bring them back to where they were afterwards.
+        // The calling page still shows its own failure toast; the redirect is the actual remedy.
+        if (errorKey === 'security.ageVerificationRequired' && bootRouter) {
+          const current = bootRouter.currentRoute?.value
+          if (current?.name !== 'player-age-verification') {
+            bootRouter
+              .push({
+                name: 'player-age-verification',
+                query: { next: current?.fullPath ?? '/', required: '1' },
+              })
+              .catch((redirectError) => {
+                console.error('[403] age-verification redirect failed', redirectError)
+              })
+          }
+        }
       }
 
       // Handle 5xx - Server errors

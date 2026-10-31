@@ -689,7 +689,7 @@ logged at DEBUG and acknowledged):
 
 | Endpoint (per mode) | Dashboard setting | URL | Events (exact) | Secret env var |
 |---|---|---|---|---|
-| **Account** endpoint | "Events on your account" | `https://<DOMAIN>/api/payment/webhooks/stripe` | `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded` | `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` |
+| **Account** endpoint | "Events on your account" | `https://<DOMAIN>/api/payment/webhooks/stripe` | `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `charge.dispute.created`, `charge.dispute.closed`, `charge.refunded`, `identity.verification_session.verified`, `identity.verification_session.requires_input`, `identity.verification_session.processing`, `identity.verification_session.canceled` (S-27, only once age verification is switched on, [4.5](#45-stripe-identity-age-verification-of-self-registered-players)) | `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` |
 | **Connect** endpoint | "Events on connected accounts" | `https://<DOMAIN>/api/payment/webhooks/stripe/connect` | `account.updated`, `account.application.deauthorized` (`StripeWebhookService.CONNECT_EVENT_TYPES`) | `APP_PAYMENT_STRIPE_CONNECT_WEBHOOK_SECRET` |
 
 - [ ] Both endpoints created for PROD (live mode) and UAT (test mode): four endpoints in total.
@@ -756,6 +756,42 @@ logged at DEBUG and acknowledged):
   **(confirm)**. None of these is configured from the repository.
 - [ ] Fee model keys match the Stripe pricing actually contracted: `payment.stripe.feeRate`
   `0.025`, `payment.stripe.feeFixed` `0.25` (`V139`) **(confirm)**.
+
+### 4.5 Stripe Identity (age verification of self-registered players)
+
+Self-registered adult players prove they are 18+ with a Stripe Identity document check at their first
+chat or first booking (S-27, V222). Detail: `docs/dev-docs/security/index.html`. The feature is **off
+until an operator turns it on**; while off, only the fallback applies (the player may book and pay, but
+chat with a coach opens only after a COMPLETED session with that coach), so UAT and dev need nothing.
+
+- [ ] **Stripe Dashboard → Identity**: Stripe Identity enabled (and, for live mode, the Identity
+  business verification / terms accepted) in **each mode** that will use it. It is billed per
+  verification; the cap below bounds it.
+- [ ] The API key can create `VerificationSession`s **and read their `verified_outputs`**. A full
+  secret key does. A restricted key (`rk_`) needs "Identity → Verification sessions" write plus
+  read access to verified outputs (date of birth), or `verified` events fail with
+  `STRIPE_IDENTITY_VERIFIED_OUTPUTS_FAILED` and Stripe keeps redelivering them. Redaction
+  (`VerificationSession.redact`) uses the same key.
+- [ ] Add the four `identity.verification_session.*` events (`verified`, `requires_input`,
+  `processing`, `canceled`) to the **Account** endpoint ([4.3](#43-webhook-endpoints-and-exact-event-lists)).
+  No new endpoint and no new secret: `APP_PAYMENT_STRIPE_WEBHOOK_SECRET` signs them. They are not Connect events.
+- [ ] Set `identity.ageVerification.enabled` = `true` (admin config editor, `PUT /api/config/values/{key}`).
+  Code default `false`, no seed row. It only takes effect when `APP_PAYMENT_STRIPE_API_KEY` is also set. Flip
+  it **after** the endpoint events above exist, or players will upload documents that never conclude.
+- [ ] `identity.ageVerification.maxAttemptsPerDay` (code default 3, range 1–100): sessions one player may open
+  in a rolling 24 h. This is the cost cap. A failed attempt ends its session, so every retry is a new,
+  counted one.
+- [ ] Return URL is `https://<DOMAIN>/#/player/age-verification` (built from `app.frontend-url`); nothing
+  to register in Stripe.
+- [ ] Data sent to Stripe: the internal numeric user id (`client_reference_id`) and a `purpose` metadata
+  tag. No name, e-mail, phone or declared date of birth. Skillars stores only status, session id, verified
+  tier and `verified_at` (`main.age_verifications`), never document data. Every concluded session is
+  redacted at Stripe right after the outcome commits and again on GDPR erasure; a failure is logged as
+  `AGE_VERIFICATION_STRIPE_REDACT_FAILED` and the session can be redacted by hand in the Dashboard.
+- [ ] Players who registered before this release are treated as unverified and are prompted at their next
+  chat or booking. Nothing is backfilled and no one is blocked retroactively.
+- [ ] A verified age under 18 locks the account and revokes its sessions (log line
+  `AGE_VERIFICATION_UNDERAGE`); no admin alert exists for it. Unlocking is the admin Users console.
 
 ---
 
@@ -965,6 +1001,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.unresolvedSession.autoRefundHours` | 48 (code default, range 2–720) | `ConfigBounds`, V219 | Owner decision 2026-10-31: 48. Hours after the start before a session nobody started, claimed or quick-completed is refunded in full automatically (no coach strike). Never applied below `booking.coachNoShow.reportWindowHours` + 1 |
 | `booking.coachNoShow.repeatClaimAlertThreshold` | 3 (code default, range 1–1000) | `ConfigBounds`, V219 | Owner decision 2026-10-31: 3. A payer's coach no-show claims (reports, late-cancel claims, 50/50 splits) within the window that raise one informational `REPEAT_NO_SHOW_CLAIMANT` admin alert. Nothing is blocked |
 | `booking.coachNoShow.repeatClaimAlertWindowDays` | 90 (code default, range 1–3650) | `ConfigBounds`, V219 | Owner decision 2026-10-31: 90. One alert per payer per window |
+| `identity.ageVerification.enabled` | `false` (code default, no seed row) | `AgeVerificationService`, V222 | S-27: turn on once Stripe Identity is enabled and the webhook events exist ([4.5](#45-stripe-identity-age-verification-of-self-registered-players)). While `false`, or without a Stripe API key, self-registered players book and pay unverified and may chat only after a COMPLETED session with that coach |
+| `identity.ageVerification.maxAttemptsPerDay` | 3 (code default, range 1–100) | `ConfigBounds`, V222 | S-27: Stripe Identity sessions one player may start per rolling 24 h (billed per verification) |
 | `booking.live.minDurationPercent` | 50 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A live session ended in under this share of its booked length (Start to End; pauses count as live) waits for the family's confirmation or dispute instead of paying the coach at once. 0 turns the check off |
 | `disputes.maxPerBookingPerRaiser` | 2 (code default, range 1–100) | `ConfigBounds` | Keep **(confirm)**. Disputes one side (the coach, or the family's logins together) may raise on one booking in total (open, resolved or dismissed). Past it: 409 `disputes.limitReached`; an appeal is the route past a decision |
 | `coach.excusedCancellations.maxPerWindow` | 3 (code default, 0–100) | `ConfigBounds` | Keep unless policy changes |
@@ -1286,3 +1324,4 @@ an operator must now do.
   `docker compose` stops with a message). `redis` moves from `skillars-observability` to a new internal network
   `skillars-data` shared only with `app`; deploy with `docker compose up -d redis app`. A few seconds of Redis
   downtime, no data loss (AOF kept), no user-visible effect (rate limiting is in-memory). No migration, job or webhook.
+- 2026-10-31: S-27 (V222, `main.age_verifications`): Stripe Identity age verification of self-registered players. New config keys `identity.ageVerification.enabled` (off) and `...maxAttemptsPerDay` (3). To switch on: enable Identity in the Stripe Dashboard, add the four `identity.verification_session.*` events to the Account webhook endpoint, ensure the API key can read verified outputs ([4.5](#45-stripe-identity-age-verification-of-self-registered-players)), then set the flag. No new endpoint, secret or job.

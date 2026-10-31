@@ -26,6 +26,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.security.service.AgeVerificationService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -68,6 +69,8 @@ public class BookingBatchService {
     private final ApplicationEventPublisher eventPublisher;
     private final ConfigService configService;
     private final BookingService bookingService;
+    /** S-27: Stripe Identity age gate for self-registered players. */
+    private final AgeVerificationService ageVerificationService;
     private final SessionDurationResolver sessionDurationResolver;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
@@ -134,6 +137,8 @@ public class BookingBatchService {
             if (!Objects.equals(player.getUserId(), parentId)) {
                 throw new OperationNotAllowedException("Player does not own this profile", SecurityError.MISSING_RIGHTS);
             }
+            // S-27: same age gate as BookingService.createBookingRequest.
+            ageVerificationService.requireVerifiedToBook(player.getUserId());
         }
         // B2: the batch path never checked the erasure tombstone (unlocked fast-fail here; the
         // authoritative check runs under the player row lock below, as on the single path).

@@ -112,3 +112,48 @@ describe('boot/axios — 401 before boot has run (defensive fallback, deferred-1
     expect(window.location.href).toContain('expired=true')
   })
 })
+
+describe('boot/axios — 403 age-verification gate redirects to the verification flow (S-27)', () => {
+  let rejectedHandler
+  let fakeRouter
+
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    const { api, default: boot } = await import('src/boot/axios')
+    rejectedHandler = api.interceptors.response.handlers[0].rejected
+    fakeRouter = {
+      currentRoute: { value: { name: 'booking-request', fullPath: '/parent/coaches/1/book' } },
+      push: vi.fn().mockResolvedValue(undefined),
+    }
+    await boot({ router: fakeRouter })
+  })
+
+  const build403 = (errorKey) => ({ response: { status: 403, data: { errorMsg: { errorKey } } } })
+
+  it('security.ageVerificationRequired — pushes the verification page with the current route as next', async () => {
+    await expect(
+      rejectedHandler(build403('security.ageVerificationRequired')),
+    ).rejects.toBeDefined()
+    expect(fakeRouter.push).toHaveBeenCalledWith({
+      name: 'player-age-verification',
+      query: { next: '/parent/coaches/1/book', required: '1' },
+    })
+  })
+
+  it('does not redirect when already on the verification page', async () => {
+    fakeRouter.currentRoute.value = {
+      name: 'player-age-verification',
+      fullPath: '/player/age-verification',
+    }
+    await expect(
+      rejectedHandler(build403('security.ageVerificationRequired')),
+    ).rejects.toBeDefined()
+    expect(fakeRouter.push).not.toHaveBeenCalled()
+  })
+
+  it('any other 403 does not redirect', async () => {
+    await expect(rejectedHandler(build403('MISSING_RIGHTS'))).rejects.toBeDefined()
+    expect(fakeRouter.push).not.toHaveBeenCalled()
+  })
+})

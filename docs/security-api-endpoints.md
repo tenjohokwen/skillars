@@ -174,6 +174,10 @@ Every method requires an authenticated session (any role).
 | POST | `/api/security/players/me` | PLAYER | Create the self-registered player's own profile (`position`). One-time. |
 | GET | `/api/security/players/me` | PLAYER | The caller's own profile. |
 | PATCH | `/api/security/players/me/position` | PLAYER | Change own position. |
+| GET | `/api/security/age-verification` | PLAYER | S-27: the caller's age-verification state `{applicable, enabled, state, attemptsRemainingToday}`; `state` is `NOT_STARTED`, `PENDING`, `FAILED`, `VERIFIED` or `BLOCKED`. `enabled` is false when `identity.ageVerification.enabled` is off or Stripe is not configured. |
+| POST | `/api/security/age-verification/session` | PLAYER | S-27: start (or resume) a Stripe Identity document check; returns `{state, url}` (hosted Stripe page, redirect the browser there). `@RateLimited` 5 per 10 min per IP plus a per-user daily cap (`identity.ageVerification.maxAttemptsPerDay`). 429 `security.ageVerificationAttemptsExceeded`, 503 `security.ageVerificationUnavailable`. |
+
+Gated elsewhere (S-27): `POST /api/bookings/requests`, `POST /api/bookings/batches`, `POST /api/payment/session-packs/purchase` and the messaging `POST /api/messaging/conversations` / `.../messages` answer 403 `security.ageVerificationRequired` (the player), `security.playerNotAgeVerified` (the other party) or `security.completedSessionRequired` (fallback mode) for a self-registered player who is not age-verified.
 
 One parent per player (FR-USR-001) is enforced by the `uq_ppl_player_id` unique constraint on
 `parent_player_links`. There is no "link another parent" endpoint.

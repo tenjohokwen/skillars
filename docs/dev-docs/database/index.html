@@ -191,6 +191,7 @@
         <tr><td><code>V143</code></td><td><code>"user".cleanup_failed_*</code> columns: unactivated-user cleanup records per-user failures instead of aborting.</td></tr>
         <tr><td><code>V144</code>, <code>V150</code></td><td><code>claimed_at</code>/<code>claimed_by</code> on <code>video_deletion_outbox</code> and <code>radar_composite_dlq</code> — run-scoped claims for the DLQ drainers.</td></tr>
         <tr><td><code>V145</code>–<code>V149</code></td><td>Backfill schema Hibernate used to create (<code>user_aud</code> columns, <code>"user".provider</code>, <code>file_storage_objects</code> auditing columns, <code>audit_log</code>, <code>user_authority_aud</code>) and widen <code>"user"</code> role/verification CHECKs.</td></tr>
+        <tr><td><code>V222</code></td><td><code>main.age_verifications</code> (S-27): outcome of each Stripe Identity age-verification session of a self-registered player (<code>status</code> CHECK, unique <code>stripe_session_id</code>, <code>verified_tier</code>, <code>verified_at</code>; FK to <code>"user"</code> <code>ON DELETE CASCADE</code>). No document data, no DOB. Deleted by GDPR erasure. No CHECK widened.</td></tr>
         <tr><td><code>V151</code></td><td><code>player_profiles.development_data_erased_at</code> — GDPR tombstone checked under lock by development listeners (<code>DevelopmentDataErasureGuard</code>).</td></tr>
         <tr><td><code>V152</code>–<code>V154</code></td><td>New <code>admin_alerts</code> types (GDPR erasure deadline, orphaned subscription); <code>gdpr_requests.retry_count</code>/<code>failed_at</code> for <code>GdprErasureRetryScheduler</code>.</td></tr>
         <tr><td><code>V156</code></td><td>Review eligibility config keys (<code>reviews.minSessionAgeDays</code>, <code>reviews.updateCooldownDays</code>).</td></tr>
@@ -456,7 +457,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>b78e264e</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

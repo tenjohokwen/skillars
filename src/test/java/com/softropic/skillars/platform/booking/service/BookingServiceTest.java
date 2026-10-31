@@ -117,6 +117,7 @@ class BookingServiceTest {
     @Mock private com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard developmentDataErasureGuard;
     // fix/booking-cancel-policy-loopholes: late-cancel grace window.
     @Mock private com.softropic.skillars.platform.config.service.ConfigService configService;
+    @Mock private com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
 
     @Spy
     private BookingStateMachine bookingStateMachine = new BookingStateMachine();
@@ -737,6 +738,35 @@ class BookingServiceTest {
         assertThat(bookingCaptor.getValue().getParentId())
             .as("a self-booking player's own userId is written into the opaque parent_id column")
             .isEqualTo(selfPlayerUserId);
+    }
+
+    /** S-27: an unverified self-registered player is stopped at the age gate before anything is written. */
+    @Test
+    void createBookingRequest_selfRegisteredPlayerNotAgeVerified_isRefusedBeforeAnyWrite() {
+        Long selfPlayerUserId = 500L;
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(makeSelfPlayer(PLAYER_ID, selfPlayerUserId)));
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.security.contract.exception.AgeVerificationException(
+                com.softropic.skillars.platform.security.contract.AgeVerificationErrorCode.AGE_VERIFICATION_REQUIRED, "verify"))
+            .when(ageVerificationService).requireVerifiedToBook(selfPlayerUserId);
+
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(selfPlayerUserId, req))
+            .isInstanceOf(com.softropic.skillars.platform.security.contract.exception.AgeVerificationException.class);
+        verify(bookingRepository, never()).save(any(Booking.class));
+    }
+
+    /** A parent booking for a parent-managed child is never subject to the age gate. */
+    @Test
+    void createBookingRequest_parentManagedPlayer_doesNotTouchTheAgeGate() {
+        PlayerProfile child = makePlayer(PLAYER_ID, PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(child));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.empty());
+        CreateBookingRequest req = makeValidRequest(COACH_ID, PLAYER_ID, makeCoveringWindow(COACH_ID));
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
+            .isInstanceOf(ResourceNotFoundException.class);
+        org.mockito.Mockito.verifyNoInteractions(ageVerificationService);
     }
 
     /** Self-registered player must not be able to book using someone else's playerId. */

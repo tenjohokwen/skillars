@@ -77,6 +77,7 @@ class BookingBatchServiceTest {
     @Mock TransactionStatus transactionStatus;
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock EntityManager entityManager;
+    @Mock com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
 
     @InjectMocks BookingBatchService service;
 

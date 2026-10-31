@@ -235,7 +235,10 @@ flowchart TD
   F -- no --> E403a["403 notAParty"]
   F -- yes --> G{"booking CONFIRMED/UPCOMING/IN_PROGRESS/COMPLETED?"}
   G -- no --> E403b["403 noBookingRelationship"]
-  G -- yes --> H{"role gate"}
+  G -- yes --> AV{"self-registered player not age-verified? (S-27)"}
+  AV -- "verification on" --> E403e["403 ageVerificationRequired (player) or playerNotAgeVerified (coach)"]
+  AV -- "verification off, no COMPLETED session" --> E403f["403 completedSessionRequired (player) or playerNotAgeVerified (coach)"]
+  AV -- ok --> H{"role gate"}
   H -- "PARENT and tier UNRESTRICTED" --> E403c["403 parentalOversightNotApplicable"]
   H -- "PLAYER and tier under 13" --> E403d["403 playerDirectMessagingRestricted"]
   H -- ok --> I["ConversationCreationHelper.tryCreate (REQUIRES_NEW)"]
@@ -320,6 +323,16 @@ sequenceDiagram
     </p>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
+    <div class="callout">
+      <p><strong>Age-verification gate (S-27).</strong> A chat with a <em>self-registered</em> player (profile <code>user_id</code> set; parent-managed
+      children are unaffected) is refused for both parties until that player is age-verified: <code>MessagingService.requireSelfRegisteredPlayerMayChat</code>
+      runs in <code>initiateConversation</code> (after the booking-relationship check) and <code>sendMessage</code> (so an existing thread is frozen too, which
+      also covers players registered before the gate). Reading history stays allowed. The errors are <code>AgeVerificationException</code>s
+      (<code>security.ageVerificationRequired</code> / <code>security.playerNotAgeVerified</code> / <code>security.completedSessionRequired</code>), not
+      <code>OperationNotAllowedException</code>s, so they bypass <code>MessagingApiAdvice</code> and are mapped by the global security <code>ApiAdvice</code>
+      (403, same <code>errorMsg.errorKey</code> shape). With verification off the gate falls back to "at least one COMPLETED booking between this coach and
+      this player". The coach is only told the player is not verified, never why. See the security page.</p>
+    </div>
     <div class="callout warn">
       <p><strong><code>PENDING</code> content is shown to its sender only.</strong> <code>toMessageDto(msg, viewerUserId)</code>
       hides content for <code>BLOCKED</code> and <code>UNDER_REVIEW</code> for everyone, and for <code>PENDING</code> for
@@ -415,7 +428,7 @@ sequenceDiagram
     </table>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>b78e264e</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

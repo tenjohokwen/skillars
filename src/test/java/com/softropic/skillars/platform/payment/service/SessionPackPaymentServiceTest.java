@@ -57,6 +57,7 @@ class SessionPackPaymentServiceTest {
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock RefundReconciliationService refundReconciliationService;
     @Mock SubscriptionService subscriptionService;
+    @Mock com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
