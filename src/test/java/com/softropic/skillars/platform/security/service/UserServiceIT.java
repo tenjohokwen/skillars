@@ -161,6 +161,28 @@ class UserServiceIT extends AbstractIntegrationTest {
 
     @Test
     @Sql({AUTHORITY_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
+    void completePasswordReset_revokesRefreshTokensAndInvalidatesSessions() {
+        final String email = "me@yahoo.com";
+        final var changePasswordDto = new ChangePasswordDto(email, LocalDate.parse("1978-03-19"), email);
+        final User prepared = passwordResetService.prepareForPasswordReset(changePasswordDto).orElseThrow();
+        final Long id = prepared.getId();
+        final String resetKey = userRepository.findById(id).orElseThrow().getResetKey();
+        final com.softropic.skillars.platform.security.repo.RefreshToken token =
+            new com.softropic.skillars.platform.security.repo.RefreshToken();
+        token.setUserId(id);
+        token.setTokenHash("pwreset-token");
+        token.setExpiresAt(Instant.now(ClockProvider.getClock()).plus(java.time.Duration.ofDays(7)));
+        refreshTokenRepository.save(token);
+
+        passwordResetService.completePasswordReset("newPassword", resetKey);
+
+        assertThat(refreshTokenRepository.findByTokenHash("pwreset-token").orElseThrow().isUsed()).isTrue();
+        assertThat(userRepository.findById(id).orElseThrow().getSecuritySessionInvalidatedAt()).isNotNull();
+        refreshTokenRepository.deleteAll();
+    }
+
+    @Test
+    @Sql({AUTHORITY_SQL_PATH, USER_DATA_SQL_PATH, SEC_DATA_SQL_PATH})
     void testAddressUpdate() {
         initSecurityContext();
         final Address address = Instancio.create(Address.class);

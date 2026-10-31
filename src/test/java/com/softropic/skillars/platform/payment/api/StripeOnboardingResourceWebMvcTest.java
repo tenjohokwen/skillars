@@ -31,6 +31,8 @@ import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletResponse;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -119,9 +121,10 @@ class StripeOnboardingResourceWebMvcTest {
     void callback_success_redirectsToFrontendHashRoute() throws Exception {
         stubCoachResolution();
         when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings");
+        when(onboardingService.consumeOAuthState(COACH_UUID, "minted-nonce")).thenReturn(true);
 
         mockMvc.perform(get("/api/payment/coaches/me/stripe/callback")
-                .param("code", "ac_123").param("state", COACH_UUID.toString()))
+                .param("code", "ac_123").param("state", "minted-nonce"))
             .andExpect(status().isFound())
             .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings"));
         verify(onboardingService).handleOAuthCallback(COACH_UUID, "ac_123");
@@ -148,6 +151,32 @@ class StripeOnboardingResourceWebMvcTest {
                 .param("code", "ac_123").param("state", "someone-else"))
             .andExpect(status().isFound())
             .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings?stripe_error=state_mismatch"));
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_oldStyleCoachIdState_isRejectedAndNothingLinked() throws Exception {
+        stubCoachResolution();
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings");
+
+        // The coach's own id used to be the accepted state; with no minted nonce behind it, it is not.
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback")
+                .param("code", "ac_attacker").param("state", COACH_UUID.toString()))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings?stripe_error=state_mismatch"));
+        verify(onboardingService, never()).handleOAuthCallback(any(), any());
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void callback_missingState_redirectsWithStateMismatch() throws Exception {
+        stubCoachResolution();
+        when(paymentProperties.getCallbackSuccessUrl()).thenReturn("/coach/payment-settings");
+
+        mockMvc.perform(get("/api/payment/coaches/me/stripe/callback").param("code", "ac_123"))
+            .andExpect(status().isFound())
+            .andExpect(redirectedUrl("https://app.example.com/#/coach/payment-settings?stripe_error=state_mismatch"));
+        verify(onboardingService, never()).handleOAuthCallback(any(), any());
     }
 
     @Test

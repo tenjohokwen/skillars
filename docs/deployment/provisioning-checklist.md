@@ -539,6 +539,12 @@ SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
 
+**V216: Stripe OAuth state + payout account hold** (`V216__stripe_oauth_state_and_payout_account_hold.sql`).
+Additive only: a new empty `payment.stripe_oauth_states` table (single-use OAuth `state` nonces, hashed) and a
+nullable `coach_stripe_accounts.payout_hold_until`. Nothing to check before it runs. Onboarding links minted
+before the deploy carry the old state (the coach id) and are rejected by the callback; the coach just clicks
+"Connect" again.
+
 **V214: open pack-reservation index** (`V214__bookings_open_pack_reservation_index.sql`).
 One partial btree index, `idx_bkg_open_pack_reservation` on `booking.bookings (session_pack_purchase_id)`
 `WHERE session_pack_purchase_id IS NOT NULL AND status IN ('REQUESTED','ACCEPTED','PAYMENT_PENDING')`, for
@@ -845,6 +851,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `payment.payout.newCoach.releasedCount` | 5 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A coach with fewer payouts ever released than this is "new" and gets the longer hold below. 0 = no new-coach hold. Shown to the coach on the Revenue Dashboard |
 | `payment.payout.newCoach.minReleasedNet` | 20 (code default, range 0–10000, whole units of `platform.payment.currency`) | `ConfigBounds` | Keep **(confirm)**. Only RELEASED payouts the coach kept at least this much of count toward `releasedCount`, so tiny sessions cannot end the new-coach hold. 0 = all count |
 | `payment.payout.newCoach.holdHours` | 168 (code default, range 0–336) | `ConfigBounds` | Keep **(confirm)**. Payout hold for a new coach (never shorter than `payment.payout.hold_hours`); sized against the card-chargeback window |
+| `payment.payout.accountChange.holdHours` | 72 (code default, range 0-336) | `ConfigBounds` | Keep **(confirm)**. Cooling-off during which transfers to a coach's NEW Stripe account are held after they replaced an existing connected account with a different one (V216 `payout_hold_until`); the coach is emailed. A first-time connection is never delayed. 0 = no hold (the email is still sent) |
 | `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
 | `platform.commission.rate` | 0.08 | V139 | Set to the agreed rate. The only commission key since V211 (`fix/prod-readiness-gaps` deleted the duplicate `platform.commission_rate`; `ProjectedRevenueService` now reads this one too) |
 | `payment.stripe.feeRate` / `feeFixed` | 0.025 / 0.25 | V139 | Match the Stripe contract **(confirm)** |
@@ -1113,3 +1120,5 @@ an operator must now do.
 - 2026-10-31: feat/lgtm-application-dashboards. V215 runs automatically and joins the "prod is not live" list in section 0. Grafana dashboards moved to `deploy/lgtm/dashboards/`, so recreate the container after pulling: `docker compose up -d --force-recreate grafana`. The rewritten alert rules start notifying on the app and business alerts, so confirm a channel is set and check **Alerting → Alert rules** shows every rule healthy.
 - 2026-10-31: fix/backlog-metrics-staleness-and-timeout. New optional property `platform.backlog-metrics.query-timeout-seconds` (default 10), no action needed. New Grafana alert `BacklogMetricsStale`: recreate the Grafana container after deploying so it loads.
 - 2026-10-31: fix/security-pack-caps-gdpr-stripe-erasure (S-10, S-19). No migration, config key, job or webhook. New outbox aggregate `STRIPE_CUSTOMER_ERASURE` (enqueued by GDPR erasure, drained by the existing outbox drain and sweep): detaches the user's saved cards and deletes their Stripe Customer, or blanks its name/email/phone/description/`userId` metadata if Stripe refuses the delete. If the Stripe secret key is a restricted key, it needs write access to Customers and PaymentMethods. A row stuck in the outbox DLQ means Stripe kept rejecting the call: finish it in the Stripe dashboard (delete or edit the customer named in the row's `stripeCustomerId`). Pack tiers are now capped at 100 sessions and 50000.00 per pack (400 beyond that).
+||||||| parent of 68a3ef92 (fix(security): single-use Stripe OAuth state, payout-destination cooling-off, revoke sessions on password change/reset)
+- 2026-10-31: fix/security-payout-oauth-session-revocation (V216, additive). Stripe Connect onboarding now uses a single-use OAuth `state`: a link generated before the deploy fails with `state_mismatch`, the coach reconnects. Replacing a connected Stripe account with a different one holds payouts for `payment.payout.accountChange.holdHours` (default 72, `platform_config`, see section 7) and emails the coach (`profileChange` template, new i18n key in all four bundles). Password reset and password change now revoke all sessions. No new env vars, jobs or webhooks.

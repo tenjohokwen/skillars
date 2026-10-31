@@ -21,6 +21,7 @@ public class AccountChangeEvent {
         EMAIL_CHANGED,
         ADDRESS_CHANGED,
         PHONE_CHANGED,
+        PAYOUT_ACCOUNT_CHANGED,
         TWO_FACTOR_AUTH_ENABLED,
         TWO_FACTOR_AUTH_DISABLED,
         OTHERS;

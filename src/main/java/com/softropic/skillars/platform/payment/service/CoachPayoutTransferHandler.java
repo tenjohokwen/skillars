@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.payment.contract.exception.CoachPayoutTra
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutFreezeRepository;
 import com.softropic.skillars.platform.payment.repo.CoachPayoutRepository;
+import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,8 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
     private final ObjectMapper objectMapper;
     private final ApplicationEventPublisher eventPublisher;
     private final CoachPayoutDebtService coachPayoutDebtService;
+    private final CoachStripeAccountRepository coachStripeAccountRepository;
+    private final CoachPayoutOutboxSupport coachPayoutOutboxSupport;
 
     @Override
     public String aggregateType() {
@@ -114,6 +117,18 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
             // AC4.3: still inside the hold window — throw so the outbox backoff re-drives it later.
             throw new IllegalStateException("coach payout for booking " + p.bookingId()
                 + " is held until " + row.getReleaseAfter() + " — deferring");
+        }
+
+        // fix/security-payout-oauth-session-revocation: the coach replaced their connected account with a
+        // different one and the cooling-off has not passed. Re-enqueue the transfer for when it does (rather
+        // than throwing, which would burn outbox attempts toward [OUTBOX_STUCK]); the row stays PENDING_RELEASE.
+        Instant accountHoldUntil = coachStripeAccountRepository.findById(row.getCoachId())
+            .map(a -> a.getPayoutHoldUntil()).orElse(null);
+        if (accountHoldUntil != null && accountHoldUntil.isAfter(Instant.now())) {
+            coachPayoutOutboxSupport.enqueueTransfer(row.getBookingId(), accountHoldUntil);
+            log.info("[COACH_PAYOUT_ACCOUNT_CHANGE_HOLD] booking={} coach={} — payout destination changed recently, "
+                + "transfer deferred until {}", row.getBookingId(), row.getCoachId(), accountHoldUntil);
+            return;
         }
 
         // fix/payment-payout-recovery: money a refused reversal left with the coach (coach_payout_debts) is

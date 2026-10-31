@@ -45,6 +45,8 @@ class CoachPayoutTransferHandlerTest {
     @Mock PaymentGateway paymentGateway;
     @Mock ApplicationEventPublisher eventPublisher;
     @Mock CoachPayoutDebtRepository debtRepository;
+    @Mock com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository coachStripeAccountRepository;
+    @Mock CoachPayoutOutboxSupport coachPayoutOutboxSupport;
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -57,7 +59,8 @@ class CoachPayoutTransferHandlerTest {
     void setUp() {
         handler = new CoachPayoutTransferHandler(coachPayoutRepository, coachPayoutFreezeRepository, paymentGateway,
             meterRegistry, objectMapper, eventPublisher,
-            new CoachPayoutDebtService(debtRepository, meterRegistry, eventPublisher));
+            new CoachPayoutDebtService(debtRepository, meterRegistry, eventPublisher),
+            coachStripeAccountRepository, coachPayoutOutboxSupport);
     }
 
     private String payload() throws Exception {
@@ -90,6 +93,37 @@ class CoachPayoutTransferHandlerTest {
         assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
         assertThat(r.getStripeTransferId()).isEqualTo("tr_1");
         assertThat(r.getReleasedAt()).isNotNull();
+    }
+
+    @Test
+    void recentlyChangedPayoutAccount_defersTransferAndReEnqueuesForTheEndOfTheCoolingOff() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        Instant holdUntil = Instant.now().plus(40, ChronoUnit.HOURS);
+        var account = new com.softropic.skillars.platform.payment.repo.CoachStripeAccount();
+        account.setPayoutHoldUntil(holdUntil);
+        when(coachStripeAccountRepository.findById(coachId)).thenReturn(Optional.of(account));
+
+        handler.handle(payload());
+
+        verify(paymentGateway, never()).transferToCoach(any(), any(), any(), any());
+        verify(coachPayoutOutboxSupport).enqueueTransfer(bookingId, holdUntil);
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
+    }
+
+    @Test
+    void expiredPayoutAccountHold_doesNotDelayTheTransfer() throws Exception {
+        CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        var account = new com.softropic.skillars.platform.payment.repo.CoachStripeAccount();
+        account.setPayoutHoldUntil(Instant.now().minus(1, ChronoUnit.HOURS));
+        when(coachStripeAccountRepository.findById(coachId)).thenReturn(Optional.of(account));
+        when(paymentGateway.transferToCoach(bookingId, coachId, new BigDecimal("45.00"), "eur")).thenReturn("tr_1");
+
+        handler.handle(payload());
+
+        assertThat(r.getStatus()).isEqualTo(CoachPayoutStatus.RELEASED);
+        verify(coachPayoutOutboxSupport, never()).enqueueTransfer(any(), any());
     }
 
     // fix/payment-payout-recovery (M5): an open coach debt is repaid from the next transfer, oldest first.
