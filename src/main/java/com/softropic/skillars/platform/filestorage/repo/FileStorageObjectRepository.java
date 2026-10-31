@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.filestorage.repo;
 
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -58,4 +59,39 @@ public interface FileStorageObjectRepository extends JpaRepository<FileStorageOb
     int markPhysicallyDeleted(@Param("id") Long id, @Param("ts") Instant ts);
 
     List<FileStorageObject> findAllByOwnerIdAndDeletedAtIsNull(String ownerId);
+
+    /** S-18: unscanned images awaiting a verdict whose last attempt (or upload) is older than {@code cutoff}. */
+    @Query("SELECT f FROM FileStorageObject f WHERE f.scanStatus = com.softropic.skillars.platform.filestorage.repo.ScanStatus.PENDING "
+        + "AND f.deletedAt IS NULL AND COALESCE(f.lastScanAttemptAt, f.uploadConfirmedAt) < :cutoff ORDER BY f.id")
+    List<FileStorageObject> findPendingScanDue(@Param("cutoff") Instant cutoff, Pageable page);
+
+    /** S-18: counts a scan attempt that produced no verdict (scanner down); the caller reads the new count back. */
+    @Modifying
+    @Transactional
+    @Query("UPDATE FileStorageObject f SET f.scanAttempts = f.scanAttempts + 1, f.lastScanAttemptAt = :now WHERE f.id = :id")
+    int recordScanAttempt(@Param("id") Long id, @Param("now") Instant now);
+
+    /** S-18: PENDING to CLEAN. Conditional, so a verdict that raced a flag/quarantine never un-withholds an object. */
+    @Modifying
+    @Transactional
+    @Query("UPDATE FileStorageObject f SET f.scanStatus = com.softropic.skillars.platform.filestorage.repo.ScanStatus.CLEAN, "
+        + "f.lastScanAttemptAt = :now WHERE f.id = :id AND f.scanStatus = com.softropic.skillars.platform.filestorage.repo.ScanStatus.PENDING")
+    int markScanClean(@Param("id") Long id, @Param("now") Instant now);
+
+    /** S-18: a hash match. Unconditional on the previous state: a match always wins. */
+    @Modifying
+    @Transactional
+    @Query("UPDATE FileStorageObject f SET f.scanStatus = com.softropic.skillars.platform.filestorage.repo.ScanStatus.FLAGGED, "
+        + "f.lastScanAttemptAt = :now WHERE f.id = :id")
+    int markScanFlagged(@Param("id") Long id, @Param("now") Instant now);
+
+    /** S-18: withholds every other live object of an uploader who had a match. Returns how many were withheld. */
+    @Modifying
+    @Transactional
+    @Query("UPDATE FileStorageObject f SET f.scanStatus = com.softropic.skillars.platform.filestorage.repo.ScanStatus.QUARANTINED "
+        + "WHERE f.ownerId = :ownerId AND f.id <> :exceptId AND f.deletedAt IS NULL AND f.scanStatus IN ("
+        + "com.softropic.skillars.platform.filestorage.repo.ScanStatus.NOT_REQUIRED, "
+        + "com.softropic.skillars.platform.filestorage.repo.ScanStatus.PENDING, "
+        + "com.softropic.skillars.platform.filestorage.repo.ScanStatus.CLEAN)")
+    int quarantineOtherObjectsOfOwner(@Param("ownerId") String ownerId, @Param("exceptId") Long exceptId);
 }

@@ -811,7 +811,8 @@ class ReportGenerationServiceTest {
                 org.mockito.Mockito.mock(org.springframework.transaction.support.TransactionTemplate.class),
                 org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.repo.StorageAccessEventRepository.class),
                 org.mockito.Mockito.mock(com.softropic.skillars.infrastructure.blobstore.service.StorageMetrics.class),
-                org.mockito.Mockito.mock(SecurityUtil.class));
+                org.mockito.Mockito.mock(SecurityUtil.class),
+                org.mockito.Mockito.mock(com.softropic.skillars.platform.filestorage.service.MediaScanPolicy.class));
 
         return new ReportGenerationService(
             coachProfileService, playerProfileService,

@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.video.service;
 
 import com.softropic.skillars.infrastructure.arachnid.ArachnidClient;
-import com.softropic.skillars.infrastructure.arachnid.ArachnidException;
 import com.softropic.skillars.infrastructure.arachnid.ArachnidScanResult;
 import com.softropic.skillars.infrastructure.feature.AppFeature;
 import com.softropic.skillars.infrastructure.feature.FeatureToggleService;
@@ -168,43 +167,51 @@ public class ModerationOrchestrationService {
             log.debug("Arachnid disabled for videoId={} — skipping Layer 1", videoId);
             return true;
         }
+        ArachnidScanResult result;
         try {
-            ArachnidScanResult result = arachnidClient.scan(mediaUrl);
-            if (result.matched()) {
-                String matchType = Objects.toString(result.matchType(), "UNKNOWN");
-                log.error("CSAM MATCH — videoId={} matchType={}", videoId, matchType);
-                try {
-                    transactionTemplate.execute(status -> {
-                        videoLifecycleService.transitionOperationalState(videoId, OperationalState.LOCKED);
-                        return null;
-                    });
-                } catch (TerminalStateViolationException ex) {
-                    log.warn("CSAM LOCKED transition skipped — videoId={} already in terminal state", videoId);
-                }
-                recordScan(videoId, "ARACHNID", "FLAGGED", null, "matchType=" + matchType);
-                // Alert BEFORE suspension: a CSAM match with no admin notification is worse than a failed suspension
-                alertAdmin(videoId, ownerId, "CSAM match detected",
-                           "videoId=" + videoId + " ownerId=" + ownerId + " matchType=" + matchType, true);
-                try {
-                    suspendAccount(ownerId, videoId);
-                } catch (Exception ex) {
-                    log.error("CRITICAL: suspendAccount failed for CSAM match ownerId={} videoId={}: {}",
-                              ownerId, videoId, ex.getMessage(), ex);
-                    alertAdmin(videoId, ownerId, "CSAM match — account suspension FAILED",
-                               "videoId=" + videoId + " ownerId=" + ownerId
-                               + " suspensionError=" + ex.getMessage(), true);
-                }
-                return false;
-            }
-            recordScan(videoId, "ARACHNID", "PASSED", null, null);
-            return true;
-        } catch (ArachnidException e) {
+            result = arachnidClient.scan(mediaUrl);
+        } catch (RuntimeException e) {
+            // ArachnidException, or anything unexpected from the scanner side (bad payload, null body): no verdict is
+            // never a pass (S-18). The video stays SCANNING and the SLA monitor retries it.
             log.error("Arachnid unavailable for videoId={}: {}", videoId, e.getMessage());
             recordScan(videoId, "ARACHNID", "FAILED", null, e.getMessage());
             alertAdmin(videoId, ownerId, "Arachnid moderation unavailable",
                        "videoId=" + videoId + " error=" + e.getMessage(), false);
             return false;
         }
+        if (result != null && result.matched()) {
+            String matchType = Objects.toString(result.matchType(), "UNKNOWN");
+            log.error("CSAM MATCH — videoId={} matchType={}", videoId, matchType);
+            try {
+                transactionTemplate.execute(status -> {
+                    videoLifecycleService.transitionOperationalState(videoId, OperationalState.LOCKED);
+                    return null;
+                });
+            } catch (TerminalStateViolationException ex) {
+                log.warn("CSAM LOCKED transition skipped — videoId={} already in terminal state", videoId);
+            }
+            recordScan(videoId, "ARACHNID", "FLAGGED", null, "matchType=" + matchType);
+            // Alert BEFORE suspension: a CSAM match with no admin notification is worse than a failed suspension
+            alertAdmin(videoId, ownerId, "CSAM match detected",
+                       "videoId=" + videoId + " ownerId=" + ownerId + " matchType=" + matchType, true);
+            try {
+                suspendAccount(ownerId, videoId);
+            } catch (Exception ex) {
+                log.error("CRITICAL: suspendAccount failed for CSAM match ownerId={} videoId={}: {}",
+                          ownerId, videoId, ex.getMessage(), ex);
+                alertAdmin(videoId, ownerId, "CSAM match — account suspension FAILED",
+                           "videoId=" + videoId + " ownerId=" + ownerId
+                           + " suspensionError=" + ex.getMessage(), true);
+            }
+            return false;
+        }
+        if (result == null) {
+            recordScan(videoId, "ARACHNID", "FAILED", null, "empty scan result");
+            alertAdmin(videoId, ownerId, "Arachnid moderation unavailable", "videoId=" + videoId + " error=empty result", false);
+            return false;
+        }
+        recordScan(videoId, "ARACHNID", "PASSED", null, null);
+        return true;
     }
 
     private boolean runVideoIntelLayer(UUID videoId, String ownerId, String mediaUrl) {

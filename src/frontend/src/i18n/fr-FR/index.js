@@ -1810,6 +1810,8 @@ export default {
       uploadRejected:
         'Ce fichier ne peut pas être envoyé (type, taille ou état de la vidéo). Vérifiez et réessayez.',
       title: 'Mes vidéos',
+      reviewNotice:
+        "Les vidéos sont examinées avant de pouvoir être partagées. D'ici là, seul vous pouvez regarder vos envois.",
       uploadButton: 'Téléverser une vidéo de devoirs',
       deleteConfirm: 'Supprimer cette vidéo ? Cette action est irréversible.',
       emptyState: 'Aucune vidéo téléversée pour le moment',

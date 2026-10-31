@@ -854,6 +854,8 @@ export default {
       uploadRejected:
         'Diese Datei kann nicht hochgeladen werden (Typ, Größe oder Videostatus). Bitte prüfen und erneut versuchen.',
       title: 'Meine Videos',
+      reviewNotice:
+        'Videos werden geprüft, bevor sie geteilt werden können. Bis dahin kannst nur du deine Uploads ansehen.',
       uploadButton: 'Hausaufgaben-Video hochladen',
       deleteConfirm: 'Dieses Video löschen? Dies kann nicht rückgängig gemacht werden.',
       emptyState: 'Noch keine Videos hochgeladen',

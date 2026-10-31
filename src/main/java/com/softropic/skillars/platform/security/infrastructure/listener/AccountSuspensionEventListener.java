@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
+import com.softropic.skillars.platform.security.contract.event.UserSuspensionRequestedEvent;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
@@ -60,13 +61,29 @@ public class AccountSuspensionEventListener {
                 + ownerId + " videoId=" + event.videoId());
         }
 
+        suspend(userId, ownerId, String.valueOf(event.videoId()));
+    }
+
+    /**
+     * S-18: safety suspension for a trigger that knows the USER id (an abuse-media match on an uploaded image).
+     * Same effect, same idempotence, as {@link #onAccountSuspensionRequested}. Throws when the user is gone so the
+     * caller can raise its "suspension FAILED" alert.
+     */
+    @EventListener
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void onUserSuspensionRequested(UserSuspensionRequestedEvent event) {
+        log.error("Processing account suspension: userId={} reason={}", event.userId(), event.reason());
+        suspend(event.userId(), String.valueOf(event.userId()), event.reason());
+    }
+
+    private void suspend(Long userId, String ownerId, String trigger) {
         // Row lock first, so the status check and the writes below act on committed, locked state
         // (same lock AdminUserService.suspendUser/reactivateUser take on this row).
         User user = lockRetryer.withBoundedRetry("AccountSuspensionEventListener.suspend",
             () -> userRepository.findByIdForUpdate(userId)).orElse(null);
         if (user == null) {
             throw new IllegalStateException("CRITICAL: Cannot suspend account — user vanished: userId="
-                + userId + " videoId=" + event.videoId());
+                + userId + " trigger=" + trigger);
         }
 
         boolean alreadySuspended = user.getVerificationStatus() == SkillarsVerificationStatus.SUSPENDED
@@ -83,9 +100,9 @@ public class AccountSuspensionEventListener {
 
         // Durable audit link: suspension ← CSAM scan. A dedicated account_suspension_audits
         // table is Story 10 scope; at minimum log at ERROR level so it appears in audit trail.
-        log.error("Account suspended: ownerId={} userId={} triggeredByVideoId={} verificationStatus=SUSPENDED "
+        log.error("Account suspended: ownerId={} userId={} trigger={} verificationStatus=SUSPENDED "
                   + "locked=true sessionsRevoked=true alreadySuspended={}",
-                  ownerId, userId, event.videoId(), alreadySuspended);
+                  ownerId, userId, trigger, alreadySuspended);
     }
 
     /**

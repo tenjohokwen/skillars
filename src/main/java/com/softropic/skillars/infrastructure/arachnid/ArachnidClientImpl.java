@@ -29,6 +29,10 @@ public class ArachnidClientImpl implements ArachnidClient {
 
     @Override
     public ArachnidScanResult scan(String mediaUrl) {
+        // S-18: no credential, no verdict. Fail closed up front instead of sending "Bearer " and reading the 401.
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new ArachnidException("Arachnid API key is not configured", null);
+        }
         HttpHeaders headers = new HttpHeaders();
         headers.set("Authorization", "Bearer " + apiKey);
         headers.setContentType(MediaType.APPLICATION_JSON);

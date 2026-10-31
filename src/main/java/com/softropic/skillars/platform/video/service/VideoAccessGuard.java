@@ -51,10 +51,11 @@ public class VideoAccessGuard {
     private final ConfigService configService;
     private final VideoAccessCache videoAccessCache;
     private final PlayerProfileRepository playerProfileRepository;
+    private final VideoSharingPolicy videoSharingPolicy;
 
     /**
      * Guards GET /api/video/{id}/play.
-     * Checks in order: PURGED gate → admin → owner → parent of owner → subject (V184: parent of the
+     * Checks in order: PURGED gate → admin → owner → sharing gate (S-18) → parent of owner → subject (V184: parent of the
      * child a coach video is about, or that child themself) → coach → deny.
      * Admission here is not playability: {@code PlaybackService} still refuses any video that is not
      * READY/ACTIVE (HIDDEN included, for every caller).
@@ -78,6 +79,12 @@ public class VideoAccessGuard {
         videoAccessCache.setOwnerDecision(videoId, owner);
         if (owner) {
             return true;
+        }
+
+        // Step 2b (S-18, decision B): past this point the caller is not the uploader. Until a real scanner has
+        // passed the video it is the uploader's alone (an admin was admitted above, for moderation review).
+        if (!videoSharingPolicy.maySharePastOwner(video)) {
+            throw new PlaybackDeniedException(videoId, securityUtil.getCurrentUserName());
         }
 
         // Step 3: Parent of owner

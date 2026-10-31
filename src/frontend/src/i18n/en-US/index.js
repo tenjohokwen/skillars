@@ -1170,6 +1170,8 @@ export default {
       uploadRejected:
         'This file cannot be uploaded (type, size or video state). Please check and try again.',
       title: 'My Videos',
+      reviewNotice:
+        'Videos are reviewed before they can be shared. Until then, only you can watch your uploads.',
       uploadButton: 'Upload Homework Video',
       deleteConfirm: 'Delete this video? This cannot be undone.',
       emptyState: 'No videos uploaded yet',
