@@ -261,6 +261,15 @@ class CancellationRefundMatrixTest {
         verify(reliabilityStrikeService).issue(COACH_ID, BOOKING_ID, "COACH_NO_SHOW");
     }
 
+    /** S-07: the conflict-zone split strikes nobody. */
+    @Test
+    void coachNoShowSplit_neverStrikes() {
+        service.onCoachNoShow(new CoachNoShowEvent(this, BOOKING_ID, PARENT_ID, COACH_ID, null, SESSION_PRICE, false,
+            "parent@test.com", Instant.now(), "UTC", true));
+
+        verify(reliabilityStrikeService, never()).issue(any(), any(), anyString());
+    }
+
     @Test
     void parentCancel_notACoachNoShow_neverStrikes() {
         service.onBookingCancelledByParent(parentEvent(false));

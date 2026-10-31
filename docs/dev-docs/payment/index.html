@@ -225,7 +225,7 @@
       booking had been paid (<code>CONFIRMED</code>/<code>UPCOMING</code>) and the cancellation is either
       more than 24h before the start (measured from the <em>earlier</em> of the original and current start,
       so a reschedule cannot reopen the window) or the session is still unstarted
-      <code>booking.lateCancel.graceMinutes</code> (default 30) after its start (Deferred-64, narrowed by
+      <code>booking.lateCancel.graceMinutes</code> (default 15) after its start (Deferred-64, narrowed by
       fix/booking-cancel-policy-loopholes). A coach's excused cancellations beyond
       <code>coach.excusedCancellations.maxPerWindow</code> (3) per <code>windowDays</code> (90) strike as
       <code>COACH_CANCELLATION_EXCUSED_LIMIT</code>. A coach cancel at or after the start of a never-started booking (ACCEPTED / CONFIRMED / UPCOMING; a PAUSED session keeps the excused rules)
@@ -254,7 +254,7 @@
       booking (<code>CONFIRMED</code>/<code>UPCOMING</code>/<code>PAUSED</code>; the event's
       <code>paymentCaptured</code>, decided under the booking row lock) &mdash; an <code>ACCEPTED</code>
       booking the coach drops mints no wallet credit and restores no pack session (C6; it used to do both).
-      Coach no-shows (only from <code>UPCOMING</code>) always refund. An admin cancellation (coach
+      Coach no-shows from <code>UPCOMING</code> always refund in full; one on a never-started Quick Complete (S-07) is a 50/50 split settled by <code>CoachNoShowSplitListener</code>: the payer gets <code>floor(paid / 2)</code> back, the coach is paid the rest through the normal payout row, no strike, and a pack session is consumed rather than restored. An admin cancellation (coach
       suspension, child-safety hold, or one booking cancelled from the admin bookings page,
       <code>BookingCancelledByAdminEvent</code>) refunds only a booking whose payment was captured
       (<code>CONFIRMED</code>/<code>UPCOMING</code>; the event's <code>refundEligible</code>), never strikes

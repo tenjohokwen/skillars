@@ -560,6 +560,10 @@ SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
 
+**V218: coach no-show claim marker** (`V218__booking_coach_no_show_claim.sql`). Additive only: two nullable
+columns on `booking.bookings` (`coach_no_show_claim`, `coach_no_show_claimed_at`), `lock_timeout = 5s`. Nothing
+to check before it runs.
+
 **V217: Stripe OAuth state + payout account hold** (`V217__stripe_oauth_state_and_payout_account_hold.sql`).
 Additive only: a new empty `payment.stripe_oauth_states` table (single-use OAuth `state` nonces, hashed) and a
 nullable `coach_stripe_accounts.payout_hold_until`. Nothing to check before it runs. Onboarding links minted
@@ -859,7 +863,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 |---|---|---|---|
 | `platform.admin_alert_email` | **blank** | V139 | **Must set** on PROD and UAT. While blank, admin alerts are dropped (`runbook.md` → "Admin alert recipient"). Outside `dev`, every boot logs an ERROR while it is blank (`config.value.misconfigured`, reason `launch_blank`) |
 | `subscription.*.priceId` (7 keys) | **blank** | V139 | **Must set** ([section 4.4](#44-subscription-products-and-price-ids)). Same boot ERROR while blank |
-| `booking.lateCancel.graceMinutes` | 30 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-28: 30 |
+| `booking.lateCancel.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-31: 15 (was 30). The one knob for when a coach no-show claim opens: the report, the late-cancel refund and the late-cancel coach strike all use it. If a value was stored in `platform_config` under the old default, delete it (or set 15) |
+| `booking.coachNoShow.reportWindowHours` | 5 (code default, range 1–168) | `ConfigBounds`, V218 | Owner decision 2026-10-31: 5. Hours after the start until which a coach no-show claim (report or cancel-for-refund) is accepted on a session nobody started; then 409 `booking.noShowWindowClosed` |
 | `booking.playerNoShow.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V209 | Owner decision 2026-10-29: 15. Minutes after the start before a coach may report a player no-show |
 | `booking.unresolvedSession.graceMinutes` | 120 (code default, range 30–10080) | `ConfigBounds`, V209 | Keep. Minutes after a session's end before `UnresolvedSessionSweeperService` acts on it |
 | `booking.live.minDurationPercent` | 50 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A live session ended in under this share of its booked length (Start to End; pauses count as live) waits for the family's confirmation or dispute instead of paying the coach at once. 0 turns the check off |
@@ -1146,3 +1151,10 @@ an operator must now do.
   fresh value, not the old DB key. All logged-in users are signed out at deploy (the SPA does not refresh on 401).
   `APP_BOOTSTRAP_JWT_SECRET_ENABLED` and `JwtSecretBootstrapRunner` are gone; the `main.sec` row is unused
   and may be dropped later.
+- 2026-10-31: feat/noshow-claim-window-and-split (S-07 part 1, V218, additive). Coach no-show policy change
+  (owner decision 2026-10-31, supersedes the 30-minute grace of 2026-10-28): `booking.lateCancel.graceMinutes`
+  default 30 -> 15 and new code-default key `booking.coachNoShow.reportWindowHours` (5), see section 7: a coach
+  no-show claim (report or cancel-for-refund) is accepted from start + 15 min to start + 5 h. If an admin ever
+  stored `booking.lateCancel.graceMinutes` in `platform_config`, that value still wins: check it. A report on a
+  session the coach quick-completed without ever pressing Start now splits the fee 50/50 (no strike) instead of
+  refunding it in full. No new job, env var or Stripe webhook event.

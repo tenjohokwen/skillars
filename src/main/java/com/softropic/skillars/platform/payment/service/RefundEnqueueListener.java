@@ -98,6 +98,9 @@ public class RefundEnqueueListener {
 
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onCoachNoShow(CoachNoShowEvent event) {
+        if (event.isCoachSplit()) {
+            return; // S-07: the 50/50 conflict-zone settlement is CoachNoShowSplitListener's
+        }
         if (event.isWalletRefund()) {
             enqueueWalletRefund(event.getParentId(), event.getSessionPackPurchaseId(), event.getBookingId(),
                 event.getSessionPrice(),

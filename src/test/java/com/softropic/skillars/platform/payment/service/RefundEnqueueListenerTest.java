@@ -177,6 +177,16 @@ class RefundEnqueueListenerTest {
             eq(PARENT_ID), eq(SESSION_PRICE), eq(BOOKING_ID), anyString());
     }
 
+    /** S-07: a conflict-zone split is settled by CoachNoShowSplitListener, never as a full refund / pack restore. */
+    @Test
+    void onCoachNoShow_split_isLeftToTheSplitListener() {
+        listener.onCoachNoShow(new CoachNoShowEvent(this, BOOKING_ID, PARENT_ID, COACH_ID, UUID.randomUUID(), SESSION_PRICE,
+            false, "parent@test.com", Instant.now(), "UTC", true));
+
+        verify(refundOutboxSupport, never()).enqueueBookingRefund(any(), any(), any(), any());
+        verify(packRestoreOutboxSupport, never()).enqueuePackRestore(any(), any(), anyString());
+    }
+
     @Test
     void onCoachNoShow_packExpired_enqueues() {
         UUID packId = UUID.randomUUID();

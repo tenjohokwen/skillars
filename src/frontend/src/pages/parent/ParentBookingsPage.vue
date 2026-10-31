@@ -167,7 +167,8 @@
           <q-btn
             v-if="
               (authStore.isParent || authStore.isPlayer) &&
-              ['CONFIRMED', 'UPCOMING'].includes(booking.status)
+              ['CONFIRMED', 'UPCOMING'].includes(booking.status) &&
+              !coachNoShowWindowClosed(booking)
             "
             flat
             dense
@@ -210,6 +211,17 @@
                 time: formatDateTime(booking.coachNoShowReportableAt, booking.canonicalTimezone),
               })
             }}
+          </div>
+          <!-- S-07: the claim window has closed on a session nobody started — neither the report nor a
+               cancel-for-refund is accepted (409 booking.noShowWindowClosed); the platform resolves it. -->
+          <div
+            v-else-if="
+              (authStore.isParent || authStore.isPlayer) && coachNoShowWindowClosed(booking)
+            "
+            class="text-caption text-grey-7 q-mt-xs"
+            data-testid="no-show-window-closed"
+          >
+            {{ t('cancellation.noShowWindowClosed') }}
           </div>
 
           <!-- Player/parent session-prep request (skillars-deferred-155 AC7).
@@ -421,7 +433,11 @@
           <div class="text-h6">{{ t('cancellation.noShowCoachConfirmTitle') }}</div>
         </q-card-section>
         <q-card-section>
-          {{ t('cancellation.noShowCoachConfirmBody') }}
+          {{
+            noShowCoachSplit
+              ? t('cancellation.noShowCoachConfirmBodySplit')
+              : t('cancellation.noShowCoachConfirmBody')
+          }}
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
@@ -578,11 +594,19 @@ function isCoachNoShowReportableStatus(booking) {
   return booking.status === 'COMPLETED_PENDING_CONFIRMATION' && booking.liveStarted === false
 }
 
+// S-07: the claim closes at coachNoShowReportableUntil (start + the report window). An older response
+// without it has no upper bound here; the server still answers 409 booking.noShowWindowClosed.
+function coachNoShowWindowClosed(booking) {
+  if (!isCoachNoShowReportableStatus(booking) || !booking.coachNoShowReportableUntil) return false
+  const until = new Date(booking.coachNoShowReportableUntil).getTime()
+  return !Number.isNaN(until) && nowMs.value > until
+}
+
 function canReportCoachNoShow(booking) {
   if (!isCoachNoShowReportableStatus(booking)) return false
   const reportable = coachNoShowReportableMs(booking)
   // Unparseable instant: fail closed (hide) rather than offer an action the server would refuse.
-  return !Number.isNaN(reportable) && reportable <= nowMs.value
+  return !Number.isNaN(reportable) && reportable <= nowMs.value && !coachNoShowWindowClosed(booking)
 }
 
 /** The session has started but the grace has not passed yet: say when the report opens. */
@@ -601,9 +625,12 @@ function coachNoShowPending(booking) {
 const noShowCoachDialogOpen = ref(false)
 const noShowCoachBookingId = ref(null)
 const noShowCoachId = ref(null)
+// S-07 conflict zone: a Quick Complete the coach never started is split 50/50 (no strike) instead of refunded.
+const noShowCoachSplit = ref(false)
 
 function openNoShowCoachDialog(booking) {
   noShowCoachBookingId.value = booking.id
+  noShowCoachSplit.value = booking.status === 'COMPLETED_PENDING_CONFIRMATION'
   noShowCoachDialogOpen.value = true
 }
 
@@ -616,6 +643,8 @@ async function submitNoShowCoach() {
     $q.notify({ message: t('cancellation.noShowCoachSuccess'), type: 'positive' })
   } catch (err) {
     const errorKey = err?.response?.data?.errorMsg?.errorKey
+    // A 409 ResponseStatusException carries its reason as the message, not the error key (see submitCancelBooking).
+    const reason = err?.response?.data?.errorMsg?.message
     noShowCoachDialogOpen.value = false
     // Same error-key → copy mapping as CoachCommandCenterPage's player no-show report.
     const messages = {
@@ -624,9 +653,11 @@ async function submitNoShowCoach() {
       'booking.alreadyCompleted': 'cancellation.alreadyCompleted',
       'booking.invalidTransition': 'cancellation.invalidTransition',
       'booking.sessionWasStarted': 'cancellation.noShowCoachSessionStarted',
+      'booking.noShowWindowClosed': 'cancellation.noShowWindowClosed',
     }
+    const messageKey = reason === 'booking.noShowWindowClosed' ? reason : errorKey
     $q.notify({
-      message: t(messages[errorKey] || 'cancellation.noShowCoachFailed'),
+      message: t(messages[messageKey] || 'cancellation.noShowCoachFailed'),
       type: 'negative',
     })
     // The row may have moved on (e.g. the coach started the session) — show its real state.
@@ -733,6 +764,15 @@ async function submitCancelBooking() {
       $q.notify({ message: t('booking.errors.requestNotAllowed'), type: 'negative' })
     } else if (message === 'booking.paymentInProgress') {
       $q.notify({ message: t('booking.cancel.paymentInProgress'), type: 'negative' })
+    } else if (message === 'booking.noShowWindowClosed') {
+      // S-07: the claim window closed under a stale list — show the booking's real state.
+      cancelDialogOpen.value = false
+      $q.notify({ message: t('booking.cancel.windowClosed'), type: 'negative' })
+      try {
+        await bookingStore.loadParentBookings()
+      } catch {
+        /* keep the current list */
+      }
     } else {
       $q.notify({ message: t('booking.cancel.failed'), type: 'negative' })
     }

@@ -27,6 +27,10 @@ public record BookingResponse(
     // feat/payment-forfeit-payouts-and-clawback: when the payer may report a coach no-show (start + the
     // late-cancel grace) — BookingService.recordNoShowCoach refuses earlier. Display hint; the server decides.
     Instant coachNoShowReportableAt,
+    // S-07: when that report window closes (start + booking.coachNoShow.reportWindowHours). After it the platform
+    // resolves a never-started session itself and BookingService refuses a report or a cancel-for-refund (409
+    // booking.noShowWindowClosed). Display hint; the server decides.
+    Instant coachNoShowReportableUntil,
     // fix/booking-request-consent: a coach-proposed booking ("repeat next week"). While REQUESTED, only the
     // parent can act on it (confirm or decline); the coach sees it as awaiting parent confirmation.
     boolean proposedByCoach,

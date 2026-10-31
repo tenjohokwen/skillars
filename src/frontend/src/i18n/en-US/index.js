@@ -2022,11 +2022,13 @@ export default {
       cta: 'Cancel',
       dialogTitle: 'Cancel this session?',
       dialogBody:
-        'Cancelling more than 24 hours before the originally booked start time is refunded. Later cancellations, including after a reschedule, are not refunded, unless the coach has still not started the session well after its scheduled start time.',
+        'Cancelling more than 24 hours before the originally booked start time is refunded. Later cancellations, including after a reschedule, are not refunded. If the coach has still not started the session shortly after its scheduled start time, you are refunded and the coach is recorded as a no-show; this is possible for a limited time after the start.',
       confirm: 'Cancel session',
       success: 'Session cancelled',
       paymentInProgress:
         'A payment for this session is already in progress. Please try again shortly.',
+      windowClosed:
+        'This session can no longer be cancelled or reported as a coach no-show. If nobody records it, it is refunded automatically.',
       failed: 'Could not cancel this session. Please try again.',
     },
     batch: {
@@ -2473,6 +2475,10 @@ export default {
     noShowCoachSessionStarted:
       'The coach started this session, so it cannot be reported as a no-show. Raise a dispute instead.',
     noShowCoachAvailableFrom: 'You can report a coach no-show from {time}.',
+    noShowCoachConfirmBodySplit:
+      'The coach marked this session as completed but never started it in Skillars. Because we cannot tell which account is right, the session fee is shared equally: you are refunded half and the coach keeps half. No penalty is recorded for either side. This cannot be undone.',
+    noShowWindowClosed:
+      'The time to report a coach no-show has passed. If nobody records this session, it is refunded automatically.',
     title: 'Cancel Session',
     selectReason: 'Select cancellation reason',
     confirmCancel: 'Confirm Cancellation',

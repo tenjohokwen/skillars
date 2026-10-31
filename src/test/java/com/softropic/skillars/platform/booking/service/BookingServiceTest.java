@@ -148,7 +148,11 @@ class BookingServiceTest {
                 inv.getArgument(0), false));
         lenient().when(configService.getBoundedLong(
                 com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES))
-            .thenReturn(30L);
+            .thenReturn(15L);
+        // S-07: the coded default report window (hours after the start the coach no-show claim stays open).
+        lenient().when(configService.getBoundedLong(
+                com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS))
+            .thenReturn(5L);
         // fix/booking-request-consent (M2): the coded defaults, so the create-path fixtures (a few days
         // out, nothing else pending) pass the horizon and pending-request cap unless a test overrides them.
         lenient().when(configService.getBoundedLong(
@@ -2313,17 +2317,17 @@ class BookingServiceTest {
     // ---- fix/booking-cancel-policy-loopholes: grace window + reschedule anchor ----
 
     @Test
-    void cancelBookingAsParent_29MinutesAfterStart_isAnOrdinaryForfeit() {
+    void cancelBookingAsParent_14MinutesAfterStart_isAnOrdinaryForfeit() {
         Instant now = Instant.now();
-        assertThat(cancelConfirmedAsParent(now.minus(29, java.time.temporal.ChronoUnit.MINUTES), null))
-            .as("inside the 30-minute grace the coach may still start; cancelling now is a <24h forfeit")
+        assertThat(cancelConfirmedAsParent(now.minus(14, java.time.temporal.ChronoUnit.MINUTES), null))
+            .as("inside the 15-minute grace the coach may still start; cancelling now is a <24h forfeit")
             .isFalse();
     }
 
     @Test
-    void cancelBookingAsParent_31MinutesAfterStartStillUnstarted_isRefundEligible() {
+    void cancelBookingAsParent_16MinutesAfterStartStillUnstarted_isRefundEligible() {
         Instant now = Instant.now();
-        assertThat(cancelConfirmedAsParent(now.minus(31, java.time.temporal.ChronoUnit.MINUTES), null)).isTrue();
+        assertThat(cancelConfirmedAsParent(now.minus(16, java.time.temporal.ChronoUnit.MINUTES), null)).isTrue();
     }
 
     @Test
@@ -2345,12 +2349,12 @@ class BookingServiceTest {
     @Test
     void parentCancelRefundRule_boundaries() {
         Instant now = Instant.parse("2026-10-28T12:00:00Z");
-        Duration grace = Duration.ofMinutes(30);
+        Duration grace = Duration.ofMinutes(15);
         java.time.temporal.ChronoUnit min = java.time.temporal.ChronoUnit.MINUTES;
         java.time.temporal.ChronoUnit hrs = java.time.temporal.ChronoUnit.HOURS;
         // Grace window: exactly start+grace is still a forfeit; strictly after it is a refund.
-        assertThat(BookingService.isParentCancelRefundEligible(now.minus(30, min), null, now, grace)).isFalse();
-        assertThat(BookingService.isParentCancelRefundEligible(now.minus(31, min), null, now, grace)).isTrue();
+        assertThat(BookingService.isParentCancelRefundEligible(now.minus(15, min), null, now, grace)).isFalse();
+        assertThat(BookingService.isParentCancelRefundEligible(now.minus(16, min), null, now, grace)).isTrue();
         assertThat(BookingService.isParentCancelRefundEligible(now.minusSeconds(1), null, now, grace)).isFalse();
         // 24h notice: strictly more than 24h.
         assertThat(BookingService.isParentCancelRefundEligible(now.plus(24, hrs), null, now, grace)).isFalse();
@@ -2470,8 +2474,8 @@ class BookingServiceTest {
     @Test
     void recordNoShowCoach_insideTheLateCancelGrace_throwsNoShowTooEarly() {
         Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, "UPCOMING");
-        // 29 minutes after start, grace is 30 (setUp): the coach can still press Start.
-        booking.setRequestedStartTime(Instant.now().minus(29, java.time.temporal.ChronoUnit.MINUTES));
+        // 14 minutes after start, grace is 15 (setUp): the coach can still press Start.
+        booking.setRequestedStartTime(Instant.now().minus(14, java.time.temporal.ChronoUnit.MINUTES));
         when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
 
         assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
@@ -2484,7 +2488,7 @@ class BookingServiceTest {
     @Test
     void coachNoShowReportableAt_isStartPlusTheLateCancelGrace() {
         Instant start = Instant.parse("2026-10-28T12:00:00Z");
-        assertThat(bookingService.coachNoShowReportableAt(start)).isEqualTo(Instant.parse("2026-10-28T12:30:00Z"));
+        assertThat(bookingService.coachNoShowReportableAt(start)).isEqualTo(Instant.parse("2026-10-28T12:15:00Z"));
     }
 
     private boolean cancelConfirmedAsParent(Instant start, Instant originalStart) {
@@ -3055,8 +3059,8 @@ class BookingServiceTest {
 
     /** Exploit 4: the refund-eligible late cancel after start + grace is the coach's no-show. */
     @Test
-    void cancelBookingAsParent_31MinutesAfterStartStillUnstarted_isACoachNoShow() {
-        cancelConfirmedAsParent(Instant.now().minus(31, java.time.temporal.ChronoUnit.MINUTES), null);
+    void cancelBookingAsParent_16MinutesAfterStartStillUnstarted_isACoachNoShow() {
+        cancelConfirmedAsParent(Instant.now().minus(16, java.time.temporal.ChronoUnit.MINUTES), null);
         assertThat(capturedParentCancellation().isCoachNoShow()).isTrue();
     }
 
@@ -3071,6 +3075,169 @@ class BookingServiceTest {
     void cancelBookingAsParent_insideTheGrace_isNotACoachNoShow() {
         cancelConfirmedAsParent(Instant.now().minus(10, java.time.temporal.ChronoUnit.MINUTES), null);
         assertThat(capturedParentCancellation().isCoachNoShow()).isFalse();
+    }
+
+    // ---- S-07: coach no-show claim window, two doors, first action wins, conflict-zone split ----
+
+    private static final java.time.temporal.ChronoUnit MIN = java.time.temporal.ChronoUnit.MINUTES;
+
+    private Booking reportableBooking(String status, Instant start) {
+        Booking booking = makeBooking(PARENT_ID, PLAYER_ID, COACH_ID, status);
+        booking.setRequestedStartTime(start);
+        booking.setRequestedEndTime(start.plus(1, java.time.temporal.ChronoUnit.HOURS));
+        lenient().when(bookingRepository.findById(booking.getId())).thenReturn(Optional.of(booking));
+        lenient().when(bookingRepository.findByIdForUpdate(booking.getId())).thenReturn(Optional.of(booking));
+        lenient().when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
+        lenient().when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(makeCoachPricing(new BigDecimal("40.00"))));
+        lenient().when(userRepository.findById(PARENT_ID)).thenReturn(Optional.of(makeUser("parent@test.com")));
+        return booking;
+    }
+
+    private static void assertNoShowWindowClosed(Throwable e) {
+        assertThat(e).isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        org.springframework.web.server.ResponseStatusException rse = (org.springframework.web.server.ResponseStatusException) e;
+        assertThat(rse.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+        assertThat(rse.getReason()).isEqualTo("booking.noShowWindowClosed");
+    }
+
+    @Test
+    void coachNoShowReportableUntil_isStartPlusTheReportWindow() {
+        Instant start = Instant.parse("2026-10-28T12:00:00Z");
+        assertThat(bookingService.coachNoShowReportableUntil(start)).isEqualTo(Instant.parse("2026-10-28T17:00:00Z"));
+    }
+
+    @Test
+    void coachNoShowReportableUntil_aGraceAtOrPastTheWindow_neverClosesTheClaimBeforeItOpens() {
+        when(configService.getBoundedLong(
+            com.softropic.skillars.platform.config.service.ConfigBounds.BOOKING_LATE_CANCEL_GRACE_MINUTES)).thenReturn(600L);
+        Instant start = Instant.parse("2026-10-28T12:00:00Z");
+        Instant opens = bookingService.coachNoShowReportableAt(start);
+        assertThat(bookingService.coachNoShowReportableUntil(start)).isEqualTo(opens.plusSeconds(3600));
+    }
+
+    @Test
+    void recordNoShowCoach_at14m59_isTooEarly_at15m01_isAllowed() {
+        Booking early = reportableBooking("UPCOMING", Instant.now().minus(14, MIN).minusSeconds(59));
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(early.getId(), PARENT_ID))
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.NO_SHOW_TOO_EARLY));
+
+        Booking open = reportableBooking("UPCOMING", Instant.now().minus(15, MIN).minusSeconds(1));
+        bookingService.recordNoShowCoach(open.getId(), PARENT_ID);
+        assertThat(open.getStatus()).isEqualTo("NO_SHOW_COACH");
+    }
+
+    @Test
+    void recordNoShowCoach_justInsideTheFiveHourEdge_isAllowed_justPastIt_is409() {
+        Booking inside = reportableBooking("UPCOMING", Instant.now().minus(5, java.time.temporal.ChronoUnit.HOURS).plusSeconds(5));
+        bookingService.recordNoShowCoach(inside.getId(), PARENT_ID);
+        assertThat(inside.getStatus()).isEqualTo("NO_SHOW_COACH");
+
+        Booking past = reportableBooking("UPCOMING", Instant.now().minus(5, java.time.temporal.ChronoUnit.HOURS).minusSeconds(5));
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(past.getId(), PARENT_ID))
+            .satisfies(BookingServiceTest::assertNoShowWindowClosed);
+        assertThat(past.getStatus()).isEqualTo("UPCOMING");
+        assertThat(past.getCoachNoShowClaim()).isNull();
+    }
+
+    @Test
+    void recordNoShowCoach_plainUpcoming_isAFullRefundReport_notASplit() {
+        Booking booking = reportableBooking("UPCOMING", Instant.now().minus(40, MIN));
+
+        bookingService.recordNoShowCoach(booking.getId(), PARENT_ID);
+
+        com.softropic.skillars.platform.booking.contract.CoachNoShowEvent event =
+            capturedEvent(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class);
+        assertThat(event.isCoachSplit()).isFalse();
+        assertThat(booking.getCoachNoShowClaim()).isEqualTo(Booking.CLAIM_REPORT);
+        assertThat(booking.getCoachNoShowClaimedAt()).isNotNull();
+    }
+
+    @Test
+    void recordNoShowCoach_onANeverStartedQuickComplete_isTheConflictZoneSplit() {
+        Booking booking = reportableBooking("COMPLETED_PENDING_CONFIRMATION", Instant.now().minus(40, MIN));
+        booking.setLiveStartedAt(null);
+
+        bookingService.recordNoShowCoach(booking.getId(), PARENT_ID);
+
+        com.softropic.skillars.platform.booking.contract.CoachNoShowEvent event =
+            capturedEvent(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class);
+        assertThat(event.isCoachSplit()).isTrue();
+        assertThat(event.isPackRestore()).as("a split consumes the session").isFalse();
+        assertThat(event.isWalletRefund()).isTrue();
+        assertThat(booking.getCoachNoShowClaim()).isEqualTo(Booking.CLAIM_SPLIT);
+    }
+
+    @Test
+    void recordNoShowCoach_conflictZonePastTheWindow_is409() {
+        Booking booking = reportableBooking("COMPLETED_PENDING_CONFIRMATION",
+            Instant.now().minus(5, java.time.temporal.ChronoUnit.HOURS).minusSeconds(5));
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .satisfies(BookingServiceTest::assertNoShowWindowClosed);
+    }
+
+    /** First action wins: the coach pressed Start (even at +16) before any claim — the family disputes instead. */
+    @ParameterizedTest
+    @ValueSource(strings = {"IN_PROGRESS", "PAUSED"})
+    void recordNoShowCoach_afterALateStart_isRefusedAsSessionWasStarted(String status) {
+        Booking booking = reportableBooking(status, Instant.now().minus(20, MIN));
+        booking.setLiveStartedAt(Instant.now().minus(4, MIN));
+
+        assertThatThrownBy(() -> bookingService.recordNoShowCoach(booking.getId(), PARENT_ID))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(BookingError.SESSION_WAS_STARTED));
+        assertThat(booking.getStatus()).isEqualTo(status);
+        verify(eventPublisher, never()).publishEvent(any(com.softropic.skillars.platform.booking.contract.CoachNoShowEvent.class));
+    }
+
+    /** Two doors, one rule: the cancel follows the same window, refund and strike as the report. */
+    @Test
+    void cancelBookingAsParent_justInsideTheWindow_isTheSameClaim() {
+        cancelUpcomingAsParent(Instant.now().minus(5, java.time.temporal.ChronoUnit.HOURS).plusSeconds(5));
+        BookingCancelledByParentEvent event = capturedParentCancellation();
+        assertThat(event.isRefundEligible()).isTrue();
+        assertThat(event.isCoachNoShow()).isTrue();
+    }
+
+    @Test
+    void cancelBookingAsParent_pastTheWindow_is409AndNothingMoves() {
+        Booking booking = reportableBooking("UPCOMING", Instant.now().minus(5, java.time.temporal.ChronoUnit.HOURS).minusSeconds(5));
+        assertThatThrownBy(() -> bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID))
+            .satisfies(BookingServiceTest::assertNoShowWindowClosed);
+        assertThat(booking.getStatus()).isEqualTo("UPCOMING");
+        assertThat(booking.getCoachNoShowClaim()).isNull();
+        verify(eventPublisher, never()).publishEvent(any(BookingCancelledByParentEvent.class));
+    }
+
+    @Test
+    void cancelBookingAsParent_aLateCancelRecordsTheClaim_anOrdinaryCancelDoesNot() {
+        Booking late = cancelUpcomingAsParent(Instant.now().minus(40, MIN));
+        assertThat(late.getCoachNoShowClaim()).isEqualTo(Booking.CLAIM_LATE_CANCEL);
+        assertThat(late.getCoachNoShowClaimedAt()).isNotNull();
+
+        Booking before = cancelUpcomingAsParent(Instant.now().plus(2, java.time.temporal.ChronoUnit.HOURS));
+        assertThat(before.getCoachNoShowClaim()).isNull();
+    }
+
+    @Test
+    void cancelBookingAsParent_aNeverCapturedBookingFarPastItsStart_stillCancels() {
+        Booking booking = reportableBooking("ACCEPTED", Instant.now().minus(2, java.time.temporal.ChronoUnit.DAYS));
+        lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        lenient().when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+
+        assertThat(booking.getStatus()).as("nothing was charged — the window only guards captured money").isEqualTo("CANCELLED_PARENT");
+    }
+
+    private Booking cancelUpcomingAsParent(Instant start) {
+        Booking booking = reportableBooking("UPCOMING", start);
+        lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(makeActiveCoach(COACH_ID, COACH_USER_ID)));
+        lenient().when(userRepository.findById(COACH_USER_ID)).thenReturn(Optional.of(makeUser("coach@test.com")));
+        bookingService.cancelBookingAsParent(booking.getId(), PARENT_ID);
+        assertThat(booking.getStatus()).isEqualTo("CANCELLED_PARENT");
+        return booking;
     }
 
     // ---- setPlayerRequest tests (skillars-deferred-155 AC5/AC8) ----

@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.payment.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
@@ -105,9 +106,35 @@ public class CoachPayoutOutboxSupport {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public void enqueuePayout(UUID bookingId, UUID coachId) {
+        enqueuePayoutInternal(bookingId, coachId, false, null);
+    }
+
+    /**
+     * S-07 conflict zone (option B): the coach quick-completed WITHOUT a live Start and the booker reports a coach
+     * no-show, so neither side is established. The session fee is split: the payer's half is returned, the coach is
+     * paid the rest through the ordinary payout row — commission at the rate locked at capture / pack purchase on
+     * the coach's half only, the same release hold (new-coach hold included), the same freeze / dispute handling.
+     *
+     * <p>Rounding: the payer's half is {@code floor(paid / 2)} to the cent, the coach's gross is the remainder (so
+     * the coach takes an odd cent) and the commission is taken from that. A pack session settles ONE ledger slot
+     * ({@link SessionPackPurchase#recordSplitSettlement}), so the pack's payouts + refunds still sum to exactly what
+     * it was charged.
+     *
+     * @param paidFallback what the payer paid per {@code BookingService.resolveAmountPaid}; used for the refund only
+     *                     when there is no captured payment row to pay the coach from (a row-less legacy booking)
+     * @return the amount to refund to the payer — zero when nothing was charged, the coach's row already exists, or
+     *     a pack session could not be allocated (logged; an operator follows up)
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public BigDecimal enqueueSplitPayout(UUID bookingId, UUID coachId, BigDecimal paidFallback) {
+        return enqueuePayoutInternal(bookingId, coachId, true, paidFallback);
+    }
+
+    private BigDecimal enqueuePayoutInternal(UUID bookingId, UUID coachId, boolean split, BigDecimal paidFallback) {
+        BigDecimal refundShare = BigDecimal.ZERO;
         if (coachPayoutRepository.existsById(bookingId)) {
             log.info("[COACH_PAYOUT] coach_payouts row already exists for booking {} — enqueue is a no-op", bookingId);
-            return;
+            return refundShare;
         }
 
         String currency = resolveCurrency();
@@ -117,9 +144,9 @@ public class CoachPayoutOutboxSupport {
         final BigDecimal rate;
         final BigDecimal cardPortion;
         if (packId != null) {
-            PackShare share = allocatePackShare(bookingId, packId);
+            PackShare share = allocatePackShare(bookingId, packId, split);
             if (share.alreadyPaidOut()) {
-                return;
+                return refundShare;
             }
             if (share.skipReason() != null) {
                 CoachPayout row = newRow(bookingId, coachId, currency, BigDecimal.ZERO, BigDecimal.ZERO,
@@ -128,9 +155,10 @@ public class CoachPayoutOutboxSupport {
                 row.setStatus(CoachPayoutStatus.CANCELLED);
                 row.setLastError(share.skipReason());
                 coachPayoutRepository.save(row);
-                return;
+                return refundShare;
             }
             gross = share.gross();
+            refundShare = share.refundShare();
             cardPortion = gross;
             rate = share.commissionRate() != null ? share.commissionRate() : liveCommissionRate();
         } else {
@@ -140,12 +168,20 @@ public class CoachPayoutOutboxSupport {
                 // Nothing to pay the coach from; coach earnings for such bookings are out of scope
                 // (design doc §0.1).
                 log.warn("[COACH_PAYOUT] no booking_payments row for completed booking {} — no payout enqueued", bookingId);
-                return;
+                // A split still returns the payer's half: it is owed whether or not the coach's half can be paid.
+                return split ? CoachNoShowEvent.splitRefundShare(paidFallback) : refundShare;
             }
             BigDecimal stripeCharged = bp.getStripeCharged() == null ? BigDecimal.ZERO : bp.getStripeCharged();
             BigDecimal creditDebited = bp.getCreditDebited() == null ? BigDecimal.ZERO : bp.getCreditDebited();
-            gross = stripeCharged.add(creditDebited);
-            cardPortion = stripeCharged;
+            BigDecimal totalPaid = stripeCharged.add(creditDebited);
+            if (split && totalPaid.signum() > 0) {
+                refundShare = CoachNoShowEvent.splitRefundShare(totalPaid);
+                gross = totalPaid.subtract(refundShare);
+                cardPortion = stripeCharged.multiply(gross).divide(totalPaid, 2, RoundingMode.HALF_UP);
+            } else {
+                gross = totalPaid;
+                cardPortion = stripeCharged;
+            }
             // AC4.2: the rate LOCKED AT CAPTURE (booking_payments.commission_rate), never
             // platform.commission.rate re-read now.
             rate = bp.getCommissionRate() != null ? bp.getCommissionRate() : liveCommissionRate();
@@ -162,7 +198,7 @@ public class CoachPayoutOutboxSupport {
             coachPayoutRepository.save(row);
             log.info("[COACH_PAYOUT] booking {} had nothing charged — coach_payouts row written CANCELLED "
                 + "({}), no transfer", bookingId, REASON_NOTHING_CHARGED);
-            return;
+            return refundShare;
         }
 
         BigDecimal commission = gross.multiply(rate).setScale(2, RoundingMode.HALF_UP);
@@ -196,7 +232,7 @@ public class CoachPayoutOutboxSupport {
                 coachPayoutRepository.save(row);
                 log.warn("[COACH_PAYOUT_CHARGEBACK_LOST] booking={} coach={} — the charge that paid for this session "
                     + "lost a card dispute for all of it, payout written CANCELLED, no transfer", bookingId, coachId);
-                return;
+                return refundShare;
             }
             if (lostShare.signum() > 0) {
                 BigDecimal newNet = CoachPayoutAdjustmentService.cutNet(row, lostShare);
@@ -225,11 +261,12 @@ public class CoachPayoutOutboxSupport {
         if (frozen) {
             log.warn("[COACH_PAYOUT_FROZEN] booking={} coach={} net={} reason={} — payout recorded FROZEN, no transfer "
                 + "until the freeze is lifted", bookingId, coachId, row.getNetAmount(), row.getLastError());
-            return;
+            return refundShare;
         }
         enqueue(AGGREGATE_TYPE_TRANSFER, new CoachPayoutTransferPayload(bookingId), releaseAfter, bookingId);
         log.info("[COACH_PAYOUT] enqueued transfer for booking {} coach {} gross {} net {} pack {} releaseAfter {}",
             bookingId, coachId, row.getGrossAmount(), row.getNetAmount(), packId, releaseAfter);
+        return refundShare;
     }
 
     /**
@@ -297,7 +334,7 @@ public class CoachPayoutOutboxSupport {
      * there is no cycle; NOWAIT + {@link PessimisticLockRetryer} bounds any wait, and an exhausted retry
      * rolls the completion back to its caller (retryable) rather than losing the payout.
      */
-    private PackShare allocatePackShare(UUID bookingId, UUID packId) {
+    private PackShare allocatePackShare(UUID bookingId, UUID packId, boolean split) {
         SessionPackPurchase pack = lockRetryer.withBoundedRetry("CoachPayoutOutboxSupport.allocatePackShare",
             () -> sessionPackPurchaseRepository.findByIdForUpdate(packId).orElse(null));
         // Re-check under the pack lock: a concurrent first delivery for the same booking that committed
@@ -337,9 +374,17 @@ public class CoachPayoutOutboxSupport {
             return PackShare.skip(REASON_PACK_FULLY_ALLOCATED);
         }
         BigDecimal gross = pack.nextSettlementValue();
+        if (split) {
+            // S-07: one slot, two settlements — the coach's half is allocated, the payer's half is refunded by the caller.
+            BigDecimal payerHalf = CoachNoShowEvent.splitRefundShare(gross);
+            BigDecimal coachHalf = gross.subtract(payerHalf);
+            pack.recordSplitSettlement(coachHalf, payerHalf);
+            sessionPackPurchaseRepository.save(pack);
+            return new PackShare(coachHalf, pack.getCommissionRate(), null, payerHalf);
+        }
         pack.recordPayoutAllocation(gross);
         sessionPackPurchaseRepository.save(pack);
-        return new PackShare(gross, pack.getCommissionRate(), null);
+        return new PackShare(gross, pack.getCommissionRate(), null, BigDecimal.ZERO);
     }
 
     /**
@@ -359,11 +404,11 @@ public class CoachPayoutOutboxSupport {
     }
 
     /** A pack session's gross share and the pack's stamped rate, or why nothing is paid. */
-    private record PackShare(BigDecimal gross, BigDecimal commissionRate, String skipReason) {
-        static final PackShare ALREADY_PAID_OUT = new PackShare(BigDecimal.ZERO, null, "ALREADY_PAID_OUT");
+    private record PackShare(BigDecimal gross, BigDecimal commissionRate, String skipReason, BigDecimal refundShare) {
+        static final PackShare ALREADY_PAID_OUT = new PackShare(BigDecimal.ZERO, null, "ALREADY_PAID_OUT", BigDecimal.ZERO);
 
         static PackShare skip(String reason) {
-            return new PackShare(BigDecimal.ZERO, null, reason);
+            return new PackShare(BigDecimal.ZERO, null, reason, BigDecimal.ZERO);
         }
 
         boolean alreadyPaidOut() {

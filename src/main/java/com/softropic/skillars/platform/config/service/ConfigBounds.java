@@ -181,10 +181,26 @@ public final class ConfigBounds {
      * parent cancel becomes refund-eligible. Before this, start+1s was enough, so any parent inside
      * the 24h forfeit window could wait out the start time and cancel for 100% back. The floor is 5,
      * not 0: 0 reopens exactly that loophole.
+     *
+     * <p>S-07 (owner decision 2026-10-31): default 15 (was 30). It is the ONE knob for when a coach no-show
+     * claim opens — the report ({@code BookingService.recordNoShowCoach}), the late-cancel refund and the
+     * late-cancel coach-no-show strike all read it, so they cannot drift apart. The claim closes at
+     * {@link #BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS} after the start.
      */
     public static final BoundedKey BOOKING_LATE_CANCEL_GRACE_MINUTES =
         new BoundedKey("booking.lateCancel.graceMinutes", 5L, 1440L, false,
-            "out-of-range falls back to the coded default (30); tiny → parents cancel at start for a full refund", 30L);
+            "out-of-range falls back to the coded default (15); tiny → parents cancel at start for a full refund", 15L);
+
+    /**
+     * S-07 (owner decision 2026-10-31): {@code BookingService.recordNoShowCoach} and the late branch of
+     * {@code cancelBookingAsParent} — how long after a booking's start the booker may still claim a coach
+     * no-show (report, or cancel for a refund) on a session nobody started. The claim is open from
+     * start + {@link #BOOKING_LATE_CANCEL_GRACE_MINUTES} until start + this many hours; after that the
+     * platform resolves a never-started session itself. Floor 1: 0 would close the claim before it opens.
+     */
+    public static final BoundedKey BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS =
+        new BoundedKey("booking.coachNoShow.reportWindowHours", 1L, 168L, false,
+            "out-of-range falls back to the coded default (5); tiny → families cannot claim a no-show in time", 5L);
 
     /**
      * fix/booking-completion-integrity: {@code BookingService.recordNoShowPlayer} — how long after a
@@ -635,6 +651,7 @@ public final class ConfigBounds {
         DEVELOPMENT_ROSTER_MAX_PLAYERS.key(),
         BOOKING_RECAP_EDIT_WINDOW_DAYS.key(),
         BOOKING_LATE_CANCEL_GRACE_MINUTES.key(),
+        BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS.key(),
         COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW.key(),
         COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.key(),
         BOOKING_REQUEST_MAX_PENDING_PER_COACH.key(),
@@ -692,6 +709,7 @@ public final class ConfigBounds {
             DEVELOPMENT_ROSTER_MAX_PLAYERS,
             BOOKING_RECAP_EDIT_WINDOW_DAYS,
             BOOKING_LATE_CANCEL_GRACE_MINUTES,
+            BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS,
             COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW,
             COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS,
             BOOKING_REQUEST_MAX_PENDING_PER_COACH,
