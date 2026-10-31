@@ -51,16 +51,11 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   and the onboarding status is also read from Stripe (`Account.retrieve`) when the coach returns
   from OAuth and while it is not yet `COMPLETE`. Provision both endpoints as described in
   [section 4.3](#43-webhook-endpoints-and-exact-event-lists).
-- [ ] **Never seed PROD's JWT signing key from `src/test/resources/sql/secData.sql`.** The passthrough
-  gap is fixed by `fix/prod-readiness-gaps`: `APP_BOOTSTRAP_JWT_SECRET_ENABLED` (default `false`) is now
-  in `docker-compose.yml`, so the `.env` procedure in `secrets-reference.md` → "JWT signing key" works.
-  Use it for one boot of a fresh PROD database, then remove it. The rest of this item still applies.
-  `uat-hostwinds-deployment.md` Step 8 and `local/deployment.md` Step 5 seed `main.sec` from that
-  fixture. Its encrypted key is committed to the repository, so anyone with repo access could forge
-  tokens for an environment seeded from it. The supported generator, `JwtSecretBootstrapRunner`
-  (`app.bootstrap.jwt-secret.enabled`), is meant for local use only. It does accept the private
-  compose-network address, so a PROD boot with the flag set creates a unique `(v1, jot)` row. Verify
-  it with the query in [section 8](#8-accounts-and-seed-data).
+- [x] ~~**Never seed PROD's JWT signing key from `src/test/resources/sql/secData.sql`.**~~ Moot since
+  S-03: the signing key now comes from `JWT_SIGNING_KEY` (section 2.4) and the app no longer reads the
+  `sec` table. `JwtSecretBootstrapRunner` is removed. The old `(v1, jot)` row is unused; drop it after
+  the first deploy with a fresh key (`DELETE FROM main.sec WHERE version='v1' AND bus_id='jot';` is
+  safe once the app runs this release). Do not reuse its value, backups may contain it.
 - [x] ~~**Production object storage has no service in `docker-compose.yml`.**~~ Resolved by
   `infra/prod-seaweedfs-storage`: `docker-compose.yml` now runs single-node SeaweedFS (`storage` +
   one-shot `storage-init`) on `STORAGE_DOMAIN`, with data on the Hetzner Volume. See
@@ -219,6 +214,7 @@ Spring `${X:default}` default.
 | `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | required; the dev default is rejected | required; the dev default is rejected | `RegistrationVerificationTokenService` aborts boot; `DeployedSecretsValidator` rejects the dev default | `application.yaml` |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | required; rotating it invalidates stored PINs; the dev default `S3CR3TW0RD` is rejected | required; same | fail-fast: `Cryptopher` on blank, `DeployedSecretsValidator` on blank or the dev default | `application.yaml` |
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | required (base64, ≥ 32 bytes); the dev/test value is rejected | required; same | fail-fast at boot in `prod`/`uat` (`DeployedSecretsValidator`: blank, not Base64, < 32 bytes, or the dev default); previously only failed on the first playback token | `application.yaml` |
+| `JWT_SIGNING_KEY` | required (base64, >= 64 bytes); the dev/test values are rejected | required; same | fail-fast: `DeployedSecretsValidator` (blank, not Base64, < 64 bytes, dev default) and `JwtConfiguration`; compose passes it through, UAT compose files use `:?` | `application.yaml` `app.security.jwt.signing-key`, section 2.4 |
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | required; the dev default is rejected | required; same | fail-fast (`BunnyVideoProviderAdapter` on blank, `DeployedSecretsValidator` on the dev default) | `application.yaml` |
 | `BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME` | required for video | test library | compose defaults the library ID to the placeholder `123456` | `docker-compose.yml` |
 | `APP_STORAGE_BUCKET` | set it (compose default `skillars-prod`) | set it | the UAT compose files pass it without a default | `docker-compose.yml` |
@@ -257,9 +253,34 @@ and diffing against `secrets-reference.md`. Since `fix/prod-readiness-gaps` each
 | `ARACHNID_API_BASE_URL` | `https://api.c3p.ca` | Only with `features.toggles.arachnid-enabled` (`ARACHNID_API_KEY` is documented) |
 | `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH` | blank | Only with `features.toggles.videointel-enabled` |
 | ~~`PLATFORM_NOTIFICATION_EMAIL`~~ | removed | The property had no reader and a personal default; `fix/prod-readiness-gaps` deleted it. Setting it does nothing |
-| `APP_BOOTSTRAP_JWT_SECRET_ENABLED` | `false` | Now passed through compose (see [section 0](#0-open-issues-found-while-compiling-this-checklist)) |
 
 ---
+
+### 2.4 JWT signing key (`JWT_SIGNING_KEY`)
+
+Signs the 15-minute access tokens (HS512). Moved out of the database (S-03): the old key sat in the
+`sec` table encrypted with a password derived from constants in the source, so anyone who could read
+the row could forge any token, including ADMIN.
+
+- [ ] **Generate** a fresh key per environment: `openssl rand -base64 64` (decodes to 64 bytes; longer is
+  fine). Store it in the password manager and in `/opt/skillars/.env` (PROD) or `.env.uat` (UAT) as
+  `JWT_SIGNING_KEY=...`. Never reuse a value across environments, never commit it, never log it.
+- [ ] **First deploy of this release MUST use a freshly generated key.** Do not derive it from the old DB
+  row: that value may exist in database dumps and backups.
+- [ ] **Expected effect at deploy: every logged-in user is signed out.** All live access tokens become invalid
+  at once. The SPA does NOT call `/api/auth/refresh` on a 401 (it has no caller; the axios interceptor sends
+  the user to `/login`), and the 401 for a bad-signature JWT is a "genuine denial" that also revokes the
+  user's refresh token (`JWTAuthorizationFilter` -> `SecurityUtil.terminateSession`). Deploy in a quiet window
+  and expect everyone to log in again once. Same on every later rotation.
+- [ ] **Boot check:** the app refuses to start (naming `app.security.jwt.signing-key`) if the value is blank,
+  not Base64, under 64 bytes, or a dev default. A crash loop right after deploy means this.
+- [ ] **Smoke test:** after the deploy, log in, then load a protected page and confirm no logout; check
+  `docker compose logs app | grep -i "signing-key"` shows no errors (the key itself is never logged).
+  A browser still holding a pre-deploy session gets a 401 and lands on `/login`; logging in again works.
+- [ ] **Rotation** = set a new `JWT_SIGNING_KEY` and `docker compose up -d app`. Same effect as the first
+  deploy: everyone is signed out and logs in again.
+- [ ] **Cleanup (later, after rotation):** the legacy `main.sec` `(v1, jot)` row is unused and can be dropped.
+  This release deliberately does not drop it.
 
 ## 3. Database
 
@@ -899,15 +920,8 @@ Yaml-level settings worth reviewing for PROD (`application.yaml` unless noted):
 Detail: [`uat-deployment.md`](uat-deployment.md) Step 8, `secrets-reference.md` → admin bootstrap
 callout.
 
-- [ ] **JWT signing key**: a unique `(version='v1', bus_id='jot')` row exists in `main.sec`, and
-  it is **not** the test fixture:
-  ```sql
-  SELECT id, version, bus_id, created_date FROM main.sec WHERE version = 'v1' AND bus_id = 'jot';
-  -- exactly one row, and id must NOT be 659287191260154475 (the src/test/resources/sql/secData.sql fixture)
-  ```
-  Without the row, every request fails with `JWT secret key has not been set in DB`
-  (`JwtSecretService`). See [section 0](#0-open-issues-found-while-compiling-this-checklist) for
-  how to create it.
+- [ ] **JWT signing key**: `JWT_SIGNING_KEY` is set (section 2.4). Nothing to seed in the database;
+  the old `main.sec` `(v1, jot)` row is unused.
 - [ ] **Initial admin**: set `APP_BOOTSTRAP_ADMIN_EMAIL`, `APP_BOOTSTRAP_ADMIN_PASSWORD` and
   `APP_BOOTSTRAP_ADMIN_PHONE`, deploy, and confirm the log line `admin_bootstrap ... created the
   first administrator`. Then **remove the password** and redeploy (`AdminBootstrapRunner`). Use an
@@ -1127,3 +1141,8 @@ an operator must now do.
 - 2026-10-31: fix/backlog-metrics-staleness-and-timeout. New optional property `platform.backlog-metrics.query-timeout-seconds` (default 10), no action needed. New Grafana alert `BacklogMetricsStale`: recreate the Grafana container after deploying so it loads.
 - 2026-10-31: fix/security-pack-caps-gdpr-stripe-erasure (S-10, S-19). No migration, config key, job or webhook. New outbox aggregate `STRIPE_CUSTOMER_ERASURE` (enqueued by GDPR erasure, drained by the existing outbox drain and sweep): detaches the user's saved cards and deletes their Stripe Customer, or blanks its name/email/phone/description/`userId` metadata if Stripe refuses the delete. If the Stripe secret key is a restricted key, it needs write access to Customers and PaymentMethods. A row stuck in the outbox DLQ means Stripe kept rejecting the call: finish it in the Stripe dashboard (delete or edit the customer named in the row's `stripeCustomerId`). Pack tiers are now capped at 100 sessions and 50000.00 per pack (400 beyond that).
 - 2026-10-31: fix/security-payout-oauth-session-revocation (V217, additive). Stripe Connect onboarding now uses a single-use OAuth `state`: a link generated before the deploy fails with `state_mismatch`, the coach reconnects. Replacing a connected Stripe account with a different one holds payouts for `payment.payout.accountChange.holdHours` (default 72, `platform_config`, see section 7) and emails the coach (`profileChange` template, new i18n key in all four bundles). Password reset and password change now revoke all sessions. No new env vars, jobs or webhooks.
+- 2026-10-31: S-03 (fix/security-jwt-key-from-env). New REQUIRED secret `JWT_SIGNING_KEY` (section 2.4): generate with
+  `openssl rand -base64 64` and set it in `.env` / `.env.uat` BEFORE deploying, or the app will not boot. Use a
+  fresh value, not the old DB key. All logged-in users are signed out at deploy (the SPA does not refresh on 401).
+  `APP_BOOTSTRAP_JWT_SECRET_ENABLED` and `JwtSecretBootstrapRunner` are gone; the `main.sec` row is unused
+  and may be dropped later.

@@ -107,6 +107,10 @@ platform:
         max-input-chars: 100
 
 app:
+  security:
+    jwt:
+      # TEST ONLY fixture (Base64, 69 bytes). DeployedSecretsValidator rejects it under prod/uat.
+      signing-key: "dGVzdC1vbmx5LWp3dC1zaWduaW5nLWtleS0tdW5pdC1hbmQtaW50ZWdyYXRpb24tdGVzdHMtb25seS0wMTIzNDU2Nzg5"
   # AC5a (story deferred-19). Consolidating the suite onto a few long-lived Spring contexts
   # removes the accidental protection context fragmentation used to provide: a 5-minute job in
   # a context that lived 90 seconds never fired. One long-lived context means every @Scheduled

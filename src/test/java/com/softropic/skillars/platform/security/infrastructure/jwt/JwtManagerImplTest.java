@@ -15,8 +15,6 @@ import com.softropic.skillars.platform.security.contract.exception.JWTExpiredExc
 import com.softropic.skillars.platform.security.contract.exception.MissingClientIdException;
 import com.softropic.skillars.infrastructure.security.RequestMetadata;
 import com.softropic.skillars.infrastructure.security.RequestMetadataProvider;
-import com.softropic.skillars.platform.security.service.SecretService;
-import com.softropic.skillars.platform.security.repo.Secret;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +22,6 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
-import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.MockitoAnnotations;
@@ -38,6 +35,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Date;
 import java.util.HashMap;
@@ -81,15 +79,14 @@ import static com.softropic.skillars.platform.security.contract.util.Authorities
 import static io.jsonwebtoken.Claims.SUBJECT;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertThrows;
-import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.reset;
 import static org.mockito.Mockito.when;
 
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.ANONYMOUS_SESSION_COOKIE;
 import static com.softropic.skillars.infrastructure.security.SecurityError.MISSING_JWT_PRINCIPAL;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 public class JwtManagerImplTest {
 
@@ -112,10 +109,11 @@ public class JwtManagerImplTest {
         MAPPER.addMixIn(SimpleGrantedAuthority.class, SimpleGrantedAuthorityMixin.class);
     }
 
-    @Mock
-    private SecretService secretService;
+    // Same fixture key as application-test.yaml's app.security.jwt.signing-key.
+    private static final String TEST_SIGNING_KEY = Base64.getEncoder().encodeToString(
+            "test-only-jwt-signing-key--unit-and-integration-tests-only-0123456789".getBytes(StandardCharsets.UTF_8));
 
-    private final Secret secret = new Secret("v1", "jot");
+    private final SecretKey secret = JwtConfiguration.parseSigningKey(TEST_SIGNING_KEY);
 
     private JwtManagerImpl jwtManager;
     private ClaimsExtractor claimsExtractor;
@@ -125,9 +123,7 @@ public class JwtManagerImplTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
 
-        when(secretService.fetchSecret(anyString(), anyString())).thenReturn(secret);
-
-        JwtConfiguration jwtConfiguration = new JwtConfiguration(secretService);
+        JwtConfiguration jwtConfiguration = new JwtConfiguration(TEST_SIGNING_KEY);
         this.tokenCreator = new TokenCreatorImpl(jwtConfiguration);
         this.claimsExtractor = new ClaimsExtractorImpl(jwtConfiguration);
         TokenValidator tokenValidator = new TokenValidatorImpl(claimsExtractor);
@@ -140,7 +136,6 @@ public class JwtManagerImplTest {
 
     @AfterEach
     void tearDown() {
-        reset(secretService);
         RequestMetadataProvider.cleanup();
     }
 
@@ -155,12 +150,12 @@ public class JwtManagerImplTest {
     }
 
     // Helper to build a token with custom claims for testing invalid/malformed scenarios
-    private String buildTokenWithCustomClaims(Map<String, Object> customClaims, Instant expirationInstant, Secret secret) {
+    private String buildTokenWithCustomClaims(Map<String, Object> customClaims, Instant expirationInstant, SecretKey secret) {
         return Jwts.builder()
                 .claims(customClaims)
                 .issuedAt(Date.from(Instant.now(TestClockProvider.getClock()))) // use fixed clock
                 .expiration(Date.from(expirationInstant))
-                .signWith(Keys.hmacShaKeyFor(secret.getSecretBytes()))
+                .signWith(secret)
                 .compact();
     }
     
@@ -207,7 +202,7 @@ public class JwtManagerImplTest {
         assertThat(token).isNotNull();
 
         // 3. Parse the token
-        final SecretKey secretKey = Keys.hmacShaKeyFor(secret.getSecretBytes());
+        final SecretKey secretKey = secret;
         Claims claims = Jwts.parser().verifyWith(secretKey).build().parseSignedClaims(token).getPayload();
 
         // 4. Assert claims
@@ -414,6 +409,22 @@ public class JwtManagerImplTest {
     }
 
      @Test
+    void testExtractClaims_tokenSignedWithDifferentKey_isRejected() {
+        initRequestMetadata();
+        SecretKey otherKey = Keys.hmacShaKeyFor(new byte[64]);
+        Map<String, Object> claims = new HashMap<>();
+        claims.put(SUBJECT, "forger");
+        claims.put(ROLES, "[\"ROLE_ADMIN\"]");
+        String forged = buildTokenWithCustomClaims(claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), otherKey);
+        String genuine = buildTokenWithCustomClaims(claims, Instant.now(ClockProvider.getClock()).plus(JWT_TTL), secret);
+
+        assertThat(claimsExtractor.extractClaims(genuine).getSubject()).isEqualTo("forger");
+        assertThatThrownBy(() -> claimsExtractor.extractClaims(forged))
+            .isInstanceOf(InvalidJWTDataException.class);
+        assertThat(claimsExtractor.extractClaimsFromTokenSilently(forged)).isEmpty();
+    }
+
+    @Test
     void testExtractPrincipal_invalidTokenSignature() {
          initRequestMetadata();
 

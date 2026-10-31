@@ -67,6 +67,8 @@ services:
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET}
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=${APP_VIDEO_PLAYBACK_SIGNING_SECRET}
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      # Base64, >= 64 bytes (`openssl rand -base64 64`); app refuses to boot otherwise. Never the dev value.
+      - JWT_SIGNING_KEY=${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env.uat, generate it with openssl rand and base64 of 64 bytes}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
       # Same single-endpoint constraint as docker-compose.uat.yml (S3Presigner bakes
       # app.storage.endpoint-url into every presigned URL it hands back) — but there's no

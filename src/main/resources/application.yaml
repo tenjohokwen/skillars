@@ -297,6 +297,13 @@ app:
   access-log:
     enabled: ${APP_ACCESS_LOG_ENABLED:true}
     pattern: "%{yyyy-MM-dd HH:mm:ss.SSS}t %a (%{X-Forwarded-For}i) > %A:%p '%r' %{requestBodyLength}r %D %s %B %I '%{Referer}i' '%{User-Agent}i' %u %{username}s %{sessionTracker}s"
+  security:
+    jwt:
+      # HMAC key for access-token signing: Base64, >= 64 bytes decoded (`openssl rand -base64 64`).
+      # Deliberately no default here: prod/uat refuse to start without a real value
+      # (DeployedSecretsValidator); only application-dev.yaml and the test config carry a
+      # clearly-labelled dev-only one. Never log it.
+      signing-key: ${JWT_SIGNING_KEY:}
   # One-time creation of the platform's first administrator (AdminBootstrapRunner).
   # BLANK MEANS DISABLED — the runner no-ops unless email AND password are both set, so this is
   # inert everywhere until an operator deliberately opts in. Never give `password` a literal
