@@ -29,6 +29,19 @@
           {{ $t('admin.health.accessDenied') }}
         </q-banner>
 
+        <q-banner
+          v-for="item in warnings"
+          :key="item.name"
+          class="health-banner q-mb-lg"
+          rounded
+          data-test="health-warning"
+        >
+          <template #avatar>
+            <q-icon name="warning" style="color: var(--accent-warning)" />
+          </template>
+          {{ warningText(item) }}
+        </q-banner>
+
         <div v-if="health.components" class="components-grid">
           <div
             v-for="(component, name) in health.components"
@@ -37,10 +50,7 @@
           >
             <div class="component-header">
               <div class="text-card-title">{{ name }}</div>
-              <span
-                class="status-pill status-pill--sm"
-                :class="component.status === 'UP' ? 'status-pill--up' : 'status-pill--down'"
-              >
+              <span class="status-pill status-pill--sm" :class="statusClass(component.status)">
                 {{ component.status }}
               </span>
             </div>
@@ -58,16 +68,34 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
 import { useI18n } from 'vue-i18n'
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const $q = useQuasar()
 const health = ref(null)
 const isLoading = ref(false)
+
+// Components reporting WARNING (e.g. geminiCompliance) are notices, not outages: the overall
+// status stays UP, so they get their own banner above the grid.
+const warnings = computed(() =>
+  Object.entries(health.value?.components ?? {})
+    .filter(([, c]) => c.status === 'WARNING')
+    .map(([name, c]) => ({ name, details: c.details })),
+)
+
+function warningText(item) {
+  const key = `admin.health.warnings.${item.name}`
+  return te(key) ? t(key) : (item.details?.warning ?? item.name)
+}
+
+function statusClass(status) {
+  if (status === 'UP') return 'status-pill--up'
+  return status === 'WARNING' ? 'status-pill--warning' : 'status-pill--down'
+}
 
 onMounted(async () => {
   isLoading.value = true
@@ -109,6 +137,10 @@ onMounted(async () => {
   &--down {
     background: rgba(255, 95, 122, 0.12);
     color: var(--accent-danger);
+  }
+  &--warning {
+    background: rgba(255, 184, 77, 0.12);
+    color: var(--accent-warning);
   }
   &--sm {
     font-size: 11px;

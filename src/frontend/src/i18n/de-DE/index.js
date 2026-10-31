@@ -1703,6 +1703,10 @@ export default {
       subtitle: 'Infrastrukturstatus in Echtzeit',
       accessDenied: 'Für die Statusdetails sind Administratorrechte erforderlich.',
       loadError: 'Systemstatus konnte nicht geladen werden',
+      warnings: {
+        geminiCompliance:
+          'Die Inhaltsmoderation nutzt die Gemini-Entwickler-API, für die es weder einen Auftragsverarbeitungsvertrag noch eine EU-Datenresidenz gibt; stellen Sie GEMINI_MODE=vertex um, bevor Medien von Kindern verarbeitet werden.',
+      },
     },
     disputes: {
       title: 'Streitfälle',

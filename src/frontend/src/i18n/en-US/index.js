@@ -1257,6 +1257,10 @@ export default {
       subtitle: 'Real-time infrastructure status',
       accessDenied: 'Admin access required to view health details.',
       loadError: 'Failed to load health status',
+      warnings: {
+        geminiCompliance:
+          "Content moderation uses the Gemini developer API, which has no data processing agreement or EU data residency; switch GEMINI_MODE=vertex before processing children's media.",
+      },
     },
     disputes: {
       title: 'Disputes',

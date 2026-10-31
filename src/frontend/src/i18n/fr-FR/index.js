@@ -1156,6 +1156,10 @@ export default {
       subtitle: "État de l'infrastructure en temps réel",
       accessDenied: "Un accès administrateur est requis pour consulter l'état détaillé.",
       loadError: "Impossible de charger l'état du système",
+      warnings: {
+        geminiCompliance:
+          "La modération de contenu utilise l'API développeur Gemini, qui n'offre ni accord de traitement des données ni résidence des données dans l'UE ; passez à GEMINI_MODE=vertex avant de traiter des médias d'enfants.",
+      },
     },
     disputes: {
       title: 'Litiges',
