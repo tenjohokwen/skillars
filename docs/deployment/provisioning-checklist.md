@@ -114,7 +114,8 @@ and [`uat-hostwinds-deployment.md`](uat-hostwinds-deployment.md) (UAT).
 - [ ] Provider firewall applied: `deploy/firewall/apply-firewall.sh` with `firewall-rules.json`
   (`first-time-setup.md` Step 4, `deploy/firewall/README.md`). Inbound 22/80/443 only, outbound
   open (SMTP/SES, Let's Encrypt, Stripe, Bunny, Gemini).
-  - UAT (Hostwinds): also open the storage port 9500 (`uat-hostwinds-deployment.md` Step 6).
+  - UAT (Hostwinds): 80 and 443 on the host (`ufw allow 'Nginx Full'`). Port 9500 stays closed: storage is bound to
+    `127.0.0.1` and reached over https on 443 (`uat-hostwinds-deployment.md` Step 6).
 - [ ] Compose networks: `skillars-internal` (has egress) and `skillars-observability`
   (`internal: true`, no egress) (`docker-compose.yml` → `networks:`; `first-time-setup.md`
   troubleshooting section).
@@ -812,7 +813,20 @@ logged at DEBUG and acknowledged):
   so uploads stop before Postgres runs out of space. Alert on disk usage in Grafana.
 - [ ] `deploy.yml` recreates `app` only. After changing `storage` or rotating `STORAGE_ROOT_*`, run
   `docker compose up -d storage storage-init app` on the node.
-- [ ] UAT (Hostwinds): published port 9500 instead of Traefik (`docker-compose.uat-hostwinds.yml`).
+- [ ] UAT (Hostwinds, S-25): storage is served over https by the host nginx, not Traefik
+  (`deploy/nginx/uat-hostwinds-storage.conf`, `docker-compose.uat-hostwinds.yml`). Before deploying:
+  - [ ] DNS: `STORAGE_DOMAIN` (A record) points at the Hostwinds box; `dig +short <STORAGE_DOMAIN> @8.8.8.8`.
+  - [ ] Certificate: Let's Encrypt for `STORAGE_DOMAIN` (`certbot certonly --webroot`, auto-renew with an nginx
+    reload hook; `uat-hostwinds-deployment.md` Step 6).
+  - [ ] Firewall: 80 and 443 open; no `ufw allow 9500/tcp` (remove it if it was added: `ufw delete allow 9500/tcp`).
+    Docker bypasses ufw for published ports, so the real closure is the `127.0.0.1:9500` bind in compose.
+  - [ ] `.env.uat`: `STORAGE_DOMAIN` set (compose now fails interpolation without it); the endpoint becomes
+    `https://${STORAGE_DOMAIN}` and the app refuses to boot on any non-https `app.storage.endpoint-url`.
+  - [ ] Verify: `curl -I https://<STORAGE_DOMAIN>/` returns 403 with a valid certificate;
+    `curl -m 3 http://<BOX_IP>:9500/` times out or is refused from outside; a profile-photo upload and display
+    in the browser works (presigned PUT then GET, URLs start with `https://<STORAGE_DOMAIN>/`).
+  - [ ] Reminder: all UAT users share the one `STORAGE_ROOT_*` admin key (it is also the app's S3 key). A
+    dedicated least-privilege app identity is not implemented.
 - [ ] Limits accepted: per-user quota `platform.filestorage.quota.default-bytes` 10 GiB, max file
   100 MiB, MIME/extension allowlist (`application.yaml` → `platform.filestorage`).
   `application/octet-stream`/`bin` are no longer allowed; `allowed-entities` limits upload keys to
@@ -1251,6 +1265,10 @@ an operator must now do.
   directory is migrated in place on first start (take a copy of `/opt/skillars/data/grafana` first if you want a
   rollback path; a downgrade needs that copy). Afterwards check `/api/health` reports 11.6.16, the three datasources
   and six dashboards are present, and the alert rules list shows no provisioning error.
+- 2026-10-31: S-25 (security/s25-uat-storage-tls). UAT Hostwinds only; PROD and full UAT (Traefik) already use
+  https. The app now refuses to boot in `prod`/`uat` if `app.storage.endpoint-url` (or a set backup endpoint) is not
+  `https://`. Hostwinds needs `STORAGE_DOMAIN` DNS, a certificate, the nginx site and `ufw` cleanup BEFORE
+  redeploying (section "Object storage"); redeploy `app storage` after.
 - 2026-10-31: S-03 (fix/security-jwt-key-from-env). New REQUIRED secret `JWT_SIGNING_KEY` (section 2.4): generate with
   `openssl rand -base64 64` and set it in `.env` / `.env.uat` BEFORE deploying, or the app will not boot. Use a
   fresh value, not the old DB key. All logged-in users are signed out at deploy (the SPA does not refresh on 401).

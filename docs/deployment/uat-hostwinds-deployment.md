@@ -6,7 +6,7 @@ Get Skillars running on the existing Hostwinds Ubuntu box
 happy path. **This is not the final UAT environment** — see
 [`uat-deployment.md`](uat-deployment.md) for that (Traefik, TLS, its own
 domains, the full LGTM observability stack). This guide deliberately drops
-all of that: no Traefik, no HTTPS, no Loki/Tempo/Prometheus/Grafana. The
+all of that: no Traefik, no HTTPS for the app (the storage hostname does get TLS, Step 6), no Loki/Tempo/Prometheus/Grafana. The
 only two things kept from the full UAT design are the `uat` Spring profile
 (so `PaymentConfig`'s live-key guard is still active — a stripped-down
 environment is exactly where a stray live key would be easiest to miss) and
@@ -30,7 +30,7 @@ Image tag: **`skillars:uat`**.
 
 ```
 Browser ──80──> nginx (existing, unchanged) ──> 127.0.0.1:9990 ──> app container
-Browser ──9500─────────────────────────────────────────────────> storage container
+Browser ──443 (TLS)──> nginx (storage site) ──> 127.0.0.1:9500 ──> storage container
 app container ──skillars-internal network──> postgres, storage containers
 app container ──skillars-data network──> redis (password: REDIS_PASSWORD in .env.uat)
 ```
@@ -41,9 +41,10 @@ app container ──skillars-data network──> redis (password: REDIS_PASSWORD
   `127.0.0.1`, this config transparently starts serving Skillars instead —
   **zero nginx changes needed**. The site file is still literally named
   `gulliver`; see [Notes](#notes) if you want to rename it for clarity.
-- **storage** (SeaweedFS): no domain-based routing available here (unlike
-  `uat-deployment.md`'s `STORAGE_DOMAIN` + Traefik), so its S3 API port is
-  published directly on the host instead — `http://hwsrv-1301707.hostwindsdns.com:9500`.
+- **storage** (SeaweedFS): served over https on its own hostname (`STORAGE_DOMAIN`, e.g.
+  `storage-uat.skillars.com`). The same nginx terminates TLS on 443 and proxies to the storage
+  container's port, published on `127.0.0.1:9500` only (S-25; it used to be public cleartext HTTP, with the
+  access key in every presigned URL). See [Step 6](#step-6-tls-for-the-storage-service).
 - **Postgres/Redis**: run in Docker, internal-only (not published to the
   host) — a separate instance from the native PostgreSQL 17 already
   installed on this box for gulliver, no port conflict. That said, the
@@ -114,9 +115,9 @@ most headroom above its actual working set.
   `gulliver-history.txt`)
 - `.env.uat` at the repo root, already prepared with real values for this
   box — `DOMAIN=hwsrv-1301707.hostwindsdns.com`, `APP_IMAGE=skillars:uat`,
-  a real Stripe test-mode key, etc. (`MONITORING_DOMAIN`/`STORAGE_DOMAIN`
-  are still present in the file but unused by this stripped-down setup —
-  see [Notes](#notes))
+  a real Stripe test-mode key, etc. `STORAGE_DOMAIN` is required (Step 6);
+  `MONITORING_DOMAIN` is still present but unused by this stripped-down setup
+  — see [Notes](#notes)
 
 ---
 
@@ -257,18 +258,59 @@ SES is deferred (`ses-1-5b-uat-ses-cutover`).
 `.env.uat` already has real values for this box, this is the only new file
 to bring over — everything else came from `git clone`.)
 
-## Step 6: Open the firewall for the storage service
+## Step 6: TLS for the storage service
 
-```bash
-ufw allow 9500/tcp
-ufw status
-```
+Browsers upload and download directly against presigned URLs built from `STORAGE_DOMAIN`, and those
+URLs carry the access key in the query string, so this MUST be https (the app refuses to boot in `uat`
+otherwise). nginx terminates TLS and proxies to the storage container.
 
-**Do not open `9990`** — it's bound to `127.0.0.1` only (see
+1. **DNS**: add an A record for `STORAGE_DOMAIN` (the value in `.env.uat`) pointing at this box.
+   `dig +short <STORAGE_DOMAIN> @8.8.8.8` must return the box IP before continuing.
+2. **Firewall**: 80 and 443 must be open (`ufw allow 'Nginx Full'`, already done for gulliver; check
+   `ufw status`). Do NOT open 9500; if an older version of this guide had you run `ufw allow 9500/tcp`,
+   undo it with `ufw delete allow 9500/tcp`.
+3. **Certificate** (needs port 80 reachable for the name). Install certbot, serve the challenge, issue:
+
+   ```bash
+   apt install -y certbot
+   mkdir -p /var/www/certbot
+   cat > /etc/nginx/sites-available/skillars-uat-storage <<EOF
+   server {
+       listen 80;
+       server_name <STORAGE_DOMAIN>;
+       location /.well-known/acme-challenge/ { root /var/www/certbot; }
+   }
+   EOF
+   ln -sf /etc/nginx/sites-available/skillars-uat-storage /etc/nginx/sites-enabled/
+   nginx -t && systemctl reload nginx
+   certbot certonly --webroot -w /var/www/certbot -d <STORAGE_DOMAIN> \
+     --deploy-hook "systemctl reload nginx"
+   ```
+
+4. **nginx site**: replace that stub with the repo's config (it adds the 443 block and the proxy):
+
+   ```bash
+   sed 's/@STORAGE_DOMAIN@/<STORAGE_DOMAIN>/g' /server/skillars/deploy/nginx/uat-hostwinds-storage.conf \
+     > /etc/nginx/sites-available/skillars-uat-storage
+   nginx -t && systemctl reload nginx
+   ```
+
+   The config passes `Host` through unchanged (`proxy_set_header Host $http_host`). SigV4 presigned URLs sign
+   the Host header, so rewriting it makes every presigned URL fail with `SignatureDoesNotMatch`. Do not add a
+   path prefix either (the path is signed too). CORS is set on the bucket by `storage-init`, not in nginx.
+
+5. **Check** (before deploying the app):
+
+   ```bash
+   certbot renew --dry-run
+   curl -I https://<STORAGE_DOMAIN>/   # valid certificate; 403 or 405 from SeaweedFS (anonymous refused)
+   ```
+
+**Do not open `9990` either** — it's bound to `127.0.0.1` only (see
 `docker-compose.uat-hostwinds.yml`) and reached through nginx on port 80
-instead, matching how gulliver worked. Opening it would just add an
-unnecessary second way to reach the app directly, bypassing nginx for no
-benefit.
+instead, matching how gulliver worked. Docker publishes ports through its own iptables rules, which
+`ufw` does not filter, so the `127.0.0.1` bind address in the compose file (9500, 9990) is what actually
+keeps them private.
 
 ## Step 7: Deploy
 
@@ -330,12 +372,13 @@ etc.), and specifically exercise:
   under **Test mode**, never live.
 - **A file upload** (e.g. a coach profile photo) — confirm the image
   actually renders afterward. This is the real test of the storage/
-  `extra_hosts` setup in `docker-compose.uat-hostwinds.yml`: if the upload
-  succeeds but the image never loads, the presigned URL's host
-  (`http://hwsrv-1301707.hostwindsdns.com:9500`) likely isn't resolving the
-  way the `extra_hosts: host-gateway` entry intends — check
-  `docker compose ... exec app getent hosts hwsrv-1301707.hostwindsdns.com`
-  resolves to a private/internal IP, not the box's real public IP.
+  `extra_hosts` setup in `docker-compose.uat-hostwinds.yml`: the presigned URLs must start
+  with `https://<STORAGE_DOMAIN>/`. If the upload succeeds but the image never loads, or the
+  app logs a TLS/connection error talking to storage, check
+  `docker compose ... exec app getent hosts <STORAGE_DOMAIN>` resolves to the
+  Docker host gateway (the `extra_hosts: host-gateway` entry), not the public IP, and that
+  `nginx -t` is clean. `SignatureDoesNotMatch` means something between the browser and
+  storage changed the Host header or path.
 
 ---
 
@@ -493,11 +536,10 @@ way, automatically, once it's listening on `9990` again.
   `uat-deployment.md`, you'll need to either swap these back to real
   domain/Traefik-shaped values or split into a second env file — don't
   assume this file is still Hostwinds-specific by then without checking.
-- **`STORAGE_DOMAIN` and the LGTM/Grafana variables in `.env.uat` are unused
-  here** — `docker-compose.uat-hostwinds.yml` doesn't reference
-  `STORAGE_DOMAIN` at all (uses `DOMAIN` + port `9500` instead), and
+- **The LGTM/Grafana variables in `.env.uat` are unused here** —
   `grafana`/`loki`/`tempo`/`prometheus` are never in the explicit service
-  list in Step 7. Harmless to leave them in the file.
+  list in Step 7. Harmless to leave them in the file. (`STORAGE_DOMAIN` IS used
+  now: it is the https name nginx serves storage on, Step 6.)
 - **The nginx site is still named `gulliver`** even though it's now serving
   Skillars. Fine for a quick test; if this setup sticks around, consider:
   ```bash

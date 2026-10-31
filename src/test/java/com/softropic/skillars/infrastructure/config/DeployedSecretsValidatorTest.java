@@ -21,7 +21,8 @@ class DeployedSecretsValidatorTest {
             .withProperty(DeployedSecretsValidator.REGISTRATION_SECRET, "a-real-registration-secret-of-32-chars")
             .withProperty(DeployedSecretsValidator.BUNNY_WEBHOOK_SECRET, "a-real-bunny-key")
             .withProperty(DeployedSecretsValidator.JWT_SIGNING_KEY, GOOD_JWT_KEY)
-            .withProperty(DeployedSecretsValidator.REDIS_PASSWORD, "a-real-redis-password");
+            .withProperty(DeployedSecretsValidator.REDIS_PASSWORD, "a-real-redis-password")
+            .withProperty(DeployedSecretsValidator.STORAGE_ENDPOINT_URL, "https://storage.example.com");
     }
 
     private void validate(MockEnvironment env) {
@@ -97,7 +98,8 @@ class DeployedSecretsValidatorTest {
             .withProperty(DeployedSecretsValidator.PLAYBACK_SECRET, GOOD_KEY)
             .withProperty(DeployedSecretsValidator.REGISTRATION_SECRET, "a-real-registration-secret-of-32-chars")
             .withProperty(DeployedSecretsValidator.BUNNY_WEBHOOK_SECRET, "a-real-bunny-key")
-            .withProperty(DeployedSecretsValidator.REDIS_PASSWORD, "a-real-redis-password");
+            .withProperty(DeployedSecretsValidator.REDIS_PASSWORD, "a-real-redis-password")
+            .withProperty(DeployedSecretsValidator.STORAGE_ENDPOINT_URL, "https://storage.example.com");
         assertThatThrownBy(() -> validate(missing))
             .isInstanceOf(AppSetupException.class).hasMessageContaining(DeployedSecretsValidator.JWT_SIGNING_KEY);
     }
@@ -118,5 +120,41 @@ class DeployedSecretsValidatorTest {
         String shortKey = Base64.getEncoder().encodeToString(new byte[63]);
         assertThatThrownBy(() -> validate(valid().withProperty(DeployedSecretsValidator.JWT_SIGNING_KEY, shortKey)))
             .hasMessageContaining("64 bytes").hasMessageNotContaining(shortKey);
+    }
+
+    @Test
+    void storageEndpoint_plainHttp_isRejectedWithoutEchoingTheUrl() {
+        String url = "http://storage.example.com:9500";
+        assertThatThrownBy(() -> validate(valid().withProperty(DeployedSecretsValidator.STORAGE_ENDPOINT_URL, url)))
+            .isInstanceOf(AppSetupException.class)
+            .hasMessageContaining(DeployedSecretsValidator.STORAGE_ENDPOINT_URL).hasMessageContaining("https")
+            .hasMessageNotContaining(url);
+    }
+
+    @Test
+    void storageEndpoint_blankOrMissing_fails() {
+        assertThatThrownBy(() -> validate(valid().withProperty(DeployedSecretsValidator.STORAGE_ENDPOINT_URL, " ")))
+            .hasMessageContaining(DeployedSecretsValidator.STORAGE_ENDPOINT_URL);
+    }
+
+    @Test
+    void storageEndpoint_httpsAnyCase_passes() {
+        assertThatCode(() -> validate(valid().withProperty(DeployedSecretsValidator.STORAGE_ENDPOINT_URL,
+            "HTTPS://s3.eu-central-1.example.com"))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void localStorageProvider_hasNoEndpointToCheck() {
+        MockEnvironment env = valid().withProperty(DeployedSecretsValidator.STORAGE_PROVIDER, "local")
+            .withProperty(DeployedSecretsValidator.STORAGE_ENDPOINT_URL, "");
+        assertThatCode(() -> validate(env)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void backupEndpoint_optionalButHttpsWhenSet() {
+        assertThatCode(() -> validate(valid())).doesNotThrowAnyException();
+        assertThatThrownBy(() -> validate(valid()
+            .withProperty(DeployedSecretsValidator.STORAGE_BACKUP_ENDPOINT_URL, "http://backup.example.com")))
+            .hasMessageContaining(DeployedSecretsValidator.STORAGE_BACKUP_ENDPOINT_URL);
     }
 }
