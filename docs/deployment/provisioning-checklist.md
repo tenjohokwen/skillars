@@ -1109,6 +1109,10 @@ callout.
   JOIN main.authority a ON a.id = ua.authority_id
   WHERE a.name = 'ROLE_ADMIN';
   ```
+- [ ] **Staff tier (S-28).** Support / moderation staff get `ROLE_LTD_ADMIN`, never `ROLE_ADMIN`: it can
+  read and moderate but cannot change money, enforcement, config, GDPR or roles. No role-grant API exists;
+  create such an account with the runbook procedure "Create a limited administrator". Re-run the query above
+  and confirm every `ROLE_ADMIN` holder is meant to have full power.
 - [ ] Admin surfaces are API-only. There is no admin UI (`uat-deployment.md` 8.3).
 - [ ] **PROD has no test or seed data.** Never run `src/test/resources/sql/initTestData.sql`,
   `userData.sql`, `account.sql`, `secData.sql` or `docs/deployment/local/seed-accounts.sql` against

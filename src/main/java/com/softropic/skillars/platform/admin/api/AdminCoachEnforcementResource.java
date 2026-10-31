@@ -51,7 +51,7 @@ public class AdminCoachEnforcementResource {
     }
 
     @PostMapping("/{coachId}/suspend")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.coach.suspend")
     public ResponseEntity<AdminSuspendCoachResponse> suspendCoach(
             @PathVariable UUID coachId,
@@ -61,7 +61,7 @@ public class AdminCoachEnforcementResource {
     }
 
     @PostMapping("/{coachId}/reinstate")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.coach.reinstate")
     public ResponseEntity<Void> reinstateCoach(
             @PathVariable UUID coachId,
@@ -71,7 +71,7 @@ public class AdminCoachEnforcementResource {
     }
 
     @PostMapping("/{coachId}/strikes")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.coach.strike.issue")
     public ResponseEntity<AdminManualStrikeResponse> issueManualStrike(
             @PathVariable UUID coachId,
@@ -81,7 +81,7 @@ public class AdminCoachEnforcementResource {
     }
 
     @DeleteMapping("/{coachId}/strikes/{strikeId}")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.coach.strike.delete")
     public ResponseEntity<Void> deleteStrike(
             @PathVariable UUID coachId,
@@ -93,7 +93,7 @@ public class AdminCoachEnforcementResource {
 
     /** D6: set the coach's marketplace verification tier (BASIC / TRUSTED / FEATURED), audited. */
     @PatchMapping("/{coachId}/verification-tier")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.coach.verificationTier")
     public ResponseEntity<Void> setVerificationTier(
             @PathVariable UUID coachId,

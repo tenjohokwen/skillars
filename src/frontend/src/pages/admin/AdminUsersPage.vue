@@ -150,7 +150,7 @@
           <q-card-actions align="right">
             <q-btn flat :label="t('common.close')" v-close-popup />
             <q-btn
-              v-if="!detail.privileged"
+              v-if="!isLimitedAdmin && !detail.privileged"
               flat
               color="primary"
               :label="t('admin.users.unlockLoginAction')"
@@ -158,7 +158,7 @@
               @click="openAction('unlock')"
             />
             <q-btn
-              v-if="detail.suspended && !detail.privileged"
+              v-if="!isLimitedAdmin && detail.suspended && !detail.privileged"
               unelevated
               color="positive"
               :label="t('admin.users.reactivateAction')"
@@ -166,7 +166,7 @@
               @click="openAction('reactivate')"
             />
             <q-btn
-              v-else-if="!detail.privileged"
+              v-else-if="!isLimitedAdmin && !detail.privileged"
               unelevated
               color="negative"
               :label="t('admin.users.suspendAction')"
@@ -225,12 +225,14 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
 
 const { t, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 
 const query = ref('')

@@ -484,7 +484,7 @@
       diff to read.</p>
     <ol>
       <li><strong>Backend</strong>: a <code>*Resource</code> under <code>/api/admin/…</code> in <code>platform/admin/api/</code>, every method
-        <code>@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)</code> (admits <code>ROLE_ADMIN</code> and <code>ROLE_LTD_ADMIN</code>).
+        <code>@PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)</code> (<code>ROLE_ADMIN</code> only). Use <code>HAS_ADMIN_ROLE</code> (ADMIN or the limited LTD_ADMIN) only for read-only views and plain moderation; <code>AdminRoleTierAuditTest</code> fails a state-changing handler on the shared tier unless it is allow-listed.
         Queues are paged.</li>
       <li><strong>Audit mutating actions</strong>: add a constant to <code>…/platform/admin/contract/AdminActionType.java</code>
         <em>and</em> a migration widening <code>admin_action_log</code>'s <code>action_type</code> CHECK (copy <code>V171</code>; the most recent widening is <code>V189</code>, and the re-added list must carry every existing value) — the

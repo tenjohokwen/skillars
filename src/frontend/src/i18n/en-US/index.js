@@ -1240,6 +1240,13 @@ export default {
     },
   },
   admin: {
+    limited: {
+      title: 'Administrator access required',
+      message:
+        'This area is only available to full administrators. Your account is a limited administrator: you can review queues, users and bookings and moderate content, but not change money, enforcement, configuration or personal-data settings.',
+      back: 'Back to the dashboard',
+      readOnly: 'Limited administrator: this action requires a full administrator.',
+    },
     appeals: {
       title: 'Appeals',
       subtitle: 'Users contesting an enforcement action. Decisions are final.',
@@ -3041,5 +3048,6 @@ export default {
     adminFinance: 'Finance',
     adminGdpr: 'GDPR requests',
     adminConfig: 'Configuration',
+    adminLimitedNote: 'Limited administrator: read-only and moderation access',
   },
 }

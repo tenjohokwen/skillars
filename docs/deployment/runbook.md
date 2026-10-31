@@ -854,6 +854,44 @@ docker compose stop <extra-app-service-or-container>
 `peerHosts` in the log line names the other instance's hostname (container id). Rows of crashed
 instances stop counting after three missed beats (3 minutes) and are pruned after a day.
 
+## Create a limited administrator (`ROLE_LTD_ADMIN`)
+
+S-28: `ROLE_LTD_ADMIN` is a genuinely limited back-office tier (support / moderation). It can view queues,
+users, bookings, coaches, disputes and appeals, moderate reviews and messages, and mark admin alerts handled.
+It cannot touch money, enforcement (suspend / reinstate / strikes / tier), GDPR, configuration, alert rules,
+video state or deletion, and cannot grant roles. The full matrix is in the dev-docs `admin` page ("Admin role tiers").
+
+There is **no API or UI to grant or revoke roles** (deliberately: an LTD_ADMIN must never be able to grant one,
+and an ADMIN-only grant action needs its own migration and audit type; a follow-up). Today an LTD_ADMIN is created by
+database change:
+
+```sql
+-- 1. Bootstrap the account as a normal admin first (APP_BOOTSTRAP_ADMIN_EMAIL/PASSWORD/PHONE with a NEW
+--    address; the runner never elevates an existing user), confirm the log line, remove the password, redeploy.
+-- 2. Demote it to the limited tier. :uid = main."user".id of that account.
+BEGIN;
+DELETE FROM main.user_authority
+ WHERE user_id = :uid
+   AND authority_id = (SELECT id FROM main.authority WHERE name = 'ROLE_ADMIN');
+INSERT INTO main.user_authority (user_id, authority_id)
+SELECT :uid, id FROM main.authority WHERE name = 'ROLE_LTD_ADMIN';
+-- end any session minted while it was a full admin (JWTs carry the roles claim)
+UPDATE main."user" SET security_session_invalidated_at = now() WHERE id = :uid;
+UPDATE main.refresh_tokens SET used = true WHERE user_id = :uid;
+COMMIT;
+```
+
+The account lands on the admin console with read/moderate access only; sign-in is the normal `/login`.
+Revoke by deleting the `ROLE_LTD_ADMIN` row from `main.user_authority` and running the two `UPDATE`s above.
+Verify who holds which tier:
+
+```sql
+SELECT u.id, u.email, a.name FROM main."user" u
+JOIN main.user_authority ua ON ua.user_id = u.id
+JOIN main.authority a ON a.id = ua.authority_id
+WHERE a.name IN ('ROLE_ADMIN', 'ROLE_LTD_ADMIN') ORDER BY a.name, u.id;
+```
+
 ## Admin alert recipient (`platform.admin_alert_email`)
 
 Both video-moderation admin alerts and EMAIL-channel alert rules (`AlertNotificationListener`) are

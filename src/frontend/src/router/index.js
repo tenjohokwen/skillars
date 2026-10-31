@@ -83,6 +83,13 @@ export default defineRouter(function (/* { store, ssrContext } */) {
       return
     }
 
+    // S-28: pages whose every action needs a full administrator (finance, GDPR, config). A limited
+    // administrator gets an explanation instead of a page full of 403s. The API enforces this too.
+    if (isAuthenticated && authStore.limitedAdmin && to.matched.some((r) => r.meta.fullAdmin)) {
+      next('/admin/requires-administrator')
+      return
+    }
+
     if (to.matched.some((r) => r.path === '/coach/command-center') && authStore.isCoach) {
       const pbStore = useProfileBuilderStore()
       await pbStore.loadStatus()

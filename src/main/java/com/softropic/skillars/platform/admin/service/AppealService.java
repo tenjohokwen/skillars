@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
 import com.softropic.skillars.platform.admin.contract.AdminAppealDto;
@@ -147,6 +148,7 @@ public class AppealService {
      */
     @Transactional
     public AdminAppealDto decide(UUID appealId, AppealStatus outcome, String note, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         if (outcome == null || outcome == AppealStatus.OPEN) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "appeals.invalidOutcome");
         }

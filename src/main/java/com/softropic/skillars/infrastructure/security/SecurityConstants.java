@@ -31,7 +31,15 @@ public final class SecurityConstants {
      * Security expressions for @PreAuthorize annotations
      */
     public static final String HAS_ANY_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN') or hasRole('ROLE_USER') or hasRole('ROLE_COACH') or hasRole('ROLE_PARENT') or hasRole('ROLE_PLAYER')";
+    /**
+     * S-28 shared admin tier: ROLE_ADMIN or the limited ROLE_LTD_ADMIN. Only for read-only admin views and
+     * content/alert moderation. A state-changing admin endpoint may use it only if it is on the explicit
+     * allow-list in {@code AdminRoleTierAuditTest}; everything else (money, GDPR, config, suspension, roles,
+     * deletion, integrations) must use {@link #HAS_FULL_ADMIN_ROLE}.
+     */
     public static final String HAS_ADMIN_ROLE = "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')";
+    /** S-28 full-admin tier: ROLE_ADMIN only. The default for any admin endpoint that is not plainly read/moderate. */
+    public static final String HAS_FULL_ADMIN_ROLE = "hasRole('ROLE_ADMIN')";
     public static final String HAS_COACH_ROLE = "hasRole('ROLE_COACH')";
     public static final String HAS_PARENT_ROLE = "hasRole('ROLE_PARENT')";
     public static final String HAS_PLAYER_ROLE = "hasRole('ROLE_PLAYER')";

@@ -1688,6 +1688,13 @@ export default {
     },
   },
   admin: {
+    limited: {
+      title: 'Administratorzugriff erforderlich',
+      message:
+        'Dieser Bereich ist nur für Volladministratoren verfügbar. Dein Konto ist ein eingeschränktes Administratorkonto: Du kannst Warteschlangen, Nutzer und Buchungen einsehen und Inhalte moderieren, aber keine Zahlungen, Sanktionen, Konfigurationen oder Datenschutzeinstellungen ändern.',
+      back: 'Zurück zum Dashboard',
+      readOnly: 'Eingeschränkter Administrator: Diese Aktion erfordert einen Volladministrator.',
+    },
     appeals: {
       title: 'Einsprüche',
       subtitle: 'Nutzer, die eine Maßnahme anfechten. Entscheidungen sind endgültig.',
@@ -3102,5 +3109,6 @@ export default {
     adminFinance: 'Finanzen',
     adminGdpr: 'DSGVO-Anfragen',
     adminConfig: 'Konfiguration',
+    adminLimitedNote: 'Eingeschränkter Administrator: Lese- und Moderationszugriff',
   },
 }

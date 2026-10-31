@@ -202,10 +202,10 @@
         <tr><td>GET</td><td><code>/api/notifications/preferences</code></td><td>One entry per opt-out-able category (missing row → enabled).</td><td>Authenticated</td></tr>
         <tr><td>PUT</td><td><code>/api/notifications/preferences/{category}</code></td><td>Body <code>{emailEnabled}</code>. 400 for a transactional category.</td><td>Authenticated</td></tr>
         <tr><td>POST</td><td><code>/api/notifications/unsubscribe?token=</code></td><td>RFC 8058 one-click unsubscribe (token in query string or form body). POST only — no GET, so link scanners cannot unsubscribe anyone. Returns the category.</td><td>Public (exact path in <code>AppEndpoints.PUBLIC_ENDPOINTS</code>); rate-limited</td></tr>
-        <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create an alert rule.</td><td><code>HAS_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> or <code>ROLE_LTD_ADMIN</code>)</td></tr>
-        <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List enabled rules (from the in-memory cache).</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
-        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update (delete-then-save) and refresh the cache.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
-        <tr><td>POST</td><td><code>/v1/admin/ses/preflight</code></td><td>Body <code>{recipientEmail}</code>. Live (uncached) SES <code>GetAccount</code> via <code>SesAccountChecker.checkLive()</code> plus a real test send of <code>SES_CUTOVER_PREFLIGHT</code> through <code>sendEmailSync</code> with a fresh <code>sendId</code>; returns <code>{accountCheck, testSend, ready}</code>. Bean only exists when <code>app.email.transport=ses</code>.</td><td><code>HAS_ADMIN_ROLE</code></td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create an alert rule.</td><td><code>HAS_FULL_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> only)</td></tr>
+        <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List enabled rules (from the in-memory cache).</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
+        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update (delete-then-save) and refresh the cache.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
+        <tr><td>POST</td><td><code>/v1/admin/ses/preflight</code></td><td>Body <code>{recipientEmail}</code>. Live (uncached) SES <code>GetAccount</code> via <code>SesAccountChecker.checkLive()</code> plus a real test send of <code>SES_CUTOVER_PREFLIGHT</code> through <code>sendEmailSync</code> with a fresh <code>sendId</code>; returns <code>{accountCheck, testSend, ready}</code>. Bean only exists when <code>app.email.transport=ses</code>.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
       </tbody>
     </table>
     <p>Every <code>/api/notifications</code> endpoint except <code>unsubscribe</code> acts on <code>SecurityUtil.requireCurrentUserId()</code> only — no user id appears in any path or body.

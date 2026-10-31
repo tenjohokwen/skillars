@@ -468,6 +468,13 @@
         <!-- Admin section -->
         <template v-if="authStore.isAdmin">
           <div class="text-label q-px-md q-mt-lg q-mb-sm">{{ $t('nav.admin') }}</div>
+          <div
+            v-if="authStore.limitedAdmin"
+            class="text-meta q-px-md q-mb-sm"
+            data-testid="nav-limited-admin-note"
+          >
+            {{ $t('nav.adminLimitedNote') }}
+          </div>
 
           <q-item clickable to="/admin/health-dashboard" class="nav-item">
             <q-item-section avatar>
@@ -555,7 +562,7 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/finance" class="nav-item">
+          <q-item v-if="!authStore.limitedAdmin" clickable to="/admin/finance" class="nav-item">
             <q-item-section avatar>
               <q-icon name="payments" class="nav-icon" />
             </q-item-section>
@@ -564,7 +571,7 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/gdpr" class="nav-item">
+          <q-item v-if="!authStore.limitedAdmin" clickable to="/admin/gdpr" class="nav-item">
             <q-item-section avatar>
               <q-icon name="privacy_tip" class="nav-icon" />
             </q-item-section>
@@ -573,7 +580,7 @@
             </q-item-section>
           </q-item>
 
-          <q-item clickable to="/admin/config" class="nav-item">
+          <q-item v-if="!authStore.limitedAdmin" clickable to="/admin/config" class="nav-item">
             <q-item-section avatar>
               <q-icon name="tune" class="nav-icon" />
             </q-item-section>

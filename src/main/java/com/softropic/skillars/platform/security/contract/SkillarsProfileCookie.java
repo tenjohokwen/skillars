@@ -28,7 +28,11 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.S
  * type is explicitly positioned as the extension point for the next field, so the escaping must
  * hold even when a caller's input doesn't.
  */
-public record SkillarsProfileCookie(String id, String role) {
+public record SkillarsProfileCookie(String id, String role, boolean limitedAdmin) {
+
+    public SkillarsProfileCookie(String id, String role) {
+        this(id, role, false);
+    }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
@@ -36,6 +40,10 @@ public record SkillarsProfileCookie(String id, String role) {
         ObjectNode payload = MAPPER.createObjectNode();
         payload.put("id", id);
         payload.put("role", role);
+        if (limitedAdmin) {
+            // S-28: UI hint only (hide full-admin-only navigation); the server enforces the tier itself.
+            payload.put("limitedAdmin", true);
+        }
         String json = payload.toString();
         // java.net.URLEncoder is FORM encoding (space -> '+'); the frontend decodes with
         // decodeURIComponent, which leaves '+' literal. The two are not inverse functions.

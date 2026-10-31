@@ -25,7 +25,7 @@ import java.util.List;
 /**
  * Admin REST endpoints for managing alert rules.
  *
- * <p>All endpoints require JWT authentication with ROLE_ADMIN or ROLE_LTD_ADMIN.
+ * <p>All endpoints require JWT authentication with ROLE_ADMIN (S-28: not ROLE_LTD_ADMIN).
  * These are automatically excluded from the API-key filter chain via the
  * NegatedRequestMatcher on /v1/admin/** in TenantSecurityConfig.
  *
@@ -36,7 +36,7 @@ import java.util.List;
 @Observed(name = "http.admin.alerts")
 @RestController
 @RequestMapping("/v1/admin/alerts")
-@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+@PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
 @RequiredArgsConstructor
 public class AlertRuleAdminResource {
 

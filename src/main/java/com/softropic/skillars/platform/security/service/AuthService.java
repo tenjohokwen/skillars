@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.security.CookieUtil;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -134,9 +135,10 @@ public class AuthService {
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
         String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        new SkillarsProfileCookie(String.valueOf(user.getId()), role).writeTo(res);
+        boolean limitedAdmin = AdminTierGuard.isLimitedAdmin(principal.getAuthorities());
+        new SkillarsProfileCookie(String.valueOf(user.getId()), role, limitedAdmin).writeTo(res);
 
-        return new LoginResponse(user.getId(), role, principal.getDisplayName());
+        return new LoginResponse(user.getId(), role, principal.getDisplayName(), limitedAdmin);
     }
 
     private String dummyPasswordHash() {
@@ -292,9 +294,10 @@ public class AuthService {
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
         String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        new SkillarsProfileCookie(String.valueOf(user.getId()), role).writeTo(res);
+        boolean limitedAdmin = AdminTierGuard.isLimitedAdmin(principal.getAuthorities());
+        new SkillarsProfileCookie(String.valueOf(user.getId()), role, limitedAdmin).writeTo(res);
 
-        return new LoginResponse(user.getId(), role, principal.getDisplayName());
+        return new LoginResponse(user.getId(), role, principal.getDisplayName(), limitedAdmin);
     }
 
     public void logout(HttpServletRequest req, HttpServletResponse res) {

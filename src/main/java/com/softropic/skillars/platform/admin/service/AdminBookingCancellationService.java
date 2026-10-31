@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
 import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.repo.AdminActionLog;
@@ -42,6 +43,7 @@ public class AdminBookingCancellationService {
 
     @Transactional
     public AdminBookingCancellationOutcome cancel(UUID bookingId, Long adminId, String note) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         AdminBookingCancellationOutcome outcome = bookingService.cancelBookingAsAdmin(
             bookingId, adminId, BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT);
         if (outcome == AdminBookingCancellationOutcome.CANCELLED) {

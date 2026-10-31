@@ -99,7 +99,7 @@
             </div>
           </q-card-section>
 
-          <q-card-actions align="left" class="q-px-md">
+          <q-card-actions v-if="!isLimitedAdmin" align="left" class="q-px-md">
             <q-btn
               v-if="profile.currentStatus !== 'SUSPENDED'"
               unelevated
@@ -128,7 +128,7 @@
           <q-separator class="q-my-sm" />
 
           <!-- Verification tier (D6) -->
-          <q-card-section>
+          <q-card-section v-if="!isLimitedAdmin">
             <div class="text-subtitle2">{{ t('admin.coaches.tierSectionTitle') }}</div>
             <div class="text-meta q-mb-sm">{{ t('admin.coaches.tierSectionHint') }}</div>
             <div class="row q-col-gutter-sm items-start">
@@ -185,6 +185,7 @@
                 </q-item-section>
                 <q-item-section side>
                   <q-btn
+                    v-if="!isLimitedAdmin"
                     flat
                     dense
                     size="sm"
@@ -299,6 +300,7 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
@@ -307,6 +309,7 @@ import { adminApi } from 'src/api/admin.api'
 import VerificationBadge from 'components/marketplace/VerificationBadge.vue'
 
 const { t, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 const route = useRoute()
 

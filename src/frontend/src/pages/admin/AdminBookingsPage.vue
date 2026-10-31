@@ -88,7 +88,7 @@
           </q-list>
         </q-card-section>
 
-        <q-card-section v-if="booking.forceCompletable">
+        <q-card-section v-if="!isLimitedAdmin && booking.forceCompletable">
           <q-banner class="bg-warning text-dark q-mb-sm" rounded>
             {{ t('admin.bookings.stuckBanner') }}
           </q-banner>
@@ -109,7 +109,10 @@
         </q-card-section>
 
         <!-- C6: cancel one booking (full refund of anything paid, no coach strike) -->
-        <q-card-section v-if="booking.adminCancellable" data-testid="booking-cancel-section">
+        <q-card-section
+          v-if="!isLimitedAdmin && booking.adminCancellable"
+          data-testid="booking-cancel-section"
+        >
           <div class="text-meta q-mb-sm">{{ t('admin.bookings.cancelHint') }}</div>
           <q-btn
             outline
@@ -225,6 +228,7 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
@@ -233,6 +237,7 @@ import { adminApi } from 'src/api/admin.api'
 import { formatDateTime, isUuid } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 const route = useRoute()
 

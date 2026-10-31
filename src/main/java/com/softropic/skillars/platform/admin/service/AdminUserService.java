@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
@@ -137,6 +138,7 @@ public class AdminUserService {
      */
     @Transactional
     public boolean suspendUser(Long userId, String reason, Long adminId, boolean cancelUpcomingBookings) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         if (userId.equals(adminId)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "admin.users.cannotSuspendSelf");
         }
@@ -178,6 +180,7 @@ public class AdminUserService {
      */
     @Transactional
     public boolean reactivateUser(Long userId, String reason, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         User user = lockAndLoad(userId, "AdminUserService.reactivateUser");
         // Mirrors suspendUser: this console never acts on ADMIN / LTD_ADMIN accounts (an LTD_ADMIN
         // must not be able to undo a lock placed on a more-privileged account).
@@ -215,6 +218,7 @@ public class AdminUserService {
      */
     @Transactional
     public int unlockLogin(Long userId, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         User user = userRepository.findOneById(userId)
             .orElseThrow(() -> new ResourceNotFoundException("User not found", "user"));
         if (isPrivileged(user)) {

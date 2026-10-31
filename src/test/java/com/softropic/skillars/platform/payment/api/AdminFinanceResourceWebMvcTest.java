@@ -82,6 +82,18 @@ class AdminFinanceResourceWebMvcTest {
             .andExpect(status().isForbidden());
     }
 
+    // S-28: money surfaces are full-admin only; the limited tier is refused and never reaches the service.
+    @Test
+    @WithMockUser(roles = "LTD_ADMIN")
+    void ltdAdmin_cannotReadFinanceOrReleasePayouts() throws Exception {
+        mockMvc.perform(get("/api/admin/payment/overview")).andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/admin/payment/coaches/{coachId}/revenue", UUID.randomUUID()))
+            .andExpect(status().isForbidden());
+        mockMvc.perform(post("/api/admin/payment/coaches/{coachId}/payouts/release-held", UUID.randomUUID()))
+            .andExpect(status().isForbidden());
+        org.mockito.Mockito.verifyNoInteractions(revenueReportingService, coachPayoutHoldRecoveryService);
+    }
+
     @Test
     @WithMockUser(roles = "ADMIN")
     void overview_adminRole_returns200_withoutAFakeSubscriptionRevenueFigure() throws Exception {

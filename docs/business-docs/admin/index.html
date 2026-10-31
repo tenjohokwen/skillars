@@ -50,6 +50,8 @@ flowchart LR
     S["/admin/safeguarding"]
     </pre>
 
+    <p><strong>Two kinds of admin account.</strong> A <em>full administrator</em> can do everything described below. A <em>limited administrator</em> (support / moderation staff) can look at the health page, the moderation queue, disputes, coaches, users, appeals and bookings, approve or block reviews and messages, and mark alerts as handled &mdash; but cannot resolve disputes, decide appeals, suspend or reinstate coaches or users, issue strikes, cancel or force-complete bookings, release payouts, see the Finance, GDPR or Configuration pages, change video access, or manage alert rules. Those pages and buttons are hidden for a limited administrator, and the server refuses the actions as well. Limited accounts are currently created by the technical team, not in the app.</p>
+
     <h3>1. System health — <code>/admin/health-dashboard</code></h3>
     <p>"System Health" shows an overall UP/DOWN status pill and a card for each backend component (database, cache, external providers and so on), with status and detail rows.</p>
 

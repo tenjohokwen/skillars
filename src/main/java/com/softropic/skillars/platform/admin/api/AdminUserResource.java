@@ -53,7 +53,7 @@ public class AdminUserResource {
     }
 
     @PostMapping("/{userId}/suspend")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.users.suspend")
     public ResponseEntity<Void> suspendUser(
             @PathVariable Long userId,
@@ -64,7 +64,7 @@ public class AdminUserResource {
     }
 
     @PostMapping("/{userId}/reactivate")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.users.reactivate")
     public ResponseEntity<Void> reactivateUser(
             @PathVariable Long userId,
@@ -74,7 +74,7 @@ public class AdminUserResource {
     }
 
     @PostMapping("/{userId}/unlock-login")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.users.unlockLogin")
     public ResponseEntity<AdminLoginUnlockResponse> unlockLogin(@PathVariable Long userId) {
         return ResponseEntity.ok(new AdminLoginUnlockResponse(adminUserService.unlockLogin(userId, resolveAdminId())));

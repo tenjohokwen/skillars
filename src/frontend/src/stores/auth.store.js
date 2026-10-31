@@ -11,17 +11,22 @@ export const useAuthStore = defineStore('auth', () => {
   const displayName = ref(null)
   const timezoneNoticeDismissed = ref(false)
   const coachTier = ref(null)
+  // S-28: ROLE_LTD_ADMIN without ROLE_ADMIN. UI hint only (role stays 'ADMIN' for routing); the backend
+  // enforces the tier on every endpoint, so a tampered cookie only reveals buttons that answer 403.
+  const limitedAdmin = ref(false)
 
   const isAuthenticated = computed(() => !!userId.value)
   const isCoach = computed(() => role.value === 'COACH')
   const isParent = computed(() => role.value === 'PARENT')
   const isPlayer = computed(() => role.value === 'PLAYER')
   const isAdmin = computed(() => role.value === 'ADMIN')
+  const isFullAdmin = computed(() => role.value === 'ADMIN' && !limitedAdmin.value)
 
   function setUser(data) {
     userId.value = data.userId
     role.value = data.role
     displayName.value = data.displayName
+    limitedAdmin.value = data.limitedAdmin === true
   }
 
   function clearUser() {
@@ -29,6 +34,7 @@ export const useAuthStore = defineStore('auth', () => {
     role.value = null
     displayName.value = null
     coachTier.value = null
+    limitedAdmin.value = false
   }
 
   // skillars-deferred-163 AC4.3: a 20s timeout (getCoachTier, marketplace.api.js) means this always
@@ -82,6 +88,7 @@ export const useAuthStore = defineStore('auth', () => {
         if (parsed.id && parsed.role) {
           userId.value = parsed.id
           role.value = parsed.role
+          limitedAdmin.value = parsed.limitedAdmin === true
           // displayName not in skp — will be populated on next login response
         }
       }
@@ -100,6 +107,8 @@ export const useAuthStore = defineStore('auth', () => {
     isParent,
     isPlayer,
     isAdmin,
+    isFullAdmin,
+    limitedAdmin,
     timezoneNoticeDismissed,
     browserTimezone,
     setUser,

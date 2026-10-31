@@ -178,7 +178,7 @@
           <q-card-section v-if="isGone" class="text-meta">
             {{ t('admin.videos.goneHint') }}
           </q-card-section>
-          <q-card-actions v-else align="left" class="q-px-md q-gutter-sm">
+          <q-card-actions v-else-if="!isLimitedAdmin" align="left" class="q-px-md q-gutter-sm">
             <q-btn
               v-if="video.accessState === 'ACTIVE'"
               unelevated
@@ -282,6 +282,7 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
@@ -290,6 +291,7 @@ import { adminApi } from 'src/api/admin.api'
 import { formatDateTime, isUuid } from 'src/utils/adminFormat'
 
 const { t, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 const route = useRoute()
 

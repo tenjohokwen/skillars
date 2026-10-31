@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.config.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.config.config.ConfigProperties;
 import com.softropic.skillars.platform.config.contract.AdminConfigEntryDto;
@@ -348,6 +349,7 @@ public class ConfigService {
      * existing 404 behavior exactly — this does not widen the write surface to arbitrary unknown keys.
      */
     public ConfigValueResponse updateConfig(String key, String newValue) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         Optional<PlatformConfig> existing = configRepository.findByKey(key);
         if (existing.isEmpty() && !ConfigBounds.HAS_CODE_DEFAULT.contains(key)) {
             // Preserves the original 404-before-range-check ordering for a key that is neither

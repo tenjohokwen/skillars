@@ -46,6 +46,18 @@ class SkillarsProfileCookieTest {
     }
 
     @Test
+    void writeTo_limitedAdmin_addsFlagOnlyWhenSet() {
+        MockHttpServletResponse limited = new MockHttpServletResponse();
+        new SkillarsProfileCookie("1", "ADMIN", true).writeTo(limited);
+        assertThat(java.net.URLDecoder.decode(soleSkpCookie(limited).getValue(), java.nio.charset.StandardCharsets.UTF_8))
+            .contains("\"limitedAdmin\":true");
+
+        MockHttpServletResponse full = new MockHttpServletResponse();
+        new SkillarsProfileCookie("1", "ADMIN").writeTo(full);
+        assertThat(soleSkpCookie(full).getValue()).doesNotContain("limitedAdmin");
+    }
+
+    @Test
     void writeTo_roleContainingSpace_encodesSpaceAsPercent20NotPlus() {
         MockHttpServletResponse response = new MockHttpServletResponse();
 

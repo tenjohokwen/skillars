@@ -44,7 +44,7 @@ public class AdminBookingResource {
     }
 
     @PostMapping("/{bookingId}/force-complete")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.bookings.forceComplete")
     public ResponseEntity<AdminForceCompleteBookingResponse> forceComplete(
             @PathVariable UUID bookingId,
@@ -63,7 +63,7 @@ public class AdminBookingResource {
      * (LIVE_SESSION / PAYMENT_IN_PROGRESS / NOT_CANCELLABLE) — the force-complete endpoint's contract.
      */
     @PostMapping("/{bookingId}/cancel")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.bookings.cancel")
     public ResponseEntity<AdminCancelBookingResponse> cancel(
             @PathVariable UUID bookingId,
