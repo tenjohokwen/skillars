@@ -177,7 +177,7 @@ groups:
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: '(sum(rate(http_server_requests_seconds_count{uri!~"/manage.*",status=~"5.."}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_requests_seconds_count{uri!~"/manage.*"}[5m])), 0.05)'
+              expr: '((sum(rate(http_server_requests_seconds_count{uri!~"/manage.*|.*/events",status=~"5.."}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_requests_seconds_count{uri!~"/manage.*|.*/events"}[5m])), 0.001)) and on() (sum(increase(http_server_requests_seconds_count{uri!~"/manage.*|.*/events"}[5m])) >= 20)'
               instant: true
               range: false
               refId: A
@@ -208,7 +208,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri!~"/manage.*"}[10m])))'
+              expr: 'histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri!~"/manage.*|.*/events"}[10m])))'
               instant: true
               range: false
               refId: A
@@ -424,7 +424,7 @@ groups:
             relativeTimeRange: { from: 1200, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'sum(increase(persistence_lock_retry_exhausted_total[15m])) or vector(0)'
+              expr: '(sum(increase(persistence_lock_retry_exhausted_total[15m])) or vector(0)) + (sum(persistence_lock_retry_exhausted_total unless persistence_lock_retry_exhausted_total offset 15m) or vector(0))'
               instant: true
               range: false
               refId: A
@@ -485,7 +485,7 @@ groups:
             relativeTimeRange: { from: 2400, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'sum(increase(tasks_scheduled_execution_seconds_count{outcome="FAILED"}[30m])) or vector(0)'
+              expr: '(sum(increase(tasks_scheduled_execution_seconds_count{outcome="ERROR"}[30m])) or vector(0)) + (sum(tasks_scheduled_execution_seconds_count{outcome="ERROR"} unless tasks_scheduled_execution_seconds_count{outcome="ERROR"} offset 30m) or vector(0))'
               instant: true
               range: false
               refId: A
@@ -614,7 +614,7 @@ groups:
             relativeTimeRange: { from: 1200, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'sum(increase(payment_stripe_webhook_seconds_count{error!="none"}[15m])) or vector(0)'
+              expr: '(sum(increase(payment_stripe_webhook_seconds_count{error!="none"}[15m])) or vector(0)) + (sum(payment_stripe_webhook_seconds_count{error!="none"} unless payment_stripe_webhook_seconds_count{error!="none"} offset 15m) or vector(0))'
               instant: true
               range: false
               refId: A
@@ -675,7 +675,7 @@ groups:
             relativeTimeRange: { from: 2400, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'sum(increase(booking_payment_pending_unrecoverable_total[30m])) or vector(0)'
+              expr: '(sum(increase(booking_payment_pending_unrecoverable_total[30m])) or vector(0)) + (sum(booking_payment_pending_unrecoverable_total unless booking_payment_pending_unrecoverable_total offset 30m) or vector(0))'
               instant: true
               range: false
               refId: A
@@ -984,7 +984,7 @@ groups:
             relativeTimeRange: { from: 3900, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'sum(increase(video_moderation_bypass_total[1h])) or vector(0)'
+              expr: '(sum(increase(video_moderation_bypass_total[1h])) or vector(0)) + (sum(video_moderation_bypass_total unless video_moderation_bypass_total offset 1h) or vector(0))'
               instant: true
               range: false
               refId: A
@@ -1015,7 +1015,7 @@ groups:
             relativeTimeRange: { from: 3900, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'sum(increase(config_value_misconfigured_total[1h])) or vector(0)'
+              expr: '(sum(increase(config_value_misconfigured_total[1h])) or vector(0)) + (sum(config_value_misconfigured_total unless config_value_misconfigured_total offset 1h) or vector(0))'
               instant: true
               range: false
               refId: A

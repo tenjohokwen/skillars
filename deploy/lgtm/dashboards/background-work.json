@@ -62,7 +62,7 @@
             "type": "prometheus",
             "uid": "Prometheus"
           },
-          "expr": "sum by (code_namespace, code_function, exception) (increase(tasks_scheduled_execution_seconds_count{outcome=\"FAILED\"}[$__range])) > 0",
+          "expr": "sum by (code_namespace, code_function, exception) (increase(tasks_scheduled_execution_seconds_count{outcome=\"ERROR\"}[$__range])) > 0",
           "legendFormat": "__auto",
           "editorMode": "code",
           "range": false,

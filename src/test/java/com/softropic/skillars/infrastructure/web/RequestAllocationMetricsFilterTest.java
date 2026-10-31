@@ -63,6 +63,17 @@ class RequestAllocationMetricsFilterTest {
     }
 
     @Test
+    void anArbitraryHttpMethod_isBucketedSoScannersCannotExplodeCardinality() throws Exception {
+        filter(registry).doFilter(new MockHttpServletRequest("PROPFIND", "/api/x"),
+            new MockHttpServletResponse(), matchingRoute("/api/x"));
+        filter(registry).doFilter(new MockHttpServletRequest("BREW", "/api/x"),
+            new MockHttpServletResponse(), matchingRoute("/api/x"));
+
+        assertThat(registry.get(RequestAllocationMetricsFilter.METRIC).tag("method", "OTHER").summaries()).hasSize(1);
+        assertThat(registry.find(RequestAllocationMetricsFilter.METRIC).tag("method", "PROPFIND").summary()).isNull();
+    }
+
+    @Test
     void aRequestThatThrows_isStillRecorded() {
         FilterChain failing = (request, response) -> {
             request.setAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE, "/api/boom");

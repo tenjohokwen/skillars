@@ -39,7 +39,7 @@ Panels fed by a counter stay empty until that event first happens. That is norma
 
 - **`skillars_backlog_count` / `skillars_backlog_oldest_age_seconds`** (`OperationalBacklogMetrics`): work waiting in the database, refreshed every minute. Tags: `backlog`, `detail`.
 - **`http_server_allocated_bytes`** (`RequestAllocationMetricsFilter`): heap allocated per request, by route. It counts allocation on the request thread, not retained memory, so async listeners and SSE streams are not attributed to the route.
-- **`tasks_scheduled_execution_seconds`**: Spring's own per-job timer. A job that throws shows `outcome="FAILED"`.
+- **`tasks_scheduled_execution_seconds`**: Spring's own per-job timer. A job that throws shows `outcome="ERROR"`.
 - **Log markers:** the app logs integrity problems as `[MARKER] ...` at WARN or ERROR. Dashboards count these in Loki. A new marker appears on Business Health with no dashboard change.
 
 Loki stream labels are `app`, `environment` and `level` (upper case: `level="ERROR"`). Everything else is in the JSON line, or in structured metadata such as `traceId`.

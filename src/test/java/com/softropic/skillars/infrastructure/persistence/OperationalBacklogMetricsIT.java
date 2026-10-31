@@ -67,6 +67,18 @@ class OperationalBacklogMetricsIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void aDeadVideoDeletion_staysInTheBacklog() {
+        commit("INSERT INTO main.video_deletion_outbox (video_id, status) VALUES (gen_random_uuid(), 'DEAD')");
+        try {
+            metrics.refresh();
+            assertThat(registry.find("skillars.backlog.count").tags("backlog", "video_deletion_outbox", "detail", "DEAD").gauge())
+                .isNotNull();
+        } finally {
+            commit("DELETE FROM main.video_deletion_outbox WHERE status = 'DEAD'");
+        }
+    }
+
+    @Test
     void aBacklogThatEmptied_dropsItsSeries_soAnAlertOnItClears() {
         enqueue(12, "1 hour");
         metrics.refresh();

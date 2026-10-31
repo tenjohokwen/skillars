@@ -20,10 +20,12 @@ import java.util.List;
  * <p>Refreshed on a schedule rather than per scrape so a slow query can never stall Prometheus. No
  * {@code @SchedulerLock}: gauges are per JVM, so every instance must refresh its own (cookbook recipe
  * 5). Dashboards aggregate with {@code max}. A failure propagates to the scheduler, leaves the previous
- * values in place and shows as {@code tasks_scheduled_execution_seconds_count{outcome="FAILED"}}.
+ * values in place and shows as {@code tasks_scheduled_execution_seconds_count{outcome="ERROR"}} (the ScheduledJobFailing alert).
  *
  * <p>Raw SQL because this reads across module schemas and only ever reports. Each branch reads an
- * indexed status or a table that drains (the outboxes), so the poll stays cheap as bookings grow.
+ * indexed status or a table that drains (the outboxes), so the poll stays cheap as bookings grow. A
+ * booking's age runs from when it entered the waiting status (its last update, or the confirmation request),
+ * not from creation, which can be weeks earlier.
  * {@code outbox_stuck}'s 10 mirrors {@code OutboxService.STUCK_ATTEMPTS_THRESHOLD}. {@code payouts} /
  * {@code FROZEN} only counts payouts already past their release date: until then the freeze delays nothing.
  */
@@ -39,7 +41,7 @@ public class OperationalBacklogMetrics {
           FROM main.outbox_messages WHERE attempts >= 10 GROUP BY aggregate_type
         UNION ALL
         SELECT 'video_deletion_outbox', status, COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
-          FROM main.video_deletion_outbox WHERE status IN ('PENDING', 'FAILED') GROUP BY status
+          FROM main.video_deletion_outbox WHERE status IN ('PENDING', 'FAILED', 'DEAD') GROUP BY status
         UNION ALL
         SELECT 'subscription_lifecycle_outbox', status, COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
           FROM main.subscription_lifecycle_outbox WHERE status = 'PENDING' GROUP BY status
@@ -57,7 +59,8 @@ public class OperationalBacklogMetrics {
         SELECT 'awaited_wrap_ups', 'all', COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
           FROM booking.session_completion_data WHERE awaiting_wrap_up HAVING COUNT(*) > 0
         UNION ALL
-        SELECT 'bookings', status, COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
+        SELECT 'bookings', status, COUNT(*),
+               EXTRACT(EPOCH FROM now() - MIN(COALESCE(confirmation_requested_at, updated_at)))
           FROM booking.bookings WHERE status IN ('PAYMENT_PENDING', 'COMPLETED_PENDING_CONFIRMATION')
           GROUP BY status
         UNION ALL
