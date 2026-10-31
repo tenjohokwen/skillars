@@ -137,7 +137,7 @@
             </template>
           </q-card-section>
 
-          <template v-if="detail.status === 'OPEN'">
+          <template v-if="!isLimitedAdmin && detail.status === 'OPEN'">
             <q-card-section class="q-pt-none">
               <div class="text-meta q-mb-sm">{{ t('admin.appeals.overturnHint') }}</div>
               <q-input
@@ -179,6 +179,7 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 // FR-ADM-004 appeals queue — follows AdminDisputesPage's server-paged queue + detail-dialog shape.
 // The decision is final and race-safe server-side (AppealService.decide: conditional UPDATE on
 // status = OPEN); a second admin deciding the same appeal gets 409 appeals.alreadyDecided.
@@ -188,6 +189,7 @@ import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
 
 const { t, te, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 
 const rows = ref([])

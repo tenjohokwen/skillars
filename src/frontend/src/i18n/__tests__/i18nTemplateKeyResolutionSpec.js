@@ -291,7 +291,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'detail line keyed by the AppealStatus enum',
   },
   {
-    at: 'src/pages/admin/AdminAppealsPage.vue:333',
+    at: 'src/pages/admin/AdminAppealsPage.vue:335',
     reason:
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },

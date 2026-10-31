@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
@@ -298,6 +299,7 @@ public class DisputeService {
     @Transactional
     public void resolveDispute(UUID disputeId, String resolution, BigDecimal creditAmount,
                                String resolutionNote, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         Dispute dispute = disputeRepository.findById(disputeId)
             .orElseThrow(() -> new ResourceNotFoundException("Dispute not found", "Dispute"));
 
@@ -445,6 +447,7 @@ public class DisputeService {
 
     @Transactional
     public void dismissDispute(UUID disputeId, String reason, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         Dispute dispute = disputeRepository.findById(disputeId)
             .orElseThrow(() -> new ResourceNotFoundException("Dispute not found", "Dispute"));
 

@@ -43,7 +43,7 @@ public class AdminVideoResource {
         return ResponseEntity.ok(adminVideoService.getVideo(videoId));
     }
 
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "video.admin.setAccessState")
     @PatchMapping("/videos/{videoId}/access-state")
     public ResponseEntity<VideoSummaryResponse> setAccessState(
@@ -53,7 +53,7 @@ public class AdminVideoResource {
         return ResponseEntity.ok(toSummary(updated));
     }
 
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "video.admin.deleteVideo")
     @DeleteMapping("/videos/{videoId}")
     public ResponseEntity<Void> deleteVideo(@PathVariable UUID videoId) {
@@ -70,7 +70,7 @@ public class AdminVideoResource {
         return ResponseEntity.ok(dtos);
     }
 
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "video.admin.triggerReconciliation")
     @PostMapping("/videos/{videoId}/reconcile")
     public ResponseEntity<ReconcileResponse> reconcile(@PathVariable UUID videoId) {

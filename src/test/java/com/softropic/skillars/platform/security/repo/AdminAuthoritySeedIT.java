@@ -38,7 +38,7 @@ class AdminAuthoritySeedIT extends AbstractIntegrationTest {
                 + "so a missing or misspelled row fails silently as a 403")
             .isPresent();
         assertThat(authorityRepository.findOneByName(SecurityConstants.ROLE_LTD_ADMIN))
-            .as("ROLE_LTD_ADMIN must be seeded — HAS_ADMIN_ROLE accepts it too")
+            .as("ROLE_LTD_ADMIN must be seeded (the limited admin tier, S-28)")
             .isPresent();
     }
 

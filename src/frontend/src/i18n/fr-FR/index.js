@@ -1138,6 +1138,13 @@ export default {
     },
   },
   admin: {
+    limited: {
+      title: 'Accès administrateur requis',
+      message:
+        "Cette zone est réservée aux administrateurs complets. Votre compte est un administrateur limité : vous pouvez consulter les files d'attente, les utilisateurs et les réservations et modérer les contenus, mais pas modifier les paiements, les sanctions, la configuration ni les paramètres de données personnelles.",
+      back: 'Retour au tableau de bord',
+      readOnly: 'Administrateur limité : cette action nécessite un administrateur complet.',
+    },
     appeals: {
       title: 'Appels',
       subtitle: 'Utilisateurs contestant une mesure. Les décisions sont définitives.',
@@ -3075,5 +3082,6 @@ export default {
     adminFinance: 'Finances',
     adminGdpr: 'Demandes RGPD',
     adminConfig: 'Configuration',
+    adminLimitedNote: 'Administrateur limité : accès en lecture et modération',
   },
 }

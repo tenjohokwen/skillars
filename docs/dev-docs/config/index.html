@@ -89,7 +89,7 @@
         age-policy logic is built on (<code>security.age-policy.*</code>).</li>
     </ul>
     <p>
-      Only <code>ROLE_ADMIN</code>/<code>ROLE_LTD_ADMIN</code> can read or change a value via
+      Only <code>ROLE_ADMIN</code> (not the limited <code>ROLE_LTD_ADMIN</code>, S-28) can read or change a value via
       <code>ConfigResource</code>. Treat this as a <em>values</em> store, not a schema store: keys are seeded by Flyway,
       and the API can only update an existing key &mdash; with one exception, the unseeded
       <code>ConfigBounds.HAS_CODE_DEFAULT</code> keys, which a <code>PUT</code> creates. Writes to bounded keys are
@@ -161,9 +161,9 @@
     <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr>
-      <tr><td>GET</td><td><code>/api/config/values</code></td><td>Admin editor list: every stored row plus every unseeded <code>HAS_CODE_DEFAULT</code> key, each with its <code>ConfigBounds</code> range, sorted by key. Reads the table directly, not the cache.</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
-      <tr><td>GET</td><td><code>/api/config/values/{key}</code></td><td>One entry (value, type, last-updated) from this node's cache; 404 if absent</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
-      <tr><td>PUT</td><td><code>/api/config/values/{key}</code></td><td>Update a value (or create an unseeded <code>HAS_CODE_DEFAULT</code> key); 404 for any other unknown key, 400 for a non-numeric/out-of-range bounded value or a review-window pair violation</td><td>ROLE_ADMIN / ROLE_LTD_ADMIN</td></tr>
+      <tr><td>GET</td><td><code>/api/config/values</code></td><td>Admin editor list: every stored row plus every unseeded <code>HAS_CODE_DEFAULT</code> key, each with its <code>ConfigBounds</code> range, sorted by key. Reads the table directly, not the cache.</td><td>ROLE_ADMIN only</td></tr>
+      <tr><td>GET</td><td><code>/api/config/values/{key}</code></td><td>One entry (value, type, last-updated) from this node's cache; 404 if absent</td><td>ROLE_ADMIN only</td></tr>
+      <tr><td>PUT</td><td><code>/api/config/values/{key}</code></td><td>Update a value (or create an unseeded <code>HAS_CODE_DEFAULT</code> key); 404 for any other unknown key, 400 for a non-numeric/out-of-range bounded value or a review-window pair violation</td><td>ROLE_ADMIN only</td></tr>
     </table>
     <p>There is no delete endpoint, and keys outside <code>HAS_CODE_DEFAULT</code> can only be added by a migration.</p>
 
@@ -335,7 +335,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>1ee47152</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

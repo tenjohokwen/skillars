@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.platform.payment.contract.CoachPayoutStatus;
 import com.softropic.skillars.platform.payment.contract.event.CoachStripeOnboardingCompleteEvent;
 import com.softropic.skillars.platform.payment.repo.CoachPayout;
@@ -99,6 +100,7 @@ public class CoachPayoutHoldRecoveryService {
      * @param trigger      log tag
      */
     public Result redriveHeld(UUID coachId, boolean requireReady, String trigger) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         if (requireReady && StripePaymentGateway.transferReadiness(
                 coachStripeAccountRepository.findById(coachId).orElse(null)) != StripePaymentGateway.TransferReadiness.READY) {
             return new Result(0, 0, 0);

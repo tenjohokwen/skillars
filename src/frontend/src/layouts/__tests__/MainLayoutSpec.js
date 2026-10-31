@@ -75,6 +75,9 @@ async function mountLayout(
         '/dashboard',
         '/profile',
         '/admin/health-dashboard',
+        '/admin/finance',
+        '/admin/gdpr',
+        '/admin/config',
         '/coach/command-center',
         '/coach/revenue',
         '/messaging',
@@ -643,5 +646,32 @@ describe('MainLayout.vue — role-scoped nav entries (navigation reachability)',
   it.each(['COACH', 'PARENT', 'ADMIN'])('%s sees none of the player-only entries', async (role) => {
     const wrapper = await mountAs(role)
     for (const href of PLAYER_ONLY) expect(has(wrapper, href)).toBe(false)
+  })
+})
+
+// S-28: the limited admin tier loses the navigation entries whose every action needs a full admin.
+describe('MainLayout - limited admin navigation (S-28)', () => {
+  it('a full ADMIN sees finance, GDPR and configuration entries and no limited note', async () => {
+    const { wrapper } = await mountLayout({ role: 'ADMIN', userId: 1 }, undefined, undefined, {
+      shallow: false,
+    })
+    for (const path of ['/admin/finance', '/admin/gdpr', '/admin/config']) {
+      expect(wrapper.find(`[href="${path}"]`).exists()).toBe(true)
+    }
+    expect(wrapper.find('[data-testid="nav-limited-admin-note"]').exists()).toBe(false)
+  })
+
+  it('a limited admin keeps the shared entries but not finance, GDPR or configuration', async () => {
+    const { wrapper } = await mountLayout(
+      { role: 'ADMIN', userId: 1, limitedAdmin: true },
+      undefined,
+      undefined,
+      { shallow: false },
+    )
+    expect(wrapper.find('[href="/admin/health-dashboard"]').exists()).toBe(true)
+    for (const path of ['/admin/finance', '/admin/gdpr', '/admin/config']) {
+      expect(wrapper.find(`[href="${path}"]`).exists()).toBe(false)
+    }
+    expect(wrapper.find('[data-testid="nav-limited-admin-note"]').exists()).toBe(true)
   })
 })

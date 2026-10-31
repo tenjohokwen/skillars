@@ -35,14 +35,14 @@ public class ConfigResource {
      * {@code HAS_CODE_DEFAULT} key, each with the range {@link #updateValue} enforces.
      */
     @GetMapping("/values")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "config.admin.list")
     public ResponseEntity<List<AdminConfigEntryDto>> listValues() {
         return ResponseEntity.ok(configService.listForAdmin());
     }
 
     @GetMapping("/values/{key}")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     public ResponseEntity<ConfigValueResponse> getValue(@PathVariable String key) {
         return ResponseEntity.ok(configService.findResponse(key));
     }
@@ -84,7 +84,7 @@ public class ConfigResource {
      * (2026-09-04) that there was no admin config UI.
      */
     @PutMapping("/values/{key}")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     public ResponseEntity<ConfigValueResponse> updateValue(
             @PathVariable String key,
             @Valid @RequestBody UpdateConfigRequest request) {

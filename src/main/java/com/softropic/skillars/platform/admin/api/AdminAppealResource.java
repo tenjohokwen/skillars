@@ -49,7 +49,7 @@ public class AdminAppealResource {
     }
 
     @PostMapping("/{appealId}/decide")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.appeals.decide")
     public ResponseEntity<AdminAppealDto> decide(
             @PathVariable UUID appealId,

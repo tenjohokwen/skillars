@@ -423,6 +423,12 @@ const routes = [
         path: 'admin',
         meta: { requiresAuth: true, roles: ['ADMIN'] },
         children: [
+          // S-28: shown to a limited administrator who opens a full-admin-only page directly.
+          {
+            path: 'requires-administrator',
+            component: () => import('pages/admin/AdminRequiredPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
           {
             path: 'health-dashboard',
             component: () => import('pages/admin/HealthDashboardPage.vue'),
@@ -461,12 +467,12 @@ const routes = [
           {
             path: 'gdpr',
             component: () => import('pages/admin/AdminGdprRequestsPage.vue'),
-            meta: { requiresAuth: true, roles: ['ADMIN'] },
+            meta: { requiresAuth: true, roles: ['ADMIN'], fullAdmin: true },
           },
           {
             path: 'finance',
             component: () => import('pages/admin/AdminFinancePage.vue'),
-            meta: { requiresAuth: true, roles: ['ADMIN'] },
+            meta: { requiresAuth: true, roles: ['ADMIN'], fullAdmin: true },
           },
           {
             path: 'bookings',
@@ -481,7 +487,7 @@ const routes = [
           {
             path: 'config',
             component: () => import('pages/admin/AdminConfigPage.vue'),
-            meta: { requiresAuth: true, roles: ['ADMIN'] },
+            meta: { requiresAuth: true, roles: ['ADMIN'], fullAdmin: true },
           },
         ],
       },

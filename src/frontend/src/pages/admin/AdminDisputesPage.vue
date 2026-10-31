@@ -120,7 +120,10 @@
             </div>
           </q-card-section>
 
-          <q-card-actions v-if="!['RESOLVED', 'DISMISSED'].includes(detail.status)" align="right">
+          <q-card-actions
+            v-if="!isLimitedAdmin && !['RESOLVED', 'DISMISSED'].includes(detail.status)"
+            align="right"
+          >
             <q-btn
               flat
               color="negative"
@@ -243,12 +246,14 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { adminApi } from 'src/api/admin.api'
 
 const { t, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 
 const rows = ref([])

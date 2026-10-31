@@ -112,7 +112,7 @@ public class AdminModerationResource {
     }
 
     @PostMapping("/conversations/{conversationId}/unblock")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.conversations.unblock")
     public ResponseEntity<Void> unblockConversation(@PathVariable Long conversationId) {
         adminConversationService.unblockConversation(conversationId, resolveAdminId());

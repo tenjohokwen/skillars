@@ -27,7 +27,7 @@ import java.util.UUID;
 @RequestMapping("/api/admin/payment")
 @RequiredArgsConstructor
 @Observed(name = "payment.admin.finance")
-@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+@PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
 public class AdminFinanceResource {
 
     private final RevenueReportingService revenueReportingService;

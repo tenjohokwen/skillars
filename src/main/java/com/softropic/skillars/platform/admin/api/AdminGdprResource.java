@@ -23,7 +23,7 @@ public class AdminGdprResource {
     private final GdprRequestService gdprRequestService;
 
     @GetMapping("/requests")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.gdpr.list")
     public ResponseEntity<Page<AdminGdprRequestDto>> listRequests(
             @RequestParam(required = false) String type,

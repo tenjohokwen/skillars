@@ -146,6 +146,39 @@ describe('router/index.js beforeEach — role-gated routes (deferred-148 AC4)', 
     expect(router.currentRoute.value.path).toBe('/admin/health-dashboard')
   })
 
+  // S-28: a limited administrator keeps role 'ADMIN' (routing) but is bounced off full-admin-only pages.
+  it('sends a limited admin from /admin/config to the requires-administrator page', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'ADMIN', limitedAdmin: true } })
+
+    await router.push('/admin/config')
+
+    expect(router.currentRoute.value.path).toBe('/admin/requires-administrator')
+  })
+
+  it.each(['/admin/finance', '/admin/gdpr'])('sends a limited admin from %s too', async (path) => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'ADMIN', limitedAdmin: true } })
+
+    await router.push(path)
+
+    expect(router.currentRoute.value.path).toBe('/admin/requires-administrator')
+  })
+
+  it('still lets a limited admin reach the shared-tier admin pages', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'ADMIN', limitedAdmin: true } })
+
+    await router.push('/admin/users')
+
+    expect(router.currentRoute.value.path).toBe('/admin/users')
+  })
+
+  it('lets a full admin reach /admin/config', async () => {
+    const router = await buildRouter({ auth: { userId: '1', role: 'ADMIN' } })
+
+    await router.push('/admin/config')
+
+    expect(router.currentRoute.value.path).toBe('/admin/config')
+  })
+
   it("redirects a non-PARENT role away from /parent/dashboard (representative of the player/home + player/development pair's identical gate shape)", async () => {
     const router = await buildRouter({
       auth: { userId: '1', role: 'COACH' },

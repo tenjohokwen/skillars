@@ -127,7 +127,7 @@
     <table>
       <tr><th>Entity</th><th>Table</th><th>Notes</th></tr>
       <tr><td><code>User</code> (extends <code>Customer</code>)</td><td><code>main."user"</code></td><td>Core account: login, password hash, <code>activated</code>/<code>locked</code>, reset key, <code>otpEnabled</code>, <code>skillarsRole</code> (COACH/PARENT/PLAYER, null for admins), <code>verificationStatus</code> (<code>UNVERIFIED</code> &rarr; <code>EMAIL_VERIFIED</code> &rarr; <code>BASIC_VERIFIED</code>; <code>SUSPENDED</code>), <code>securitySessionInvalidatedAt</code> (account-wide "last theft/suspension revocation" epoch, written only by <code>UserRepository.invalidateSessionsForUser*</code> bulk updates), <code>cleanup*</code> columns tracking failed never-activated purges, embedded addresses, phone, DOB. <code>@DynamicUpdate</code> (V171) so a stale managed save only writes the columns it changed.</td></tr>
-      <tr><td><code>Authority</code></td><td><code>authority</code></td><td>Spring Security role/authority (<code>ROLE_USER</code>, <code>ROLE_ADMIN</code>, <code>ROLE_COACH</code>, <code>ROLE_PARENT</code>, <code>ROLE_PLAYER</code>, <code>ROLE_LTD_ADMIN</code>); many-to-many with <code>User</code>.</td></tr>
+      <tr><td><code>Authority</code></td><td><code>authority</code></td><td>Spring Security role/authority (<code>ROLE_USER</code>, <code>ROLE_ADMIN</code>, <code>ROLE_COACH</code>, <code>ROLE_PARENT</code>, <code>ROLE_PLAYER</code>, <code>ROLE_LTD_ADMIN</code> &mdash; the limited admin tier); many-to-many with <code>User</code>.</td></tr>
       <tr><td><code>PlayerProfile</code></td><td><code>main.player_profiles</code></td><td>Exactly one of <code>parent_id</code> (minor, created by parent) or <code>user_id</code> (self-registered adult) is set — enforced by <code>chk_pp_owner</code>. Carries <code>ageTier</code>, <code>position</code>, <code>independentAccountAllowed</code>, GDPR consent fields, and <code>development_data_erased_at</code> (V151) — the one-way GDPR erasure tombstone. An erased child keeps its row (bookings still reference it) but is filtered out of <code>ShadowAccountService.listPlayerProfiles</code>.</td></tr>
       <tr><td><code>ParentPlayerLink</code></td><td><code>main.parent_player_links</code></td><td>Join row linking a parent <code>User</code> to a <code>PlayerProfile</code>, with its own consent timestamp/version. <code>uq_ppl_player_id</code> prevents a player being linked to two parents (surfaced as <code>ShadowAccountException</code>).</td></tr>
       <tr><td><code>RefreshToken</code></td><td><code>main.refresh_tokens</code></td><td>SHA-256-hashed rotating refresh token (7-day TTL) backing <code>/api/auth/refresh</code>; tracks <code>used</code>/<code>rotatedAt</code> for reuse (theft) detection. <code>markUsedByTokenHash</code>/<code>markAllUsedByUserId</code> are <code>REQUIRES_NEW</code> so a revocation survives the caller's rollback.</td></tr>
@@ -484,6 +484,17 @@ sequenceDiagram
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
+      <p><strong>Two admin tiers.</strong> <code>ROLE_LTD_ADMIN</code> is a limited tier, not a synonym for
+      <code>ROLE_ADMIN</code>. <code>SecurityConstants.HAS_ADMIN_ROLE</code> (ADMIN or LTD_ADMIN) is for read-only admin
+      views and plain moderation; everything that moves money, changes enforcement, config or personal data, deletes, or
+      touches integrations uses <code>HAS_FULL_ADMIN_ROLE</code> (ADMIN only), and the sensitive services also call
+      <code>AdminTierGuard.requireFullAdmin()</code>. <code>AdminRoleTierAuditTest</code> fails a new admin endpoint that
+      is unclassified, or a state-changing one on the shared tier without an allow-list entry. The full role matrix is in
+      the <a href="../admin/index.html#admin-role-tiers">admin module page</a>; an LTD_ADMIN is created by SQL
+      (runbook, "Create a limited administrator") &mdash; no endpoint grants roles. The SPA learns the tier from
+      <code>limitedAdmin</code> in the login response and <code>skp</code> cookie (UI hint only).</p>
+    </div>
+    <div class="callout warn">
       <p><strong>One login path.</strong> See <a href="#the-two-login-stacks">the login stack</a>. Every password check goes
       through <code>POST /api/auth/login</code> and its rate limiter — do not add another
       <code>AuthenticationManager</code>-backed entry point (form login, HTTP Basic, a filter) without the same
@@ -596,7 +607,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>1ee47152</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

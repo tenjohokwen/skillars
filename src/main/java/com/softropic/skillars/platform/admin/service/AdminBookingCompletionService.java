@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
 import com.softropic.skillars.platform.admin.contract.AdminBookingLookupDto;
@@ -58,6 +59,7 @@ public class AdminBookingCompletionService {
 
     @Transactional
     public ForceCompleteOutcome forceComplete(UUID bookingId, Long adminId, String note) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         ForceCompleteOutcome outcome =
             bookingCompletionService.forceCompleteWithPlaceholderData(bookingId, ActorRole.ADMIN, adminId);
         logAdminAction(adminId, bookingId, note, outcome);

@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.admin.service;
 
+import com.softropic.skillars.infrastructure.security.AdminTierGuard;
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.admin.contract.AdminActionType;
@@ -165,6 +166,7 @@ public class AdminCoachEnforcementService {
      */
     public AdminSuspendCoachResponse suspendCoach(UUID coachId, String reason, boolean notifyCoach, Long adminId,
                                                   boolean cancelUpcomingBookings) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         if (!self.applyAdminSuspension(coachId, reason, notifyCoach, adminId)) {
             return AdminSuspendCoachResponse.alreadySuspended();
         }
@@ -434,6 +436,7 @@ public class AdminCoachEnforcementService {
 
     @Transactional
     public void reinstateCoach(UUID coachId, String reason, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         // skillars-deferred-121 AC1: locked read, mirroring suspendCoach's :107-108. A plain
         // findById let this method's transition decision be computed from a stale pre-lock read
         // while a concurrent locked writer (suspendCoach, or ReliabilityStrikeService.issue) was
@@ -581,6 +584,7 @@ public class AdminCoachEnforcementService {
 
     @Transactional
     public UUID issueManualStrike(UUID coachId, UUID bookingId, String reason, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         if (!VALID_STRIKE_REASONS.contains(reason)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid strike reason");
         }
@@ -646,6 +650,7 @@ public class AdminCoachEnforcementService {
 
     @Transactional
     public void deleteStrike(UUID coachId, UUID strikeId, String reason, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         CoachReliabilityStrike strike = strikeRepository.findById(strikeId)
             .orElseThrow(() -> new ResourceNotFoundException("Strike not found", "coach_reliability_strike"));
 
@@ -847,6 +852,7 @@ public class AdminCoachEnforcementService {
      */
     @Transactional
     public boolean setVerificationTier(UUID coachId, String tier, String reason, Long adminId) {
+        AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
         if (tier == null || !VALID_VERIFICATION_TIERS.contains(tier)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid verification tier");
         }

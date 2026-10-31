@@ -60,7 +60,7 @@ public class AdminDisputeResource {
     }
 
     @PostMapping("/{disputeId}/resolve")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.disputes.resolve")
     public ResponseEntity<Void> resolveDispute(
             @PathVariable UUID disputeId,
@@ -71,7 +71,7 @@ public class AdminDisputeResource {
     }
 
     @PostMapping("/{disputeId}/dismiss")
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     @Observed(name = "admin.disputes.dismiss")
     public ResponseEntity<Void> dismissDispute(
             @PathVariable UUID disputeId,

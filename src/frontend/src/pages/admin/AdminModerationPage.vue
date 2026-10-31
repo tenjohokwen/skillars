@@ -346,7 +346,7 @@
           <q-card-actions align="right">
             <q-btn flat :label="t('common.close')" v-close-popup />
             <q-btn
-              v-if="conversation.status !== 'ACTIVE'"
+              v-if="!isLimitedAdmin && conversation.status !== 'ACTIVE'"
               unelevated
               color="primary"
               :label="t('admin.moderation.unblockAction')"
@@ -362,6 +362,7 @@
 </template>
 
 <script setup>
+import { useAdminTier } from 'src/composables/useAdminTier'
 import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
@@ -369,6 +370,7 @@ import { adminApi } from 'src/api/admin.api'
 import ReviewModerationPanel from 'components/admin/ReviewModerationPanel.vue'
 
 const { t, locale } = useI18n()
+const { isLimitedAdmin } = useAdminTier()
 const $q = useQuasar()
 
 const tab = ref('queue')

@@ -93,11 +93,11 @@ public class UserAdminService {
 
     /**
      * Deletes a user by login.
-     * Requires ADMIN, LTD_ADMIN, or USER role.
+     * Requires ADMIN (S-28: deletion is full-admin only; this had no callers and was open to any role).
      *
      * @param login the user login to delete
      */
-    @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     public void deleteUserInformation(final String login) {
         userRepository.findOneByLogin(login).ifPresent(u -> {
             userRepository.delete(u);
@@ -106,13 +106,13 @@ public class UserAdminService {
 
     /**
      * Locks a user account.
-     * Requires ADMIN or LTD_ADMIN role.
+     * Requires ADMIN (S-28: not LTD_ADMIN).
      * Delegates to User domain entity for locking logic.
      *
      * @param login the user login to lock
      * @return the locked user if found, empty otherwise
      */
-    @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+    @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     public Optional<User> lockUserAccount(String login) {
         return userRepository.findOneByLogin(login)
                 .map(u -> {

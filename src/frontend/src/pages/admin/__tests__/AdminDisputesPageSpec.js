@@ -3,6 +3,7 @@
 
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createTestingPinia } from '@pinia/testing'
 
 vi.mock('src/api/admin.api', () => ({
   adminApi: {
@@ -304,5 +305,47 @@ describe('AdminDisputesPage.vue (skillars-deferred-165 AC3)', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="dispute-recovered-amount"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="dispute-absorbed-amount"]').exists()).toBe(true)
+  })
+})
+
+// S-28: a limited administrator may read disputes but the resolve/dismiss actions are full-admin only.
+describe('AdminDisputesPage.vue - limited admin (S-28)', () => {
+  afterEach(() => {
+    while (mounted.length) mounted.pop().unmount()
+    vi.clearAllMocks()
+  })
+
+  async function mountAs(limitedAdmin) {
+    adminApi.getDisputeQueue.mockResolvedValue({ content: [QUEUE_ROW], totalPages: 1 })
+    adminApi.getDisputeDetail.mockResolvedValue(DETAIL)
+    const wrapper = mount(AdminDisputesPage, {
+      global: {
+        plugins: [
+          createTestingPinia({
+            createSpy: vi.fn,
+            initialState: { auth: { userId: '1', role: 'ADMIN', limitedAdmin } },
+          }),
+        ],
+        stubs: { QDialog: { template: '<div><slot /></div>' } },
+      },
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+    await wrapper.vm.openDetail('d1')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('hides resolve and dismiss for a limited admin but still shows the detail', async () => {
+    const wrapper = await mountAs(true)
+    expect(wrapper.find('[data-testid="dispute-detail-content"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dispute-resolve-open-btn"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="dispute-dismiss-open-btn"]').exists()).toBe(false)
+  })
+
+  it('shows resolve and dismiss for a full admin', async () => {
+    const wrapper = await mountAs(false)
+    expect(wrapper.find('[data-testid="dispute-resolve-open-btn"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dispute-dismiss-open-btn"]').exists()).toBe(true)
   })
 })

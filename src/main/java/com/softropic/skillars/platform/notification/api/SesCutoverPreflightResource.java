@@ -75,14 +75,14 @@ import java.util.UUID;
  * {@code @ConditionalOnProperty(app.email.transport=ses)} mirrors
  * {@link com.softropic.skillars.infrastructure.ses.SesHealthIndicator}'s own bean-gating (as does
  * {@link SesAccountChecker} itself): this endpoint only exists in a profile where SES is actually
- * the active transport. {@code @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)} follows
+ * the active transport. {@code @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)} follows
  * {@link AlertRuleAdminResource}'s sibling admin-resource pattern.
  */
 @Slf4j
 @Observed(name = "http.admin.ses_preflight")
 @RestController
 @RequestMapping("/v1/admin/ses/preflight")
-@PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE)
+@PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
 @ConditionalOnProperty(name = "app.email.transport", havingValue = "ses")
 @RequiredArgsConstructor
 public class SesCutoverPreflightResource {

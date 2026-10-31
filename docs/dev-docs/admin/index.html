@@ -61,8 +61,9 @@
       Skillars is a two-sided marketplace connecting minors (Players), their Parents, and Coaches, so the platform
       needs a back office that lets <strong>Admins</strong> keep the marketplace safe and legally compliant without
       touching the consumer-facing apps. The <code>admin</code> module is that back office. Most of its endpoints are
-      gated behind <code>SecurityConstants.HAS_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> <em>or</em>
-      <code>ROLE_LTD_ADMIN</code>) and are driven by the admin console pages under
+      gated by one of two tiers (see <a href="#admin-role-tiers">Admin role tiers</a>):
+      <code>HAS_FULL_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> only) or the read/moderate tier
+      <code>HAS_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> <em>or</em> <code>ROLE_LTD_ADMIN</code>), and are driven by the admin console pages under
       <code>src/frontend/src/pages/admin/</code>. Three controllers are end-user facing: disputes, appeals, and GDPR
       self-service.
     </p>
@@ -190,7 +191,7 @@
         <tr><td><code>AdminQueueService</code></td><td>Paginated OPEN queue (filter by type or <code>ALL</code>) and per-type open counts (the six payment-integrity types summed into <code>paymentIntegrity</code>), resolving a human-readable summary per alert type from the source record. <code>resolveSafetyHoldBookingAlert</code> / <code>resolvePaymentIntegrityAlert</code> mark the workflow-less alerts handled (atomic conditional UPDATE, 404 if not open).</td></tr>
         <tr><td><code>AdminMessageService</code> / <code>AdminConversationService</code></td><td>Message detail with surrounding context, approve/block a message, unblock a conversation, resolve the related reports/alerts, push live SSE updates via <code>MessagingEmitterRegistry</code>.</td></tr>
         <tr><td><code>AdminReviewService</code></td><td>Review moderation queue; approve/block flagged reviews, write <code>ReviewModerationLog</code>, call <code>CoachRatingService.recompute</code>, publish <code>ReviewModerationResolvedEvent</code>.</td></tr>
-        <tr><td><code>AdminUserService</code></td><td>User search (LIKE-escaped, 20/page), user detail with failed-login count and last 50 user actions, suspend/reactivate under <code>UserRepository.findByIdForUpdate</code>, login unlock. Never acts on ADMIN/LTD_ADMIN accounts or on yourself.</td></tr>
+        <tr><td><code>AdminUserService</code></td><td>User search (LIKE-escaped, 20/page), user detail with failed-login count and last 50 user actions, suspend/reactivate under <code>UserRepository.findByIdForUpdate</code>, login unlock. Never acts on ADMIN/LTD_ADMIN accounts or on yourself. Suspend/reactivate/unlock are ADMIN only (S-28).</td></tr>
         <tr><td><code>AdminCoachEnforcementService</code></td><td>Enforcement profile and list (REPEATABLE_READ snapshots), suspend, reinstate, manual strike issue/delete with three-tier status re-evaluation, verification tier. Every status writer takes <code>coachProfileRepository.findByIdForUpdate</code> via <code>PessimisticLockRetryer</code>. <code>suspendCoach</code> is not <code>@Transactional</code>: <code>applyAdminSuspension</code> commits the status, then <code>cancelBookingForSuspension</code> (<code>REQUIRES_NEW</code>, via <code>self</code>) runs once per booking.</td></tr>
         <tr><td><code>AdminSafeguardingService</code></td><td>S-09: the staff side of the optional coach safeguarding check. Queue and records listings, <code>viewDocument</code> (decrypted upload, audited <code>SAFEGUARDING_DOC_VIEWED</code> in the same transaction), <code>inspect</code> / <code>reject</code> / <code>revoke</code> (audited), all delegating to <code>marketplace.CoachSafeguardingService</code>. The reason never contains anything from the certificate. <code>AdminSafeguardingResource</code> is <code>hasRole('ROLE_ADMIN')</code> only, narrower than <code>HAS_ADMIN_ROLE</code>.</td></tr>
         <tr><td><code>DisputeService</code></td><td>Raise (reason, owner, status and window checks; freezes the payout via <code>CoachPayoutAdjustmentService.freezeForDispute</code>), owner/admin views, OPEN queue, resolve (credit through payment's <code>DisputeCreditService</code>, capped per booking; <code>UPHOLD_COACH</code> through <code>RefundClawbackService</code> + <code>CoachPayoutAdjustmentService.payInFull</code>; otherwise <code>applyRefund</code> on the coach payout) and dismiss (lifts the freeze only).</td></tr>
@@ -205,51 +206,90 @@
       </tbody>
     </table>
 
+    <h3 id="admin-role-tiers">Admin role tiers (S-28)</h3>
+    <p>
+      <code>ROLE_LTD_ADMIN</code> is a genuinely limited back-office tier (support / moderation staff);
+      <code>ROLE_ADMIN</code> is the full administrator. Two constants in <code>SecurityConstants</code> express it:
+      <code>HAS_ADMIN_ROLE</code> = ADMIN <em>or</em> LTD_ADMIN (read and moderate) and
+      <code>HAS_FULL_ADMIN_ROLE</code> = ADMIN only. <strong>The default for a new admin endpoint is
+      <code>HAS_FULL_ADMIN_ROLE</code></strong>; the shared tier is read-only plus plain moderation. If a case is
+      ambiguous it is ADMIN-only &mdash; loosening later is cheap, un-leaking is not.
+    </p>
+    <table>
+      <thead><tr><th>Area</th><th>LTD_ADMIN (and ADMIN)</th><th>ADMIN only</th></tr></thead>
+      <tbody>
+        <tr><td>Queues &amp; alerts</td><td>View the moderation queue and summary; mark safety-hold and payment-integrity alerts handled</td><td>Alert-rule administration (<code>/v1/admin/alerts</code>), SES preflight</td></tr>
+        <tr><td>Content moderation</td><td>Review queue approve/block; message detail, approve/block; conversation detail; video review queue, video detail and upload sessions (read)</td><td>Unblock a conversation; set video access state; delete video; reconcile video</td></tr>
+        <tr><td>Users</td><td>Search and view users (read-only)</td><td>Suspend, reactivate, unlock login; any role/authority change</td></tr>
+        <tr><td>Coaches</td><td>Enforcement list and profile (read-only)</td><td>Suspend, reinstate, issue/delete strike, verification tier</td></tr>
+        <tr><td>Disputes &amp; appeals</td><td>Queue and detail (read-only)</td><td>Resolve / dismiss a dispute; decide an appeal</td></tr>
+        <tr><td>Bookings</td><td>Booking lookup (read-only)</td><td>Force-complete, admin cancel</td></tr>
+        <tr><td>Money</td><td>&mdash;</td><td>Finance overview and coach revenue, release held payouts, refunds, clawbacks, disputes credits</td></tr>
+        <tr><td>Personal data</td><td>&mdash;</td><td>GDPR request list (and any erasure/export action)</td></tr>
+        <tr><td>Configuration</td><td>&mdash;</td><td>All of <code>/api/config</code> (read and write); actuator details (<code>/manage/**</code>, health component details)</td></tr>
+        <tr><td>Planned</td><td colspan="2">S-09 safeguarding-badge inspection: ADMIN only for now (can be loosened by switching the constant).</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Enforcement, three layers.</strong></p>
+    <ul>
+      <li><em>Controllers</em>: per-method <code>@PreAuthorize</code>, never per class where read and write are mixed.</li>
+      <li><em>Services</em>: the sensitive operations (user suspend/reactivate/unlock, coach suspend/reinstate/strike/tier, dispute resolve/dismiss, appeal decide, booking force-complete/cancel, <code>ConfigService.updateConfig</code>, payout re-drive) call
+        <code>AdminTierGuard.requireFullAdmin()</code>, which refuses a caller holding <code>ROLE_LTD_ADMIN</code> without <code>ROLE_ADMIN</code>. It lets a null/system authentication through on purpose, because listeners, jobs and tests call the same services.</li>
+      <li><em>Guard test</em>: <code>AdminRoleTierAuditTest</code> scans every <code>@RestController</code> by reflection. It fails if an admin handler (path contains <code>/admin</code> or a role expression names ADMIN/LTD_ADMIN) uses neither constant, if a POST/PUT/PATCH/DELETE handler uses the shared tier without being on the in-test allow-list (<code>SHARED_TIER_WRITES</code>, with reasons), or if a service method uses the shared constant. <code>AdminTierWebMvcTest</code> proves 403/200 over HTTP.</li>
+    </ul>
+    <p>
+      The UI hint: the login response and the <code>skp</code> cookie carry <code>limitedAdmin</code> (role stays
+      <code>ADMIN</code> for routing). The SPA hides finance/GDPR/config navigation, redirects direct visits to
+      <code>/admin/requires-administrator</code> and hides action buttons on the shared pages; the server enforces the tier
+      regardless. An LTD_ADMIN cannot grant roles (no endpoint grants roles at all today); to create one, see
+      <code>docs/deployment/runbook.md</code> &rarr; "Create a limited administrator".
+    </p>
+
     <h3 id="rest-endpoints">REST endpoints</h3>
     <table>
       <thead><tr><th>Method</th><th>Path</th><th>Purpose</th><th>Auth / Role</th></tr></thead>
       <tbody>
-        <tr><td>GET</td><td><code>/api/admin/queue</code></td><td>Unified moderation queue (<code>type</code>, <code>status=OPEN</code> only, <code>page</code>)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/queue/summary</code></td><td>Open-alert counts by type</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/queue/safety-hold-alerts/{alertId}/resolve</code></td><td>Mark an urgent <code>SAFETY_HOLD_BOOKING</code> alert handled (404 if not open)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/queue/payment-alerts/{alertId}/resolve</code></td><td>Mark a payment-integrity alert (any of the six <code>PAYMENT_INTEGRITY</code> types) handled (404 if not open)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/messages/{messageId}</code></td><td>Message detail with surrounding conversation context</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/approve</code></td><td>Approve a held message</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/block</code></td><td>Block a message</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/conversations/{conversationId}</code></td><td>Conversation detail with messages and reports</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/conversations/{conversationId}/unblock</code></td><td>Unblock a conversation and resolve its reports</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/reviews/queue</code></td><td>Reviews UNDER_REVIEW, with flags</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/approve</code></td><td>Approve a flagged review</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/block</code></td><td>Block a flagged review</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/users</code></td><td>Search users (<code>q</code>, <code>page</code>)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/users/{userId}</code></td><td>User detail + failed-login count + enforcement history</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/users/{userId}/suspend</code></td><td>Lock the account, revoke sessions, suspend coach profile if any</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/users/{userId}/reactivate</code></td><td>Unlock the account (refused if a self-scoped erasure exists, or the account is under a child-safety suspension)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/users/{userId}/unlock-login</code></td><td>Clear the failed-login rate limit; returns cleared-attempt count</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/coaches</code></td><td>Coaches under enforcement (default PENDING_REVIEW + SUSPENDED; <code>status</code> filter)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/coaches/{coachId}/enforcement</code></td><td>Enforcement profile (status, tier, 30-day strikes, histories, open alerts)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/suspend</code></td><td>Suspend a coach (<code>{reason, notifyCoach, cancelUpcomingBookings}</code>; returns <code>{newlySuspended, cancelledBookings, alertedBookings}</code>)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/reinstate</code></td><td>Reinstate from SUSPENDED / PENDING_REVIEW / REDUCED</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/strikes</code></td><td>Issue a manual reliability strike</td><td>ADMIN</td></tr>
-        <tr><td>DELETE</td><td><code>/api/admin/coaches/{coachId}/strikes/{strikeId}</code></td><td>Delete a strike (may re-tier the coach)</td><td>ADMIN</td></tr>
-        <tr><td>PATCH</td><td><code>/api/admin/coaches/{coachId}/verification-tier</code></td><td>Set BASIC / TRUSTED / FEATURED</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/queue</code></td><td>Unified moderation queue (<code>type</code>, <code>status=OPEN</code> only, <code>page</code>)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/queue/summary</code></td><td>Open-alert counts by type</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/queue/safety-hold-alerts/{alertId}/resolve</code></td><td>Mark an urgent <code>SAFETY_HOLD_BOOKING</code> alert handled (404 if not open)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/queue/payment-alerts/{alertId}/resolve</code></td><td>Mark a payment-integrity alert (any of the six <code>PAYMENT_INTEGRITY</code> types) handled (404 if not open)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/messages/{messageId}</code></td><td>Message detail with surrounding conversation context</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/approve</code></td><td>Approve a held message</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/messages/{messageId}/block</code></td><td>Block a message</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/conversations/{conversationId}</code></td><td>Conversation detail with messages and reports</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/conversations/{conversationId}/unblock</code></td><td>Unblock a conversation and resolve its reports</td><td>ADMIN only</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/reviews/queue</code></td><td>Reviews UNDER_REVIEW, with flags</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/approve</code></td><td>Approve a flagged review</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/reviews/{reviewId}/block</code></td><td>Block a flagged review</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/users</code></td><td>Search users (<code>q</code>, <code>page</code>)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/users/{userId}</code></td><td>User detail + failed-login count + enforcement history</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/users/{userId}/suspend</code></td><td>Lock the account, revoke sessions, suspend coach profile if any</td><td>ADMIN only</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/users/{userId}/reactivate</code></td><td>Unlock the account (refused if a self-scoped erasure exists, or the account is under a child-safety suspension)</td><td>ADMIN only</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/users/{userId}/unlock-login</code></td><td>Clear the failed-login rate limit; returns cleared-attempt count</td><td>ADMIN only</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/coaches</code></td><td>Coaches under enforcement (default PENDING_REVIEW + SUSPENDED; <code>status</code> filter)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/coaches/{coachId}/enforcement</code></td><td>Enforcement profile (status, tier, 30-day strikes, histories, open alerts)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/suspend</code></td><td>Suspend a coach (<code>{reason, notifyCoach, cancelUpcomingBookings}</code>; returns <code>{newlySuspended, cancelledBookings, alertedBookings}</code>)</td><td>ADMIN only</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/reinstate</code></td><td>Reinstate from SUSPENDED / PENDING_REVIEW / REDUCED</td><td>ADMIN only</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/coaches/{coachId}/strikes</code></td><td>Issue a manual reliability strike</td><td>ADMIN only</td></tr>
+        <tr><td>DELETE</td><td><code>/api/admin/coaches/{coachId}/strikes/{strikeId}</code></td><td>Delete a strike (may re-tier the coach)</td><td>ADMIN only</td></tr>
+        <tr><td>PATCH</td><td><code>/api/admin/coaches/{coachId}/verification-tier</code></td><td>Set BASIC / TRUSTED / FEATURED</td><td>ADMIN only</td></tr>
         <tr><td>GET</td><td><code>/api/admin/safeguarding/requests</code></td><td>S-09: pending safeguarding-check requests (page of 20, oldest first)</td><td>ROLE_ADMIN only</td></tr>
         <tr><td>GET</td><td><code>/api/admin/safeguarding/records</code></td><td>S-09: valid checks on record (for revoke)</td><td>ROLE_ADMIN only</td></tr>
         <tr><td>GET</td><td><code>/api/admin/safeguarding/requests/{coachId}/document</code></td><td>S-09: the decrypted upload (<code>no-store</code>, <code>nosniff</code>, content type sniffed at upload: PDF/JPEG/PNG only); audited per view</td><td>ROLE_ADMIN only</td></tr>
         <tr><td>POST</td><td><code>/api/admin/safeguarding/requests/{coachId}/inspect</code></td><td>S-09: mark inspected: writes the record, closes the request, deletes the upload; audited</td><td>ROLE_ADMIN only</td></tr>
         <tr><td>POST</td><td><code>/api/admin/safeguarding/requests/{coachId}/reject</code></td><td>S-09: reject (optional <code>{reason}</code>, audit log only); deletes the upload</td><td>ROLE_ADMIN only</td></tr>
         <tr><td>DELETE</td><td><code>/api/admin/safeguarding/records/{coachId}</code></td><td>S-09: revoke a record (optional <code>{reason}</code>); audited</td><td>ROLE_ADMIN only</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/disputes/queue</code></td><td>OPEN disputes, oldest first (<code>status=OPEN</code> only)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/disputes/{disputeId}</code></td><td>Dispute detail (booking, payment split, coach history)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/resolve</code></td><td>Resolve: <code>FULL_CREDIT</code> / <code>PARTIAL_CREDIT</code> / <code>NO_ACTION</code> / <code>COACH_WARNING</code> / <code>UPHOLD_COACH</code> (409 <code>disputes.bookingNotSettled</code> while the session is unsettled)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/dismiss</code></td><td>Dismiss with a reason</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/appeals/queue</code></td><td>Appeals by status (default OPEN), oldest first</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/appeals/{appealId}</code></td><td>Appeal detail with a subject summary</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/appeals/{appealId}/decide</code></td><td>Decide UPHELD / OVERTURNED (final)</td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/bookings/{bookingId}</code></td><td>Booking lookup for force-complete and cancel (status, completion recorded, pending confirmation, <code>adminCancellable</code>, <code>liveSession</code>)</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/bookings/{bookingId}/force-complete</code></td><td>Force-complete a stuck booking with placeholder data</td><td>ADMIN</td></tr>
-        <tr><td>POST</td><td><code>/api/admin/bookings/{bookingId}/cancel</code></td><td>Cancel one booking (full refund of captured money, no strike, neutral notice); body <code>{note}</code>, returns the <code>AdminBookingCancellationOutcome</code></td><td>ADMIN</td></tr>
-        <tr><td>GET</td><td><code>/api/admin/gdpr/requests</code></td><td>List GDPR requests (<code>type</code>, <code>status</code>, pageable; rows carry <code>playerId</code>)</td><td>ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/disputes/queue</code></td><td>OPEN disputes, oldest first (<code>status=OPEN</code> only)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/disputes/{disputeId}</code></td><td>Dispute detail (booking, payment split, coach history)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/resolve</code></td><td>Resolve: <code>FULL_CREDIT</code> / <code>PARTIAL_CREDIT</code> / <code>NO_ACTION</code> / <code>COACH_WARNING</code> / <code>UPHOLD_COACH</code> (409 <code>disputes.bookingNotSettled</code> while the session is unsettled)</td><td>ADMIN only</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/disputes/{disputeId}/dismiss</code></td><td>Dismiss with a reason</td><td>ADMIN only</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/appeals/queue</code></td><td>Appeals by status (default OPEN), oldest first</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/appeals/{appealId}</code></td><td>Appeal detail with a subject summary</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/appeals/{appealId}/decide</code></td><td>Decide UPHELD / OVERTURNED (final)</td><td>ADMIN only</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/bookings/{bookingId}</code></td><td>Booking lookup for force-complete and cancel (status, completion recorded, pending confirmation, <code>adminCancellable</code>, <code>liveSession</code>)</td><td>ADMIN or LTD_ADMIN</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/bookings/{bookingId}/force-complete</code></td><td>Force-complete a stuck booking with placeholder data</td><td>ADMIN only</td></tr>
+        <tr><td>POST</td><td><code>/api/admin/bookings/{bookingId}/cancel</code></td><td>Cancel one booking (full refund of captured money, no strike, neutral notice); body <code>{note}</code>, returns the <code>AdminBookingCancellationOutcome</code></td><td>ADMIN only</td></tr>
+        <tr><td>GET</td><td><code>/api/admin/gdpr/requests</code></td><td>List GDPR requests (<code>type</code>, <code>status</code>, pageable; rows carry <code>playerId</code>)</td><td>ADMIN only</td></tr>
         <tr><td>POST</td><td><code>/api/disputes</code></td><td>Raise a dispute</td><td>Authenticated (parent, player or coach of the booking)</td></tr>
         <tr><td>GET</td><td><code>/api/disputes/{disputeId}</code></td><td>View a dispute you raised</td><td>Authenticated, owner-only</td></tr>
         <tr><td>POST</td><td><code>/api/appeals</code></td><td>Submit an appeal</td><td>Authenticated, subject owner</td></tr>
@@ -695,7 +735,7 @@ sequenceDiagram
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>1ee47152</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
