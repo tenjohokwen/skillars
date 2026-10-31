@@ -1107,3 +1107,4 @@ an operator must now do.
   `idx_bkg_open_pack_reservation` on `booking.bookings`, built non-concurrently: deploy in a quiet window
   once PROD has traffic (section 3.2). No new config keys, jobs or webhooks.
 - 2026-10-31: feat/lgtm-application-dashboards. V215 runs automatically and joins the "prod is not live" list in section 0. Grafana dashboards moved to `deploy/lgtm/dashboards/`, so recreate the container after pulling: `docker compose up -d --force-recreate grafana`. The rewritten alert rules start notifying on the app and business alerts, so confirm a channel is set and check **Alerting → Alert rules** shows every rule healthy.
+- 2026-10-31: fix/backlog-metrics-staleness-and-timeout. New optional property `platform.backlog-metrics.query-timeout-seconds` (default 10), no action needed. New Grafana alert `BacklogMetricsStale`: recreate the Grafana container after deploying so it loads.

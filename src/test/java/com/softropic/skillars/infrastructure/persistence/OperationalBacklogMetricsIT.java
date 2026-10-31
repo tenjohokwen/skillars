@@ -8,10 +8,22 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 
 /**
@@ -28,11 +40,36 @@ class OperationalBacklogMetricsIT extends AbstractIntegrationTest {
 
     private SimpleMeterRegistry registry;
     private OperationalBacklogMetrics metrics;
+    private MutableClock clock;
 
     @BeforeEach
     void setUp() {
         registry = new SimpleMeterRegistry();
-        metrics = new OperationalBacklogMetrics(jdbcTemplate, registry);
+        clock = new MutableClock();
+        metrics = new OperationalBacklogMetrics(bounded(1), registry, clock);
+    }
+
+    private JdbcTemplate bounded(int timeoutSeconds) {
+        JdbcTemplate bounded = new JdbcTemplate(jdbcTemplate.getDataSource());
+        bounded.setQueryTimeout(timeoutSeconds);
+        return bounded;
+    }
+
+    private double refreshAge() {
+        return registry.get("skillars.backlog.refresh.age").gauge().value();
+    }
+
+    /** A clock the test advances by hand, so staleness is asserted without sleeping. */
+    private static final class MutableClock extends Clock {
+        private Instant now = Instant.parse("2026-01-01T00:00:00Z");
+
+        void advance(Duration d) {
+            now = now.plus(d);
+        }
+
+        @Override public ZoneOffset getZone() { return ZoneOffset.UTC; }
+        @Override public Clock withZone(java.time.ZoneId zone) { return this; }
+        @Override public Instant instant() { return now; }
     }
 
     @AfterEach
@@ -88,5 +125,55 @@ class OperationalBacklogMetricsIT extends AbstractIntegrationTest {
         metrics.refresh();
 
         assertThat(gauge("skillars.backlog.count", "outbox_stuck")).isNull();
+    }
+
+    @Test
+    void aTimedOutRefresh_keepsTheLastValues_andLetsTheRefreshAgeGrow() throws Exception {
+        enqueue(0, "10 minutes");
+        metrics.refresh();
+        assertThat(refreshAge()).isZero();
+        assertThat(gauge("skillars.backlog.count", "outbox_pending").value()).isEqualTo(1);
+
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService blocker = Executors.newSingleThreadExecutor();
+        // A migration-style ACCESS EXCLUSIVE lock: the poll's read of outbox_messages waits behind it.
+        Future<?> holding = blocker.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+            jdbcTemplate.execute("LOCK TABLE main.outbox_messages IN ACCESS EXCLUSIVE MODE");
+            locked.countDown();
+            try {
+                release.await(30, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }));
+        try {
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            clock.advance(Duration.ofMinutes(7));
+
+            long started = System.nanoTime();
+            assertThatThrownBy(metrics::refresh).isInstanceOf(DataAccessException.class);
+
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+            assertThat(refreshAge()).isEqualTo(420.0);
+            assertThat(gauge("skillars.backlog.count", "outbox_pending").value()).isEqualTo(1);
+        } finally {
+            release.countDown();
+            holding.get(30, TimeUnit.SECONDS);
+            blocker.shutdownNow();
+        }
+
+        metrics.refresh();
+        assertThat(refreshAge()).isZero();
+    }
+
+    @Test
+    void theRefreshAge_runsFromStartupUntilTheFirstSuccess() {
+        clock.advance(Duration.ofMinutes(3));
+        assertThat(refreshAge()).isEqualTo(180.0);
+
+        metrics.refresh();
+
+        assertThat(refreshAge()).isZero();
     }
 }
