@@ -1363,7 +1363,7 @@
         "x": 0,
         "y": 29
       },
-      "description": "Click a line for its traceId link into Tempo. Anonymous 401s are logged at ERROR and left out here."
+      "description": "Click a line for its traceId link into Tempo. Filter-origin 401 denials are left out here."
     }
   ],
   "refresh": "1m",
