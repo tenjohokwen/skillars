@@ -22,13 +22,36 @@ Grafana is only accessible via HTTPS through Traefik. There is no direct port ex
 
 ## Dashboards
 
-**Skillars Dashboard** — provisioned automatically from `deploy/lgtm/skillars-dashboard.json`.
+Provisioned into the **Skillars** folder from `deploy/lgtm/dashboards/`. Every dashboard links to the others from its top bar, and purple annotations mark app restarts.
 
-Shows:
-- Infrastructure health overview
-- JVM heap utilisation
-- HikariCP database connection pool utilisation
-- Live error logs and recent errors (Loki)
+| Dashboard | Open it when | Shows |
+|---|---|---|
+| **Operations Overview** | First stop, or an alert fired | Up/down, traffic, 5xx, latency, heap, DB pool, what is waiting on a human, firing alerts, latest errors |
+| **Business Health** | Daily check, or a user reports something odd | Every work queue with its oldest item, the admin queue by type, booking activity, coach wrap-ups and lost development credit, every tagged `[MARKER]` warning |
+| **Payments & Payouts** | Anything about money | Settlement outcomes, Stripe webhooks, payouts held / frozen / failed, cash-outs, mismatch log |
+| **Performance & Memory** | "It's slow", GC pressure, OOM risk | Slowest routes and traces, **heap allocated per route**, heap after GC, GC, Tomcat threads, executors |
+| **Database & Transactions** | Conflicts, timeouts, pool pressure | Hikari wait and hold times, deadlocks, lock timeouts, rollbacks, lock retries, repository time |
+| **Background Work** | A job, email or video seems stuck | Scheduled jobs that failed, outboxes, email, video, storage, GDPR requests |
+
+Panels fed by a counter stay empty until that event first happens. That is normal for the failure panels.
+
+### Where the numbers come from
+
+- **`skillars_backlog_count` / `skillars_backlog_oldest_age_seconds`** (`OperationalBacklogMetrics`): work waiting in the database, refreshed every minute. Tags: `backlog`, `detail`.
+- **`http_server_allocated_bytes`** (`RequestAllocationMetricsFilter`): heap allocated per request, by route. It counts allocation on the request thread, not retained memory, so async listeners and SSE streams are not attributed to the route.
+- **`tasks_scheduled_execution_seconds`**: Spring's own per-job timer. A job that throws shows `outcome="FAILED"`.
+- **Log markers:** the app logs integrity problems as `[MARKER] ...` at WARN or ERROR. Dashboards count these in Loki. A new marker appears on Business Health with no dashboard change.
+
+Loki stream labels are `app`, `environment` and `level` (upper case: `level="ERROR"`). Everything else is in the JSON line, or in structured metadata such as `traceId`.
+
+Postgres itself is not exported, so deadlocks and lock timeouts are read from the exceptions the app logs. Add `postgres_exporter` if you need server-side views (bloat, slow statements, replication).
+
+### Grafana alert or admin queue?
+
+- **Admin queue (in-app `AdminAlertType`):** a specific record needs a person to act on it and mark it handled, for example a chargeback or a booking that could not be cancelled.
+- **Grafana alert (email/Slack):** the system or a trend needs attention, or there is no in-app action to take.
+
+Long-unresolved admin items reach Grafana too, through `AdminAlertsAging`, so the queue cannot go quietly stale.
 
 For ad-hoc log queries (Loki) or trace lookups (Tempo), use Grafana's built-in **Explore** view — select the appropriate datasource (Loki or Tempo) from the dropdown.
 
@@ -54,6 +77,8 @@ rewrite you must recreate the container for the change to take effect:
 **Notification policy:** group wait 30s, group interval 5m, repeat interval 4h.
 
 All alert rules appear in Grafana under **Alerting → Alert rules → Skillars Alerts** folder.
+
+**Only the rules in `grafana-alerts.yml` notify anyone.** A rule in `alerts.yml` alone is visible in Prometheus and reaches nobody. Each Grafana rule is a query (A) plus a threshold (C): Grafana refuses to alert on a raw series, and a query returning nothing means healthy (`noDataState: OK`). Check a new rule with Grafana's *Rule state* before relying on it.
 
 ---
 
@@ -216,13 +241,173 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 
 ---
 
+#### HttpServerErrorRateHigh
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** More than 5% of requests returned a 5xx for 5 minutes.
+
+**Response:** Operations Overview shows the failing routes and exceptions. Open an error line and follow its traceId into Tempo. If it began with a deploy, roll back.
+
+---
+
+#### StripeWebhookFailing
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** More than 2 Stripe webhook deliveries failed in 15 minutes. Stripe retries, but payment state drifts meanwhile and repeated failures disable the endpoint.
+
+**Response:** Payments & Payouts shows the error class. Check the webhook secret, then the app logs. After fixing, resend failed events from the Stripe dashboard.
+
+---
+
+#### MoneyIntegrityEvent
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** The app logged that money and its records disagree: an amount mismatch, a settle failing after a charge, a refund of unknown amount, an unreconciled pack purchase or a failed payout or refund enqueue.
+
+**Response:** Read the "Mismatches and failures" log on Payments & Payouts. Each line names the booking or PaymentIntent. Compare with Stripe and correct by hand. Do not retry blindly: the charge may already have succeeded.
+
+---
+
+#### UnrecoverablePayment
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** The payment-pending sweeper gave up on a booking.
+
+**Response:** The panel on Payments & Payouts gives the reason and the log names the booking. Check the PaymentIntent in Stripe, then settle or refund by hand.
+
+---
+
+#### OutboxRowsStuck
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** Outbox rows have failed 10 or more times. Each is a committed operation (a refund, email or SLU delta) that has not run.
+
+**Response:** Background Work shows the type. Read `last_error`: `SELECT aggregate_type, attempts, last_error FROM main.outbox_messages WHERE attempts >= 10;`. Fix the cause. Rows keep retrying on backoff.
+
+---
+
 ### High Alerts
+
+---
+
+#### TomcatThreadsSaturated
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** Tomcat request threads are above 90% of the pool, so requests will queue before any app code runs.
+
+**Response:** Performance & Memory: check for a slow route or slow dependency holding threads. Compare with DB pool wait on Database & Transactions.
+
+---
+
+#### DbConnectionTimeouts
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** A request failed because no DB connection was free.
+
+**Response:** Database & Transactions: look for a high "time a connection is held". That is usually a long transaction, often network I/O inside one.
+
+---
+
+#### LockRetriesExhausted
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** A row stayed locked through every `PessimisticLockRetryer` attempt, so the user got a conflict error.
+
+**Response:** Database & Transactions names the lock. Occasional hits under a race are expected. Repeats mean a transaction holds that row too long.
+
+---
+
+#### TransactionDeadlocks
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** Postgres reported a deadlock: two code paths take locks in opposite order.
+
+**Response:** The log panel on Database & Transactions has both statements in the exception. Fix the lock order in code.
+
+---
+
+#### ScheduledJobFailing
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** A `@Scheduled` job threw. Spring retries on the next tick, so without this a job can fail forever in silence.
+
+**Response:** Background Work lists the job and exception. Check whether it clears on the next run. If not, what it maintains (sweeps, payouts, retention) has stopped.
+
+---
+
+#### SecondInstanceRunning
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** More than one app instance is heartbeating for 5 minutes. SSE state lives in one JVM, so users on the other node miss real-time events.
+
+**Response:** Expected only briefly during a deploy. Otherwise find and stop the stray instance.
+
+---
+
+#### PayoutsOverdue
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A payout is over an hour past its release date and not frozen, or is `FAILED_PERMANENT` / `REVERSAL_FAILED`.
+
+**Response:** Payments & Payouts shows which. For overdue, check that the release job is running on Background Work. For failed ones, resolve the coach Connect account, then correct by hand.
+
+---
+
+#### CashOutsUnresolved
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A cash-out refund outcome has been unknown for over an hour. The recheck job has not been able to confirm it.
+
+**Response:** Find the refund in Stripe by the PaymentIntent on the `CASH_OUT_UNRESOLVED` admin alert and resolve it there.
+
+---
+
+#### GdprRequestOverdue
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A GDPR request has been open for 20 days. The legal limit is one month.
+
+**Response:** Background Work shows the request type and any failure log. Complete it by hand if the job cannot.
+
+---
+
+#### MailDeliveryFailing
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** More than 20% of emails failed to send for 10 minutes.
+
+**Response:** Background Work shows the transport. Check SES or SMTP status and credentials. `mail_ses_rate_limiter_rejected_total` shows throttling.
+
+---
+
+#### VideoModerationBypassed
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A video reached READY without a moderation verdict.
+
+**Response:** Find the video in the logs, then review it in the admin moderation queue. Check the moderation provider.
 
 ---
 
 #### BookingPaymentSettleFailureRateHigh
 
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
+**Source:** `deploy/lgtm/grafana-alerts.yml` (notifies) and `deploy/lgtm/alerts.yml` (skillars-alerts)
 
 **Meaning:** More than 25% of booking-payment settle outcomes over a 15-minute window were failures
 (`booking.payment.settle_failed`, incremented by `BookingPaymentPersistenceService.persistPaymentFailure`)
@@ -248,7 +433,7 @@ docker compose logs app --tail=200 | grep -i "settle"
 
 #### DbConnectionPoolHigh
 
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
+**Source:** `deploy/lgtm/grafana-alerts.yml` (notifies) and `deploy/lgtm/alerts.yml` (skillars-alerts)
 
 **Meaning:** HikariCP database connection pool usage exceeded 80% of the configured maximum. Connection starvation is imminent if unchecked.
 
@@ -292,9 +477,89 @@ docker exec -e PGPASSWORD="${POSTGRES_PASSWORD}" "$CID" \
 
 ---
 
+#### HttpLatencyHigh
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** p95 latency has been above 2s for 10 minutes.
+
+**Response:** Performance & Memory: start with "Most server time spent" and "Slowest traces".
+
+---
+
+#### ErrorLogSpike
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** More than 50 ERROR lines in 10 minutes.
+
+**Response:** Operations Overview, "Errors". Group by logger in Explore to find the source. Anonymous 401s are logged at ERROR too (`Filter-origin 401`) and are excluded, so they cannot trip this alert.
+
+---
+
+#### GcOverheadHigh
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** The JVM spent over 20% of its CPU in GC for 10 minutes.
+
+**Response:** Performance & Memory: "Allocation pressure by route" shows what drives it. If "Live data after GC" is also high, treat it as a leak.
+
+---
+
+#### AdminAlertsAging
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** An item in the admin queue has been unresolved for over 24 hours.
+
+**Response:** Work the admin queue. Business Health shows the types.
+
+---
+
+#### DisputesAging
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A dispute has been open for over 48 hours, which may be freezing a coach payout.
+
+**Response:** Resolve or dismiss it in the admin disputes queue.
+
+---
+
+#### AwaitedWrapUpRefused
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A coach tried to submit a wrap-up after the recap window closed, for a session the family had already confirmed. The session stays paid, but its SLU, timeline and homework are never recorded. Only `RECAP_EDIT_WINDOW_CLOSED` alerts. The erased and disputed refusals are expected and appear on the dashboard only.
+
+**Response:** Tell the coach their wrap-up was not recorded. The booking id is in the log line. If this repeats, coaches are not finding "Resume wrap-up". This is a Grafana alert rather than an admin-queue item because no admin action can restore the data.
+
+---
+
+#### AwaitedWrapUpsNearDeadline
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A wrap-up has been awaited for 26 days and the development credit is lost at day 30. This covers the silent case where the coach never tries, which logs nothing. The threshold assumes the default `booking.recap.editWindowDays` of 30, so change it here if that setting changes.
+
+**Response:** Nudge the coach while there is still time. The rows are `booking.session_completion_data WHERE awaiting_wrap_up`.
+
+---
+
+#### ConfigValueMisconfigured
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** An admin-editable config value is outside its safe range and the default is in use.
+
+**Response:** The `key` tag on Background Work names it. Correct it in the admin config page.
+
+---
+
 #### JvmHeapHigh
 
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
+**Source:** `deploy/lgtm/grafana-alerts.yml` (notifies) and `deploy/lgtm/alerts.yml` (skillars-alerts)
 
 **Meaning:** JVM heap usage exceeded 85% of the configured maximum. The application may experience GC pauses or, if sustained, an OOM restart.
 
@@ -314,7 +579,7 @@ docker compose restart app
 
 #### SubscriptionInvoicePaymentFailureHigh
 
-**Source:** `deploy/lgtm/alerts.yml` (skillars-alerts)
+**Source:** `deploy/lgtm/grafana-alerts.yml` (notifies) and `deploy/lgtm/alerts.yml` (skillars-alerts)
 
 **Meaning:** More than 5 Stripe subscription invoice payments failed in the last hour
 (`subscription.payment.invoice_failed`, incremented by `StripeWebhookService.handleInvoicePaymentFailed`

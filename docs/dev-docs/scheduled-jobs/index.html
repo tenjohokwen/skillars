@@ -63,8 +63,8 @@
       wrap-up wizard has the session force-completed; a message or review whose moderation verdict never landed is
       escalated to a human; a live session the coach never ended is auto-ended; a card charge whose outcome
       was lost is settled from Stripe's answer; packs forfeit at expiry; outboxes drain; failed GDPR erasures
-      are retried; local subscriptions are reconciled against Stripe. There are <strong>46
-      <code>@Scheduled</code> methods in 44 classes across 12 platform modules plus
+      are retried; local subscriptions are reconciled against Stripe. There are <strong>47
+      <code>@Scheduled</code> methods in 45 classes across 12 platform modules plus
       <code>infrastructure</code></strong>, and <strong>36 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
       crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
       "why is this record stuck".
@@ -76,7 +76,7 @@
       exactly that on the current master. A bare <code>grep -c</code> over-counts: two hits are Javadoc
       mentions (<code>SchedulingConfig</code>, <code>ConfigResource</code>), and one <code>@SchedulerLock(</code>
       hit is a comment, so anchor the pattern to the start of the line (<code>'^\s*@Scheduled('</code>) to get
-      the real 46 and 36.
+      the real 47 and 36.
     </p>
 
     <h2 id="how-scheduling-is-wired">How Scheduling Is Wired</h2>
@@ -97,7 +97,7 @@
       long-lived Spring contexts: a job with a 5-minute delay never fires in a context that lives 90 seconds,
       and that accidental protection disappeared. Worse, the per-test reset backdates every ShedLock row,
       making every guarded job eligible on every test method.</p>
-      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 27 of the 46
+      <p>Overriding each job's delay in test config <em>cannot</em> substitute for the switch: 27 of the 47
       <code>@Scheduled</code> methods hard-code their delay or cron with no property placeholder. Meanwhile
       <code>@EnableSchedulerLock</code> stays unconditional because tests invoke scheduled methods directly
       through the Spring proxy, so the lock advisor must still apply — that is the behaviour
@@ -202,6 +202,7 @@
         <tr><td><code>notification.AlertEvaluationService.evaluate</code></td><td>(cfg) <code>alert.evaluation-interval-ms</code> [30s]</td><td>Evaluates alert rules against this instance's Micrometer counters (needs ≥10 samples before firing).</td></tr>
         <tr><td><code>messaging.MessagingEmitterRegistry.sendHeartbeats</code></td><td>every 30s</td><td>SSE heartbeats to this instance's connected clients.</td></tr>
         <tr><td><code>infrastructure.security.RateLimitingService.evictIdleBuckets</code></td><td>hourly</td><td>Evicts in-memory Bucket4j rate-limit buckets idle past the TTL so the map cannot grow unbounded.</td></tr>
+        <tr><td><code>infrastructure.persistence.OperationalBacklogMetrics.refresh</code></td><td>(cfg) <code>platform.backlog-metrics.interval-ms</code> [60s, first after 20s]</td><td>Read-only: counts work waiting in the database (outboxes, admin alerts, disputes, payouts, cash-outs, awaited wrap-ups) into the <code>skillars.backlog.*</code> gauges.</td></tr>
         <tr><td><code>infrastructure.persistence.InstanceHeartbeatMonitor.beat</code></td><td>(cfg) <code>platform.instance-heartbeat.interval-ms</code> [60s, first after 15s]</td><td>Upserts this instance's row in <code>main.app_instance_heartbeat</code> and WARNs (<code>status=MULTIPLE_INSTANCES</code>) when another instance's row is fresh — single-instance safety net (<a href="../decisions/index.html#adr-single-instance">ADR 20</a>). Must stay unguarded: each instance beats for itself.</td></tr>
       </tbody>
     </table>
@@ -222,8 +223,8 @@
         <tr><td>admin</td><td>1</td><td>1</td></tr>
         <tr><td>outbox</td><td>1</td><td>1</td></tr>
         <tr><td>config</td><td>1</td><td>0</td></tr>
-        <tr><td><code>infrastructure</code></td><td>2</td><td>0</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>46</strong></td><td><strong>36</strong></td></tr>
+        <tr><td><code>infrastructure</code></td><td>3</td><td>0</td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>47</strong></td><td><strong>36</strong></td></tr>
       </tbody>
     </table>
 
@@ -281,9 +282,9 @@
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
 
     <div class="callout warn">
-      <p><strong>10 of the 46 jobs are unguarded, and each has a reason.</strong> Six are per-instance by
+      <p><strong>11 of the 47 jobs are unguarded, and each has a reason.</strong> Seven are per-instance by
       design (<code>ConfigService</code>, <code>AlertRuleCache</code>, <code>AlertEvaluationService</code>,
-      <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>, <code>InstanceHeartbeatMonitor</code>) — they
+      <code>MessagingEmitterRegistry</code>, <code>RateLimitingService</code>, <code>InstanceHeartbeatMonitor</code>, <code>OperationalBacklogMetrics</code>) — they
       touch only in-memory state, this instance's metrics/connections, or (the heartbeat) this instance's own row. The other four (<code>UploadSessionExpiryScheduler</code>,
       <code>ReconciliationWorkerScheduler.reconcile</code>, <code>WebhookEventProcessorScheduler</code>,
       <code>ModerationSlaMonitorService</code>) rely on row-level <code>FOR UPDATE [SKIP LOCKED]</code> claims

@@ -79,7 +79,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
   (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
   `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213 and V214 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214 and V215 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -1106,3 +1106,4 @@ an operator must now do.
 - 2026-10-30: fix/audit3-booking-scheduling-integrity (V214). New partial index
   `idx_bkg_open_pack_reservation` on `booking.bookings`, built non-concurrently: deploy in a quiet window
   once PROD has traffic (section 3.2). No new config keys, jobs or webhooks.
+- 2026-10-31: feat/lgtm-application-dashboards. V215 runs automatically and joins the "prod is not live" list in section 0. Grafana dashboards moved to `deploy/lgtm/dashboards/`, so recreate the container after pulling: `docker compose up -d --force-recreate grafana`. The rewritten alert rules start notifying on the app and business alerts, so confirm a channel is set and check **Alerting → Alert rules** shows every rule healthy.

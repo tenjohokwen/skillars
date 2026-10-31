@@ -479,7 +479,7 @@ services:
       - ./deploy/lgtm/grafana-datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml:ro
       - ./deploy/lgtm/grafana-alerts.yml:/etc/grafana/provisioning/alerting/alerts.yml:ro
       - ./deploy/lgtm/grafana-dashboard-config.yml:/etc/grafana/provisioning/dashboards/dashboard.yml:ro
-      - ./deploy/lgtm/skillars-dashboard.json:/etc/grafana/provisioning/dashboards/skillars-dashboard.json:ro
+      - ./deploy/lgtm/dashboards:/etc/grafana/dashboards:ro
       - /opt/skillars/data/grafana:/var/lib/grafana
     labels:
       - "traefik.enable=true"

@@ -14,6 +14,10 @@ server:
     whitelabel:
       enabled: false
   tomcat:
+    # Off by default in embedded Tomcat, and without it Micrometer exports no tomcat_threads_* or
+    # tomcat_connections_*: request-thread saturation would be invisible on the Performance dashboard.
+    mbeanregistry:
+      enabled: true
     accesslog:
       # Tomcat's stock file-based access log valve is OFF; the access log is emitted through
       # SLF4J instead, so it reaches Loki like every other log event. See AccessLogConfig /

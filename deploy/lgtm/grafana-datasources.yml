@@ -6,6 +6,10 @@ datasources:
     uid: Prometheus
     url: http://prometheus:9090
     isDefault: true
+    jsonData:
+      # Must match scrape_interval in prometheus.yml. $__rate_interval is derived from it, and at
+      # Grafana's 15s default its windows hold one sample of a 45s scrape: rate() returns nothing.
+      timeInterval: 45s
 
   - name: Loki
     type: loki
@@ -37,9 +41,8 @@ datasources:
         limit: 20
       tracesToLogs:
         datasourceUid: 'Loki'
-        tags: ['service']
-        mappedTags: [{ key: 'service.name', value: 'service' }]
-        mapTagNamesEnabled: true
+        # Stream labels are app/environment/level (config/logback-spring.xml). There is no `service` label.
+        tags: [{ key: 'service.name', value: 'app' }]
         spanStartTimeShift: '1m'
         spanEndTimeShift: '1m'
         filterByTraceId: true
