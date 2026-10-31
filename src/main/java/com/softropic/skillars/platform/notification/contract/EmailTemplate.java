@@ -98,6 +98,11 @@ public enum EmailTemplate {
     COACH_START_REMINDER("email.booking.coach_start_reminder.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),
     /**
+     * S-09 (V223): to the coach ~30 days before their safeguarding check expires and the public badge reverts to
+     * "no check on record". Sent once per record by the safeguarding expiry job; renewal resets it.
+     */
+    COACH_SAFEGUARDING_EXPIRING("email.coach.safeguarding_expiring.title"),
+    /**
      * RETIRED — no producer since the parental-approval flow was removed (ADR "Minors never upload",
      * 2026-10-28). Kept ONLY so envelope / outbox / inbox rows already stored with these values still
      * load (Hibernate {@code EnumType.STRING}) and still satisfy {@code envelope_entity_email_template_check},

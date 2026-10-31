@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.coach.safeguarding_expiring.title}">Your Safeguarding Check Is About to Expire</title>
+</head>
+<body>
+    <h2 th:text="#{email.coach.safeguarding_expiring.title}">Your Safeguarding Check Is About to Expire</h2>
+    <p>The safeguarding check on record for your coach profile <strong th:text="${map.coachDisplayName}">Coach</strong> is valid until <strong th:text="${map.expiresAt}">date</strong>.</p>
+    <p>After that date your public profile shows that no safeguarding check is on record. The check is optional; if you would like to keep it shown, you can request a new inspection from your profile.</p>
+    <p><a th:href="${map.safeguardingUrl}" th:text="${map.safeguardingUrl}">safeguarding</a></p>
+</body>
+</html>

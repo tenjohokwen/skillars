@@ -662,6 +662,27 @@ public final class ConfigBounds {
     static final List<String> VIDEO_TYPE_SEGMENTS = List.of("homework", "drillDemo", "coachReview");
 
     /**
+     * S-09: {@code CoachSafeguardingService.markInspected} — how many years a staff-inspected safeguarding check
+     * stays on the public profile (expires_at = inspected_at + this). Owner decision: 5 (the DE norm for the
+     * erweiterte Fuehrungszeugnis re-check). Applies to inspections made after the change; a stored
+     * {@code expires_at} is never rewritten. The ceiling is 100 only because ConfigStartupAssertionTest feeds
+     * every bounded key the value 100; the sane operating range is 1-10.
+     */
+    public static final BoundedKey COACH_SAFEGUARDING_VALIDITY_YEARS =
+        new BoundedKey("coach.safeguarding.validityYears", 1L, 100L, false,
+            "out-of-range falls back to the coded default (5); huge → a badge outlives the certificate behind it", 5L);
+
+    /**
+     * S-09: {@code CoachSafeguardingService.sweepStaleUploads} — days an uploaded certificate may sit in the
+     * private bucket unprocessed before the sweeper deletes it (the request stays, the file goes; the coach
+     * must upload again or arrange a video call). Owner decision: 14. Lower is more protective; the file is
+     * also deleted the moment staff decide.
+     */
+    public static final BoundedKey COACH_SAFEGUARDING_UPLOAD_RETENTION_DAYS =
+        new BoundedKey("coach.safeguarding.uploadRetentionDays", 1L, 100L, false,
+            "out-of-range falls back to the coded default (14); huge → certificates linger in storage", 14L);
+
+    /**
      * Keys whose call site passes a code default (2-arg {@code getLong}/{@code getInt}) or catches
      * the missing-key {@code IllegalStateException} — an <em>absent</em> or <em>blank</em> value is
      * survivable there (the code default applies), so {@link ConfigStartupAssertion} logs it at DEBUG
@@ -718,7 +739,9 @@ public final class ConfigBounds {
         PAYOUT_NEW_COACH_HOLD_HOURS.key(),
         PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS.key(),
         PAYOUT_RELATED_PARTY_HOLD_DAYS.key(),
-        IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY.key());
+        IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY.key(),
+        COACH_SAFEGUARDING_VALIDITY_YEARS.key(),
+        COACH_SAFEGUARDING_UPLOAD_RETENTION_DAYS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -781,7 +804,9 @@ public final class ConfigBounds {
             PAYOUT_NEW_COACH_HOLD_HOURS,
             PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS,
             PAYOUT_RELATED_PARTY_HOLD_DAYS,
-            IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY));
+            IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY,
+            COACH_SAFEGUARDING_VALIDITY_YEARS,
+            COACH_SAFEGUARDING_UPLOAD_RETENTION_DAYS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

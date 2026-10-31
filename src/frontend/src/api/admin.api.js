@@ -152,6 +152,33 @@ export const adminApi = {
     return api.post(`/api/admin/appeals/${appealId}/decide`, payload)
   },
 
+  // S-09 coach safeguarding checks (AdminSafeguardingResource, ROLE_ADMIN only).
+  getSafeguardingRequests(page = 0) {
+    return api.get('/api/admin/safeguarding/requests', { params: { page } })
+  },
+
+  getSafeguardingRecords(page = 0) {
+    return api.get('/api/admin/safeguarding/records', { params: { page } })
+  },
+
+  // Resolves to a Blob (the decrypted upload); each call is audited server-side.
+  getSafeguardingDocument(coachId) {
+    return api.get(`/api/admin/safeguarding/requests/${coachId}/document`, { responseType: 'blob' })
+  },
+
+  inspectSafeguardingRequest(coachId) {
+    return api.post(`/api/admin/safeguarding/requests/${coachId}/inspect`)
+  },
+
+  // payload: { reason } (optional; audit log only)
+  rejectSafeguardingRequest(coachId, payload = {}) {
+    return api.post(`/api/admin/safeguarding/requests/${coachId}/reject`, payload)
+  },
+
+  revokeSafeguardingRecord(coachId, payload = {}) {
+    return api.delete(`/api/admin/safeguarding/records/${coachId}`, { data: payload })
+  },
+
   // GDPR request tracker (AdminGdprResource). type: 'EXPORT' | 'ERASURE' | null (all);
   // status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | null (all). Newest first.
   getGdprRequests({ type = null, status = null, page = 0, size = 20 } = {}) {

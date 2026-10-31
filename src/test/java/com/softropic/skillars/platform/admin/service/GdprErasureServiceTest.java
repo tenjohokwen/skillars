@@ -121,6 +121,7 @@ class GdprErasureServiceTest {
     @Mock private BlobDeletionOutboxSupport blobDeletionOutboxSupport;
     @Mock private com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
     @Mock private com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
+    @Mock private com.softropic.skillars.platform.marketplace.service.CoachSafeguardingService coachSafeguardingService;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PessimisticLockRetryer lockRetryer;
@@ -167,7 +168,7 @@ class GdprErasureServiceTest {
             playerTimelineRepository, homeworkCompletionRepository, blobDeletionOutboxSupport,
             refreshTokenRepository, eventPublisher, lockRetryer, entityManager, txManager, configService,
             dataSource, coachMediaItemRepository, coachBrandingRepository, stripeCustomerErasureOutboxSupport,
-            ageVerificationService);
+            ageVerificationService, coachSafeguardingService);
         service.initTemplates();
         // skillars-deferred-132 AC1 Fix 4: erase() now delegates to self.eraseTransactional(...) so its
         // own connection-pool pre-check runs before the @Transactional(REQUIRES_NEW) proxy advice would

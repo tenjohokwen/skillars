@@ -20,6 +20,9 @@ import java.util.UUID;
  * {@code MultipleBagFetchException} risk (the hazards the original "left as-is" decision correctly
  * identified for a naive {@code JOIN FETCH} across six collections).
  *
+ * <p>S-09 added a fifth branch, the safeguarding check's valid-until date, so the public badge costs no extra
+ * round trip. Expiry is judged by {@code :now}; only the date is selected - never who inspected.
+ *
  * <p>Native on purpose: JPQL has no {@code UNION}. The projection is deliberately homogeneous —
  * every branch yields exactly {@code (kind text, value text)} — so PostgreSQL needs no implicit type
  * coercion and the result maps to a trivial two-column interface.
@@ -37,6 +40,8 @@ public interface CoachPublicProfileFactsRepository extends Repository<CoachSpeci
     String KIND_AGE_GROUP = "AGE_GROUP";
     String KIND_AVAILABILITY_COUNT = "AVAILABILITY_COUNT";
     String KIND_STRIKE_COUNT = "STRIKE_COUNT";
+    /** S-09: the valid-until date (ISO, UTC) of a safeguarding check that is still valid; absent otherwise. */
+    String KIND_SAFEGUARDING_VALID_UNTIL = "SAFEGUARDING_VALID_UNTIL";
 
     @Query(value = """
         SELECT 'SPECIALTY' AS kind, s.skill AS value
@@ -55,7 +60,14 @@ public interface CoachPublicProfileFactsRepository extends Repository<CoachSpeci
           FROM marketplace.coach_reliability_strikes r
          WHERE r.coach_id = :coachId
            AND r.created_at > :since
+        UNION ALL
+        SELECT 'SAFEGUARDING_VALID_UNTIL' AS kind,
+               to_char(c.expires_at AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS value
+          FROM marketplace.coach_safeguarding_checks c
+         WHERE c.coach_id = :coachId
+           AND c.expires_at > :now
         """, nativeQuery = true)
     List<Fact> findPublicProfileFacts(@Param("coachId") UUID coachId,
-                                      @Param("since") OffsetDateTime since);
+                                      @Param("since") OffsetDateTime since,
+                                      @Param("now") OffsetDateTime now);
 }

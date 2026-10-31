@@ -2786,6 +2786,8 @@ export default {
         'Un litige concernant la séance du {requestedStartTime} a été tranché en faveur du coach.',
       GDPR_EXPORT_READY: 'Votre export de données peut être téléchargé jusqu’au {expiresAt}.',
       REVIEW_APPROVED: 'Votre avis sur {coachDisplayName} a été publié.',
+      COACH_SAFEGUARDING_EXPIRING:
+        'Votre contrôle expire le {expiresAt}. Renouvelez-le pour le garder sur votre profil.',
       REVIEW_BLOCKED: 'Votre avis sur {coachDisplayName} n’a pas été publié.',
     },
     preferences: {
@@ -2936,6 +2938,107 @@ export default {
       DISPUTE_RESOLUTION: 'Décision de litige',
     },
   },
+  safeguarding: {
+    badge: {
+      onRecord: 'Contrôle de protection de l’enfance enregistré (valable jusqu’au {date})',
+      none: 'Aucun contrôle de protection de l’enfance enregistré',
+      tooltipOn:
+        'L’équipe Skillars a vérifié un extrait de casier judiciaire étendu de ce coach (en Allemagne : erweitertes Führungszeugnis). Skillars n’en conserve aucune copie.',
+      tooltipNone:
+        'Ce coach n’a présenté aucun contrôle de protection de l’enfance à Skillars. Ce contrôle est facultatif et vous décidez vous-même ; vous pouvez aussi interroger le coach avant de réserver.',
+    },
+    coach: {
+      title: 'Contrôle de protection de l’enfance',
+      subtitle:
+        'Facultatif. Montrez aux familles que Skillars a vérifié votre extrait de casier judiciaire étendu (en Allemagne : erweitertes Führungszeugnis).',
+      loadError: 'Impossible de charger l’état de votre contrôle.',
+      statusLabel: 'Statut',
+      status: {
+        NONE: 'Non demandé',
+        PENDING: 'En attente de vérification',
+        VERIFIED: 'Enregistré',
+        EXPIRED: 'Expiré',
+        REJECTED: 'N’a pas pu être confirmé',
+      },
+      validUntil: 'Affiché sur votre profil public jusqu’au {date}.',
+      expiredNote:
+        'Votre contrôle a expiré : votre profil public indique donc qu’aucun contrôle n’est enregistré. Vous pouvez demander une nouvelle vérification.',
+      requestedOn: 'Demandé le {date}.',
+      uploadDeletesOn:
+        'Votre fichier est supprimé dès que nous l’avons vérifié, et au plus tard le {date}.',
+      noUploadNote:
+        'Aucun fichier joint : un membre de l’équipe Skillars vous contactera à l’adresse e-mail de votre compte pour vérifier l’extrait autrement, par exemple lors d’un court appel vidéo.',
+      rejectedNote:
+        'Nous n’avons pas pu confirmer votre contrôle. Rien n’est affiché sur votre profil public. Vous pouvez envoyer une nouvelle demande.',
+      privacyTitle: 'Ce que Skillars conserve',
+      privacy1:
+        'Uniquement qu’un contrôle a été effectué, quand, jusqu’à quand et par quel membre de l’équipe. Rien du contenu de l’extrait n’est enregistré.',
+      privacy2:
+        'Si vous téléversez l’extrait, il est stocké chiffré, seul un administrateur Skillars peut l’ouvrir, et il est supprimé juste après la vérification (ou après {days} jours si personne ne l’a traité).',
+      privacy3:
+        'Le contrôle est facultatif. Sans lui, vous utilisez Skillars comme avant. Vous pouvez le retirer à tout moment ; il disparaît alors de votre profil public.',
+      fileLabel: 'Extrait (facultatif, PDF, JPG ou PNG, 5 Mo max.)',
+      fileRejected: 'Veuillez choisir un fichier PDF, JPG ou PNG de 5 Mo maximum.',
+      requestBtn: 'Demander la vérification',
+      renewBtn: 'Demander le renouvellement',
+      withdrawBtn: 'Retirer et supprimer',
+      withdrawTitle: 'Retirer le contrôle ?',
+      withdrawBody:
+        'Votre demande, votre enregistrement et tout fichier téléversé sont supprimés, et votre profil public n’indique plus de contrôle enregistré.',
+      cancel: 'Annuler',
+      confirm: 'Retirer',
+      requestSuccess: 'Demande envoyée.',
+      withdrawSuccess: 'Contrôle retiré.',
+      errors: {
+        fileTooLarge: 'Le fichier dépasse 5 Mo.',
+        fileType: 'Seuls les fichiers PDF, JPG ou PNG sont acceptés.',
+        fileEmpty: 'Le fichier est vide ou n’a pas pu être lu.',
+        stillValid:
+          'Votre contrôle est encore valable longtemps. Vous pourrez le renouveler à l’approche de son échéance.',
+        generic: 'Une erreur est survenue. Veuillez réessayer.',
+      },
+    },
+    admin: {
+      title: 'Contrôles de protection de l’enfance',
+      subtitle:
+        'Vérifiez les extraits de casier judiciaire étendus des coachs et enregistrez le résultat. Rien du contenu n’est conservé ; un fichier téléversé est supprimé à votre décision.',
+      tabRequests: 'Demandes',
+      tabRecords: 'Enregistrés',
+      loadError: 'Impossible de charger les contrôles.',
+      emptyRequests: 'Aucune demande en attente.',
+      emptyRecords: 'Aucun contrôle enregistré.',
+      colCoach: 'Coach',
+      colType: 'Type',
+      colRequested: 'Demandé',
+      colUpload: 'Fichier',
+      colInspected: 'Vérifié',
+      colValidUntil: 'Valable jusqu’au',
+      colActions: 'Actions',
+      uploadYes: 'Oui',
+      uploadNo: 'Aucun (vérifier autrement)',
+      renewal: 'Renouvellement',
+      viewDocument: 'Voir le document',
+      viewFailed: 'Impossible d’ouvrir le document. Il a peut-être déjà été supprimé.',
+      inspect: 'Marquer comme vérifié',
+      reject: 'Refuser',
+      revoke: 'Révoquer',
+      inspectTitle: 'Marquer comme vérifié',
+      inspectBody:
+        'Confirmez que vous avez vérifié un extrait de casier judiciaire étendu valide pour {coach}. Le profil public indiquera un contrôle enregistré et tout fichier est supprimé maintenant.',
+      rejectTitle: 'Refuser la demande',
+      rejectBody:
+        'Le coach voit que le contrôle n’a pas pu être confirmé. Tout fichier est supprimé maintenant. Votre note reste dans le journal d’audit uniquement.',
+      revokeTitle: 'Révoquer le contrôle enregistré',
+      revokeBody: 'Le profil public de {coach} n’indique plus de contrôle enregistré.',
+      reasonLabel: 'Note (journal d’audit uniquement)',
+      cancel: 'Annuler',
+      inspectedDone: 'Enregistré comme vérifié.',
+      rejectedDone: 'Demande refusée.',
+      revokedDone: 'Contrôle révoqué.',
+      actionFailed:
+        'L’action n’a pas pu être menée à bien. Elle a peut-être déjà été traitée ; la liste a été rechargée.',
+    },
+  },
   nav: {
     coachVideos: 'Mes vidéos',
     appeals: 'Appels',
@@ -2954,6 +3057,7 @@ export default {
     drillLibrary: "Bibliothèque d'exercices",
     sessionTemplates: 'Modèles de séance',
     paymentSettings: 'Paramètres de paiement',
+    safeguarding: 'Contrôle de protection de l’enfance',
     reliability: 'Fiabilité',
     subscription: 'Abonnement',
     myPlayers: 'Mes joueurs',
@@ -2963,6 +3067,7 @@ export default {
     videos: 'Mes vidéos',
     moderation: 'Modération',
     coachEnforcement: 'Sanctions entraîneurs',
+    adminSafeguarding: 'Contrôles de protection de l’enfance',
     adminUsers: 'Utilisateurs',
     groupAdminOperations: 'Exploitation',
     adminVideos: 'Revue des vidéos',

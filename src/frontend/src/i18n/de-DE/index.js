@@ -2810,6 +2810,8 @@ export default {
         'Eine Beschwerde zur Sitzung am {requestedStartTime} wurde zugunsten des Coaches entschieden.',
       GDPR_EXPORT_READY: 'Ihr Datenexport kann bis {expiresAt} heruntergeladen werden.',
       REVIEW_APPROVED: 'Ihre Bewertung von {coachDisplayName} wurde veröffentlicht.',
+      COACH_SAFEGUARDING_EXPIRING:
+        'Ihr Kinderschutz-Check läuft am {expiresAt} ab. Verlängern Sie ihn, damit er in Ihrem Profil bleibt.',
       REVIEW_BLOCKED: 'Ihre Bewertung von {coachDisplayName} wurde nicht veröffentlicht.',
     },
     preferences: {
@@ -2962,6 +2964,108 @@ export default {
       DISPUTE_RESOLUTION: 'Streitfallentscheidung',
     },
   },
+  safeguarding: {
+    badge: {
+      onRecord: 'Kinderschutz-Check hinterlegt (gültig bis {date})',
+      none: 'Kein Kinderschutz-Check hinterlegt',
+      tooltipOn:
+        'Das Skillars-Team hat ein erweitertes Führungszeugnis dieses Coaches eingesehen. Skillars speichert keine Kopie.',
+      tooltipNone:
+        'Dieser Coach hat Skillars keinen Kinderschutz-Check vorgelegt. Der Check ist freiwillig und Sie entscheiden selbst; Sie können den Coach vor der Buchung auch danach fragen.',
+    },
+    coach: {
+      title: 'Kinderschutz-Check',
+      subtitle:
+        'Freiwillig. Zeigen Sie Familien, dass Skillars Ihr erweitertes Führungszeugnis eingesehen hat.',
+      loadError: 'Der Status Ihres Kinderschutz-Checks konnte nicht geladen werden.',
+      statusLabel: 'Status',
+      status: {
+        NONE: 'Nicht beantragt',
+        PENDING: 'Wartet auf Prüfung',
+        VERIFIED: 'Hinterlegt',
+        EXPIRED: 'Abgelaufen',
+        REJECTED: 'Konnte nicht bestätigt werden',
+      },
+      validUntil: 'Wird in Ihrem öffentlichen Profil bis {date} angezeigt.',
+      expiredNote:
+        'Ihr Kinderschutz-Check ist abgelaufen, daher zeigt Ihr öffentliches Profil, dass kein Check hinterlegt ist. Sie können eine neue Prüfung beantragen.',
+      requestedOn: 'Beantragt am {date}.',
+      uploadDeletesOn:
+        'Ihre hochgeladene Datei wird gelöscht, sobald wir sie geprüft haben, spätestens am {date}.',
+      noUploadNote:
+        'Keine Datei angehängt: Eine Person vom Skillars-Team meldet sich unter Ihrer Konto-E-Mail-Adresse, um das Zeugnis auf anderem Weg einzusehen, zum Beispiel in einem kurzen Videoanruf.',
+      rejectedNote:
+        'Wir konnten Ihren Kinderschutz-Check nicht bestätigen. In Ihrem öffentlichen Profil wird nichts angezeigt. Sie können einen neuen Antrag senden.',
+      privacyTitle: 'Was Skillars speichert',
+      privacy1:
+        'Nur, dass ein Check eingesehen wurde, wann, bis wann und von welcher Person im Team. Inhalte des Zeugnisses werden nicht gespeichert.',
+      privacy2:
+        'Wenn Sie das Zeugnis hochladen, wird es verschlüsselt gespeichert, nur ein Skillars-Administrator kann es öffnen, und es wird direkt nach der Prüfung gelöscht (oder nach {days} Tagen, falls es niemand geprüft hat).',
+      privacy3:
+        'Der Check ist freiwillig. Ohne ihn nutzen Sie Skillars wie bisher. Sie können ihn jederzeit zurückziehen; er wird dann aus Ihrem öffentlichen Profil entfernt.',
+      fileLabel: 'Zeugnis (freiwillig, PDF, JPG oder PNG, max. 5 MB)',
+      fileRejected: 'Bitte wählen Sie eine PDF-, JPG- oder PNG-Datei mit höchstens 5 MB.',
+      requestBtn: 'Prüfung beantragen',
+      renewBtn: 'Verlängerung beantragen',
+      withdrawBtn: 'Zurückziehen und löschen',
+      withdrawTitle: 'Kinderschutz-Check zurückziehen?',
+      withdrawBody:
+        'Ihr Antrag, Ihr Eintrag und jede hochgeladene Datei werden gelöscht, und Ihr öffentliches Profil zeigt keinen hinterlegten Check.',
+      cancel: 'Abbrechen',
+      confirm: 'Zurückziehen',
+      requestSuccess: 'Antrag gesendet.',
+      withdrawSuccess: 'Kinderschutz-Check zurückgezogen.',
+      errors: {
+        fileTooLarge: 'Die Datei ist größer als 5 MB.',
+        fileType: 'Es werden nur PDF-, JPG- oder PNG-Dateien akzeptiert.',
+        fileEmpty: 'Die Datei ist leer oder konnte nicht gelesen werden.',
+        stillValid:
+          'Ihr Kinderschutz-Check ist noch lange gültig. Sie können ihn kurz vor dem Ablauf verlängern.',
+        generic: 'Etwas ist schiefgelaufen. Bitte versuchen Sie es erneut.',
+      },
+    },
+    admin: {
+      title: 'Kinderschutz-Checks',
+      subtitle:
+        'Erweiterte Führungszeugnisse von Coaches einsehen und das Ergebnis erfassen. Inhalte des Zeugnisses werden nicht gespeichert; ein Upload wird mit Ihrer Entscheidung gelöscht.',
+      tabRequests: 'Anträge',
+      tabRecords: 'Hinterlegt',
+      loadError: 'Die Kinderschutz-Checks konnten nicht geladen werden.',
+      emptyRequests: 'Keine offenen Anträge.',
+      emptyRecords: 'Keine hinterlegten Checks.',
+      colCoach: 'Coach',
+      colType: 'Art',
+      colRequested: 'Beantragt',
+      colUpload: 'Upload',
+      colInspected: 'Geprüft',
+      colValidUntil: 'Gültig bis',
+      colActions: 'Aktionen',
+      uploadYes: 'Ja',
+      uploadNo: 'Keiner (auf anderem Weg prüfen)',
+      renewal: 'Verlängerung',
+      viewDocument: 'Dokument ansehen',
+      viewFailed:
+        'Das Dokument konnte nicht geöffnet werden. Möglicherweise wurde es bereits gelöscht.',
+      inspect: 'Als geprüft markieren',
+      reject: 'Ablehnen',
+      revoke: 'Widerrufen',
+      inspectTitle: 'Als geprüft markieren',
+      inspectBody:
+        'Bestätigen Sie, dass Sie ein gültiges erweitertes Führungszeugnis von {coach} eingesehen haben. Das öffentliche Profil zeigt dann einen hinterlegten Check, und ein Upload wird jetzt gelöscht.',
+      rejectTitle: 'Antrag ablehnen',
+      rejectBody:
+        'Der Coach sieht, dass der Check nicht bestätigt werden konnte. Ein Upload wird jetzt gelöscht. Ihre Notiz steht nur im Audit-Log.',
+      revokeTitle: 'Hinterlegten Check widerrufen',
+      revokeBody: 'Das öffentliche Profil von {coach} zeigt keinen hinterlegten Check mehr.',
+      reasonLabel: 'Notiz (nur Audit-Log)',
+      cancel: 'Abbrechen',
+      inspectedDone: 'Als geprüft erfasst.',
+      rejectedDone: 'Antrag abgelehnt.',
+      revokedDone: 'Check widerrufen.',
+      actionFailed:
+        'Die Aktion konnte nicht abgeschlossen werden. Möglicherweise wurde sie bereits bearbeitet; die Liste wurde neu geladen.',
+    },
+  },
   nav: {
     coachVideos: 'Meine Videos',
     appeals: 'Einsprüche',
@@ -2980,6 +3084,7 @@ export default {
     drillLibrary: 'Übungsbibliothek',
     sessionTemplates: 'Trainingsvorlagen',
     paymentSettings: 'Zahlungseinstellungen',
+    safeguarding: 'Kinderschutz-Check',
     reliability: 'Zuverlässigkeit',
     subscription: 'Abonnement',
     myPlayers: 'Meine Spieler',
@@ -2989,6 +3094,7 @@ export default {
     videos: 'Meine Videos',
     moderation: 'Moderation',
     coachEnforcement: 'Trainer-Maßnahmen',
+    adminSafeguarding: 'Kinderschutz-Checks',
     adminUsers: 'Benutzer',
     groupAdminOperations: 'Betrieb',
     adminVideos: 'Videoprüfung',

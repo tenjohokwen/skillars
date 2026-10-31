@@ -21,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
@@ -40,6 +41,7 @@ public class CoachSearchService {
     private final CoachReliabilityStrikeRepository strikeRepository;
     private final CoachCapabilityService coachCapabilityService;
     private final FileStorageService fileStorageService;
+    private final CoachSafeguardingService coachSafeguardingService;
 
     public CoachSearchResponse searchCoaches(CoachSearchParams params, int page, int size) {
         // 1. Build DB-level specification — searchable status set (ACTIVE, REDUCED) and city filter
@@ -77,6 +79,7 @@ public class CoachSearchService {
         Map<UUID, BigDecimal>   priceByCoach       = loadPrices(pageIds);
         Map<UUID, Integer>      strikesByCoach     = loadReliabilityStrikes(pageIds);
         Map<UUID, List<String>> capabilityBadgesByCoach = coachCapabilityService.getActiveBadgesBatch(pageIds);
+        Map<UUID, LocalDate>    safeguardingByCoach = coachSafeguardingService.validUntilByCoach(pageIds);
 
         // 6. Assemble DTOs
         List<CoachCardDto> dtos = profiles.stream().map(p -> new CoachCardDto(
@@ -91,7 +94,9 @@ public class CoachSearchService {
             p.getAverageRating() != null ? p.getAverageRating() : 0.0,
             p.getReviewCount(),
             strikesByCoach.getOrDefault(p.getId(), 0),
-            capabilityBadgesByCoach.getOrDefault(p.getId(), List.of())
+            capabilityBadgesByCoach.getOrDefault(p.getId(), List.of()),
+            safeguardingByCoach.containsKey(p.getId()),
+            safeguardingByCoach.get(p.getId())
         )).toList();
 
         // 7. Apply price sort within the current page (cross-page price sort deferred to future migration)

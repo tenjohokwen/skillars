@@ -52,6 +52,8 @@ const IN_APP_TYPES = [
   'GDPR_EXPORT_READY',
   'REVIEW_APPROVED',
   'REVIEW_BLOCKED',
+  // S-09
+  'COACH_SAFEGUARDING_EXPIRING',
 ]
 
 function i18nFor(locale) {

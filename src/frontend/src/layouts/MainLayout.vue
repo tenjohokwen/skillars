@@ -252,6 +252,15 @@
             </q-item-section>
           </q-item>
 
+          <q-item clickable to="/coach/safeguarding" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="mdi-shield-check-outline" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ t('nav.safeguarding') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
           <q-item clickable to="/coach/payment-settings" class="nav-item">
             <q-item-section avatar>
               <q-icon name="account_balance" class="nav-icon" />
@@ -494,6 +503,15 @@
             </q-item-section>
             <q-item-section>
               <q-item-label class="nav-label">{{ $t('nav.coachEnforcement') }}</q-item-label>
+            </q-item-section>
+          </q-item>
+
+          <q-item clickable to="/admin/safeguarding" class="nav-item">
+            <q-item-section avatar>
+              <q-icon name="mdi-shield-account-outline" class="nav-icon" />
+            </q-item-section>
+            <q-item-section>
+              <q-item-label class="nav-label">{{ $t('nav.adminSafeguarding') }}</q-item-label>
             </q-item-section>
           </q-item>
 

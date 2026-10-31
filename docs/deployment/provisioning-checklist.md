@@ -592,6 +592,13 @@ SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
 
+**V223: optional coach safeguarding check** (`V223__coach_safeguarding_check.sql`). Two new empty tables,
+`marketplace.coach_safeguarding_requests` and `marketplace.coach_safeguarding_checks` (both FK to
+`coach_profiles`), plus two validating CHECK swaps (`envelope_entity_email_template_check` gains
+`COACH_SAFEGUARDING_EXPIRING`, `admin_action_log_action_type_check` gains four `SAFEGUARDING_*` types), both
+supersets of the old lists so every existing row passes; `lock_timeout = 5s`. Nothing to check before it runs.
+The email list is the union of V219's 58 values plus the new one and the action-type list is V189's 20 plus four; a later migration that widens either CHECK must re-union it (merge note in the file header).
+
 **V220: related-party signals and review flag** (`V220__related_party_signals_and_review_flag.sql`).
 Additive only: two new empty tables, `main.user_identity_signals` (hashed email / phone / card / browser
 fingerprints per user; a unique index and `idx_uis_kind_hash`) and `payment.related_party_bookings` (PK
@@ -863,6 +870,14 @@ chat with a coach opens only after a COMPLETED session with that coach), so UAT 
     in the browser works (presigned PUT then GET, URLs start with `https://<STORAGE_DOMAIN>/`).
   - [ ] Reminder: all UAT users share the one `STORAGE_ROOT_*` admin key (it is also the app's S3 key). A
     dedicated least-privilege app identity is not implemented.
+- [ ] Safeguarding-certificate uploads (S-09) live in the same bucket under `safeguarding/{coachId}/*.enc`:
+  application-encrypted with `PLATFORM_PIN_ENCRYPTION_SECRET` (so rotating that secret makes any still-pending
+  upload unreadable: the coach re-uploads), never signable through `/api/storage/sign/download`, deleted when
+  staff decide and by `CoachSafeguardingScheduler` after `coach.safeguarding.uploadRetentionDays` (14). The daily
+  `volume-backup.sh` archive includes the bucket directory, so a deleted upload can still sit in a backup until
+  that archive is pruned (`prune-backups.sh`): confirm that retention is acceptable to the owner's lawyer **(confirm)**.
+  The only multipart endpoint is `POST /api/marketplace/coaches/me/safeguarding` (5 MB,
+  `spring.servlet.multipart.max-file-size`); Traefik adds no body limit of its own.
 - [ ] Limits accepted: per-user quota `platform.filestorage.quota.default-bytes` 10 GiB, max file
   100 MiB, MIME/extension allowlist (`application.yaml` → `platform.filestorage`).
   `application/octet-stream`/`bin` are no longer allowed; `allowed-entities` limits upload keys to
@@ -956,6 +971,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `SessionPackForfeitureScheduler` | 60 min | hard-coded |
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
 | `GeminiComplianceMonitor.remind` | 24 h | hard-coded; log-only, per instance, no ShedLock. Repeats the `COMPLIANCE:` WARN while prod runs `GEMINI_MODE=developer` |
+| `CoachSafeguardingScheduler` sweep / reminder | daily 03:15 / 09:00 | hard-coded; upload retention `coach.safeguarding.uploadRetentionDays` (14), reminder lead 30 days (code). Sweep deletes unprocessed safeguarding-certificate uploads, reminder emails the coach once before the check expires |
 | `SubscriptionChangeApplicator` | daily 02:00 | hard-coded |
 | `SubscriptionGracePeriodChecker` | daily 03:00 | hard-coded |
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |
@@ -1008,6 +1024,8 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 |---|---|---|---|
 | `platform.admin_alert_email` | **blank** | V139 | **Must set** on PROD and UAT. While blank, admin alerts are dropped (`runbook.md` → "Admin alert recipient"). Outside `dev`, every boot logs an ERROR while it is blank (`config.value.misconfigured`, reason `launch_blank`) |
 | `subscription.*.priceId` (7 keys) | **blank** | V139 | **Must set** ([section 4.4](#44-subscription-products-and-price-ids)). Same boot ERROR while blank |
+| `coach.safeguarding.validityYears` | 5 (code default, range 1–100) | `ConfigBounds`, V223 | Owner decision: 5 (DE norm for the erweitertes Führungszeugnis). Years a staff-inspected safeguarding check stays on the public profile; applies to inspections made after the change. Sane range is 1–10 (the ceiling of 100 only satisfies `ConfigStartupAssertionTest`) |
+| `coach.safeguarding.uploadRetentionDays` | 14 (code default, range 1–100) | `ConfigBounds`, V223 | Owner decision: 14. Days an uploaded certificate may sit unprocessed before the sweeper deletes it. Lower is more protective |
 | `booking.lateCancel.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-31: 15 (was 30). The one knob for when a coach no-show claim opens: the report, the late-cancel refund and the late-cancel coach strike all use it. If a value was stored in `platform_config` under the old default, delete it (or set 15) |
 | `booking.coachNoShow.reportWindowHours` | 5 (code default, range 1–168) | `ConfigBounds`, V218 | Owner decision 2026-10-31: 5. Hours after the start until which a coach no-show claim (report or cancel-for-refund) is accepted on a session nobody started; then 409 `booking.noShowWindowClosed` |
 | `booking.playerNoShow.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V209 | Owner decision 2026-10-29: 15. Minutes after the start before a coach may report a player no-show |
@@ -1343,3 +1361,10 @@ an operator must now do.
   `skillars-data` shared only with `app`; deploy with `docker compose up -d redis app`. A few seconds of Redis
   downtime, no data loss (AOF kept), no user-visible effect (rate limiting is in-memory). No migration, job or webhook.
 - 2026-10-31: S-27 (V222, `main.age_verifications`): Stripe Identity age verification of self-registered players. New config keys `identity.ageVerification.enabled` (off) and `...maxAttemptsPerDay` (3). To switch on: enable Identity in the Stripe Dashboard, add the four `identity.verification_session.*` events to the Account webhook endpoint, ensure the API key can read verified outputs ([4.5](#45-stripe-identity-age-verification-of-self-registered-players)), then set the flag. No new endpoint, secret or job.
+- 2026-10-31: feat/coach-safeguarding-check (S-09, V223). New optional coach safeguarding check (no gate, badge
+  only). New tables, two CHECK widenings, two code-default keys `coach.safeguarding.validityYears` (5) and
+  `coach.safeguarding.uploadRetentionDays` (14), two daily ShedLock jobs (`CoachSafeguardingScheduler`, 03:15 and
+  09:00), a multipart limit of 5 MB (`spring.servlet.multipart`), and a new storage prefix `safeguarding/`
+  (application-encrypted with `PLATFORM_PIN_ENCRYPTION_SECRET`). Staff need `ROLE_ADMIN` (not `ROLE_LTD_ADMIN`) to
+  use `/admin/safeguarding`. Decide with the lawyer how long a deleted certificate may remain in the daily volume
+  backup. No new env var, Stripe event or webhook.

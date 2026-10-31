@@ -269,6 +269,13 @@
       (deep link <code>/coach/booking-requests</code>). There is no push channel; email and the inbox are the notification
       channels. An automatic never-started refund reuses <code>BOOKING_CANCELLED_COACH_UNAVAILABLE</code> (parent) and
       <code>BOOKING_CANCELLED_BY_SKILLARS</code> (coach) with <code>cancelledBy = NEVER_STARTED</code>.</p>
+    <p><strong>Safeguarding expiry reminder (V223).</strong> <code>CoachSafeguardingEmailListener.onSafeguardingExpiring</code>
+      (<code>BEFORE_COMMIT</code>) turns <code>marketplace.contract.CoachSafeguardingExpiringEvent</code>, published by the daily
+      <code>CoachSafeguardingService.sendExpiryReminders</code> job, into <code>COACH_SAFEGUARDING_EXPIRING</code> (category
+      <code>ACCOUNT</code>, so never opt-out-able, in-app link <code>/coach/safeguarding</code>). It is its own listener class, not a
+      handler on the booking / pack / admin-outcome listeners, so the pinned handler counts of
+      <code>EmailListenerAnnotationCoverageTest</code> and <code>EmailDataRoundTripContractTest</code> are unchanged; the data map is
+      string-typed (the date is formatted in the coach's zone at the producer).</p>
     <p><strong>Forfeit notices to the family (V212).</strong> A forfeit pays the coach and refunds nothing, so the payer is
       told. <code>BookingEmailListener.onPlayerNoShowNotifyFamily</code> sends <code>SESSION_FORFEITED_NO_SHOW</code> to
       <code>PlayerNoShowEvent.getParentEmail()</code> (the user <code>Booking.parentId</code> names: the parent, or the

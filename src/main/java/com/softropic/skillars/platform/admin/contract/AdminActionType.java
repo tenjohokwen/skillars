@@ -16,5 +16,8 @@ public enum AdminActionType {
     COACH_SAFETY_HOLD,
     // V189 (C6): an admin cancelled a single booking (CANCEL_ADMIN, full refund, no strike) from the admin
     // bookings page. referenceId = the booking id; the reason carries the admin's note and the outcome.
-    BOOKING_ADMIN_CANCEL
+    BOOKING_ADMIN_CANCEL,
+    // V223 (S-09): optional coach safeguarding check. referenceId = the coach profile id; the reason carries the
+    // check type / validity (never anything from the certificate). DOC_VIEWED audits each staff view of an upload.
+    SAFEGUARDING_INSPECTED, SAFEGUARDING_REJECTED, SAFEGUARDING_REVOKED, SAFEGUARDING_DOC_VIEWED
 }

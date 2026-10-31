@@ -127,6 +127,8 @@
       <tr><td><code>CoachAvailabilityWindow</code></td><td><code>coach_availability_windows</code></td><td>Recurring weekly windows (day, start/end, timezone). At least one row = "available" on the public profile.</td></tr>
       <tr><td><code>CoachMediaItem</code></td><td><code>coach_media</code></td><td>Gallery entries (<code>file_url</code> = <code>coach_gallery/…</code> storage key or a legacy absolute URL, <code>media_type</code>, <code>display_order</code>). Written by <code>CoachGalleryService</code>; max 6.</td></tr>
       <tr><td><code>CoachSubscription</code></td><td><code>coach_subscriptions</code></td><td>PK <code>coach_id</code>; tier <code>SCOUT</code>/<code>INSTRUCTOR</code>/<code>ACADEMY</code>. A projection that <code>payment.SubscriptionService</code> syncs. A missing row reads as <code>SCOUT</code>, and a paid tier is only honoured while the payment-side subscription is entitled (see <code>getCoachSubscriptionTier</code>).</td></tr>
+      <tr><td><code>CoachSafeguardingCheck</code></td><td><code>coach_safeguarding_checks</code> (V223)</td><td>S-09: the record behind the optional public "safeguarding check on record" badge. PK <code>coach_id</code>; <code>check_type</code> (generic code, <code>DE_EFZ</code>), <code>inspected_at</code>, <code>expires_at</code> (inspection + <code>coach.safeguarding.validityYears</code>), <code>inspected_by</code> (staff <code>main."user"</code> id, never on a public DTO), <code>reminder_sent_at</code>, <code>version</code>. Written only by a staff inspection. Nothing from the certificate is stored.</td></tr>
+      <tr><td><code>CoachSafeguardingRequest</code></td><td><code>coach_safeguarding_requests</code> (V223)</td><td>S-09: the staff inspection queue. PK <code>coach_id</code>; <code>status</code> <code>PENDING</code>/<code>REJECTED</code>, <code>requested_at</code>, optional <code>upload_key</code> + <code>upload_stored_at</code> + <code>upload_content_type</code> (the application-encrypted certificate upload, <code>safeguarding/{coachId}/{uuid}.enc</code>), <code>decided_at</code>, <code>version</code>. Deleted by an accepted inspection, withdraw and erasure.</td></tr>
       <tr><td><code>CoachReliabilityStrike</code></td><td><code>coach_reliability_strikes</code></td><td>Issued by <code>payment.ReliabilityStrikeService</code>, deleted by <code>admin.AdminCoachEnforcementService</code>; marketplace only counts the last 90 days for cards and profiles.</td></tr>
     </table>
 
@@ -137,6 +139,8 @@
       <tr><td><code>CoachSearchSpecification</code></td><td>Composable predicates: status ACTIVE/REDUCED, city, district, skill, age group, min/max price (<code>EXISTS</code> subqueries on <code>coach_pricing</code>), and <code>averageRating &gt;= minRating</code> when <code>minRating &gt; 0</code>.</td></tr>
       <tr><td><code>CoachProfileService</code></td><td>Wizard steps 1–5 + publish, <code>getOwnProfile</code> (DRAFT-safe full profile), <code>deletePhoto</code>, <code>getPublicProfile</code> (4 queries, guarded by <code>CoachPublicProfileQueryCountIT</code>), <code>getSupportedTimezones</code>, and lookups used across the platform (<code>getCoachIdByUserId</code>, <code>getCoachSubscriptionTier</code>, <code>getDisplayNamesByIds</code>, <code>validateReadyForActivation</code> for admin reinstatement). <code>getCoachSubscriptionTier</code> returns <code>SCOUT</code> instead of a projected paid tier when <code>CoachSubscriptionEntitlementPort.isPaidTierEntitled</code> is false. That port is implemented by <code>payment.adapter.CoachSubscriptionEntitlementAdapter</code>: false only when a payment-side subscription row exists and its status is not <code>ACTIVE</code>/<code>TRIALLING</code>/<code>PAST_DUE</code> (<code>payment.contract.SubscriptionEntitlement</code>), so admin-provisioned rows with no payment row keep their tier. This one method gates the tier checks in <code>development</code>, <code>session</code>, <code>video</code> quotas and <code>GET /me/tier</code>.</td></tr>
       <tr><td><code>CoachGalleryService</code></td><td>The coach's own gallery (#312): list, add an uploaded image, delete. Re-validates the confirmed storage object server-side and serialises adds/deletes on the profile row lock.</td></tr>
+      <tr><td><code>CoachSafeguardingService</code></td><td>S-09, the optional safeguarding check: the coach's status / request (optional encrypted upload) / withdraw, the staff operations <code>markInspected</code> / <code>reject</code> / <code>revoke</code> / <code>loadDocument</code> (called by <code>admin.AdminSafeguardingService</code>, which audits), the public read model <code>validUntilByCoach</code>, <code>eraseForCoach</code> for GDPR, and the two job bodies <code>sweepStaleUploads</code> / <code>sendExpiryReminders</code>. See "Optional safeguarding check" below.</td></tr>
+      <tr><td><code>CoachSafeguardingScheduler</code></td><td>The two daily ShedLock-guarded jobs (<code>CoachSafeguardingScheduler_sweepUploads</code> 03:15, <code>CoachSafeguardingScheduler_remindExpiring</code> 09:00); thin wrappers over the service.</td></tr>
       <tr><td><code>CityTimezoneValidator</code></td><td>Package-private plausibility check for Step 1 (small hand-maintained city&rarr;region map, fail-open).</td></tr>
       <tr><td><code>CoachCapabilityService</code></td><td>Badge scaffold (single + batch); reads <code>marketplace.capability.badge.activity.window.days</code> (default 90) for future use.</td></tr>
       <tr><td><code>CoachProfilePhotoEventListener</code></td><td>On <code>filestorage</code>'s <code>StorageObjectConfirmedEvent</code> for a <code>coach_profile/{userId}/…</code> key, sets that coach's <code>photoUrl</code> to the key.</td></tr>
@@ -157,6 +161,9 @@
       <tr><td>DELETE</td><td><code>/api/marketplace/coaches/me/profile/photo</code></td><td>Soft-delete the photo object and clear <code>photoUrl</code> (idempotent).</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/gallery</code></td><td>Own gallery items (signed URLs).</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>POST</td><td><code>/api/marketplace/coaches/me/profile/gallery</code></td><td>Link a confirmed upload <code>{key}</code> &rarr; 201 (idempotent per key).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>GET</td><td><code>/api/marketplace/coaches/me/safeguarding</code></td><td>S-09: own safeguarding-check status (<code>NONE / PENDING / VERIFIED / EXPIRED / REJECTED</code>, valid-until, upload deletion date).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>POST</td><td><code>/api/marketplace/coaches/me/safeguarding</code></td><td>S-09: ask staff to inspect the certificate. Multipart, optional <code>file</code> part (PDF/JPEG/PNG, max 5 MB, real type sniffed from magic bytes). No file = inspect another way (video call).</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>DELETE</td><td><code>/api/marketplace/coaches/me/safeguarding</code></td><td>S-09: withdraw: deletes the request, the record and any upload (idempotent).</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>DELETE</td><td><code>/api/marketplace/coaches/me/profile/gallery/{mediaId}</code></td><td>Remove an item and soft-delete its storage object; 404 if not the caller's.</td><td><code>ROLE_COACH</code></td></tr>
     </table>
     <p>All <code>/api/marketplace/coaches/**</code> paths are in <code>AppEndpoints.PUBLIC_ENDPOINTS</code>, so for the
@@ -285,6 +292,59 @@ sequenceDiagram
       targeted <code>updatePhotoUrlByUserId</code> UPDATE, never a full-row <code>save()</code> (see the
       <code>@Version</code> gotcha below).
     </p>
+
+    <h3 id="optional-safeguarding-check">Optional safeguarding check (S-09)</h3>
+    <p>
+      Owner decision: coaches are never blocked or gated on a background check. The platform offers an
+      <em>optional</em> check (Germany: <em>erweitertes Führungszeugnis</em>, code <code>DE_EFZ</code>) and the public profile and
+      search card say, neutrally, whether one is on record. <code>CoachProfileDto</code> and <code>CoachCardDto</code> carry
+      <code>safeguardingCheckOnRecord</code> + <code>safeguardingValidUntil</code> only, never the inspector. The profile read gets it
+      from a fifth branch of the <code>CoachPublicProfileFactsRepository</code> UNION (so <code>getPublicProfile</code> is still 4
+      queries), the search page from one batched <code>validUntilByCoach</code> query. Expiry is a read-time comparison
+      (<code>expires_at &gt; now</code>), so a lapsed badge needs no job.
+    </p>
+    <pre class="mermaid">
+sequenceDiagram
+  participant Coach as Coach (ROLE_COACH)
+  participant Svc as CoachSafeguardingService
+  participant Store as FileStorageService (private bucket)
+  participant Admin as Admin (ROLE_ADMIN only)
+  participant ASvc as AdminSafeguardingService
+
+  Coach->>Svc: POST /me/safeguarding (optional file)
+  Svc->>Svc: lock coach row, refuse if recap_data_erased_at set
+  Svc->>Store: storeBytes(Cryptopher ciphertext, safeguarding/coachId/uuid.enc)
+  Svc->>Svc: upsert request PENDING
+  Admin->>ASvc: GET /requests/coachId/document
+  ASvc->>Store: downloadBytes then decrypt, audit SAFEGUARDING_DOC_VIEWED
+  Admin->>ASvc: POST /requests/coachId/inspect
+  ASvc->>Svc: markInspected(coachId, adminId)
+  Svc->>Svc: upsert check (expires_at = now + validityYears), delete request
+  Svc->>Store: blob-deletion outbox: upload deleted after commit
+  ASvc->>ASvc: audit SAFEGUARDING_INSPECTED (same transaction)
+    </pre>
+    <ul>
+      <li><strong>Who sets the badge.</strong> Only <code>markInspected</code>, reachable only through
+        <code>POST /api/admin/safeguarding/requests/{coachId}/inspect</code>, which is <code>hasRole('ROLE_ADMIN')</code> and deliberately
+        <em>not</em> <code>HAS_ADMIN_ROLE</code> (that also admits <code>ROLE_LTD_ADMIN</code>). It needs a PENDING request, so nobody gets a
+        badge they did not ask for. A coach can only request and withdraw.</li>
+      <li><strong>Data minimisation (GDPR Art. 10).</strong> The record is coach, type, dates and staff id. The optional upload is
+        encrypted with <code>Cryptopher</code> (AES-256, the <code>PLATFORM_PIN_ENCRYPTION_SECRET</code>) before it reaches the
+        bucket, lives under a key with no <code>file_storage_objects</code> row (so <code>/api/storage/sign/download</code> cannot
+        mint a URL for it), is only ever read back through the audited admin endpoint, and is deleted by the inspect / reject
+        decision itself, by withdraw / replace / erasure, and by <code>sweepStaleUploads</code> after
+        <code>coach.safeguarding.uploadRetentionDays</code> (default 14). All deletions go through
+        <code>BlobDeletionOutboxSupport</code> (durable, retried).</li>
+      <li><strong>Reminder.</strong> <code>sendExpiryReminders</code> publishes <code>CoachSafeguardingExpiringEvent</code> in a
+        per-coach transaction that also stamps <code>reminder_sent_at</code>; <code>CoachSafeguardingEmailListener</code>
+        (<code>BEFORE_COMMIT</code>) enqueues <code>COACH_SAFEGUARDING_EXPIRING</code> (category <code>ACCOUNT</code>, in-app link
+        <code>/coach/safeguarding</code>). It is a separate listener class, so the handler counts pinned for the booking /
+        pack / admin-outcome listeners are unchanged. A renewal resets the stamp.</li>
+      <li><strong>Erasure.</strong> <code>GdprErasureService</code>'s COACH branch calls <code>eraseForCoach</code> after the recap scrub
+        (native <code>DELETE ... RETURNING upload_key</code> + record delete + blob outbox). The request path takes the coach row lock
+        and checks the V166 tombstone, because the recap scrub commits before <code>user.locked</code>.</li>
+      <li><strong>Not a gate.</strong> Nothing reads the record to allow or block a booking, a publish or a search result.</li>
+    </ul>
 
     <h3 id="coach-adds-a-gallery-image">Coach adds a gallery image</h3>
     <pre class="mermaid">

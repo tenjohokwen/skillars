@@ -49,6 +49,7 @@ flowchart LR
     F --> K["/coach/session-builder/:bookingId"]
     F --> Q["/coach/session-pack-tiers"]
     F --> M["/coach/payment-settings<br/>Stripe onboarding"]
+    F --> SG["/coach/safeguarding<br/>optional safeguarding check"]
     F --> N["/coach/revenue"]
     F --> O["/coach/reliability"]
     F --> S["/coach/reviews"]
@@ -90,6 +91,17 @@ flowchart LR
       finish without a price.</p>
     </div>
     <p>Completing step 5 publishes your profile and takes you to <code>/coach/command-center</code>. If you return to the wizard after your profile is complete, it sends you to the command center instead.</p>
+
+    <h3>2b. Optional safeguarding check — <code>/coach/safeguarding</code></h3>
+    <p><strong>Why it matters:</strong> families decide for themselves whom to book. A safeguarding check on record is a trust signal you can choose to show; it is never required, and nothing about your profile, bookings or payouts depends on it.</p>
+    <ul>
+      <li><strong>What it is.</strong> You ask Skillars staff to inspect your enhanced criminal-record certificate (in Germany: <em>erweitertes Führungszeugnis</em>). Once a staff member has inspected it, your public profile and your search card say "Safeguarding check on record (valid until MM/YYYY)". Everyone else shows "No safeguarding check on record". Neither is a warning: it is a neutral fact.</li>
+      <li><strong>How to ask.</strong> On "Safeguarding check" you can attach the certificate (PDF, JPG or PNG, up to 5 MB) or ask without a file, in which case a member of the Skillars team contacts you at your account email to inspect it another way, for example in a short video call. Only staff can put the check on your profile; you cannot set it yourself.</li>
+      <li><strong>What Skillars keeps.</strong> Only that a check was inspected, when, until when, and which staff member did it. Nothing from the certificate is stored. A file you upload is stored encrypted, can only be opened by a Skillars administrator, and is deleted as soon as it has been inspected (or after 14 days, whichever comes first).</li>
+      <li><strong>Status.</strong> The page shows Not requested, Waiting for inspection, On record, Expired or "Could not be confirmed". A rejected request shows nothing on your public profile and you can simply ask again.</li>
+      <li><strong>Validity and renewal.</strong> A check is shown for 5 years from the inspection (<code>coach.safeguarding.validityYears</code>). About 30 days before it ends you get a reminder email and a notification. After the end date the public profile reverts to "No safeguarding check on record" by itself. You can ask for a renewal during the last 90 days or after it has expired.</li>
+      <li><strong>Withdrawing.</strong> "Withdraw and delete" removes your request, your record and any uploaded file at any time, and the badge disappears from your profile. Erasing your account does the same.</li>
+    </ul>
 
     <h3>3. Your command center</h3>
     <p><strong>Why it matters:</strong> this is the coach's main hub. It holds your week's schedule and the live-session tools that turn a booking into a delivered, paid session.</p>

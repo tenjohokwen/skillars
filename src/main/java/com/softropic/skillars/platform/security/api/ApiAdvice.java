@@ -428,6 +428,18 @@ public class ApiAdvice {
         return logErrorAndReturnDTO(ex, ex.getMessage(), ex.getErrorCode());
     }
 
+    /**
+     * S-09: the only multipart endpoint is the coach's optional safeguarding-certificate upload, capped by
+     * {@code spring.servlet.multipart.max-file-size} (5 MB). Without this the container-level rejection fell
+     * through to the {@code Throwable} handler as a logged 500.
+     */
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    @ResponseStatus(HttpStatus.PAYLOAD_TOO_LARGE)
+    public ErrorDto maxUploadSizeExceededHandler(final org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
+        log.warn("Upload rejected: larger than the multipart limit");
+        return logErrorAndReturnDTO(ex, "Upload exceeds the size limit", "marketplace.safeguardingFileTooLarge");
+    }
+
     @ExceptionHandler(CoachProfileNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ErrorDto coachProfileNotFoundHandler(final CoachProfileNotFoundException ex) {

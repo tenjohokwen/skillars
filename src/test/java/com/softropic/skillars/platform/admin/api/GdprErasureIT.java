@@ -251,6 +251,35 @@ class GdprErasureIT extends AbstractIntegrationTest {
         assertThat(cpRow.get("city")).isNull();
     }
 
+    // S-09: the optional safeguarding check (record, request and the encrypted certificate upload) is personal data
+    // about the coach and must not survive their erasure.
+    @Test
+    void requestErasure_coachUser_deletesTheSafeguardingCheckRequestAndUpload() {
+        String uploadKey = "safeguarding/" + coachProfileId + "/" + UUID.randomUUID() + ".enc";
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_safeguarding_checks (coach_id, check_type, inspected_at, expires_at, inspected_by) "
+                    + "VALUES (?, 'DE_EFZ', now(), now() + interval '5 years', ?)", coachProfileId, COACH_USER_ID);
+            jdbcTemplate.update(
+                "INSERT INTO marketplace.coach_safeguarding_requests (coach_id, status, check_type, requested_at, upload_key, upload_stored_at, upload_content_type) "
+                    + "VALUES (?, 'PENDING', 'DE_EFZ', now(), ?, now(), 'application/pdf')", coachProfileId, uploadKey);
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        httpTestClient.makeHttpRequest(
+            baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
+        outboxService.drain();
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_safeguarding_checks WHERE coach_id = ?", Long.class, coachProfileId))
+            .isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_safeguarding_requests WHERE coach_id = ?", Long.class, coachProfileId))
+            .isZero();
+        verify(fileStorageService).deleteRawBytes(uploadKey);
+    }
+
     @Test
     void requestErasure_playerUser_erasureCompletesSuccessfully() {
         String cookies = loginAndGetCookies(PLAYER_EMAIL);

@@ -31,6 +31,13 @@
 
       <ReliabilityIndicator :strike-count="coach.reliabilityStrikeCount" class="q-mt-xs" />
 
+      <!-- S-09: optional safeguarding check, neutral either way -->
+      <SafeguardingBadge
+        :on-record="!!coach.safeguardingCheckOnRecord"
+        :valid-until="coach.safeguardingValidUntil"
+        class="q-mt-xs"
+      />
+
       <!-- Name + location -->
       <div class="coach-card__name q-mt-sm">{{ coach.displayName }}</div>
       <div class="coach-card__location text-caption">
@@ -71,6 +78,7 @@
 import { useI18n } from 'vue-i18n'
 import VerificationBadge from './VerificationBadge.vue'
 import ReliabilityIndicator from './ReliabilityIndicator.vue'
+import SafeguardingBadge from './SafeguardingBadge.vue'
 
 defineProps({
   coach: { type: Object, required: true },

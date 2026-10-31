@@ -49,3 +49,17 @@ export const deleteCoachGalleryItem = (mediaId) =>
 // Best-effort cleanup of a confirmed upload the gallery then refused (type/size/full): the storage
 // DELETE is owner-checked server-side, so a coach can only remove their own object.
 export const deleteStorageObject = (key) => api.delete(`/api/storage/${key}`)
+
+// S-09: the coach's optional safeguarding check. The coach can only ask staff to inspect their certificate
+// (optionally attaching it) and withdraw; only staff can put the badge on the public profile.
+export const getSafeguardingStatus = () => api.get('/api/marketplace/coaches/me/safeguarding')
+
+// file: optional File (PDF/JPG/PNG, max 5 MB). No file = staff inspect another way (e.g. a video call).
+export const requestSafeguardingCheck = (file) => {
+  const form = new FormData()
+  if (file) form.append('file', file)
+  return api.post('/api/marketplace/coaches/me/safeguarding', form)
+}
+
+export const withdrawSafeguardingCheck = () =>
+  api.delete('/api/marketplace/coaches/me/safeguarding')

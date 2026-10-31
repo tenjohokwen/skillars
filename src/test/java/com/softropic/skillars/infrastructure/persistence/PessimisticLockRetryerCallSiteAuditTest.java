@@ -95,6 +95,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Now 66 as of S-27's {@code AgeVerificationService.lockAndLoad}: a read-only
  * {@code userRepository.findByIdForUpdate(userId).orElseThrow}; the daily-cap check, the provider call, the
  * DOB correction and the underage lock all run after it returns.
+ * Now 67 as of S-09's {@code CoachSafeguardingService.lockProfile}: a read-only
+ * {@code findByIdForUpdate(coachId).orElseThrow}; the erasure-tombstone check and the request / upload writes run
+ * after it returns.
  *
  * <p><strong>What this test actually proved, not merely asserted</strong> (AC5's own "Verified by"):
  * building this scan against the real call sites (28 at story-creation time) surfaced one genuine violation —
@@ -188,7 +191,7 @@ class PessimisticLockRetryerCallSiteAuditTest {
      * added or removed call site is loud (this count changes) rather than silently changing how much
      * code this test covers.
      */
-    private static final int EXPECTED_CALL_SITE_COUNT = 66;
+    private static final int EXPECTED_CALL_SITE_COUNT = 67;
 
     private record CallSite(String file, int line, String argument) {
     }
