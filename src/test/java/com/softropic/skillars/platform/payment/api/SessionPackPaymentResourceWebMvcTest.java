@@ -402,4 +402,57 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(jsonPath("$.sessionCount").value(5))
             .andExpect(jsonPath("$.validityDays").value(180));
     }
+    // ─── S-10: input bounds / payment method id format ─────────────────────────
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void createTier_sessionCountOverCap_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/coaches/me/session-pack-tiers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"Huge\",\"sessionCount\":101,\"totalPrice\":100.00}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void createTier_priceOverColumnCapacity_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/coaches/me/session-pack-tiers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"Huge\",\"sessionCount\":5,\"totalPrice\":99999999999.00}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void createTier_threeDecimalPrice_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/coaches/me/session-pack-tiers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"Odd\",\"sessionCount\":5,\"totalPrice\":10.005}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void savePaymentMethod_malformedId_returns400WithoutTouchingStripeOrService() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"card_123; DROP\"}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, paymentGateway);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_malformedPaymentMethodId_returns400() throws Exception {
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + java.util.UUID.randomUUID() + "\",\"playerId\":7,\"paymentMethodId\":\"tok_x\"}"))
+            .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
 }

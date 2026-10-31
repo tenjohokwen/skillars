@@ -27,6 +27,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.stripe.exception.CardException;
 import com.stripe.exception.IdempotencyException;
 import com.stripe.exception.InvalidRequestException;
+import com.softropic.skillars.platform.payment.contract.StripeIdFormat;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Subscription;
 import com.stripe.param.SubscriptionListParams;
@@ -655,6 +656,7 @@ public class SubscriptionService {
      */
     @Transactional
     public void savePaymentMethodAndScheduleSync(Long userId, String paymentMethodId) {
+        StripeIdFormat.requirePaymentMethodId(paymentMethodId);
         StripeCustomer customer = stripeCustomerRepository.findById(userId)
             .orElseThrow(() -> new IllegalStateException("stripe_customers row missing for userId=" + userId));
         customer.setStripePaymentMethodId(paymentMethodId);

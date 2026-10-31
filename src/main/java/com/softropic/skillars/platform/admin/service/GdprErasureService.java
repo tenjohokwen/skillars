@@ -30,6 +30,7 @@ import com.softropic.skillars.platform.development.repo.SluRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.development.repo.SluWeeklySnapshotRepository;
 import com.softropic.skillars.platform.filestorage.service.BlobDeletionOutboxSupport;
+import com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport;
 import com.softropic.skillars.platform.marketplace.repo.CoachMediaItem;
 import com.softropic.skillars.platform.marketplace.repo.CoachMediaItemRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -122,6 +123,8 @@ public class GdprErasureService {
     private final CoachMediaItemRepository coachMediaItemRepository;
     // The coach's report-branding logo (development.coach_branding.logo_key).
     private final CoachBrandingRepository coachBrandingRepository;
+    // S-19: the user's Stripe Customer + saved cards, erased at Stripe after commit via the outbox.
+    private final StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
 
     /**
      * The owner-bound upload slots (FileStorageService.OWNER_BOUND_ENTITIES) a coach's own images live
@@ -773,6 +776,13 @@ public class GdprErasureService {
                 skipped.set(true);
             }
         }
+
+        // S-19: Stripe holds the user's name/email on the Customer and their saved cards. Nulls the local card
+        // id and enqueues the Stripe-side detach + delete (scrub fallback) in THIS transaction; the calls
+        // run after commit, so a Stripe outage cannot fail or roll back the erasure and is retried by the
+        // outbox. The stripe_customers row stays for financial-record retention. An open dispute does not
+        // block erasure: the disputed charge stays at Stripe either way.
+        stripeCustomerErasureOutboxSupport.scheduleErasure(userId);
 
         // Revoke all refresh tokens so existing sessions are rejected on the next request
         refreshTokenRepository.markAllUsedByUserId(userId);
