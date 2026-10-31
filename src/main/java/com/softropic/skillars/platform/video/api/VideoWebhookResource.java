@@ -8,17 +8,23 @@ import com.softropic.skillars.platform.video.repo.VideoWebhookEvent;
 import com.softropic.skillars.platform.video.repo.VideoWebhookEventRepository;
 import com.softropic.skillars.platform.video.service.WebhookEventOutboxService;
 import io.micrometer.observation.annotation.Observed;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+
 @Slf4j
 @RestController
 @RequestMapping("/api/video")
 @RequiredArgsConstructor
 public class VideoWebhookResource {
+
+    private static final int MAX_WEBHOOK_BODY_BYTES = 65_536; // 64 KB — Bunny status payloads are a few hundred bytes
 
     private final VideoProviderAdapter videoProviderAdapter;
     private final VideoWebhookEventRepository webhookEventRepository;
@@ -29,8 +35,22 @@ public class VideoWebhookResource {
     @Observed(name = "video.webhook.receive")
     @PostMapping("/webhooks/bunny")
     public ResponseEntity<Void> receiveBunnyWebhook(
-            @RequestBody String payload,
-            @RequestHeader(value = "X-BunnyStream-Signature", required = false, defaultValue = "") String signature) {
+            HttpServletRequest request,
+            @RequestHeader(value = "X-BunnyStream-Signature", required = false, defaultValue = "") String signature)
+            throws IOException {
+
+        // Unauthenticated endpoint: bound the body before it is buffered and HMAC-ed. A chunked body has no
+        // Content-Length (-1), so also read at most one byte past the limit (same approach as StripeWebhookResource).
+        if (request.getContentLength() > MAX_WEBHOOK_BODY_BYTES) {
+            log.warn("Video webhook rejected: body of {} bytes exceeds {}", request.getContentLength(), MAX_WEBHOOK_BODY_BYTES);
+            return ResponseEntity.status(413).build();
+        }
+        byte[] body = request.getInputStream().readNBytes(MAX_WEBHOOK_BODY_BYTES + 1);
+        if (body.length > MAX_WEBHOOK_BODY_BYTES) {
+            log.warn("Video webhook rejected: chunked body exceeds {} bytes", MAX_WEBHOOK_BODY_BYTES);
+            return ResponseEntity.status(413).build();
+        }
+        String payload = new String(body, StandardCharsets.UTF_8);
 
         WebhookEvent event;
         try {

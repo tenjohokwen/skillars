@@ -394,6 +394,8 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
     @Test
     void saveStep5_photoWrite_doesNotRevertAConcurrentStatusChange() throws Exception {
         coachProfileService.publishProfile(COACH_USER_ID);
+        String photoKey = "coach_profile/" + COACH_USER_ID + "/2026/10/" + UUID.randomUUID() + ".jpg";
+        insertConfirmedImage(photoKey);
         // Detached pre-suspension snapshot: the old code's save() merged every column of it back.
         // (A Spring Data spy cannot callRealMethod on the interface, so the snapshot is read first.)
         var stale = coachProfileRepository.findByUserId(COACH_USER_ID).orElseThrow();
@@ -407,7 +409,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             }).when(coachProfileRepository).findByUserId(COACH_USER_ID);
 
             coachProfileService.saveStep5(COACH_USER_ID, new com.softropic.skillars.platform.marketplace.contract
-                .ProfileBuilderStep5Request("coach_profile/" + COACH_USER_ID + "/2026/10/photo.jpg"));
+                .ProfileBuilderStep5Request(photoKey));
         } finally {
             executor.shutdownNow();
         }
@@ -418,7 +420,17 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
             .isEqualTo("SUSPENDED");
         assertThat(jdbcTemplate.queryForObject(
             "SELECT photo_url FROM marketplace.coach_profiles WHERE id = ?", String.class, profileId))
-            .isEqualTo("coach_profile/" + COACH_USER_ID + "/2026/10/photo.jpg");
+            .isEqualTo(photoKey);
+    }
+
+    /** A confirmed image upload recorded as the coach's own, as confirmUpload would have written it. */
+    private void insertConfirmedImage(String key) {
+        transactionTemplate.execute(tx -> jdbcTemplate.update(
+            "INSERT INTO main.file_storage_objects "
+                + "(id, key, owner_id, original_filename, content_type, size_bytes, provider, bucket, "
+                + "upload_confirmed_at, created_by, created_date) "
+                + "VALUES (?, ?, ?, 'photo.jpg', 'image/jpeg', 1024, 'local', 'test-bucket', now(), 'test', now())",
+            System.nanoTime(), key, String.valueOf(COACH_USER_ID)));
     }
 
     /**
@@ -434,7 +446,7 @@ class CoachProfileServiceConcurrencyIT extends AbstractIntegrationTest {
         org.mockito.Mockito.clearInvocations(coachProfileRepository); // setUp/publish saves are not under test
         com.softropic.skillars.platform.filestorage.repo.FileStorageObject fso =
             com.softropic.skillars.platform.filestorage.repo.FileStorageObject.builder()
-                .key("coach_profile/" + COACH_USER_ID + "/2026/10/confirmed.jpg").build();
+                .key("coach_profile/" + COACH_USER_ID + "/2026/10/confirmed.jpg").contentType("image/jpeg").build();
         transactionTemplate.execute(tx -> {
             photoEventListener.onStorageConfirmed(
                 new com.softropic.skillars.platform.filestorage.event.StorageObjectConfirmedEvent(this, fso));

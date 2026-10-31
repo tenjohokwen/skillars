@@ -190,6 +190,10 @@ spring:
         prepStmtCacheSize: 500 #Mysql optimization
         prepStmtCacheSqlLimit: 1024 #Mysql optimization
   data:
+    web:
+      pageable:
+        # Spring's default cap is 2000 rows per page; AdminGdprResource binds Pageable straight from ?size=.
+        max-page-size: 100
     redis:
       host: localhost
       port: 6379
@@ -448,7 +452,6 @@ platform:
         - image/webp
         - application/pdf
         - text/plain
-        - application/octet-stream
       allowed-extensions:
         - jpg
         - jpeg
@@ -457,7 +460,10 @@ platform:
         - webp
         - pdf
         - txt
-        - bin
+      allowed-entities:
+        - coach_profile
+        - coach_branding
+        - coach_gallery
       max-size-bytes: 104857600
 
 # hibernate logs

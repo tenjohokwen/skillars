@@ -32,6 +32,11 @@ public class CoachProfilePhotoEventListener {
         if (keyParts == null) {
             return;
         }
+        // Only an image can be the profile photo; confirm checked the real bytes against this declared type.
+        if (fso.getContentType() == null || !CoachGalleryService.ALLOWED_CONTENT_TYPES.contains(fso.getContentType())) {
+            log.warn("coach_profile storage event for a non-image upload ignored: {}", fso.getKey());
+            return;
+        }
 
         long userId;
         try {

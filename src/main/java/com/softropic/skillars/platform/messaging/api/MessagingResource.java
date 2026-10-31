@@ -126,7 +126,7 @@ public class MessagingResource {
         String role = resolveRole(auth, roleHint);
         return ResponseEntity.ok(
             messagingService.getMessages(conversationId, userId, role,
-                PageRequest.of(Math.max(0, page), Math.min(size, 100))));
+                PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 100)))));
     }
 
     @GetMapping("/players/{playerId}/conversations")
@@ -148,7 +148,7 @@ public class MessagingResource {
         return ResponseEntity.ok(
             messagingService.getMessagesForPlayerConversation(
                 playerId, conversationId, parentUserId,
-                PageRequest.of(Math.max(0, page), Math.min(size, 100))));
+                PageRequest.of(Math.max(0, page), Math.max(1, Math.min(size, 100)))));
     }
 
     @DeleteMapping("/conversations/{conversationId}/messages/{messageId}")

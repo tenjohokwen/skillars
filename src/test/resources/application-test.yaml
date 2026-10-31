@@ -92,6 +92,10 @@ enable:
     mail: true
 
 platform:
+  filestorage:
+    validation:
+      # The production allow-list plus the generic "documents" entity the filestorage ITs upload under.
+      allowed-entities: coach_profile,coach_branding,coach_gallery,documents
   video:
     deletion:
       outbox_initial_delay_ms: 31536000000  # 1 year — prevents background firing in tests

@@ -62,7 +62,7 @@ class FileStorageDownloadIT extends BaseStorageIT {
 
     @Test
     void signDownload_afterConfirmedUpload_returnsUsableUrl() {
-        byte[] content = "hello download".getBytes();
+        byte[] content = "%PDF-1.4 hello download".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 
@@ -79,7 +79,7 @@ class FileStorageDownloadIT extends BaseStorageIT {
 
     @Test
     void signDownload_afterConfirmedUpload_persistsAccessEvent() {
-        byte[] content = "access event content".getBytes();
+        byte[] content = "%PDF-1.4 access event content".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 
@@ -101,7 +101,7 @@ class FileStorageDownloadIT extends BaseStorageIT {
 
     @Test
     void signDownload_softDeletedFile_throwsNotFoundException() {
-        byte[] content = "soft deleted".getBytes();
+        byte[] content = "%PDF-1.4 soft deleted".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 
@@ -114,7 +114,7 @@ class FileStorageDownloadIT extends BaseStorageIT {
     // B3 #1: sign/download used to mint a URL for any authenticated caller who knew a confirmed key.
     @Test
     void signDownload_otherUsersFile_isDeniedAndNotAudited() {
-        byte[] content = "not yours".getBytes();
+        byte[] content = "%PDF-1.4 not yours".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
         transactionTemplate.execute(status -> {

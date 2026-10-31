@@ -76,6 +76,20 @@ class VideoWebhookResourceIT extends BaseVideoIT {
     }
 
     @Test
+    void oversizedBody_returns413BeforeSignatureCheckAndStoresNothing() throws Exception {
+        String payload = "{\"VideoLibraryId\":12345,\"VideoGuid\":\"" + "g".repeat(70_000) + "\",\"Status\":3}";
+        String signature = computeHmac(SIGNING_SECRET, payload); // validly signed: the size cap still wins
+
+        mockMvc.perform(post(WEBHOOK_URL)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("X-BunnyStream-Signature", signature)
+                .content(payload))
+            .andExpect(status().isPayloadTooLarge());
+
+        assertThat(webhookEventRepository.count()).isZero();
+    }
+
+    @Test
     void invalidSignature_returns400AndDiscardsEvent() throws Exception {
         String payload = "{\"VideoLibraryId\":12345,\"VideoGuid\":\"guid-bad-sig\",\"Status\":3}";
 

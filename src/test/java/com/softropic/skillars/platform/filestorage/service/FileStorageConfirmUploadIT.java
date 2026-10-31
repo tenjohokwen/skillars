@@ -58,6 +58,9 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
     private RestTemplate restTemplate;
 
     @Autowired
+    private software.amazon.awssdk.services.s3.S3Client s3Client;
+
+    @Autowired
     private BlobstoreProperties blobstoreProperties;
 
     @Autowired
@@ -73,6 +76,8 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
     private JdbcTemplate jdbcTemplate;
 
     private static final String OWNER = "675373350208068096";
+    // Real PDF header: confirmUpload checks the stored bytes against the declared application/pdf.
+    private static final byte[] PDF_BYTES = "%PDF-1.4 test".getBytes(java.nio.charset.StandardCharsets.US_ASCII);
 
     @BeforeEach
     void setUp() {
@@ -82,7 +87,7 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
     @Test
     void confirmUpload_afterRealPut_savesRecordAndReturnsResponse() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = PDF_BYTES;
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
 
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
@@ -104,7 +109,7 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
     @Test
     void confirmUpload_replicationEnabled_enqueuesPendingReplicateJob() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = PDF_BYTES;
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
 
         blobstoreProperties.getReplication().setEnabled(true);
@@ -124,7 +129,7 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
     // B3 #2: the idempotent short-circuit used to hand any caller the existing record for a key.
     @Test
     void confirmUpload_idempotentPathOfAnotherOwnersRecord_isDenied() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = PDF_BYTES;
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
             "application/pdf", (long) content.length, null, null, null);
@@ -159,10 +164,10 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
         byte[] content = new byte[]{1, 2, 3};
         List<SignUploadResponse> uploads = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
-            uploads.add(signAndPut("documents", "42", "application/pdf", "pdf", content));
+            uploads.add(signAndPut("documents", "42", "text/plain", "txt", content));
         }
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
-            "application/pdf", (long) content.length, null, null, null);
+            "text/plain", (long) content.length, null, null, null);
 
         long originalQuota = fileStorageProperties.getQuota().getDefaultBytes();
         fileStorageProperties.getQuota().setDefaultBytes(7L);
@@ -203,9 +208,9 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
     @Test
     void confirmUpload_waitsForAConcurrentQuotaHolderAndCountsItsCommittedUsage() throws Exception {
         byte[] content = new byte[]{1, 2, 3};
-        SignUploadResponse upload = signAndPut("documents", "42", "application/pdf", "pdf", content);
+        SignUploadResponse upload = signAndPut("documents", "42", "text/plain", "txt", content);
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
-            "application/pdf", (long) content.length, null, null, null);
+            "text/plain", (long) content.length, null, null, null);
 
         long originalQuota = fileStorageProperties.getQuota().getDefaultBytes();
         fileStorageProperties.getQuota().setDefaultBytes(5L);
@@ -302,7 +307,7 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
     @Test
     void confirmUpload_contentTypeMismatch_throws422() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = PDF_BYTES;
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
 
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
@@ -313,9 +318,40 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
             .hasMessageContaining("contentType mismatch");
     }
 
+    // The presigned PUT stores any bytes under the declared Content-Type: confirm checks the real header, deletes
+    // the rejected object and writes no row, so it cannot count against the quota or be served later.
+    @Test
+    void confirmUpload_contentNotMatchingDeclaredType_isRejectedAndObjectDeleted() {
+        byte[] notAnImage = "<html><script>alert(1)</script></html>".getBytes();
+        SignUploadResponse signResponse = signAndPut("documents", "42", "image/png", "png", notAnImage);
+
+        ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
+            "image/png", (long) notAnImage.length, null, null, null);
+
+        assertThatThrownBy(() -> fileStorageService.confirmUpload(signResponse.key(), confirmRequest))
+            .isInstanceOf(StorageValidationException.class)
+            .hasMessageContaining("content does not match");
+        assertThat(fileStorageObjectRepository.findByKey(signResponse.key())).isEmpty();
+        assertThat(fileStorageObjectRepository.sumSizeBytesByOwnerId(OWNER)).isZero();
+        assertThatThrownBy(() -> s3Client.headObject(r -> r
+            .bucket(blobstoreProperties.getBucket()).key(signResponse.key())))
+            .isInstanceOf(software.amazon.awssdk.services.s3.model.NoSuchKeyException.class);
+    }
+
+    @Test
+    void confirmUpload_realPngHeader_isAccepted() {
+        byte[] png = new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0};
+        SignUploadResponse signResponse = signAndPut("documents", "42", "image/png", "png", png);
+
+        ConfirmUploadResponse response = fileStorageService.confirmUpload(signResponse.key(),
+            new ConfirmUploadRequest("image/png", (long) png.length, null, null, null));
+
+        assertThat(response.contentType()).isEqualTo("image/png");
+    }
+
     @Test
     void confirmUpload_fileSizeMismatch_throws422() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = PDF_BYTES;
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
 
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(
@@ -328,7 +364,7 @@ class FileStorageConfirmUploadIT extends BaseStorageIT {
 
     @Test
     void confirmUpload_idempotent_returnsExistingRecord() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = PDF_BYTES;
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
 
         ConfirmUploadRequest confirmRequest = new ConfirmUploadRequest(

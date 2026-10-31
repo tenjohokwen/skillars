@@ -82,7 +82,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
 
     @Test
     void softDelete_makesFileImmediatelyInaccessible() {
-        byte[] content = "delete me".getBytes();
+        byte[] content = "%PDF-1.4 delete me".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 
@@ -102,7 +102,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
 
     @Test
     void scheduler_doesNotDeleteWithinRetentionWindow() {
-        byte[] content = "within retention".getBytes();
+        byte[] content = "%PDF-1.4 within retention".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 
@@ -125,7 +125,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
 
     @Test
     void scheduler_physicallyDeletesPastRetentionWindow() {
-        byte[] content = "past retention".getBytes();
+        byte[] content = "%PDF-1.4 past retention".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 
@@ -177,7 +177,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
     @Test
     @Timeout(60)
     void scheduler_concurrentTicks_doNotDuplicateOutboxJobForSameRow() throws Exception {
-        byte[] content = "concurrent race".getBytes();
+        byte[] content = "%PDF-1.4 concurrent race".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         // Replication is switched on for the race below only (it is off in every profile, and then no
         // DELETE job is enqueued at all — see scheduler_replicationDisabled_enqueuesNoDeleteJob).
@@ -229,7 +229,7 @@ class FileStorageDeletionIT extends BaseStorageIT {
     // B3 #5: with replication off nothing drains outbox_replication_jobs, so no DELETE job may be enqueued.
     @Test
     void scheduler_replicationDisabled_enqueuesNoDeleteJob() {
-        byte[] content = "no replication".getBytes();
+        byte[] content = "%PDF-1.4 no replication".getBytes();
         SignUploadResponse signResponse = signAndPut("documents", "42", "application/pdf", "pdf", content);
         confirmUpload(signResponse, content, "application/pdf");
 

@@ -729,6 +729,10 @@ logged at DEBUG and acknowledged):
 - [ ] UAT (Hostwinds): published port 9500 instead of Traefik (`docker-compose.uat-hostwinds.yml`).
 - [ ] Limits accepted: per-user quota `platform.filestorage.quota.default-bytes` 10 GiB, max file
   100 MiB, MIME/extension allowlist (`application.yaml` → `platform.filestorage`).
+  `application/octet-stream`/`bin` are no longer allowed; `allowed-entities` limits upload keys to
+  `coach_profile`, `coach_branding`, `coach_gallery`. `confirmUpload` checks image/PDF magic bytes and deletes a
+  rejected object. A never-confirmed upload leaves an orphan object (no DB row): add a bucket lifecycle rule that
+  expires unreferenced objects if storage growth matters.
 
 ### AI moderation and safety (optional, off by default)
 
