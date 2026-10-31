@@ -6,6 +6,7 @@ import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.platform.booking.contract.BookingError;
+import com.softropic.skillars.platform.filestorage.contract.StorageObjectDto;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachAvailabilityWindowDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachMediaItemDto;
@@ -359,7 +360,17 @@ public class CoachProfileService {
 
         if (req.photoUrl() != null) {
             String expectedPrefix = "coach_profile/" + userId + "/";
-            if (!req.photoUrl().startsWith(expectedPrefix)) {
+            if (!req.photoUrl().startsWith(expectedPrefix) || !fileStorageService.isClientUploadKey(req.photoUrl())) {
+                throw new MarketplaceException("marketplace.invalidPhotoUrl", "Invalid photo key");
+            }
+            // The prefix alone only proves the string's shape: the key must be a confirmed, not-deleted upload
+            // recorded as the caller's own, and (HEAD- and header-verified at confirm time) an image. Same checks
+            // as the gallery (CoachGalleryService.addImage).
+            StorageObjectDto photo = fileStorageService.findActiveObject(req.photoUrl())
+                .orElseThrow(() -> new MarketplaceException("marketplace.invalidPhotoUrl", "Upload not confirmed"));
+            if (!String.valueOf(userId).equals(photo.ownerId())
+                || photo.contentType() == null
+                || !CoachGalleryService.ALLOWED_CONTENT_TYPES.contains(photo.contentType())) {
                 throw new MarketplaceException("marketplace.invalidPhotoUrl", "Invalid photo key");
             }
             // Targeted UPDATE of photo_url only (fix/content-consistency-and-lost-updates): the old

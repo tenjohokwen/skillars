@@ -128,7 +128,7 @@ class StorageResourceIT extends BaseStorageIT {
 
     @Test
     void fullUploadFlow_signConfirmDownload_succeeds() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = "%PDF-1.4 test".getBytes();
         SignUploadResponse signResponse = signUploadHttp("application/pdf", "pdf", content.length);
 
         putToS3(signResponse.uploadUrl(), content, "application/pdf");
@@ -149,7 +149,7 @@ class StorageResourceIT extends BaseStorageIT {
 
     @Test
     void deleteFlow_softDeleteMakesFileInaccessible() {
-        byte[] content = new byte[]{1, 2, 3};
+        byte[] content = "%PDF-1.4 test".getBytes();
         SignUploadResponse signResponse = signUploadHttp("application/pdf", "pdf", content.length);
         putToS3(signResponse.uploadUrl(), content, "application/pdf");
         confirmUploadHttp(signResponse.key(), "application/pdf", content.length);

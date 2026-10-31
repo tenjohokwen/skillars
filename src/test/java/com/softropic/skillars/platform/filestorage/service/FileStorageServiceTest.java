@@ -256,6 +256,49 @@ class FileStorageServiceTest {
         verify(repo, never()).saveAndFlush(any());
     }
 
+    // The PUT does not bind content: a "PDF" that is really something else is rejected and its bytes removed,
+    // and no row is written, so it cannot count against the owner's quota.
+    @Test
+    @SuppressWarnings("unchecked")
+    void confirm_contentNotMatchingDeclaredType_isRejectedAndTheObjectDeleted() {
+        String key = keyGenerator.generate("documents", "42", "pdf");
+        when(repo.findByKey(key)).thenReturn(Optional.empty());
+        stubHead();
+        stubHeader("MZ\u0090\u0000 not a pdf".getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+
+        assertThatThrownBy(() -> service.confirmUpload(key, confirmRequest()))
+            .isInstanceOf(com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException.class)
+            .hasMessageContaining("content does not match");
+        verify(s3Client).deleteObject(any(Consumer.class));
+        verify(repo, never()).saveAndFlush(any());
+        verify(publisher, never()).publishEvent(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void confirm_realSizeOverQuota_deletesTheRejectedObject() {
+        String key = keyGenerator.generate("documents", "42", "pdf");
+        when(repo.findByKey(key)).thenReturn(Optional.empty());
+        stubHead();
+        stubTransactionTemplate();
+        when(repo.sumSizeBytesByOwnerId(OWNER)).thenReturn(new FileStorageProperties().getQuota().getDefaultBytes());
+
+        assertThatThrownBy(() -> service.confirmUpload(key, confirmRequest()))
+            .isInstanceOf(com.softropic.skillars.platform.filestorage.contract.exception.QuotaExceededException.class);
+        verify(s3Client).deleteObject(any(Consumer.class));
+    }
+
+    @Test
+    void signUpload_entityOutsideTheAllowList_isRejected() {
+        var request = new com.softropic.skillars.platform.filestorage.contract.SignUploadRequest(
+            "reports", OWNER, "application/pdf", "pdf", 3L, null, null);
+
+        assertThatThrownBy(() -> service.signUpload(request))
+            .isInstanceOf(com.softropic.skillars.platform.filestorage.contract.exception.StorageValidationException.class)
+            .hasMessageContaining("entity not allowed");
+        verify(presigner, never()).presignPutObject(any(software.amazon.awssdk.services.s3.presigner.model.PutObjectPresignRequest.class));
+    }
+
     @Test
     void signUpload_ownerBoundEntitySpelledToSanitizeIntoIt_isDenied() {
         // "coach profile" sanitizes to coach_profile, so it must get the same owner check
@@ -329,6 +372,14 @@ class FileStorageServiceTest {
     private void stubHead() {
         when(s3Client.headObject(any(Consumer.class))).thenReturn(
             HeadObjectResponse.builder().contentType("application/pdf").contentLength(3L).eTag("\"e\"").build());
+        stubHeader("%PDF-1.4".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void stubHeader(byte[] bytes) {
+        lenient().when(s3Client.getObjectAsBytes(any(Consumer.class))).thenReturn(
+            software.amazon.awssdk.core.ResponseBytes.fromByteArray(
+                software.amazon.awssdk.services.s3.model.GetObjectResponse.builder().build(), bytes));
     }
 
     @SuppressWarnings("unchecked")

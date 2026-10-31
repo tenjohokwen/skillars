@@ -203,7 +203,7 @@ class ReportGenerationServiceIT extends BaseStorageIT {
 
         HttpHeaders authHeaders = loginAsCoach(BRANDING_COACH_EMAIL, BRANDING_COACH_PASSWORD);
 
-        byte[] logoBytes = new byte[]{1, 2, 3, 4};
+        byte[] logoBytes = new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}; // PNG signature: confirm sniffs the header
         SignUploadResponse signResponse = signUploadHttp(
             authHeaders, String.valueOf(BRANDING_COACH_USER_ID), "image/png", "png", logoBytes.length);
 

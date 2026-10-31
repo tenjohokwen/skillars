@@ -1014,17 +1014,62 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
         saveStep2(cookies);
         saveStep3(cookies);
         saveStep4(cookies);
+        String key = photoKey(COACH_ID);
+        insertStorageObject(key, String.valueOf(COACH_ID), "image/jpeg");
 
         ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/steps/5",
             HttpMethod.PUT,
-            Map.of("photoUrl", "coach_profile/9100000001/2026/06/test-photo.jpg"),
+            Map.of("photoUrl", key),
             authenticatedHeaders(cookies),
             Map.class
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(response.getBody().get("stepSaved")).isEqualTo(5);
+    }
+
+    @Test
+    void saveStep5_photoKeyThatIsNotAConfirmedOwnImage_isRejectedAndNothingLinked() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+        saveStep4(cookies);
+        String unconfirmed = photoKey(COACH_ID);
+        String notAnImage = photoKey(COACH_ID);
+        insertStorageObject(notAnImage, String.valueOf(COACH_ID), "application/pdf");
+        String foreignOwned = photoKey(COACH_ID);
+        insertStorageObject(foreignOwned, String.valueOf(PARENT_ID), "image/jpeg");
+        String softDeleted = photoKey(COACH_ID);
+        insertStorageObject(softDeleted, String.valueOf(COACH_ID), "image/jpeg");
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE main.file_storage_objects SET deleted_at = now() WHERE key = ?", softDeleted));
+
+        for (String key : List.of(unconfirmed, notAnImage, foreignOwned, softDeleted,
+            "coach_profile/" + COACH_ID + "/../" + PARENT_ID + "/2026/06/x.jpg",
+            "coach_profile/" + COACH_ID + "/2026/06/test-photo.jpg")) {
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + PROFILE_BASE + "/steps/5", HttpMethod.PUT, Map.of("photoUrl", key),
+                authenticatedHeaders(cookies), Map.class))
+                .as(key)
+                .isInstanceOf(HttpClientErrorException.class);
+        }
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT photo_url FROM marketplace.coach_profiles WHERE user_id = ?", String.class, COACH_ID)).isNull();
+    }
+
+    private static String photoKey(long userId) {
+        return "coach_profile/" + userId + "/2026/06/" + java.util.UUID.randomUUID() + ".jpg";
+    }
+
+    private void insertStorageObject(String key, String ownerId, String contentType) {
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "INSERT INTO main.file_storage_objects "
+                + "(id, key, owner_id, original_filename, content_type, size_bytes, provider, bucket, "
+                + "upload_confirmed_at, created_by, created_date) "
+                + "VALUES (?, ?, ?, 'photo', ?, 1024, 'local', 'test-bucket', now(), 'test', now())",
+            System.nanoTime(), key, ownerId, contentType));
     }
 
     @Test

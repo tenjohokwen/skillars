@@ -20,12 +20,14 @@ public class FileStorageProperties {
     public static class Validation {
         private List<String> allowedMimeTypes = List.of(
             "image/jpeg", "image/png", "image/gif", "image/webp",
-            "application/pdf", "text/plain", "application/octet-stream"
+            "application/pdf", "text/plain"
         );
         private List<String> allowedExtensions = List.of(
-            "jpg", "jpeg", "png", "gif", "webp", "pdf", "txt", "bin"
+            "jpg", "jpeg", "png", "gif", "webp", "pdf", "txt"
         );
         private long maxSizeBytes = 104857600L;
+        /** Upload {@code entity} values {@code signUpload} accepts: the key's first segment is built from it. */
+        private List<String> allowedEntities = List.of("coach_profile", "coach_branding", "coach_gallery");
     }
 
     @Getter

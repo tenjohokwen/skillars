@@ -9,7 +9,7 @@
 
     <div th:switch="${map.action}">
         <p th:case="'PASSWORD_CHANGED'" th:text="#{email.profile_change.password}">Your password has been changed.</p>
-        <p th:case="'EMAIL_CHANGED'" th:utext="#{email.profile_change.email(${map.oldValue}, ${map.newValue})}">Your email has been changed.</p>
+        <p th:case="'EMAIL_CHANGED'" th:text="#{email.profile_change.email(${map.oldValue}, ${map.newValue})}">Your email has been changed.</p>
         <p th:case="'ADDRESS_CHANGED'" th:text="#{email.profile_change.address}">Your address has been updated.</p>
         <p th:case="'PHONE_CHANGED'" th:text="#{email.profile_change.phone}">Your phone number has been updated.</p>
         <p th:case="'TWO_FACTOR_AUTH_ENABLED'" th:text="#{email.profile_change.2fa_enabled}">2FA has been enabled.</p>

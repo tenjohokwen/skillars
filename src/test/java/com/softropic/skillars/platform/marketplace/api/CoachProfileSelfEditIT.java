@@ -292,7 +292,9 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
         saveStep2(cookies);
         saveStep3(cookies);
         saveStep4(cookies);
-        String photoKey = "coach_profile/" + COACH_ID + "/2026/06/test-photo.jpg";
+        String photoKey = "coach_profile/" + COACH_ID + "/2026/06/" + java.util.UUID.randomUUID() + ".jpg";
+        // saveStep5 only links a confirmed upload recorded as the caller's own.
+        insertFileStorageObject(photoKey, COACH_EMAIL);
         httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/steps/5",
             HttpMethod.PUT,
@@ -304,9 +306,7 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
             "SELECT photo_url FROM marketplace.coach_profiles WHERE user_id = ?", String.class, COACH_ID))
             .isNotNull();
         // FileStorageService.softDelete looks the key up in main.file_storage_objects and checks
-        // ownership via created_by — insert the matching row directly, as the real sign/confirm-upload
-        // flow would have, rather than driving the full S3-backed flow through this IT.
-        insertFileStorageObject(photoKey, COACH_EMAIL);
+        // ownership via created_by — the row inserted above is what the real sign/confirm-upload flow writes.
 
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/photo", HttpMethod.DELETE, null, authenticatedHeaders(cookies), Void.class);
@@ -337,7 +337,8 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
         saveStep2(cookies);
         saveStep3(cookies);
         saveStep4(cookies);
-        String photoKey = "coach_profile/" + COACH_ID + "/2026/06/vanished-photo.jpg";
+        String photoKey = "coach_profile/" + COACH_ID + "/2026/06/" + java.util.UUID.randomUUID() + ".jpg";
+        insertFileStorageObject(photoKey, COACH_EMAIL);
         httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/steps/5",
             HttpMethod.PUT,
@@ -345,9 +346,10 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
             authenticatedHeaders(cookies),
             Map.class
         );
-        // Deliberately no matching main.file_storage_objects row inserted — simulates the key
-        // pointing at a row that was already soft-deleted independently (e.g. via StorageResource's
-        // own DELETE /api/storage/**).
+        // Soft-delete the row after linking — simulates the key pointing at a row that was already
+        // soft-deleted independently (e.g. via StorageResource's own DELETE /api/storage/**).
+        transactionTemplate.execute(status -> jdbcTemplate.update(
+            "UPDATE main.file_storage_objects SET deleted_at = now() WHERE key = ?", photoKey));
 
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/photo", HttpMethod.DELETE, null, authenticatedHeaders(cookies), Void.class);
@@ -365,7 +367,11 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
         saveStep2(cookies);
         saveStep3(cookies);
         saveStep4(cookies);
-        String photoKey = "coach_profile/" + COACH_ID + "/2026/06/stale-owner-photo.jpg";
+        String photoKey = "coach_profile/" + COACH_ID + "/2026/06/" + java.util.UUID.randomUUID() + ".jpg";
+        // created_by deliberately NOT this coach's login — mirrors the reachable real-world case of
+        // an email change (UserProfileService.updateUserEmail updates the user's login but not any
+        // already-created file_storage_objects row's created_by). owner_id is still the coach.
+        insertFileStorageObject(photoKey, "someone-else@skillars-test.com");
         httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/steps/5",
             HttpMethod.PUT,
@@ -373,10 +379,6 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
             authenticatedHeaders(cookies),
             Map.class
         );
-        // created_by deliberately NOT this coach's login — mirrors the reachable real-world case of
-        // an email change (UserProfileService.updateUserEmail updates the user's login but not any
-        // already-created file_storage_objects row's created_by).
-        insertFileStorageObject(photoKey, "someone-else@skillars-test.com");
 
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/photo", HttpMethod.DELETE, null, authenticatedHeaders(cookies), Void.class);

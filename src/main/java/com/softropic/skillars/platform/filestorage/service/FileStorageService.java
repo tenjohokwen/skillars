@@ -86,6 +86,10 @@ public class FileStorageService {
         MDC.put("provider", storageProperties.getProvider());
         MDC.put("ownerId", ownerId);
         try {
+            if (!fileStorageProperties.getValidation().getAllowedEntities()
+                .contains(StorageKeyGenerator.sanitizeSegment(request.entity()))) {
+                throw new StorageValidationException("upload entity not allowed: " + request.entity());
+            }
             // Compare the SANITIZED entity: the key is built from it, so "coach profile" / "coach.profile" would
             // otherwise skip the check and still land in coach_profile/<someone-else>/.
             if (OWNER_BOUND_ENTITIES.contains(StorageKeyGenerator.sanitizeSegment(request.entity()))
@@ -161,6 +165,7 @@ public class FileStorageService {
             }
 
             if (!request.contentType().equals(head.contentType())) {
+                discardRejectedUpload(key);
                 throw new StorageValidationException(
                     "contentType mismatch: declared=" + request.contentType() + ", actual=" + head.contentType());
             }
@@ -175,7 +180,15 @@ public class FileStorageService {
             // here; sign-time checks only saw the client's declared size. The quota check itself runs inside the
             // insert transaction, under the owner's quota lock (see persistConfirmedWithinQuota).
             if (head.contentLength() > fileStorageProperties.getValidation().getMaxSizeBytes()) {
+                discardRejectedUpload(key);
                 throw new StorageValidationException("file exceeds maximum size: " + head.contentLength());
+            }
+            // Nor does the PUT bind the content: an "image/png" upload can be any bytes. Check the real header
+            // of images and PDFs against the declared type.
+            if (ContentSniffer.isChecked(head.contentType()) && !ContentSniffer.matches(head.contentType(), readHeader(key))) {
+                discardRejectedUpload(key);
+                throw new StorageValidationException(
+                    "content does not match declared type " + head.contentType() + " for key " + key);
             }
 
             FileStorageObject saved;
@@ -188,6 +201,9 @@ public class FileStorageService {
                         .orElseThrow(() -> new StorageObjectNotFoundException(key));
                     return reconfirm(winner, ownerId);
                 }
+            } catch (QuotaExceededException over) {
+                discardRejectedUpload(key);
+                throw over;
             } catch (DataIntegrityViolationException race) {
                 // A concurrent confirm of the same key won the unique index (idx_storage_objects_key): treat
                 // this one as the idempotent retry it is. Any other constraint failure is a real error.
@@ -213,6 +229,31 @@ public class FileStorageService {
             MDC.remove("ownerId");
             MDC.remove("operation");
             MDC.remove("provider");
+        }
+    }
+
+    /** The first {@link ContentSniffer#HEADER_BYTES} bytes of the stored object (fewer for a shorter one). */
+    private byte[] readHeader(String key) {
+        try {
+            return s3Client.getObjectAsBytes(r -> r
+                .bucket(storageProperties.getBucket())
+                .key(key)
+                .range("bytes=0-" + (ContentSniffer.HEADER_BYTES - 1))).asByteArray();
+        } catch (NoSuchKeyException e) {
+            throw new StorageObjectNotFoundException(key, e);
+        }
+    }
+
+    /**
+     * Removes the bytes of an upload confirm rejected. A rejected confirm writes no {@code file_storage_objects}
+     * row, so nothing counts against the owner's quota; this stops the stored object lingering unreferenced.
+     * Best-effort: a failed delete is logged, and the original rejection still reaches the caller.
+     */
+    private void discardRejectedUpload(String key) {
+        try {
+            s3Client.deleteObject(r -> r.bucket(storageProperties.getBucket()).key(key));
+        } catch (Exception e) {
+            log.warn("Could not delete rejected upload: key={}", key, e);
         }
     }
 
