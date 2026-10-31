@@ -95,11 +95,13 @@ class SelfPlayerMessagingIT extends AbstractIntegrationTest {
             // The precondition initiateConversation requires: a CONFIRMED-status booking between
             // this exact coach/player pair. parent_id here is the player's own userId — the
             // opaque-id shortcut AC1 relies on — but is irrelevant to this AC's trigger chain.
+            // S-27: COMPLETED, not CONFIRMED — with age verification off (the test default) an unverified
+            // self-registered player and their coach may chat only after a completed session.
             jdbcTemplate.update(
                 "INSERT INTO booking.bookings " +
                 "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
                 " version, created_at, updated_at, canonical_timezone) " +
-                "VALUES (?, ?, ?, ?, 'CONFIRMED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
                 UUID.randomUUID(), coachProfileId, SELF_PLAYER_USER_ID, SELF_PLAYER_PROFILE_ID,
                 Timestamp.from(Instant.now().minusSeconds(7200)),
                 Timestamp.from(Instant.now().minusSeconds(3600)),
