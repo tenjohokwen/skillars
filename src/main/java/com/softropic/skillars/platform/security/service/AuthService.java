@@ -56,6 +56,7 @@ public class AuthService {
     private final ConfigService configService;
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil securityUtil;
+    private final UserIdentitySignalService userIdentitySignalService;
 
     /** Lazily encoded with the live encoder so its cost factor always matches real users' hashes. */
     private volatile String dummyPasswordHash;
@@ -112,6 +113,11 @@ public class AuthService {
         }
 
         Principal principal = Principal.instanceFrom(user);
+
+        // feat/security-s06-related-party: this browser and this account's contact details are identity signals for
+        // related-party detection (best-effort; nothing here can fail a login).
+        userIdentitySignalService.recordCurrentBrowser(user.getId());
+        userIdentitySignalService.recordContact(user);
 
         // Persist the refresh token before writing any response cookies — ensures DB state
         // is committed (or rolled back) before the client receives auth credentials.

@@ -89,6 +89,11 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
+    public Optional<String> cardFingerprint(String paymentMethodId) {
+        return Optional.empty();
+    }
+
+    @Override
     public boolean isCoachPaymentReady(UUID coachId) {
         return true;
     }

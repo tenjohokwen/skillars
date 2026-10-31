@@ -23,6 +23,8 @@ import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
 import com.softropic.skillars.platform.payment.repo.StripeCustomer;
 import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
+import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.security.service.UserIdentitySignalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -73,6 +75,8 @@ public class StripePaymentGateway implements PaymentGateway {
     private final StripeCustomerRepository stripeCustomerRepository;
     private final ConfigService configService;
     private final StripeClient stripeClient;
+    private final UserIdentitySignalService userIdentitySignalService;
+    private final UserRepository userRepository;
 
     /**
      * skillars-deferred-106 (B-1): charge the <strong>platform</strong> account — no
@@ -139,7 +143,11 @@ public class StripePaymentGateway implements PaymentGateway {
             }
             builder.setCustomer(stripeCustomer.getStripeCustomerId())
                    .setPaymentMethod(paymentMethodId)
-                   .setOffSession(true);
+                   .setOffSession(true)
+                   // feat/security-s06-related-party: expanded so the charge's card fingerprint arrives with the
+                   // response (no extra call); Radar rules can also key on the payer's id.
+                   .addExpand("latest_charge")
+                   .putMetadata("payerUserId", parentId.toString());
         }
 
         // fix/payment-charge-idempotency: every live caller now passes an explicit, per-attempt key that it
@@ -194,6 +202,7 @@ public class StripePaymentGateway implements PaymentGateway {
         }
         log.info("Stripe charge captured (platform account): referenceId={} intentId={}", referenceId, intent.getId());
         if (stripeCustomer != null) {
+            recordCardFingerprint(parentId, intent);
             // fix/payment-session-pack-integrity: bookkeeping only, AFTER the money is captured. A failure here
             // used to escape before the intent id reached the caller — captured with no record and no
             // compensating refund. Never let it fail the charge.
@@ -206,6 +215,38 @@ public class StripePaymentGateway implements PaymentGateway {
             }
         }
         return intent.getId();
+    }
+
+    /**
+     * feat/security-s06-related-party: the fingerprint of the card that was just charged, kept as a hashed identity
+     * signal of the payer. Best-effort — a missing fingerprint or a failed write never affects the captured charge.
+     */
+    private void recordCardFingerprint(Long parentId, PaymentIntent intent) {
+        try {
+            Charge charge = intent.getLatestChargeObject();
+            if (charge != null && charge.getPaymentMethodDetails() != null
+                    && charge.getPaymentMethodDetails().getCard() != null) {
+                userIdentitySignalService.recordCardFingerprint(parentId,
+                    charge.getPaymentMethodDetails().getCard().getFingerprint());
+            }
+        } catch (RuntimeException e) {
+            log.warn("[CARD_FINGERPRINT_RECORD_FAILED] parentId={} intentId={} error={}", parentId, intent.getId(),
+                e.getClass().getSimpleName());
+        }
+    }
+
+    @Override
+    public Optional<String> cardFingerprint(String paymentMethodId) {
+        if (paymentMethodId == null || paymentMethodId.isBlank()) {
+            return Optional.empty();
+        }
+        try {
+            var card = stripeClient.retrievePaymentMethod(paymentMethodId).getCard();
+            return card == null ? Optional.empty() : Optional.ofNullable(card.getFingerprint());
+        } catch (StripeException e) {
+            log.warn("Stripe payment method lookup failed: paymentMethodId={} error={}", paymentMethodId, e.getMessage());
+            return Optional.empty();
+        }
     }
 
     @Override
@@ -565,9 +606,13 @@ public class StripePaymentGateway implements PaymentGateway {
 
     @Override
     public String createStripeCustomer(Long parentId) {
-        CustomerCreateParams params = CustomerCreateParams.builder()
-            .putMetadata("userId", parentId.toString())
-            .build();
+        CustomerCreateParams.Builder customer = CustomerCreateParams.builder()
+            .putMetadata("userId", parentId.toString());
+        // Radar reads the customer's email (email-based rules and velocity); GDPR erasure blanks it again
+        // (StripeClient.scrubCustomer). Name and phone are deliberately not sent.
+        userRepository.findOneById(parentId).map(u -> u.getEmail()).filter(e -> e != null && !e.isBlank())
+            .ifPresent(customer::setEmail);
+        CustomerCreateParams params = customer.build();
         try {
             return stripeClient.createCustomer(params).getId();
         } catch (StripeException e) {

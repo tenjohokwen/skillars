@@ -124,6 +124,13 @@ public interface PaymentGateway {
      */
     String createSetupIntent(String stripeCustomerId);
 
+    /**
+     * feat/security-s06-related-party: the Stripe {@code card.fingerprint} of a saved payment method — identical for
+     * every PaymentMethod made from the same physical card, so it links two accounts that use one card. Empty when the
+     * method is not a card, has no fingerprint, or Stripe could not be reached (best-effort).
+     */
+    java.util.Optional<String> cardFingerprint(String paymentMethodId);
+
     /** Returns true iff the coach has a COMPLETE Stripe account with charges_enabled. */
     boolean isCoachPaymentReady(UUID coachId);
 

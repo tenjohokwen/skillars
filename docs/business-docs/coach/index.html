@@ -216,6 +216,7 @@ flowchart LR
       <li>A review held for moderation is marked "This review is awaiting moderation and is not yet publicly visible."; one that was removed reads "This review was removed by moderation."</li>
       <li>Reply to a review in the "Write a response (optional)" box and click "Submit response". Your reply appears under the review on your public profile, labelled "Coach's response".</li>
       <li>Your average rating and review count appear on your marketplace card and your public profile (<code>/coaches/:coachId</code>).</li>
+      <li>Reviews from accounts that appear to be related to you (the same card, device, email or phone as your own account) are neither published nor counted, and you do not see them in this list. Sessions booked from such an account have their payout held for <code>payment.payout.relatedParty.holdDays</code> (60) days and do not count toward ending the new-coach hold. You cannot book your own sessions.</li>
     </ol>
 
     <h3>12. Messaging clients</h3>

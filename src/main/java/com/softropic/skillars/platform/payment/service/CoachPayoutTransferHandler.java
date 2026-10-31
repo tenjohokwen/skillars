@@ -54,6 +54,7 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
     private final ApplicationEventPublisher eventPublisher;
     private final CoachPayoutDebtService coachPayoutDebtService;
     private final CoachStripeAccountRepository coachStripeAccountRepository;
+    private final RelatedPartyService relatedPartyService;
     /** Lazy: CoachPayoutOutboxSupport -> OutboxService -> OutboxRowProcessor -> this handler is a cycle otherwise. */
     private final ObjectProvider<CoachPayoutOutboxSupport> coachPayoutOutboxSupport;
 
@@ -130,6 +131,16 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
             coachPayoutOutboxSupport.getObject().enqueueTransfer(row.getBookingId(), accountHoldUntil);
             log.info("[COACH_PAYOUT_ACCOUNT_CHANGE_HOLD] booking={} coach={} — payout destination changed recently, "
                 + "transfer deferred until {}", row.getBookingId(), row.getCoachId(), accountHoldUntil);
+            return;
+        }
+
+        // feat/security-s06-related-party: the booking was flagged related-party after this payout was enqueued (or
+        // its hold was extended since): the long hold is enforced here too, so a late flag still stops the money.
+        Instant relatedPartyHoldUntil = relatedPartyService.findPayoutHoldUntil(row.getBookingId()).orElse(null);
+        if (relatedPartyHoldUntil != null && relatedPartyHoldUntil.isAfter(Instant.now())) {
+            coachPayoutOutboxSupport.getObject().enqueueTransfer(row.getBookingId(), relatedPartyHoldUntil);
+            log.info("[COACH_PAYOUT_RELATED_PARTY_HOLD] booking={} coach={} — related-party booking, transfer deferred "
+                + "until {}", row.getBookingId(), row.getCoachId(), relatedPartyHoldUntil);
             return;
         }
 

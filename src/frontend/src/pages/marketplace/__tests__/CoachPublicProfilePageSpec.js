@@ -135,6 +135,37 @@ describe('CoachPublicProfilePage.vue — review flag visibility (deferred-165 AC
     expect(flagActions.map((c) => c.props('reviewId'))).toEqual([MY_REVIEW_ID, OTHER_REVIEW_ID])
   })
 
+  // S-06: a review by an account related to the coach is stored but not published or counted; its author is told why.
+  it('tells the author their review is not published or counted when it is flagged related-party', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockResolvedValue({
+      reviewId: MY_REVIEW_ID,
+      rating: 5,
+      body: 'Great!',
+      moderationStatus: 'APPROVED',
+      relatedPartyHidden: true,
+    })
+
+    const wrapper = await mountPage()
+
+    expect(wrapper.find('[data-testid="review-related-party-hidden"]').exists()).toBe(true)
+  })
+
+  it('shows no related-party notice for an ordinary review', async () => {
+    getCoachProfile.mockResolvedValue(PROFILE)
+    getMyReviewForCoach.mockResolvedValue({
+      reviewId: MY_REVIEW_ID,
+      rating: 5,
+      body: 'Great!',
+      moderationStatus: 'APPROVED',
+      relatedPartyHidden: false,
+    })
+
+    const wrapper = await mountPage()
+
+    expect(wrapper.find('[data-testid="review-related-party-hidden"]').exists()).toBe(false)
+  })
+
   // Code review 2026-10-27: the profile page is public and flagging requires auth — anonymous
   // visitors and non-parent/player roles must not get a Flag action that can only fail.
   it.each([

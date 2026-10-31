@@ -146,6 +146,8 @@ public class BookingBatchService {
         // requested from a coach the single path refuses, and could never be paid for once accepted.
         final Map<String, Object> coachMeta = Map.of("submitted coach id", req.coachId());
         BookingService.requireBookableCoachStatus(coach, coachMeta);
+        BookingService.requireNotSelfBooking(parentId, coach);
+        bookingService.recordPayerBrowser(parentId);
         bookingService.requireCoachPaymentReady(coach.getId());
 
         // UAT.2 AC4: both resolved ONCE for the whole batch, not per slot — @Size(max = 10) on

@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.RelatedPartyQuery;
 import com.softropic.skillars.platform.reviews.contract.AuthorRole;
 import com.softropic.skillars.platform.reviews.contract.ReviewEligibilityDto;
 import com.softropic.skillars.platform.reviews.contract.ReviewErrorCode;
@@ -51,6 +52,7 @@ public class ReviewSubmissionService {
     private final PessimisticLockRetryer lockRetryer;
     private final PlayerProfileRepository playerProfileRepository;
     private final DisputeRepository disputeRepository;
+    private final RelatedPartyQuery relatedPartyQuery;
 
     /**
      * skillars-deferred-132 AC2 Fix 7: {@code @Transactional(REQUIRES_NEW)}, overriding this class's
@@ -88,6 +90,8 @@ public class ReviewSubmissionService {
         review.setRating(rating);
         review.setBody(body);
         review.setModerationStatus(ReviewModerationStatus.PENDING);
+        // feat/security-s06-related-party: stored, but hidden and uncounted, when the author is linked to this coach.
+        review.setRelatedParty(relatedPartyQuery.isRelatedPartyAuthor(coachId, authorId));
         // Round-2 code review (R4): set authorLastEditedAt at submission too. Submitting IS an
         // author write, so "last author write" is well defined from creation onward; without this
         // every freshly-created review carried NULL and relied on updateReview's createdAt
@@ -235,7 +239,7 @@ public class ReviewSubmissionService {
                 "Authenticated coach does not own this review",
                 ReviewErrorCode.COACH_MISMATCH);
         }
-        if (review.getModerationStatus() != ReviewModerationStatus.APPROVED) {
+        if (review.getModerationStatus() != ReviewModerationStatus.APPROVED || review.isRelatedParty()) {
             throw new OperationNotAllowedException(
                 "Coach response is only permitted on approved reviews",
                 ReviewErrorCode.REVIEW_NOT_APPROVED);

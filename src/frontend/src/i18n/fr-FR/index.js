@@ -453,6 +453,8 @@ export default {
     pendingModeration:
       "Votre avis est en cours de modération et n'est pas encore visible publiquement.",
     blocked: 'Votre avis a été retiré par la modération.',
+    relatedPartyHidden:
+      'Les avis de comptes qui semblent liés au coach ne sont ni publiés ni comptabilisés.',
     coachResponseLabel: 'Réponse du coach',
     noQualifyingSession:
       'Vous devez avoir suivi avec ce coach une séance suffisamment ancienne. Pour modifier un avis existant, il vous faut également une nouvelle séance depuis votre dernier avis.',
@@ -2588,6 +2590,7 @@ export default {
         'Vous avez déjà le nombre maximal de demandes en attente auprès de ce coach. Attendez une réponse ou retirez une demande.',
       beyondBookingHorizon:
         'Cette date est trop éloignée pour réserver. Choisissez une date plus proche.',
+      selfBookingNotAllowed: 'Vous ne pouvez pas réserver vos propres séances.',
       slotNotOnGrid:
         'Cette heure de début ne fait pas partie des créneaux réservables du coach. Actualisez et choisissez un créneau dans la liste.',
       batchNoneAccepted: "Aucune des séances de cette demande n'a pu être acceptée.",

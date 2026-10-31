@@ -82,6 +82,12 @@ public enum BookingError implements ErrorCode {
     SLOT_BLOCKED_BY_COACH,
     BLOCK_OVERLAPS_BOOKING,
     /**
+     * feat/security-s06-related-party: the booker's user account is the booked coach's own account. A coach cannot book
+     * their own sessions (there is no session to deliver to oneself); the hard guard behind the signal-based
+     * related-party detection, which covers a second account.
+     */
+    SELF_BOOKING_NOT_ALLOWED,
+    /**
      * skillars-deferred-106 AC9: a {@code COMPLETED} booking is immutable for cancellation. Once the
      * session is confirmed complete the coach payout has been (or is being) released, so a cancel /
      * no-show / refund would be chasing money that has left the platform. Any post-completion
@@ -257,6 +263,7 @@ public enum BookingError implements ErrorCode {
             case WEEK_START_OUT_OF_RANGE   -> "booking.weekStartOutOfRange";
             case SLOT_BLOCKED_BY_COACH     -> "booking.slotBlockedByCoach";
             case BLOCK_OVERLAPS_BOOKING    -> "booking.blockOverlapsBooking";
+            case SELF_BOOKING_NOT_ALLOWED  -> "booking.selfBookingNotAllowed";
             case BOOKING_ALREADY_COMPLETED -> "booking.alreadyCompleted";
             case SESSION_NOT_YET_STARTED   -> "booking.sessionNotYetStarted";
             case BOOKING_NOT_EDITABLE      -> "booking.notEditable";

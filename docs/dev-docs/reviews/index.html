@@ -305,6 +305,23 @@ sequenceDiagram
       <em>lists</em> <code>UNDER_REVIEW</code> rows, though.
     </p>
 
+    <h3 id="related-party-reviews-stored-hidden-and-uncounted">Related-party reviews: stored, hidden and uncounted</h3>
+    <p>
+      A review by an account linked to the coach (same card fingerprint, browser fingerprint, normalised email or phone, see
+      <a href="../payment/index.html">Payment</a>) is <strong>stored but never published or counted</strong>. <code>coach_reviews.related_party</code>
+      (V220, default false) is set in two places: <code>submitReview</code> asks <code>RelatedPartyQuery.isRelatedPartyAuthor(coachId, authorId)</code>
+      (the payment port, so reviews does not depend on the service), and <code>RelatedPartyReviewListener</code> handles
+      <code>RelatedPartyBookingFlaggedEvent</code> synchronously in the flagging transaction: it marks the payer's (and the booked player's own account's) reviews of that
+      coach and calls <code>CoachRatingService.recompute</code> when anything changed, so a booking flagged after a review was approved retroactively removes it from
+      the average and count. The column is sticky: moderation, approval and edits never clear it.
+    </p>
+    <p>
+      Every public or counting read excludes it: <code>computeAggregates</code>, <code>computeAverageRating</code>, <code>countByCoachIdAndModerationStatus</code>,
+      the public list and the coach's own list (<code>findByCoachId</code>). A coach cannot respond to it. The unique (author, coach) row remains, so it cannot be
+      resubmitted. Moderation still runs on it as usual. The author sees it: <code>AuthorReviewDto.relatedPartyHidden</code> makes the profile page show
+      "Reviews from accounts that appear to be related to the coach are not published or counted." (<code>reviews.relatedPartyHidden</code>); which signal matched is never disclosed.
+    </p>
+
     <h3 id="coach-responds-once-to-an-approved-review">Coach responds once to an approved review</h3>
     <pre class="mermaid">
 sequenceDiagram
@@ -436,7 +453,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

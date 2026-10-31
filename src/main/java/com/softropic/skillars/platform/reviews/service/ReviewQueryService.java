@@ -82,7 +82,8 @@ public class ReviewQueryService {
             r.getCoachResponseBody(),
             r.getCoachResponseAt(),
             r.getCreatedAt(),
-            r.getLastModifiedAt());
+            r.getLastModifiedAt(),
+            r.isRelatedParty());
     }
 
     public ReviewListResponse getFirstPageForCoach(UUID coachId) {

@@ -134,6 +134,7 @@
       <tr><td><code>EmailVerificationToken</code></td><td><code>email_verification_tokens</code></td><td>Single-use UUID token shared by the three role registration flows (coach/parent/player).</td></tr>
       <tr><td><code>PhoneOtpToken</code></td><td><code>phone_otp_tokens</code></td><td>Keyed-HMAC 6-digit OTP (10-min TTL) for the phone-verification step, shared across the three registration flows. Partial unique index <code>uq_pot_one_active_per_user</code> allows one live OTP per user (a concurrent re-issue &rarr; 409 <code>security.otpResendInProgress</code>).</td></tr>
       <tr><td><code>LoginAttempt</code></td><td><code>main.login_attempts</code></td><td>One row per failed <code>/api/auth/login</code>, keyed by <code>identifier = SHA-256(email|ip)</code> plus (V171) <code>subject_hash = SHA-256(email)</code>, so an admin can count/clear an account's failures across all IPs. Purged after 24h by <code>AuthCleanupService</code>.</td></tr>
+      <tr><td><code>UserIdentitySignal</code></td><td><code>main.user_identity_signals</code></td><td>Hashed identifiers observed per user (V220): <code>kind</code> EMAIL / PHONE / CARD / BROWSER and a SHA-256 <code>value_hash</code> of the normalised value, unique per (user, kind, hash), with <code>first_seen</code> / <code>last_seen</code>. Written by <code>UserIdentitySignalService</code> (login records the browser fingerprint cookie and the account's email and phone; the payment module adds card fingerprints), compared by <code>RelatedPartyService</code> to link a coach to a second account (see <a href="../payment/index.html">Payment</a>). Best-effort writes, never fail a login. Raw values are never stored, and <code>GdprErasureService</code> deletes every row of an erased user.</td></tr>
       <tr><td><code>PersistentToken</code></td><td><code>persistent_token</code></td><td>Per-user session/device info (IP, user agent, blacklist flag); cleared by <code>UserErasedEventListener</code>.</td></tr>
       <tr><td><code>SecKey</code> / <code>Secret</code></td><td><code>sec_key</code> / <code>sec</code></td><td>Jasypt-encrypted key material keyed by (<code>version</code>, <code>busId</code>). The JWT signing key no longer lives here: it comes from the <code>JWT_SIGNING_KEY</code> env var (Base64, at least 64 bytes), and the <code>sec</code> row <code>(v1, jot)</code> is unused legacy data.</td></tr>
     </table>
@@ -525,7 +526,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

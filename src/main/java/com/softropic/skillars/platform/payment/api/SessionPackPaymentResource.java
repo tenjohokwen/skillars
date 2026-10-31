@@ -209,6 +209,8 @@ public class SessionPackPaymentResource {
         // retry, paused-subscription resume). The Stripe calls run on the durable outbox after commit, so
         // they neither fail nor slow this request, and a Stripe outage is retried.
         subscriptionService.savePaymentMethodAndScheduleSync(parentId, request.paymentMethodId());
+        // feat/security-s06-related-party: best-effort, after the save has committed.
+        sessionPackPaymentService.recordCardFingerprint(parentId, request.paymentMethodId());
         return ResponseEntity.noContent().build();
     }
 

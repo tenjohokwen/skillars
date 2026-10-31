@@ -28,7 +28,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
-import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
+import com.softropic.skillars.platform.security.service.UserIdentitySignalService;import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
 import com.softropic.skillars.platform.security.contract.SkillarsRole;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
@@ -107,7 +107,7 @@ class GdprErasureServiceTest {
     @Mock private CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     @Mock private MessageRepository messageRepository;
     @Mock private CoachReviewRepository coachReviewRepository;
-    @Mock private SluRepository sluRepository;
+    @Mock private UserIdentitySignalService userIdentitySignalService;    @Mock private SluRepository sluRepository;
     @Mock private SluWeeklySnapshotRepository sluWeeklySnapshotRepository;
     @Mock private PlayerSluWeeklySnapshotAppliedRepository playerSluWeeklySnapshotAppliedRepository;
     @Mock private SluTargetRepository sluTargetRepository;
@@ -160,7 +160,7 @@ class GdprErasureServiceTest {
             gdprRequestRepository, adminAlertRepository, userRepository, coachProfileRepository,
             playerProfileRepository, bookingRepository, sessionCompletionDataRepository,
             coachAvailabilityBlockRepository, messageRepository, coachReviewRepository,
-            sluRepository, sluWeeklySnapshotRepository, playerSluWeeklySnapshotAppliedRepository,
+            userIdentitySignalService, sluRepository, sluWeeklySnapshotRepository, playerSluWeeklySnapshotAppliedRepository,
             sluTargetRepository, radarAssessmentRepository, neglectedSkillFlagRepository,
             playerRadarBaselineRepository, playerRadarCompositeRepository, performanceReportRepository,
             playerTimelineRepository, homeworkCompletionRepository, blobDeletionOutboxSupport,

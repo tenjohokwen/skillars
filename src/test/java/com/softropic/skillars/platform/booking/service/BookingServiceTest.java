@@ -94,6 +94,7 @@ class BookingServiceTest {
     @Mock private BookingRepository bookingRepository;
     @Mock private CoachProfileRepository coachProfileRepository;
     @Mock private PaymentGateway paymentGateway;
+    @Mock private com.softropic.skillars.platform.security.service.UserIdentitySignalService userIdentitySignalService;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock private com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     @Mock private PlayerProfileRepository playerProfileRepository;
@@ -1237,6 +1238,32 @@ class BookingServiceTest {
 
         assertThatThrownBy(() -> bookingService.createBookingRequest(PARENT_ID, req))
             .isInstanceOf(OperationNotAllowedException.class);
+    }
+
+    /** feat/security-s06-related-party: the booker's account is the coach's own account. */
+    @Test
+    void createBookingRequest_bookerIsTheCoachsOwnUser_isRefusedSelfBooking() {
+        PlayerProfile player = makePlayer(PLAYER_ID, COACH_USER_ID);
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+
+        Instant start = Instant.now().plusSeconds(86_400);
+        CreateBookingRequest req = new CreateBookingRequest(
+            COACH_ID, PLAYER_ID, start, start.plusSeconds(3600), null, null, null);
+
+        assertThatThrownBy(() -> bookingService.createBookingRequest(COACH_USER_ID, req))
+            .isInstanceOfSatisfying(OperationNotAllowedException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo(BookingError.SELF_BOOKING_NOT_ALLOWED));
+        verify(bookingRepository, never()).save(any());
+        verify(userIdentitySignalService, never()).recordCurrentBrowser(any());
+    }
+
+    /** feat/security-s06-related-party: a booker who is not the coach's user is not refused. */
+    @Test
+    void requireNotSelfBooking_otherUser_passes() {
+        CoachProfile coach = makeActiveCoach(COACH_ID, COACH_USER_ID);
+        BookingService.requireNotSelfBooking(PARENT_ID, coach);
     }
 
     // ---- UAT.2 AC3: session-duration enforcement on the single-booking create path ----

@@ -149,6 +149,16 @@ flowchart LR
       payout's release date.
     </p>
 
+    <p>
+      <strong>Sessions with a linked account are held for 60 days.</strong> If the person who paid for a session
+      appears to be connected to the coach it is booked with (the same card, the same device, or the same email or phone
+      number once formatting is ignored), the booking still goes ahead and nobody is alerted, but its payout is held
+      <strong>60 days</strong> (<code>payment.payout.relatedParty.holdDays</code>, adjustable from 7 to 120). If the normal or
+      new-coach hold is longer, that one applies. Such a payout does not count toward ending the new-coach hold. Only
+      the coach and the account that paid are compared, so a coach who is also a parent of a child trained by someone
+      else is not affected. A coach cannot book their own sessions.
+    </p>
+
     <h2>Credit wallet</h2>
     <p>
       As well as pack credits, each payer has a <strong>euro balance</strong> with Skillars. Refunds land here and are

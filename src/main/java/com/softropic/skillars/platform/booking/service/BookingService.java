@@ -65,6 +65,7 @@ import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGu
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import org.apache.commons.lang3.StringUtils;
+import com.softropic.skillars.platform.security.service.UserIdentitySignalService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -155,6 +156,7 @@ public class BookingService {
     private final DevelopmentDataErasureGuard developmentDataErasureGuard;
     // fix/booking-cancel-policy-loopholes: late-cancel grace window (cancelBookingAsParent only).
     private final ConfigService configService;
+    private final UserIdentitySignalService userIdentitySignalService;
 
     // skillars-deferred-155 AC5: the two statuses representing "this session is genuinely still
     // going to happen" — the only window in which a player/parent's session-prep request can be
@@ -364,6 +366,22 @@ public class BookingService {
         }
     }
 
+    /**
+     * feat/security-s06-related-party: a coach cannot book their own sessions. Static so the batch path applies the
+     * same rule; the second-account case is handled by {@code RelatedPartyService}, not refused here.
+     */
+    static void requireNotSelfBooking(Long bookerUserId, CoachProfile coach) {
+        if (bookerUserId != null && bookerUserId.equals(coach.getUserId())) {
+            throw new OperationNotAllowedException("A coach cannot book their own sessions",
+                Map.of("submitted coach id", coach.getId()), BookingError.SELF_BOOKING_NOT_ALLOWED);
+        }
+    }
+
+    /** The booker's browser fingerprint is an identity signal for related-party detection (best-effort). */
+    void recordPayerBrowser(Long bookerUserId) {
+        userIdentitySignalService.recordCurrentBrowser(bookerUserId);
+    }
+
     @Transactional
     public BookingResponse createBookingRequest(Long parentId, CreateBookingRequest req) {
         PlayerProfile player = playerProfileRepository.findById(req.playerId())
@@ -385,6 +403,8 @@ public class BookingService {
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         final Map<String, Object> metaData = Map.of("submitted coach id", req.coachId());
         requireBookableCoachStatus(coach, metaData);
+        requireNotSelfBooking(parentId, coach);
+        recordPayerBrowser(parentId);
 
         requireCoachPaymentReady(coach.getId());
 
