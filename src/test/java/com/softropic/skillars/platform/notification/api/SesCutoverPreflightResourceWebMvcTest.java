@@ -26,6 +26,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -160,12 +161,11 @@ class SesCutoverPreflightResourceWebMvcTest {
 
     @Test
     @WithMockUser(roles = "LTD_ADMIN")
-    void preflight_ltdAdminRole_isAlsoAuthorized() throws Exception {
-        stubHealthyAccount();
-        stubTestSend(EmailDeliveryStatus.SENT, null);
-
+    void preflight_ltdAdminRole_isForbidden() throws Exception {
+        // S-28: the SES preflight sends a real test email through the live transport - full admin only.
         mockMvc.perform(post(ENDPOINT).contentType(MediaType.APPLICATION_JSON).content(requestBody()))
-            .andExpect(status().isOk());
+            .andExpect(status().isForbidden());
+        verifyNoInteractions(sesAccountChecker, mailManager);
     }
 
     @Test
