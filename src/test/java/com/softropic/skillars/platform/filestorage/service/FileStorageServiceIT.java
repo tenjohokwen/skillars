@@ -73,7 +73,7 @@ class FileStorageServiceIT extends BaseStorageIT {
     @Test
     void signUpload_uploadUrlIsUsable() {
         SignUploadRequest request = new SignUploadRequest(
-            "avatars", "user-1", "application/pdf", "pdf", 3L, null, null);
+            "documents", "user-1", "application/pdf", "pdf", 3L, null, null);
 
         SignUploadResponse response = fileStorageService.signUpload(request);
 
