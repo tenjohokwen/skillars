@@ -138,23 +138,23 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     @Test
     void changePassword_revokesRefreshTokensAndInvalidatesSessions() {
         Long userId = userRepository.findOneByLogin(LOGIN).orElseThrow().getId();
-        saveLiveRefreshToken(userId, "pwchange-token");
+        saveLiveRefreshToken(userId, "pwchange_token__________________________________________________");
 
         userProfileService.changePassword(CORRECT_PW, "NewSecureP@ss99!");
 
-        assertThat(refreshTokenRepository.findByTokenHash("pwchange-token").orElseThrow().isUsed()).isTrue();
+        assertThat(refreshTokenRepository.findByTokenHash("pwchange_token__________________________________________________").orElseThrow().isUsed()).isTrue();
         assertThat(userRepository.findById(userId).orElseThrow().getSecuritySessionInvalidatedAt()).isNotNull();
     }
 
     @Test
     void changePassword_wrongCurrentPassword_leavesSessionsAlone() {
         Long userId = userRepository.findOneByLogin(LOGIN).orElseThrow().getId();
-        saveLiveRefreshToken(userId, "pwchange-rejected-token");
+        saveLiveRefreshToken(userId, "pwchange_rejected_token_________________________________________");
 
         assertThatThrownBy(() -> userProfileService.changePassword("wrongPassword", "NewSecureP@ss99!"))
                 .isInstanceOf(ProfileActionException.class);
 
-        assertThat(refreshTokenRepository.findByTokenHash("pwchange-rejected-token").orElseThrow().isUsed()).isFalse();
+        assertThat(refreshTokenRepository.findByTokenHash("pwchange_rejected_token_________________________________________").orElseThrow().isUsed()).isFalse();
     }
 
     private void saveLiveRefreshToken(Long userId, String hash) {

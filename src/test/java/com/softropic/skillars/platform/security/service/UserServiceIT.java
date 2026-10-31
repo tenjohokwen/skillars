@@ -170,13 +170,13 @@ class UserServiceIT extends AbstractIntegrationTest {
         final com.softropic.skillars.platform.security.repo.RefreshToken token =
             new com.softropic.skillars.platform.security.repo.RefreshToken();
         token.setUserId(id);
-        token.setTokenHash("pwreset-token");
+        token.setTokenHash("pwreset_token___________________________________________________");
         token.setExpiresAt(Instant.now(ClockProvider.getClock()).plus(java.time.Duration.ofDays(7)));
         refreshTokenRepository.save(token);
 
         passwordResetService.completePasswordReset("newPassword", resetKey);
 
-        assertThat(refreshTokenRepository.findByTokenHash("pwreset-token").orElseThrow().isUsed()).isTrue();
+        assertThat(refreshTokenRepository.findByTokenHash("pwreset_token___________________________________________________").orElseThrow().isUsed()).isTrue();
         assertThat(userRepository.findById(id).orElseThrow().getSecuritySessionInvalidatedAt()).isNotNull();
         refreshTokenRepository.deleteAll();
     }
