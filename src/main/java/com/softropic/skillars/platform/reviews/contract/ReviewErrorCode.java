@@ -22,7 +22,8 @@ public enum ReviewErrorCode implements ErrorCode {
     COACH_PROFILE_MISSING("reviews.coachProfileMissing"),
     REVIEW_NOT_FOUND("reviews.reviewNotFound"),
     INVALID_FLAGGER("reviews.invalidFlagger"),
-    ACTIVE_DISPUTE("reviews.activeDispute");
+    ACTIVE_DISPUTE("reviews.activeDispute"),
+    FLAG_RATE_LIMITED("reviews.flagRateLimited");
 
     private final String code;
 

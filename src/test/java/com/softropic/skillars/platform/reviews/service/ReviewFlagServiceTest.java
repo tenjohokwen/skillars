@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.infrastructure.security.RateLimitingService;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -17,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 
@@ -29,9 +32,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.instancio.Select.field;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -50,6 +55,8 @@ class ReviewFlagServiceTest {
     @Mock private ConfigService configService;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PessimisticLockRetryer lockRetryer;
+    @Mock private BookingRepository bookingRepository;
+    @Mock private RateLimitingService rateLimitingService;
 
     @InjectMocks
     private ReviewFlagService service;
@@ -149,5 +156,83 @@ class ReviewFlagServiceTest {
             new org.hibernate.exception.ConstraintViolationException(
                 "constraint violation", new SQLException("23505"), constraintName);
         return new DataIntegrityViolationException("could not execute statement", cve);
+    }
+
+    // ---- S-08: only flags from real customers of THIS coach count towards the auto-hold ----
+
+    private CoachReview arrangeFlagAndGetApprovedReview(Long... openFlaggers) {
+        when(reviewRepository.findAuthorAndCoachIdByReviewId(REVIEW_ID))
+            .thenReturn(java.util.List.<Object[]>of(new Object[] {AUTHOR_ID, COACH_ID}));
+        CoachProfile coachProfile = Instancio.of(CoachProfile.class)
+            .set(field(CoachProfile::getUserId), COACH_USER_ID)
+            .create();
+        when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coachProfile));
+        when(reviewFlagRepository.existsByReviewIdAndFlaggedBy(REVIEW_ID, FLAGGER_ID)).thenReturn(false);
+        CoachReview review = Instancio.of(CoachReview.class)
+            .set(field(CoachReview::getReviewId), REVIEW_ID)
+            .set(field(CoachReview::getCoachId), COACH_ID)
+            .set(field(CoachReview::getAuthorId), AUTHOR_ID)
+            .set(field(CoachReview::getModerationStatus),
+                com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus.APPROVED)
+            .create();
+        when(reviewRepository.findByIdForUpdateNoWait(REVIEW_ID)).thenReturn(Optional.of(review));
+        when(configService.getBoundedInt(any(ConfigBounds.BoundedKey.class))).thenReturn(3);
+        when(reviewFlagRepository.findOpenFlaggerIds(REVIEW_ID)).thenReturn(java.util.List.of(openFlaggers));
+        return review;
+    }
+
+    @Test
+    void flag_threeOpenFlagsButOnlyOneFromACustomer_doesNotAutoHold() {
+        CoachReview review = arrangeFlagAndGetApprovedReview(601L, 602L, FLAGGER_ID);
+        // Only FLAGGER_ID is a customer; 601 / 602 are strangers with no booking with this coach.
+        when(bookingRepository.existsByCoachIdAndFamilyUserIdAndStatusIn(any(), any(), any()))
+            .thenAnswer(inv -> FLAGGER_ID.equals(inv.getArgument(1)));
+
+        service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details");
+
+        assertThat(review.getModerationStatus())
+            .isEqualTo(com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus.APPROVED);
+        verify(coachRatingService, never()).recompute(any());
+    }
+
+    @Test
+    void flag_threeOpenFlagsFromThreeCustomers_autoHolds() {
+        CoachReview review = arrangeFlagAndGetApprovedReview(601L, 602L, FLAGGER_ID);
+        when(bookingRepository.existsByCoachIdAndFamilyUserIdAndStatusIn(eq(COACH_ID), any(), any()))
+            .thenReturn(true);
+
+        service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details");
+
+        assertThat(review.getModerationStatus())
+            .isEqualTo(com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus.UNDER_REVIEW);
+        verify(coachRatingService).recompute(COACH_ID);
+    }
+
+    @Test
+    void flag_flagsFromOtherCoaches_neverCountEvenWithABooking() {
+        CoachReview review = arrangeFlagAndGetApprovedReview(601L, 602L, FLAGGER_ID);
+        when(coachProfileRepository.existsByUserId(601L)).thenReturn(true);
+        when(coachProfileRepository.existsByUserId(602L)).thenReturn(true);
+        lenient().when(bookingRepository.existsByCoachIdAndFamilyUserIdAndStatusIn(eq(COACH_ID), any(), any()))
+            .thenReturn(true);
+
+        service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details");
+
+        assertThat(review.getModerationStatus())
+            .isEqualTo(com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus.APPROVED);
+    }
+
+    @Test
+    void flag_overThePerUserRateLimit_isRefusedBeforeAnyRead() {
+        ReflectionTestUtils.setField(service, "rateLimitingEnabled", true);
+        when(rateLimitingService.tryConsume(eq(String.valueOf(FLAGGER_ID)), eq("reviews.flag"),
+            anyLong(), anyLong(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.flag(REVIEW_ID, FLAGGER_ID, ReviewFlagReason.FAKE_REVIEW, "details"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(ReviewErrorCode.FLAG_RATE_LIMITED));
+
+        verifyNoInteractions(reviewRepository, reviewFlagRepository);
     }
 }

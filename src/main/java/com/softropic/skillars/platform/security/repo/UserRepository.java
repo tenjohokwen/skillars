@@ -29,6 +29,10 @@ import java.util.Optional;
  */
 public interface UserRepository extends JpaRepository<User, Long> {
 
+    /** Cheap lock probe for callers that must refuse a locked account without loading the entity graph. */
+    @Query("select count(u) > 0 from User u where u.id = :id and u.locked = true")
+    boolean existsByIdAndLockedTrue(@Param("id") Long id);
+
     Optional<User> findOneByActivationKey(final String activationKey);
 
     @Query("select u from User u where activated = false and activationKey = ?1")

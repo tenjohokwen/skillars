@@ -280,6 +280,24 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         @Param("playerId") Long playerId,
         @Param("statuses") List<String> statuses);
 
+    /**
+     * S-08: does this user have a booking with the coach in one of {@code statuses} — as the player's
+     * parent or as the (adult) player themselves? {@code Booking.playerId} is a PlayerProfile PK, so the
+     * user is matched through {@code PlayerProfile.userId / parentId}, never against the booking column.
+     */
+    @Query("""
+        SELECT CASE WHEN COUNT(b) > 0 THEN true ELSE false END
+        FROM Booking b
+        JOIN PlayerProfile pp ON pp.id = b.playerId
+        WHERE b.coachId = :coachId
+          AND (pp.userId = :userId OR pp.parentId = :userId)
+          AND b.status IN :statuses
+        """)
+    boolean existsByCoachIdAndFamilyUserIdAndStatusIn(
+        @Param("coachId") UUID coachId,
+        @Param("userId") Long userId,
+        @Param("statuses") List<String> statuses);
+
     // Parent-requested child erasure (V172): refused while the child still has a live booking.
     boolean existsByPlayerIdAndStatusIn(Long playerId, List<String> statuses);
 

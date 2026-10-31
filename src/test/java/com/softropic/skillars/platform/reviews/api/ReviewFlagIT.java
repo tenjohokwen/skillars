@@ -128,6 +128,18 @@ class ReviewFlagIT extends AbstractIntegrationTest {
                 Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
                 Timestamp.from(Instant.now().minusSeconds(3600)));
 
+            // S-08: the flagging user is a real customer of the coach (flags only count if so).
+            jdbcTemplate.update(
+                "INSERT INTO booking.bookings " +
+                "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
+                " version, created_at, updated_at, canonical_timezone) " +
+                "VALUES (?, ?, ?, 8050000004, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                UUID.randomUUID(), coachProfileId, FLAGGING_USER_ID,
+                Timestamp.from(Instant.now().minusSeconds(7200)),
+                Timestamp.from(Instant.now().minusSeconds(3600)),
+                Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
+                Timestamp.from(Instant.now().minusSeconds(3600)));
+
             // Insert an APPROVED review directly (bypass Gemini)
             jdbcTemplate.update(
                 "INSERT INTO reviews.coach_reviews " +
@@ -210,6 +222,24 @@ class ReviewFlagIT extends AbstractIntegrationTest {
                     "INSERT INTO main.user_authority (user_id, authority_id) " +
                     "VALUES (?, (SELECT id FROM main.authority WHERE name = 'ROLE_PARENT')) ON CONFLICT DO NOTHING",
                     userId);
+                // S-08: only flags from customers of THIS coach count towards the threshold.
+                long extraPlayerId = 8050_000_030L + i;
+                jdbcTemplate.update(
+                    "INSERT INTO main.player_profiles " +
+                    "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
+                    "VALUES (?, 'Extra Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                    extraPlayerId, Date.valueOf(LocalDate.now().minusYears(18)),
+                    userId, Timestamp.from(Instant.now()));
+                jdbcTemplate.update(
+                    "INSERT INTO booking.bookings " +
+                    "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
+                    " version, created_at, updated_at, canonical_timezone) " +
+                    "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                    UUID.randomUUID(), coachProfileId, userId, extraPlayerId,
+                    Timestamp.from(Instant.now().minusSeconds(7200)),
+                    Timestamp.from(Instant.now().minusSeconds(3600)),
+                    Timestamp.from(Instant.now().minusSeconds(86400 * 3)),
+                    Timestamp.from(Instant.now().minusSeconds(3600)));
                 jdbcTemplate.update(
                     "INSERT INTO reviews.review_flags (review_id, flagged_by, reason, created_at) " +
                     "VALUES (?, ?, 'FAKE_REVIEW', ?)",
@@ -243,6 +273,54 @@ class ReviewFlagIT extends AbstractIntegrationTest {
         transactionTemplate.execute(status -> {
             for (int i = 0; i < 2; i++) {
                 long userId = 8050_000_020L + i;
+                jdbcTemplate.update("DELETE FROM booking.bookings WHERE player_id = ?", 8050_000_030L + i);
+                jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE flagged_by = ?", userId);
+                jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = ?", 8050_000_030L + i);
+                jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", userId);
+                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", userId);
+            }
+            return null;
+        });
+    }
+
+    @Test
+    void flagThresholdReachedOnlyByStrangers_reviewStaysApproved() {
+        // S-08: two extra flaggers with NO booking with this coach, then the flagging user (a customer).
+        // Three open flags, one qualifying -> no auto-hold.
+        transactionTemplate.execute(status -> {
+            String passwordHash = passwordEncoder.encode(TEST_PASSWORD);
+            for (int i = 0; i < 2; i++) {
+                long userId = 8050_000_040L + i;
+                insertUser(userId, "stranger.flagger" + i + "@skillars-test.com", passwordHash, "PARENT");
+                jdbcTemplate.update(
+                    "INSERT INTO reviews.review_flags (review_id, flagged_by, reason, created_at) " +
+                    "VALUES (?, ?, 'FAKE_REVIEW', ?)",
+                    reviewId, userId, Timestamp.from(Instant.now()));
+            }
+            return null;
+        });
+
+        String cookies = loginAndGetCookies(FLAGGING_EMAIL);
+        ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
+            reviewsUrl("/" + reviewId + "/flag"),
+            HttpMethod.POST,
+            Map.of("reason", "CONFLICT_OF_INTEREST"),
+            authenticatedHeaders(cookies),
+            Map.class);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT moderation_status FROM reviews.coach_reviews WHERE review_id = ?",
+            String.class, reviewId)).isEqualTo("APPROVED");
+        // Every flag is still on record for the admin.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM reviews.review_flags WHERE review_id = ?",
+            Integer.class, reviewId)).isEqualTo(3);
+
+        transactionTemplate.execute(status -> {
+            for (int i = 0; i < 2; i++) {
+                long userId = 8050_000_040L + i;
+                jdbcTemplate.update("DELETE FROM reviews.review_flags WHERE flagged_by = ?", userId);
                 jdbcTemplate.update("DELETE FROM main.user_authority WHERE user_id = ?", userId);
                 jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = ?", userId);
             }

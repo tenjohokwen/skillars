@@ -17,6 +17,10 @@ public interface ReviewFlagRepository extends JpaRepository<ReviewFlag, UUID> {
 
     long countByReviewId(UUID reviewId);
 
+    /** S-08: who raised the still-open flags on a review (one row per flagger — the flag is unique per user). */
+    @Query("SELECT f.flaggedBy FROM ReviewFlag f WHERE f.reviewId = :reviewId AND f.resolvedAt IS NULL")
+    List<Long> findOpenFlaggerIds(@Param("reviewId") UUID reviewId);
+
     List<ReviewFlag> findByReviewIdOrderByCreatedAtAsc(UUID reviewId);
 
     // skillars-deferred-131 AC2 Fix 8: returns the row count the @Modifying JPQL UPDATE already

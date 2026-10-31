@@ -30,6 +30,8 @@ public class MessagingApiAdvice {
         } else if (MessagingErrorCode.ALREADY_REPORTED.getErrorCode().equals(code)
                 || MessagingErrorCode.ALREADY_DELETED.getErrorCode().equals(code)) {
             status = HttpStatus.CONFLICT;
+        } else if (MessagingErrorCode.RATE_LIMITED.getErrorCode().equals(code)) {
+            status = HttpStatus.TOO_MANY_REQUESTS;
         } else {
             status = HttpStatus.FORBIDDEN;
         }
