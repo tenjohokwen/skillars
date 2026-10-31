@@ -199,7 +199,7 @@ public final class ConfigBounds {
      * platform resolves a never-started session itself. Floor 1: 0 would close the claim before it opens.
      */
     public static final BoundedKey BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS =
-        new BoundedKey("booking.coachNoShow.reportWindowHours", 1L, 72L, false,
+        new BoundedKey("booking.coachNoShow.reportWindowHours", 1L, 168L, false,
             "out-of-range falls back to the coded default (5); tiny → families cannot claim a no-show in time", 5L);
 
     /**
