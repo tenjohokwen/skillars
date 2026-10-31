@@ -143,7 +143,7 @@
       business health, payments, performance, database, background work). The app adds two metric families for them:
       <code>skillars.backlog.*</code> (<code>OperationalBacklogMetrics</code>, work waiting in the database) and
       <code>http.server.allocated</code> (<code>RequestAllocationMetricsFilter</code>, heap allocated per route). Only rules
-      in <code>grafana-alerts.yml</code> notify anyone. Reference docs:
+      in <code>grafana-alerts.yml</code> notify anyone. Grafana is pinned to an exact tag in <code>docker-compose.yml</code> (11.6.16, the last 11.x line); the pin comment lists what was checked before the last bump, so re-run that check on a live stack before changing it. Reference docs:
     </p>
     <ul>
       <li><a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> — LogQL/PromQL/TraceQL query reference.</li>
