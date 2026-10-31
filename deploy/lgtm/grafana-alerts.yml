@@ -1,95 +1,1038 @@
 apiVersion: 1
 
+# Every rule is query A + threshold C. Grafana refuses to alert on a raw series ("only reduced data
+# can be alerted on"), and a raw `up == 0` would hand it the value 0 for the very state it must fire
+# on. noDataState OK: most queries return nothing when healthy, which must not page anyone; the
+# `or vector(n)` forms make the rules that must fire on a vanished target still see a value.
 groups:
   - orgId: 1
     name: skillars-infra-alerts
     folder: "Skillars Alerts"
     interval: 1m
     rules:
-      - uid: node_exporter_down
-        title: NodeExporterDown
-        condition: A
+      - uid: app_down
+        title: AppDown
+        condition: C
+        noDataState: OK
+        execErrState: Error
         data:
           - refId: A
-            relativeTimeRange: { from: 120, to: 0 }
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'up{job="node-exporter"} == 0'
-              queryType: instant
+              expr: '(1 - max(up{job="spring-boot-app"})) or vector(1)'
+              instant: true
+              range: false
               refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
         for: 1m
         annotations:
-          summary: "node_exporter is DOWN — disk and memory alerts are blind"
-          runbook: "Check Docker service: docker compose logs node_exporter --tail=50"
+          summary: 'The Spring Boot app is down: Prometheus cannot scrape it'
+          runbook: 'docs/deployment/monitoring.md#appdown'
+          dashboard: /d/skillars-ops-overview
         labels:
           severity: critical
 
-      - uid: app_down
-        title: AppDown
-        condition: A
+      - uid: node_exporter_down
+        title: NodeExporterDown
+        condition: C
+        noDataState: OK
+        execErrState: Error
         data:
           - refId: A
-            relativeTimeRange: { from: 120, to: 0 }
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: 'up{job="spring-boot-app"} == 0'
-              queryType: instant
+              expr: '(1 - max(up{job="node-exporter"})) or vector(1)'
+              instant: true
+              range: false
               refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
         for: 1m
         annotations:
-          summary: "Spring Boot app is DOWN — health endpoint not reachable"
-          runbook: "Check Docker service: docker compose logs app --tail=50"
+          summary: 'node_exporter is down: disk and memory alerts are blind'
+          runbook: 'docs/deployment/monitoring.md#nodeexporterdown'
+          dashboard: /d/skillars-ops-overview
         labels:
           severity: critical
 
       - uid: disk_data_volume_high
         title: DiskDataVolumeHigh
-        condition: A
+        condition: C
+        noDataState: OK
+        execErrState: Error
         data:
           - refId: A
-            relativeTimeRange: { from: 600, to: 0 }
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: '(1 - (node_filesystem_avail_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"})) > 0.80 and node_filesystem_size_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"} > 0'
-              queryType: instant
+              expr: '1 - (node_filesystem_avail_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/opt/skillars/data",fstype!="tmpfs"})'
+              instant: true
+              range: false
               refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
         for: 5m
         annotations:
-          summary: "Data volume disk >80% — investigate before 90%"
+          summary: 'Data volume disk above 80%: investigate before 90%'
+          runbook: 'docs/deployment/monitoring.md#diskdatavolumehigh'
         labels:
           severity: warning
 
       - uid: disk_root_high
         title: DiskRootHigh
-        condition: A
+        condition: C
+        noDataState: OK
+        execErrState: Error
         data:
           - refId: A
-            relativeTimeRange: { from: 600, to: 0 }
+            relativeTimeRange: { from: 300, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: '(1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"})) > 0.80 and node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"} > 0'
-              queryType: instant
+              expr: '1 - (node_filesystem_avail_bytes{mountpoint="/",fstype!="tmpfs"} / node_filesystem_size_bytes{mountpoint="/",fstype!="tmpfs"})'
+              instant: true
+              range: false
               refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
         for: 5m
         annotations:
-          summary: "Root disk >80% — investigate before 90%"
+          summary: 'Root disk above 80%: investigate before 90%'
+          runbook: 'docs/deployment/monitoring.md#diskroothigh'
         labels:
           severity: warning
 
       - uid: memory_pressure_high
         title: MemoryPressureHigh
-        condition: A
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+        for: 5m
+        annotations:
+          summary: 'Node memory above 85%: OOM risk for containers'
+          runbook: 'docs/deployment/monitoring.md#memorypressurehigh'
+        labels:
+          severity: warning
+
+  - orgId: 1
+    name: skillars-app-alerts
+    folder: "Skillars Alerts"
+    interval: 1m
+    rules:
+      - uid: http_5xx_rate_high
+        title: HttpServerErrorRateHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
         data:
           - refId: A
             relativeTimeRange: { from: 600, to: 0 }
             datasourceUid: Prometheus
             model:
-              expr: '(1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85'
-              queryType: instant
+              expr: '((sum(rate(http_server_requests_seconds_count{uri!~"/manage.*|.*/events",status=~"5.."}[5m])) or vector(0)) / clamp_min(sum(rate(http_server_requests_seconds_count{uri!~"/manage.*|.*/events"}[5m])), 0.001)) and on() (sum(increase(http_server_requests_seconds_count{uri!~"/manage.*|.*/events"}[5m])) >= 20)'
+              instant: true
+              range: false
               refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.05] }
         for: 5m
         annotations:
-          summary: "Node memory >85% used — OOM risk"
+          summary: 'More than 5% of requests are failing with a 5xx'
+          runbook: 'docs/deployment/monitoring.md#httpservererrorratehigh'
+          dashboard: /d/skillars-ops-overview
+        labels:
+          severity: critical
+
+      - uid: http_latency_high
+        title: HttpLatencyHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'histogram_quantile(0.95, sum by (le) (rate(http_server_requests_seconds_bucket{uri!~"/manage.*|.*/events"}[10m])))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+        for: 10m
+        annotations:
+          summary: 'p95 request latency is above 2s'
+          runbook: 'docs/deployment/monitoring.md#httplatencyhigh'
+          dashboard: /d/skillars-performance
+        labels:
+          severity: warning
+
+      - uid: error_log_spike
+        title: ErrorLogSpike
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Loki
+            model:
+              expr: 'sum(count_over_time({app="skillars",level="ERROR"} != "Filter-origin 401" [10m]))'
+              queryType: instant
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [50] }
+        for: 0s
+        annotations:
+          summary: 'More than 50 ERROR log lines in 10 minutes'
+          runbook: 'docs/deployment/monitoring.md#errorlogspike'
+          dashboard: /d/skillars-ops-overview
+        labels:
+          severity: warning
+
+      - uid: jvm_heap_high
+        title: JvmHeapHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(jvm_memory_usage_after_gc{area="heap"})'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.85] }
+        for: 5m
+        annotations:
+          summary: 'Heap is above 85% straight after GC: leak or undersized heap'
+          runbook: 'docs/deployment/monitoring.md#jvmheaphigh'
+          dashboard: /d/skillars-performance
+        labels:
+          severity: warning
+
+      - uid: gc_overhead_high
+        title: GcOverheadHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(jvm_gc_overhead)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.2] }
+        for: 10m
+        annotations:
+          summary: 'The JVM is spending over 20% of its CPU in GC'
+          runbook: 'docs/deployment/monitoring.md#gcoverheadhigh'
+          dashboard: /d/skillars-performance
+        labels:
+          severity: warning
+
+      - uid: tomcat_threads_saturated
+        title: TomcatThreadsSaturated
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(tomcat_threads_busy_threads / tomcat_threads_config_max_threads)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.9] }
+        for: 5m
+        annotations:
+          summary: 'Tomcat request threads above 90% of the pool'
+          runbook: 'docs/deployment/monitoring.md#tomcatthreadssaturated'
+          dashboard: /d/skillars-performance
+        labels:
+          severity: high
+
+      - uid: db_pool_high
+        title: DbConnectionPoolHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(hikaricp_connections_active / hikaricp_connections_max)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.8] }
+        for: 2m
+        annotations:
+          summary: 'DB connection pool above 80%: starvation risk'
+          runbook: 'docs/deployment/monitoring.md#dbconnectionpoolhigh'
+          dashboard: /d/skillars-database
+        labels:
+          severity: high
+
+      - uid: db_connection_timeouts
+        title: DbConnectionTimeouts
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'sum(increase(hikaricp_connections_timeout_total[5m])) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'Requests are failing because no DB connection was free'
+          runbook: 'docs/deployment/monitoring.md#dbconnectiontimeouts'
+          dashboard: /d/skillars-database
+        labels:
+          severity: high
+
+      - uid: lock_retries_exhausted
+        title: LockRetriesExhausted
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(increase(persistence_lock_retry_exhausted_total[15m])) or vector(0)) + (sum(persistence_lock_retry_exhausted_total unless persistence_lock_retry_exhausted_total offset 15m) or vector(0))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'A row stayed locked through every retry: users got a conflict error'
+          runbook: 'docs/deployment/monitoring.md#lockretriesexhausted'
+          dashboard: /d/skillars-database
+        labels:
+          severity: high
+
+      - uid: transaction_deadlocks
+        title: TransactionDeadlocks
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: Loki
+            model:
+              expr: 'sum(count_over_time({app="skillars",level=~"WARN|ERROR"} |~ "deadlock detected|40P01" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'Postgres reported a deadlock: two code paths take locks in opposite order'
+          runbook: 'docs/deployment/monitoring.md#transactiondeadlocks'
+          dashboard: /d/skillars-database
+        labels:
+          severity: high
+
+      - uid: scheduled_job_failing
+        title: ScheduledJobFailing
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 2400, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(increase(tasks_scheduled_execution_seconds_count{outcome="ERROR"}[30m])) or vector(0)) + (sum(tasks_scheduled_execution_seconds_count{outcome="ERROR"} unless tasks_scheduled_execution_seconds_count{outcome="ERROR"} offset 30m) or vector(0))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 2400, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'A scheduled job threw an exception'
+          runbook: 'docs/deployment/monitoring.md#scheduledjobfailing'
+          dashboard: /d/skillars-jobs
+        labels:
+          severity: high
+
+      - uid: second_instance_running
+        title: SecondInstanceRunning
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_app_instances_live)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [1] }
+        for: 5m
+        annotations:
+          summary: 'More than one app instance: SSE users on the other node miss events'
+          runbook: 'docs/deployment/monitoring.md#secondinstancerunning'
+          dashboard: /d/skillars-ops-overview
+        labels:
+          severity: high
+
+  - orgId: 1
+    name: skillars-business-alerts
+    folder: "Skillars Alerts"
+    interval: 1m
+    rules:
+      - uid: booking_settle_failure_rate
+        title: BookingPaymentSettleFailureRateHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(rate(booking_payment_settle_failed_total[15m])) + sum(rate(booking_payment_settle_error_total[15m]))) / clamp_min(sum(rate(booking_payment_settle_success_total[15m])) + sum(rate(booking_payment_settle_failed_total[15m])) + sum(rate(booking_payment_settle_error_total[15m])), 0.0001)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.25] }
+        for: 10m
+        annotations:
+          summary: 'Booking payment settle failure rate above 25%'
+          runbook: 'docs/deployment/monitoring.md#bookingpaymentsettlefailureratehigh'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: high
+
+      - uid: subscription_invoice_failure
+        title: SubscriptionInvoicePaymentFailureHigh
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3900, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'sum(increase(subscription_payment_invoice_failed_total[1h])) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 3900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [5] }
+        for: 5m
+        annotations:
+          summary: 'More than 5 subscription invoice failures in the last hour'
+          runbook: 'docs/deployment/monitoring.md#subscriptioninvoicepaymentfailurehigh'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: warning
+
+      - uid: stripe_webhook_failing
+        title: StripeWebhookFailing
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(increase(payment_stripe_webhook_seconds_count{error!="none"}[15m])) or vector(0)) + (sum(payment_stripe_webhook_seconds_count{error!="none"} unless payment_stripe_webhook_seconds_count{error!="none"} offset 15m) or vector(0))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [2] }
+        for: 0s
+        annotations:
+          summary: 'Stripe webhooks are failing: payment state is drifting from Stripe'
+          runbook: 'docs/deployment/monitoring.md#stripewebhookfailing'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: critical
+
+      - uid: money_integrity_event
+        title: MoneyIntegrityEvent
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: Loki
+            model:
+              expr: 'sum(count_over_time({app="skillars"} |~ "\\[(SETTLE_FAILED_AFTER_CHARGE|CHARGE_RECONCILE_AMOUNT_MISMATCH|CHARGE_RECONCILE_SETTLE_FAILED|COACH_PAYOUT_TRANSFER_MISMATCH|COACH_PAYOUT_ENQUEUE_FAILED|CREDIT_WALLET_REFUND_ENQUEUE_FAILED|REFUND_AMOUNT_UNKNOWN|ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN|PACK_PURCHASE_UNRECONCILED|PACK_PURCHASE_RECORD_FAILED|STRIPE_INTENT_RECORD_FAILED)\\]" [15m]))'
+              queryType: instant
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'Money and records disagree: a charge, refund or transfer needs reconciling'
+          runbook: 'docs/deployment/monitoring.md#moneyintegrityevent'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: critical
+
+      - uid: unrecoverable_payment
+        title: UnrecoverablePayment
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 2400, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(increase(booking_payment_pending_unrecoverable_total[30m])) or vector(0)) + (sum(booking_payment_pending_unrecoverable_total unless booking_payment_pending_unrecoverable_total offset 30m) or vector(0))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 2400, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'A payment could not be recovered automatically'
+          runbook: 'docs/deployment/monitoring.md#unrecoverablepayment'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: critical
+
+      - uid: outbox_rows_stuck
+        title: OutboxRowsStuck
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'sum(max by (detail) (skillars_backlog_count{backlog="outbox_stuck"})) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 5m
+        annotations:
+          summary: 'Outbox rows failed 10+ times: a refund, email or SLU delta has not run'
+          runbook: 'docs/deployment/monitoring.md#outboxrowsstuck'
+          dashboard: /d/skillars-jobs
+        labels:
+          severity: critical
+
+      - uid: payouts_overdue
+        title: PayoutsOverdue
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'sum(max by (detail) (skillars_backlog_count{backlog="payouts",detail=~"OVERDUE|FAILED_PERMANENT|REVERSAL_FAILED"})) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 15m
+        annotations:
+          summary: 'Coach payouts are overdue or have failed'
+          runbook: 'docs/deployment/monitoring.md#payoutsoverdue'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: high
+
+      - uid: cash_outs_unresolved
+        title: CashOutsUnresolved
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="cash_outs",detail="UNKNOWN"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [3600] }
+        for: 0s
+        annotations:
+          summary: 'A cash-out refund outcome has been unknown for over an hour'
+          runbook: 'docs/deployment/monitoring.md#cashoutsunresolved'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: high
+
+      - uid: admin_alerts_aging
+        title: AdminAlertsAging
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="admin_alerts"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [86400] }
+        for: 0s
+        annotations:
+          summary: 'An item in the admin queue has been unresolved for over 24 hours'
+          runbook: 'docs/deployment/monitoring.md#adminalertsaging'
+          dashboard: /d/skillars-business-health
+        labels:
+          severity: warning
+
+      - uid: disputes_aging
+        title: DisputesAging
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="disputes"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [172800] }
+        for: 0s
+        annotations:
+          summary: 'A dispute has been open for over 48 hours: a coach payout may be frozen'
+          runbook: 'docs/deployment/monitoring.md#disputesaging'
+          dashboard: /d/skillars-business-health
+        labels:
+          severity: warning
+
+      - uid: awaited_wrap_up_refused
+        title: AwaitedWrapUpRefused
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: Loki
+            model:
+              expr: 'sum(count_over_time({app="skillars"} |= "[AWAITED_WRAP_UP_REFUSED]" |= "RECAP_EDIT_WINDOW_CLOSED" [1h]))'
+              queryType: instant
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'A coach''s wrap-up arrived after the recap window: its development credit is lost'
+          runbook: 'docs/deployment/monitoring.md#awaitedwrapuprefused'
+          dashboard: /d/skillars-business-health
+        labels:
+          severity: warning
+
+      - uid: awaited_wrap_ups_near_deadline
+        title: AwaitedWrapUpsNearDeadline
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="awaited_wrap_ups"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [2246400] }
+        for: 0s
+        annotations:
+          summary: 'A coach wrap-up has waited 26+ days: development credit is lost at 30'
+          runbook: 'docs/deployment/monitoring.md#awaitedwrapupsneardeadline'
+          dashboard: /d/skillars-business-health
+        labels:
+          severity: warning
+
+      - uid: gdpr_request_overdue
+        title: GdprRequestOverdue
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="gdpr_requests"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [1728000] }
+        for: 0s
+        annotations:
+          summary: 'A GDPR request has been open 20+ days: the legal limit is one month'
+          runbook: 'docs/deployment/monitoring.md#gdprrequestoverdue'
+          dashboard: /d/skillars-jobs
+        labels:
+          severity: high
+
+      - uid: mail_delivery_failing
+        title: MailDeliveryFailing
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(rate(mail_send_seconds_count{outcome!="success"}[15m])) or vector(0)) / clamp_min(sum(rate(mail_send_seconds_count[15m])), 0.001)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 1200, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0.2] }
+        for: 10m
+        annotations:
+          summary: 'More than 20% of emails are failing to send'
+          runbook: 'docs/deployment/monitoring.md#maildeliveryfailing'
+          dashboard: /d/skillars-jobs
+        labels:
+          severity: high
+
+      - uid: video_moderation_bypassed
+        title: VideoModerationBypassed
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3900, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(increase(video_moderation_bypass_total[1h])) or vector(0)) + (sum(video_moderation_bypass_total unless video_moderation_bypass_total offset 1h) or vector(0))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 3900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'A video reached READY without a moderation verdict'
+          runbook: 'docs/deployment/monitoring.md#videomoderationbypassed'
+          dashboard: /d/skillars-jobs
+        labels:
+          severity: high
+
+      - uid: config_value_misconfigured
+        title: ConfigValueMisconfigured
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3900, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: '(sum(increase(config_value_misconfigured_total[1h])) or vector(0)) + (sum(config_value_misconfigured_total unless config_value_misconfigured_total offset 1h) or vector(0))'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 3900, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'A platform config value is out of range and was replaced by its default'
+          runbook: 'docs/deployment/monitoring.md#configvaluemisconfigured'
+          dashboard: /d/skillars-jobs
         labels:
           severity: warning
 

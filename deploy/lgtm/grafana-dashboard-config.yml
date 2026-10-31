@@ -3,9 +3,9 @@ apiVersion: 1
 providers:
   - name: 'skillars'
     orgId: 1
-    folder: ''
+    folder: 'Skillars'
     type: file
     disableDeletion: false
     editable: true
     options:
-      path: /etc/grafana/provisioning/dashboards
+      path: /etc/grafana/dashboards

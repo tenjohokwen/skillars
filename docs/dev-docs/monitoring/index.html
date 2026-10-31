@@ -139,7 +139,11 @@
       structured logs for exact error context, Prometheus metrics for rate/volume health signals, Tempo traces for
       causal request chains, and Grafana for dashboards and alerting. Its provisioning lives in <code>deploy/lgtm/</code>
       (<code>loki.yml</code>, <code>prometheus.yml</code>, <code>tempo.yml</code>, <code>alerts.yml</code>,
-      <code>grafana-*.yml</code>, <code>skillars-dashboard.json</code>). Reference docs:
+      <code>grafana-*.yml</code>, <code>dashboards/</code>). Six dashboards ship in the Skillars folder (overview,
+      business health, payments, performance, database, background work). The app adds two metric families for them:
+      <code>skillars.backlog.*</code> (<code>OperationalBacklogMetrics</code>, work waiting in the database) and
+      <code>http.server.allocated</code> (<code>RequestAllocationMetricsFilter</code>, heap allocated per route). Only rules
+      in <code>grafana-alerts.yml</code> notify anyone. Reference docs:
     </p>
     <ul>
       <li><a href="../../lgtm-observability.md">docs/lgtm-observability.md</a> — LogQL/PromQL/TraceQL query reference.</li>

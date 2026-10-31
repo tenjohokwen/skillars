@@ -516,7 +516,7 @@ Open `http://localhost:3000` and log in with user `admin` and whatever you set
 `GF_SECURITY_ADMIN_PASSWORD` to in `.env.local`. The `loki`, `tempo`, and
 `prometheus` datasources are already provisioned (via
 `deploy/lgtm/grafana-datasources.yml`), along with the dashboards under
-`deploy/lgtm/skillars-dashboard.json` — traces (Tempo), metrics (Prometheus)
+`deploy/lgtm/dashboards/` — traces (Tempo), metrics (Prometheus)
 and, since the appender fix, logs (Loki) are all queryable through the UI. Try
 `{app="skillars"}` in Explore against the `Loki` datasource; see the
 [Logs](#logs) section below.
