@@ -58,6 +58,7 @@ class AgeTierTransitionTest {
     @Mock private ModerationResultApplier moderationResultApplier;
     @Mock private com.softropic.skillars.infrastructure.security.RateLimitingService rateLimitingService;
     @Mock private com.softropic.skillars.platform.security.repo.UserRepository userRepository;
+    @Mock private com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
     @org.mockito.Spy private com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer contactDetailSanitizer =
         new com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer();
     @Mock private com.softropic.skillars.platform.marketplace.service.PlayerProfileService playerProfileService;

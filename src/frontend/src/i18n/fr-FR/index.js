@@ -130,6 +130,38 @@ export default {
       approvalsNone: 'Tout est à jour',
       tileUnavailable: 'Indisponible',
     },
+    // S-27: Stripe Identity age verification of self-registered players.
+    ageVerification: {
+      title: 'Vérifiez votre âge',
+      intro:
+        "Skillars s'adresse aux adultes. Les joueurs de moins de 18 ans sont pris en charge via un compte parent ; avant votre premier chat ou votre première réservation, nous devons donc confirmer que vous avez 18 ans ou plus.",
+      how: "Cela prend environ deux minutes : vous photographiez une pièce d'identité (passeport, carte d'identité ou permis de conduire) auprès de Stripe, notre partenaire d'identité.",
+      privacy:
+        'Skillars ne conserve que le résultat et votre date de naissance. Les images de votre document restent chez Stripe et sont supprimées après la vérification.',
+      required: 'Vous devez vérifier votre âge avant de pouvoir discuter ou réserver.',
+      start: 'Vérifier mon âge',
+      retry: 'Réessayer',
+      resume: 'Poursuivre la vérification',
+      checking: 'Vérification du document',
+      pending:
+        'Nous vérifions votre document. Cela prend généralement une minute — cette page se met à jour toute seule.',
+      failed:
+        "Nous n'avons pas pu vérifier votre document. Assurez-vous qu'il est net, entièrement visible et en cours de validité, puis réessayez.",
+      verified:
+        'Votre âge est vérifié. Vous pouvez discuter avec les coachs et réserver des séances.',
+      blocked:
+        "Notre vérification indique que vous avez moins de 18 ans. Les joueurs de moins de 18 ans sont pris en charge via un compte parent ; votre compte a été bloqué. Contactez le support s'il s'agit d'une erreur.",
+      attemptsLeft: "Tentatives restantes aujourd'hui : {count}",
+      attemptsExhausted: 'Vous avez utilisé vos tentatives du jour. Veuillez réessayer demain.',
+      unavailable:
+        "La vérification d'âge n'est pas activée. Vous pouvez réserver et payer comme d'habitude ; le chat s'ouvre après votre première séance terminée avec un coach.",
+      startError: "La vérification n'a pas pu démarrer. Veuillez réessayer dans un instant.",
+      backToWhere: 'Reprendre là où vous en étiez',
+      dashboardTitle: "Vérification d'âge",
+      dashboardPending: 'Vérifiez votre âge pour discuter et réserver',
+      dashboardVerified: 'Âge vérifié',
+      dashboardFailed: 'Vérification échouée — réessayez',
+    },
   },
   auth: {
     parentPrivacyBody:
@@ -2196,6 +2228,12 @@ export default {
         "Les parents ne peuvent pas envoyer de messages dans la conversation d'un joueur majeur.",
       conversationBlocked:
         "Cette conversation est bloquée — il n'est plus possible d'envoyer de nouveaux messages.",
+      ageVerificationRequired:
+        "Veuillez d'abord vérifier votre âge — vous allez être redirigé vers la page de vérification.",
+      playerNotAgeVerified:
+        "Ce joueur n'a pas encore terminé la vérification d'âge ; vous ne pouvez pas lui écrire pour le moment.",
+      completedSessionRequired:
+        "Le chat s'ouvre après votre première séance terminée avec ce coach.",
     },
     reportReason: {
       HARASSMENT: 'Harcèlement',

@@ -11,6 +11,7 @@ import com.stripe.model.SetupIntent;
 import com.stripe.model.Subscription;
 import com.stripe.model.Transfer;
 import com.stripe.model.TransferReversal;
+import com.stripe.model.identity.VerificationSession;
 import com.stripe.net.RequestOptions;
 import com.stripe.param.CustomerCreateParams;
 import com.stripe.param.InvoicePayParams;
@@ -28,6 +29,8 @@ import com.stripe.param.TransferCreateParams;
 import com.stripe.param.TransferListParams;
 import com.stripe.param.TransferReversalCollectionCreateParams;
 import com.stripe.param.TransferReversalCollectionListParams;
+import com.stripe.param.identity.VerificationSessionCreateParams;
+import com.stripe.param.identity.VerificationSessionRetrieveParams;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -103,6 +106,44 @@ public class StripeClient {
             .setIdempotencyKey(idempotencyKey)
             .build();
         return Refund.create(params, options);
+    }
+
+    /**
+     * S-27: creates a Stripe Identity document-check session under a caller-supplied idempotency key (a retry of
+     * the same attempt replays the session instead of creating, and paying for, another).
+     */
+    public VerificationSession createVerificationSession(VerificationSessionCreateParams params,
+                                                         String idempotencyKey) throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey(idempotencyKey)
+            .build();
+        return VerificationSession.create(params, options);
+    }
+
+    /** S-27: the session without its verified outputs (status, hosted URL, last error). */
+    public VerificationSession retrieveVerificationSession(String id) throws StripeException {
+        return VerificationSession.retrieve(id);
+    }
+
+    /**
+     * S-27: the session with {@code verified_outputs} expanded — the only way to read the verified date of birth
+     * (the webhook event never carries it).
+     */
+    public VerificationSession retrieveVerificationSessionWithOutputs(String id) throws StripeException {
+        VerificationSessionRetrieveParams params = VerificationSessionRetrieveParams.builder()
+            .addExpand("verified_outputs")
+            .build();
+        return VerificationSession.retrieve(id, params, RequestOptions.getDefault());
+    }
+
+    /** S-27: ends a session that failed, so a retry needs a new (counted) one. */
+    public VerificationSession cancelVerificationSession(String id) throws StripeException {
+        return VerificationSession.retrieve(id).cancel();
+    }
+
+    /** S-27: deletes the document, selfie and verified data Stripe holds for a concluded session. */
+    public VerificationSession redactVerificationSession(String id) throws StripeException {
+        return VerificationSession.retrieve(id).redact();
     }
 
     public SetupIntent createSetupIntent(SetupIntentCreateParams params) throws StripeException {

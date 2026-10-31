@@ -120,6 +120,7 @@ class GdprErasureServiceTest {
     @Mock private HomeworkCompletionRepository homeworkCompletionRepository;
     @Mock private BlobDeletionOutboxSupport blobDeletionOutboxSupport;
     @Mock private com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
+    @Mock private com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PessimisticLockRetryer lockRetryer;
@@ -165,7 +166,8 @@ class GdprErasureServiceTest {
             playerRadarBaselineRepository, playerRadarCompositeRepository, performanceReportRepository,
             playerTimelineRepository, homeworkCompletionRepository, blobDeletionOutboxSupport,
             refreshTokenRepository, eventPublisher, lockRetryer, entityManager, txManager, configService,
-            dataSource, coachMediaItemRepository, coachBrandingRepository, stripeCustomerErasureOutboxSupport);
+            dataSource, coachMediaItemRepository, coachBrandingRepository, stripeCustomerErasureOutboxSupport,
+            ageVerificationService);
         service.initTemplates();
         // skillars-deferred-132 AC1 Fix 4: erase() now delegates to self.eraseTransactional(...) so its
         // own connection-pool pre-check runs before the @Transactional(REQUIRES_NEW) proxy advice would
@@ -191,6 +193,8 @@ class GdprErasureServiceTest {
         service.erase(REQUEST_ID, USER_ID);
 
         org.mockito.Mockito.verify(stripeCustomerErasureOutboxSupport).scheduleErasure(USER_ID);
+        // S-27: the age-verification outcome rows are erased in the same transaction.
+        org.mockito.Mockito.verify(ageVerificationService).eraseForUser(USER_ID);
     }
 
     @Test

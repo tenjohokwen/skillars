@@ -12,6 +12,10 @@ const KNOWN_CODES = {
   'messaging.parentMessagingRestrictedForAdult':
     'messaging.errors.parentMessagingRestrictedForAdult',
   'messaging.conversationBlocked': 'messaging.errors.conversationBlocked',
+  // S-27: age-verification gates (SecurityError-less codes owned by the security module).
+  'security.ageVerificationRequired': 'messaging.errors.ageVerificationRequired',
+  'security.playerNotAgeVerified': 'messaging.errors.playerNotAgeVerified',
+  'security.completedSessionRequired': 'messaging.errors.completedSessionRequired',
 }
 
 export function messagingErrorCode(err) {

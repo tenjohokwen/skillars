@@ -82,6 +82,20 @@ flowchart LR
       <li>The drawer also lists Find a Coach, My bookings, Messages, Locker room, My videos, Credit wallet, Credit Statement, Your session packs and Player Development.</li>
     </ol>
 
+    <h3>3a. Proving you are 18 or older (first chat or first booking)</h3>
+    <p><strong>Why it matters:</strong> the date of birth you type at signup is only a claim, and Skillars is for adults — players under 18 are served through a parent account. So that a minor cannot slip in with a made-up birthday, a self-registered player verifies their age once, with an ID document, the first time they try to book a session, buy a pack or chat with a coach. Nothing is asked at signup.</p>
+    <ol>
+      <li>Trying to book (<code>/parent/coaches/:id/request-booking</code>), buy a pack or message a coach before you are verified sends you to <code>/player/age-verification</code> ("Verify your age"), with a note that you need to verify first. The Player dashboard also has an "Age verification" tile showing your status.</li>
+      <li>"Verify my age" opens Stripe's hosted page, where you photograph a passport, ID card or driving licence. When Stripe returns you to Skillars the page shows "Checking your document" and updates by itself, usually within a minute.</li>
+      <li>Verified: you can chat and book, and "Continue where you left off" takes you back to what you were doing. If the date of birth on the document differs from the one you registered with, the document wins and your profile is corrected.</li>
+      <li>Could not verify (blurry, covered or expired document): "Try again". You get a limited number of attempts per day (3 by default); when they are used up the page says to try again tomorrow.</li>
+      <li>If the document shows you are under 18, your account is blocked and your sessions are ended. Nothing is cancelled or refunded automatically; support can review it, and an under-18 player can be registered by a parent instead.</li>
+      <li>Skillars keeps only the result and your date of birth. The document images stay with Stripe and are deleted right after the check; deleting your account removes the record.</li>
+    </ol>
+    <div class="callout">
+      <p><strong>When verification is switched off</strong> (<code>identity.ageVerification.enabled</code>, off until an operator turns it on, and always off in dev/UAT) booking and paying work as before, but chat is closed in both directions until you have at least one <em>completed</em> session with that coach. A coach who tries to message an unverified player sees only that the player has not completed age verification. Players who registered before this feature are treated as unverified and are asked at their next chat or booking.</p>
+    </div>
+
     <h3>4. Finding a coach and booking a session</h3>
     <ol>
       <li>Go to <code>/marketplace</code> ("Find a Coach", also public). Type a city and search — there is no default/nearby listing. Filters (District, Age group, Language, Sort) then appear; results are coach cards with "Load more".</li>
@@ -120,7 +134,7 @@ flowchart LR
 
     <h3>9. Messaging your coach</h3>
     <ol>
-      <li>Start a conversation with "Message coach" on a booking in "My bookings" or on the coach's profile — it only appears once a booking links you to that coach.</li>
+      <li>Start a conversation with "Message coach" on a booking in "My bookings" or on the coach's profile — it only appears once a booking links you to that coach. As a self-registered player you must be age-verified first (step 3a), or, when verification is off, have a completed session with that coach.</li>
       <li><code>/messaging</code> ("Messages") is a two-panel screen: conversation list on the left, thread on the right; press Enter or click send.</li>
     </ol>
 
@@ -146,7 +160,7 @@ flowchart LR
     </div>
     <p><a href="../index.html">&larr; Back to Home</a></p>
 
-    <footer class="page-footer">Skillars business documentation — last verified against master <code>2ad84416</code> (2026-10-29).</footer>
+    <footer class="page-footer">Skillars business documentation — last verified against master <code>b78e264e</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

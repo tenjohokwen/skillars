@@ -248,6 +248,16 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (90); tiny → a repeat claimant is never seen", 90L);
 
     /**
+     * S-27: {@code AgeVerificationService.start} — how many Stripe Identity sessions one player may open in a rolling
+     * 24 hours. Stripe bills per verification, so this is the cost-amplification cap: a failed attempt ends its
+     * session, and the next try is a new, counted one. 0 would lock every self-registered player out of chat and
+     * booking while the feature is on, hence the floor of 1.
+     */
+    public static final BoundedKey IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY =
+        new BoundedKey("identity.ageVerification.maxAttemptsPerDay", 1L, 100L, false,
+            "out-of-range falls back to the coded default (3); huge → one player can run up Stripe Identity charges", 3L);
+
+    /**
      * fix/audit3-wallet-cashout-integrity: {@code CoachPayoutOutboxSupport.enqueuePayout} — a coach with fewer
      * than this many payouts already released (transferred) is "new": their payouts are held
      * {@link #PAYOUT_NEW_COACH_HOLD_HOURS} instead of {@code payment.payout.hold_hours}, so a chargeback inside
@@ -707,7 +717,8 @@ public final class ConfigBounds {
         PAYOUT_NEW_COACH_MIN_RELEASED_NET.key(),
         PAYOUT_NEW_COACH_HOLD_HOURS.key(),
         PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS.key(),
-        PAYOUT_RELATED_PARTY_HOLD_DAYS.key());
+        PAYOUT_RELATED_PARTY_HOLD_DAYS.key(),
+        IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -769,7 +780,8 @@ public final class ConfigBounds {
             PAYOUT_NEW_COACH_MIN_RELEASED_NET,
             PAYOUT_NEW_COACH_HOLD_HOURS,
             PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS,
-            PAYOUT_RELATED_PARTY_HOLD_DAYS));
+            PAYOUT_RELATED_PARTY_HOLD_DAYS,
+            IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

@@ -18,7 +18,10 @@ import com.softropic.skillars.platform.security.contract.exception.OperationNotA
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.platform.security.contract.AgeVerificationErrorCode;
+import com.softropic.skillars.platform.security.contract.exception.AgeVerificationException;
 import com.softropic.skillars.platform.security.service.AgePolicyService;
+import com.softropic.skillars.platform.security.service.AgeVerificationService;
 
 import jakarta.persistence.EntityManager;
 
@@ -64,6 +67,7 @@ class MessagingServiceTest {
     @Mock private ModerationResultApplier moderationResultApplier;
     @Mock private RateLimitingService rateLimitingService;
     @Mock private UserRepository userRepository;
+    @Mock private AgeVerificationService ageVerificationService;
 
     private MessagingService messagingService;
 
@@ -78,7 +82,8 @@ class MessagingServiceTest {
             playerProfileRepository, coachProfileRepository, moderationService,
             messagingEmitterRegistry, conversationCreationHelper, agePolicyService,
             playerProfileService, transactionTemplate, entityManager,
-            moderationResultApplier, new ContactDetailSanitizer(), rateLimitingService, userRepository
+            moderationResultApplier, new ContactDetailSanitizer(), rateLimitingService, userRepository,
+            ageVerificationService
         );
     }
 
@@ -296,6 +301,83 @@ class MessagingServiceTest {
 
         verify(transactionTemplate, never()).execute(any());
         verify(moderationService, never()).moderate(anyLong(), any());
+    }
+
+    // ── S-27: age-verification gate on chats with a self-registered player ────────────────────────────────────
+
+    private static final Long PLAYER_USER_ID = 555L;
+
+    private void arrangeSelfRegisteredPlayerConversation() {
+        arrangeSend(MessagingPolicy.unrestricted(), CoachProfileStatus.ACTIVE);
+        PlayerProfile self = player(PLAYER_ID, "Self Player");
+        self.setUserId(PLAYER_USER_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(self));
+        lenient().when(playerProfileRepository.findByUserId(PLAYER_USER_ID)).thenReturn(Optional.of(self));
+    }
+
+    private void assertGate(Runnable call, AgeVerificationErrorCode expected) {
+        assertThatThrownBy(call::run)
+            .isInstanceOf(AgeVerificationException.class)
+            .satisfies(e -> assertThat(((AgeVerificationException) e).getErrorCode()).isEqualTo(expected));
+        verify(transactionTemplate, never()).execute(any());
+    }
+
+    @Test
+    void sendMessage_unverifiedSelfRegisteredPlayer_verificationOn_playerMustVerify() {
+        arrangeSelfRegisteredPlayerConversation();
+        when(ageVerificationService.isVerified(PLAYER_USER_ID)).thenReturn(false);
+        when(ageVerificationService.isEnabled()).thenReturn(true);
+
+        assertGate(() -> messagingService.sendMessage(CONVERSATION_ID, "hi", PLAYER_USER_ID, "PLAYER"),
+            AgeVerificationErrorCode.AGE_VERIFICATION_REQUIRED);
+    }
+
+    @Test
+    void sendMessage_unverifiedSelfRegisteredPlayer_verificationOn_coachIsToldTheyAreNotVerified() {
+        arrangeSelfRegisteredPlayerConversation();
+        when(ageVerificationService.isVerified(PLAYER_USER_ID)).thenReturn(false);
+        when(ageVerificationService.isEnabled()).thenReturn(true);
+
+        assertGate(() -> messagingService.sendMessage(CONVERSATION_ID, "hi", COACH_USER_ID, "COACH"),
+            AgeVerificationErrorCode.PLAYER_NOT_AGE_VERIFIED);
+    }
+
+    @Test
+    void sendMessage_unverifiedSelfRegisteredPlayer_fallback_noCompletedSession_isRefusedBothWays() {
+        arrangeSelfRegisteredPlayerConversation();
+        when(ageVerificationService.isVerified(PLAYER_USER_ID)).thenReturn(false);
+        when(ageVerificationService.isEnabled()).thenReturn(false);
+        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, PLAYER_ID, List.of("COMPLETED")))
+            .thenReturn(false);
+
+        assertGate(() -> messagingService.sendMessage(CONVERSATION_ID, "hi", PLAYER_USER_ID, "PLAYER"),
+            AgeVerificationErrorCode.COMPLETED_SESSION_REQUIRED);
+        assertGate(() -> messagingService.sendMessage(CONVERSATION_ID, "hi", COACH_USER_ID, "COACH"),
+            AgeVerificationErrorCode.PLAYER_NOT_AGE_VERIFIED);
+    }
+
+    @Test
+    void sendMessage_unverifiedSelfRegisteredPlayer_fallback_completedSession_opensTheChat() {
+        arrangeSelfRegisteredPlayerConversation();
+        when(ageVerificationService.isVerified(PLAYER_USER_ID)).thenReturn(false);
+        when(ageVerificationService.isEnabled()).thenReturn(false);
+        when(bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, PLAYER_ID, List.of("COMPLETED")))
+            .thenReturn(true);
+
+        messagingService.sendMessage(CONVERSATION_ID, "hi", COACH_USER_ID, "COACH");
+
+        verify(transactionTemplate).execute(any());
+    }
+
+    @Test
+    void sendMessage_verifiedSelfRegisteredPlayer_isNotGated() {
+        arrangeSelfRegisteredPlayerConversation();
+        when(ageVerificationService.isVerified(PLAYER_USER_ID)).thenReturn(true);
+
+        messagingService.sendMessage(CONVERSATION_ID, "hi", COACH_USER_ID, "COACH");
+
+        verify(transactionTemplate).execute(any());
+        verify(bookingRepository, never()).existsByCoachIdAndPlayerIdAndStatusIn(any(), any(), any());
     }
 
     @Test

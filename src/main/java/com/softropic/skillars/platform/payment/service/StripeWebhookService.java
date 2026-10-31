@@ -100,6 +100,10 @@ public class StripeWebhookService {
     @Autowired
     private ChargeDisputeWebhookService chargeDisputeWebhookService;
 
+    /** S-27: Stripe Identity events. */
+    @Autowired
+    private StripeIdentityWebhookService identityWebhookService;
+
     /** Self-reference so @Transactional on handleEventAtomically is honoured via the Spring proxy. */
     @Autowired
     @Lazy
@@ -194,6 +198,9 @@ public class StripeWebhookService {
             chargeDisputeWebhookService.onChargeRefunded(deserialize(event, Charge.class), event);
         } else if ("invoice.paid".equals(event.getType())) {
             handleInvoicePaid(event);
+        } else if (event.getType().startsWith(StripeIdentityWebhookService.EVENT_PREFIX)) {
+            // S-27: Stripe Identity age verification of self-registered players.
+            identityWebhookService.handle(event);
         } else {
             log.debug("[STRIPE_WEBHOOK_UNKNOWN_TYPE type={}]", event.getType());
         }

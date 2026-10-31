@@ -53,16 +53,35 @@
             <template v-else>{{ t('player.dashboard.approvalsNone') }}</template>
           </div>
         </router-link>
+
+        <!-- S-27: Stripe Identity age verification; shown once the feature is on (or once verified). -->
+        <router-link
+          v-if="ageTileVisible"
+          :to="{ name: 'player-age-verification' }"
+          class="glass-card soft-hover player-dashboard__tile"
+          data-test="age-verification-tile"
+        >
+          <q-icon
+            :name="ageStatus.state === 'VERIFIED' ? 'verified' : 'badge'"
+            size="24px"
+            style="color: var(--accent-primary)"
+          />
+          <div class="text-card-title q-mt-sm">
+            {{ t('player.ageVerification.dashboardTitle') }}
+          </div>
+          <div class="text-meta q-mt-xs">{{ ageTileText }}</div>
+        </router-link>
       </div>
     </div>
   </q-page>
 </template>
 
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import { usePaymentStore } from 'src/stores/payment.store'
+import { ageVerificationApi } from 'src/api/ageVerification.api'
 
 const { t } = useI18n()
 const bookingStore = useBookingStore()
@@ -96,9 +115,38 @@ const formattedBalance = computed(() => {
   return balance != null ? `€${Number(balance).toFixed(2)}` : t('player.dashboard.tileUnavailable')
 })
 
+// S-27: the tile is a nicety — a failed status call just leaves it out; the gates still redirect on demand.
+const ageStatus = ref(null)
+const ageTileVisible = computed(
+  () =>
+    !!ageStatus.value?.applicable &&
+    (ageStatus.value.enabled || ageStatus.value.state === 'VERIFIED'),
+)
+const ageTileText = computed(() => {
+  switch (ageStatus.value?.state) {
+    case 'VERIFIED':
+      return t('player.ageVerification.dashboardVerified')
+    case 'FAILED':
+      return t('player.ageVerification.dashboardFailed')
+    case 'BLOCKED':
+      return t('player.ageVerification.blocked')
+    default:
+      return t('player.ageVerification.dashboardPending')
+  }
+})
+
+async function loadAgeStatus() {
+  try {
+    ageStatus.value = (await ageVerificationApi.getStatus()) ?? null
+  } catch {
+    ageStatus.value = null
+  }
+}
+
 onMounted(() => {
   bookingStore.loadParentBookings()
   paymentStore.fetchCreditBalance()
+  loadAgeStatus()
 })
 </script>
 

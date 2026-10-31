@@ -301,6 +301,13 @@ const routes = [
         meta: { requiresAuth: true, role: 'PLAYER' },
       },
       {
+        // S-27: Stripe Identity age verification of a self-registered player (also the return_url target).
+        path: 'player/age-verification',
+        name: 'player-age-verification',
+        component: () => import('pages/player/AgeVerificationPage.vue'),
+        meta: { requiresAuth: true, role: 'PLAYER' },
+      },
+      {
         path: 'player/videos',
         name: 'player-video-management',
         component: () => import('pages/VideoManagementPage.vue'),
