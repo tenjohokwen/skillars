@@ -793,6 +793,26 @@ logged at DEBUG and acknowledged):
 
 - [ ] `GEMINI_API_KEY`: message and review moderation and AI narrative features
   (`infrastructure.gemini`, model `gemini-2.0-flash`). Decide for PROD **(confirm)**.
+- [ ] **Gemini endpoint (S-20).** Only message and review **text** (up to 4000/2000 chars, no user ids, no
+  media) goes to Gemini. `GEMINI_MODE=developer` (default) calls the Google AI developer API with an API key,
+  which has **no GDPR Art. 28 data processing agreement and no EU data residency**. In prod this logs a
+  `COMPLIANCE:` WARN at startup and daily, shows a WARNING banner on the admin System Health page, and sets
+  the gauge `skillars_gemini_developer_api_in_prod` to 1 (alert on `== 1`). It never blocks boot. To move to
+  Vertex AI (EU, Google Cloud DPA):
+  1. Create (or pick) a Google Cloud project and enable billing.
+  2. Enable the **Vertex AI API** (`aiplatform.googleapis.com`).
+  3. Choose an EU location that serves the model (default `europe-west4`; `europe-west1` is an alternative) and
+     confirm the model id is available there. Vertex may need the versioned id (e.g. `gemini-2.0-flash-001`):
+     set `GEMINI_MODEL`.
+  4. Create a service account with role **Vertex AI User** (`roles/aiplatform.user`) only, and download a JSON key.
+  5. Accept the **Google Cloud Data Processing Addendum** (Cloud Console, Account settings / Legal and compliance)
+     and record Google Cloud as a processor in the records of processing (Art. 30), with the EU location.
+  6. Mount the key file read-only into the app container (e.g. `/run/secrets/gemini-sa.json`) and set
+     `GEMINI_MODE=vertex`, `GEMINI_VERTEX_PROJECT=<project id>`, `GEMINI_VERTEX_LOCATION=europe-west4`,
+     `GEMINI_VERTEX_CREDENTIALS_PATH=/run/secrets/gemini-sa.json`. `GEMINI_API_KEY` is then unused.
+  7. Redeploy; startup aborts with a clear message if a vertex setting or the key file is missing. After the
+     first moderated message, check there is no `Gemini API call failed` / `token exchange failed` log. The
+     admin health banner and the gauge clear on their own.
 - [ ] `features.toggles.arachnid-enabled: false` (Project Arachnid / C3P, `ARACHNID_API_KEY`). If
   you enable it, `platform.admin_alert_email` must be set or startup aborts (`runbook.md` →
   "Admin alert recipient").
@@ -836,6 +856,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `CashOutReconciliationService` | 15 min | hard-coded |
 | `SessionPackForfeitureScheduler` | 60 min | hard-coded |
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
+| `GeminiComplianceMonitor.remind` | 24 h | hard-coded; log-only, per instance, no ShedLock. Repeats the `COMPLIANCE:` WARN while prod runs `GEMINI_MODE=developer` |
 | `SubscriptionChangeApplicator` | daily 02:00 | hard-coded |
 | `SubscriptionGracePeriodChecker` | daily 03:00 | hard-coded |
 | `SubscriptionTierReconciliationScheduler` | daily 04:00 | hard-coded |

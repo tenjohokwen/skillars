@@ -15,28 +15,26 @@ import java.util.Map;
 public class GeminiClientImpl implements GeminiClient {
 
     private final RestTemplate restTemplate;
-    private final String apiKey;
-    private final String apiBaseUrl;
+    private final GeminiEndpoint endpoint;
     private final String model;
 
-    public GeminiClientImpl(RestTemplate restTemplate, String apiKey, String apiBaseUrl, String model) {
+    public GeminiClientImpl(RestTemplate restTemplate, GeminiEndpoint endpoint, String model) {
         this.restTemplate = restTemplate;
-        this.apiKey = apiKey;
-        this.apiBaseUrl = apiBaseUrl;
+        this.endpoint = endpoint;
         this.model = model;
     }
 
     @Override
     public ModerationVerdict evaluate(String combinedPrompt) {
-        String url = apiBaseUrl + "/v1beta/models/" + model + ":generateContent";
+        String url = endpoint.generateContentUrl(model);
 
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set("x-goog-api-key", apiKey);
+        endpoint.authenticate(headers);
 
         Map<String, Object> body = Map.of(
             "contents", List.of(
-                Map.of("parts", List.of(Map.of("text", combinedPrompt)))
+                Map.of("role", "user", "parts", List.of(Map.of("text", combinedPrompt)))
             ),
             "generationConfig", Map.of("maxOutputTokens", 10, "temperature", 0)
         );

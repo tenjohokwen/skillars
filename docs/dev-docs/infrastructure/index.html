@@ -103,7 +103,7 @@
       <div class="card"><h4>threadpool</h4><p>MDC task decorator, plus <code>ExecutorShutdown</code>/<code>GracefulShutdownTaskExecutor</code>: the per-pool drain budget on SIGTERM.</p></div>
       <div class="card"><h4>exception</h4><p><code>ApplicationException</code> — the base runtime exception (support-id, error code, log context) every module's own exceptions extend.</p></div>
       <div class="card"><h4>video</h4><p><code>VideoProviderAdapter</code> contract plus the BunnyCDN implementation: upload credentials, asset status, signed playback URLs, webhook verification, delete.</p></div>
-      <div class="card"><h4>gemini</h4><p>Thin client wrapping Google Gemini for text-content moderation, consumed by <code>messaging</code> and <code>reviews</code>.</p></div>
+      <div class="card"><h4>gemini</h4><p>Thin client wrapping Google Gemini for text-content moderation, consumed by <code>messaging</code> and <code>reviews</code>. Switchable between the developer API and Vertex AI (EU) by config; see <a href="#gemini">gemini</a>.</p></div>
       <div class="card"><h4>util</h4><p>Grab-bag of stateless helpers: <code>Constants</code>, <code>JsonUtil</code>, <code>TimeUtil</code>/<code>TimeGuru</code>, <code>ClockProvider</code>, <code>RandomUtil</code>, <code>PhoneNumberUtil</code>, <code>EnvUtil</code>, <code>BodySanitizer</code>, <code>TransactionIdProvider</code>.</p></div>
       <div class="card"><h4>config</h4><p>App-wide <code>@Configuration</code>: <code>Clock</code>/Jackson (<code>CommonConfig</code>), async executor, <code>SchedulingConfig</code>, <code>ShedLockConfig</code>, the routing <code>DataSource</code> with its isolated pools, JPA auditing, access logs, observability.</p></div>
       <div class="card"><h4>web</h4><p><code>LoggingFilter</code> (structured request logs), <code>Slf4jAccessLogValve</code> (Tomcat access log via SLF4J), and <code>FrontendLinkBuilder</code> (absolute hash-routed SPA links).</p></div>
@@ -413,6 +413,30 @@
       registration strategies. Don't concatenate a frontend URL by hand.
     </p>
 
+    <h3 id="gemini">gemini — developer API or Vertex AI, and the compliance warning</h3>
+    <p>
+      <code>GeminiClientImpl</code> is the one moderation client: it sends a single text prompt (a chat message or a
+      review, truncated, never media, never user ids) to <code>generateContent</code> and parses
+      <code>SAFE</code>/<code>UNSAFE</code>/<code>UNCERTAIN</code>. Where it calls is a
+      <code>GeminiEndpoint</code> strategy chosen by <code>infrastructure.gemini.mode</code> (<code>GEMINI_MODE</code>):
+    </p>
+    <ul>
+      <li><code>developer</code> (default): <code>DeveloperGeminiEndpoint</code>, <code>generativelanguage.googleapis.com</code>
+        with <code>x-goog-api-key</code>. No Art. 28 DPA and no EU residency.</li>
+      <li><code>vertex</code>: <code>VertexGeminiEndpoint</code>, <code>{location}-aiplatform.googleapis.com</code>
+        (default <code>europe-west4</code>) under the Google Cloud DPA. <code>GoogleAccessTokenProvider</code> signs an
+        RS256 JWT-bearer assertion from the service-account key file and caches the access token, so no Google auth
+        library is on the classpath. Missing project, location or key file aborts startup.</li>
+    </ul>
+    <p>
+      Request and response bodies are identical in both modes, so moderation logic and tests are shared. In
+      <code>prod</code> with <code>developer</code> mode, <code>GeminiComplianceMonitor</code> logs a
+      <code>COMPLIANCE:</code> WARN at startup and daily, sets the gauge <code>skillars.gemini.developer_api_in_prod</code>
+      to 1, and <code>GeminiComplianceHealthIndicator</code> reports a custom <code>WARNING</code> status that the admin
+      System Health page shows as a banner. The aggregate health stays UP and boot is never blocked. Steps to move to
+      Vertex are in <code>docs/deployment/provisioning-checklist.md</code>.
+    </p>
+
     <h3 id="i18n">i18n</h3>
     <p>
       <code>WarnOnMissingMessageSource</code> is the application <code>MessageSource</code>
@@ -597,7 +621,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>b78e264e</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

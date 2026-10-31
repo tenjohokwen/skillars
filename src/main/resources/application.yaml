@@ -432,10 +432,18 @@ infrastructure:
     flag-threshold: 0.7
     timeout-seconds: 300
   gemini:
+    # developer = Google AI developer API (API key; no DPA / EU residency, prod logs a compliance warning).
+    # vertex = Vertex AI in an EU region under the Google Cloud DPA (service-account key file).
+    mode: ${GEMINI_MODE:developer}
     api-key: ${GEMINI_API_KEY:}
     api-base-url: https://generativelanguage.googleapis.com
-    model: gemini-2.0-flash
+    # Must be a model id both endpoints serve; Vertex may need the versioned id (e.g. gemini-2.0-flash-001).
+    model: ${GEMINI_MODEL:gemini-2.0-flash}
     timeout-seconds: 30
+    vertex:
+      project-id: ${GEMINI_VERTEX_PROJECT:}
+      location: ${GEMINI_VERTEX_LOCATION:europe-west4}
+      credentials-path: ${GEMINI_VERTEX_CREDENTIALS_PATH:}
 
 platform:
   messaging:

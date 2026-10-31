@@ -121,6 +121,13 @@ services:
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET:-}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET:-}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # developer (default; prod logs a compliance warning, no DPA / EU residency) or vertex (EU region, Google Cloud DPA).
+      - GEMINI_MODE=${GEMINI_MODE:-developer}
+      - GEMINI_MODEL=${GEMINI_MODEL:-gemini-2.0-flash}
+      - GEMINI_VERTEX_PROJECT=${GEMINI_VERTEX_PROJECT:-}
+      - GEMINI_VERTEX_LOCATION=${GEMINI_VERTEX_LOCATION:-europe-west4}
+      # Path INSIDE the container of the service-account key JSON (mount it read-only; see provisioning-checklist.md).
+      - GEMINI_VERTEX_CREDENTIALS_PATH=${GEMINI_VERTEX_CREDENTIALS_PATH:-}
       # AI moderation and safety providers (off unless enabled in config). Defaults mirror application.yaml.
       - ARACHNID_API_BASE_URL=${ARACHNID_API_BASE_URL:-https://api.c3p.ca}
       - VIDEOINTEL_PROJECT_ID=${VIDEOINTEL_PROJECT_ID:-}
