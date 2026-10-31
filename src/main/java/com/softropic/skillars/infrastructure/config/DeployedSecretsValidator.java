@@ -13,7 +13,9 @@ import java.util.Map;
 /**
  * Refuses to boot a deployed ({@code prod}/{@code uat}) instance whose secrets are blank or still the
  * development defaults from {@code application-dev.yaml}. The JWT signing key ({@code JWT_SIGNING_KEY}) is
- * held to the same rule and must be Base64 of at least 64 bytes. Values are never put in a message.
+ * held to the same rule and must be Base64 of at least 64 bytes. The S3 endpoint must be {@code https}:
+ * presigned URLs carry the access key in their query string and are fetched by browsers (S-25). Values are
+ * never put in a message.
  *
  * <p>Blank {@code PLATFORM_PIN_ENCRYPTION_SECRET} already aborts boot in {@code Cryptopher}; the video
  * playback signing secret, by contrast, only failed the first time a token was issued. Both are checked
@@ -34,6 +36,9 @@ public class DeployedSecretsValidator {
     static final String JWT_SIGNING_KEY = "app.security.jwt.signing-key";
     /** Fed by SPRING_DATA_REDIS_PASSWORD (compose maps it from REDIS_PASSWORD); redis itself runs with the same value. */
     static final String REDIS_PASSWORD = "spring.data.redis.password";
+    static final String STORAGE_PROVIDER = "app.storage.provider";
+    static final String STORAGE_ENDPOINT_URL = "app.storage.endpoint-url";
+    static final String STORAGE_BACKUP_ENDPOINT_URL = "app.storage.replication.backup.endpoint-url";
 
     /** Every value application-dev.yaml falls back to for these properties, plus the test fixtures'. */
     private static final Map<String, List<String>> KNOWN_DEFAULTS = Map.of(
@@ -61,6 +66,32 @@ public class DeployedSecretsValidator {
         KNOWN_DEFAULTS.forEach(this::requireRealValue);
         requireBase64Key(PLAYBACK_SECRET, MIN_HMAC_KEY_BYTES);
         requireBase64Key(JWT_SIGNING_KEY, MIN_JWT_KEY_BYTES);
+        requireHttpsStorageEndpoints();
+    }
+
+    /**
+     * Only the {@code s3} provider (the default) builds URLs from the endpoint; the {@code local} provider has
+     * none. The backup endpoint is optional (blank means no replication target), so it is checked only when set.
+     */
+    private void requireHttpsStorageEndpoints() {
+        if (!"s3".equalsIgnoreCase(env.getProperty(STORAGE_PROVIDER, "s3"))) {
+            return;
+        }
+        String endpoint = env.getProperty(STORAGE_ENDPOINT_URL);
+        if (endpoint == null || endpoint.isBlank()) {
+            throw new AppSetupException(STORAGE_ENDPOINT_URL + " must be set in a deployed environment");
+        }
+        requireHttps(STORAGE_ENDPOINT_URL, endpoint);
+        String backup = env.getProperty(STORAGE_BACKUP_ENDPOINT_URL);
+        if (backup != null && !backup.isBlank()) {
+            requireHttps(STORAGE_BACKUP_ENDPOINT_URL, backup);
+        }
+    }
+
+    private void requireHttps(String property, String url) {
+        if (!url.trim().regionMatches(true, 0, "https://", 0, "https://".length())) {
+            throw new AppSetupException(property + " must be an https:// URL in a deployed environment");
+        }
     }
 
     private void requireRealValue(String property, List<String> knownDefaults) {

@@ -74,11 +74,13 @@ services:
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
       # Same single-endpoint constraint as docker-compose.uat.yml (S3Presigner bakes
       # app.storage.endpoint-url into every presigned URL it hands back) — but there's no
-      # STORAGE_DOMAIN/Traefik here, just the one real hostname this box already has, on
-      # the storage service's directly-published port. See `extra_hosts` below for why the
-      # app container can reach this same URL reliably.
+      # Traefik here: the box's existing nginx terminates TLS for STORAGE_DOMAIN on 443 and
+      # proxies to the storage service on 127.0.0.1:9500 (S-25; deploy/nginx/ and
+      # uat-hostwinds-deployment.md Step 6). It MUST be https: presigned URLs carry the access
+      # key in the query string, and DeployedSecretsValidator refuses to boot uat on a non-https
+      # endpoint. See `extra_hosts` below for why the app container can reach this same URL.
       - APP_STORAGE_BUCKET=${APP_STORAGE_BUCKET}
-      - APP_STORAGE_ENDPOINT_URL=http://${DOMAIN}:9500
+      - APP_STORAGE_ENDPOINT_URL=https://${STORAGE_DOMAIN:?set STORAGE_DOMAIN in .env.uat, the DNS name nginx serves storage on over https}
       - APP_STORAGE_S3_ACCESS_KEY=${STORAGE_ROOT_USER}
       - APP_STORAGE_S3_SECRET_KEY=${STORAGE_ROOT_PASSWORD}
       # ses-1.2 D9: SPRING_MAIL_PASSWORD removed — it backed Boot's own autoconfigured
@@ -96,15 +98,17 @@ services:
       - ENVIRONMENT=${ENVIRONMENT:-uat}
       - APP_FRONTEND_URL=${APP_FRONTEND_URL:?set APP_FRONTEND_URL in .env.uat, e.g. https://<DOMAIN>}
       - APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL=${APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL:?set APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL in .env.uat, e.g. https://<DOMAIN>/api/payment/coaches/me/stripe/callback}
-    # Makes `http://${DOMAIN}:9500/...` (the value baked into every presigned URL, above)
+    # Makes `https://${STORAGE_DOMAIN}/...` (the value baked into every presigned URL, above)
     # resolve straight to this Docker host's gateway from inside the container, instead of
     # a real DNS lookup + round-trip out to the public internet and back in on the same
     # box's own public IP ("NAT hairpin") — which Docker's own iptables NAT rules aren't
     # guaranteed to handle cleanly even on a VPS where the OS itself would. `host-gateway`
     # is the Docker-documented way to sidestep that ambiguity entirely (Docker Engine
-    # 20.10+, already satisfied by a fresh install).
+    # 20.10+, already satisfied by a fresh install). It lands on the host's nginx :443, which
+    # presents the real Let's Encrypt certificate for this name, so the JVM's normal TLS
+    # hostname verification still passes (no trust-store tweaks).
     extra_hosts:
-      - "${DOMAIN}:host-gateway"
+      - "${STORAGE_DOMAIN}:host-gateway"
     ports:
       # Bound to localhost only — reached via the box's existing nginx (port 80), not
       # directly from the internet. See uat-hostwinds-deployment.md for why this doesn't
@@ -155,13 +159,12 @@ services:
     volumes:
       - skillars-uat-hostwinds-redis:/data
 
-  # Stands in for the real S3 API. Unlike docker-compose.uat.yml, there's no
-  # STORAGE_DOMAIN/Traefik here — this box only has the one real hostname (DOMAIN), so
-  # the storage service's S3 API port is published directly instead of routed through a
-  # reverse proxy. (A path-based nginx location block was considered and rejected: S3 SigV4
-  # signatures cover the exact host/path used, so inserting an nginx path prefix breaks
-  # presigned URL validation unless carefully rewritten — directly publishing the port
-  # avoids that whole class of problem.)
+  # Stands in for the real S3 API. Unlike docker-compose.uat.yml there's no Traefik here, so
+  # TLS is terminated by the box's existing nginx on a dedicated hostname (STORAGE_DOMAIN) that
+  # proxies to this service's localhost-only port. (A path-based nginx location on the app's
+  # hostname was considered and rejected: S3 SigV4 signatures cover the exact host/path used, so
+  # inserting an nginx path prefix breaks presigned URL validation unless carefully rewritten —
+  # a whole hostname with the Host header preserved avoids that whole class of problem.)
   #
   # Runs SeaweedFS, not MinIO — as of 2026-09-24, quay.io/minio/minio (both this pinned tag
   # and :latest) 401s on anonymous pulls, confirmed via direct `docker pull`; a
@@ -207,10 +210,12 @@ services:
     volumes:
       - skillars-uat-hostwinds-storage:/data
     ports:
-      # Publicly reachable on purpose — real browsers need to reach presigned URLs built
-      # from APP_STORAGE_ENDPOINT_URL above. Needs `ufw allow 9500/tcp` (not needed for
-      # 9990, which stays localhost-only behind nginx) — see uat-hostwinds-deployment.md.
-      - "9500:9500"
+      # Localhost only — NOT public (S-25). Browsers reach storage over https through the
+      # box's nginx on 443 (STORAGE_DOMAIN), which proxies here. Published as 127.0.0.1 rather
+      # than left unpublished because the host nginx is outside the compose network. A bare
+      # "9500:9500" would be world-reachable regardless of `ufw` (Docker's iptables rules
+      # bypass it), so the bind address is the only thing that actually closes the port.
+      - "127.0.0.1:9500:9500"
     healthcheck:
       # No `mc`-equivalent ships in this image; a plain TCP probe on the S3 port is enough
       # to gate `depends_on: condition: service_healthy` below.
