@@ -32,6 +32,12 @@ public class BookingCancelledByAdminEvent extends ApplicationEvent {
     public static final String REASON_COACH_UNAVAILABLE = "COACH_UNAVAILABLE";
     /** C6: {@code bookings.cancel_reason} of a single booking an admin cancelled from the admin bookings page. */
     public static final String REASON_ADMIN_SUPPORT = "ADMIN_SUPPORT";
+    /**
+     * S-07: {@code bookings.cancel_reason} of a session nobody started, claimed or quick-completed, refunded in full
+     * by {@code UnresolvedSessionSweeperService} {@code booking.unresolvedSession.autoRefundHours} after its start.
+     * No coach strike; both sides are told.
+     */
+    public static final String REASON_NEVER_STARTED = "NEVER_STARTED";
 
     private final UUID bookingId;
     private final Long parentId;

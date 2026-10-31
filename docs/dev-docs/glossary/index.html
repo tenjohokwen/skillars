@@ -83,7 +83,7 @@
 
     <h2 id="a">A</h2>
     <h3 id="admin-alert">Admin alert / moderation queue</h3>
-    <p>The admin back office's single work queue. Events from other modules (reported messages, AI-moderation holds, flagged reviews, strike thresholds, disputes, GDPR deadline overruns, orphaned subscriptions) become one de-duplicated <code>OPEN</code> alert row each, served at <code>/admin/moderation</code>. Payment problems (<code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code>, <code>SESSION_NEVER_STARTED</code>) are grouped into one <a href="#payment-integrity-alert">payment-integrity</a> bucket.</p>
+    <p>The admin back office's single work queue. Events from other modules (reported messages, AI-moderation holds, flagged reviews, strike thresholds, disputes, GDPR deadline overruns, orphaned subscriptions) become one de-duplicated <code>OPEN</code> alert row each, served at <code>/admin/moderation</code>. Payment problems (<code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code>, <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code>, <code>SESSION_NEVER_STARTED</code>, <code>REPEAT_NO_SHOW_CLAIMANT</code>) are grouped into one <a href="#payment-integrity-alert">payment-integrity</a> bucket.</p>
     <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>AdminAlertEventListener</code>, <code>AdminQueueService</code>, table <code>admin.admin_alerts</code></p>
 
     <h3 id="age-tier">Age tier</h3>
@@ -244,7 +244,7 @@
 
     <h2 id="p">P</h2>
     <h3 id="payment-integrity-alert">Payment-integrity alert</h3>
-    <p>The admin-queue bucket for money problems a human must settle: <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code> (a payout stuck in <code>FROZEN</code>/<code>HOLD</code> longer than <code>payment.payout.stale_alert_days</code>), <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code> (a booking a coach suspension could not cancel) and <code>SESSION_NEVER_STARTED</code>. They share one resolve action.</p>
+    <p>The admin-queue bucket for money problems a human must settle: <code>CHARGEBACK</code>, <code>EXTERNAL_REFUND</code>, <code>PAYOUT_HELD</code> (a payout stuck in <code>FROZEN</code>/<code>HOLD</code> longer than <code>payment.payout.stale_alert_days</code>), <code>PAYOUT_REVERSAL_FAILED</code>, <code>BOOKING_ACTION_REQUIRED</code> (a booking a coach suspension could not cancel), <code>SESSION_NEVER_STARTED</code> (historic; no longer raised) and <code>REPEAT_NO_SHOW_CLAIMANT</code> (informational). They share one resolve action.</p>
     <p><strong>See</strong> <a href="../admin/index.html">Admin</a> · <strong>Code</strong> <code>PaymentIntegrityAlertEvent</code>, <code>AdminQueueService.resolvePaymentIntegrityAlert</code>, <code>POST /api/admin/queue/payment-alerts/{alertId}/resolve</code></p>
 
     <h3 id="payout-hold">Payout hold</h3>

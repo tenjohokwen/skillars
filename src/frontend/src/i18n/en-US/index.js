@@ -1365,6 +1365,7 @@ export default {
         PAYOUT_REVERSAL_FAILED: 'Coach payout reversal failed',
         BOOKING_ACTION_REQUIRED: 'Booking needs manual action',
         SESSION_NEVER_STARTED: 'Session ended without being started',
+        REPEAT_NO_SHOW_CLAIMANT: 'Repeat coach no-show claimant (informational)',
       },
     },
     reviewModeration: {
@@ -2691,6 +2692,8 @@ export default {
       SESSION_FORFEITED_LATE_CANCEL:
         'Your late cancellation of the session on {requestedStartTime} is not refunded: the session is forfeited.',
       BOOKING_REMINDER: 'Reminder: session with {coachDisplayName} on {requestedStartTime}.',
+      COACH_START_REMINDER:
+        'Press Start: your session with {playerName} (scheduled {requestedStartTime}) has not been started. Unstarted sessions can be refunded.',
       SESSION_PACK_EXPIRY_WARNING:
         '{creditsRemaining} session(s) with {coachDisplayName} expire on {expiresAt}.',
       SESSION_PACK_EXPIRED: 'Your session pack with {coachDisplayName} has expired.',

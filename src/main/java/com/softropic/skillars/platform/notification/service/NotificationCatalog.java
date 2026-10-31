@@ -77,7 +77,7 @@ public final class NotificationCatalog {
             // Recipient is always the coach.
             case BOOKING_REQUESTED, BOOKING_RESCHEDULE_REQUESTED, BOOKING_RESCHEDULE_DECLINED_BY_PARENT,
                  BOOKING_BATCH_REQUESTED, BOOKING_CANCELLED_DUE_TO_PAUSE, BOOKING_CANCELLED_BY_PARENT,
-                 BOOKING_CANCELLED_BY_SKILLARS, PLAYER_NO_SHOW ->
+                 BOOKING_CANCELLED_BY_SKILLARS, PLAYER_NO_SHOW, COACH_START_REMINDER ->
                 inApp(NotificationCategory.BOOKING, COACH_BOOKINGS, COACH_BOOKINGS);
             // Recipient is always the parent (or a self-registered player booking for themselves).
             case BOOKING_CONFIRMED, BOOKING_DECLINED, BOOKING_PAYMENT_UNRESOLVED, BOOKING_EXPIRED,

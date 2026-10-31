@@ -215,13 +215,37 @@ public final class ConfigBounds {
     /**
      * fix/booking-completion-integrity: {@code UnresolvedSessionSweeperService} — how long after a
      * booking's scheduled end a session still IN_PROGRESS / PAUSED is ended automatically (moved to
-     * COMPLETED_PENDING_CONFIRMATION, so the parent's confirm / dispute window applies), and a session
-     * still UPCOMING (never started) raises a SESSION_NEVER_STARTED admin alert. The floor keeps a
-     * session that merely overran from being cut off.
+     * COMPLETED_PENDING_CONFIRMATION, so the parent's confirm / dispute window applies). The floor keeps a
+     * session that merely overran from being cut off. (A session never started is no longer alerted here: S-07
+     * refunds it automatically, see {@link #BOOKING_UNRESOLVED_SESSION_AUTO_REFUND_HOURS}.)
      */
     public static final BoundedKey BOOKING_UNRESOLVED_SESSION_GRACE_MINUTES =
         new BoundedKey("booking.unresolvedSession.graceMinutes", 30L, 10080L, false,
             "out-of-range falls back to the coded default (120); tiny → overrunning live sessions are cut off", 120L);
+
+    /**
+     * S-07 (owner decision 2026-10-31): {@code UnresolvedSessionSweeperService} — how long after a booking's
+     * scheduled START a session nobody started, claimed or quick-completed is refunded in full to the payer
+     * automatically (no coach strike). The sweeper never uses less than
+     * {@link #BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS} + 1, so a family always has its whole claim window first.
+     * The coach may quick-complete until then (the parent's confirm / dispute window applies). Floor 2.
+     */
+    public static final BoundedKey BOOKING_UNRESOLVED_SESSION_AUTO_REFUND_HOURS =
+        new BoundedKey("booking.unresolvedSession.autoRefundHours", 2L, 720L, false,
+            "out-of-range falls back to the coded default (48); tiny → a coach who forgot the app loses the session before they can quick-complete", 48L);
+
+    /**
+     * S-07: {@code CoachNoShowRepeatClaimantAlertListener} — a payer whose coach no-show claims (reports, late-cancel
+     * claims and conflict-zone splits) reach this many within {@link #BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_WINDOW_DAYS}
+     * raises one informational admin alert per payer per window. Nothing is blocked or decided automatically.
+     */
+    public static final BoundedKey BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_THRESHOLD =
+        new BoundedKey("booking.coachNoShow.repeatClaimAlertThreshold", 1L, 1000L, false,
+            "out-of-range falls back to the coded default (3); 1 → every claim alerts", 3L);
+
+    public static final BoundedKey BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_WINDOW_DAYS =
+        new BoundedKey("booking.coachNoShow.repeatClaimAlertWindowDays", 1L, 3650L, false,
+            "out-of-range falls back to the coded default (90); tiny → a repeat claimant is never seen", 90L);
 
     /**
      * fix/audit3-wallet-cashout-integrity: {@code CoachPayoutOutboxSupport.enqueuePayout} — a coach with fewer
@@ -652,6 +676,9 @@ public final class ConfigBounds {
         BOOKING_RECAP_EDIT_WINDOW_DAYS.key(),
         BOOKING_LATE_CANCEL_GRACE_MINUTES.key(),
         BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS.key(),
+        BOOKING_UNRESOLVED_SESSION_AUTO_REFUND_HOURS.key(),
+        BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_THRESHOLD.key(),
+        BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_WINDOW_DAYS.key(),
         COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW.key(),
         COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS.key(),
         BOOKING_REQUEST_MAX_PENDING_PER_COACH.key(),
@@ -710,6 +737,9 @@ public final class ConfigBounds {
             BOOKING_RECAP_EDIT_WINDOW_DAYS,
             BOOKING_LATE_CANCEL_GRACE_MINUTES,
             BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS,
+            BOOKING_UNRESOLVED_SESSION_AUTO_REFUND_HOURS,
+            BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_THRESHOLD,
+            BOOKING_COACH_NO_SHOW_REPEAT_CLAIM_ALERT_WINDOW_DAYS,
             COACH_EXCUSED_CANCELLATIONS_MAX_PER_WINDOW,
             COACH_EXCUSED_CANCELLATIONS_WINDOW_DAYS,
             BOOKING_REQUEST_MAX_PENDING_PER_COACH,

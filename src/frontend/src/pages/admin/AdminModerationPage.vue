@@ -410,6 +410,7 @@ const typeLabels = computed(() => ({
   PAYOUT_REVERSAL_FAILED: t('admin.moderation.types.PAYOUT_REVERSAL_FAILED'),
   BOOKING_ACTION_REQUIRED: t('admin.moderation.types.BOOKING_ACTION_REQUIRED'),
   SESSION_NEVER_STARTED: t('admin.moderation.types.SESSION_NEVER_STARTED'),
+  REPEAT_NO_SHOW_CLAIMANT: t('admin.moderation.types.REPEAT_NO_SHOW_CLAIMANT'),
 }))
 
 const typeOptions = computed(() => [
@@ -465,7 +466,8 @@ function isCoachAlert(type) {
 
 // Chargebacks, refunds made outside the app, held payouts and failed reversals: no workflow of their
 // own — the admin reconciles in Stripe / the runbook and marks them handled. SESSION_NEVER_STARTED: a
-// paid session that ended without being started (contact the parent / coach).
+// paid session that ended without being started (historic; such sessions are now refunded
+// automatically). REPEAT_NO_SHOW_CLAIMANT: informational, mark it handled.
 const PAYMENT_INTEGRITY_TYPES = [
   'CHARGEBACK',
   'EXTERNAL_REFUND',
@@ -473,6 +475,7 @@ const PAYMENT_INTEGRITY_TYPES = [
   'PAYOUT_REVERSAL_FAILED',
   'BOOKING_ACTION_REQUIRED',
   'SESSION_NEVER_STARTED',
+  'REPEAT_NO_SHOW_CLAIMANT',
 ]
 
 function isPaymentIntegrityAlert(type) {

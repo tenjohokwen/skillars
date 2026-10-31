@@ -32,6 +32,16 @@ class NotificationCatalogTest {
             EmailTemplate.PERFORMANCE_REPORT_SHARED);
     }
 
+    /** S-07: the coach's "press Start" reminder is safety-relevant — transactional (never opt-out-able), with an inbox row. */
+    @Test
+    void coachStartReminder_isTransactionalBookingCategory_withACoachInboxRow() {
+        NotificationCatalog.Entry entry = NotificationCatalog.of(EmailTemplate.COACH_START_REMINDER);
+        assertThat(entry.category()).isEqualTo(NotificationCategory.BOOKING);
+        assertThat(entry.category().optOutable()).isFalse();
+        assertThat(entry.inApp()).isTrue();
+        assertThat(entry.deepLinkFor(true)).isEqualTo("/coach/booking-requests");
+    }
+
     @ParameterizedTest
     @EnumSource(value = EmailTemplate.class, names = {
         "ACTIVATION", "CREATION_DUP", "PASSWORD_RESET", "SEND_OTP", "COACH_EMAIL_VERIFY", "COACH_OTP",

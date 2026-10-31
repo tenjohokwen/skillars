@@ -111,6 +111,26 @@ public interface AdminAlertRepository extends JpaRepository<AdminAlert, UUID> {
                          @Param("adminId") Long adminId);
 
     /**
+     * S-07: a payer's REPEAT_NO_SHOW_CLAIMANT alerts raised since {@code since}, whatever their status — "one per payer
+     * per window" must hold even after an admin marked the first one handled. {@code prefix} is
+     * {@code "payer <userId>:%"} (the colon stops one id matching another's prefix).
+     */
+    @Query(value = """
+        SELECT COUNT(*) FROM admin.admin_alerts
+        WHERE type = 'REPEAT_NO_SHOW_CLAIMANT' AND reason LIKE :prefix AND created_at > :since
+        """, nativeQuery = true)
+    long countRepeatClaimantAlertsSince(@Param("prefix") String prefix, @Param("since") java.time.Instant since);
+
+    /**
+     * S-07: serialises concurrent claims by one payer so the count-then-insert above cannot raise two alerts. Two-int
+     * form {@code (namespace, hashtext(key))} keeps it out of the other advisory key spaces ("RCLM"); held to the end of
+     * the caller's transaction. Not {@code @Modifying}: a SELECT of a void function, like
+     * {@code CoachCancellationHistoryRepository.acquireCoachCancellationLock}.
+     */
+    @Query(value = "SELECT pg_advisory_xact_lock(1380142157, hashtext(:payerKey))", nativeQuery = true)
+    void acquireRepeatClaimantLock(@Param("payerKey") String payerKey);
+
+    /**
      * C6: resolves every OPEN alert of {@code type} on one reference — used when an admin cancels a
      * booking that a child-safety hold could not, so its SAFETY_HOLD_BOOKING alert is closed with it. One
      * atomic conditional UPDATE (no load-check-write); a no-op (0) when none is open.

@@ -6,7 +6,7 @@ import com.softropic.skillars.platform.admin.contract.AdminAlertType;
 import com.softropic.skillars.platform.admin.contract.DisputeRaisedEvent;
 import com.softropic.skillars.platform.admin.repo.AdminAlert;
 import com.softropic.skillars.platform.admin.repo.AdminAlertRepository;
-import com.softropic.skillars.platform.booking.contract.SessionNeverStartedEvent;
+import com.softropic.skillars.platform.booking.contract.BookingCancelledByAdminEvent;
 import com.softropic.skillars.platform.messaging.contract.ConversationReportedEvent;
 import com.softropic.skillars.platform.messaging.contract.MessageHeldForReviewEvent;
 import com.softropic.skillars.platform.messaging.contract.ModerationFailureEvent;
@@ -236,16 +236,18 @@ public class AdminAlertEventListener {
     }
 
     /**
-     * fix/booking-completion-integrity: an UPCOMING session ended without being started (captured money,
-     * nothing settled). Same isolation as {@link #onPaymentIntegrityAlert}; the publisher stamps the booking
-     * so this fires once per booking.
+     * S-07: a session nobody started is now refunded automatically (BookingCancelledByAdminEvent with reason
+     * NEVER_STARTED). A SESSION_NEVER_STARTED alert raised for it before the change has nothing left to decide, so it is
+     * closed with the refund (resolved_by stays null: no admin made the decision). A no-op when none is open.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void onSessionNeverStarted(SessionNeverStartedEvent event) {
-        insertAlert(AdminAlertType.SESSION_NEVER_STARTED,
-            event.getBookingId().toString(),
-            AdminAlertReferenceType.BOOKING);
+    public void onNeverStartedSessionAutoRefunded(BookingCancelledByAdminEvent event) {
+        if (!BookingCancelledByAdminEvent.REASON_NEVER_STARTED.equals(event.getCancelReason())) {
+            return;
+        }
+        adminAlertRepository.resolveOpenAlertsForReference(
+            event.getBookingId().toString(), AdminAlertType.SESSION_NEVER_STARTED.name(), null);
     }
 
     private static String truncateReason(String reason) {

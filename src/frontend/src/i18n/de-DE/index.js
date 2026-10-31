@@ -1812,6 +1812,8 @@ export default {
         PAYOUT_REVERSAL_FAILED: 'Rückbuchung der Trainer-Auszahlung fehlgeschlagen',
         BOOKING_ACTION_REQUIRED: 'Buchung erfordert manuelle Bearbeitung',
         SESSION_NEVER_STARTED: 'Einheit beendet, ohne gestartet worden zu sein',
+        REPEAT_NO_SHOW_CLAIMANT:
+          'Wiederholte Meldung „Coach nicht erschienen“ (nur zur Information)',
       },
     },
     reviewModeration: {
@@ -2741,6 +2743,8 @@ export default {
         'Ihre kurzfristige Stornierung der Trainingseinheit am {requestedStartTime} wird nicht erstattet: Die Einheit verfällt.',
       BOOKING_REMINDER:
         'Erinnerung: Trainingseinheit mit {coachDisplayName} am {requestedStartTime}.',
+      COACH_START_REMINDER:
+        'Start drücken: Deine Trainingseinheit mit {playerName} (geplant am {requestedStartTime}) wurde nicht gestartet. Nicht gestartete Einheiten können erstattet werden.',
       SESSION_PACK_EXPIRY_WARNING:
         '{creditsRemaining} Trainingseinheit(en) mit {coachDisplayName} verfallen am {expiresAt}.',
       SESSION_PACK_EXPIRED: 'Ihr Paket bei {coachDisplayName} ist abgelaufen.',

@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.booking.coach_start_reminder.title}">Press Start</title>
+</head>
+<body>
+    <h2 th:text="#{email.booking.coach_start_reminder.title}">Press Start</h2>
+    <p th:if="${map.reminderType == 'START'}">Your session with <strong th:text="${map.playerName}">Player</strong> was due to start at <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>).</p>
+    <p th:if="${map.reminderType != 'START'}">Your session with <strong th:text="${map.playerName}">Player</strong> was due to start at <strong th:text="${map.requestedStartTime}">date</strong> (<span th:text="${map.canonicalTimezone}">timezone</span>) and has not been started yet.</p>
+    <p><strong>Press Start, or this session can be refunded.</strong> If the family reports that you did not show up, they are refunded in full and a no-show is recorded on your reliability record. A session nobody records at all is refunded automatically after a while, so please press Start (or Quick Complete) even if you are running late.</p>
+    <p>Open your sessions on Skillars: <a th:href="${map.bookingsUrl}" th:text="${map.bookingsUrl}">bookings</a></p>
+</body>
+</html>

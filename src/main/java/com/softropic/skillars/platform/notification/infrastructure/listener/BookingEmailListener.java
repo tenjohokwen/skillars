@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.booking.contract.BookingCancelledByCoachE
 import com.softropic.skillars.platform.booking.contract.BookingCancelledByParentEvent;
 import com.softropic.skillars.platform.booking.contract.BookingCancelledDueToPauseEvent;
 import com.softropic.skillars.platform.booking.contract.CoachNoShowEvent;
+import com.softropic.skillars.platform.booking.contract.CoachStartReminderEvent;
 import com.softropic.skillars.platform.booking.contract.PlayerNoShowEvent;
 import com.softropic.skillars.platform.booking.contract.BatchBookingRequestedEvent;
 import com.softropic.skillars.platform.booking.contract.BookingConfirmedEvent;
@@ -511,7 +512,10 @@ public class BookingEmailListener {
             putRefund(data, event.isPackRestore(), event.isWalletRefund(), event.getRefundAmount());
             // C6: a single booking an admin cancelled from the admin bookings page is worded "cancelled by
             // the Skillars team" — "the coach is unavailable" is only true for a suspension / safety-hold sweep.
-            data.put("cancelledBy", BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason()) ? "SKILLARS" : "COACH_UNAVAILABLE");
+            // S-07: a session nobody started or recorded is refunded automatically (NEVER_STARTED).
+            data.put("cancelledBy", BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason()) ? "SKILLARS"
+                : BookingCancelledByAdminEvent.REASON_NEVER_STARTED.equals(event.getCancelReason()) ? "NEVER_STARTED"
+                : "COACH_UNAVAILABLE");
             data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();
@@ -528,12 +532,13 @@ public class BookingEmailListener {
 
     /**
      * C6: a single booking an admin cancelled from the admin bookings page (ADMIN_SUPPORT) also tells the
-     * coach — otherwise they would turn up for a session that no longer exists. A suspension / safety-hold
+     * coach (S-07: and so does the automatic refund of a session nobody started — NEVER_STARTED) — otherwise they would turn up for a session that no longer exists. A suspension / safety-hold
      * sweep does not: the coach is suspended and told by COACH_SUSPENDED (or, for a safety hold, nothing).
      */
     @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
     public void onBookingCancelledByAdminNotifyCoach(BookingCancelledByAdminEvent event) {
-        if (!BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason())) {
+        boolean neverStarted = BookingCancelledByAdminEvent.REASON_NEVER_STARTED.equals(event.getCancelReason());
+        if (!BookingCancelledByAdminEvent.REASON_ADMIN_SUPPORT.equals(event.getCancelReason()) && !neverStarted) {
             return;
         }
         try {
@@ -545,6 +550,7 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("cancelledBy", neverStarted ? "NEVER_STARTED" : "SKILLARS");
             data.put("bookingsUrl", frontendLinks.route("coach/booking-requests"));
 
             Recipient recipient = new Recipient();
@@ -588,6 +594,37 @@ public class BookingEmailListener {
                 EmailTemplate.COACH_NO_SHOW, recipient, data, UUID.randomUUID().toString());
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.COACH_NO_SHOW),
+                kv("bookingId", event.getBookingId()), e);
+        }
+    }
+
+    /**
+     * S-07: the coach's "press Start, or this session can be refunded" reminder (at the scheduled start, and again at
+     * start + 10 minutes). Category BOOKING in {@code NotificationCatalog}: always sent, plus an in-app inbox row.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onCoachStartReminder(CoachStartReminderEvent event) {
+        try {
+            if (event.getCoachEmail() == null || event.getCoachEmail().isBlank()) {
+                log.warn("Cannot send coach start reminder: coach email is blank, bookingId={}", event.getBookingId());
+                return;
+            }
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("playerName", event.getPlayerName());
+            data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
+            data.put("canonicalTimezone", event.getCanonicalTimezone());
+            data.put("reminderType", event.getReminderType());
+            data.put("bookingsUrl", frontendLinks.route("coach/booking-requests"));
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.getCoachEmail());
+            recipient.setLangKey("en");
+
+            notificationOutboxSupport.enqueueEmail(
+                EmailTemplate.COACH_START_REMINDER, recipient, data, UUID.randomUUID().toString());
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.COACH_START_REMINDER),
                 kv("bookingId", event.getBookingId()), e);
         }
     }

@@ -23,7 +23,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * <ul>
  *   <li>the expiry query also returns a REQUESTED booking whose start time has passed;</li>
  *   <li>UnresolvedSessionSweeperService ends a live session left open past its end (CPC + auto_ended_at) and
- *       raises one SESSION_NEVER_STARTED alert for an ended, never-started UPCOMING session;</li>
+ *       refunds an UPCOMING session nobody started, claimed or quick-completed 48 hours after its start (see
+ *       NeverStartedAutoRefundIT);</li>
  *   <li>a parent cannot cancel a PAUSED session.</li>
  * </ul>
  * No new mock beans.
@@ -80,7 +81,7 @@ class BookingCompletionIntegrityIT extends BasePaymentIT {
     }
 
     @Test
-    void sweep_endsAnAbandonedPausedSession_andAlertsANeverStartedOneOnce() {
+    void sweep_endsAnAbandonedPausedSession_andLeavesARecentNeverStartedOneAlone() {
         // Distinct, non-overlapping slots (excl_bkg_coach_slot_overlap).
         Instant longAgo = Instant.now().minus(8, ChronoUnit.HOURS);
         UUID paused = seedBooking("PAUSED", longAgo, longAgo.minus(2, ChronoUnit.DAYS));
@@ -95,23 +96,11 @@ class BookingCompletionIntegrityIT extends BasePaymentIT {
             "SELECT auto_ended_at IS NOT NULL FROM booking.bookings WHERE id = ?", Boolean.class, paused)).isTrue();
         assertThat(statusOf(stillRunning)).as("inside its end + grace").isEqualTo("IN_PROGRESS");
 
-        assertThat(statusOf(neverStarted)).as("never auto-settled").isEqualTo("UPCOMING");
-        assertThat(jdbcTemplate.queryForObject(
-            "SELECT unresolved_alerted_at IS NOT NULL FROM booking.bookings WHERE id = ?", Boolean.class, neverStarted))
-            .isTrue();
+        // S-07: a session never started is no longer alerted; it is refunded 48h after its start, not before.
+        assertThat(statusOf(neverStarted)).as("only ~6h past its start").isEqualTo("UPCOMING");
         assertThat(jdbcTemplate.queryForObject(
             "SELECT count(*) FROM admin.admin_alerts WHERE type = 'SESSION_NEVER_STARTED' AND reference_id = ?",
-            Integer.class, neverStarted.toString())).isEqualTo(1);
-
-        // An admin resolves the alert; the next sweep must not raise it again.
-        transactionTemplate.execute(s -> jdbcTemplate.update(
-            "UPDATE admin.admin_alerts SET status = 'RESOLVED', resolved_at = now() WHERE reference_id = ?",
-            neverStarted.toString()));
-        releaseSchedulerLock("UnresolvedSessionSweeperService_sweep");
-        unresolvedSessionSweeperService.sweep();
-        assertThat(jdbcTemplate.queryForObject(
-            "SELECT count(*) FROM admin.admin_alerts WHERE type = 'SESSION_NEVER_STARTED' AND reference_id = ?",
-            Integer.class, neverStarted.toString())).isEqualTo(1);
+            Integer.class, neverStarted.toString())).isZero();
     }
 
     @Test
