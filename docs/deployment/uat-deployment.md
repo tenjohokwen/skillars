@@ -486,6 +486,8 @@ yet. Say so in the UAT brief.
 - The JWT signing key is no longer seeded into the database: set `JWT_SIGNING_KEY` in `.env.uat`
   (`openssl rand -base64 64`); the app refuses to boot without it. Sample users: see
   `local/deployment.md` Step 5.
+- `REDIS_PASSWORD` is required in `.env.uat` (`openssl rand -base64 32`, S-24): `docker compose` stops without it. Redis
+  runs on its own `skillars-data` network with only `app`; see `provisioning-checklist.md` section 2.5.
 - `docker-compose.yml` itself still doesn't set `SPRING_PROFILES_ACTIVE` for
   a plain production deploy (`docker compose up -d` with no `-f` overrides) —
   that's a separate, pre-existing gap tracked outside this doc, not something

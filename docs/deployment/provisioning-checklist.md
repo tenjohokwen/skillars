@@ -214,6 +214,7 @@ Spring `${X:default}` default.
 | `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | required; the dev default is rejected | required; the dev default is rejected | `RegistrationVerificationTokenService` aborts boot; `DeployedSecretsValidator` rejects the dev default | `application.yaml` |
 | `PLATFORM_PIN_ENCRYPTION_SECRET` | required; rotating it invalidates stored PINs; the dev default `S3CR3TW0RD` is rejected | required; same | fail-fast: `Cryptopher` on blank, `DeployedSecretsValidator` on blank or the dev default | `application.yaml` |
 | `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | required (base64, ≥ 32 bytes); the dev/test value is rejected | required; same | fail-fast at boot in `prod`/`uat` (`DeployedSecretsValidator`: blank, not Base64, < 32 bytes, or the dev default); previously only failed on the first playback token | `application.yaml` |
+| `REDIS_PASSWORD` | required; the local dev value is rejected | required; same | fail-fast: the `redis` container exits on blank, `DeployedSecretsValidator` rejects blank or the dev value on `spring.data.redis.password`; base compose passes it with `:-`, UAT compose files use `:?`; section 2.5 | `docker-compose.yml`, `.env.example` |
 | `JWT_SIGNING_KEY` | required (base64, >= 64 bytes); the dev/test values are rejected | required; same | fail-fast: `DeployedSecretsValidator` (blank, not Base64, < 64 bytes, dev default) and `JwtConfiguration`; compose passes it through, UAT compose files use `:?` | `application.yaml` `app.security.jwt.signing-key`, section 2.4 |
 | `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | required; the dev default is rejected | required; same | fail-fast (`BunnyVideoProviderAdapter` on blank, `DeployedSecretsValidator` on the dev default) | `application.yaml` |
 | `BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME` | required for video | test library | compose defaults the library ID to the placeholder `123456` | `docker-compose.yml` |
@@ -281,6 +282,35 @@ the row could forge any token, including ADMIN.
   deploy: everyone is signed out and logs in again.
 - [ ] **Cleanup (later, after rotation):** the legacy `main.sec` `(v1, jot)` row is unused and can be dropped.
   This release deliberately does not drop it.
+
+### 2.5 Redis password (`REDIS_PASSWORD`)
+
+S-24. `redis` used to run without a password on `skillars-observability`, next to Grafana, Loki and Tempo.
+It now requires a password and sits on its own `internal: true` network, `skillars-data`, shared only with
+`app`. (Note: nothing in the application stores rate-limit state in Redis today, `RateLimitingService` is
+in-memory; Redis holds only what Spring Data Redis puts there. This is hardening, not a behaviour change.)
+
+- [ ] **Generate** per environment: `openssl rand -base64 32`. Set `REDIS_PASSWORD=...` in `/opt/skillars/.env`
+  (PROD) and `.env.uat` (UAT) BEFORE deploying. No spaces or quotes in the value.
+- [ ] **Deploy order:** set the secret, pull, then `docker compose up -d redis app` (UAT: add the `-f` / `--env-file`
+  flags as usual). Compose recreates `redis` onto the new network and with the password, then `app` (which
+  `depends_on` a healthy redis). A plain `docker compose up -d` does the same. Redis is down for a few seconds;
+  the existing AOF in `/opt/skillars/data/redis` is reloaded, so nothing stored is lost. The password is not
+  stored in the AOF: a later rotation is "edit `.env`, `docker compose up -d redis app`".
+- [ ] **Boot check:** with the value blank the `redis` container exits (`docker compose logs redis` says
+  "REDIS_PASSWORD is not set"), and in `prod`/`uat` the app refuses to start naming
+  `spring.data.redis.password` if it is blank or the local dev value.
+- [ ] **Verify auth:** `docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'` returns `PONG`, and
+  `docker compose exec redis redis-cli ping` returns `NOAUTH Authentication required.`.
+- [ ] **Verify isolation:** `docker compose exec grafana sh -c 'getent hosts redis || nslookup redis'` finds
+  nothing (also try `loki`/`tempo`/`prometheus` where the image has a shell), while
+  `docker compose exec app getent hosts redis` resolves. `docker network inspect skillars_skillars-data`
+  lists only `app` and `redis`.
+- [ ] **App side:** `docker compose logs app | grep -i -E "NOAUTH|redis.*(fail|refused|unable)"` prints nothing
+  after the restart (a wrong or missing password shows up as `NOAUTH`/`WRONGPASS` and a DOWN `redis` health
+  component; the indicator is disabled on UAT Hostwinds).
+- [ ] **Anything new that needs Redis** (a `redis_exporter`, a tool in another container) must join
+  `skillars-data` explicitly and authenticate.
 
 ## 3. Database
 
@@ -1226,3 +1256,8 @@ an operator must now do.
   `latest_charge` and carry `payerUserId` in metadata; new Stripe Customers carry the user's email. Radar rules to
   review in the Stripe dashboard are listed in the PR description. Watch the counter
   `skillars.payment.related_party.flagged` and the log `[RELATED_PARTY_FLAGGED]`. No new env var, job or webhook event.
+- 2026-10-31: S-24 (security/s24-redis-hardening). New REQUIRED secret `REDIS_PASSWORD` (section 2.5): generate with
+  `openssl rand -base64 32` and set it in `.env` / `.env.uat` BEFORE deploying, or `redis` will not start (UAT
+  `docker compose` stops with a message). `redis` moves from `skillars-observability` to a new internal network
+  `skillars-data` shared only with `app`; deploy with `docker compose up -d redis app`. A few seconds of Redis
+  downtime, no data loss (AOF kept), no user-visible effect (rate limiting is in-memory). No migration, job or webhook.

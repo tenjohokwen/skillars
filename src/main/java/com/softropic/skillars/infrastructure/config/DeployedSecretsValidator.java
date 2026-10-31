@@ -32,6 +32,8 @@ public class DeployedSecretsValidator {
     static final String REGISTRATION_SECRET = "skillars.platform.registration-verification-secret";
     static final String BUNNY_WEBHOOK_SECRET = "app.video.bunny.webhook-signing-secret";
     static final String JWT_SIGNING_KEY = "app.security.jwt.signing-key";
+    /** Fed by SPRING_DATA_REDIS_PASSWORD (compose maps it from REDIS_PASSWORD); redis itself runs with the same value. */
+    static final String REDIS_PASSWORD = "spring.data.redis.password";
 
     /** Every value application-dev.yaml falls back to for these properties, plus the test fixtures'. */
     private static final Map<String, List<String>> KNOWN_DEFAULTS = Map.of(
@@ -39,6 +41,7 @@ public class DeployedSecretsValidator {
         PLAYBACK_SECRET, List.of("dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh"),
         REGISTRATION_SECRET, List.of("dev-registration-verification-secret-32b!"),
         BUNNY_WEBHOOK_SECRET, List.of("dev-webhook-signing-secret"),
+        REDIS_PASSWORD, List.of("dev-redis-password-NOT-for-prod"),
         JWT_SIGNING_KEY, List.of(
             "ZGV2LW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1sb2NhbC1kZXZlbG9wbWVudC1vbmx5ISE=",
             "dGVzdC1vbmx5LWp3dC1zaWduaW5nLWtleS0tdW5pdC1hbmQtaW50ZWdyYXRpb24tdGVzdHMtb25seS0wMTIzNDU2Nzg5"));

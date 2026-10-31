@@ -35,6 +35,8 @@ services:
       # docker-compose.yml doesn't pass it through for prod either — separate, pre-existing
       # gap not fixed here).
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      # S-24: shared secret with the redis service below; DeployedSecretsValidator rejects blank / dev default.
+      - SPRING_DATA_REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env.uat, generate it with openssl rand and base64 of 32 bytes}
       # Base64, >= 64 bytes (`openssl rand -base64 64`); app refuses to boot otherwise. Never the dev value.
       - JWT_SIGNING_KEY=${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env.uat, generate it with openssl rand and base64 of 64 bytes}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
@@ -95,6 +97,12 @@ services:
   # replacing any of it, so `docker compose -f docker-compose.yml -f docker-compose.uat.yml
   # --env-file .env.uat up -d` (no explicit service list) brings up the full observability
   # stack the same way a plain production deploy does. Nothing to configure here.
+
+  # S-24: no `:-` default, so a missing REDIS_PASSWORD fails `docker compose` itself (the base file's
+  # blank default would otherwise start a redis that refuses to boot, or an app that cannot authenticate).
+  redis:
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?set REDIS_PASSWORD in .env.uat, generate it with openssl rand and base64 of 32 bytes}
 
   # Stands in for the real S3 API so UAT doesn't need AWS credentials. Publicly reachable
   # (unlike local dev's storage service, which only needs to work for your own machine)

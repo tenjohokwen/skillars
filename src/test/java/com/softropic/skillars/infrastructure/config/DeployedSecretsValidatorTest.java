@@ -20,7 +20,8 @@ class DeployedSecretsValidatorTest {
             .withProperty(DeployedSecretsValidator.PLAYBACK_SECRET, GOOD_KEY)
             .withProperty(DeployedSecretsValidator.REGISTRATION_SECRET, "a-real-registration-secret-of-32-chars")
             .withProperty(DeployedSecretsValidator.BUNNY_WEBHOOK_SECRET, "a-real-bunny-key")
-            .withProperty(DeployedSecretsValidator.JWT_SIGNING_KEY, GOOD_JWT_KEY);
+            .withProperty(DeployedSecretsValidator.JWT_SIGNING_KEY, GOOD_JWT_KEY)
+            .withProperty(DeployedSecretsValidator.REDIS_PASSWORD, "a-real-redis-password");
     }
 
     private void validate(MockEnvironment env) {
@@ -67,6 +68,27 @@ class DeployedSecretsValidatorTest {
     }
 
     @Test
+    void redisPassword_blankOrMissing_failsNamingTheProperty() {
+        assertThatThrownBy(() -> validate(valid().withProperty(DeployedSecretsValidator.REDIS_PASSWORD, " ")))
+            .isInstanceOf(AppSetupException.class).hasMessageContaining(DeployedSecretsValidator.REDIS_PASSWORD);
+        MockEnvironment missing = new MockEnvironment()
+            .withProperty(DeployedSecretsValidator.PIN_SECRET, "a-real-pin-secret")
+            .withProperty(DeployedSecretsValidator.PLAYBACK_SECRET, GOOD_KEY)
+            .withProperty(DeployedSecretsValidator.REGISTRATION_SECRET, "a-real-registration-secret-of-32-chars")
+            .withProperty(DeployedSecretsValidator.BUNNY_WEBHOOK_SECRET, "a-real-bunny-key")
+            .withProperty(DeployedSecretsValidator.JWT_SIGNING_KEY, GOOD_JWT_KEY);
+        assertThatThrownBy(() -> validate(missing))
+            .isInstanceOf(AppSetupException.class).hasMessageContaining(DeployedSecretsValidator.REDIS_PASSWORD);
+    }
+
+    @Test
+    void redisPassword_devDefault_isRejected() {
+        assertThatThrownBy(() -> validate(valid().withProperty(DeployedSecretsValidator.REDIS_PASSWORD,
+            "dev-redis-password-NOT-for-prod")))
+            .hasMessageContaining(DeployedSecretsValidator.REDIS_PASSWORD).hasMessageContaining("development default");
+    }
+
+    @Test
     void jwtSigningKey_blankOrMissing_failsNamingTheProperty() {
         assertThatThrownBy(() -> validate(valid().withProperty(DeployedSecretsValidator.JWT_SIGNING_KEY, " ")))
             .isInstanceOf(AppSetupException.class).hasMessageContaining(DeployedSecretsValidator.JWT_SIGNING_KEY);
@@ -74,7 +96,8 @@ class DeployedSecretsValidatorTest {
             .withProperty(DeployedSecretsValidator.PIN_SECRET, "a-real-pin-secret")
             .withProperty(DeployedSecretsValidator.PLAYBACK_SECRET, GOOD_KEY)
             .withProperty(DeployedSecretsValidator.REGISTRATION_SECRET, "a-real-registration-secret-of-32-chars")
-            .withProperty(DeployedSecretsValidator.BUNNY_WEBHOOK_SECRET, "a-real-bunny-key");
+            .withProperty(DeployedSecretsValidator.BUNNY_WEBHOOK_SECRET, "a-real-bunny-key")
+            .withProperty(DeployedSecretsValidator.REDIS_PASSWORD, "a-real-redis-password");
         assertThatThrownBy(() -> validate(missing))
             .isInstanceOf(AppSetupException.class).hasMessageContaining(DeployedSecretsValidator.JWT_SIGNING_KEY);
     }

@@ -31,7 +31,8 @@ Image tag: **`skillars:uat`**.
 ```
 Browser ──80──> nginx (existing, unchanged) ──> 127.0.0.1:9990 ──> app container
 Browser ──9500─────────────────────────────────────────────────> storage container
-app container ──skillars-internal network──> postgres, redis, storage containers
+app container ──skillars-internal network──> postgres, storage containers
+app container ──skillars-data network──> redis (password: REDIS_PASSWORD in .env.uat)
 ```
 
 - **nginx**: already installed and configured for gulliver
@@ -302,6 +303,8 @@ adjust first (`docker compose ... logs app`, and `dmesg | grep -i "killed proces
 on the host, will confirm which it was).
 
 ## Step 8: Bootstrap data
+
+`REDIS_PASSWORD` (`openssl rand -base64 32`) is also required in `.env.uat` (S-24); `docker compose` stops without it.
 
 There is no JWT row to seed any more: the signing key is `JWT_SIGNING_KEY` in `.env.uat` (Step 5; generate
 it with `openssl rand -base64 64`). The app refuses to boot without it. Register accounts through the app,

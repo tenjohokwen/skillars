@@ -191,7 +191,7 @@ docker exec "$APP_CID" wget -qO- http://localhost:8367/manage/health
 - Or: application logs contain `NOAUTH`, `ERR max number of clients reached`, or `Connection refused` to Redis
 - Or: `docker compose logs redis --tail=50` shows `OOM command not allowed` or the container keeps cycling
 
-**Context:** The Redis container has a 256m Docker memory limit. Redis uses `--appendonly yes` with AOF persistence to `/opt/skillars/data/redis` on the Hetzner Volume. When the Docker memory limit is exceeded, the kernel OOM-kills the Redis process and Docker restarts it automatically (`restart: unless-stopped`).
+**Context:** Redis requires `REDIS_PASSWORD` (S-24), so run `redis-cli` inside the container as `docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ...'`. `NOAUTH`/`WRONGPASS` in the app logs means the app and redis disagree on that value: fix `.env` and `docker compose up -d redis app`. The Redis container has a 256m Docker memory limit. Redis uses `--appendonly yes` with AOF persistence to `/opt/skillars/data/redis` on the Hetzner Volume. When the Docker memory limit is exceeded, the kernel OOM-kills the Redis process and Docker restarts it automatically (`restart: unless-stopped`).
 
 ```bash
 # Confirm Redis state and recent logs:

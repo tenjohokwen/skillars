@@ -51,6 +51,7 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 | `POSTGRES_DB` | Alphanumeric string, e.g. `skillars` | Choose a database name; default `skillars` |
 | `POSTGRES_USER` | Alphanumeric string, e.g. `skillars` | Choose a database username; default `skillars` |
 | `POSTGRES_PASSWORD` | 32+ character random string | `openssl rand -base64 32` |
+| `REDIS_PASSWORD` | 32+ character random string, no spaces or quotes | `openssl rand -base64 32`. Required in prod and UAT: `redis` refuses to start blank and `DeployedSecretsValidator` rejects blank or the local dev value. See "Redis password" below |
 | `APP_BOOTSTRAP_ADMIN_EMAIL` | Email address | **Temporary — see the callout below.** The login for the platform's first administrator. Choose an address that does not already belong to a coach, parent or player account |
 | `APP_BOOTSTRAP_ADMIN_PASSWORD` | 24+ character random string | **Temporary — see the callout below.** `openssl rand -base64 24`. Stored bcrypt-hashed; never logged. Record it in your password manager before the first deploy — it cannot be recovered from the running system |
 | `APP_BOOTSTRAP_ADMIN_PHONE` | E.164 phone number, e.g. `+491700000000` | **Temporary — see the callout below.** Required whenever the two above are set. `main."user".phone` carries a `UNIQUE` constraint, so this cannot be a shared placeholder — a second admin bootstrapped on the same database needs a different number |
@@ -378,6 +379,16 @@ compromise-triggered or policy-triggered rotation of a single secret.
    `POSTGRES_PASSWORD` from the same `.env`, so no separate update is needed for the backup cron.
 4. Confirm: `docker compose logs app --tail=50` shows a clean datasource start, and
    `bash /opt/skillars/app/deploy/backup/pg-backup.sh` completes with `Upload verified`.
+
+### Redis password
+
+`REDIS_PASSWORD` is the `requirepass` of the `redis` container and, through `SPRING_DATA_REDIS_PASSWORD`, the
+password the app connects with. `redis` is reachable only from `app` (network `skillars-data`, `internal: true`).
+Generate with `openssl rand -base64 32`; keep spaces and quotes out of it (it is written into a redis config line).
+
+**Rotation is "set a new value and restart."** Edit `REDIS_PASSWORD` in `/opt/skillars/.env`, then
+`cd /opt/skillars/app && docker compose up -d redis app`. The AOF holds data, not the password, so nothing is lost.
+Verify: `docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'` prints `PONG`.
 
 ### JWT signing key
 

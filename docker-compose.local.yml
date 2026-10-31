@@ -60,6 +60,9 @@ services:
       # The base file defaults the bucket to skillars-prod; local storage-init creates skillars-dev.
       - APP_STORAGE_BUCKET=skillars-dev
       # Base passes these with a prod-safe default (false / none), which overrides application-dev.yaml.
+      # Dev-only redis password (S-24); DeployedSecretsValidator rejects it on prod/uat. Redis is only
+      # reachable on the skillars-data network, never published to the host.
+      - SPRING_DATA_REDIS_PASSWORD=dev-redis-password-NOT-for-prod
       - JWT_SIGNING_KEY=ZGV2LW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1sb2NhbC1kZXZlbG9wbWVudC1vbmx5ISE=
       - ALLOWED_CLIENTS=${ALLOWED_CLIENTS:-myClientId,hisClientId,herClientId,ourClientId}
       # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
@@ -99,6 +102,8 @@ services:
   # bind mount /opt/skillars/data/redis. Without this override, running the local stack would
   # create that production path on the developer's own machine.
   redis:
+    environment:
+      - REDIS_PASSWORD=dev-redis-password-NOT-for-prod
     volumes:
       - skillars-local-redis:/data
   loki:

@@ -283,6 +283,7 @@ services:
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=dev-webhook-signing-secret
       - APP_VIDEO_PLAYBACK_SIGNING_SECRET=dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh
       - PLATFORM_PIN_ENCRYPTION_SECRET=S3CR3TW0RD
+      - SPRING_DATA_REDIS_PASSWORD=dev-redis-password-NOT-for-prod
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=dev-registration-verification-secret-32-bytes!
       - GEMINI_API_KEY=${GEMINI_API_KEY:-dev-key}
     ports:
@@ -295,6 +296,8 @@ services:
     volumes:
       - skillars-local-postgres:/var/lib/postgresql/data
   redis:
+    environment:
+      - REDIS_PASSWORD=dev-redis-password-NOT-for-prod
     volumes:
       - skillars-local-redis:/data
   loki:
