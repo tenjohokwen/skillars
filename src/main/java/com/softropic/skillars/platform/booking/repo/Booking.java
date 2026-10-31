@@ -152,6 +152,20 @@ public class Booking {
     private Instant confirmationRequestedAt;
 
     /**
+     * feat/noshow-claim-window-and-split (V218): how the booker claimed a coach no-show — {@link #CLAIM_REPORT},
+     * {@link #CLAIM_LATE_CANCEL} or {@link #CLAIM_SPLIT}. NULL = no claim. Written once, in the claiming transaction.
+     */
+    @Column(name = "coach_no_show_claim", length = 16)
+    private String coachNoShowClaim;
+
+    @Column(name = "coach_no_show_claimed_at")
+    private Instant coachNoShowClaimedAt;
+
+    public static final String CLAIM_REPORT = "REPORT";
+    public static final String CLAIM_LATE_CANCEL = "LATE_CANCEL";
+    public static final String CLAIM_SPLIT = "SPLIT";
+
+    /**
      * fix/booking-integrity (B2, V178): when the booking entered its CURRENT status. Unlike
      * {@code updatedAt}, later writes that do not change the status (a recap edit, a reminder stamp,
      * GDPR note anonymisation, a plan note) leave it alone — so for a terminal status it is the moment

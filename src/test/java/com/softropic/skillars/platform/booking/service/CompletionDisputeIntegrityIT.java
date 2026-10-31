@@ -139,16 +139,21 @@ class CompletionDisputeIntegrityIT extends BasePaymentIT {
         assertThat(confirmationEmails()).isEqualTo(1);
     }
 
+    /**
+     * S-07 option B: a report on a quick-complete the coach never started is the conflict zone — the fee is split
+     * 50/50 (the coach is paid their half through the payout row) and nobody is struck. CoachNoShowClaimIT covers
+     * the split's amounts, rounding and pack handling.
+     */
     @Test
-    void neverStartedQuickComplete_canBeReportedAsACoachNoShow_withAStrikeAndNoPayout() {
+    void neverStartedQuickComplete_canBeReportedAsACoachNoShow_asAFiftyFiftySplitWithNoStrike() {
         UUID bookingId = seedBooking("UPCOMING", Instant.now().minus(40, ChronoUnit.MINUTES));
         bookingCompletionService.initiateQuickComplete(bookingId, COACH_USER_ID);
 
         bookingService.recordNoShowCoach(bookingId, PARENT_ID);
 
         assertThat(statusOf(bookingId)).isEqualTo("NO_SHOW_COACH");
-        assertThat(strikes(bookingId, "COACH_NO_SHOW")).isEqualTo(1);
-        assertThat(coachPayoutRepository.findById(bookingId)).isEmpty();
+        assertThat(strikes(bookingId, "COACH_NO_SHOW")).isZero();
+        assertThat(payout(bookingId).getGrossAmount()).isEqualByComparingTo("25.00");
     }
 
     /**

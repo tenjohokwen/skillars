@@ -134,7 +134,7 @@
         50 named keys (pack pause, pack validity <code>pack.expiry.days.tier1..4</code> (90 / 180 / 365 / 548, range 14–3650, #369), dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
         TTL, timeline/roster windows, GDPR export TTL and erase lock timeout, message retention, batch sizes, review
         eligibility and moderation-orphan grace, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows,
-        and the booking-integrity keys <code>booking.lateCancel.graceMinutes</code> (30), <code>booking.playerNoShow.graceMinutes</code> (15),
+        and the booking-integrity keys <code>booking.lateCancel.graceMinutes</code> (15), <code>booking.coachNoShow.reportWindowHours</code> (5, range 1–72), <code>booking.playerNoShow.graceMinutes</code> (15),
         <code>booking.unresolvedSession.graceMinutes</code> (120), <code>booking.live.minDurationPercent</code> (50, range 0–100),
         <code>disputes.maxPerBookingPerRaiser</code> (2, range 1–100), <code>coach.excusedCancellations.maxPerWindow</code> (3) /
         <code>windowDays</code> (90), <code>booking.request.maxPendingPerCoach</code> (10) and <code>booking.request.maxHorizonDays</code> (120), and the new-coach

@@ -2260,6 +2260,10 @@ export default {
     noShowCoachSessionStarted:
       'Le coach a démarré cette séance : elle ne peut pas être signalée comme une absence. Ouvrez plutôt un litige.',
     noShowCoachAvailableFrom: 'Vous pourrez signaler l’absence du coach à partir de {time}.',
+    noShowCoachConfirmBodySplit:
+      'Le coach a marqué cette séance comme terminée sans jamais la démarrer dans Skillars. Comme nous ne pouvons pas savoir quelle version est juste, le prix de la séance est partagé : vous êtes remboursé de la moitié et le coach garde l’autre moitié. Aucun avertissement n’est enregistré pour l’une ou l’autre partie. Cette action est irréversible.',
+    noShowWindowClosed:
+      'Le délai pour signaler l’absence du coach est dépassé. Si personne n’enregistre cette séance, elle est remboursée automatiquement.',
     title: 'Annuler la séance',
     selectReason: "Sélectionner un motif d'annulation",
     confirmCancel: "Confirmer l'annulation",
@@ -2514,11 +2518,13 @@ export default {
       cta: 'Annuler',
       dialogTitle: 'Annuler cette séance ?',
       dialogBody:
-        "Une annulation plus de 24 heures avant l'heure de début initialement réservée est remboursée. Les annulations plus tardives, y compris après un report, ne sont pas remboursées, sauf si l'entraîneur n'a toujours pas démarré la séance bien après son heure de début prévue.",
+        "Une annulation plus de 24 heures avant l'heure de début initialement réservée est remboursée. Les annulations plus tardives, y compris après un report, ne sont pas remboursées. Si l'entraîneur n'a toujours pas démarré la séance peu après son heure de début prévue, vous êtes remboursé et le coach est enregistré comme absent ; c'est possible pendant une durée limitée après le début.",
       confirm: 'Annuler la séance',
       success: 'Séance annulée',
       paymentInProgress:
         'Un paiement pour cette séance est déjà en cours. Veuillez réessayer sous peu.',
+      windowClosed:
+        "Cette séance ne peut plus être annulée ni signalée comme absence du coach. Si personne ne l'enregistre, elle est remboursée automatiquement.",
       failed: "Impossible d'annuler cette séance. Veuillez réessayer.",
     },
     batch: {

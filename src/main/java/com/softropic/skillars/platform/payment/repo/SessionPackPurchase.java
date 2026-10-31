@@ -230,6 +230,18 @@ public class SessionPackPurchase {
         payoutGrossAllocated = nz(payoutGrossAllocated).add(gross);
     }
 
+    /**
+     * S-07: one session settled half to the coach, half back to the payer (a conflict-zone coach no-show split).
+     * It occupies ONE settlement slot (the payout counter), with the payer's half added to the refunded gross only —
+     * so {@link #settledSessions()} stays right and payouts + refunds still sum to {@code amountCharged}. Caller
+     * holds this row's lock.
+     */
+    public void recordSplitSettlement(BigDecimal coachGross, BigDecimal payerRefund) {
+        payoutSessionsAllocated++;
+        payoutGrossAllocated = nz(payoutGrossAllocated).add(coachGross);
+        refundGrossIssued = nz(refundGrossIssued).add(payerRefund);
+    }
+
     /** Records one session refunded to the payer. Caller holds this row's lock. */
     public void recordRefund(BigDecimal amount) {
         refundSessionsIssued++;

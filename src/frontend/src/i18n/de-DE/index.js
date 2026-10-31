@@ -661,11 +661,13 @@ export default {
       cta: 'Stornieren',
       dialogTitle: 'Diese Sitzung stornieren?',
       dialogBody:
-        'Bei einer Stornierung mehr als 24 Stunden vor dem ursprünglich gebuchten Beginn wird erstattet. Spätere Stornierungen, auch nach einer Terminverschiebung, werden nicht erstattet, es sei denn, der Trainer hat die Sitzung auch deutlich nach dem geplanten Beginn noch nicht gestartet.',
+        'Bei einer Stornierung mehr als 24 Stunden vor dem ursprünglich gebuchten Beginn wird erstattet. Spätere Stornierungen, auch nach einer Terminverschiebung, werden nicht erstattet. Hat der Trainer die Sitzung kurz nach dem geplanten Beginn noch nicht gestartet, wird erstattet und der Trainer als nicht erschienen vermerkt; das ist nur für begrenzte Zeit nach dem Beginn möglich.',
       confirm: 'Sitzung stornieren',
       success: 'Sitzung storniert',
       paymentInProgress:
         'Für diese Sitzung läuft bereits eine Zahlung. Bitte versuchen Sie es in Kürze erneut.',
+      windowClosed:
+        'Diese Sitzung kann nicht mehr storniert oder als Nichterscheinen des Coaches gemeldet werden. Wenn sie niemand erfasst, wird sie automatisch erstattet.',
       failed: 'Diese Sitzung konnte nicht storniert werden. Bitte erneut versuchen.',
     },
     batch: {
@@ -2313,6 +2315,10 @@ export default {
     noShowCoachSessionStarted:
       'Der Coach hat diese Sitzung gestartet, daher kann sie nicht als Nichterscheinen gemeldet werden. Eröffne stattdessen einen Streitfall.',
     noShowCoachAvailableFrom: 'Du kannst ein Nichterscheinen des Coaches ab {time} melden.',
+    noShowCoachConfirmBodySplit:
+      'Der Coach hat diese Sitzung als abgeschlossen markiert, sie aber nie in Skillars gestartet. Da wir nicht feststellen können, welche Angabe stimmt, wird das Sitzungsentgelt geteilt: Du erhältst die Hälfte zurück und der Coach behält die Hälfte. Für keine Seite wird eine Verwarnung vermerkt. Dies kann nicht rückgängig gemacht werden.',
+    noShowWindowClosed:
+      'Die Frist, ein Nichterscheinen des Coaches zu melden, ist abgelaufen. Wenn diese Sitzung niemand erfasst, wird sie automatisch erstattet.',
     title: 'Sitzung stornieren',
     selectReason: 'Stornierungsgrund auswählen',
     confirmCancel: 'Stornierung bestätigen',

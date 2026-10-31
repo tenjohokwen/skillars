@@ -210,12 +210,13 @@ flowchart LR
       <tbody>
         <tr><td>Parent withdraws a request (not yet accepted)</td><td>Nothing was charged</td><td>No</td><td>No</td></tr>
         <tr><td>Parent cancels &gt; 24h before the <em>original</em> start time</td><td>Full: pack session restored, or wallet credit</td><td>No</td><td>No</td></tr>
-        <tr><td>Parent cancels ≤ 24h before (including after the start time, up to 30 min)</td><td><strong>Nothing</strong>: forfeited</td><td><strong>Yes</strong>, normal payout</td><td>No</td></tr>
-        <tr><td>Parent cancels when the coach still hasn't started 30+ min after the start time</td><td>Full</td><td>No</td><td><strong>Yes</strong> (coach no-show)</td></tr>
+        <tr><td>Parent cancels ≤ 24h before (including after the start time, up to 15 min)</td><td><strong>Nothing</strong>: forfeited</td><td><strong>Yes</strong>, normal payout</td><td>No</td></tr>
+        <tr><td>Parent cancels when the coach still hasn't started 15+ min after the start time (and less than 5 hours after it; later the cancel is refused)</td><td>Full</td><td>No</td><td><strong>Yes</strong> (coach no-show)</td></tr>
         <tr><td>Player no-show (coach can report it from 15 min after the start)</td><td>Nothing: forfeited</td><td><strong>Yes</strong>, normal payout</td><td>No</td></tr>
         <tr><td>Coach cancels a paid booking before its start time</td><td>Full</td><td>No</td><td><strong>Yes</strong>, unless excused</td></tr>
         <tr><td>Coach cancels a never-started session at or after its start time</td><td>Full</td><td>No</td><td><strong>Yes</strong> (coach no-show), whatever the reason</td></tr>
-        <tr><td>Coach no-show (parent can report it from 30 min after the start — also on a session the coach marked complete without ever starting it)</td><td>Full</td><td>No</td><td><strong>Yes</strong></td></tr>
+        <tr><td>Coach no-show (parent can report it from 15 min to 5 hours after the start, on a session nobody started)</td><td>Full</td><td>No</td><td><strong>Yes</strong></td></tr>
+        <tr><td>Coach no-show reported on a session the coach marked complete without ever starting it (a 50/50 split)</td><td>Half, rounded down to the cent (a pack session is used up; half its value is booking credit)</td><td><strong>Yes</strong>, the other half, with commission on that half and the normal payout hold</td><td>No</td></tr>
         <tr><td>Skillars cancels (coach suspension, safety hold, or an admin cancelling one booking)</td><td>Full</td><td>No</td><td>No</td></tr>
       </tbody>
     </table>

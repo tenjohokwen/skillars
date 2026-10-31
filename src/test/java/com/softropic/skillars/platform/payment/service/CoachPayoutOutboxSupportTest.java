@@ -109,6 +109,63 @@ class CoachPayoutOutboxSupportTest {
         verify(outboxService).requestDrainAfterCommit();
     }
 
+    /** S-07 split: the payer's half is floored, the coach is paid the remainder, commission on that remainder only. */
+    @Test
+    void split_cardBooking_paysTheCoachTheRemainderOfTheFlooredHalf_commissionOnTheRetainedHalfOnly() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("33.33", "0.10")));
+
+        BigDecimal refund = support.enqueueSplitPayout(bookingId, coachId, new BigDecimal("33.33"));
+
+        assertThat(refund).isEqualByComparingTo("16.66");
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getGrossAmount()).isEqualByComparingTo("16.67");
+        assertThat(row.getCommissionAmount()).isEqualByComparingTo("1.67");
+        assertThat(row.getNetAmount()).isEqualByComparingTo("15.00");
+        assertThat(row.getStatus()).isEqualTo(CoachPayoutStatus.PENDING_RELEASE);
+        verify(outboxService).enqueue(eq(CoachPayoutOutboxSupport.AGGREGATE_TYPE_TRANSFER), any(), any(Instant.class));
+    }
+
+    @Test
+    void split_withNoPaymentRow_stillReturnsThePayersHalf_butPaysNobody() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.empty());
+
+        BigDecimal refund = support.enqueueSplitPayout(bookingId, coachId, new BigDecimal("40.00"));
+
+        assertThat(refund).isEqualByComparingTo("20.00");
+        verify(coachPayoutRepository, never()).save(any());
+    }
+
+    @Test
+    void split_nothingCharged_refundsNothing() {
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("0.00", "0.10")));
+
+        assertThat(support.enqueueSplitPayout(bookingId, coachId, new BigDecimal("40.00"))).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void split_packSession_occupiesOneLedgerSlot_andPaysTheCoachHisHalfOfTheShare() {
+        UUID packId = UUID.randomUUID();
+        Booking booking = new Booking();
+        booking.setSessionPackPurchaseId(packId);
+        when(bookingRepository.findById(bookingId)).thenReturn(Optional.of(booking));
+        SessionPackPurchase pack = new SessionPackPurchase();
+        pack.setAmountCharged(new BigDecimal("90.00"));
+        pack.setSessionCount(3);
+        pack.setCommissionRate(new BigDecimal("0.20"));
+        when(sessionPackPurchaseRepository.findByIdForUpdate(packId)).thenReturn(Optional.of(pack));
+
+        BigDecimal refund = support.enqueueSplitPayout(bookingId, coachId, new BigDecimal("30.00"));
+
+        assertThat(refund).isEqualByComparingTo("15.00");
+        assertThat(pack.getPayoutSessionsAllocated()).isEqualTo(1);
+        assertThat(pack.getRefundSessionsIssued()).as("one slot, not two").isZero();
+        assertThat(pack.settledSessions()).isEqualTo(1);
+        assertThat(pack.settledGross()).as("coach half + payer half = the session's share").isEqualByComparingTo("30.00");
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getGrossAmount()).isEqualByComparingTo("15.00");
+        assertThat(row.getCommissionAmount()).isEqualByComparingTo("3.00");
+    }
+
     @Test
     void nullStampedRate_fallsBackToLivePlatformRate() {
         when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", null)));

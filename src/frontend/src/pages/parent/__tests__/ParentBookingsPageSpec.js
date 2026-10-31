@@ -495,6 +495,83 @@ describe('ParentBookingsPage.vue — coach no-show report (A13)', () => {
     expect(wrapper.find('[data-testid="no-show-coach-pending"]').exists()).toBe(true)
   })
 
+  // S-07: the claim closes at coachNoShowReportableUntil.
+  describe('report window (S-07)', () => {
+    const sessionStartedAgo = (min) => new Date(Date.now() - min * 60 * 1000).toISOString()
+    const open = (overrides) => ({
+      ...BOOKING_1H,
+      status: 'UPCOMING',
+      requestedStartTime: sessionStartedAgo(60),
+      coachNoShowReportableAt: sessionStartedAgo(45),
+      coachNoShowReportableUntil: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(),
+      ...overrides,
+    })
+
+    it('inside the window offers the report and the cancel', async () => {
+      const { wrapper } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: { parentBookings: [open()] },
+      })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="no-show-window-closed"]').exists()).toBe(false)
+      expect(wrapper.text()).toContain('booking.cancel.cta')
+    })
+
+    it('after the window hides the report and the cancel and says why', async () => {
+      const { wrapper } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: {
+          parentBookings: [
+            open({
+              requestedStartTime: sessionStartedAgo(6 * 60),
+              coachNoShowReportableAt: sessionStartedAgo(6 * 60 - 15),
+              coachNoShowReportableUntil: sessionStartedAgo(60),
+            }),
+          ],
+        },
+      })
+      await flushPromises()
+      expect(wrapper.find('[data-testid="no-show-coach-btn"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="no-show-window-closed"]').exists()).toBe(true)
+      expect(wrapper.text()).not.toContain('booking.cancel.cta')
+    })
+
+    it('a 409 window-closed answer to the report maps to its copy', async () => {
+      const booking = open()
+      const { wrapper, bookingStore } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: { parentBookings: [booking] },
+      })
+      await flushPromises()
+      bookingStore.handleRecordNoShowCoach.mockRejectedValue({
+        response: {
+          data: {
+            errorMsg: { errorKey: 'generic.requestError', message: 'booking.noShowWindowClosed' },
+          },
+        },
+      })
+      wrapper.vm.openNoShowCoachDialog(booking)
+      await wrapper.vm.submitNoShowCoach()
+      expect(notifySpy).toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'negative', message: 'cancellation.noShowWindowClosed' }),
+      )
+    })
+
+    it('a never-started quick complete explains the 50/50 split in the confirm dialog', async () => {
+      const booking = open({ status: 'COMPLETED_PENDING_CONFIRMATION', liveStarted: false })
+      const { wrapper } = mountPage({
+        auth: { role: 'PARENT' },
+        booking: { parentBookings: [booking] },
+      })
+      await flushPromises()
+      wrapper.vm.openNoShowCoachDialog(booking)
+      expect(wrapper.vm.noShowCoachSplit).toBe(true)
+      wrapper.vm.openNoShowCoachDialog(open())
+      expect(wrapper.vm.noShowCoachSplit).toBe(false)
+    })
+  })
+
   // fix/audit3-completion-dispute-integrity: a Quick Complete the coach never started stays reportable.
   it('offers the action on a never-started session awaiting confirmation', async () => {
     const { wrapper } = mountPage({

@@ -135,6 +135,12 @@ public class CancellationRefundService {
     public void onCoachNoShow(CoachNoShowEvent event) {
         // skillars-deferred-101 AC4 / fix/payment-session-pack-integrity: refund and pack restore are enqueued
         // by RefundEnqueueListener (BEFORE_COMMIT, durable outbox).
+        if (event.isCoachSplit()) {
+            // S-07 conflict zone: the coach quick-completed with no live Start and the family reports no-show. Neither
+            // side is established — the fee is split (CoachNoShowSplitListener) and nobody is struck.
+            log.info("Coach no-show split (no strike): bookingId={}", event.getBookingId());
+            return;
+        }
         issueStrikeSafely(event.getCoachId(), event.getBookingId(), "COACH_NO_SHOW");
         log.info("Coach no-show processed: bookingId={}", event.getBookingId());
     }

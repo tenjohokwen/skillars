@@ -570,7 +570,14 @@ public class BookingEmailListener {
             Map<String, Object> data = new HashMap<>();
             data.put("requestedStartTime", formatInstantInZone(event.getRequestedStartTime(), event.getCanonicalTimezone()));
             data.put("canonicalTimezone", event.getCanonicalTimezone());
-            putRefund(data, event.isPackRestore(), event.isWalletRefund(), event.getSessionPrice());
+            if (event.isCoachSplit()) {
+                // S-07: the coach had quick-completed with no live Start — the fee is shared, the payer gets half.
+                data.put("refundType", "SPLIT");
+                data.put("refundAmount", CoachNoShowEvent.splitRefundShare(event.getSessionPrice())
+                    .setScale(2, RoundingMode.HALF_UP).toPlainString());
+            } else {
+                putRefund(data, event.isPackRestore(), event.isWalletRefund(), event.getSessionPrice());
+            }
             data.put("bookingsUrl", frontendLinks.route("parent/bookings"));
 
             Recipient recipient = new Recipient();

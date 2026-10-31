@@ -1588,6 +1588,14 @@ public class BookingService {
         // fix/booking-cancel-policy-loopholes: narrowed by a grace window and a reschedule anchor —
         // see isParentCancelRefundEligible.
         Instant cancelledAt = Instant.now();
+        // S-07 rule 2, two doors one rule: a cancel of a never-started captured session is the same claim as the
+        // report, so it follows the same window. After start + booking.coachNoShow.reportWindowHours the family can
+        // no longer cancel-for-refund (the platform resolves the session itself); before the start the cancel is the
+        // ordinary one, untouched.
+        if (paymentWasCaptured
+                && cancelledAt.isAfter(coachNoShowReportableUntil(booking.getRequestedStartTime()))) {
+            throw noShowWindowClosed();
+        }
         boolean refundEligible = paymentWasCaptured && isParentCancelRefundEligible(
             booking.getRequestedStartTime(), booking.getOriginalStartTime(), cancelledAt, lateCancelGrace());
         // fix/audit3-completion-dispute-integrity: the refund-eligible LATE cancel — still CONFIRMED / UPCOMING
@@ -1609,6 +1617,12 @@ public class BookingService {
         String coachEmail = resolveCoachEmail(booking.getCoachId(), bookingId);
 
         transition(bookingId, BookingEvent.CANCEL_PARENT, new TransitionContext(ActorRole.PARENT, parentUserId));
+        if (coachNoShow) {
+            // V218: after the transition, which refreshes this same managed instance under the row lock.
+            booking.setCoachNoShowClaim(Booking.CLAIM_LATE_CANCEL);
+            booking.setCoachNoShowClaimedAt(cancelledAt);
+            bookingRepository.save(booking);
+        }
 
         eventPublisher.publishEvent(new BookingCancelledByParentEvent(
             this, bookingId, parentUserId, booking.getCoachId(),
@@ -1733,7 +1747,7 @@ public class BookingService {
         // started.
         // fix/booking-completion-integrity (owner decision 2026-10-29): and not at start+0s either — a family a
         // few minutes late is not a no-show, and the report is a forfeit that pays the coach. Reportable from
-        // start + booking.playerNoShow.graceMinutes (default 15); the parent's coach no-show stays start + 30.
+        // start + booking.playerNoShow.graceMinutes (default 15); the parent's coach no-show uses booking.lateCancel.graceMinutes (15).
         Instant reportableAt = playerNoShowReportableAt(booking.getRequestedStartTime());
         if (Instant.now(ClockProvider.getClock()).isBefore(reportableAt)) {
             throw new OperationNotAllowedException(
@@ -1776,16 +1790,29 @@ public class BookingService {
                 Map.of("reportable at", reportableAt), BookingError.NO_SHOW_TOO_EARLY);
         }
         // fix/audit3-completion-dispute-integrity: also from COMPLETED_PENDING_CONFIRMATION when the coach never
-        // started the session (a Quick Complete — allowed at start+0, while this report opens at start+30, so the
-        // coach always won the race and the family was left with nothing to report). Decided under the row
-        // lock: Start then End between the read above and the transition would otherwise slip through. A
+        // started the session (a Quick Complete — allowed at start+0, while this report opens at start + the
+        // grace, so the coach always won the race and the family was left with nothing to report). Decided under
+        // the row lock: Start then End between the read above and the transition would otherwise slip through. A
         // session that was started (liveStartedAt) is disputed instead, never reported as a no-show.
         booking = lockBookingForUpdate(bookingId);
-        if (BookingStatus.COMPLETED_PENDING_CONFIRMATION.name().equals(booking.getStatus())
-                && booking.getLiveStartedAt() != null) {
+        // S-07 rule 3, first action wins: a coach who pressed Start (even late, e.g. at +16) before any claim was
+        // filed makes the claim impossible — IN_PROGRESS / PAUSED here, or a started session now awaiting the
+        // family's confirmation. The family disputes, as before.
+        String statusNow = booking.getStatus();
+        if (BookingStatus.IN_PROGRESS.name().equals(statusNow) || BookingStatus.PAUSED.name().equals(statusNow)
+                || (BookingStatus.COMPLETED_PENDING_CONFIRMATION.name().equals(statusNow)
+                    && booking.getLiveStartedAt() != null)) {
             throw new OperationNotAllowedException(
                 "The coach started this session — raise a dispute instead of reporting a no-show",
                 Map.of("booking id", bookingId), BookingError.SESSION_WAS_STARTED);
+        }
+        // S-07 rule 1: the claim closes at start + booking.coachNoShow.reportWindowHours. Only meaningful for a
+        // status the report can still act on (any other falls through to the transition's own refusal, as before).
+        // After it an unstarted session is resolved by the platform (refunded automatically if nobody records it).
+        boolean conflictZone = BookingStatus.COMPLETED_PENDING_CONFIRMATION.name().equals(statusNow);
+        if ((conflictZone || BookingStatus.UPCOMING.name().equals(statusNow))
+                && Instant.now().isAfter(coachNoShowReportableUntil(booking.getRequestedStartTime()))) {
+            throw noShowWindowClosed();
         }
         // C6: NO_SHOW_COACH leaves only UPCOMING or a never-started COMPLETED_PENDING_CONFIRMATION, so payment
         // was always captured and no coach payout exists yet (one is written only on completion) — refund what
@@ -1805,12 +1832,21 @@ public class BookingService {
         } catch (OptimisticLockingFailureException e) {
             throw new OperationNotAllowedException(BookingError.CONCURRENT_MODIFICATION_MESSAGE, e, BookingError.CONCURRENT_MODIFICATION);
         }
+        // After the transition, which refreshes this same managed instance under the row lock. The claim is
+        // recorded once, with the transition (V218).
+        booking.setCoachNoShowClaim(conflictZone ? Booking.CLAIM_SPLIT : Booking.CLAIM_REPORT);
+        booking.setCoachNoShowClaimedAt(Instant.now());
+        bookingRepository.save(booking);
 
+        // S-07 rule 4 (option B): a report on a session the coach quick-completed without ever pressing Start is
+        // the conflict zone — neither side is established, so the fee is split 50/50 and the coach is not struck
+        // (CoachNoShowSplitListener, CancellationRefundService.onCoachNoShow). A report on a plain UPCOMING session
+        // stays a full refund + strike.
         eventPublisher.publishEvent(new CoachNoShowEvent(
             this, bookingId, parentUserId, booking.getCoachId(),
             booking.getSessionPackPurchaseId(), sessionPrice,
             packExpired, parentEmail,
-            booking.getRequestedStartTime(), booking.getCanonicalTimezone()
+            booking.getRequestedStartTime(), booking.getCanonicalTimezone(), conflictZone
         ));
     }
 
@@ -1820,6 +1856,23 @@ public class BookingService {
      */
     Instant coachNoShowReportableAt(Instant requestedStartTime) {
         return requestedStartTime.plus(lateCancelGrace());
+    }
+
+    /**
+     * S-07: the instant a coach no-show claim stops being accepted — {@code start +
+     * booking.coachNoShow.reportWindowHours}. A grace set (mis)configured at or past the window would close the claim
+     * before it opens, so the window is never shorter than one hour after the report opens.
+     */
+    Instant coachNoShowReportableUntil(Instant requestedStartTime) {
+        Instant until = requestedStartTime.plus(
+            Duration.ofHours(configService.getBoundedLong(ConfigBounds.BOOKING_COACH_NO_SHOW_REPORT_WINDOW_HOURS)));
+        Instant opens = coachNoShowReportableAt(requestedStartTime);
+        return until.isAfter(opens) ? until : opens.plus(Duration.ofHours(1));
+    }
+
+    /** S-07: the 409 both claim doors (report, cancel-for-refund) answer once the window has closed. */
+    private static ResponseStatusException noShowWindowClosed() {
+        return new ResponseStatusException(HttpStatus.CONFLICT, "booking.noShowWindowClosed");
     }
 
     /**
@@ -2115,6 +2168,7 @@ public class BookingService {
             b.getPlayerRequest(),
             receiptAvailable,
             b.getRequestedStartTime() == null ? null : coachNoShowReportableAt(b.getRequestedStartTime()),
+            b.getRequestedStartTime() == null ? null : coachNoShowReportableUntil(b.getRequestedStartTime()),
             b.isProposedByCoach(),
             b.getLiveStartedAt() != null
         );

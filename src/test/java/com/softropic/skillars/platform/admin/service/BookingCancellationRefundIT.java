@@ -300,7 +300,7 @@ class BookingCancellationRefundIT extends AbstractIntegrationTest {
         bookingService.cancelBookingAsParent(started, PARENT_ID);
 
         assertThat(statusOf(started)).isEqualTo("CANCELLED_PARENT");
-        assertThat(refundRows(started)).as("start+10m is inside the default 30-minute grace").isZero();
+        assertThat(refundRows(started)).as("start+10m is inside the default 15-minute grace").isZero();
     }
 
     @Test
