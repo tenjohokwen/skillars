@@ -34,10 +34,16 @@ public enum AdminAlertType {
     // fix/booking-completion-integrity (V209): an UPCOMING booking whose session ended without being started —
     // captured money with nothing settled (reference_type BOOKING). Raised once per booking by
     // UnresolvedSessionSweeperService; in the payment-integrity bucket (no workflow of its own).
-    SESSION_NEVER_STARTED;
+    // S-07: no longer raised — such a session is refunded automatically. Kept for rows already stored (V209 CHECK).
+    SESSION_NEVER_STARTED,
+    // S-07 (V219): INFORMATIONAL only. A payer's coach no-show claims (reports, late-cancel claims, conflict-zone splits)
+    // reached booking.coachNoShow.repeatClaimAlertThreshold within the alert window. Nothing is blocked or decided
+    // automatically and there is nothing to adjudicate; an admin just marks it handled. referenceId = the booking that
+    // crossed the threshold (reference_type BOOKING); reason = "payer <userId>: <n> claims in <d>d". One per payer per window.
+    REPEAT_NO_SHOW_CLAIMANT;
 
     /** fix/payment-payouts-disputes-webhooks: the payment-integrity types (one queue bucket, one resolve action). */
     public static final java.util.Set<AdminAlertType> PAYMENT_INTEGRITY =
         java.util.EnumSet.of(CHARGEBACK, EXTERNAL_REFUND, PAYOUT_HELD, PAYOUT_REVERSAL_FAILED, BOOKING_ACTION_REQUIRED,
-            SESSION_NEVER_STARTED);
+            SESSION_NEVER_STARTED, REPEAT_NO_SHOW_CLAIMANT);
 }

@@ -74,7 +74,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   product decision)**. Since `fix/prod-readiness-gaps`, `PUT /api/config` refuses to set it to `true`
   (400) and a stored `true` logs an ERROR at boot (`config.value.misconfigured`, reason
   `no_sms_gateway`). Flip `ConfigService.SMS_GATEWAY_AVAILABLE` when a gateway ships.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214 and V215 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215 and V219 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -560,6 +560,22 @@ SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
 
+**V219: coach start reminders + repeat-claimant alert** (`V219__coach_start_reminders_and_repeat_claim_alert.sql`).
+Two nullable `booking.bookings` columns (`coach_start_reminder_sent_at`, `coach_late_start_reminder_sent_at`), a
+small partial index `idx_bkg_no_show_claim_payer` on `(parent_id, coach_no_show_claimed_at)` for claimed bookings
+(built non-concurrently, marker `allow-blocking-index`, `lock_timeout = 5s`), and two validating CHECK swaps:
+`envelope_entity_email_template_check` gains `COACH_START_REMINDER` and `admin_alerts_type_check` gains
+`REPEAT_NO_SHOW_CLAIMANT` (both rebuilt as the union of every earlier value; justified by "prod is not live", listed in
+section 0). Nothing to check before it runs. After deploy the first sweeps refund any session that is already more
+than 48 h past its start and was never started or recorded (200 per 5-minute tick); to see that backlog first:
+```sql
+SELECT status, count(*) FROM booking.bookings
+WHERE status IN ('UPCOMING', 'CONFIRMED') AND requested_start_time < now() - interval '48 hours'
+GROUP BY 1;
+```
+Each one is refunded in full (or its pack session returned) and the family and coach are emailed. Open
+`SESSION_NEVER_STARTED` alerts for them are closed by the refund.
+
 **V218: coach no-show claim marker** (`V218__booking_coach_no_show_claim.sql`). Additive only: two nullable
 columns on `booking.bookings` (`coach_no_show_claim`, `coach_no_show_claimed_at`), `lock_timeout = 5s`. Nothing
 to check before it runs.
@@ -805,7 +821,8 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `OutboxPollerScheduler` / `DeletionSchedulerService` (filestorage) | 5 s | `app.storage.poller.fixed-delay-ms` |
 | `ConfigService` cache refresh | 300 s | `app.config.cache-ttl-seconds`: config edits take up to 5 min to apply |
 | `BookingExpiryScheduler`, `BookingReminderScheduler`, `QuickCompleteTimeoutService`, `StuckCompletionSweeperService` | 5 min | hard-coded |
-| `UnresolvedSessionSweeperService` | 5 min | hard-coded; grace `booking.unresolvedSession.graceMinutes` (120). Ends live sessions left open past their end (to COMPLETED_PENDING_CONFIRMATION) and raises one `SESSION_NEVER_STARTED` alert per ended, never-started session |
+| `UnresolvedSessionSweeperService` | 5 min | hard-coded; live-session grace `booking.unresolvedSession.graceMinutes` (120) and never-started auto-refund `booking.unresolvedSession.autoRefundHours` (48). Ends live sessions left open past their end (to COMPLETED_PENDING_CONFIRMATION) and refunds in full, with no coach strike, a session nobody started, claimed or quick-completed 48 h after its start. It no longer raises `SESSION_NEVER_STARTED` alerts |
+| `CoachStartReminderScheduler` | 1 min | hard-coded; ShedLock `CoachStartReminderScheduler_remind` (`PT5M` / `PT30S`). Emails the coach (`COACH_START_REMINDER`, plus an inbox row) at an unstarted session's start and at start + 10 min; needs working outbound email like every other booking mail |
 | `PaymentPendingSweeper` | 15 min | hard-coded |
 | `ChargeOutcomeReconciler` | 10 min | hard-coded cadence; age threshold `booking.payment.charge_reconcile_after_minutes` (10). Settles or declines booking charges whose Stripe response was lost; ERROR tags `[CHARGE_RECONCILE_AMOUNT_MISMATCH]` / `[CHARGE_RECONCILE_BOOKING_MOVED]` need an operator |
 | `CashOutReconciliationService` | 15 min | hard-coded |
@@ -866,7 +883,10 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.lateCancel.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V191 | Owner decision 2026-10-31: 15 (was 30). The one knob for when a coach no-show claim opens: the report, the late-cancel refund and the late-cancel coach strike all use it. If a value was stored in `platform_config` under the old default, delete it (or set 15) |
 | `booking.coachNoShow.reportWindowHours` | 5 (code default, range 1–168) | `ConfigBounds`, V218 | Owner decision 2026-10-31: 5. Hours after the start until which a coach no-show claim (report or cancel-for-refund) is accepted on a session nobody started; then 409 `booking.noShowWindowClosed` |
 | `booking.playerNoShow.graceMinutes` | 15 (code default, range 5–1440) | `ConfigBounds`, V209 | Owner decision 2026-10-29: 15. Minutes after the start before a coach may report a player no-show |
-| `booking.unresolvedSession.graceMinutes` | 120 (code default, range 30–10080) | `ConfigBounds`, V209 | Keep. Minutes after a session's end before `UnresolvedSessionSweeperService` acts on it |
+| `booking.unresolvedSession.graceMinutes` | 120 (code default, range 30–10080) | `ConfigBounds`, V209 | Keep. Minutes after a LIVE session's end before `UnresolvedSessionSweeperService` ends it for the coach |
+| `booking.unresolvedSession.autoRefundHours` | 48 (code default, range 2–720) | `ConfigBounds`, V219 | Owner decision 2026-10-31: 48. Hours after the start before a session nobody started, claimed or quick-completed is refunded in full automatically (no coach strike). Never applied below `booking.coachNoShow.reportWindowHours` + 1 |
+| `booking.coachNoShow.repeatClaimAlertThreshold` | 3 (code default, range 1–1000) | `ConfigBounds`, V219 | Owner decision 2026-10-31: 3. A payer's coach no-show claims (reports, late-cancel claims, 50/50 splits) within the window that raise one informational `REPEAT_NO_SHOW_CLAIMANT` admin alert. Nothing is blocked |
+| `booking.coachNoShow.repeatClaimAlertWindowDays` | 90 (code default, range 1–3650) | `ConfigBounds`, V219 | Owner decision 2026-10-31: 90. One alert per payer per window |
 | `booking.live.minDurationPercent` | 50 (code default, range 0–100) | `ConfigBounds` | Keep **(confirm)**. A live session ended in under this share of its booked length (Start to End; pauses count as live) waits for the family's confirmation or dispute instead of paying the coach at once. 0 turns the check off |
 | `disputes.maxPerBookingPerRaiser` | 2 (code default, range 1–100) | `ConfigBounds` | Keep **(confirm)**. Disputes one side (the coach, or the family's logins together) may raise on one booking in total (open, resolved or dismissed). Past it: 409 `disputes.limitReached`; an appeal is the route past a decision |
 | `coach.excusedCancellations.maxPerWindow` | 3 (code default, 0–100) | `ConfigBounds` | Keep unless policy changes |
@@ -1158,3 +1178,12 @@ an operator must now do.
   stored `booking.lateCancel.graceMinutes` in `platform_config`, that value still wins: check it. A report on a
   session the coach quick-completed without ever pressing Start now splits the fee 50/50 (no strike) instead of
   refunding it in full. No new job, env var or Stripe webhook event.
+- 2026-10-31: feat/noshow-reminders-autorefund-alert (S-07 part 2, V219). New 1-minute job `CoachStartReminderScheduler`
+  (ShedLock `CoachStartReminderScheduler_remind`): coaches are emailed (and get an inbox row) at an unstarted session's
+  start and at start + 10 min, so outbound email must work (section 5). `UnresolvedSessionSweeperService` now refunds in
+  full, with no coach strike, any session nobody started, claimed or quick-completed 48 h after its start and no longer
+  raises `SESSION_NEVER_STARTED`. New code-default keys `booking.unresolvedSession.autoRefundHours` (48),
+  `booking.coachNoShow.repeatClaimAlertThreshold` (3) and `booking.coachNoShow.repeatClaimAlertWindowDays` (90), see
+  section 7. New admin alert type `REPEAT_NO_SHOW_CLAIMANT` (informational; an admin only marks it handled) and new
+  email template `COACH_START_REMINDER` (CHECK widened in V219; four message bundles, Thymeleaf file
+  `coachStartReminder.html`). Run the V219 backlog query in [3.2](#32-pre-migration-data-checks) before deploying.

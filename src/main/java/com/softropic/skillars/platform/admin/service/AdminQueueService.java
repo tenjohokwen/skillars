@@ -244,6 +244,9 @@ public class AdminQueueService {
             case SESSION_NEVER_STARTED -> "Booking " + referenceId + " ended without the session being started"
                 + " — payment captured, nothing paid out or refunded. The parent can report a coach no-show;"
                 + " otherwise contact the coach (quick-complete) or the parent: " + parentContact(referenceId);
+            // S-07: informational — reason is "payer <userId>: <n> claims in <d>d"; referenceId the latest booking.
+            case REPEAT_NO_SHOW_CLAIMANT -> "Repeat coach no-show claimant (" + (reason != null ? reason : "")
+                + "), latest booking " + referenceId + " — informational, no action is taken or needed";
             default -> "";
         };
     }

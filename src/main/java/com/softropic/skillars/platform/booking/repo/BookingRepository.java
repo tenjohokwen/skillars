@@ -441,14 +441,28 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
         """)
     List<UUID> findLiveSessionIdsEndedBefore(@Param("cutoff") Instant cutoff, Pageable pageable);
 
-    // fix/booking-completion-integrity: UPCOMING (never started) sessions whose scheduled end is older than
-    // the cutoff and that have not been alerted yet — captured money with nothing settled.
+    // S-07: captured sessions (UPCOMING, or a CONFIRMED one the reminder job never advanced) that nobody started,
+    // claimed or quick-completed and whose scheduled START is older than the cutoff — refunded automatically.
     @Query("""
         SELECT b.id FROM Booking b
-        WHERE b.status = 'UPCOMING' AND b.requestedEndTime < :cutoff AND b.unresolvedAlertedAt IS NULL
-        ORDER BY b.requestedEndTime ASC, b.id ASC
+        WHERE b.status IN ('UPCOMING', 'CONFIRMED') AND b.requestedStartTime < :cutoff
+        ORDER BY b.requestedStartTime ASC, b.id ASC
         """)
-    List<UUID> findUnalertedNeverStartedIdsEndedBefore(@Param("cutoff") Instant cutoff, Pageable pageable);
+    List<UUID> findNeverStartedIdsStartedBefore(@Param("cutoff") Instant cutoff, Pageable pageable);
+
+    // S-07: UPCOMING sessions already past their scheduled start (but not older than notBefore, so a long outage does
+    // not replay stale reminders) that are still owed at least one of the coach's two "press Start" reminders.
+    @Query("""
+        SELECT b.id FROM Booking b
+        WHERE b.status = 'UPCOMING' AND b.requestedStartTime <= :now AND b.requestedStartTime > :notBefore
+          AND (b.coachStartReminderSentAt IS NULL OR b.coachLateStartReminderSentAt IS NULL)
+        ORDER BY b.requestedStartTime ASC, b.id ASC
+        """)
+    List<UUID> findUnstartedIdsDueForCoachReminder(@Param("now") Instant now, @Param("notBefore") Instant notBefore,
+                                                   Pageable pageable);
+
+    // S-07: a payer's coach no-show claims (report, late-cancel, split) since an instant — the repeat-claimant count.
+    long countByParentIdAndCoachNoShowClaimedAtAfter(Long parentId, Instant since);
 
     // skillars-12-7 AC8: COMPLETED bookings of this coach, inside the recap edit window, whose
     // session_completion_data row carries no recap text, and whose player has NOT been erased (player

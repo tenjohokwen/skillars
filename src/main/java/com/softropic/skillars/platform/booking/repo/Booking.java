@@ -136,10 +136,22 @@ public class Booking {
     /**
      * fix/booking-completion-integrity (V209): set when UnresolvedSessionSweeperService raised the
      * SESSION_NEVER_STARTED admin alert for this UPCOMING booking whose session ended without being
-     * started — once per booking, so a resolved alert is not raised again every sweep.
+     * started — once per booking, so a resolved alert is not raised again every sweep. S-07: no longer written
+     * (such a session is refunded automatically after booking.unresolvedSession.autoRefundHours); the column stays
+     * for rows already stamped.
      */
     @Column(name = "unresolved_alerted_at")
     private Instant unresolvedAlertedAt;
+
+    /**
+     * S-07 (V219): when CoachStartReminderScheduler queued the coach's "press Start" reminder at the scheduled
+     * start, and again at start + 10 minutes. Once each per booking (the dedupe); NULL = not sent.
+     */
+    @Column(name = "coach_start_reminder_sent_at")
+    private Instant coachStartReminderSentAt;
+
+    @Column(name = "coach_late_start_reminder_sent_at")
+    private Instant coachLateStartReminderSentAt;
 
     /**
      * fix/audit3-completion-dispute-integrity (V213): when the family was asked to confirm (or dispute) this

@@ -1265,6 +1265,7 @@ export default {
         PAYOUT_REVERSAL_FAILED: "Échec de l'annulation du versement coach",
         BOOKING_ACTION_REQUIRED: 'Réservation nécessitant une action manuelle',
         SESSION_NEVER_STARTED: 'Séance terminée sans avoir été démarrée',
+        REPEAT_NO_SHOW_CLAIMANT: 'Signalements répétés d’absence du coach (à titre informatif)',
       },
     },
     reviewModeration: {
@@ -2718,6 +2719,8 @@ export default {
       SESSION_FORFEITED_LATE_CANCEL:
         'Votre annulation tardive de la séance du {requestedStartTime} n’est pas remboursée : la séance est perdue.',
       BOOKING_REMINDER: 'Rappel : séance avec {coachDisplayName} le {requestedStartTime}.',
+      COACH_START_REMINDER:
+        'Appuyez sur Démarrer : votre séance avec {playerName} (prévue le {requestedStartTime}) n’a pas été démarrée. Une séance non démarrée peut être remboursée.',
       SESSION_PACK_EXPIRY_WARNING:
         '{creditsRemaining} séance(s) avec {coachDisplayName} expirent le {expiresAt}.',
       SESSION_PACK_EXPIRED: 'Votre forfait avec {coachDisplayName} a expiré.',

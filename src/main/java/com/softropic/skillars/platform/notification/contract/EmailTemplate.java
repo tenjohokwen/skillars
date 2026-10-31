@@ -90,6 +90,12 @@ public enum EmailTemplate {
      * {@link #BOOKING_CANCELLED_BY_PARENT} either way.
      */
     SESSION_FORFEITED_LATE_CANCEL("email.booking.session_forfeited_late_cancel.title"),
+    /**
+     * S-07 (V219): to the COACH when a session is still UPCOMING at its scheduled start (reminderType START) and again
+     * at start + 10 minutes (LATE): press Start, or the family can claim a no-show and the session can be refunded.
+     * Safety-relevant, so category BOOKING (never opt-out-able), with an in-app inbox row.
+     */
+    COACH_START_REMINDER("email.booking.coach_start_reminder.title"),
     COACH_VISIBILITY_REDUCED("email.reliability.visibility_reduced.title"),
     /**
      * RETIRED — no producer since the parental-approval flow was removed (ADR "Minors never upload",

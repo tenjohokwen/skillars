@@ -110,6 +110,13 @@ flowchart LR
       <li>"Quick Complete" skips the live overlay. A quick-completed session waits for the parent to confirm it; if they don't, it confirms automatically after <code>booking.quick_complete_timeout_hours</code> (seeded at 24). <strong>The server decides which kind of wrap-up you are doing.</strong> It only counts as a live session if you pressed "Start Session", ended it yourself, and it ran for at least <code>booking.live.minDurationPercent</code> (50%) of its booked length, so you can't skip the parent's confirmation by claiming a live session or by pressing Start then End. The family is emailed as soon as a session starts waiting for them, and can confirm it or raise a dispute. If you Quick Complete a session you never started, the family can still report "Coach didn't show" from start + 30 minutes.</li>
     </ol>
     <div class="callout warn">
+      <p><strong>Reminders and the automatic refund.</strong> If a session is still not started when its time arrives, you get a
+      reminder by email and in your notifications: "Press Start, or this session can be refunded", and a second one 10 minutes
+      later. These are safety notices, so you cannot switch them off. If nobody starts, claims or quick-completes a session,
+      the family is refunded in full automatically 48 hours after its start, and you are not struck for it. You can still
+      Quick Complete until then (the family then confirms or disputes it as usual).</p>
+    </div>
+    <div class="callout warn">
       <p><strong>If you don't press Start.</strong> The family can claim a coach no-show from 15 minutes after the start
       until 5 hours after it (the claim is a report, or cancelling the session): they are refunded in full and you get a
       reliability strike. Press "Start Session" first, even late, and no claim is possible; the family can only dispute.

@@ -183,8 +183,8 @@ class EmailDataRoundTripContractTest {
         }
 
         assertThat(invoked)
-            .as("all 27 on*(Event) handlers across both listeners must have been driven")
-            .hasSize(27);
+            .as("all 28 on*(Event) handlers across both listeners must have been driven")
+            .hasSize(28);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> captor = ArgumentCaptor.forClass(Map.class);
