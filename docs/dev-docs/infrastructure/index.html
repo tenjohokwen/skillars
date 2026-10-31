@@ -153,7 +153,7 @@
       <code>docker-compose.uat.yml</code>, and since #356 production via the <code>storage</code> service in
       <code>docker-compose.yml</code> (production previously had no storage service). Production details: S3 API on port
       9500, routed by Traefik on its own <code>STORAGE_DOMAIN</code> with a Let's Encrypt certificate because browsers
-      PUT/GET presigned URLs against it directly; data on the Hetzner volume at <code>/opt/skillars/data/storage</code>
+      PUT/GET presigned URLs against it directly (the Hostwinds UAT uses its host nginx instead of Traefik, <code>deploy/nginx/uat-hostwinds-storage.conf</code>, with port 9500 bound to localhost; <code>DeployedSecretsValidator</code> refuses to boot <code>prod</code>/<code>uat</code> on a non-https endpoint); data on the Hetzner volume at <code>/opt/skillars/data/storage</code>
       (so <code>deploy/backup/volume-backup.sh</code> already covers it); <code>-volume.max=0</code> (the default 8 volumes
       × 1&nbsp;GB would cap the store at 8&nbsp;GB) and <code>-volume.minFreeSpace=10</code> (read-only at 10% free
       rather than filling the volume Postgres shares); the entrypoint writes the S3 identity file from
