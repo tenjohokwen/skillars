@@ -165,6 +165,43 @@ public class StripeClient {
         return Customer.create(params);
     }
 
+    public Customer retrieveCustomer(String stripeCustomerId) throws StripeException {
+        return Customer.retrieve(stripeCustomerId);
+    }
+
+    /**
+     * GDPR erasure: every payment method still attached to the customer (all types, auto-paged and
+     * materialised up front so the caller can detach while iterating). A failure mid-pagination surfaces as
+     * an unchecked {@code RuntimeException}, as with {@link #listSubscriptionsByStatus}.
+     */
+    public java.util.List<PaymentMethod> listCustomerPaymentMethods(String stripeCustomerId) throws StripeException {
+        java.util.List<PaymentMethod> all = new java.util.ArrayList<>();
+        PaymentMethod.list(com.stripe.param.PaymentMethodListParams.builder()
+                .setCustomer(stripeCustomerId).setLimit(100L).build())
+            .autoPagingIterable().forEach(all::add);
+        return all;
+    }
+
+    public void detachPaymentMethod(String paymentMethodId) throws StripeException {
+        PaymentMethod.retrieve(paymentMethodId).detach();
+    }
+
+    /** GDPR erasure: deletes the customer at Stripe (which also cancels its subscriptions there). */
+    public void deleteCustomer(String stripeCustomerId) throws StripeException {
+        Customer.retrieve(stripeCustomerId).delete();
+    }
+
+    /**
+     * GDPR erasure fallback when Stripe refuses the delete: blanks every personal field on the customer
+     * (an empty string unsets the field at Stripe) and the {@code userId} metadata that links it to a person.
+     */
+    public void scrubCustomer(String stripeCustomerId) throws StripeException {
+        Customer.retrieve(stripeCustomerId).update(com.stripe.param.CustomerUpdateParams.builder()
+            .setName("").setEmail("").setPhone("").setDescription("")
+            .putMetadata("userId", "")
+            .build());
+    }
+
     public PaymentMethod retrievePaymentMethod(String id) throws StripeException {
         return PaymentMethod.retrieve(id);
     }

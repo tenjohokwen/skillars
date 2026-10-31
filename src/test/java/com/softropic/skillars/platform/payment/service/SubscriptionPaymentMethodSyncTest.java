@@ -275,6 +275,16 @@ class SubscriptionPaymentMethodSyncTest {
         verify(stripeClient, never()).updateSubscriptionDefaultPaymentMethod(anyString(), anyString());
     }
 
+    @Test
+    void savePaymentMethod_malformedId_rejectedWith400_nothingStoredOrEnqueued() {
+        assertThatThrownBy(() -> service.savePaymentMethodAndScheduleSync(USER_ID, "card_123"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.invalidPaymentMethodId");
+
+        verify(stripeCustomerRepository, never()).save(any());
+        verify(paymentMethodSyncOutboxSupport, never()).enqueueSync(any(), anyString());
+    }
+
     // ─── Item 2: UNPAID/PAUSED grace ──────────────────────────────────────────────
 
     @Test

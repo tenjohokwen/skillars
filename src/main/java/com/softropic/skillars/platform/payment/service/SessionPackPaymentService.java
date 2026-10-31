@@ -7,9 +7,11 @@ import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.payment.contract.CreateSessionPackTierRequest;
 import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackTierResponse;
+import com.softropic.skillars.platform.payment.contract.StripeIdFormat;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.PaymentMethod;
@@ -92,6 +94,9 @@ public class SessionPackPaymentService {
                                                     String attemptKey) {
         if (attemptKey != null && !ATTEMPT_KEY_PATTERN.matcher(attemptKey).matches()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.invalidIdempotencyKey");
+        }
+        if (paymentMethodId != null && !paymentMethodId.isBlank()) {
+            StripeIdFormat.requirePaymentMethodId(paymentMethodId);
         }
         // Deferred-81 AC4: a self-registered (no-parent) player has parentId == null by
         // definition, so the old findByIdAndParentId(playerId, parentId) lookup always returned
@@ -281,6 +286,16 @@ public class SessionPackPaymentService {
 
     @Transactional
     public SessionPackTierResponse createTier(UUID coachId, String label, int sessionCount, BigDecimal totalPrice) {
+        // Defence in depth behind CreateSessionPackTierRequest's bean validation, and the one bound it cannot
+        // express: price_per_session is rounded to 2 decimals and the table CHECKs it > 0, so a total that
+        // rounds a session's share to 0.00 would otherwise surface as a 500 constraint violation.
+        if (sessionCount < 1 || sessionCount > CreateSessionPackTierRequest.MAX_SESSION_COUNT
+                || totalPrice.compareTo(new BigDecimal("0.01")) < 0
+                || totalPrice.compareTo(new BigDecimal(CreateSessionPackTierRequest.MAX_TOTAL_PRICE)) > 0
+                || totalPrice.stripTrailingZeros().scale() > 2
+                || totalPrice.divide(BigDecimal.valueOf(sessionCount), 2, RoundingMode.HALF_UP).signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.invalidPackTier");
+        }
         // Deactivate all existing active tiers for this coach
         sessionPackTierRepository.findAllByCoachIdAndIsActiveTrue(coachId)
             .forEach(t -> {

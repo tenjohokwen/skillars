@@ -119,6 +119,7 @@ class GdprErasureServiceTest {
     @Mock private PlayerTimelineRepository playerTimelineRepository;
     @Mock private HomeworkCompletionRepository homeworkCompletionRepository;
     @Mock private BlobDeletionOutboxSupport blobDeletionOutboxSupport;
+    @Mock private com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private PessimisticLockRetryer lockRetryer;
@@ -164,7 +165,7 @@ class GdprErasureServiceTest {
             playerRadarBaselineRepository, playerRadarCompositeRepository, performanceReportRepository,
             playerTimelineRepository, homeworkCompletionRepository, blobDeletionOutboxSupport,
             refreshTokenRepository, eventPublisher, lockRetryer, entityManager, txManager, configService,
-            dataSource, coachMediaItemRepository, coachBrandingRepository);
+            dataSource, coachMediaItemRepository, coachBrandingRepository, stripeCustomerErasureOutboxSupport);
         service.initTemplates();
         // skillars-deferred-132 AC1 Fix 4: erase() now delegates to self.eraseTransactional(...) so its
         // own connection-pool pre-check runs before the @Transactional(REQUIRES_NEW) proxy advice would
@@ -173,6 +174,23 @@ class GdprErasureServiceTest {
         // its own self field). dataSource is a plain Mockito mock, not a HikariDataSource, so the
         // pre-check itself is a no-op in this unit-test context.
         ReflectionTestUtils.setField(service, "self", service);
+    }
+
+    @Test
+    void erase_schedulesStripeCustomerErasureInTheErasureTransaction() {
+        GdprRequest request = new GdprRequest();
+        request.setId(REQUEST_ID);
+        request.setUserId(USER_ID);
+        when(gdprRequestRepository.findById(REQUEST_ID)).thenReturn(Optional.of(request));
+        User user = new User();
+        user.setSkillarsRole(SkillarsRole.PLAYER);
+        when(userRepository.findOneById(USER_ID)).thenReturn(Optional.of(user));
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+        when(playerProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.empty());
+
+        service.erase(REQUEST_ID, USER_ID);
+
+        org.mockito.Mockito.verify(stripeCustomerErasureOutboxSupport).scheduleErasure(USER_ID);
     }
 
     @Test
