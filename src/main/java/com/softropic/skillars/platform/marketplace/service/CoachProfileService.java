@@ -54,6 +54,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.StringUtils;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.util.Comparator;
@@ -608,12 +609,15 @@ public class CoachProfileService {
         // (2) specialties + age groups + availability existence + 90-day strike count
         final OffsetDateTime since = OffsetDateTime.now().minusDays(STRIKE_WINDOW_DAYS);
         final List<CoachPublicProfileFactsRepository.Fact> facts =
-            coachPublicProfileFactsRepository.findPublicProfileFacts(profile.getId(), since);
+            coachPublicProfileFactsRepository.findPublicProfileFacts(profile.getId(), since, OffsetDateTime.now());
 
         final List<String> specialties = factValues(facts, CoachPublicProfileFactsRepository.KIND_SPECIALTY);
         final List<String> ageGroups = factValues(facts, CoachPublicProfileFactsRepository.KIND_AGE_GROUP);
         final boolean available = factCount(facts, CoachPublicProfileFactsRepository.KIND_AVAILABILITY_COUNT) > 0;
         final int strikeCount = factCount(facts, CoachPublicProfileFactsRepository.KIND_STRIKE_COUNT);
+        final LocalDate safeguardingValidUntil = factValues(facts,
+                CoachPublicProfileFactsRepository.KIND_SAFEGUARDING_VALID_UNTIL).stream()
+            .findFirst().map(LocalDate::parse).orElse(null);
 
         // (3) session packs
         List<SessionPackDto> sessionPacks = sessionPackRepository.findByCoachId(profile.getId())
@@ -654,7 +658,9 @@ public class CoachProfileService {
             available,
             strikeCount,
             mediaGallery,
-            null  // reviews enriched at controller level to avoid circular service dependency
+            null,  // reviews enriched at controller level to avoid circular service dependency
+            safeguardingValidUntil != null,
+            safeguardingValidUntil
         );
     }
 

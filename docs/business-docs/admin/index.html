@@ -47,6 +47,7 @@ flowchart LR
     V["/admin/videos"]
     G["/admin/gdpr"]
     K["/admin/config"]
+    S["/admin/safeguarding"]
     </pre>
 
     <h3>1. System health — <code>/admin/health-dashboard</code></h3>
@@ -123,6 +124,15 @@ flowchart LR
 
     <h3>11. Platform configuration — <code>/admin/config</code></h3>
     <p>"Platform configuration" lists every stored setting (Setting, Value, Type, Allowed range, Last changed), with a "Search settings" box. Click "Edit" to change a value. Changes take effect at once on the server that handled the change, and on all other servers within five minutes. This is where policy numbers like strike thresholds, grace periods, request limits, the commission rate and session pack validity (<code>pack.expiry.days.tier1</code>–<code>tier4</code>: 90 / 180 / 365 / 548 days for 1 / 2–5 / 6–10 / 11+ sessions, range 14–3650, applied only to packs bought after the change) are tuned. A setting that has never been stored shows "Not set (default <em>n</em>)".</p>
+
+    <h3>12. Safeguarding checks — <code>/admin/safeguarding</code></h3>
+    <p>Visible to <strong>full administrators only</strong> (the limited admin role gets a 403): the uploads are criminal-record certificates. "Requests" lists coaches who asked for an inspection (oldest first; "Renewal" marks a coach whose current check is still valid). A request either carries an encrypted upload ("View document" decrypts it into a new tab; each view is written to the audit log) or none ("None (inspect another way)", e.g. a video call).</p>
+    <ul>
+      <li><strong>Mark inspected</strong> confirms you inspected a valid enhanced certificate. The coach's public profile then shows "Safeguarding check on record (valid until MM/YYYY)" for <code>coach.safeguarding.validityYears</code> (5) years. The request closes and any upload is deleted at once.</li>
+      <li><strong>Reject</strong> tells the coach the check could not be confirmed (nothing is shown publicly) and deletes the upload. Your optional note stays in the audit log only.</li>
+      <li><strong>On record</strong> lists the checks currently shown; <strong>Revoke</strong> removes one (for example one recorded in error).</li>
+      <li>Every action writes <code>SAFEGUARDING_INSPECTED</code> / <code>_REJECTED</code> / <code>_REVOKED</code> / <code>_DOC_VIEWED</code> to the admin action log with your admin id, the coach and the check type, never anything from the certificate. Uploads nobody processes are deleted automatically after 14 days.</li>
+    </ul>
 
     <h2>What's real but API-only (no admin UI yet)</h2>
     <p>Every <code>/api/admin/**</code> endpoint the backend exposes now has a caller in the admin console. What remains without a screen:</p>

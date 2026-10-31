@@ -77,7 +77,7 @@ public class CoachMarketplaceResource {
             base.specialties(), base.ageGroupsCoached(), base.perSessionPrice(),
             base.currency(), base.sessionPacks(), base.available(),
             base.reliabilityStrikeCount(), base.mediaGallery(),
-            reviews));
+            reviews, base.safeguardingCheckOnRecord(), base.safeguardingValidUntil()));
     }
 
     @GetMapping("/me/tier")

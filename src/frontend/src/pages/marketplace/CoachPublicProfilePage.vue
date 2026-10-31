@@ -68,6 +68,13 @@
               :coach-context="isOwnProfile"
             />
           </div>
+          <!-- S-09: optional safeguarding check, neutral either way -->
+          <div class="q-mt-sm">
+            <SafeguardingBadge
+              :on-record="!!profile.safeguardingCheckOnRecord"
+              :valid-until="profile.safeguardingValidUntil"
+            />
+          </div>
         </div>
 
         <!-- Star rating -->
@@ -493,6 +500,7 @@ import {
 } from 'src/composables/useStartConversation'
 import VerificationBadge from 'src/components/marketplace/VerificationBadge.vue'
 import ReliabilityIndicator from 'src/components/marketplace/ReliabilityIndicator.vue'
+import SafeguardingBadge from 'src/components/marketplace/SafeguardingBadge.vue'
 import CapabilityBadgeSet from 'src/components/marketplace/CapabilityBadgeSet.vue'
 import SessionPackPricingDisplay from 'src/components/marketplace/SessionPackPricingDisplay.vue'
 import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'

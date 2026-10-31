@@ -229,7 +229,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:223',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:230',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {

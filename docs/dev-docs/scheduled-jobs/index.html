@@ -63,9 +63,9 @@
       wrap-up wizard has the session force-completed; a message or review whose moderation verdict never landed is
       escalated to a human; a live session the coach never ended is auto-ended; a card charge whose outcome
       was lost is settled from Stripe's answer; packs forfeit at expiry; outboxes drain; failed GDPR erasures
-      are retried; local subscriptions are reconciled against Stripe. There are <strong>47
-      <code>@Scheduled</code> methods in 45 classes across 12 platform modules plus
-      <code>infrastructure</code></strong>, and <strong>36 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
+      are retried; local subscriptions are reconciled against Stripe. There are <strong>49
+      <code>@Scheduled</code> methods in 46 classes across 13 platform modules plus
+      <code>infrastructure</code></strong>, and <strong>38 of them are ShedLock-guarded</strong>. Several are the <em>only</em> thing standing between a
       crashed transaction and a permanently stuck row, so knowing they exist is a prerequisite for debugging
       "why is this record stuck".
     </p>
@@ -169,6 +169,8 @@
         <tr><td><code>booking.BookingReminderScheduler.processReminderWindows</code> 🔒 PT15M</td><td>every 5 min</td><td>Transitions <code>CONFIRMED → UPCOMING</code> and sends primary/secondary reminder emails.</td></tr>
         <tr><td><code>payment.CashOutReconciliationService.recheckOpenCashOuts</code> 🔒 PT30M</td><td>every 15 min</td><td>Retries the Stripe refund of an unconfirmed credit cash-out (<code>cash_out_reconciliations</code> <code>UNKNOWN</code>, or <code>PENDING</code> for more than 15 min) under its original <code>cashout-{id}</code> key, 15 rows per run (15 × ~110s worst-case Stripe call fits the lock), only within 23h of the cash-out; older open rows are escalated for a human.</td></tr>
         <tr><td><code>payment.SessionPackForfeitureScheduler.forfeitExpiredPacks</code> 🔒 PT15M</td><td>hourly</td><td>Forfeits packs past <code>expiresAt</code>, stamps <code>expiredNotifiedAt</code>, publishes <code>SessionPackExpiredEvent</code>. Keyset-paged by purchase id, 200 per page (a pack with a missing coach is deliberately left unstamped, so it pages rather than looping "until empty").</td></tr>
+        <tr><td><code>marketplace.CoachSafeguardingScheduler.sweepStaleUploads</code> 🔒 PT15M</td><td>daily 03:15</td><td>S-09: deletes optional safeguarding-certificate uploads still unprocessed after <code>coach.safeguarding.uploadRetentionDays</code> (14); the request stays, the file goes (durable blob-deletion outbox).</td></tr>
+        <tr><td><code>marketplace.CoachSafeguardingScheduler.sendExpiryReminders</code> 🔒 PT15M</td><td>daily 09:00</td><td>S-09: emails the coach once, ~30 days before their safeguarding check expires; stamps <code>reminder_sent_at</code> in the same transaction.</td></tr>
         <tr><td><code>payment.SessionPackExpiryNotifier.notifyExpiringPacks</code> 🔒 PT15M</td><td>daily 08:00</td><td>Warns about packs expiring within 14 days; stamps <code>expiryWarnedAt</code> to dedupe across the window.</td></tr>
         <tr><td><code>payment.SubscriptionChangeApplicator.applyPendingChanges</code> 🔒 PT30M</td><td>daily 02:00</td><td>Applies tier downgrades scheduled for period end.</td></tr>
         <tr><td><code>payment.SubscriptionGracePeriodChecker.checkGracePeriods</code> 🔒 PT30M</td><td>daily 03:00</td><td>Downgrades <code>PAST_DUE</code>, <code>UNPAID</code> and <code>PAUSED</code> subscriptions past their grace period (an expired row also gets one idempotent Stripe cancel).</td></tr>
@@ -222,16 +224,17 @@
         <tr><td>reviews</td><td>1</td><td>1</td></tr>
         <tr><td>filestorage</td><td>2</td><td>2</td></tr>
         <tr><td>admin</td><td>1</td><td>1</td></tr>
+        <tr><td>marketplace</td><td>2</td><td>2</td></tr>
         <tr><td>outbox</td><td>1</td><td>1</td></tr>
         <tr><td>config</td><td>1</td><td>0</td></tr>
         <tr><td><code>infrastructure</code></td><td>3</td><td>0</td></tr>
-        <tr><td><strong>Total</strong></td><td><strong>47</strong></td><td><strong>36</strong></td></tr>
+        <tr><td><strong>Total</strong></td><td><strong>49</strong></td><td><strong>38</strong></td></tr>
       </tbody>
     </table>
 
     <h3 id="shedlock-names-and-lock-windows">ShedLock names and lock windows</h3>
     <p>
-      All 36 guarded jobs, with the exact <code>@SchedulerLock</code> <code>name</code> (the
+      All 38 guarded jobs, with the exact <code>@SchedulerLock</code> <code>name</code> (the
       <code>main.shedlock</code> row and the <code>lock_name</code> tag on <code>scheduler.lock.skipped</code>) and
       both bounds. Names do <em>not</em> all follow <code>ClassName_method</code> — several use a short verb
       (<code>_sweep</code>, <code>_expire</code>, <code>_remind</code>, <code>_reset</code>, <code>_warn</code>), so copy
@@ -245,6 +248,8 @@
         <tr><td><code>AuthCleanupService.purgeOldLoginAttempts</code></td><td><code>AuthCleanupService_purgeOldLoginAttempts</code></td><td><code>PT5M</code></td><td><code>PT1M</code></td></tr>
         <tr><td><code>BandwidthResetService.resetMonthlyBandwidth</code></td><td><code>BandwidthResetService_reset</code></td><td><code>PT30M</code></td><td><code>PT1M</code></td></tr>
         <tr><td><code>BookingExpiryScheduler.expireStaleRequests</code></td><td><code>BookingExpiryScheduler_expire</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
+        <tr><td><code>CoachSafeguardingScheduler.sweepStaleUploads</code></td><td><code>CoachSafeguardingScheduler_sweepUploads</code></td><td><code>PT15M</code></td><td><code>PT1M</code></td></tr>
+        <tr><td><code>CoachSafeguardingScheduler.sendExpiryReminders</code></td><td><code>CoachSafeguardingScheduler_remindExpiring</code></td><td><code>PT15M</code></td><td><code>PT1M</code></td></tr>
         <tr><td><code>BookingReminderScheduler.processReminderWindows</code></td><td><code>BookingReminderScheduler_remind</code></td><td><code>PT15M</code></td><td><code>PT2M</code></td></tr>
         <tr><td><code>CoachStartReminderScheduler.remind</code></td><td><code>CoachStartReminderScheduler_remind</code></td><td><code>PT5M</code></td><td><code>PT30S</code></td></tr>
         <tr><td><code>CashOutReconciliationService.recheckOpenCashOuts</code></td><td><code>CashOutReconciliationService_recheck</code></td><td><code>PT30M</code></td><td><code>PT1M</code></td></tr>

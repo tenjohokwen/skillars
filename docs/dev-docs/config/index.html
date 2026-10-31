@@ -131,16 +131,17 @@
         Write/admin side: <code>updateConfig</code>, <code>findResponse</code>, <code>listForAdmin</code>,
         <code>invalidate</code>.</td></tr>
       <tr><td><code>ConfigBounds</code></td><td>Static registry of <code>BoundedKey(key, min, max, failFast, note, defaultValue)</code>:
-        50 named keys (pack pause, pack validity <code>pack.expiry.days.tier1..4</code> (90 / 180 / 365 / 548, range 14–3650, #369), dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
+        58 named keys (pack pause, pack validity <code>pack.expiry.days.tier1..4</code> (90 / 180 / 365 / 548, range 14–3650, #369), dispute window, moderation SLA/retries/lock timeout, video lifecycle and playback
         TTL, timeline/roster windows, GDPR export TTL and erase lock timeout, message retention, batch sizes, review
         eligibility and moderation-orphan grace, DLQ/outbox attempts, rate-limit TTL, stuck-completion and recap-edit windows,
         and the booking-integrity keys <code>booking.lateCancel.graceMinutes</code> (15), <code>booking.coachNoShow.reportWindowHours</code> (5, range 1–168), <code>booking.unresolvedSession.autoRefundHours</code> (48, range 2–720), <code>identity.ageVerification.maxAttemptsPerDay</code> (3, range 1–100; Stripe Identity sessions per player per 24 h, S-27; the on/off switch <code>identity.ageVerification.enabled</code> is a plain boolean read with code default <code>false</code>), <code>booking.coachNoShow.repeatClaimAlertThreshold</code> (3, range 1–1000) / <code>repeatClaimAlertWindowDays</code> (90, range 1–3650), <code>booking.playerNoShow.graceMinutes</code> (15),
         <code>booking.unresolvedSession.graceMinutes</code> (120), <code>booking.live.minDurationPercent</code> (50, range 0–100),
         <code>disputes.maxPerBookingPerRaiser</code> (2, range 1–100), <code>coach.excusedCancellations.maxPerWindow</code> (3) /
         <code>windowDays</code> (90), <code>booking.request.maxPendingPerCoach</code> (10) and <code>booking.request.maxHorizonDays</code> (120), and the new-coach
+        safeguarding check <code>coach.safeguarding.validityYears</code> (5) / <code>coach.safeguarding.uploadRetentionDays</code> (14), both range 1–100 (the ceiling is only there because <code>ConfigStartupAssertionTest</code> feeds every key 100), and the new-coach
         payout hold <code>payment.payout.newCoach.releasedCount</code> (5) / <code>minReleasedNet</code> (20) / <code>holdHours</code> (168), and <code>payment.payout.relatedParty.holdDays</code> (60, 7–120)) plus generated
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
-        <code>HAS_CODE_DEFAULT</code> (40 keys) marks keys whose call site has a code default. Also holds
+        <code>HAS_CODE_DEFAULT</code> (48 keys) marks keys whose call site has a code default. Also holds
         <code>MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code> (7), the one definition of the review-window gap.
         Since C5 every <code>HAS_CODE_DEFAULT</code> key is read straight from its <code>BoundedKey</code>
         (<code>getBoundedLong/Int(BoundedKey)</code>), so its default and range live only here. Only the no-code-default

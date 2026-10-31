@@ -202,6 +202,12 @@ const routes = [
         meta: { requiresAuth: true, requiresCoach: true },
       },
       {
+        path: 'coach/safeguarding',
+        name: 'coach-safeguarding',
+        component: () => import('pages/coach/CoachSafeguardingPage.vue'),
+        meta: { requiresAuth: true, requiresCoach: true },
+      },
+      {
         path: 'coach/payment-settings',
         name: 'coach-payment-settings',
         component: () => import('pages/coach/CoachPaymentSettingsPage.vue'),
@@ -435,6 +441,11 @@ const routes = [
           {
             path: 'coaches',
             component: () => import('pages/admin/AdminCoachEnforcementPage.vue'),
+            meta: { requiresAuth: true, roles: ['ADMIN'] },
+          },
+          {
+            path: 'safeguarding',
+            component: () => import('pages/admin/AdminSafeguardingPage.vue'),
             meta: { requiresAuth: true, roles: ['ADMIN'] },
           },
           {

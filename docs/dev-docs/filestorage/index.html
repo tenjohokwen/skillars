@@ -78,6 +78,13 @@
         session-report PDFs. <code>development.ReportGenerationService</code> stores the PDF server-side
         (<code>storeBytes</code>, key <code>reports/{uuid}/report.pdf</code>), reads the logo
         (<code>downloadBytes</code>, after <code>assertOwnership</code>), and hands out <code>signedDownloadUrl</code>s.</li>
+      <li><strong>Coaches</strong> may attach an enhanced criminal-record certificate to an optional safeguarding-check request
+        (S-09). <code>marketplace.CoachSafeguardingService</code> encrypts it with <code>Cryptopher</code> and stores the ciphertext with
+        <code>storeBytes</code> under <code>safeguarding/{coachId}/{uuid}.enc</code>. There is no <code>file_storage_objects</code> row, so
+        <code>signDownload</code> cannot hand out a URL for it; only the audited admin endpoint reads it back (<code>downloadBytes</code> +
+        decrypt). It is deleted through <code>BlobDeletionOutboxSupport</code> when staff decide, on withdraw / replace / erasure, and by a
+        sweeper after <code>coach.safeguarding.uploadRetentionDays</code>. PROD's daily volume backup archives the bucket directory, so a
+        deleted upload can outlive its deletion in a backup until that archive rotates (see the provisioning checklist).</li>
       <li><strong>Parents, players and admins</strong> get GDPR export ZIPs that <code>admin.GdprExportService</code> stores with
         <code>storeBytes</code> (key <code>gdpr/exports/{requestId}.zip</code>) and shares with a time-limited
         <code>signedDownloadUrl(key, Duration)</code>. <code>admin.GdprErasureService</code> deletes a user's blobs (exports,

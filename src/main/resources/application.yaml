@@ -125,6 +125,12 @@ spring:
   mvc:
     async:
       request-timeout: -1
+  # S-09: the only multipart endpoint is the coach's optional safeguarding-certificate upload
+  # (CoachSafeguardingResource, 5 MB cap re-checked in CoachSafeguardingService). Spring's default is 1 MB.
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 6MB
   jackson:
     time-zone: UTC
     serialization:

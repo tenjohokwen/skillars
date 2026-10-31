@@ -112,6 +112,9 @@ public final class NotificationCatalog {
             // Enforcement notices to a coach. The suspension links to the profile page, where the appeal is.
             case COACH_SUSPENDED -> inApp(NotificationCategory.MODERATION, PROFILE, PROFILE);
             case COACH_REINSTATED -> inApp(NotificationCategory.MODERATION, DASHBOARD, DASHBOARD);
+            // S-09: the coach's safeguarding-check expiry heads-up. ACCOUNT, not REMINDER: it is about what their public
+            // profile says (never opt-out-able); the check is managed on /coach/safeguarding.
+            case COACH_SAFEGUARDING_EXPIRING -> inApp(NotificationCategory.ACCOUNT, "/coach/safeguarding", DASHBOARD);
             case COACH_WARNING_ISSUED -> inApp(NotificationCategory.MODERATION, COACH_RELIABILITY, DASHBOARD);
             // Dispute outcome to whoever raised it: a coach, a parent, or a self-registered player.
             case DISPUTE_RESOLVED, DISPUTE_DISMISSED -> inApp(NotificationCategory.BOOKING, COACH_BOOKINGS, PARENT_BOOKINGS);

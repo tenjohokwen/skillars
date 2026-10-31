@@ -3,6 +3,7 @@ package com.softropic.skillars.platform.marketplace.contract;
 import com.softropic.skillars.platform.reviews.contract.ReviewListResponse;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -26,5 +27,8 @@ public record CoachProfileDto(
     boolean available,
     int reliabilityStrikeCount,
     List<CoachMediaItemDto> mediaGallery,
-    ReviewListResponse reviews
+    ReviewListResponse reviews,
+    // S-09: optional safeguarding check (see CoachCardDto). Boolean + valid-until date only.
+    boolean safeguardingCheckOnRecord,
+    LocalDate safeguardingValidUntil
 ) {}

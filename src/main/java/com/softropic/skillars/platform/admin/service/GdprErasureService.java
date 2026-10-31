@@ -34,6 +34,7 @@ import com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutb
 import com.softropic.skillars.platform.marketplace.repo.CoachMediaItem;
 import com.softropic.skillars.platform.marketplace.repo.CoachMediaItemRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.marketplace.service.CoachSafeguardingService;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
@@ -129,6 +130,8 @@ public class GdprErasureService {
     // S-19: the user's Stripe Customer + saved cards, erased at Stripe after commit via the outbox.
     private final StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
     private final AgeVerificationService ageVerificationService;
+    // S-09: the coach's optional safeguarding check record, request and encrypted upload.
+    private final CoachSafeguardingService coachSafeguardingService;
 
     /**
      * The owner-bound upload slots (FileStorageService.OWNER_BOUND_ENTITIES) a coach's own images live
@@ -627,6 +630,13 @@ public class GdprErasureService {
                 .filter(k -> isCoachOwnUploadKey(k, userId))
                 .toList();
             blobDeletionOutboxSupport.enqueue(logoKeys);
+
+            // S-09: the optional safeguarding check - the staff-inspected record, any pending request and its
+            // encrypted certificate upload (enqueued for deletion with the outbox, like the blobs above). After the
+            // recap scrub's commit, which wrote the recap_data_erased_at tombstone: a request filed since is
+            // refused by CoachSafeguardingService.requestVerification, and one still in flight is serialised
+            // with this delete on the request row.
+            coachSafeguardingService.eraseForCoach(cp.getId());
 
             // C5 (CoachProfile @Version, V188): scrub the profile under the coach row lock, on refreshed
             // state. An unlocked findByUserId + save flushed at the outer commit would now fail its version

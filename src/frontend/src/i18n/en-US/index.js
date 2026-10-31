@@ -2755,6 +2755,8 @@ export default {
         'A dispute about the session on {requestedStartTime} was resolved in the coach’s favour.',
       GDPR_EXPORT_READY: 'Your data export is ready to download until {expiresAt}.',
       REVIEW_APPROVED: 'Your review of {coachDisplayName} was published.',
+      COACH_SAFEGUARDING_EXPIRING:
+        'Your safeguarding check expires on {expiresAt}. Renew it to keep it on your profile.',
       REVIEW_BLOCKED: 'Your review of {coachDisplayName} was not published.',
     },
     preferences: {
@@ -2902,6 +2904,107 @@ export default {
       DISPUTE_RESOLUTION: 'Dispute decision',
     },
   },
+  safeguarding: {
+    badge: {
+      onRecord: 'Safeguarding check on record (valid until {date})',
+      none: 'No safeguarding check on record',
+      tooltipOn:
+        'Skillars staff inspected an enhanced criminal-record certificate for this coach (in Germany: erweitertes Führungszeugnis). Skillars does not keep a copy.',
+      tooltipNone:
+        'This coach has not shown Skillars a safeguarding check. The check is optional and you decide for yourself; you can also ask the coach about it before booking.',
+    },
+    coach: {
+      title: 'Safeguarding check',
+      subtitle:
+        'Optional. Show families that Skillars has inspected your enhanced criminal-record certificate (in Germany: erweitertes Führungszeugnis).',
+      loadError: 'Could not load your safeguarding check status.',
+      statusLabel: 'Status',
+      status: {
+        NONE: 'Not requested',
+        PENDING: 'Waiting for inspection',
+        VERIFIED: 'On record',
+        EXPIRED: 'Expired',
+        REJECTED: 'Could not be confirmed',
+      },
+      validUntil: 'Shown on your public profile until {date}.',
+      expiredNote:
+        'Your safeguarding check has expired, so your public profile says that no check is on record. You can request a new inspection.',
+      requestedOn: 'Requested on {date}.',
+      uploadDeletesOn:
+        'Your uploaded file is deleted as soon as we have inspected it, and in any case on {date}.',
+      noUploadNote:
+        'No file attached: a member of the Skillars team will contact you at your account email to inspect the certificate another way, for example in a short video call.',
+      rejectedNote:
+        'We could not confirm your safeguarding check. Nothing is shown on your public profile. You can send a new request.',
+      privacyTitle: 'What Skillars keeps',
+      privacy1:
+        'Only that a check was inspected, when, until when and by which staff member. Nothing from the certificate itself is stored.',
+      privacy2:
+        'If you upload the certificate, it is stored encrypted, only a Skillars administrator can open it, and it is deleted right after the inspection (or after {days} days if nobody got to it).',
+      privacy3:
+        'The check is optional. Without it you can use Skillars as before. You can withdraw it at any time and it is removed from your public profile.',
+      fileLabel: 'Certificate (optional, PDF, JPG or PNG, max 5 MB)',
+      fileRejected: 'Please choose a PDF, JPG or PNG file of at most 5 MB.',
+      requestBtn: 'Request inspection',
+      renewBtn: 'Request renewal',
+      withdrawBtn: 'Withdraw and delete',
+      withdrawTitle: 'Withdraw safeguarding check?',
+      withdrawBody:
+        'Your request, your record and any uploaded file are deleted, and your public profile shows no check on record.',
+      cancel: 'Cancel',
+      confirm: 'Withdraw',
+      requestSuccess: 'Request sent.',
+      withdrawSuccess: 'Safeguarding check withdrawn.',
+      errors: {
+        fileTooLarge: 'The file is larger than 5 MB.',
+        fileType: 'Only PDF, JPG or PNG files are accepted.',
+        fileEmpty: 'The file is empty or could not be read.',
+        stillValid:
+          'Your safeguarding check is valid for a long time yet. You can renew it closer to its end.',
+        generic: 'Something went wrong. Please try again.',
+      },
+    },
+    admin: {
+      title: 'Safeguarding checks',
+      subtitle:
+        'Inspect coaches’ enhanced criminal-record certificates and record the result. Nothing from the certificate is stored; an upload is deleted when you decide.',
+      tabRequests: 'Requests',
+      tabRecords: 'On record',
+      loadError: 'Could not load the safeguarding checks.',
+      emptyRequests: 'No pending requests.',
+      emptyRecords: 'No checks on record.',
+      colCoach: 'Coach',
+      colType: 'Type',
+      colRequested: 'Requested',
+      colUpload: 'Upload',
+      colInspected: 'Inspected',
+      colValidUntil: 'Valid until',
+      colActions: 'Actions',
+      uploadYes: 'Yes',
+      uploadNo: 'None (inspect another way)',
+      renewal: 'Renewal',
+      viewDocument: 'View document',
+      viewFailed: 'Could not open the document. It may already have been deleted.',
+      inspect: 'Mark inspected',
+      reject: 'Reject',
+      revoke: 'Revoke',
+      inspectTitle: 'Mark as inspected',
+      inspectBody:
+        'Confirm that you inspected a valid enhanced criminal-record certificate for {coach}. The public profile will show a check on record, and any upload is deleted now.',
+      rejectTitle: 'Reject request',
+      rejectBody:
+        'The coach sees that the check could not be confirmed. Any upload is deleted now. Your note is kept in the audit log only.',
+      revokeTitle: 'Revoke check on record',
+      revokeBody: 'The public profile of {coach} stops showing a check on record.',
+      reasonLabel: 'Note (audit log only)',
+      cancel: 'Cancel',
+      inspectedDone: 'Recorded as inspected.',
+      rejectedDone: 'Request rejected.',
+      revokedDone: 'Check revoked.',
+      actionFailed:
+        'Could not complete the action. It may already have been handled; the list was reloaded.',
+    },
+  },
   nav: {
     coachVideos: 'My videos',
     appeals: 'Appeals',
@@ -2920,6 +3023,7 @@ export default {
     drillLibrary: 'Drill library',
     sessionTemplates: 'Session templates',
     paymentSettings: 'Payment settings',
+    safeguarding: 'Safeguarding check',
     reliability: 'Reliability',
     subscription: 'Subscription',
     myPlayers: 'My players',
@@ -2929,6 +3033,7 @@ export default {
     videos: 'My videos',
     moderation: 'Moderation',
     coachEnforcement: 'Coach enforcement',
+    adminSafeguarding: 'Safeguarding checks',
     adminUsers: 'Users',
     groupAdminOperations: 'Operations',
     adminVideos: 'Video review',
