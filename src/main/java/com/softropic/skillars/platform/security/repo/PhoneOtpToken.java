@@ -18,6 +18,9 @@ import java.time.Instant;
 @Table(name = "phone_otp_tokens")
 public class PhoneOtpToken extends BaseEntity {
 
+    /** Wrong guesses after which the token is invalidated; the user must request a resend (a fresh token). */
+    public static final int MAX_FAILED_ATTEMPTS = 5;
+
     @Version
     private Long version;
 
@@ -32,4 +35,8 @@ public class PhoneOtpToken extends BaseEntity {
 
     @Column(nullable = false)
     private boolean used;
+
+    /** Wrong guesses against this token; persisted so neither a restart nor a bucket eviction resets it. */
+    @Column(name = "failed_attempts", nullable = false)
+    private int failedAttempts;
 }

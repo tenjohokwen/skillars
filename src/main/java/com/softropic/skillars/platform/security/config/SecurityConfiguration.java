@@ -24,6 +24,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.security.authentication.AccountStatusUserDetailsChecker;
 import org.springframework.security.authentication.AuthenticationEventPublisher;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -96,8 +97,18 @@ public class SecurityConfiguration {
         return new UnanimousAuthorizationManager(authManagers);
     }
 
-    private static boolean activateSecurity(Environment env) {
-        return env.getProperty("activate.security", Boolean.class, true);
+    /**
+     * {@code activate.security=false} drops the role-based authorization manager (a test/dev
+     * convenience), so it must never survive into a deployed environment: a stray env var or config
+     * overlay would silently turn every secured endpoint open. Startup fails instead.
+     */
+    static boolean activateSecurity(Environment env) {
+        boolean active = env.getProperty("activate.security", Boolean.class, true);
+        if (!active && env.acceptsProfiles(Profiles.of("prod", "uat"))) {
+            throw new IllegalStateException(
+                "activate.security=false is not allowed while the 'prod' or 'uat' profile is active");
+        }
+        return active;
     }
 
     @Bean

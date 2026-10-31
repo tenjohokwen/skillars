@@ -178,6 +178,7 @@ class PlayerRegistrationServiceTest {
                 e -> assertThat(e.getErrorCode()).isEqualTo("security.otpMismatch"));
         verify(rateLimitingService).tryConsume(USER_ID + ":" + OTP_ID, "player_otp_verify", 5, 10, TimeUnit.MINUTES);
         verify(otpTokenRepository, never()).save(any());
+        verify(otpTokenRepository).recordFailedGuess(OTP_ID, PhoneOtpToken.MAX_FAILED_ATTEMPTS);
     }
 
     @Test
