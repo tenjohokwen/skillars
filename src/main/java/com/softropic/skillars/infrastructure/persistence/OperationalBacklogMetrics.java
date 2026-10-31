@@ -1,14 +1,21 @@
 package com.softropic.skillars.infrastructure.persistence;
 
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.MultiGauge;
 import io.micrometer.core.instrument.Tags;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Publishes work that is waiting on someone as {@code skillars.backlog.count} and
@@ -19,8 +26,14 @@ import java.util.List;
  *
  * <p>Refreshed on a schedule rather than per scrape so a slow query can never stall Prometheus. No
  * {@code @SchedulerLock}: gauges are per JVM, so every instance must refresh its own (cookbook recipe
- * 5). Dashboards aggregate with {@code max}. A failure propagates to the scheduler, leaves the previous
- * values in place and shows as {@code tasks_scheduled_execution_seconds_count{outcome="ERROR"}} (the ScheduledJobFailing alert).
+ * 5). Dashboards aggregate with {@code max}.
+ *
+ * <p>A failed or timed-out refresh propagates to the scheduler and keeps the previous values: clearing
+ * them would read as "nothing is waiting", which is the one wrong answer. What stops it going unnoticed is
+ * {@code skillars.backlog.refresh.age} (seconds since the last success, counted from startup before the
+ * first), which the BacklogMetricsStale alert watches. The query runs on its own {@link JdbcTemplate} with a
+ * statement timeout, so a blocked table (an ACCESS EXCLUSIVE lock from a migration, say) fails the refresh
+ * after seconds instead of holding a pooled connection indefinitely.
  *
  * <p>Raw SQL because this reads across module schemas and only ever reports. Each branch reads an
  * indexed status or a table that drains (the outboxes), so the poll stays cheap as bookings grow. A
@@ -78,12 +91,27 @@ public class OperationalBacklogMetrics {
           FROM payment.cash_out_reconciliations WHERE status IN ('PENDING', 'UNKNOWN') GROUP BY status
         """;
 
+    private static final int DEFAULT_QUERY_TIMEOUT_SECONDS = 10;
+
     private final JdbcTemplate jdbcTemplate;
+    private final Clock clock;
     private final MultiGauge counts;
     private final MultiGauge oldestAges;
+    private final AtomicReference<Instant> lastSuccess;
 
-    public OperationalBacklogMetrics(JdbcTemplate jdbcTemplate, MeterRegistry meterRegistry) {
-        this.jdbcTemplate = jdbcTemplate;
+    @Autowired
+    public OperationalBacklogMetrics(
+            JdbcTemplate jdbcTemplate, MeterRegistry meterRegistry,
+            @Value("${platform.backlog-metrics.query-timeout-seconds:" + DEFAULT_QUERY_TIMEOUT_SECONDS + "}")
+            int queryTimeoutSeconds) {
+        this(boundedCopy(jdbcTemplate, queryTimeoutSeconds), meterRegistry, Clock.systemUTC());
+    }
+
+    /** Tests: the template is used as given, so a short timeout or a broken one can be supplied. */
+    OperationalBacklogMetrics(JdbcTemplate boundedJdbcTemplate, MeterRegistry meterRegistry, Clock clock) {
+        this.jdbcTemplate = boundedJdbcTemplate;
+        this.clock = clock;
+        this.lastSuccess = new AtomicReference<>(clock.instant());
         this.counts = MultiGauge.builder("skillars.backlog.count")
             .description("Items currently waiting in an operational backlog")
             .register(meterRegistry);
@@ -91,6 +119,18 @@ public class OperationalBacklogMetrics {
             .baseUnit("seconds")
             .description("Age of the oldest item in an operational backlog")
             .register(meterRegistry);
+        Gauge.builder("skillars.backlog.refresh.age", this,
+                self -> Duration.between(self.lastSuccess.get(), self.clock.instant()).toMillis() / 1000.0)
+            .baseUnit("seconds")
+            .description("Seconds since the backlog gauges were last refreshed successfully")
+            .register(meterRegistry);
+    }
+
+    /** Own template over the same pool: the shared bean's settings stay untouched. */
+    private static JdbcTemplate boundedCopy(JdbcTemplate shared, int timeoutSeconds) {
+        JdbcTemplate bounded = new JdbcTemplate(shared.getDataSource());
+        bounded.setQueryTimeout(timeoutSeconds);
+        return bounded;
     }
 
     @Scheduled(initialDelayString = "${platform.backlog-metrics.initial-delay-ms:20000}",
@@ -107,5 +147,6 @@ public class OperationalBacklogMetrics {
         // sticking at its last value.
         counts.register(countRows, true);
         oldestAges.register(ageRows, true);
+        lastSuccess.set(clock.instant());
     }
 }

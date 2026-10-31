@@ -37,7 +37,7 @@ Panels fed by a counter stay empty until that event first happens. That is norma
 
 ### Where the numbers come from
 
-- **`skillars_backlog_count` / `skillars_backlog_oldest_age_seconds`** (`OperationalBacklogMetrics`): work waiting in the database, refreshed every minute. Tags: `backlog`, `detail`.
+- **`skillars_backlog_count` / `skillars_backlog_oldest_age_seconds`** (`OperationalBacklogMetrics`): work waiting in the database, refreshed every minute, with `skillars_backlog_refresh_age_seconds` showing how fresh they are. Tags: `backlog`, `detail`.
 - **`http_server_allocated_bytes`** (`RequestAllocationMetricsFilter`): heap allocated per request, by route. It counts allocation on the request thread, not retained memory, so async listeners and SSE streams are not attributed to the route.
 - **`tasks_scheduled_execution_seconds`**: Spring's own per-job timer. A job that throws shows `outcome="ERROR"`.
 - **Log markers:** the app logs integrity problems as `[MARKER] ...` at WARN or ERROR. Dashboards count these in Loki. A new marker appears on Business Health with no dashboard change.
@@ -342,6 +342,16 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 **Meaning:** A `@Scheduled` job threw. Spring retries on the next tick, so without this a job can fail forever in silence.
 
 **Response:** Background Work lists the job and exception. Check whether it clears on the next run. If not, what it maintains (sweeps, payouts, retention) has stopped.
+
+---
+
+#### BacklogMetricsStale
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-app-alerts)
+
+**Meaning:** `OperationalBacklogMetrics` has not refreshed for 5 minutes (`skillars_backlog_refresh_age_seconds`, counted from startup before its first success). Its gauges keep their last values on purpose, so every backlog panel and alert is showing old data and would not notice a new problem. The query runs with a 10 second statement timeout (`platform.backlog-metrics.query-timeout-seconds`), so a stuck table fails the refresh quickly instead of holding a connection.
+
+**Response:** Background Work, "Backlog gauge freshness". Find the error: `docker compose logs app | grep OperationalBacklogMetrics`. A query timeout usually means a lock on one of the tables it reads, such as a migration still running (`SELECT pid, query, wait_event FROM pg_stat_activity WHERE wait_event_type = 'Lock';`). A renamed column or status value fails every time and needs a code fix.
 
 ---
 
