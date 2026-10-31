@@ -213,6 +213,23 @@ public class SecurityFilterChainIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void responses_carryFramingReferrerPermissionsAndHstsHeaders() {
+        HttpHeaders headers = baseHeaders();
+        headers.add("X-Forwarded-Proto", "https");
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(baseUrl() + ACCOUNT_URL, HttpMethod.GET, null, headers, Map.class))
+                .isInstanceOfSatisfying(HttpClientErrorException.class, ex -> {
+                    HttpHeaders response = ex.getResponseHeaders();
+                    assertThat(response.getFirst("Content-Security-Policy")).isEqualTo("frame-ancestors 'self'");
+                    assertThat(response.getFirst("X-Frame-Options")).isEqualToIgnoringCase("SAMEORIGIN");
+                    assertThat(response.getFirst("Referrer-Policy")).isEqualTo("strict-origin-when-cross-origin");
+                    assertThat(response.getFirst("Permissions-Policy")).contains("camera=()", "microphone=()", "geolocation=()");
+                    assertThat(response.getFirst("Strict-Transport-Security"))
+                            .isEqualTo("max-age=31536000 ; includeSubDomains");
+                });
+    }
+
+    @Test
     void forwardedHeaderFilter_isNotRegistered() {
         assertThat(webServerContext.getBeansOfType(FilterRegistrationBean.class).values())
                 .extracting(FilterRegistrationBean::getFilter)

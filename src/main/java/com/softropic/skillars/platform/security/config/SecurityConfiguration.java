@@ -44,6 +44,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.access.intercept.RequestAuthorizationContext;
 import org.springframework.security.web.authentication.www.BasicAuthenticationFilter;
 import org.springframework.security.web.context.request.async.WebAsyncManagerIntegrationFilter;
+import org.springframework.security.web.header.writers.ReferrerPolicyHeaderWriter;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import jakarta.servlet.DispatcherType;
 import org.springframework.web.cors.CorsConfiguration;
@@ -170,7 +171,19 @@ public class SecurityConfiguration {
                                      ADMIN_COOKIE)
                       .permitAll()
         );
-        http.headers(customizer -> customizer.frameOptions(HeadersConfigurer.FrameOptionsConfig::disable));
+        // Nothing legitimately embeds the app in a frame (no iframes in the SPA, no third-party embedders), so
+        // framing is limited to same-origin. The CSP carries ONLY frame-ancestors: a full CSP could break the Quasar
+        // SPA / Google Fonts and is a separate (report-only first) rollout. X-Frame-Options covers old browsers.
+        // HSTS is only emitted on requests the container sees as secure (RemoteIpValve honours X-Forwarded-Proto
+        // from Traefik, which sets no HSTS header itself). Camera/microphone/geolocation are unused by the SPA
+        // (video upload is a file input), so they are denied.
+        http.headers(customizer -> customizer
+            .frameOptions(HeadersConfigurer.FrameOptionsConfig::sameOrigin)
+            .contentSecurityPolicy(csp -> csp.policyDirectives("frame-ancestors 'self'"))
+            .referrerPolicy(referrer -> referrer.policy(ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
+            .httpStrictTransportSecurity(hsts -> hsts.maxAgeInSeconds(31536000).includeSubDomains(true))
+            .permissionsPolicy(permissions -> permissions.policy(
+                "camera=(), microphone=(), geolocation=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=()")));
         http.authorizeHttpRequests(configureRequestMatching(authorizationManager, env));
         http.addFilterAfter(new JWTAuthorizationFilter(daoAuthProvider,
                                                        applicationEventPublisher,
