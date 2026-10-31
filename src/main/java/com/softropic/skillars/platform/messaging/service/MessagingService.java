@@ -1,8 +1,11 @@
 package com.softropic.skillars.platform.messaging.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
+import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
+import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.contract.ConversationStatus;
 import com.softropic.skillars.platform.messaging.contract.ConversationSummaryDto;
@@ -10,6 +13,7 @@ import com.softropic.skillars.platform.messaging.contract.MessageDto;
 import com.softropic.skillars.platform.messaging.contract.MessageModerationStatus;
 import com.softropic.skillars.platform.messaging.contract.MessagingErrorCode;
 import com.softropic.skillars.platform.messaging.contract.ModerationService;
+import com.softropic.skillars.platform.messaging.contract.ModerationVerdict;
 import com.softropic.skillars.platform.messaging.contract.SenderRole;
 import com.softropic.skillars.platform.messaging.repo.Conversation;
 import com.softropic.skillars.platform.messaging.repo.ConversationRepository;
@@ -18,11 +22,13 @@ import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.softropic.skillars.platform.security.service.AgePolicyService;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -42,6 +48,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -66,8 +73,32 @@ public class MessagingService {
     private final com.softropic.skillars.platform.marketplace.service.PlayerProfileService playerProfileService;
     private final TransactionTemplate transactionTemplate;
     private final EntityManager entityManager;
+    /** S-04: deterministic pre-Gemini check for minors' conversations; applies the UNCERTAIN (held) verdict. */
+    private final ModerationResultApplier moderationResultApplier;
+    private final ContactDetailSanitizer contactDetailSanitizer;
+    private final RateLimitingService rateLimitingService;
+    private final UserRepository userRepository;
+
+    /** Same switch RateLimitingAspect honours, so ITs that send many messages can turn limiting off. */
+    @Value("${rate.limiting.enabled:true}")
+    private boolean rateLimitingEnabled;
+
+    /** S-04: sends per sender / per conversation per minute. A chat burst beyond this is spam or scripted. */
+    static final int SEND_LIMIT_PER_SENDER_PER_MINUTE = 20;
+    static final int SEND_LIMIT_PER_CONVERSATION_PER_MINUTE = 40;
 
     public ConversationSummaryDto initiateConversation(UUID coachId, Long playerId, Long callerUserId, String role) {
+        assertAccountNotLocked(callerUserId);
+        if (coachIsSuspended(coachId)) {
+            // A suspended coach (admin suspension or CSAM safety hold) opens nothing. A family may still
+            // be handed an EXISTING thread with that coach (history stays readable), but not a new one.
+            if ("COACH".equals(role)
+                    || conversationRepository.findByCoachIdAndPlayerId(coachId, playerId).isEmpty()) {
+                throw new OperationNotAllowedException(
+                    "This coach cannot currently take part in conversations",
+                    MessagingErrorCode.COACH_SUSPENDED);
+            }
+        }
         boolean hasBooking = bookingRepository.existsByCoachIdAndPlayerIdAndStatusIn(coachId, playerId, CONFIRMED_STATES);
         if (!hasBooking) {
             throw new OperationNotAllowedException(
@@ -117,7 +148,10 @@ public class MessagingService {
         if ("COACH".equals(role)) {
             var coach = coachProfileRepository.findByUserId(callerUserId)
                 .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach"));
-            conversations = conversationRepository.findActiveByCoachId(coach.getId());
+            // S-04: a suspended coach sees no threads (the per-conversation reads refuse them too).
+            conversations = coach.getStatus() == CoachProfileStatus.SUSPENDED
+                ? List.of()
+                : conversationRepository.findActiveByCoachId(coach.getId());
         } else if ("PARENT".equals(role)) {
             List<Conversation> all = conversationRepository.findActiveByParentId(callerUserId);
             // skillars-deferred-90 AC13: batch the age-policy lookup for the whole list ONCE, before
@@ -198,6 +232,11 @@ public class MessagingService {
                 MessagingErrorCode.CONVERSATION_BLOCKED);
         }
 
+        // After verifyIsParty (a non-party cannot burn another user's budget) and before any write or
+        // Gemini call. Two buckets: one sender cannot flood, and a conversation cannot be flooded by
+        // several accounts.
+        enforceSendRateLimit(senderUserId, conversationId);
+
         AgeMessagingPolicy agePolicy = AgeMessagingPolicy.from(
             agePolicyService.getMessagingPolicy(conv.getPlayerId()));
         if ("PLAYER".equals(role) && agePolicy.playerIsBlocked()) {
@@ -239,7 +278,21 @@ public class MessagingService {
         });
         long messageId = savedMessageId[0];
 
-        moderationService.moderate(messageId, content);
+        // S-04: in a conversation involving a minor (any tier where a parent has oversight or is the
+        // primary participant), a message from the coach or the player that carries contact details is
+        // held for a human BEFORE the model is consulted — the check is deterministic, so it cannot be
+        // talked around, and it spends no Gemini call. Held = the existing UNDER_REVIEW state (invisible
+        // to the recipient, admin alert raised), the same outcome as an UNCERTAIN verdict, so the sender
+        // sees the usual "held for review" UX. A PARENT sender is exempt: sharing a number with the
+        // coach is the parent's own decision, and they are the child's guardian.
+        if (agePolicy.parentHasAccess() && !"PARENT".equals(role)
+                && contactDetailSanitizer.sanitize(content).wasModified()) {
+            log.warn("Holding message with contact details in a minor's conversation: messageId={}, "
+                + "conversationId={}, senderRole={}", messageId, conversationId, role);
+            moderationResultApplier.applyResult(messageId, ModerationVerdict.UNCERTAIN);
+        } else {
+            moderationService.moderate(messageId, content);
+        }
         Message finalMessage = messageRepository.findById(messageId)
             .orElseThrow(() -> new ResourceNotFoundException("Message not found", "message"));
         return toMessageDto(finalMessage, senderUserId);
@@ -381,13 +434,50 @@ public class MessagingService {
         return conv;
     }
 
+    private void enforceSendRateLimit(Long senderUserId, Long conversationId) {
+        if (!rateLimitingEnabled) {
+            return;
+        }
+        if (!rateLimitingService.tryConsume(String.valueOf(senderUserId), "messaging.send.sender",
+                SEND_LIMIT_PER_SENDER_PER_MINUTE, 1, TimeUnit.MINUTES)
+                || !rateLimitingService.tryConsume(String.valueOf(conversationId), "messaging.send.conversation",
+                SEND_LIMIT_PER_CONVERSATION_PER_MINUTE, 1, TimeUnit.MINUTES)) {
+            log.warn("Message send rate limit exceeded: senderUserId={}, conversationId={}",
+                senderUserId, conversationId);
+            throw new OperationNotAllowedException(
+                "You are sending messages too quickly. Please wait a moment and try again.",
+                MessagingErrorCode.RATE_LIMITED);
+        }
+    }
+
+    /** A locked account (admin suspension locks the user, GDPR erasure too) takes no part in messaging. */
+    private void assertAccountNotLocked(Long callerUserId) {
+        if (callerUserId != null && userRepository.existsByIdAndLockedTrue(callerUserId)) {
+            throw new OperationNotAllowedException(
+                "Account is locked", MessagingErrorCode.ACCOUNT_LOCKED);
+        }
+    }
+
+    private boolean coachIsSuspended(UUID coachId) {
+        return coachId != null && coachProfileRepository.findById(coachId)
+            .map(c -> c.getStatus() == CoachProfileStatus.SUSPENDED)
+            .orElse(false);
+    }
+
     private void verifyIsParty(Conversation conv, Long callerUserId, String role) {
+        assertAccountNotLocked(callerUserId);
         // skillars-deferred-91 code review D12: single-identity authorization lookups, NOT a batch
         // "id -> name" read — PlayerProfileService.getPlayerNamesByPlayerIds does not apply here.
         // Each branch resolves the CALLER's own profile by userId to test conversation membership.
         boolean isParty = switch (role) {
             case "COACH" -> {
                 var coach = coachProfileRepository.findByUserId(callerUserId);
+                // S-04: a suspended coach (admin suspension or safety hold both set SUSPENDED) can neither
+                // read nor write. Only the COACH arm: parents and players keep read access to the history.
+                if (coach.isPresent() && coach.get().getStatus() == CoachProfileStatus.SUSPENDED) {
+                    throw new OperationNotAllowedException(
+                        "This coach account is suspended", MessagingErrorCode.COACH_SUSPENDED);
+                }
                 yield coach.map(c -> Objects.equals(c.getId(), conv.getCoachId())).orElse(false);
             }
             case "PARENT" -> Objects.equals(conv.getParentId(), callerUserId);

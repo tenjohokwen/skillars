@@ -14,6 +14,8 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
+import java.util.regex.Pattern;
+
 @Primary
 @Service
 @RequiredArgsConstructor
@@ -22,6 +24,21 @@ public class GeminiModerationService implements ModerationService {
 
     private static final String USER_CONTENT_BEGIN_DELIMITER = "---BEGIN USER CONTENT---";
     private static final String USER_CONTENT_END_DELIMITER = "---END USER CONTENT---";
+
+    /**
+     * Anything that looks like it is trying to speak to the prompt rather than to the recipient: our
+     * own delimiters (matched loosely — any dash count, any whitespace, any case, zero-width padding
+     * removed first) and the usual instruction-override phrasing. Such content is never sent to the
+     * model for a verdict it could be talked into; it is held for a human instead.
+     */
+    private static final Pattern INJECTION_MARKERS = Pattern.compile(
+        "(?i)(?:(?:begin|end)\\s+user\\s+content"
+            + "|user\\s+content\\s*-{2,}"
+            + "|-{3,}\\s*(?:begin|end)\\b"
+            + "|ignore\\s+(?:all\\s+|any\\s+|the\\s+)?(?:previous|prior|above|earlier)\\s+(?:instructions|prompts?|rules)"
+            + "|disregard\\s+(?:all\\s+|any\\s+|the\\s+)?(?:previous|prior|above|earlier)"
+            + "|(?:^|\\n)\\s*(?:system|assistant|developer)\\s*:"
+            + "|respond\\s+(?:only\\s+)?with\\s+safe|mark\\s+(?:this\\s+|everything\\s+|it\\s+)?(?:as\\s+)?safe)");
 
     private final GeminiClient geminiClient;
     private final ModerationResultApplier moderationResultApplier;
@@ -38,6 +55,16 @@ public class GeminiModerationService implements ModerationService {
     public ModerationResult moderate(Long messageId, String content) {
         if (content == null || content.isBlank()) {
             return moderationResultApplier.applyResult(messageId, ModerationVerdict.SAFE);
+        }
+
+        if (looksLikePromptInjection(content)) {
+            // Checked on the FULL content, before truncation: a marker placed past the cutoff is
+            // harmless to the prompt but a marker split by the cutoff must not slip through either.
+            // Not a Gemini failure, so no ModerationFailureEvent; UNCERTAIN holds the message
+            // (UNDER_REVIEW + admin alert) exactly as an unresolved verdict does.
+            log.warn("Moderation input contains prompt-injection markers, holding without a model call: "
+                + "messageId={}", messageId);
+            return moderationResultApplier.applyResult(messageId, ModerationVerdict.UNCERTAIN);
         }
 
         int cutoff = maxInputChars;
@@ -67,14 +94,13 @@ public class GeminiModerationService implements ModerationService {
         ModerationVerdict verdict;
         String failureReason = null;
         try {
-            // TODO: replace this delimiter convention with real structural separation once
-            // GeminiClientImpl/GeminiApiResponse support a systemInstruction + multi-turn role field.
-            String sanitizedInput = input
-                .replace(USER_CONTENT_BEGIN_DELIMITER, "")
-                .replace(USER_CONTENT_END_DELIMITER, "");
+            // GeminiClient.evaluate takes a single combined prompt (no systemInstruction / role split),
+            // so the delimiters remain the only structure. They cannot be reassembled out of user
+            // content because any content containing them (in any spacing/case/dash form, see
+            // INJECTION_MARKERS) was already diverted above and never reaches this point.
             String prompt = promptTemplate
                 + "\n\n" + USER_CONTENT_BEGIN_DELIMITER + "\n"
-                + sanitizedInput
+                + input
                 + "\n" + USER_CONTENT_END_DELIMITER;
             verdict = geminiClient.evaluate(prompt);
         } catch (Exception e) {
@@ -93,5 +119,12 @@ public class GeminiModerationService implements ModerationService {
         }
 
         return result;
+    }
+
+    static boolean looksLikePromptInjection(String content) {
+        // Zero-width / format characters and soft hyphens are stripped so "---BEGIN\u200B USER..." cannot
+        // dodge the match; checked in a loop-free way because nothing is rewritten, only detected.
+        String normalised = content.replaceAll("[\\p{Cf}]", "");
+        return INJECTION_MARKERS.matcher(normalised).find();
     }
 }

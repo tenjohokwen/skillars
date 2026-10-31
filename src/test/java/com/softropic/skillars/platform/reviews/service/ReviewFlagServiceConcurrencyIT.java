@@ -135,6 +135,30 @@ class ReviewFlagServiceConcurrencyIT extends AbstractIntegrationTest {
                 Timestamp.from(Instant.now().minusSeconds(86400L * 400)),
                 Timestamp.from(Instant.now().minusSeconds(86400L * 400)));
 
+            // S-08: only flags from customers of this coach count towards the auto-hold, so each
+            // flagger gets a (COMPLETED) booking with the coach through a player profile they own.
+            long flaggerPlayerBase = AUTHOR_ID + 2_000_000L;
+            long[] flaggers = {FLAGGER1_ID, FLAGGER2_ID, FLAGGER3_ID};
+            for (int i = 0; i < flaggers.length; i++) {
+                long flaggerPlayerId = flaggerPlayerBase + i;
+                jdbcTemplate.update(
+                    "INSERT INTO main.player_profiles " +
+                    "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) " +
+                    "VALUES (?, 'Flagger Player', ?, 'MIDFIELDER', 'ADULT', ?, true, ?, 'system')",
+                    flaggerPlayerId, Date.valueOf(LocalDate.now().minusYears(18)),
+                    flaggers[i], Timestamp.from(Instant.now()));
+                jdbcTemplate.update(
+                    "INSERT INTO booking.bookings " +
+                    "(id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, " +
+                    " version, created_at, updated_at, canonical_timezone) " +
+                    "VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, 0, ?, ?, 'Europe/Berlin')",
+                    UUID.randomUUID(), coachProfileId, flaggers[i], flaggerPlayerId,
+                    Timestamp.from(Instant.now().minusSeconds(86400L * 10 + 3600)),
+                    Timestamp.from(Instant.now().minusSeconds(86400L * 10)),
+                    Timestamp.from(Instant.now().minusSeconds(86400 * 17)),
+                    Timestamp.from(Instant.now().minusSeconds(86400L * 10)));
+            }
+
             // Two pre-existing open flags — the third (via reviewFlagService.flag below) reaches the
             // default threshold of 3.
             jdbcTemplate.update(

@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.reviews.service;
 
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.infrastructure.security.RateLimitingService;
+import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
@@ -16,6 +18,7 @@ import com.softropic.skillars.platform.reviews.repo.ReviewFlag;
 import com.softropic.skillars.platform.reviews.repo.ReviewFlagRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -25,6 +28,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -38,6 +42,23 @@ public class ReviewFlagService {
     private final ConfigService configService;
     private final ApplicationEventPublisher eventPublisher;
     private final PessimisticLockRetryer lockRetryer;
+    private final BookingRepository bookingRepository;
+    private final RateLimitingService rateLimitingService;
+
+    /** Same switch RateLimitingAspect honours. */
+    @Value("${rate.limiting.enabled:true}")
+    private boolean rateLimitingEnabled;
+
+    /** S-08: flags one user may raise per hour, across all reviews — enough for honest use, not for a campaign. */
+    static final int FLAGS_PER_USER_PER_HOUR = 10;
+
+    /**
+     * Bookings that make a user a genuine customer of the coach (mirrors messaging's CONFIRMED_STATES):
+     * a flag from someone who has actually trained with, or paid for, the coach counts towards the
+     * auto-hold; a flag from a stranger or a competitor is recorded for the admin but does not.
+     */
+    private static final List<String> QUALIFYING_BOOKING_STATES =
+        List.of("CONFIRMED", "UPCOMING", "IN_PROGRESS", "COMPLETED");
 
     /**
      * skillars-deferred-132 AC2 Fix 7: {@code @Transactional(REQUIRES_NEW)}, overriding this class's
@@ -57,6 +78,14 @@ public class ReviewFlagService {
         if (flaggedBy == null) {
             throw new OperationNotAllowedException(
                 "Flagger identity is required", ReviewErrorCode.INVALID_FLAGGER);
+        }
+
+        // S-08: before any read or lock, so a flag storm costs the rate-limit map and nothing else.
+        if (rateLimitingEnabled && !rateLimitingService.tryConsume(String.valueOf(flaggedBy),
+                "reviews.flag", FLAGS_PER_USER_PER_HOUR, 1, TimeUnit.HOURS)) {
+            throw new OperationNotAllowedException(
+                "You are flagging reviews too quickly. Please try again later.",
+                ReviewErrorCode.FLAG_RATE_LIMITED);
         }
 
         // skillars-deferred-131 AC2 Fix 5: unlocked scalar projection for the four write-independent
@@ -145,12 +174,16 @@ public class ReviewFlagService {
         // count runs. A stale pre-lock count could otherwise justify an auto-hold the fresh count no
         // longer supports (e.g. an admin resolved the flags in the window between an unlocked read and
         // this lock) — code review 2026-09-23.
-        long openFlagCount = reviewFlagRepository.countByReviewIdAndResolvedAtIsNull(reviewId);
+        //
+        // S-08: only flags from QUALIFYING users count towards the threshold — see qualifyingOpenFlagCount.
+        // The admin still sees every flag (totalFlagCount below, the review_flags rows); the admin
+        // approve/block path is unchanged.
         // skillars-deferred-107 AC2: 0 → the first flag on any review auto-holds it. Clamps to 3 + WARN.
         // skillars-deferred-132 AC3 Fix 10 / C5: key, default and bounds all come from the registry entry
         // (BoundedKey overload), so this call site cannot drift from what ConfigService.updateConfig and
         // ConfigStartupAssertion enforce.
         int threshold = configService.getBoundedInt(ConfigBounds.REVIEWS_AUTO_HOLD_FLAG_THRESHOLD);
+        long openFlagCount = qualifyingOpenFlagCount(reviewId, review.getCoachId(), threshold);
 
         boolean autoHeld = false;
         if (openFlagCount >= threshold && review.getModerationStatus() == ReviewModerationStatus.APPROVED) {
@@ -167,6 +200,29 @@ public class ReviewFlagService {
             new ReviewFlaggedEvent(reviewId, review.getCoachId(), totalFlagCount, autoHeld));
 
         return flag.getFlagId();
+    }
+
+    /**
+     * S-08: open flags that count towards the auto-hold: distinct flaggers (the table's unique index
+     * already makes each user one flag) who hold a real booking with THIS coach, and who are not
+     * themselves a coach (a rival coach's flag is exactly the attack this exists to blunt). Stops
+     * counting at {@code stopAt} — the caller only compares against the threshold.
+     */
+    private long qualifyingOpenFlagCount(UUID reviewId, UUID coachId, int stopAt) {
+        long qualifying = 0;
+        for (Long flaggerId : reviewFlagRepository.findOpenFlaggerIds(reviewId)) {
+            if (flaggerId == null || coachProfileRepository.existsByUserId(flaggerId)) {
+                continue;
+            }
+            if (bookingRepository.existsByCoachIdAndFamilyUserIdAndStatusIn(
+                    coachId, flaggerId, QUALIFYING_BOOKING_STATES)) {
+                qualifying++;
+                if (qualifying >= stopAt) {
+                    break;
+                }
+            }
+        }
+        return qualifying;
     }
 
     private static final String UNIQUE_FLAGGER_INDEX = "review_flags_unique_flagger";

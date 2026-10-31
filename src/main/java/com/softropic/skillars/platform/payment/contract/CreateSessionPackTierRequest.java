@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.payment.contract;
 
+import com.softropic.skillars.infrastructure.validation.NoContactDetails;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
@@ -18,7 +19,7 @@ import java.math.BigDecimal;
  * price and the amount charged to Stripe can never disagree by rounding.
  */
 public record CreateSessionPackTierRequest(
-    @NotBlank @Size(max = 200) String label,
+    @NotBlank @Size(max = 200) @NoContactDetails String label,
     @NotNull @Min(1) @Max(MAX_SESSION_COUNT) Integer sessionCount,
     @NotNull @DecimalMin("0.01") @DecimalMax(MAX_TOTAL_PRICE) @Digits(integer = 8, fraction = 2) BigDecimal totalPrice
 ) {

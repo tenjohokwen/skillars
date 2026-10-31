@@ -53,6 +53,8 @@ public class ReviewApiAdvice {
             // silently become FORBIDDEN rather than reaching any 5xx.
             log.error("Data-integrity failure: {} — {}", code, ex.getMessage());
             status = HttpStatus.INTERNAL_SERVER_ERROR;
+        } else if (ReviewErrorCode.FLAG_RATE_LIMITED.getErrorCode().equals(code)) {
+            status = HttpStatus.TOO_MANY_REQUESTS;
         } else if (ReviewErrorCode.BODY_TOO_LONG.getErrorCode().equals(code)
                 || ReviewErrorCode.RESPONSE_TOO_LONG.getErrorCode().equals(code)) {
             status = HttpStatus.BAD_REQUEST;

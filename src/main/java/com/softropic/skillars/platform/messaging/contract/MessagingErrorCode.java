@@ -14,7 +14,10 @@ public enum MessagingErrorCode implements ErrorCode {
     CONVERSATION_BLOCKED("messaging.conversationBlocked"),
     ALREADY_REPORTED("messaging.alreadyReported"),
     ALREADY_DELETED("messaging.alreadyDeleted"),
-    MODERATION_PENDING("messaging.moderationPending");
+    MODERATION_PENDING("messaging.moderationPending"),
+    COACH_SUSPENDED("messaging.coachSuspended"),
+    ACCOUNT_LOCKED("messaging.accountLocked"),
+    RATE_LIMITED("messaging.rateLimited");
 
     private final String code;
 

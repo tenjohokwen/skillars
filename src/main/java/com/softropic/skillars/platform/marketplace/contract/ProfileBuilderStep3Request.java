@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.marketplace.contract;
 
+import com.softropic.skillars.infrastructure.validation.NoContactDetails;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
@@ -24,6 +25,6 @@ public record ProfileBuilderStep3Request(
     public record SessionPackRequest(
         @Positive int sessionCount,
         @NotNull @DecimalMin("0.01") BigDecimal totalPrice,
-        @Size(max = 100) String label
+        @Size(max = 100) @NoContactDetails String label
     ) {}
 }

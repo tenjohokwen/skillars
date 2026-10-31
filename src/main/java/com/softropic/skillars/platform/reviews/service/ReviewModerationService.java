@@ -76,9 +76,16 @@ public class ReviewModerationService {
             try {
                 // TODO: replace this delimiter convention with real structural separation once
                 // GeminiClientImpl/GeminiApiResponse support a systemInstruction + multi-turn role field.
-                String sanitizedInput = input
-                    .replace(USER_CONTENT_BEGIN_DELIMITER, "")
-                    .replace(USER_CONTENT_END_DELIMITER, "");
+                // Loop until stable: a single replace lets "---BEGIN USER ---BEGIN USER CONTENT---CONTENT---"
+                // collapse back into a live delimiter (S-04; messaging holds such content instead).
+                String sanitizedInput = input;
+                String previous;
+                do {
+                    previous = sanitizedInput;
+                    sanitizedInput = sanitizedInput
+                        .replace(USER_CONTENT_BEGIN_DELIMITER, "")
+                        .replace(USER_CONTENT_END_DELIMITER, "");
+                } while (!sanitizedInput.equals(previous));
                 String prompt = promptTemplate
                     + "\n\n" + USER_CONTENT_BEGIN_DELIMITER + "\n"
                     + sanitizedInput
