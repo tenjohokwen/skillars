@@ -47,6 +47,7 @@ class CoachPayoutTransferHandlerTest {
     @Mock CoachPayoutDebtRepository debtRepository;
     @Mock com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository coachStripeAccountRepository;
     @Mock CoachPayoutOutboxSupport coachPayoutOutboxSupport;
+    @Mock org.springframework.beans.factory.ObjectProvider<CoachPayoutOutboxSupport> outboxSupportProvider;
 
     private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -60,7 +61,7 @@ class CoachPayoutTransferHandlerTest {
         handler = new CoachPayoutTransferHandler(coachPayoutRepository, coachPayoutFreezeRepository, paymentGateway,
             meterRegistry, objectMapper, eventPublisher,
             new CoachPayoutDebtService(debtRepository, meterRegistry, eventPublisher),
-            coachStripeAccountRepository, coachPayoutOutboxSupport);
+            coachStripeAccountRepository, outboxSupportProvider);
     }
 
     private String payload() throws Exception {
@@ -99,6 +100,7 @@ class CoachPayoutTransferHandlerTest {
     void recentlyChangedPayoutAccount_defersTransferAndReEnqueuesForTheEndOfTheCoolingOff() throws Exception {
         CoachPayout r = row(CoachPayoutStatus.PENDING_RELEASE, Instant.now().minus(1, ChronoUnit.HOURS));
         when(coachPayoutRepository.findByIdForUpdate(bookingId)).thenReturn(Optional.of(r));
+        when(outboxSupportProvider.getObject()).thenReturn(coachPayoutOutboxSupport);
         Instant holdUntil = Instant.now().plus(40, ChronoUnit.HOURS);
         var account = new com.softropic.skillars.platform.payment.repo.CoachStripeAccount();
         account.setPayoutHoldUntil(holdUntil);

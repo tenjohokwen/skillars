@@ -16,6 +16,7 @@ import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Component;
 
@@ -53,7 +54,8 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
     private final ApplicationEventPublisher eventPublisher;
     private final CoachPayoutDebtService coachPayoutDebtService;
     private final CoachStripeAccountRepository coachStripeAccountRepository;
-    private final CoachPayoutOutboxSupport coachPayoutOutboxSupport;
+    /** Lazy: CoachPayoutOutboxSupport -> OutboxService -> OutboxRowProcessor -> this handler is a cycle otherwise. */
+    private final ObjectProvider<CoachPayoutOutboxSupport> coachPayoutOutboxSupport;
 
     @Override
     public String aggregateType() {
@@ -125,7 +127,7 @@ public class CoachPayoutTransferHandler implements OutboxMessageHandler {
         Instant accountHoldUntil = coachStripeAccountRepository.findById(row.getCoachId())
             .map(a -> a.getPayoutHoldUntil()).orElse(null);
         if (accountHoldUntil != null && accountHoldUntil.isAfter(Instant.now())) {
-            coachPayoutOutboxSupport.enqueueTransfer(row.getBookingId(), accountHoldUntil);
+            coachPayoutOutboxSupport.getObject().enqueueTransfer(row.getBookingId(), accountHoldUntil);
             log.info("[COACH_PAYOUT_ACCOUNT_CHANGE_HOLD] booking={} coach={} — payout destination changed recently, "
                 + "transfer deferred until {}", row.getBookingId(), row.getCoachId(), accountHoldUntil);
             return;
