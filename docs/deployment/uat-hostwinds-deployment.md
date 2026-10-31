@@ -332,11 +332,13 @@ docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml --env-f
 docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml --env-file .env.uat logs -f app
 ```
 
-If `PaymentConfig`'s live-key guard or the `PLATFORM_PIN_ENCRYPTION_SECRET`/
-`APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` fail-fast checks trip, `app` exits
-immediately on boot rather than looping unhealthy — see
-[`uat-deployment.md` Step 4](uat-deployment.md#step-4-prepare-envuat) for
-what each one needs.
+If `PaymentConfig`'s live-key guard or a boot check trips (`DeployedSecretsValidator`: a blank or dev-default
+`PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`, `APP_VIDEO_PLAYBACK_SIGNING_SECRET`,
+`APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`, `REDIS_PASSWORD` or `JWT_SIGNING_KEY`, or a non-https storage endpoint;
+`DeployedMediaScanningValidator`: `ARACHNID_ENABLED`/`ARACHNID_API_KEY` unset without `ALLOW_UNSCANNED_MEDIA=true`), `app` exits
+immediately on boot rather than looping unhealthy. The log line names the property; see
+[`uat-deployment.md` Step 4](uat-deployment.md#step-4-prepare-envuat) for what each one needs and
+[`secrets-reference.md`](secrets-reference.md#boot-time-checks-on-prod-and-uat) for the full list.
 
 If `app` instead disappears/restarts with no clean shutdown log line, that's
 more likely the OOM killer than a config problem — see

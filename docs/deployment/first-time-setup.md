@@ -10,7 +10,7 @@ Follow this guide end-to-end to bring up a live, TLS-enabled production environm
 You will need: SSH access to a fresh server, a secrets file, a registered domain, and cloud provider account.
 All deployment instructions are contained in this repository.
 
-> **Go-live checklist:** work through [`provisioning-checklist.md`](provisioning-checklist.md) alongside this guide. It covers secrets, Stripe, database checks, seed data and smoke tests for PROD and UAT.
+> **Go-live checklist:** start at [`provisioning-checklist.md` → Start here: first production deploy](provisioning-checklist.md#start-here-first-production-deploy), the ordered sequence (accounts and keys to obtain, secrets to generate, DNS, deploy, verify, rollback). This guide is the server-side detail behind its steps; the rest of that file covers Stripe, database checks, seed data and smoke tests for PROD and UAT.
 
 ---
 
@@ -73,7 +73,7 @@ Choose your provider and follow the equivalent steps:
 
 The stack requires:
 - **CPU:** ~2–3 vCPU under normal load; 4 vCPU recommended for headroom
-- **Memory:** ~6–7 GB reserved by containers; 8 GB minimum for host OS and overhead
+- **Memory:** container limits in `docker-compose.yml` sum to about 7.3 GiB (app 2g, postgres 1536m, storage 768m, prometheus 768m, loki 768m, tempo 512m, grafana 512m, redis 256m, traefik 256m, node_exporter 64m); plan for 8 GB at the very least, more for host OS and overhead
 - **Storage:** ≥100 GB for database and system; add capacity for the SeaweedFS media library under `/opt/skillars/data/storage` (depends on your upload volume)
 
 If running on netcup VPS 1000 G12 base tier (2 vCPU, 4 GB RAM), monitor CPU and memory closely during testing. Upgrade if sustained load exceeds 80% on either metric.
@@ -331,6 +331,13 @@ cp .env.example .env
 
 Open `.env` and fill in **every value**. See [`docs/deployment/secrets-reference.md`](secrets-reference.md) for the full list with format descriptions and generation commands.
 
+> **The app refuses to boot on a weak or missing secret.** In production (and UAT) startup aborts, naming the property, unless all of
+> these are real values: `JWT_SIGNING_KEY` (`openssl rand -base64 64`), `REDIS_PASSWORD`, `PLATFORM_PIN_ENCRYPTION_SECRET`,
+> `PLATFORM_REGISTRATION_VERIFICATION_SECRET`, `APP_VIDEO_PLAYBACK_SIGNING_SECRET`, `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`, plus
+> `APP_SES_FROM_ADDRESS`, `APP_PAYMENT_STRIPE_API_KEY`, and either `ARACHNID_ENABLED=true` with `ARACHNID_API_KEY` or the pre-launch
+> override `ALLOW_UNSCANNED_MEDIA=true` (remove it before real users upload). Every generated value is Base64 from `openssl rand`; do not
+> reuse values from UAT. Full list: [`secrets-reference.md` → Boot-time checks](secrets-reference.md#boot-time-checks-on-prod-and-uat).
+
 > **Before the first deploy that serves real users:** production sends email through AWS SES, so read the runbook's [Pre-production release gate: SES cutover](runbook.md#pre-production-release-gate-ses-cutover) — SES production access, IAM permissions, the post-deploy preflight call, and the decision to separate (or explicitly accept sharing) the AWS account with uat. Set `APP_SES_FROM_ADDRESS` here; it has no default and a blank value aborts boot.
 
 > **At least one of `GF_ALERT_NOTIFY_EMAIL` / `GF_SLACK_WEBHOOK_URL` is required** — `provision.sh`
@@ -393,7 +400,7 @@ Watch the startup status:
 ssh root@<NODE_IP> "cd /opt/skillars/app && docker compose ps"
 ```
 
-All services should reach the `healthy` state within **~60 seconds**. The `app` container may take up to **120 seconds** on first start — Docker waits 60 seconds before the first health check begins, then the app needs additional time to complete database migrations. If `docker compose ps` still shows `starting` after 2 minutes, check logs with `docker compose logs app --tail=50`.
+All services should reach the `healthy` state within **~60 seconds**. (This is a new database, so nobody is signed out; a later change of `JWT_SIGNING_KEY` signs every user out.) The `app` container may take up to **120 seconds** on first start — Docker waits 60 seconds before the first health check begins, then the app needs additional time to complete database migrations. If `docker compose ps` still shows `starting` after 2 minutes, check logs with `docker compose logs app --tail=50`.
 
 ---
 
@@ -468,10 +475,15 @@ After the stack is live, establish a backup and recovery plan:
 
 **Backup options:**
 
-1. **Database backups**
-   - Run `docker compose exec postgres pg_dump -U postgres skillars > skillars-$(date +%Y%m%d-%H%M%S).sql` regularly (daily recommended)
+0. **Automated (set this up first, it is what `deploy.yml` also relies on):** the `HOS_*` variables in `.env` and
+   `bash /opt/skillars/app/deploy/backup/install-crons.sh`, once per Node. It installs the 6-hourly `pg-backup.sh`, the daily
+   `volume-backup.sh` and the `prune-backups.sh` retention job; run `bash /opt/skillars/app/deploy/backup/pg-backup.sh` once by hand and
+   expect `Upload verified`. The pre-deploy dump in `deploy.yml` calls the same script, so a Node without `HOS_*` cannot deploy.
+
+1. **Database backups (manual, in addition)**
+   - Run `docker compose exec postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > skillars-$(date +%Y%m%d-%H%M%S).sql` before risky operations
    - Store backups off-server (S3, cloud storage, NAS)
-   - Test recovery at least monthly: `psql -U postgres skillars < backup.sql`
+   - Test recovery with `deploy/backup/restore-from-dump.sh` (see `backup-restore.md`)
 
 2. **Volume/filesystem backups**
    - If using a managed volume (Hetzner, netcup), use provider snapshots if available
@@ -520,7 +532,7 @@ All `docker compose` commands below must be run from `/opt/skillars/app` on the 
 - **Do not restart the stack repeatedly while debugging** — Let's Encrypt rate-limits failed validations to 5 per hostname per hour and 5 duplicate certificates per week. Exhausting this limit blocks certificate issuance for up to a week. Confirm `dig` returns the correct IP before each restart attempt.
 
 **App service is unhealthy**
-- Check logs: `docker compose logs app --tail=100`
+- Check logs: `docker compose logs app --tail=100`. An `AppSetupException` (or `IllegalStateException ... STARTUP ABORTED`) names the property or secret that a boot check rejected: a blank or dev-default secret, a non-https storage endpoint, image scanning off (`ARACHNID_ENABLED`), or a blank `platform.admin_alert_email` while Arachnid is on (set it by SQL, `runbook.md` "Admin alert recipient")
 - Confirm all required `.env` values are set (no `change-me` placeholders remain)
 - Confirm PostgreSQL is healthy: `docker compose ps postgres`
 
@@ -541,7 +553,7 @@ All `docker compose` commands below must be run from `/opt/skillars/app` on the 
 - Only ports 80 and 443 are published to the host
 
 **Network topology (three bridge networks):**
-- `skillars-internal` — `traefik`, `postgres`, `app`, `grafana`. Has an egress route: `app` needs OTLP/email/Bunny.net/Stripe, `grafana` needs email/Slack alert delivery, `traefik` needs ACME.
+- `skillars-internal` — `traefik`, `postgres`, `app`, `grafana`, `storage`, `storage-init`. Has an egress route: `app` needs OTLP/email/Bunny.net/Stripe, `grafana` needs email/Slack alert delivery, `traefik` needs ACME.
 - `skillars-observability` — `internal: true` (no gateway, **no outbound internet**): `prometheus`, `loki`, `tempo`, `node_exporter`. None of them need egress; a compromised one cannot exfiltrate or call home.
 - `skillars-data` — `internal: true`: `redis` and `app` only (S-24). Redis also requires `REDIS_PASSWORD`, so a compromised Grafana/Loki/Tempo can neither resolve nor authenticate to it.
 - `app` is a member of **all three** networks and `grafana` of the first two, so they can still reach their peers while keeping their own egress. Every service still shares a network with every peer it talks to, so no internal traffic is affected. No host `iptables` rules involved — this is compose-only.

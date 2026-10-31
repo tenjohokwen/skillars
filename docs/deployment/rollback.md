@@ -221,7 +221,7 @@ After production is restored, take the following actions:
 
 3. **Verify data integrity**
    - Spot-check key user flows (login, bookings, payments, video playback)
-   - Query the database for obvious corruption: `docker compose exec postgres psql -U postgres skillars -c "SELECT COUNT(*) FROM users;"`
+   - Query the database for obvious corruption: `docker compose exec postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT count(*) FROM main.\"user\";"'`
 
 4. **Investigate the root cause**
    - Review the logs of the bad deployment in GitHub Actions
@@ -256,6 +256,15 @@ crash the reverted app on startup or corrupt data on write.
    - **Backup storage location:** Backups are stored per your deployment provider configuration (see [`backup-restore.md`](backup-restore.md) for details)
 3. **Data-loss window:** writes made between the pre-deploy dump and the restore are lost. Without that dump
    it is up to 6 hours (`pg-backup.sh` also runs on a `0 */6 * * *` cron, `deploy/backup/install-crons.sh`).
+
+**Rolling the image back across the security round (S-03, S-24).** The image rollback does not touch `/opt/skillars/.env` or the
+compose files, and both directions are safe to leave in place:
+
+- `JWT_SIGNING_KEY` in `.env` is simply ignored by a pre-S-03 image, which reads the legacy `main.sec` `(v1, jot)` row again, so
+  only roll back past S-03 on a database that still has that row (do not drop it until you will never roll back that far). A database
+  created after S-03 never had one. Either way every user is signed out once, because the signing key changes.
+- A pre-S-24 image works with `REDIS_PASSWORD` set (it passes `SPRING_DATA_REDIS_PASSWORD` the same way). Keep the redis container and
+  the `skillars-data` network as they are; do not run `docker compose up -d` from an old checkout of the compose file.
 
 A forward-fixing follow-up deploy remains the preferred option whenever feasible — this restore-from-backup
 path is the fallback for when the bad release's migrations have already caused a production-blocking failure

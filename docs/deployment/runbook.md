@@ -234,11 +234,11 @@ docker compose start redis
 
 ```bash
 # Check current Redis memory usage:
-docker exec $(docker compose ps -q --status running redis | head -1) redis-cli info memory \
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" info memory' \
   | grep -E "used_memory_human|maxmemory_human"
 
 # Flush the database to free memory (active user sessions will be invalidated):
-docker exec $(docker compose ps -q --status running redis | head -1) redis-cli FLUSHDB
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" FLUSHDB'
 
 # Restart Redis:
 docker compose restart redis
@@ -258,8 +258,8 @@ docker stats --no-stream
 # Confirm Redis is running and responding:
 docker compose ps redis
 
-docker exec $(docker compose ps -q --status running redis | head -1) redis-cli ping
-# Expected: PONG
+docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'
+# Expected: PONG (a bare `redis-cli ping` prints NOAUTH)
 
 # Confirm the app has reconnected to Redis:
 APP_CID=$(docker compose ps -q --status running app 2>/dev/null | head -1)
@@ -901,6 +901,19 @@ log (and startup aborts if Arachnid is enabled), and EMAIL alert rules send noth
 `platform.admin_alert_email config key is blank — alert email NOT sent`. Set it via
 `PUT /api/config/values/platform.admin_alert_email` before relying on either path (see
 "Config change appears to have no effect" for cache timing).
+
+**First deploy of a new database.** Production and UAT must run with `ARACHNID_ENABLED=true`, and the app aborts at startup
+(`VideoModerationEmailListener`, "STARTUP ABORTED") while this row is blank. Flyway has already seeded the row by then, and no
+admin exists to call the API yet, so set it by SQL and restart:
+
+```bash
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+UPDATE main.platform_config SET value = 'ops@example.com' WHERE key = 'platform.admin_alert_email';
+SQL
+docker compose up -d app
+```
+
+Alternatively boot once with `ALLOW_UNSCANNED_MEDIA=true`, set the row through the API, and remove the override.
 
 ## Moving object storage to a managed provider
 

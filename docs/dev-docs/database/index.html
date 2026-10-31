@@ -124,7 +124,7 @@
       into two generated files: <code>V138__baseline_schema.sql</code> (pure DDL from
       <code>pg_dump --schema-only</code>) and <code>V139__baseline_seed_data.sql</code> (160 seed rows:
       <code>platform_config</code>, authorities, <code>skill_definitions</code>, platform drills). There are
-      currently <strong>66 files, <code>V138</code>–<code>V215</code></strong>, with gaps — <code>V174</code>,
+      currently <strong>74 files, <code>V138</code>–<code>V223</code></strong>, with gaps — <code>V174</code>,
       <code>V176</code>–<code>V177</code>, <code>V179</code>–<code>V180</code>, <code>V190</code>, <code>V194</code>,
       <code>V196</code> and <code>V201</code>–<code>V204</code> were never used, which Flyway does not mind —
       but never back-fill a gap: always take a number above the current latest. Older migration numbers you'll see quoted in code comments
@@ -174,7 +174,7 @@
     <p>
       Many recent migrations take a documented "same-release exception" justified by "no production
       deployment yet / prod is not live": <code>V169</code> and <code>V173</code> ship an index with the code
-      that needs it, and almost every migration from <code>V182</code> to <code>V215</code> skips
+      that needs it, and almost every migration from <code>V182</code> to <code>V223</code> skips
       <code>NOT VALID</code>/<code>VALIDATE</code> (marker <code>allow-validating-constraint</code>), builds a
       plain index (<code>allow-blocking-index</code>), runs a single-transaction backfill
       (<code>allow-full-table-dml</code>, <code>V178</code>) or ships a CHECK widening together with its first write
@@ -183,7 +183,7 @@
       its status CHECKs are re-added <code>NOT VALID</code>.)
     </p>
 
-    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V215)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V223)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -214,6 +214,12 @@
         <tr><td><code>V191</code>, <code>V192</code>, <code>V206</code></td><td>Booking request integrity: <code>bookings.original_start_time</code> (the 24h refund window is measured from the earlier of it and the current start), <code>bookings.agreed_price</code> (non-pack price locked at request time; <code>chk_bp_status</code> gains <code>REFUNDED_TO_CREDIT</code>), <code>bookings.proposed_by_coach</code> (a coach-created booking needs the parent's confirmation) and batch status <code>ACCEPTING</code> (serialises concurrent accept-all).</td></tr>
         <tr><td><code>V193</code></td><td>Payout/dispute/webhook integrity: <code>coach_payouts.reversed_amount</code>, <code>dispute_frozen</code>, <code>chargeback_frozen</code> (a <code>FROZEN</code> payout is released only when no freeze reason stands); <code>coach_stripe_accounts.transfers_capability</code>, <code>last_event_created_at</code>; new <code>payment.charge_disputes</code> (PK = Stripe dispute id, status <code>OPEN</code>/<code>WON</code>/<code>LOST</code>).</td></tr>
         <tr><td><code>V195</code>, <code>V200</code>, <code>V210</code></td><td>Session-pack integrity: partial unique <code>uq_spp_stripe_payment_intent_id</code> (one charge funds at most one pack); <code>payment.pack_session_restores</code> and <code>payment.pack_session_refunds</code> (per-booking idempotency markers, PK <code>booking_id</code>, FK to the purchase); <code>refund_sessions_issued</code>/<code>refund_gross_issued</code>; then <code>paused_from</code>, <code>dispute_frozen_at</code>, <code>revoked_at</code>, <code>revoked_reason</code> with <code>chk_spp_pause_window</code> and <code>chk_spp_revoked_reason</code> (<code>CHARGEBACK_LOST</code>, <code>EXTERNAL_REFUND</code>, <code>COACH_SUSPENDED</code>).</td></tr>
+        <tr><td><code>V216</code></td><td><code>phone_otp_tokens.failed_attempts</code> (<code>integer NOT NULL DEFAULT 0</code>, S-14): hard cap on wrong phone-OTP guesses per token. Persisted on the row so a restart, which empties the in-memory rate-limit buckets, cannot reset it; the token is invalidated at the cap and a resend issues a fresh row.</td></tr>
+        <tr><td><code>V217</code></td><td><code>payment.stripe_oauth_states</code> (the single-use nonce behind the Stripe Connect OAuth <code>state</code>; only its SHA-256 is stored, consumed by the callback or purged when expired or superseded) and <code>coach_stripe_accounts.payout_hold_until</code> (set when a coach replaces a connected account with a different one; <code>CoachPayoutTransferHandler</code> defers transfers until it has passed, see <code>payment.payout.accountChange.holdHours</code>).</td></tr>
+        <tr><td><code>V218</code></td><td><code>bookings.coach_no_show_claim</code> (<code>REPORT</code>, <code>LATE_CANCEL</code> or <code>SPLIT</code>) and <code>coach_no_show_claimed_at</code>: the durable record of how a booker claimed the coach never showed. Written once in the claiming transaction. No CHECK, the value set is owned by <code>BookingService</code>.</td></tr>
+        <tr><td><code>V219</code></td><td>S-07 part 2: <code>bookings.coach_start_reminder_sent_at</code> / <code>coach_late_start_reminder_sent_at</code> (idempotency stamps for <code>CoachStartReminderScheduler</code>), partial index <code>idx_bkg_no_show_claim_payer</code> for the repeat-claimant alert, and CHECK widenings: <code>COACH_START_REMINDER</code> (email templates) and <code>REPEAT_NO_SHOW_CLAIMANT</code> (admin alerts).</td></tr>
+        <tr><td><code>V220</code></td><td>S-06 related-party detection: <code>main.user_identity_signals</code> (hashed email / phone / card / browser-fingerprint signals per user), <code>payment.related_party_bookings</code> (one row per flagged booking, PK <code>booking_id</code>) and <code>reviews.coach_reviews.related_party</code> (hidden from the rating).</td></tr>
+        <tr><td><code>V221</code></td><td>S-18: <code>file_storage_objects.scan_status</code> (<code>NOT_REQUIRED</code> default for existing rows), <code>scan_attempts</code>, <code>last_scan_attempt_at</code>, and the partial index <code>idx_storage_objects_scan_pending</code> that <code>MediaScanRetryScheduler</code> polls. No CHECK: <code>ScanStatus</code> is written only by targeted updates.</td></tr>
         <tr><td><code>V223</code></td><td>S-09 optional coach safeguarding check: new <code>marketplace.coach_safeguarding_requests</code> (inspection queue, PK <code>coach_id</code>, optional encrypted-upload key) and <code>marketplace.coach_safeguarding_checks</code> (the badge record: type, <code>inspected_at</code>, <code>expires_at</code>, <code>inspected_by</code>, <code>reminder_sent_at</code>), both FK to <code>coach_profiles</code> and <code>@Version</code>ed; widens <code>envelope_entity_email_template_check</code> (<code>COACH_SAFEGUARDING_EXPIRING</code>) and <code>admin_action_log_action_type_check</code> (four <code>SAFEGUARDING_*</code> types). Nothing from the certificate is a column.</td></tr>
         <tr><td><code>V214</code></td><td>Partial index <code>idx_bkg_open_pack_reservation</code> on <code>booking.bookings (session_pack_purchase_id)</code> for open, unsettled bookings (<code>REQUESTED</code>/<code>ACCEPTED</code>/<code>PAYMENT_PENDING</code>) — the request-time pack-session reservation count (<code>BookingRepository.countOpenPackReservations</code>, whose literal status list must match). Plain (blocking) build, <code>allow-blocking-index</code>.</td></tr>
         <tr><td><code>V215</code></td><td>Partial index <code>idx_scd_awaiting_wrap_up</code> on <code>booking.session_completion_data</code>, so <code>OperationalBacklogMetrics</code>'s one-minute poll does not scan the table.</td></tr>
@@ -458,7 +464,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>b78e264e</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>cd7136bc</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
