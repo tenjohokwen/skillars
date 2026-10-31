@@ -251,6 +251,7 @@ and diffing against `secrets-reference.md`. Since `fix/prod-readiness-gaps` each
 | `APP_STORAGE_BACKUP_ENDPOINT_URL`, `_BUCKET`, `_REGION`, `_ACCESS_KEY`, `_SECRET_KEY` | blank / `us-east-1` | Secondary bucket for `app.storage.replication`. Disabled by default |
 | `APP_STORAGE_LOCAL_BASE_DIR` | `/tmp/skillars-storage` | Only used when `app.storage.provider=local` |
 | `ARACHNID_API_BASE_URL` | `https://api.c3p.ca` | Only with `features.toggles.arachnid-enabled` (`ARACHNID_API_KEY` is documented) |
+| `ARACHNID_ENABLED`, `ALLOW_UNSCANNED_MEDIA` | `false` / `false` | S-18: see the abuse-media scanning item in AI moderation and safety |
 | `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH` | blank | Only with `features.toggles.videointel-enabled` |
 | ~~`PLATFORM_NOTIFICATION_EMAIL`~~ | removed | The property had no reader and a personal default; `fix/prod-readiness-gaps` deleted it. Setting it does nothing |
 
@@ -813,11 +814,29 @@ logged at DEBUG and acknowledged):
   7. Redeploy; startup aborts with a clear message if a vertex setting or the key file is missing. After the
      first moderated message, check there is no `Gemini API call failed` / `token exchange failed` log. The
      admin health banner and the gauge clear on their own.
-- [ ] `features.toggles.arachnid-enabled: false` (Project Arachnid / C3P, `ARACHNID_API_KEY`). If
-  you enable it, `platform.admin_alert_email` must be set or startup aborts (`runbook.md` →
-  "Admin alert recipient").
+- [ ] **Abuse-media scanning (S-18). A prod/uat instance refuses to boot unless it is safe.**
+  `DeployedMediaScanningValidator` fails startup when image scanning is off (`ARACHNID_ENABLED` not `true`), when it
+  is on with a blank `ARACHNID_API_KEY`, or when `features.toggles.videointel-enabled=true` while the video scanner
+  is still the stub. Set `ARACHNID_ENABLED=true` and `ARACHNID_API_KEY` in `.env` (both passed through compose).
+  If you enable it, `platform.admin_alert_email` must be set or startup aborts (`runbook.md` →
+  "Admin alert recipient"), because a hash match emails an urgent alert to that address.
+  - **Owner step, long lead time:** apply to the Canadian Centre for Child Protection (C3P) for Project Arachnid API
+    access. Vetting is on their side and cannot be sped up; start now. Confirm the request/response schema against
+    the C3P documentation once you have credentials (`ArachnidClientImpl` is written to an assumed shape) and
+    smoke-test with a known-clean image before launch.
+  - **Pre-launch override:** `ALLOW_UNSCANNED_MEDIA=true` lets the instance boot without scanning. It logs
+    `[MEDIA_SCANNING_UNSAFE]` at ERROR and raises the gauge `skillars_media_scanning_unsafe`, which the
+    `MediaScanningUnsafe` Grafana rule (critical) alerts on for as long as it is set. Remove it before real users
+    upload. **(confirm it is unset on PROD at go-live)**
+  - **Legal:** have a lawyer confirm the reporting duty for flagged material (reporting to the authorities in
+    your jurisdiction). The platform does not report anything itself: a match withholds the image (the bytes are
+    kept, not deleted), quarantines the uploader's other files, suspends the account and emails an urgent admin
+    alert. Do not purge a flagged object before that advice.
+  - Migration `V221` adds `file_storage_objects.scan_status` (existing rows become `NOT_REQUIRED`; PROD is not live).
 - [ ] `features.toggles.videointel-enabled: false` (Google Video Intelligence,
-  `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH`). Neither is passed through compose.
+  `VIDEOINTEL_PROJECT_ID`, `VIDEOINTEL_CREDENTIALS_PATH`). Neither is passed through compose. **There is no real video
+  scanner yet (decision C is open):** the client is a fail-closed stub and `app.video.moderation.requires-real-scanner`
+  (default `true`) keeps every video visible to its uploader (and admins) only. Do not change it.
 
 ### Identity, maps and analytics
 
@@ -962,7 +981,8 @@ Yaml-level settings worth reviewing for PROD (`application.yaml` unless noted):
 | `app.config.cache-ttl-seconds` | 300 | Delay before a `platform_config` edit takes effect |
 | `app.email.transport` | `log` (base), `ses` (prod), `smtp` (uat) | Never run PROD on `log` |
 | `app.storage.replication.enabled` | `false` | See backups in [section 1](#1-infrastructure) |
-| `features.toggles.arachnid-enabled` / `videointel-enabled` | `false` / `false` | |
+| `features.toggles.arachnid-enabled` (`ARACHNID_ENABLED`) / `videointel-enabled` | `false` / `false` | PROD/UAT refuse to boot with arachnid off unless `ALLOW_UNSCANNED_MEDIA=true` |
+| `app.video.moderation.requires-real-scanner` | `true` | Videos are uploader-only until a real scanner passes them; leave `true` |
 | `management.tracing.sampling.probability` | 1.0 | Possibly lower on PROD **(confirm)** |
 | `app.access-log.enabled` (`APP_ACCESS_LOG_ENABLED`) | `true` | |
 | `rate.limiting.enabled` | `true` | Never disable on PROD |

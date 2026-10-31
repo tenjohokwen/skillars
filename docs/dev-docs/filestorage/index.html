@@ -326,6 +326,20 @@ sequenceDiagram
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout warn">
+      <p><strong>S-18, images are withheld until Project Arachnid has judged them.</strong> <code>confirmUpload</code> stores
+      an image as <code>scan_status = PENDING</code> when <code>ARACHNID_ENABLED</code> is on (<code>MediaScanPolicy</code>);
+      anything else is <code>NOT_REQUIRED</code>. <code>MediaScanService</code> (async, on <code>StorageObjectConfirmedEvent</code>,
+      plus <code>MediaScanRetryScheduler</code> for retries) scans a short-lived URL and writes <code>CLEAN</code>,
+      or on a hash match <code>FLAGGED</code> (bytes kept, not purged), <code>QUARANTINED</code> for the uploader's other objects,
+      an urgent admin alert, and a safety suspension (<code>UserSuspensionRequestedEvent</code>). Scanner down, timeout or any
+      exception is <em>no verdict</em>: the object stays <code>PENDING</code> and is retried; an admin is alerted after
+      <code>infrastructure.arachnid.alert-after-attempts</code> tries. <code>signedDownloadUrl</code> (every cross-user read)
+      returns <code>null</code> and <code>downloadBytes</code> throws for anything but <code>CLEAN</code>/<code>NOT_REQUIRED</code>;
+      the owner's <code>signDownload</code> still serves <code>PENDING</code> so they see their own upload. Prod/uat refuse to boot
+      with scanning off unless <code>ALLOW_UNSCANNED_MEDIA=true</code> (<code>DeployedMediaScanningValidator</code>, gauge
+      <code>skillars_media_scanning_unsafe</code>). There is no admin release tool yet for a false-positive quarantine.</p>
+    </div>
+    <div class="callout warn">
       <p><strong>The confirm-time quota check is a per-owner critical section.</strong> Two parallel confirms by one owner
       used to each read the owner's usage before either inserted, so both passed and together overshot the quota (C5).
       <code>confirmUpload</code> now runs <code>FileStorageObjectRepository.acquireOwnerQuotaLock</code>

@@ -157,7 +157,9 @@ application read them but no deploy supplied them. Defaults below are the applic
 | `GEMINI_MODEL` | String | `gemini-2.0-flash` | Model id; Vertex may require the versioned id |
 | `GEMINI_VERTEX_PROJECT` / `GEMINI_VERTEX_LOCATION` | String | *empty* / `europe-west4` | Vertex AI project and region. Required when `GEMINI_MODE=vertex` |
 | `GEMINI_VERTEX_CREDENTIALS_PATH` | Path | *empty* | Service-account key JSON **inside the container** (role `roles/aiplatform.user`). Required when `GEMINI_MODE=vertex`; mount it read-only, never bake it into the image |
-| `ARACHNID_API_KEY` | String | *empty* | Project Arachnid (C3P) credential. Only needed when `features.toggles.arachnid-enabled` is on |
+| `ARACHNID_API_KEY` | String | *empty* | Project Arachnid (C3P) credential. **Required on prod/uat** (with `ARACHNID_ENABLED=true`) unless `ALLOW_UNSCANNED_MEDIA=true`: `DeployedMediaScanningValidator` refuses to boot otherwise. Apply to C3P early; vetting lead time is theirs |
+| `ARACHNID_ENABLED` | Boolean | `false` | Turns on image abuse-media scanning. Must be `true` on prod/uat (see above) |
+| `ALLOW_UNSCANNED_MEDIA` | Boolean | `false` | **Pre-launch override only.** Lets prod/uat boot without image scanning; logs ERROR and raises the `MediaScanningUnsafe` alert while set. Remove before real users upload |
 | `APP_ACCESS_LOG_ENABLED` | Boolean | `true` | **Tuning knob, not a secret.** Tomcat access logging, emitted through SLF4J (loggers `skillars.access` for port 9990 and `skillars.access.management` for 8367) so entries reach Loki. Set `false` to disable both; see [`local/deployment.md`](local/deployment.md) for silencing only the management half, which is mostly healthcheck and Prometheus traffic |
 | `ENVIRONMENT` | String | `prod` | Stamped onto every log line and Loki stream as the `environment` label. **uat must set `ENVIRONMENT=uat`** in `.env.uat` — the compose default (`prod`) overrides the profile |
 | `APP_VERSION` | String | `unknown` | Stamped onto every log line; set from the CI build to make log/trace correlation across deploys possible |

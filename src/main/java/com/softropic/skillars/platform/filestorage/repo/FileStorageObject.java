@@ -3,9 +3,12 @@ package com.softropic.skillars.platform.filestorage.repo;
 import com.softropic.skillars.infrastructure.persistence.AbstractAuditingEntity;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.Table;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import lombok.Builder;
 import lombok.experimental.SuperBuilder;
 import lombok.extern.slf4j.Slf4j;
 import org.hibernate.annotations.JdbcTypeCode;
@@ -52,6 +55,19 @@ public class FileStorageObject extends AbstractAuditingEntity {
 
     @Column(name = "upload_confirmed_at")
     private Instant uploadConfirmedAt;
+
+    /** S-18: see {@link ScanStatus}. Written only by the targeted UPDATEs on the repository. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "scan_status", nullable = false, length = 20)
+    @Builder.Default
+    private ScanStatus scanStatus = ScanStatus.NOT_REQUIRED;
+
+    @Column(name = "scan_attempts", nullable = false)
+    @Builder.Default
+    private int scanAttempts = 0;
+
+    @Column(name = "last_scan_attempt_at")
+    private Instant lastScanAttemptAt;
 
     @Column(name = "deleted_at")
     private Instant deletedAt;

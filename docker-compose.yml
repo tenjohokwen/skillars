@@ -130,6 +130,11 @@ services:
       - GEMINI_VERTEX_CREDENTIALS_PATH=${GEMINI_VERTEX_CREDENTIALS_PATH:-}
       # AI moderation and safety providers (off unless enabled in config). Defaults mirror application.yaml.
       - ARACHNID_API_BASE_URL=${ARACHNID_API_BASE_URL:-https://api.c3p.ca}
+      # S-18: image abuse-media scanning. prod/uat refuse to boot with ARACHNID_ENABLED off or ARACHNID_API_KEY blank
+      # unless ALLOW_UNSCANNED_MEDIA=true (a pre-launch override that raises the MediaScanningUnsafe alert).
+      - ARACHNID_ENABLED=${ARACHNID_ENABLED:-false}
+      - ARACHNID_API_KEY=${ARACHNID_API_KEY:-}
+      - ALLOW_UNSCANNED_MEDIA=${ALLOW_UNSCANNED_MEDIA:-false}
       - VIDEOINTEL_PROJECT_ID=${VIDEOINTEL_PROJECT_ID:-}
       - VIDEOINTEL_CREDENTIALS_PATH=${VIDEOINTEL_CREDENTIALS_PATH:-}
       # X-Client-Id values accepted from machine (non-browser) clients, comma-separated. Blank = none.

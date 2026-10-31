@@ -19,6 +19,7 @@ public class VideoProperties {
     private Webhook webhook = new Webhook();
     private Bunny bunny = new Bunny();
     private OrphanAsset orphanAsset = new OrphanAsset();
+    private Moderation moderation = new Moderation();
 
     @Getter
     @Setter
@@ -60,6 +61,17 @@ public class VideoProperties {
     public static class Webhook {
         private int maxAttempts = 3;
         private long processorDelayMs = 5000L;
+    }
+
+    /** S-18 (decision B): see {@code VideoSharingPolicy}. */
+    @Getter
+    @Setter
+    public static class Moderation {
+        /**
+         * Default true: a video is only ever shown to its uploader (and an admin) until a REAL video scanner has
+         * passed it. The scanner is a stub today, so with this on no video is shared. {@code false} lifts the gate.
+         */
+        private boolean requiresRealScanner = true;
     }
 
     /** skillars-deferred-100 AC2: orphaned-provider-asset sweeper. */

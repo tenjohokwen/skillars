@@ -49,6 +49,7 @@ class VideoAccessGuardTest {
     @Mock VideoAccessCache videoAccessCache;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock Principal mockPrincipal;
+    @Mock VideoSharingPolicy videoSharingPolicy;
 
     @InjectMocks VideoAccessGuard guard;
 
@@ -66,6 +67,43 @@ class VideoAccessGuardTest {
     void setUp() {
         lenient().when(configService.getBoundedLong(ConfigBounds.VIDEO_ACCESS_COACH_WINDOW_DAYS))
             .thenReturn(90L);
+        lenient().when(videoSharingPolicy.maySharePastOwner(any())).thenReturn(true);
+    }
+
+    // S-18 (decision B): until a real scanner has passed a video, only its owner (and an admin) may play it.
+    @Test
+    void canPlay_unscannedVideo_ownerStillAllowed() {
+        Video video = videoWithState(OperationalState.READY, PLAYER_OWNER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
+        stubPlayerCurrentUser(PLAYER_USER_ID);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_LONG_ID, PLAYER_USER_ID)).thenReturn(true);
+        lenient().when(videoSharingPolicy.maySharePastOwner(video)).thenReturn(false);
+
+        assertThat(guard.canPlay(null, VIDEO_ID)).isTrue();
+    }
+
+    @Test
+    void canPlay_unscannedVideo_adminStillAllowed() {
+        Video video = videoWithState(OperationalState.READY, PLAYER_OWNER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(true);
+        lenient().when(videoSharingPolicy.maySharePastOwner(video)).thenReturn(false);
+
+        assertThat(guard.canPlay(null, VIDEO_ID)).isTrue();
+    }
+
+    @Test
+    void canPlay_unscannedVideo_linkedParentDeniedBeforeAnyRelationshipCheck() {
+        Video video = videoWithState(OperationalState.READY, PLAYER_OWNER_ID);
+        when(videoService.findById(VIDEO_ID)).thenReturn(video);
+        when(securityUtil.isAdmin()).thenReturn(false);
+        stubPlayerCurrentUser(PARENT_LONG_ID);
+        when(playerProfileRepository.existsByIdAndUserId(PLAYER_LONG_ID, PARENT_LONG_ID)).thenReturn(false);
+        when(videoSharingPolicy.maySharePastOwner(video)).thenReturn(false);
+
+        assertThatThrownBy(() -> guard.canPlay(null, VIDEO_ID)).isInstanceOf(PlaybackDeniedException.class);
+        org.mockito.Mockito.verifyNoInteractions(parentPlayerLinkRepository, bookingRepository);
     }
 
     // --- canPlay --- //

@@ -117,6 +117,19 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
+describe('VideoManagementPage.vue — review notice (S-18)', () => {
+  it('tells every uploader that videos are reviewed before they can be shared', async () => {
+    videoApi.getMyVideos.mockResolvedValue([])
+    videoApi.getMyQuota.mockResolvedValue(EMPTY_QUOTA)
+
+    const { wrapper } = await mountPage()
+
+    const notice = wrapper.find('[data-testid="video-review-notice"]')
+    expect(notice.exists()).toBe(true)
+    expect(notice.text()).toContain('video.management.reviewNotice')
+  })
+})
+
 describe('VideoManagementPage.vue — 403 redirect target (skillars-deferred-142 AC4)', () => {
   it('redirects to /player/dashboard, not /dashboard, on a 403 from getMyVideos()', async () => {
     videoApi.getMyVideos.mockRejectedValue({ response: { status: 403 } })

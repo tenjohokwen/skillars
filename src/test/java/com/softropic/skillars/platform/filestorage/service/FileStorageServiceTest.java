@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.filestorage.repo.FileStorageObject;
 import com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJob;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJobRepository;
+import com.softropic.skillars.platform.filestorage.repo.ScanStatus;
 import com.softropic.skillars.platform.filestorage.repo.StorageAccessEventRepository;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -32,6 +33,7 @@ import software.amazon.awssdk.services.s3.presigner.model.PresignedGetObjectRequ
 
 import java.net.URI;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.function.Consumer;
 
@@ -67,6 +69,7 @@ class FileStorageServiceTest {
     @Mock private StorageAccessEventRepository accessEventRepo;
     @Mock private StorageMetrics metrics;
     @Mock private SecurityUtil securityUtil;
+    @Mock private MediaScanPolicy mediaScanPolicy;
 
     private final StorageKeyGenerator keyGenerator = new StorageKeyGenerator();
     private final BlobstoreProperties blobstoreProperties = new BlobstoreProperties();
@@ -78,8 +81,53 @@ class FileStorageServiceTest {
         blobstoreProperties.setEndpointUrl("http://s3");
         service = new FileStorageService(validationChain, repo, keyGenerator, presigner, blobstoreProperties,
             new FileStorageProperties(), s3Client, outboxRepo, publisher, transactionTemplate, accessEventRepo,
-            metrics, securityUtil);
+            metrics, securityUtil, mediaScanPolicy);
         lenient().when(securityUtil.requireCurrentBusinessId()).thenReturn(OWNER);
+        lenient().when(mediaScanPolicy.initialStatus(any())).thenReturn(ScanStatus.NOT_REQUIRED);
+    }
+
+    // ---- S-18: no URL for an object without a clean abuse-media verdict ----
+
+    @Test
+    void signedDownloadUrl_withheldForPendingFlaggedAndQuarantined_servedForCleanAndNotRequired() throws Exception {
+        for (ScanStatus withheld : List.of(ScanStatus.PENDING, ScanStatus.FLAGGED, ScanStatus.QUARANTINED)) {
+            when(repo.findByKey("k-" + withheld)).thenReturn(Optional.of(scanned("k-" + withheld, withheld)));
+            assertThat(service.signedDownloadUrl("k-" + withheld)).isNull();
+            assertThat(service.signedDownloadUrl("k-" + withheld, java.time.Duration.ofMinutes(1))).isNull();
+        }
+        verify(presigner, never()).presignGetObject(any(GetObjectPresignRequest.class));
+
+        when(repo.findByKey("k-clean")).thenReturn(Optional.of(scanned("k-clean", ScanStatus.CLEAN)));
+        stubPresign();
+        assertThat(service.signedDownloadUrl("k-clean")).isEqualTo("http://s3/b/x");
+        // A server-written object has no row: not scanned, still served.
+        assertThat(service.signedDownloadUrl("server-written")).isEqualTo("http://s3/b/x");
+    }
+
+    @Test
+    void downloadBytes_withheldObject_isRefused() {
+        when(repo.findByKey("k")).thenReturn(Optional.of(scanned("k", ScanStatus.PENDING)));
+
+        assertThatThrownBy(() -> service.downloadBytes("k")).isInstanceOf(RuntimeException.class);
+        verify(s3Client, never()).getObjectAsBytes(any(software.amazon.awssdk.services.s3.model.GetObjectRequest.class));
+    }
+
+    @Test
+    void signDownload_ownerOfFlaggedObject_gets404_ownerOfPendingObject_getsUrl() throws Exception {
+        when(repo.findByKeyAndDeletedAtIsNull("flagged")).thenReturn(Optional.of(scanned("flagged", ScanStatus.FLAGGED)));
+        when(securityUtil.isAdmin()).thenReturn(false);
+
+        assertThatThrownBy(() -> service.signDownload("flagged")).isInstanceOf(StorageObjectNotFoundException.class);
+
+        when(repo.findByKeyAndDeletedAtIsNull("pending")).thenReturn(Optional.of(scanned("pending", ScanStatus.PENDING)));
+        stubTransactionTemplate();
+        stubPresign();
+        assertThat(service.signDownload("pending").key()).isEqualTo("pending");
+    }
+
+    private static FileStorageObject scanned(String key, ScanStatus status) {
+        return FileStorageObject.builder().key(key).ownerId(OWNER).provider("s3").bucket("b").sizeBytes(3)
+            .contentType("image/png").uploadConfirmedAt(Instant.now()).scanStatus(status).build();
     }
 
     // ---- #1 sign/download is owner-or-admin only ----

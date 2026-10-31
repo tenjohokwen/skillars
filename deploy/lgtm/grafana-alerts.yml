@@ -1005,6 +1005,37 @@ groups:
         labels:
           severity: high
 
+      - uid: media_scanning_unsafe
+        title: MediaScanningUnsafe
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_media_scanning_unsafe) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [0] }
+        for: 0s
+        annotations:
+          summary: 'Abuse-media scanning is unsafe: ALLOW_UNSCANNED_MEDIA is overriding the boot check'
+          runbook: 'docs/deployment/monitoring.md#mediascanningunsafe'
+          dashboard: /d/skillars-jobs
+        labels:
+          severity: critical
+
       - uid: backlog_metrics_stale
         title: BacklogMetricsStale
         condition: C

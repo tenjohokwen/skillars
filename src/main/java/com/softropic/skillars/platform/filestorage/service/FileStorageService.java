@@ -7,6 +7,7 @@ import com.softropic.skillars.infrastructure.blobstore.config.BlobstorePropertie
 import com.softropic.skillars.infrastructure.blobstore.contract.exception.StorageObjectNotFoundException;
 import com.softropic.skillars.platform.filestorage.repo.FileStorageObject;
 import com.softropic.skillars.platform.filestorage.repo.FileStorageObjectRepository;
+import com.softropic.skillars.platform.filestorage.repo.ScanStatus;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJob;
 import com.softropic.skillars.platform.filestorage.repo.OutboxReplicationJobRepository;
 import com.softropic.skillars.platform.filestorage.repo.StorageAccessEvent;
@@ -68,6 +69,7 @@ public class FileStorageService {
     private final StorageAccessEventRepository storageAccessEventRepository;
     private final StorageMetrics storageMetrics;
     private final SecurityUtil securityUtil;
+    private final MediaScanPolicy mediaScanPolicy;
 
     /**
      * Entities whose key's {@code entityId} segment must be the uploader's own business id. Checked at sign time
@@ -274,6 +276,12 @@ public class FileStorageService {
             if (!securityUtil.isAdmin() && !fso.getOwnerId().equals(getOwnerId())) {
                 throw new StorageObjectNotFoundException(key);
             }
+            // S-18: even the uploader gets nothing back for an object with a hash match / a quarantined one.
+            // A still-PENDING one is allowed: the uploader sees their own upload while it awaits a verdict.
+            if (!securityUtil.isAdmin()
+                && (fso.getScanStatus() == ScanStatus.FLAGGED || fso.getScanStatus() == ScanStatus.QUARANTINED)) {
+                throw new StorageObjectNotFoundException(key);
+            }
             transactionTemplate.execute(status -> {
                 StorageAccessEvent event = StorageAccessEvent.builder()
                     .key(key)
@@ -366,7 +374,15 @@ public class FileStorageService {
         }
     }
 
+    /**
+     * A URL for another user to load {@code storageKey}, or {@code null} when the object is withheld because it has
+     * no clean abuse-media verdict (S-18: pending, flagged or quarantined). Every cross-user read goes through here
+     * (see {@link #signDownload}), so this is the one place the scan verdict is enforced.
+     */
     public String signedDownloadUrl(String storageKey) {
+        if (!isServable(storageKey)) {
+            return null;
+        }
         PresignedGetObjectRequest presigned = s3Presigner.presignGetObject(
             GetObjectPresignRequest.builder()
                 .signatureDuration(Duration.ofSeconds(storageProperties.getPresignTtlSeconds()))
@@ -376,6 +392,9 @@ public class FileStorageService {
     }
 
     public String signedDownloadUrl(String storageKey, Duration duration) {
+        if (!isServable(storageKey)) {
+            return null;
+        }
         PresignedGetObjectRequest presigned = s3Presigner.presignGetObject(
             GetObjectPresignRequest.builder()
                 .signatureDuration(duration)
@@ -384,7 +403,32 @@ public class FileStorageService {
         return presigned.url().toString();
     }
 
+    /**
+     * Scanner-only: a short-lived URL that ignores the scan verdict, because the object being scanned has none
+     * yet. Never hand this to a user.
+     */
+    public String signedScanUrl(String storageKey) {
+        return presignGet(storageKey, Duration.ofSeconds(storageProperties.getPresignTtlSeconds()));
+    }
+
+    /** False for an object recorded as pending/flagged/quarantined; true for a clean one or one with no record. */
+    private boolean isServable(String storageKey) {
+        return fileStorageObjectRepository.findByKey(storageKey)
+            .map(fso -> fso.getScanStatus().isServable())
+            .orElse(true);
+    }
+
+    private String presignGet(String storageKey, Duration duration) {
+        return s3Presigner.presignGetObject(GetObjectPresignRequest.builder()
+            .signatureDuration(duration)
+            .getObjectRequest(r -> r.bucket(storageProperties.getBucket()).key(storageKey))
+            .build()).url().toString();
+    }
+
     public byte[] downloadBytes(String storageKey) {
+        if (!isServable(storageKey)) {
+            throw new RuntimeException("File is withheld pending an abuse-media verdict: " + storageKey);
+        }
         try {
             GetObjectRequest req = GetObjectRequest.builder()
                 .bucket(storageProperties.getBucket())
@@ -510,6 +554,7 @@ public class FileStorageService {
             .provider(storageProperties.getProvider())
             .bucket(storageProperties.getBucket())
             .uploadConfirmedAt(Instant.now())
+            .scanStatus(mediaScanPolicy.initialStatus(head.contentType()))
             .build();
 
         // saveAndFlush so a duplicate key surfaces here as DataIntegrityViolationException, not at commit.

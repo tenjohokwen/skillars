@@ -403,6 +403,9 @@ app:
       webhook-signing-secret: ${APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET:}
     moderation:
       sla-monitor-delay-ms: 300000
+      # S-18 (decision B): a video is shown to anyone but its uploader (and an admin) only once a REAL video scanner
+      # has passed it. The scanner is a stub today, so videos stay private. Flip to false only to bypass that gate.
+      requires-real-scanner: true
   payment:
     stripe:
       api-key: ${APP_PAYMENT_STRIPE_API_KEY:}
@@ -418,10 +421,17 @@ app:
 
 features:
   toggles:
-    arachnid-enabled: false
+    # S-18: ARACHNID_ENABLED turns on image abuse-media scanning (needs ARACHNID_API_KEY). A deployed (prod/uat)
+    # instance refuses to boot with it off unless ALLOW_UNSCANNED_MEDIA=true (DeployedMediaScanningValidator).
+    arachnid-enabled: ${ARACHNID_ENABLED:false}
     videointel-enabled: false
 
 infrastructure:
+  # S-18: pre-launch override for DeployedMediaScanningValidator. true lets a prod/uat instance boot with image
+  # scanning off / unconfigured (ERROR at boot + the skillars_media_scanning_unsafe gauge that Grafana alerts on).
+  # Never true once real users upload.
+  media-scanning:
+    allow-unscanned-media: ${ALLOW_UNSCANNED_MEDIA:false}
   arachnid:
     api-key: ${ARACHNID_API_KEY:}
     api-base-url: ${ARACHNID_API_BASE_URL:https://api.c3p.ca}

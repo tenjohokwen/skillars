@@ -415,6 +415,21 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 
 ---
 
+#### MediaScanningUnsafe
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** The gauge `skillars_media_scanning_unsafe` is above 0: a prod/uat instance booted with
+`ALLOW_UNSCANNED_MEDIA=true` while image scanning is off, `ARACHNID_API_KEY` is blank, or the video scanner toggle
+is on with the stub client (`DeployedMediaScanningValidator`). Uploaded images are not checked against Project
+Arachnid. Videos stay private to their uploader regardless.
+
+**Response:** Pre-launch this is expected and accepted; the alert is the reminder. Once real users upload, set
+`ARACHNID_ENABLED=true` and `ARACHNID_API_KEY`, remove `ALLOW_UNSCANNED_MEDIA`, and redeploy. The boot log carries
+`[MEDIA_SCANNING_UNSAFE]` with the exact list of overridden settings.
+
+---
+
 #### BookingPaymentSettleFailureRateHigh
 
 **Source:** `deploy/lgtm/grafana-alerts.yml` (notifies) and `deploy/lgtm/alerts.yml` (skillars-alerts)

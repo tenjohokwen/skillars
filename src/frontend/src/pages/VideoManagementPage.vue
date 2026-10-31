@@ -4,6 +4,12 @@
       <div class="text-h5">{{ t('video.management.title') }}</div>
     </div>
 
+    <!-- S-18: no video is shown to anyone but its uploader until a real video scanner has passed it. -->
+    <q-banner dense rounded class="q-mb-md" data-testid="video-review-notice">
+      <template #avatar><q-icon name="shield" /></template>
+      {{ t('video.management.reviewNotice') }}
+    </q-banner>
+
     <!-- Quota bar -->
     <QuotaUsageBar
       class="q-mb-lg"

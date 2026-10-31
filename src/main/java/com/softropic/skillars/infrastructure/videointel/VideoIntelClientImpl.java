@@ -3,10 +3,11 @@ package com.softropic.skillars.infrastructure.videointel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.client.RestTemplate;
 
-// CRITICAL: VideoIntelClientImpl is a fail-open stub — it returns clean for every video.
-// VIDEOINTEL_ENABLED feature flag defaults to false so it will be skipped in production.
-// Real implementation (Story 6.x) requires com.google.cloud:google-cloud-video-intelligence.
-// DANGER: enabling VIDEOINTEL_ENABLED=true with this stub means ALL videos pass Layer 2 silently.
+// CRITICAL: VideoIntelClientImpl is a STUB, not a scanner (S-18). It used to return "clean" for every video, so
+// enabling VIDEOINTEL_ENABLED silently waved everything through Layer 2. It now FAILS CLOSED: it throws, the
+// orchestrator records the layer FAILED, alerts an admin and leaves the video in SCANNING. It can never produce
+// an approving result, and isRealScanner() is false, so videos stay owner-only (VideoSharingPolicy).
+// Real implementation (decision C, still open) requires a real video scanner behind this interface.
 @Slf4j
 public class VideoIntelClientImpl implements VideoIntelClient {
 
@@ -22,7 +23,12 @@ public class VideoIntelClientImpl implements VideoIntelClient {
 
     @Override
     public VideoIntelScanResult detectExplicitContent(String videoUrl) {
-        log.warn("VideoIntelClientImpl is a stub — returning clean result for videoUrl={}", videoUrl);
-        return new VideoIntelScanResult(false, null, "stub-not-implemented");
+        log.warn("VideoIntelClientImpl is a stub — refusing to produce a verdict (fail closed)");
+        throw new VideoIntelException("Video scanner is not implemented; no verdict can be given", null);
+    }
+
+    @Override
+    public boolean isRealScanner() {
+        return false;
     }
 }
