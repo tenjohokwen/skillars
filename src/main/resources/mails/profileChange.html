@@ -14,6 +14,7 @@
         <p th:case="'PHONE_CHANGED'" th:text="#{email.profile_change.phone}">Your phone number has been updated.</p>
         <p th:case="'TWO_FACTOR_AUTH_ENABLED'" th:text="#{email.profile_change.2fa_enabled}">2FA has been enabled.</p>
         <p th:case="'TWO_FACTOR_AUTH_DISABLED'" th:text="#{email.profile_change.2fa_disabled}">2FA has been disabled.</p>
+        <p th:case="'PAYOUT_ACCOUNT_CHANGED'" th:text="#{email.profile_change.payout_account}">Your payout account has been changed.</p>
         <p th:case="*" th:text="#{email.profile_change.generic}">A change has been made to your profile.</p>
     </div>
 

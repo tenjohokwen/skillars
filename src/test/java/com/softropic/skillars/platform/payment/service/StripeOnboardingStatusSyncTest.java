@@ -55,7 +55,12 @@ class StripeOnboardingStatusSyncTest {
     void setUp() {
         clock = new MutableClock(NOW);
         service = new StripeOnboardingService(repository, new PaymentProperties(), stripeClient,
-            new CoachStripeAccountStatusApplier(eventPublisher), clock);
+            new CoachStripeAccountStatusApplier(eventPublisher), clock,
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.payment.repo.StripeOAuthStateRepository.class),
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.config.service.ConfigService.class),
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository.class),
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.security.repo.UserRepository.class),
+            eventPublisher);
         ReflectionTestUtils.setField(service, "self", service);
     }
 

@@ -54,6 +54,14 @@ public class CoachStripeAccount {
     @Column(name = "last_event_created_at")
     private Instant lastEventCreatedAt;
 
+    /**
+     * fix/security-payout-oauth-session-revocation (V216): set when the coach replaced an existing
+     * connected account with a different one; {@code CoachPayoutTransferHandler} defers transfers until
+     * this instant. Null for a first-time connection and once the cooling-off has been served.
+     */
+    @Column(name = "payout_hold_until")
+    private Instant payoutHoldUntil;
+
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 

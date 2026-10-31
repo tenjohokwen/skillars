@@ -5,6 +5,7 @@ import com.softropic.skillars.config.RecordedEvents;
 
 import com.softropic.skillars.platform.security.repo.Address;
 import com.softropic.skillars.platform.security.repo.Authority;
+import com.softropic.skillars.platform.security.repo.RefreshToken;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.contract.exception.ProfileActionException;
 import com.softropic.skillars.platform.security.contract.Principal;
@@ -24,6 +25,8 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.Set;
 
@@ -64,6 +67,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     void tearDown() {
         SecurityContextHolder.clearContext();
         transactionTemplate.execute(status -> {
+            jdbcTemplate.execute("DELETE FROM main.refresh_tokens");
             jdbcTemplate.execute("DELETE FROM main.sec");
             return null;
         });
@@ -129,6 +133,36 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
     void changePassword_wrongCurrentPassword_throwsProfileActionException() {
         assertThatThrownBy(() -> userProfileService.changePassword("wrongPassword", "NewSecureP@ss99!"))
                 .isInstanceOf(ProfileActionException.class);
+    }
+
+    @Test
+    void changePassword_revokesRefreshTokensAndInvalidatesSessions() {
+        Long userId = userRepository.findOneByLogin(LOGIN).orElseThrow().getId();
+        saveLiveRefreshToken(userId, "pwchange_token__________________________________________________");
+
+        userProfileService.changePassword(CORRECT_PW, "NewSecureP@ss99!");
+
+        assertThat(refreshTokenRepository.findByTokenHash("pwchange_token__________________________________________________").orElseThrow().isUsed()).isTrue();
+        assertThat(userRepository.findById(userId).orElseThrow().getSecuritySessionInvalidatedAt()).isNotNull();
+    }
+
+    @Test
+    void changePassword_wrongCurrentPassword_leavesSessionsAlone() {
+        Long userId = userRepository.findOneByLogin(LOGIN).orElseThrow().getId();
+        saveLiveRefreshToken(userId, "pwchange_rejected_token_________________________________________");
+
+        assertThatThrownBy(() -> userProfileService.changePassword("wrongPassword", "NewSecureP@ss99!"))
+                .isInstanceOf(ProfileActionException.class);
+
+        assertThat(refreshTokenRepository.findByTokenHash("pwchange_rejected_token_________________________________________").orElseThrow().isUsed()).isFalse();
+    }
+
+    private void saveLiveRefreshToken(Long userId, String hash) {
+        RefreshToken token = new RefreshToken();
+        token.setUserId(userId);
+        token.setTokenHash(hash);
+        token.setExpiresAt(Instant.now().plus(7, ChronoUnit.DAYS));
+        refreshTokenRepository.save(token);
     }
 
     // -------------------------------------------------------------------------

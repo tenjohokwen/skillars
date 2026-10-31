@@ -1,10 +1,18 @@
 package com.softropic.skillars.platform.payment.service;
 
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.config.PaymentProperties;
 import com.softropic.skillars.platform.payment.contract.CoachStripeStatusResponse;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccount;
 import com.softropic.skillars.platform.payment.repo.CoachStripeAccountRepository;
+import com.softropic.skillars.platform.payment.repo.StripeOAuthState;
+import com.softropic.skillars.platform.payment.repo.StripeOAuthStateRepository;
+import com.softropic.skillars.platform.security.contract.event.AccountChangeEvent;
+import com.softropic.skillars.platform.security.contract.event.AccountChangeUserInfo;
+import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Account;
 import com.stripe.model.oauth.TokenResponse;
@@ -12,17 +20,24 @@ import com.stripe.net.OAuth;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Base64;
 import java.util.HashMap;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -52,6 +67,11 @@ public class StripeOnboardingService {
      */
     static final Duration FETCH_SNAPSHOT_SKEW_ALLOWANCE = Duration.ofSeconds(30);
 
+    /** How long an onboarding link's OAuth {@code state} stays redeemable; Stripe's consent screen is interactive. */
+    static final Duration OAUTH_STATE_TTL = Duration.ofMinutes(10);
+
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     /** Bound on {@link #lastStatusSyncAttempt}; past it the map is cleared (it only rate-limits). */
     private static final int MAX_TRACKED_SYNC_ATTEMPTS = 10_000;
 
@@ -60,6 +80,11 @@ public class StripeOnboardingService {
     private final StripeClient stripeClient;
     private final CoachStripeAccountStatusApplier accountStatusApplier;
     private final Clock clock;
+    private final StripeOAuthStateRepository oauthStateRepository;
+    private final ConfigService configService;
+    private final CoachProfileRepository coachProfileRepository;
+    private final UserRepository userRepository;
+    private final ApplicationEventPublisher eventPublisher;
 
     private final Map<UUID, Instant> lastStatusSyncAttempt = new ConcurrentHashMap<>();
 
@@ -75,11 +100,46 @@ public class StripeOnboardingService {
             params.put("scope", "read_write");
             // oauthCallbackUrl points to the backend callback endpoint, not the frontend page
             params.put("redirect_uri", paymentProperties.getOauthCallbackUrl());
-            params.put("state", coachId.toString());
+            params.put("state", mintOAuthState(coachId));
             return OAuth.authorizeUrl(params, null);
         } catch (StripeException e) {
             log.error("[STRIPE_CALL_FAILED coachId={} errorMessage={}]", coachId, e.getMessage(), e);
             throw new PaymentGatewayException("payment.providerUnavailable", e);
+        }
+    }
+
+    /**
+     * fix/security-payout-oauth-session-revocation: the OAuth {@code state} is a random single-use nonce bound
+     * to this coach and valid for {@link #OAUTH_STATE_TTL}. It used to be the coach's own (public) id, so any
+     * logged-in coach could be lured into linking an attacker's Stripe account through a forged callback URL.
+     */
+    private String mintOAuthState(UUID coachId) {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        String nonce = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+        Instant now = clock.instant();
+        oauthStateRepository.purgeForCoachAndExpired(coachId, now);
+        oauthStateRepository.save(new StripeOAuthState(sha256Hex(nonce), coachId, now.plus(OAUTH_STATE_TTL), now));
+        return nonce;
+    }
+
+    /**
+     * True if {@code state} was minted for this coach, has not expired and had not been used; it is consumed
+     * by the call, so a replay returns false. The value is never logged.
+     */
+    public boolean consumeOAuthState(UUID coachId, String state) {
+        if (state == null || state.isBlank()) {
+            return false;
+        }
+        return oauthStateRepository.consume(sha256Hex(state), coachId, clock.instant()) == 1;
+    }
+
+    private static String sha256Hex(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 unavailable", e);
         }
     }
 
@@ -134,6 +194,9 @@ public class StripeOnboardingService {
     public void upsertCoachStripeAccount(UUID coachId, String stripeUserId, Instant connectedAt) {
         coachStripeAccountRepository.findById(coachId).ifPresentOrElse(
             existing -> {
+                if (!Objects.equals(existing.getStripeAccountId(), stripeUserId)) {
+                    holdAndNotifyOnDestinationChange(existing, stripeUserId, connectedAt);
+                }
                 existing.setStripeAccountId(stripeUserId);
                 existing.setOnboardingStatus("PENDING");
                 existing.setChargesEnabled(false);
@@ -151,6 +214,36 @@ public class StripeOnboardingService {
                 coachStripeAccountRepository.save(acct);
             }
         );
+    }
+
+    /**
+     * fix/security-payout-oauth-session-revocation: replacing an existing payout destination is the step an
+     * account takeover (or a lured OAuth link) needs, so transfers to the new account wait out a cooling-off
+     * ({@link ConfigBounds#PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS}, 72h) that CoachPayoutTransferHandler enforces at
+     * release time, and the coach is told by email. A first-time connection never reaches this. Re-authentication
+     * before the change is not part of this fix.
+     */
+    private void holdAndNotifyOnDestinationChange(CoachStripeAccount existing, String newStripeAccountId,
+                                                  Instant connectedAt) {
+        long holdHours = configService.getBoundedLong(ConfigBounds.PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS);
+        if (holdHours > 0) {
+            Instant holdUntil = connectedAt.plus(Duration.ofHours(holdHours));
+            // Never shorten a hold a previous change is still serving.
+            if (existing.getPayoutHoldUntil() == null || holdUntil.isAfter(existing.getPayoutHoldUntil())) {
+                existing.setPayoutHoldUntil(holdUntil);
+            }
+        }
+        log.warn("[STRIPE_PAYOUT_DESTINATION_CHANGED coachId={} newStripeAccountId={} holdHours={}]",
+            existing.getCoachId(), newStripeAccountId, holdHours);
+        coachProfileRepository.findById(existing.getCoachId())
+            .flatMap(coach -> userRepository.findOneById(coach.getUserId()))
+            .ifPresentOrElse(
+                user -> eventPublisher.publishEvent(new AccountChangeEvent(
+                    AccountChangeEvent.Action.PAYOUT_ACCOUNT_CHANGED, null, null,
+                    new AccountChangeUserInfo(user.getEmail(), user.getFirstName(), user.getLastName(),
+                        user.getLangKey(), user.getTitle(),
+                        user.getGender() != null ? user.getGender().name() : null))),
+                () -> log.warn("[STRIPE_PAYOUT_DESTINATION_CHANGED_NO_RECIPIENT coachId={}]", existing.getCoachId()));
     }
 
     /**

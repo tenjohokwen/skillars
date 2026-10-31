@@ -5,6 +5,7 @@ import com.softropic.skillars.infrastructure.util.RandomUtil;
 import com.softropic.skillars.platform.security.contract.SecurityProperties;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.contract.ChangePasswordDto;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
 import lombok.RequiredArgsConstructor;
@@ -13,6 +14,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Optional;
 
 /**
@@ -26,6 +28,7 @@ public class PasswordResetService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final SecurityProperties securityProperties;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     /**
      * Prepares a user account for password reset by generating a reset key.
@@ -63,6 +66,14 @@ public class PasswordResetService {
                 .map(user -> {
                     String encodedPassword = passwordEncoder.encode(newPassword);
                     user.completePasswordReset(encodedPassword); // Use domain method
+                    // A reset is the recovery path for a compromised credential: whoever held the old
+                    // password (or a session opened with it) must not stay signed in. Refresh tokens are
+                    // revoked REQUIRES_NEW on rows this transaction has not touched (no self-deadlock);
+                    // the session epoch joins this transaction (MANDATORY variant), because a REQUIRES_NEW
+                    // UPDATE of the user row would wait on this transaction's own pending write to it.
+                    refreshTokenRepository.markAllUsedByUserId(user.getId());
+                    userRepository.invalidateSessionsForUserInCurrentTransaction(
+                        user.getId(), Instant.now(ClockProvider.getClock()));
                     return user;
                 });
     }

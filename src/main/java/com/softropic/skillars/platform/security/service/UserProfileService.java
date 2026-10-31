@@ -11,7 +11,9 @@ import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.contract.exception.ProfileActionException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
+import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.UserRepository;
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.context.ApplicationEventPublisher;
@@ -20,6 +22,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Optional;
 
@@ -41,6 +44,7 @@ public class UserProfileService {
     private final SecurityUtil securityUtil;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher publisher;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     /**
      * Updates the current user's basic information (name and language preference).
@@ -164,7 +168,14 @@ public class UserProfileService {
                                 Map.of("login", user.getLogin()),
                                 SecurityError.EMAIL_OR_PW_MISMATCH);
                     }
+                    // Revoke every session, the caller's too: a stolen session must not survive the password
+                    // change, and re-minting the caller's own JWT here is not worth the extra surface, so the
+                    // SPA sends them back to sign in with the new password. Refresh tokens first (REQUIRES_NEW,
+                    // rows this transaction has not touched), then the session epoch inside this transaction.
+                    refreshTokenRepository.markAllUsedByUserId(user.getId());
                     user.setPassword(passwordEncoder.encode(newPassword));
+                    userRepository.invalidateSessionsForUserInCurrentTransaction(
+                        user.getId(), Instant.now(ClockProvider.getClock()));
                     log.debug("User profile updated",
                         kv("operation", "user_profile"),
                         kv("field", "password"),

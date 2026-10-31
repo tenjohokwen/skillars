@@ -65,9 +65,10 @@ public class StripeOnboardingResource {
             return;
         }
         UUID coachId = resolveCoachId();
-        // P18: Validate state param matches authenticated coach to prevent CSRF account-linking
-        if (state == null || !coachId.toString().equals(state)) {
-            log.warn("[STRIPE_OAUTH_STATE_MISMATCH coachId={} state={}]", coachId, state);
+        // P18: the state must be the single-use nonce minted for THIS coach's onboarding link (unexpired,
+        // not yet used), or a forged callback URL could link an attacker's Stripe account. Never logged.
+        if (!onboardingService.consumeOAuthState(coachId, state)) {
+            log.warn("[STRIPE_OAUTH_STATE_MISMATCH coachId={}]", coachId);
             response.sendRedirect(withStripeError("state_mismatch"));
             return;
         }
