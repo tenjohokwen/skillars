@@ -41,6 +41,8 @@ class StripePaymentGatewayTest {
     @Mock StripeCustomerRepository stripeCustomerRepository;
     @Mock ConfigService configService;
     @Mock StripeClient stripeClient;
+    @Mock com.softropic.skillars.platform.security.service.UserIdentitySignalService userIdentitySignalService;
+    @Mock com.softropic.skillars.platform.security.repo.UserRepository userRepository;
 
     @InjectMocks StripePaymentGateway stripePaymentGateway;
 
@@ -99,6 +101,51 @@ class StripePaymentGatewayTest {
 
         org.mockito.Mockito.verify(stripeClient)
             .createPaymentIntent(any(PaymentIntentCreateParams.class), org.mockito.ArgumentMatchers.eq("pack-1001-attempt-a"));
+    }
+
+    /** feat/security-s06-related-party: the charge's card fingerprint (expanded latest_charge) becomes an identity signal. */
+    @Test
+    void chargeAndCapture_recordsTheChargedCardFingerprint_andTagsThePayerForRadar() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        com.stripe.model.Charge.PaymentMethodDetails.Card card = new com.stripe.model.Charge.PaymentMethodDetails.Card();
+        card.setFingerprint("fp_charged");
+        com.stripe.model.Charge.PaymentMethodDetails details = new com.stripe.model.Charge.PaymentMethodDetails();
+        details.setCard(card);
+        com.stripe.model.Charge charge = new com.stripe.model.Charge();
+        charge.setPaymentMethodDetails(details);
+        PaymentIntent intent = mockIntent("pi_fp");
+        intent.setLatestChargeObject(charge);
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class))).thenReturn(intent);
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "key-fp");
+
+        org.mockito.Mockito.verify(userIdentitySignalService).recordCardFingerprint(1001L, "fp_charged");
+        ArgumentCaptor<PaymentIntentCreateParams> params = ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient).createPaymentIntent(params.capture(), any(String.class));
+        assertThat(params.getValue().getExpand()).contains("latest_charge");
+        assertThat(params.getValue().getMetadata()).containsEntry("payerUserId", "1001");
+    }
+
+    /** A signal that cannot be recorded never undoes a captured charge. */
+    @Test
+    void chargeAndCapture_fingerprintRecordingFails_stillReturnsTheCapturedIntent() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        com.stripe.model.Charge.PaymentMethodDetails.Card card = new com.stripe.model.Charge.PaymentMethodDetails.Card();
+        card.setFingerprint("fp_charged");
+        com.stripe.model.Charge.PaymentMethodDetails details = new com.stripe.model.Charge.PaymentMethodDetails();
+        details.setCard(card);
+        com.stripe.model.Charge charge = new com.stripe.model.Charge();
+        charge.setPaymentMethodDetails(details);
+        PaymentIntent intent = mockIntent("pi_fp2");
+        intent.setLatestChargeObject(charge);
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class))).thenReturn(intent);
+        org.mockito.Mockito.doThrow(new IllegalStateException("db")).when(userIdentitySignalService)
+            .recordCardFingerprint(any(), any());
+
+        assertThat(stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "key-fp2"))
+            .isEqualTo("pi_fp2");
     }
 
     /**
@@ -620,6 +667,38 @@ class StripePaymentGatewayTest {
                 e -> assertThat(e.isRetryable()).isTrue());
         org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
             .createTransfer(any(com.stripe.param.TransferCreateParams.class), any(String.class));
+    }
+
+    @Test
+    void createStripeCustomer_sendsTheUsersEmailForRadar() throws StripeException {
+        var user = new com.softropic.skillars.platform.security.repo.User();
+        user.setEmail("parent@example.com");
+        when(userRepository.findOneById(1001L)).thenReturn(java.util.Optional.of(user));
+        Customer customer = new Customer();
+        customer.setId("cus_new");
+        when(stripeClient.createCustomer(any(CustomerCreateParams.class))).thenReturn(customer);
+
+        stripePaymentGateway.createStripeCustomer(1001L);
+
+        ArgumentCaptor<CustomerCreateParams> paramsCaptor = ArgumentCaptor.forClass(CustomerCreateParams.class);
+        org.mockito.Mockito.verify(stripeClient).createCustomer(paramsCaptor.capture());
+        assertThat(paramsCaptor.getValue().getEmail()).isEqualTo("parent@example.com");
+        assertThat(paramsCaptor.getValue().getName()).isNull();
+        assertThat(paramsCaptor.getValue().getPhone()).isNull();
+    }
+
+    @Test
+    void cardFingerprint_returnsTheSavedCardsFingerprint_orEmptyWhenStripeFails() throws StripeException {
+        com.stripe.model.PaymentMethod.Card card = new com.stripe.model.PaymentMethod.Card();
+        card.setFingerprint("fp_card_1");
+        com.stripe.model.PaymentMethod method = new com.stripe.model.PaymentMethod();
+        method.setCard(card);
+        when(stripeClient.retrievePaymentMethod("pm_1")).thenReturn(method);
+        when(stripeClient.retrievePaymentMethod("pm_2")).thenThrow(new com.stripe.exception.ApiConnectionException("down"));
+
+        assertThat(stripePaymentGateway.cardFingerprint("pm_1")).contains("fp_card_1");
+        assertThat(stripePaymentGateway.cardFingerprint("pm_2")).isEmpty();
+        assertThat(stripePaymentGateway.cardFingerprint(" ")).isEmpty();
     }
 
     @Test

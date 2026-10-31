@@ -288,6 +288,18 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (72); 0 → a replaced payout destination is paid at once", 72L);
 
     /**
+     * feat/security-s06-related-party: {@code RelatedPartyService} — the payout of a booking whose payer is linked to the
+     * booked coach (same card fingerprint, browser fingerprint, normalised email or phone) is held this many days;
+     * the later of this and the normal / new-coach / account-change hold applies
+     * ({@code CoachPayoutOutboxSupport.enqueuePayout}, {@code CoachPayoutTransferHandler}). Long on purpose — it outlasts
+     * the card-chargeback window, so a colluding coach cannot cash out before the issuer takes the money back.
+     */
+    public static final BoundedKey PAYOUT_RELATED_PARTY_HOLD_DAYS =
+        new BoundedKey("payment.payout.relatedParty.holdDays", 7L, 120L, false,
+            "out-of-range falls back to the coded default (60); tiny → a related-party payout is released inside the chargeback window",
+            60L);
+
+    /**
      * fix/audit3-completion-dispute-integrity: {@code BookingCompletionService.endSession} — a live session
      * (Start pressed) ended in under this percentage of its booked length is not a LIVE completion: it waits
      * for the family's confirmation, which they may dispute, like a Quick Complete. Before this a coach could
@@ -694,7 +706,8 @@ public final class ConfigBounds {
         PAYOUT_NEW_COACH_RELEASED_COUNT.key(),
         PAYOUT_NEW_COACH_MIN_RELEASED_NET.key(),
         PAYOUT_NEW_COACH_HOLD_HOURS.key(),
-        PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS.key());
+        PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS.key(),
+        PAYOUT_RELATED_PARTY_HOLD_DAYS.key());
 
     /** Every bound above, plus the generated per-tier / per-type keys. */
     public static final List<BoundedKey> ALL;
@@ -755,7 +768,8 @@ public final class ConfigBounds {
             PAYOUT_NEW_COACH_RELEASED_COUNT,
             PAYOUT_NEW_COACH_MIN_RELEASED_NET,
             PAYOUT_NEW_COACH_HOLD_HOURS,
-            PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS));
+            PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS,
+            PAYOUT_RELATED_PARTY_HOLD_DAYS));
 
         for (String tier : VIDEO_QUOTA_TIER_SEGMENTS) {
             // Scout is seeded storageBytes = 0 deliberately ("0 = no upload", V53), so the floor is

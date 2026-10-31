@@ -14,6 +14,7 @@ import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -73,23 +74,35 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
     @Query("SELECT r.authorId, r.coachId FROM CoachReview r WHERE r.reviewId = :reviewId")
     List<Object[]> findAuthorAndCoachIdByReviewId(@Param("reviewId") UUID reviewId);
 
-    long countByCoachIdAndModerationStatus(UUID coachId, ReviewModerationStatus status);
+    // feat/security-s06-related-party: every read that publishes or counts a review excludes related_party rows (a
+    // review by a payer linked to the coach — stored so it cannot be resubmitted, never shown, never counted).
+    @Query("SELECT COUNT(r) FROM CoachReview r " +
+           "WHERE r.coachId = :coachId AND r.moderationStatus = :status AND r.relatedParty = false")
+    long countByCoachIdAndModerationStatus(@Param("coachId") UUID coachId,
+                                           @Param("status") ReviewModerationStatus status);
 
     @Query("SELECT AVG(r.rating) FROM CoachReview r " +
-           "WHERE r.coachId = :coachId AND r.moderationStatus = :status")
+           "WHERE r.coachId = :coachId AND r.moderationStatus = :status AND r.relatedParty = false")
     Double computeAverageRating(@Param("coachId") UUID coachId,
                                 @Param("status") ReviewModerationStatus status);
 
     // Single atomic query — eliminates TOCTOU race between count and avg reads
     @Query("SELECT COUNT(r), AVG(r.rating) FROM CoachReview r " +
-           "WHERE r.coachId = :coachId AND r.moderationStatus = :status")
+           "WHERE r.coachId = :coachId AND r.moderationStatus = :status AND r.relatedParty = false")
     List<Object[]> computeAggregates(@Param("coachId") UUID coachId,
                                     @Param("status") ReviewModerationStatus status);
 
+    @Query(value = "SELECT r FROM CoachReview r WHERE r.coachId = :coachId AND r.moderationStatus = :status "
+                   + "AND r.relatedParty = false",
+           countQuery = "SELECT COUNT(r) FROM CoachReview r WHERE r.coachId = :coachId "
+                   + "AND r.moderationStatus = :status AND r.relatedParty = false")
     Page<CoachReview> findByCoachIdAndModerationStatus(
-        UUID coachId, ReviewModerationStatus status, Pageable pageable);
+        @Param("coachId") UUID coachId, @Param("status") ReviewModerationStatus status, Pageable pageable);
 
-    Page<CoachReview> findByCoachId(UUID coachId, Pageable pageable);
+    // The coach's own list: related-party reviews are not shown to the coach either.
+    @Query(value = "SELECT r FROM CoachReview r WHERE r.coachId = :coachId AND r.relatedParty = false",
+           countQuery = "SELECT COUNT(r) FROM CoachReview r WHERE r.coachId = :coachId AND r.relatedParty = false")
+    Page<CoachReview> findByCoachId(@Param("coachId") UUID coachId, Pageable pageable);
 
     Optional<CoachReview> findByAuthorIdAndCoachId(Long authorId, UUID coachId);
 
@@ -126,6 +139,16 @@ public interface CoachReviewRepository extends JpaRepository<CoachReview, UUID> 
         ReviewModerationStatus status, Pageable pageable);
 
     List<CoachReview> findAllByAuthorId(Long authorId);
+
+    /**
+     * feat/security-s06-related-party: marks every not-yet-marked review of this coach by any of these authors as
+     * related-party. Idempotent (already-marked rows are skipped), so the return value says whether an aggregate has
+     * to be recomputed.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE CoachReview r SET r.relatedParty = true "
+           + "WHERE r.coachId = :coachId AND r.authorId IN :authorIds AND r.relatedParty = false")
+    int markRelatedParty(@Param("coachId") UUID coachId, @Param("authorIds") Collection<Long> authorIds);
 
     @Modifying
     @Query("DELETE FROM CoachReview r WHERE r.authorId = :authorId AND r.moderationStatus <> :approved")

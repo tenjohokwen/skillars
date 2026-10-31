@@ -36,10 +36,12 @@ public interface CoachPayoutRepository extends JpaRepository<CoachPayout, UUID> 
      * payout hold — status {@code RELEASED} only (a reversed payout does not count; served by the partial index
      * {@code idx_coach_payouts_coach_released}) and only those whose net the coach kept (net − reversed) is at
      * least {@code minNet}, so a handful of tiny sessions cannot clear the threshold. Fewer than
-     * {@code payment.payout.newCoach.releasedCount} makes the coach "new".
+     * {@code payment.payout.newCoach.releasedCount} makes the coach "new". feat/security-s06-related-party: a payout for a
+     * related-party booking (payer linked to the coach) never counts, so colluding sessions cannot end the hold.
      */
     @Query("SELECT COUNT(p) FROM CoachPayout p WHERE p.coachId = :coachId AND p.status = 'RELEASED' "
-        + "AND (p.netAmount - p.reversedAmount) >= :minNet")
+        + "AND (p.netAmount - p.reversedAmount) >= :minNet "
+        + "AND NOT EXISTS (SELECT 1 FROM RelatedPartyBooking r WHERE r.bookingId = p.bookingId)")
     long countQualifyingReleasedByCoach(@Param("coachId") UUID coachId, @Param("minNet") BigDecimal minNet);
 
     /**

@@ -138,7 +138,7 @@
         <code>booking.unresolvedSession.graceMinutes</code> (120), <code>booking.live.minDurationPercent</code> (50, range 0–100),
         <code>disputes.maxPerBookingPerRaiser</code> (2, range 1–100), <code>coach.excusedCancellations.maxPerWindow</code> (3) /
         <code>windowDays</code> (90), <code>booking.request.maxPendingPerCoach</code> (10) and <code>booking.request.maxHorizonDays</code> (120), and the new-coach
-        payout hold <code>payment.payout.newCoach.releasedCount</code> (5) / <code>minReleasedNet</code> (20) / <code>holdHours</code> (168)) plus generated
+        payout hold <code>payment.payout.newCoach.releasedCount</code> (5) / <code>minReleasedNet</code> (20) / <code>holdHours</code> (168), and <code>payment.payout.relatedParty.holdDays</code> (60, 7–120)) plus generated
         <code>video.quota.&lt;tier&gt;.*</code> and <code>video.&lt;type&gt;.*</code> keys. <code>ALL</code> is the full list;
         <code>HAS_CODE_DEFAULT</code> (40 keys) marks keys whose call site has a code default. Also holds
         <code>MIN_REVIEW_ELIGIBILITY_WINDOW_GAP_DAYS</code> (7), the one definition of the review-window gap.
@@ -334,7 +334,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

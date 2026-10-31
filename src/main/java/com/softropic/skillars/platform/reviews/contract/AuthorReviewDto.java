@@ -12,5 +12,8 @@ public record AuthorReviewDto(
     String coachResponseBody,
     Instant coachResponseAt,
     Instant createdAt,
-    Instant lastModifiedAt
+    Instant lastModifiedAt,
+    // feat/security-s06-related-party: true when this review is not published or counted because the author's account
+    // appears related to the coach. A flag only — never which signal matched.
+    boolean relatedPartyHidden
 ) {}

@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.payment.contract.StripeIdFormat;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.PaymentMethod;
+import com.softropic.skillars.platform.security.service.UserIdentitySignalService;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackTier;
@@ -66,6 +67,7 @@ public class SessionPackPaymentService {
     private final RefundReconciliationService refundReconciliationService;
     private final ConfigService configService;
     private final SubscriptionService subscriptionService;
+    private final UserIdentitySignalService userIdentitySignalService;
 
     /**
      * Purchase a session pack for a player.
@@ -370,6 +372,20 @@ public class SessionPackPaymentService {
         } catch (StripeException e) {
             log.warn("Failed to retrieve saved payment method from Stripe: parentId={}", parentId, e);
             return new SavedPaymentMethodResponse(true, null, null, null, null);
+        }
+    }
+
+    /**
+     * feat/security-s06-related-party: keeps the card fingerprint of a just-saved payment method as a hashed identity
+     * signal of the user, so a coach saving the same physical card as a second account is linked before any charge.
+     * Not {@code @Transactional} (one Stripe round-trip, then one upsert) and best-effort: never fails the card save.
+     */
+    public void recordCardFingerprint(Long userId, String paymentMethodId) {
+        try {
+            paymentGateway.cardFingerprint(paymentMethodId)
+                .ifPresent(fingerprint -> userIdentitySignalService.recordCardFingerprint(userId, fingerprint));
+        } catch (RuntimeException e) {
+            log.warn("[CARD_FINGERPRINT_RECORD_FAILED] userId={} error={}", userId, e.getClass().getSimpleName());
         }
     }
 

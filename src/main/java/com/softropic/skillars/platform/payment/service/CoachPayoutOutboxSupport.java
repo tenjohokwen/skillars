@@ -80,6 +80,7 @@ public class CoachPayoutOutboxSupport {
     private final ConfigService configService;
     private final ObjectMapper objectMapper;
     private final ChargeDisputeRepository chargeDisputeRepository;
+    private final RelatedPartyService relatedPartyService;
 
     /**
      * AC3.2 / AC4.1: insert the {@code coach_payouts} row {@code PENDING_RELEASE} and enqueue a
@@ -207,6 +208,12 @@ public class CoachPayoutOutboxSupport {
         // fix/audit3-wallet-cashout-integrity: a new coach's payout is held longer (see resolveHold).
         PayoutHold hold = resolveHold(configService, coachPayoutRepository, coachId);
         Instant releaseAfter = Instant.now().plus(Duration.ofHours(hold.appliedHoldHours()));
+        // feat/security-s06-related-party: re-evaluated here, before the payout is scheduled; a related-party booking
+        // is held payment.payout.relatedParty.holdDays — the later of that and the hold above wins.
+        Instant relatedPartyHold = relatedPartyService.holdPayoutUntil(bookingId);
+        if (relatedPartyHold != null && relatedPartyHold.isAfter(releaseAfter)) {
+            releaseAfter = relatedPartyHold;
+        }
 
         CoachPayout row = newRow(bookingId, coachId, currency, gross, commission, net, releaseAfter);
         row.setSessionPackPurchaseId(packId);

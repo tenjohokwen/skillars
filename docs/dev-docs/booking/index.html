@@ -543,6 +543,11 @@ sequenceDiagram
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>
     <div class="callout">
+      <p><strong>A coach cannot book their own sessions.</strong> <code>BookingService.requireNotSelfBooking</code> (single and batch create) refuses a
+      booker whose user id is the coach's with <code>BookingError.SELF_BOOKING_NOT_ALLOWED</code> (<code>booking.selfBookingNotAllowed</code>). A <em>second</em> account of the
+      coach is not refused: <code>RelatedPartyService</code> flags the booking when its payer shares an email, phone, card or browser fingerprint with the coach, holds the
+      payout and hides the payer's review (see <a href="../payment/index.html#related-party-bookings-coach-colluding-with-a-second-account">Payment</a>). Booking creation also records the booker's
+      browser fingerprint as one of those signals.</p>
       <p><strong>Status changes go through <code>BookingService.transition()</code>.</strong> It locks the booking row
       (<code>findByIdForUpdate</code>, NO_WAIT + retry, then refresh), validates the actor against <code>EVENT_ROLES</code>,
       validates the transition with <code>BookingStateMachine</code>, saves, and publishes <code>BookingStatusChangedEvent</code>.
@@ -669,7 +674,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>4db90562</code> (2026-10-29).</footer>
+    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

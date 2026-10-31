@@ -56,6 +56,7 @@ class CoachPayoutOutboxSupportTest {
     @Mock SessionPackPurchaseRepository sessionPackPurchaseRepository;
     @Mock CoachPayoutFreezeRepository coachPayoutFreezeRepository;
     @Mock PessimisticLockRetryer lockRetryer;
+    @Mock RelatedPartyService relatedPartyService;
     @Mock com.softropic.skillars.platform.payment.repo.ChargeDisputeRepository chargeDisputeRepository;
 
     private CoachPayoutOutboxSupport support;
@@ -66,7 +67,7 @@ class CoachPayoutOutboxSupportTest {
     void setUp() {
         support = new CoachPayoutOutboxSupport(coachPayoutRepository, bookingPaymentRepository, bookingRepository,
             sessionPackPurchaseRepository, coachPayoutFreezeRepository, lockRetryer,
-            coachStripeAccountRepository, outboxService, configService, new ObjectMapper(), chargeDisputeRepository);
+            coachStripeAccountRepository, outboxService, configService, new ObjectMapper(), chargeDisputeRepository, relatedPartyService);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((Supplier<?>) inv.getArgument(1)).get());
         lenient().when(bookingRepository.findById(any())).thenReturn(Optional.empty());
@@ -472,6 +473,31 @@ class CoachPayoutOutboxSupportTest {
         assertThat(row.getReleaseAfter()).isAfter(Instant.now().plusSeconds(167 * 3600));
         verify(outboxService).enqueue(eq(CoachPayoutOutboxSupport.AGGREGATE_TYPE_TRANSFER), any(),
             eq(row.getReleaseAfter()));
+    }
+
+    @Test
+    void relatedPartyBooking_isHeldTheLongerRelatedPartyHold_theLaterHoldWins() {
+        newCoachRule(5L, 168L);
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        Instant sixtyDays = Instant.now().plus(java.time.Duration.ofDays(60));
+        when(relatedPartyService.holdPayoutUntil(bookingId)).thenReturn(sixtyDays);
+
+        support.enqueuePayout(bookingId, coachId);
+
+        CoachPayout row = captureSavedRow();
+        assertThat(row.getReleaseAfter()).isEqualTo(sixtyDays);
+        verify(outboxService).enqueue(eq(CoachPayoutOutboxSupport.AGGREGATE_TYPE_TRANSFER), any(), eq(sixtyDays));
+    }
+
+    @Test
+    void relatedPartyHoldShorterThanTheNewCoachHold_doesNotShortenIt() {
+        newCoachRule(0L, 168L);
+        when(bookingPaymentRepository.findById(bookingId)).thenReturn(Optional.of(bp("50.00", "0.10")));
+        when(relatedPartyService.holdPayoutUntil(bookingId)).thenReturn(Instant.now().plusSeconds(3600));
+
+        support.enqueuePayout(bookingId, coachId);
+
+        assertThat(captureSavedRow().getReleaseAfter()).isAfter(Instant.now().plusSeconds(167 * 3600));
     }
 
     @Test

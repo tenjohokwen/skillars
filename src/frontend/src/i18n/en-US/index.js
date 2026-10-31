@@ -454,6 +454,8 @@ export default {
     loadMore: 'Load more reviews',
     pendingModeration: "Your review is awaiting moderation and isn't publicly visible yet.",
     blocked: 'Your review was removed by moderation.',
+    relatedPartyHidden:
+      'Reviews from accounts that appear to be related to the coach are not published or counted.',
     coachResponseLabel: "Coach's response",
     noQualifyingSession:
       'You need a completed session with this coach that is old enough to qualify. To edit an existing review, you also need a new session since you last wrote it.',
@@ -2086,6 +2088,7 @@ export default {
       tooManyPendingRequests:
         'You already have the maximum number of requests waiting for this coach. Wait for an answer or withdraw one first.',
       beyondBookingHorizon: 'That date is too far ahead to book yet. Pick an earlier date.',
+      selfBookingNotAllowed: 'You cannot book your own sessions.',
       slotNotOnGrid:
         'That start time is not one of the coach’s bookable slots. Refresh and pick a slot from the list.',
       batchNoneAccepted: 'None of the sessions in this request could be accepted.',

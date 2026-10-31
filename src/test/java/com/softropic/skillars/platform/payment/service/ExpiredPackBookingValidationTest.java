@@ -92,6 +92,7 @@ class ExpiredPackBookingValidationTest {
     // B2: createBookingRequest checks the player-erasure tombstone under the player row lock.
     @Mock com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard developmentDataErasureGuard;
 
+    @Mock com.softropic.skillars.platform.security.service.UserIdentitySignalService userIdentitySignalService;
     @InjectMocks BookingService bookingService;
 
     private static final Long PARENT_ID = 8001L;

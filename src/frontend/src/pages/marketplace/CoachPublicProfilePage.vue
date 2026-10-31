@@ -184,6 +184,15 @@
             >
               {{ t('reviews.pendingModeration') }}
             </div>
+            <!-- S-06: the review is stored but not published or counted; the reason is generic on purpose. -->
+            <div
+              v-if="myReview.relatedPartyHidden"
+              class="text-caption q-mb-sm"
+              style="color: var(--text-secondary)"
+              data-testid="review-related-party-hidden"
+            >
+              {{ t('reviews.relatedPartyHidden') }}
+            </div>
             <div
               v-if="myReview.moderationStatus === 'BLOCKED'"
               class="text-caption text-negative q-mb-sm"

@@ -732,6 +732,7 @@ export default {
         'Sie haben bereits die maximale Anzahl offener Anfragen bei diesem Trainer. Warten Sie auf eine Antwort oder ziehen Sie eine Anfrage zurück.',
       beyondBookingHorizon:
         'Dieses Datum liegt zu weit in der Zukunft. Bitte wählen Sie ein früheres Datum.',
+      selfBookingNotAllowed: 'Sie können Ihre eigenen Sitzungen nicht buchen.',
       slotNotOnGrid:
         'Diese Startzeit ist keiner der buchbaren Termine des Trainers. Bitte aktualisieren und einen Termin aus der Liste wählen.',
       batchNoneAccepted: 'Keine der Sitzungen in dieser Anfrage konnte angenommen werden.',
@@ -971,6 +972,8 @@ export default {
     loadMore: 'Weitere Bewertungen laden',
     pendingModeration: 'Ihre Bewertung wird geprüft und ist noch nicht öffentlich sichtbar.',
     blocked: 'Ihre Bewertung wurde durch die Moderation entfernt.',
+    relatedPartyHidden:
+      'Bewertungen von Konten, die mit dem Trainer in Verbindung zu stehen scheinen, werden weder veröffentlicht noch gezählt.',
     coachResponseLabel: 'Antwort des Trainers',
     noQualifyingSession:
       'Sie benötigen eine abgeschlossene Einheit mit diesem Trainer, die lange genug zurückliegt. Um eine bestehende Bewertung zu bearbeiten, benötigen Sie zusätzlich eine neue Einheit seit Ihrer letzten Bewertung.',

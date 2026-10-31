@@ -52,6 +52,7 @@ class AuthServiceTest {
     @Mock private ConfigService configService;
     @Mock private LoginTokenManager loginTokenManager;
     @Mock private SecurityUtil securityUtil;
+    @Mock private UserIdentitySignalService userIdentitySignalService;
 
     private AuthService authService;
     private MockHttpServletRequest request;
@@ -61,7 +62,7 @@ class AuthServiceTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         authService = new AuthService(userRepository, passwordEncoder, refreshTokenRepository,
-            loginRateLimiter, configService, loginTokenManager, securityUtil);
+            loginRateLimiter, configService, loginTokenManager, securityUtil, userIdentitySignalService);
         request = new MockHttpServletRequest();
         request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
         response = new MockHttpServletResponse();

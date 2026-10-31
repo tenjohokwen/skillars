@@ -682,6 +682,8 @@ async function submit() {
       // or booking re-anchored the grid since this view loaded) — refetch, like availabilityChanged.
       $q.notify({ type: 'negative', message: t('booking.errors.slotNotOnGrid') })
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
+    } else if (errorKey === 'booking.selfBookingNotAllowed') {
+      $q.notify({ type: 'negative', message: t('booking.errors.selfBookingNotAllowed') })
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ type: 'negative', message: t('booking.errors.sessionCrossesMidnight') })
     } else if (errorKey === 'booking.playerNotBookable') {
@@ -780,6 +782,8 @@ async function submitBatchRequest() {
     } else if (errorKey === 'booking.slotNotOnGrid') {
       $q.notify({ type: 'negative', message: t('booking.errors.slotNotOnGrid') })
       await bookingStore.loadAvailability(coachId, bookingStore.weekStart)
+    } else if (errorKey === 'booking.selfBookingNotAllowed') {
+      $q.notify({ message: t('booking.errors.selfBookingNotAllowed'), type: 'negative' })
     } else if (errorKey === 'booking.sessionCrossesMidnight') {
       $q.notify({ message: t('booking.errors.sessionCrossesMidnight'), type: 'negative' })
     } else if (errorKey === 'booking.slotUnavailable') {

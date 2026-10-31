@@ -65,6 +65,7 @@ class ReviewSubmissionServiceTest {
     // which is what would call these — never runs); present only so @InjectMocks has non-null values.
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private DisputeRepository disputeRepository;
+    @Mock private com.softropic.skillars.platform.payment.contract.RelatedPartyQuery relatedPartyQuery;
 
     @InjectMocks
     private ReviewSubmissionService service;

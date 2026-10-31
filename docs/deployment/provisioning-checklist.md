@@ -560,6 +560,14 @@ SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
 
+**V220: related-party signals and review flag** (`V220__related_party_signals_and_review_flag.sql`).
+Additive only: two new empty tables, `main.user_identity_signals` (hashed email / phone / card / browser
+fingerprints per user; a unique index and `idx_uis_kind_hash`) and `payment.related_party_bookings` (PK
+`booking_id`), plus `reviews.coach_reviews.related_party boolean NOT NULL DEFAULT false` (constant default, a
+catalog-only change on PG 11+). `lock_timeout = 5s`. Nothing to check before it runs and no backfill: signals
+accumulate from the first login / card save / charge after the deploy, so a coach and a second account are
+only linked once both have logged in (or paid) after it. No new env var, job or webhook event.
+
 **V219: coach start reminders + repeat-claimant alert** (`V219__coach_start_reminders_and_repeat_claim_alert.sql`).
 Two nullable `booking.bookings` columns (`coach_start_reminder_sent_at`, `coach_late_start_reminder_sent_at`), a
 small partial index `idx_bkg_no_show_claim_payer` on `(parent_id, coach_no_show_claimed_at)` for claimed bookings
@@ -898,6 +906,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `payment.payout.newCoach.minReleasedNet` | 20 (code default, range 0–10000, whole units of `platform.payment.currency`) | `ConfigBounds` | Keep **(confirm)**. Only RELEASED payouts the coach kept at least this much of count toward `releasedCount`, so tiny sessions cannot end the new-coach hold. 0 = all count |
 | `payment.payout.newCoach.holdHours` | 168 (code default, range 0–336) | `ConfigBounds` | Keep **(confirm)**. Payout hold for a new coach (never shorter than `payment.payout.hold_hours`); sized against the card-chargeback window |
 | `payment.payout.accountChange.holdHours` | 72 (code default, range 0-336) | `ConfigBounds` | Keep **(confirm)**. Cooling-off during which transfers to a coach's NEW Stripe account are held after they replaced an existing connected account with a different one (V216 `payout_hold_until`); the coach is emailed. A first-time connection is never delayed. 0 = no hold (the email is still sent) |
+| `payment.payout.relatedParty.holdDays` | 60 (code default, range 7–120) | `ConfigBounds`, V219 | Keep **(confirm)**. Days a payout is held when the booking's payer is linked to the booked coach (same card fingerprint, browser fingerprint, normalised email or phone; `RelatedPartyService`). The later of this and the normal / new-coach / account-change hold applies. Sized past the card-chargeback window |
 | `payment.payout.stale_alert_days` | 14 (seed; code default 14, range 1–365) | V199, `StalePayoutAlertScheduler` | Keep. Days a payout may sit FROZEN/HOLD unchanged before a `PAYOUT_HELD` admin alert |
 | `platform.commission.rate` | 0.08 | V139 | Set to the agreed rate. The only commission key since V211 (`fix/prod-readiness-gaps` deleted the duplicate `platform.commission_rate`; `ProjectedRevenueService` now reads this one too) |
 | `payment.stripe.feeRate` / `feeFixed` | 0.025 / 0.25 | V139 | Match the Stripe contract **(confirm)** |
@@ -1187,3 +1196,12 @@ an operator must now do.
   section 7. New admin alert type `REPEAT_NO_SHOW_CLAIMANT` (informational; an admin only marks it handled) and new
   email template `COACH_START_REMINDER` (CHECK widened in V219; four message bundles, Thymeleaf file
   `coachStartReminder.html`). Run the V219 backlog query in [3.2](#32-pre-migration-data-checks) before deploying.
+- 2026-10-31: feat/security-s06-related-party (S-06, V220, additive). A booking whose payer is linked to the booked
+  coach (shared Stripe card fingerprint, browser fingerprint, normalised email or phone) is flagged automatically at
+  payment confirmation and again before the payout is scheduled: payout held `payment.payout.relatedParty.holdDays`
+  (default 60, section 7), the payout stops counting toward ending the new-coach hold, and the payer's review of that
+  coach is stored hidden and left out of the rating. A coach can no longer book their own sessions
+  (`booking.selfBookingNotAllowed`, new i18n key in all three frontend bundles). Stripe: new PaymentIntents expand
+  `latest_charge` and carry `payerUserId` in metadata; new Stripe Customers carry the user's email. Radar rules to
+  review in the Stripe dashboard are listed in the PR description. Watch the counter
+  `skillars.payment.related_party.flagged` and the log `[RELATED_PARTY_FLAGGED]`. No new env var, job or webhook event.

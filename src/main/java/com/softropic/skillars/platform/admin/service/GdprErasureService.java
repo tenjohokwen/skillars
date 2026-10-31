@@ -37,6 +37,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.messaging.repo.MessageRepository;
 import com.softropic.skillars.platform.reviews.repo.CoachReviewRepository;
 import com.softropic.skillars.platform.reviews.contract.ReviewModerationStatus;
+import com.softropic.skillars.platform.security.service.UserIdentitySignalService;
 import com.softropic.skillars.platform.security.contract.AccountRole;
 import com.softropic.skillars.platform.security.contract.SkillarsRole;
 import com.softropic.skillars.platform.security.contract.event.AccountDeletionRequestedEvent;
@@ -100,6 +101,7 @@ public class GdprErasureService {
     private final CoachAvailabilityBlockRepository coachAvailabilityBlockRepository;
     private final MessageRepository messageRepository;
     private final CoachReviewRepository coachReviewRepository;
+    private final UserIdentitySignalService userIdentitySignalService;
     private final SluRepository sluRepository;
     private final SluWeeklySnapshotRepository sluWeeklySnapshotRepository;
     private final PlayerSluWeeklySnapshotAppliedRepository playerSluWeeklySnapshotAppliedRepository;
@@ -420,6 +422,10 @@ public class GdprErasureService {
         user.setLocked(true);
         user.getPersistentTokens().clear();
         userRepository.save(user);
+
+        // feat/security-s06-related-party: the hashed email / phone / card / browser identifiers recorded for this
+        // user (main.user_identity_signals). The related-party flags keep only ids, which no longer identify anyone.
+        userIdentitySignalService.eraseForUser(userId);
 
         // skillars-deferred-155 code review, Decision 1(a): declared HERE, above the COACH block — not
         // just above the PLAYER branch further down, which is where it used to live. The coach-side

@@ -83,4 +83,11 @@ public class CoachReview {
     // the entity's plain-field style; @Getter/@Setter are class-level via Lombok.
     @Column(name = "moderation_epoch", nullable = false)
     private long moderationEpoch = 0L;
+
+    // feat/security-s06-related-party (V219): the author is linked to the coach (payment.related_party_bookings), so the
+    // review is stored — the unique (author, coach) row stops endless resubmission — but never published, never
+    // counted in the coach's average / count / ranking. Sticky: moderation and edits never clear it. The author is
+    // told (AuthorReviewDto.relatedPartyHidden); nobody else sees the row.
+    @Column(name = "related_party", nullable = false)
+    private boolean relatedParty = false;
 }
