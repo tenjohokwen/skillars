@@ -428,29 +428,10 @@ why the next step can't happen until the container is up.
 
 ## Step 5: Seed required bootstrap data
 
-The app stores its JWT signing key as an encrypted row in the `main.sec`
-table rather than an environment variable. **Without this row, login and any
-authenticated request fail** with `AppSetupException: JWT secret key has not
-been set in DB`.
-
-**Under the `dev` profile this step is not needed and running it fails.**
-`application-dev.yaml` sets `app.bootstrap.jwt-secret.enabled: true`, so
-`JwtSecretBootstrapRunner` writes the row itself on first start — you will see
-`JWT secret bootstrap created a new active JWT signing secret` in the app log.
-Seeding the fixture on top of that hits the unique constraint:
-
-```
-ERROR: duplicate key value violates unique constraint "sec_version_bus_id_key"
-```
-
-Only seed it by hand on a profile that does not enable that runner, using the
-same fixture the integration tests use (`src/test/resources/sql/secData.sql`):
-
-```bash
-dcl exec -T postgres psql -U postgres -d skillars < src/test/resources/sql/secData.sql
-```
-
-(Substitute `-U`/`-d` if you changed `POSTGRES_USER`/`POSTGRES_DB` in `.env.local`.)
+The JWT signing key is no longer stored in the database. It comes from `JWT_SIGNING_KEY`
+(`app.security.jwt.signing-key`); `docker-compose.local.yml` and `application-dev.yaml` carry a
+dev-only default, so **there is nothing to seed and nothing to set locally**. Do not run
+`secData.sql`; it only writes a now-unused `main.sec` row.
 
 ### Optional: sample login users — still not reliable, for a different reason now
 
@@ -464,15 +445,10 @@ whole migration history was squashed on 2026-09-24 by `skillars-deferred-112`
 into `V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`, which now
 seed those same role names).
 
-What still fails is the very first statement in the file — an `INSERT INTO
-main.sec` with no `ON CONFLICT` at all
-(`src/test/resources/sql/initTestData.sql:11`). Under `dev`,
-`JwtSecretBootstrapRunner` has already written the active JWT signing row by
-the time you'd run this, so this insert hits the same `sec_version_bus_id_key`
-unique-constraint error `secData.sql` warns about above, just from a different
-file.
+What still fails is the very first statement in the file, an `INSERT INTO main.sec` with no
+`ON CONFLICT` (`src/test/resources/sql/initTestData.sql:11`); it writes the unused legacy JWT row.
 
-Stick with `secData.sql` above and register accounts through the app. Every
+Skip it and register accounts through the app. Every
 role the registration flows need is already seeded by Flyway, so no user
 fixture is required.
 

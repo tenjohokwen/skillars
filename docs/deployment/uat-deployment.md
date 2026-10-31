@@ -483,9 +483,9 @@ yet. Say so in the UAT brief.
   `APP_IMAGE=ghcr.io/<repo>:latest` instead of copying the exact SHA. A **rollback still requires
   the explicit SHA tag** — that is what `docs/deployment/rollback.md` pins to, and `latest` by
   definition does not point at an older build.
-- Seeding bootstrap data (the JWT signing key row, optional sample users)
-  works the same as `local/deployment.md` Step 5 — run the same SQL fixture
-  against the UAT Postgres container.
+- The JWT signing key is no longer seeded into the database: set `JWT_SIGNING_KEY` in `.env.uat`
+  (`openssl rand -base64 64`); the app refuses to boot without it. Sample users: see
+  `local/deployment.md` Step 5.
 - `docker-compose.yml` itself still doesn't set `SPRING_PROFILES_ACTIVE` for
   a plain production deploy (`docker compose up -d` with no `-f` overrides) —
   that's a separate, pre-existing gap tracked outside this doc, not something

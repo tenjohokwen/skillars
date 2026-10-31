@@ -12,7 +12,8 @@ import java.util.Map;
 
 /**
  * Refuses to boot a deployed ({@code prod}/{@code uat}) instance whose secrets are blank or still the
- * development defaults from {@code application-dev.yaml}.
+ * development defaults from {@code application-dev.yaml}. The JWT signing key ({@code JWT_SIGNING_KEY}) is
+ * held to the same rule and must be Base64 of at least 64 bytes. Values are never put in a message.
  *
  * <p>Blank {@code PLATFORM_PIN_ENCRYPTION_SECRET} already aborts boot in {@code Cryptopher}; the video
  * playback signing secret, by contrast, only failed the first time a token was issued. Both are checked
@@ -30,15 +31,21 @@ public class DeployedSecretsValidator {
     static final String PLAYBACK_SECRET = "app.video.playback.signing-secret";
     static final String REGISTRATION_SECRET = "skillars.platform.registration-verification-secret";
     static final String BUNNY_WEBHOOK_SECRET = "app.video.bunny.webhook-signing-secret";
+    static final String JWT_SIGNING_KEY = "app.security.jwt.signing-key";
 
     /** Every value application-dev.yaml falls back to for these properties, plus the test fixtures'. */
     private static final Map<String, List<String>> KNOWN_DEFAULTS = Map.of(
         PIN_SECRET, List.of("S3CR3TW0RD"),
         PLAYBACK_SECRET, List.of("dGVzdC1wbGF5YmFjay1zaWduaW5nLXNlY3JldC0zMi1ieXRlcyEh"),
         REGISTRATION_SECRET, List.of("dev-registration-verification-secret-32b!"),
-        BUNNY_WEBHOOK_SECRET, List.of("dev-webhook-signing-secret"));
+        BUNNY_WEBHOOK_SECRET, List.of("dev-webhook-signing-secret"),
+        JWT_SIGNING_KEY, List.of(
+            "ZGV2LW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1sb2NhbC1kZXZlbG9wbWVudC1vbmx5ISE=",
+            "dGVzdC1vbmx5LWp3dC1zaWduaW5nLWtleS0tdW5pdC1hbmQtaW50ZWdyYXRpb24tdGVzdHMtb25seS0wMTIzNDU2Nzg5"));
 
     private static final int MIN_HMAC_KEY_BYTES = 32;
+    /** HS512 (JWT access tokens) needs 512 bits. */
+    private static final int MIN_JWT_KEY_BYTES = 64;
 
     private final Environment env;
 
@@ -49,7 +56,8 @@ public class DeployedSecretsValidator {
     @PostConstruct
     void validate() {
         KNOWN_DEFAULTS.forEach(this::requireRealValue);
-        requireBase64Key(PLAYBACK_SECRET);
+        requireBase64Key(PLAYBACK_SECRET, MIN_HMAC_KEY_BYTES);
+        requireBase64Key(JWT_SIGNING_KEY, MIN_JWT_KEY_BYTES);
     }
 
     private void requireRealValue(String property, List<String> knownDefaults) {
@@ -62,15 +70,15 @@ public class DeployedSecretsValidator {
         }
     }
 
-    private void requireBase64Key(String property) {
+    private void requireBase64Key(String property, int minBytes) {
         byte[] decoded;
         try {
             decoded = Base64.getDecoder().decode(env.getProperty(property));
         } catch (IllegalArgumentException e) {
             throw new AppSetupException(property + " must be Base64-encoded");
         }
-        if (decoded.length < MIN_HMAC_KEY_BYTES) {
-            throw new AppSetupException(property + " must decode to at least " + MIN_HMAC_KEY_BYTES + " bytes");
+        if (decoded.length < minBytes) {
+            throw new AppSetupException(property + " must decode to at least " + minBytes + " bytes");
         }
     }
 }

@@ -301,21 +301,11 @@ more likely the OOM killer than a config problem — see
 adjust first (`docker compose ... logs app`, and `dmesg | grep -i "killed process"`
 on the host, will confirm which it was).
 
-## Step 8: Seed bootstrap data
+## Step 8: Bootstrap data
 
-Same fixture as every other environment — without this row, login fails
-with `AppSetupException: JWT secret key has not been set in DB` (see
-[`local/deployment.md` Step 5](local/deployment.md#step-5-seed-required-bootstrap-data)):
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.uat-hostwinds.yml \
-  --env-file .env.uat exec -T postgres psql -U skillars_uat -d skillars_uat < src/test/resources/sql/secData.sql
-```
-
-(Substitute `-U`/`-d` if `.env.uat`'s `POSTGRES_USER`/`POSTGRES_DB` differ.
-Use `initTestData.sql` instead if you also want ready-made sample logins —
-see `local/deployment.md` Step 5 for the account list, same file either
-environment.)
+There is no JWT row to seed any more: the signing key is `JWT_SIGNING_KEY` in `.env.uat` (Step 5; generate
+it with `openssl rand -base64 64`). The app refuses to boot without it. Register accounts through the app,
+or use `AdminBootstrapRunner` for an admin (see `local/deployment.md` Step 5).
 
 ## Step 9: Verify
 

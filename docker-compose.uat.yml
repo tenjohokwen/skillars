@@ -35,6 +35,8 @@ services:
       # docker-compose.yml doesn't pass it through for prod either — separate, pre-existing
       # gap not fixed here).
       - PLATFORM_PIN_ENCRYPTION_SECRET=${PLATFORM_PIN_ENCRYPTION_SECRET}
+      # Base64, >= 64 bytes (`openssl rand -base64 64`); app refuses to boot otherwise. Never the dev value.
+      - JWT_SIGNING_KEY=${JWT_SIGNING_KEY:?set JWT_SIGNING_KEY in .env.uat, generate it with openssl rand and base64 of 64 bytes}
       - PLATFORM_REGISTRATION_VERIFICATION_SECRET=${PLATFORM_REGISTRATION_VERIFICATION_SECRET}
       # This SeaweedFS-backed storage service stands in for the real S3 API — see the
       # `storage` service below. Both the app container and real browsers (for presigned

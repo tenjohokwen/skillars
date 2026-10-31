@@ -60,7 +60,7 @@ services:
       # The base file defaults the bucket to skillars-prod; local storage-init creates skillars-dev.
       - APP_STORAGE_BUCKET=skillars-dev
       # Base passes these with a prod-safe default (false / none), which overrides application-dev.yaml.
-      - APP_BOOTSTRAP_JWT_SECRET_ENABLED=${APP_BOOTSTRAP_JWT_SECRET_ENABLED:-true}
+      - JWT_SIGNING_KEY=ZGV2LW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1sb2NhbC1kZXZlbG9wbWVudC1vbmx5ISE=
       - ALLOWED_CLIENTS=${ALLOWED_CLIENTS:-myClientId,hisClientId,herClientId,ourClientId}
       # docker-compose.yml's APP_SES_FROM_ADDRESS carries no default at all (see the comment
       # there), so listing it in the base file makes it present-and-blank under compose —

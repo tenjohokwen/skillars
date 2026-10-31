@@ -46,7 +46,6 @@ class AuthServiceSessionInvalidationIT extends AbstractIntegrationTest {
     @Autowired private AuthService authService;
     @Autowired private UserRepository userRepository;
     @Autowired private PasswordEncoder passwordEncoder;
-    @Autowired private SecretService secretService;
 
     private static final String CLIENT_ID = "testClientId";
 
@@ -124,16 +123,6 @@ class AuthServiceSessionInvalidationIT extends AbstractIntegrationTest {
             "SELECT security_session_invalidated_at FROM main.\"user\" WHERE id = ?",
             Timestamp.class, USER_ID_2);
         assertThat(invalidatedAtAfterTheft).as("theft detection must have set the epoch").isNotNull();
-
-        // Seed the JWT signing secret: main.sec is neither Flyway-seeded reference data nor an
-        // infrastructure-excluded table (see DatabaseResetTestExecutionListener's own javadoc on
-        // exactly this table, citing this exact "collides with the fixed-PK insert" history), so
-        // it is truncated by this test's own per-method reset and never re-seeded outside the
-        // IT classes that seed it themselves (@Sql(SecurityIT.SEC_DATA_SQL_PATH), as ConfigResourceIT does) —
-        // unrelated to anything this story's AC3 redesign touches. Without a row here, JWT
-        // signing itself fails (JwtConfiguration.getSecretKey), independent of which code path
-        // (HTTP or direct call) reaches it.
-        secretService.createActiveSecret(SecurityConstants.JWT_VERSION, SecurityConstants.JWT_BUS_NAME);
 
         // The victim's own legitimate re-login, using their real password. Calls authService
         // .login(...) directly (not through HTTP): populating RequestMetadataProvider directly

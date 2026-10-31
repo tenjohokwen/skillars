@@ -1,11 +1,9 @@
 app:
   environment: "${ENVIRONMENT:dev}"
-  # A fresh local database has no JWT signing secret and no way to get one short of hand-written
-  # SQL replicating Secret's own Jasypt encryption — see JwtSecretBootstrapRunner's own javadoc.
-  # Safe here only: the dev profile is never used against a real environment's database.
-  bootstrap:
-    jwt-secret:
-      enabled: true
+  security:
+    jwt:
+      # DEV ONLY, public in the repository: DeployedSecretsValidator rejects this value under prod/uat.
+      signing-key: "${JWT_SIGNING_KEY:ZGV2LW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1sb2NhbC1kZXZlbG9wbWVudC1vbmx5ISE=}"
   ses:
     from-address: "${APP_SES_FROM_ADDRESS:dev@localhost}"
   # ses-1.5: dev runs the `log` transport (source doc D-4, §6.11): every email is logged and, because

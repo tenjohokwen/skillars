@@ -236,31 +236,11 @@ runtime in every environment, with all tests still passing. Both are fixed:
   and in the checked-in `docker-compose.local.yml` itself — this list only
   covers the ones with a distinct startup-failure story worth telling.
 
-### 5. Do NOT seed the JWT secret under the `dev` profile
+### 5. No JWT secret to seed
 
-The deployment guide presents `secData.sql` as mandatory. Under `dev` it is not,
-and running it **fails**:
-
-```
-ERROR: duplicate key value violates unique constraint "sec_version_bus_id_key"
-```
-
-`application-dev.yaml` sets `app.bootstrap.jwt-secret.enabled: true`, so
-`JwtSecretBootstrapRunner` writes the row itself on first start
-(`JWT secret bootstrap created a new active JWT signing secret`). Only seed it by
-hand on a profile that does not have that runner enabled.
-
-Skip `initTestData.sql` too. Its `main.authority` insert was since patched
-with `ON CONFLICT (name) DO NOTHING`, so it no longer collides with the role
-rows Flyway seeds (previously cited as migrations `V21`/`V92`; the whole
-migration history was squashed on 2026-09-24 by `skillars-deferred-112` into
-`V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`, which now seed
-those roles). It still fails under `dev`, though — its very first statement,
-`INSERT INTO main.sec` (`src/test/resources/sql/initTestData.sql:11`), has no
-`ON CONFLICT` at all, and `JwtSecretBootstrapRunner` has already written that
-row by the time you'd run this, so it hits the same `sec_version_bus_id_key`
-unique-constraint error described above for `secData.sql`. Every role the
-registration flows need is already seeded by Flyway.
+The deployment guide used to present `secData.sql` as mandatory. The JWT signing key now comes from
+`JWT_SIGNING_KEY`, with a dev-only default in `application-dev.yaml` and `docker-compose.local.yml`, so
+nothing is seeded and `secData.sql` / `initTestData.sql` only write an unused legacy `main.sec` row.
 
 ### 6. Fixed: access logs, previously broken everywhere
 
@@ -615,10 +595,8 @@ no Spring banner. See [note 2](#2-fixed-the-loki-appender-no-longer-crashes-the-
 fixed; rebuild if you see it. See
 [note 3](#3-fixed-dev-no-longer-builds-an-aws-ses-client).
 
-**`AppSetupException: JWT secret key has not been set in DB`** — only possible on
-a profile without `app.bootstrap.jwt-secret.enabled`. Under `dev` the row is
-created automatically; do not seed `secData.sql` (see
-[blocker 5](#5-do-not-seed-the-jwt-secret-under-the-dev-profile)).
+**`AppSetupException: app.security.jwt.signing-key ... must be set`** — `JWT_SIGNING_KEY` is blank.
+Under `dev` and in tests a default applies; elsewhere set it (`openssl rand -base64 64`).
 
 **HTTP 500 on register with `ConstraintViolationException ... propertyPath=login`**
 — the email's TLD is longer than three characters. Use `example.com`.

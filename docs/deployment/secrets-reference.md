@@ -39,10 +39,9 @@ Copy `.env.example` to `.env`, fill in every value, and SCP to the Node.
 >   local or UAT startup. `docker-compose.local.yml` restates the dev values for exactly this
 >   reason.
 
-> **JWT signing key is not an operator-supplied secret.** There is no `JWT_SECRET` (or equivalent) `.env`
-> variable — the app never reads one. The real JWT signing key is a 256-byte value, auto-generated on first
-> boot and stored Jasypt-encrypted in the database (`sec.secret` table, via `SecretService.createSecret` /
-> `JwtSecretService`). Nothing to configure here.
+> **JWT signing key (`JWT_SIGNING_KEY`)** is an operator-supplied secret: Base64, at least 64 bytes decoded
+> (`openssl rand -base64 64`). It used to live in the database (`sec` table); it no longer does. See
+> "JWT signing key" below and `provisioning-checklist.md` section 2.4.
 
 | Variable | Format | How to obtain or generate |
 |---|---|---|
@@ -291,7 +290,6 @@ Passed through `docker-compose.yml` with defaults that mirror `application.yaml`
 | Variable | Default if unset | What it does |
 |---|---|---|
 | `ALLOWED_CLIENTS` | blank (no machine client) | Comma-separated `X-Client-Id` values accepted from non-browser API clients (`allowed.clients`). A machine client skips the browser fingerprint-cookie check, so use long random ids and never the dev placeholders (`myClientId`, ...). UAT testers who curl the admin API (`uat-deployment.md` 8.3) need one listed here |
-| `APP_BOOTSTRAP_JWT_SECRET_ENABLED` | `false` | `true` makes `JwtSecretBootstrapRunner` create the `(v1, jot)` JWT signing key when none exists. One boot only, then remove it ("JWT signing key" below). `docker-compose.local.yml` defaults it to `true` |
 | `APP_BOOTSTRAP_ADMIN_FIRST_NAME` / `APP_BOOTSTRAP_ADMIN_LAST_NAME` | `Platform` / `Administrator` | Display name of the admin created by `AdminBootstrapRunner` |
 | `APP_PAYMENT_STRIPE_CALLBACK_SUCCESS_URL` | `/coach/payment-settings` | SPA route the Stripe OAuth callback redirects the coach to. Relative to `APP_FRONTEND_URL` |
 | `APP_STORAGE_BACKUP_ENDPOINT_URL`, `_BUCKET`, `_REGION`, `_ACCESS_KEY`, `_SECRET_KEY` | blank, `us-east-1` for the region | Optional second S3 bucket that uploads are copied to (`app.storage.backup.*`). All blank = off |
@@ -379,52 +377,21 @@ compromise-triggered or policy-triggered rotation of a single secret.
 
 ### JWT signing key
 
-**Rotation is not "restart the app".** The JWT signing key is **not** an environment variable — it
-is a Jasypt-encrypted row in the `sec` table keyed by `(version, busId)` =
-(`JWT_VERSION` = `v1`, `JWT_BUS_NAME` = `jot`), created once per environment and cached for the life
-of each process in `JwtSecretService`'s `volatile Secret` field. `Secret`'s columns are
-`updatable = false` and `SecretService` exposes only `createInactiveSecret` / `createActiveSecret` /
-`fetchSecret` / `fetchLatestActiveSecretAsBytes` — **there is no first-class rotate/replace method**.
-Treat rotation as a one-off DBA + ops task, not a documented button.
+`JWT_SIGNING_KEY` (property `app.security.jwt.signing-key`) is the HMAC key that signs the 15-minute
+access tokens. Base64, at least 64 bytes decoded (HS512). Generate with `openssl rand -base64 64`.
+`prod` and `uat` refuse to boot if it is blank, not Base64, shorter than 64 bytes, or one of the
+public dev/test values (`DeployedSecretsValidator`); `JwtConfiguration` also refuses a blank or
+malformed value in any profile. `dev` and the tests carry a clearly-labelled dev-only default.
 
-> **Before you start.** This is a destructive, downtime-bearing procedure — do it in a planned
-> maintenance window. Both paths below run `docker compose down`, which stops **the entire stack**
-> (app, Traefik, Grafana, the LGTM containers), not just the app. First:
-> 1. Take a fresh database dump: `bash /opt/skillars/app/deploy/backup/pg-backup.sh` and confirm it
->    ends with `Upload verified`.
-> 2. Dry-run the delete as a read to confirm exactly one row matches:
->    ```bash
->    docker compose exec postgres psql -U "<POSTGRES_USER>" -d "<POSTGRES_DB>" \
->      -c "SELECT version, bus_id, created_date FROM sec WHERE version = 'v1' AND bus_id = 'jot';"
->    ```
+**Rotation is "set a new value and restart."** Edit `JWT_SIGNING_KEY` in `/opt/skillars/.env`, then
+`cd /opt/skillars/app && docker compose up -d app`. Every access token signed with the old key is
+rejected on the next request with a 401, which also revokes that user's refresh token, and the SPA
+sends them to `/login` (it does not call `/api/auth/refresh` on a 401). Expect every logged-in user to
+sign in again once; do it in a quiet window.
+Restart every instance together (single node today), or tokens bounce between old and new keys.
 
-Two supported ways to force a new key:
-
-- **Replace the `(v1, jot)` row in place.** Stop the stack, delete the row, let
-  `JwtSecretBootstrapRunner` recreate it (it only INSERTs when none exists), then disable the runner
-  again:
-  ```bash
-  cd /opt/skillars/app && docker compose down          # FULL-STACK DOWNTIME STARTS HERE
-  docker compose up -d postgres
-  docker compose exec postgres psql -U "<POSTGRES_USER>" -d "<POSTGRES_DB>" \
-    -c "DELETE FROM sec WHERE version = 'v1' AND bus_id = 'jot';"
-  # temporarily enable the bootstrap runner for one boot:
-  #   add  APP_BOOTSTRAP_JWT_SECRET_ENABLED=true  to /opt/skillars/.env
-  docker compose up -d                             # downtime ends once app is healthy
-  docker compose logs app | grep jwt_secret_bootstrap   # expect action=create_secret status=SUCCESS
-  # then REMOVE APP_BOOTSTRAP_JWT_SECRET_ENABLED from .env and redeploy:
-  docker compose up -d
-  ```
-  If the bootstrap runner logs anything other than `action=create_secret status=SUCCESS`, restore
-  the pre-rotation dump (`restore-from-dump.sh latest`) rather than leaving the `sec` table empty —
-  an empty `(v1, jot)` fails **every** request, authenticated or not.
-- **Bump `JWT_VERSION`** (e.g. `v1` → `v2`) in `SecurityConstants` — a code change + redeploy. On
-  next boot the fetch for `(v2, jot)` misses; provision the new row the same way (bootstrap runner,
-  or hand-rolled Jasypt SQL). The stale `(v1, jot)` row is simply left unused.
-
-**Operational consequence, either way:** every issued access token (15 min TTL) **and** refresh
-token (7 day TTL) signed with the old key becomes invalid the moment each app instance restarts and
-re-reads the `volatile` cache. All users must re-authenticate. Roll during a low-traffic window.
+The legacy `sec` row `(v1, jot)` is unused. It can be dropped after the first rotation to a freshly
+generated key; do not reuse its value (it may exist in backups).
 
 ### `GF_SECURITY_ADMIN_PASSWORD`
 
