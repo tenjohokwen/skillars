@@ -216,10 +216,10 @@ Spring `${X:default}` default.
 | `APP_PAYMENT_STRIPE_OAUTH_CALLBACK_URL` | `https://<DOMAIN>/api/payment/coaches/me/stripe/callback` | same with UAT host (**required**: the UAT compose files use `:?`) | Stripe rejects the relative compose default, which would also override `application-uat.yaml`'s absolute one | `docker-compose.yml`, `application-uat.yaml` |
 | `APP_SES_FROM_ADDRESS` | required (`transport: ses`) | n/a (`transport: smtp`) | `SesPropertiesValidator` aborts boot | `application-prod.yaml` |
 | `GMX_PASSWORD`, `GMAIL_PASSWORD` | not checked (SES) | **both required** | the UAT compose files require both (`:?`), so `docker compose up` stops with a message instead of a boot loop in `ProviderConfigsValidator` | `application-uat.yaml`, `docker-compose.uat.yml`, `docker-compose.uat-hostwinds.yml` |
-| `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | required | required | `RegistrationVerificationTokenService` aborts boot | `application.yaml` |
-| `PLATFORM_PIN_ENCRYPTION_SECRET` | required; rotating it invalidates stored PINs | required | fail-fast | `application.yaml` |
-| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | required (base64, ≥ 32 bytes) | required | fail-fast | `application.yaml` |
-| `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | required | required | fail-fast | `application.yaml` |
+| `PLATFORM_REGISTRATION_VERIFICATION_SECRET` | required; the dev default is rejected | required; the dev default is rejected | `RegistrationVerificationTokenService` aborts boot; `DeployedSecretsValidator` rejects the dev default | `application.yaml` |
+| `PLATFORM_PIN_ENCRYPTION_SECRET` | required; rotating it invalidates stored PINs; the dev default `S3CR3TW0RD` is rejected | required; same | fail-fast: `Cryptopher` on blank, `DeployedSecretsValidator` on blank or the dev default | `application.yaml` |
+| `APP_VIDEO_PLAYBACK_SIGNING_SECRET` | required (base64, ≥ 32 bytes); the dev/test value is rejected | required; same | fail-fast at boot in `prod`/`uat` (`DeployedSecretsValidator`: blank, not Base64, < 32 bytes, or the dev default); previously only failed on the first playback token | `application.yaml` |
+| `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` | required; the dev default is rejected | required; same | fail-fast (`BunnyVideoProviderAdapter` on blank, `DeployedSecretsValidator` on the dev default) | `application.yaml` |
 | `BUNNY_API_KEY`, `BUNNY_LIBRARY_ID`, `BUNNY_CDN_HOSTNAME` | required for video | test library | compose defaults the library ID to the placeholder `123456` | `docker-compose.yml` |
 | `APP_STORAGE_BUCKET` | set it (compose default `skillars-prod`) | set it | the UAT compose files pass it without a default | `docker-compose.yml` |
 | `APP_STORAGE_ENDPOINT_URL` | not from `.env`: compose sets `https://${STORAGE_DOMAIN}` | same (override) | n/a | `docker-compose.yml`, `docker-compose.uat.yml` |

@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.CharArrayWriter;
+import java.util.regex.Pattern;
 
 /**
  * Tomcat access log valve that emits each entry through SLF4J instead of writing it to a file.
@@ -46,6 +47,16 @@ public class Slf4jAccessLogValve extends AbstractAccessLogValve {
      */
     public static final String MANAGEMENT_ACCESS_LOGGER_NAME = ACCESS_LOGGER_NAME + ".management";
 
+    /**
+     * Query parameters whose values are credentials or single-use secrets (activation key, e-mail
+     * verification / unsubscribe token, Bunny signed-URL token and signature, OAuth code/state).
+     * Matched case-insensitively as a whole parameter name after {@code ?} or {@code &}, so
+     * {@code ?token=} is redacted but {@code ?tokenType=} is not.
+     */
+    private static final Pattern SENSITIVE_PARAM = Pattern.compile(
+        "([?&](?:token|access_token|id_token|key|api_key|apikey|code|state|signature|sig|secret|password|otp|expires)=)[^&\\s'\"#]*",
+        Pattern.CASE_INSENSITIVE);
+
     private final Logger accessLog;
 
     public Slf4jAccessLogValve() {
@@ -58,6 +69,15 @@ public class Slf4jAccessLogValve extends AbstractAccessLogValve {
 
     @Override
     protected void log(CharArrayWriter message) {
-        accessLog.info(message.toString());
+        accessLog.info(redact(message.toString()));
+    }
+
+    /**
+     * Masks sensitive query parameter values anywhere in the entry: the request line ({@code %r}) and
+     * the {@code Referer} header, which echoes the previous page's query string. Applied to the whole
+     * line so it holds whatever pattern {@code app.access-log.pattern} is configured with.
+     */
+    static String redact(String entry) {
+        return SENSITIVE_PARAM.matcher(entry).replaceAll("$1REDACTED");
     }
 }
