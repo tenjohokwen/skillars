@@ -1,0 +1,3 @@
+# review-eval raw session metadata (findings and verdicts are committed; raw output is not)
+review/results/**/raw/
+**/__pycache__/

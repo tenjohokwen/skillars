@@ -1,0 +1,57 @@
+{
+  "arm": "control",
+  "case": "353-agreed-price-null-fallback",
+  "judge_cost_usd": 0.0643428,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the NULL agreed_price from createBookingRequest falling back to the current coach price in resolveSessionPrice, so the parent is charged a price they never saw; R2 covers the batchBookingPrice duplicate.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 describes createBatch saving a zero total and NULL agreed_price, with a 0 quote, then settling at the coach's later price.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 flags the duplication non-pack path storing a NULL currentCoachPrice, which is then priced at acceptance.",
+        "reported_ids": [
+          "R3"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "This depends on an unverified guess about how isTerminal is written (\"if isTerminal lists its statuses explicitly\"), so there is no concrete trigger.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "It assumes the settle code can throw after its transaction commits, which is unverified, so the trigger is speculative.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "The harm depends on unverified sweeper behaviour, and the report says itself that the row is left alone on purpose.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Defence-in-depth suggestion with no shown way for a negative price to get in; the report itself asks whether coach_pricing already has a check constraint.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

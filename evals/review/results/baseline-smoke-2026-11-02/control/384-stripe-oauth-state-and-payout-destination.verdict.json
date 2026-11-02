@@ -1,0 +1,38 @@
+{
+  "arm": "control",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "judge_cost_usd": 0.0421814,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same defect: state is the public coach UUID, so a forged callback links the attacker's Stripe account and the victim's payouts go to it.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R4 notes in passing that a newly linked destination is paid as soon as it is active, with no delay or re-confirmation, but its main claim is a read-lock race; it never names the silent overwrite in upsertCoachStripeAccount or the lack of a notification.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: connecting a Stripe account already linked to another coach violates the unique index, or the token exchange fails, and the exception escapes the browser GET callback as a raw error instead of a redirect, leaving the platform authorized on an account it has no record of.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "A concurrent first-time insert needs two separate valid OAuth codes arriving at the same moment, and the result is only a 500 on one of them; this is speculative and low impact.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "arm": "control",
+  "case": "353-excused-cancel-cap-race",
+  "judge_cost_usd": 0.0349414,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same unserialized insert-then-count race under READ COMMITTED: both transactions count N, so the EXCUSED_LIMIT strike is never issued.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The reviewer names no path that publishes the event twice and asks for one to be checked, so the duplicate-delivery trigger is speculative.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "No concrete non-lock failure in issue() is shown; the missing-profile and integrity-violation triggers are hypothetical.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

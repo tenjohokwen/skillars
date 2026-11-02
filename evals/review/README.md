@@ -19,6 +19,11 @@ evals/review/
   cases/_drafts/       candidate cases awaiting curation; not run
   bin/materialize.sh   exports a case's reviewer input OUTSIDE the repo (see below)
   bin/validate.py      schema + anchor check; run before committing any case change
+  bin/run.py           runs one reviewer arm over cases, stores findings
+  bin/judge.py         LLM judge: matches reported findings to expected ones
+  bin/scorecard.py     aggregates a run's verdicts into results/<run-id>/scorecard.md
+  prompts/             reviewer arms, input-mode fragments, judge prompt
+  results/<run-id>/    committed: findings, verdicts, scorecard; git-ignored: raw/
 ```
 
 Exports land in `${XDG_CACHE_HOME:-$HOME/.cache}/skillars-review-evals/<id>/`
@@ -113,8 +118,50 @@ Rules for `expected_findings`:
 - Do not leak the fix. "Missing idempotency key" is a finding; "should add
   `Idempotency-Key` header like PR #359 did" is the answer sheet.
 
-## Scoring (phase 2)
+## Running a baseline
 
-Recall: share of `expected_findings` the reviewer reported. Precision: share of the
-reviewer's findings that match an expected finding or are judged real. Both per case
-and per category.
+```
+RUN=baseline-$(date +%F)
+evals/review/bin/run.py   $RUN --arm control        # all promoted cases; --cases a,b to limit
+evals/review/bin/run.py   $RUN --arm blind-hunter
+evals/review/bin/judge.py $RUN --arm control
+evals/review/bin/judge.py $RUN --arm blind-hunter
+evals/review/bin/scorecard.py $RUN                  # writes results/$RUN/scorecard.md
+```
+
+Runs resume: a case whose findings (or verdict) file already exists is skipped, so a
+run interrupted halfway is restarted with the same command. `--parallel N` (default 3)
+bounds concurrent `claude -p` processes. `--model` and `--effort` pass through to the
+reviewer and are recorded in `results/<run-id>/run.json`.
+
+### Arms
+
+| arm | prompt | diff cases | snapshot cases |
+|---|---|---|---|
+| `control` | one plain review prompt, no layers | diff inlined, no tools | runs inside the exported tree with Read/Grep/Glob; scope list inlined |
+| `blind-hunter` | the Blind Hunter layer from `mto-code-review` | diff inlined, no tools | scoped files inlined, no tools |
+
+`control` is the floor every later reviewer must beat. Specialised reviewers (phase 3)
+are added as further arms and kept only if they raise recall in their category without
+dropping overall precision below `control`.
+
+### Scoring
+
+An expected finding scores 1 for a `full` match, 0.5 for `partial`, 0 for `none`.
+
+- recall = matched points / expected findings
+- precision = reported findings that matched something or were judged `real` / reported findings
+
+Both are reported per arm, per category, per case kind and per case. The judge is a
+tool-less `claude -p` call that sees the case YAML (the answer key) and the reported
+findings, never the fix. It is instructed to be strict about `real`: an unmatched report
+with no concrete trigger is `noise`. Precision is therefore the noisier metric; treat
+differences of a few points as nothing.
+
+### Cost and isolation
+
+Every reviewer and judge call runs on the developer's own Claude Code login. The runner
+strips `ANTHROPIC_API_KEY` from the environment, runs from the export directory with
+`--setting-sources project`, and disables session persistence. A full two-arm baseline
+over 25 cases is roughly 50 reviewer calls plus 50 judge calls; smoke-test with
+`--cases` on four or five cases before committing to that.
