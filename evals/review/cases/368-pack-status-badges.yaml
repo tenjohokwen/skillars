@@ -53,5 +53,27 @@ expected_findings:
         symbol: pausePackTransactional
       - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
         symbol: extendPack
+  - id: F4
+    title: The pause start date is sent as UTC midnight, so the earliest date the picker allows can be refused
+    category: edge-case
+    severity: medium
+    description: >
+      `submitPause` converts the picked 'YYYY-MM-DD' with `new Date(str).toISOString()`, which JavaScript
+      parses as midnight UTC, while `minPauseStartDate` is computed from the browser's local date
+      (tomorrow). For a user west of UTC in the evening (20:00 in UTC-5 on Nov 2 is 01:00 UTC on Nov 3)
+      the minimum selectable date Nov 3 becomes 2026-11-03T00:00Z, which is already past, and
+      `PackSessionService` rejects it with booking.pauseStartInPast. For every user the pause starts at
+      UTC midnight rather than at a local or coach-zone day boundary, so bookings in the hours around
+      midnight fall on the wrong side of the pause's conflict window.
+    anchors:
+      - file: src/frontend/src/pages/parent/SessionPackDashboardPage.vue
+        symbol: submitPause
+      - file: src/frontend/src/pages/parent/SessionPackDashboardPage.vue
+        symbol: minPauseStartDate
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: pauseStartInPast
 source: PR #368 description
-notes: Input revision 89a4a951^1 (after #362 added disputeFrozenAt/revokedAt). The frontend file is in scope because F2 is a frontend defect.
+notes: >
+  Input revision 89a4a951^1 (after #362 added disputeFrozenAt/revokedAt). The frontend file is in scope
+  because F2 is a frontend defect.
+  F4 added 2026-11-03 from real-sample S12 (owner-verified).

@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["verdict", "note"],
+  "properties": {
+    "verdict": {"type": "string", "enum": ["confirmed", "refuted", "undetermined"]},
+    "note": {"type": "string"}
+  }
+}

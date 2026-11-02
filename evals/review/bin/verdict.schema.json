@@ -1,19 +1,43 @@
 {
   "type": "object",
   "additionalProperties": false,
-  "required": ["matches", "unmatched_reported"],
+  "required": [
+    "matches",
+    "unmatched_reported"
+  ],
   "properties": {
     "matches": {
       "type": "array",
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["expected_id", "match", "reported_ids", "note"],
+        "required": [
+          "expected_id",
+          "match",
+          "reported_ids",
+          "note"
+        ],
         "properties": {
-          "expected_id": {"type": "string"},
-          "match": {"type": "string", "enum": ["full", "partial", "none"]},
-          "reported_ids": {"type": "array", "items": {"type": "string"}},
-          "note": {"type": "string"}
+          "expected_id": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string",
+            "enum": [
+              "full",
+              "partial",
+              "none"
+            ]
+          },
+          "reported_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     },
@@ -22,11 +46,28 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reported_id", "verdict", "note"],
+        "required": [
+          "reported_id",
+          "verdict",
+          "note"
+        ],
         "properties": {
-          "reported_id": {"type": "string"},
-          "verdict": {"type": "string", "enum": ["real", "non_finding", "duplicate", "noise"]},
-          "note": {"type": "string"}
+          "reported_id": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string",
+            "enum": [
+              "real",
+              "non_finding",
+              "duplicate",
+              "noise",
+              "unverified"
+            ]
+          },
+          "note": {
+            "type": "string"
+          }
         }
       }
     }

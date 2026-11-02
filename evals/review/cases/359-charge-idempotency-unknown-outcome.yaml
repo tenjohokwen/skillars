@@ -143,6 +143,24 @@ expected_findings:
     anchors:
       - file: src/main/java/com/softropic/skillars/platform/payment/api/StripeWebhookResource.java
         symbol: MAX_WEBHOOK_BODY_BYTES
+  - id: F10
+    title: Paid upgrade is silently not applied when the subscription row was superseded after the Stripe charge
+    category: edge-case
+    severity: low
+    description: >
+      changeCoachTier calls updateStripePrice with proration, so the proration invoice is charged at
+      Stripe, and then self.persistCoachTierUpgrade. persistCoachTierUpgrade re-reads the row under lock
+      and, if stripeSubscriptionId no longer equals the id that was just updated, logs
+      COACH_TIER_UPGRADE_SUPERSEDED and returns; the caller checks no result and reports success. The
+      coach has paid the proration for an upgrade that is never written locally, nothing alerts and
+      nothing reverts the Stripe price. persistPlayerTierUpgrade has the same warn-and-return branch.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: persistCoachTierUpgrade
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: persistPlayerTierUpgrade
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: changeCoachTier
 non_findings:
   - title: The wallet lock is held across the Stripe charge
     reason: Documented trade-off (walletBalanceForSettlement javadoc) so a cash-out cannot overdraw between charge and deduction; the PR kept it and only capped the duration.
@@ -151,3 +169,4 @@ notes: >
   The pack purchase path (SessionPackPaymentService) also treats any PaymentGatewayException as a failure; the PR
   explicitly left that to a later chunk, so it is not listed. Rows reserved without a key and credit-only batch
   confirms remain manual (PaymentPendingSweeper) by design.
+  F10 added 2026-11-03 from real-sample S11 (owner-verified).

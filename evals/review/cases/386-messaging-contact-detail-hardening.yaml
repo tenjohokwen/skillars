@@ -10,6 +10,8 @@ scope:
   - src/main/java/com/softropic/skillars/platform/messaging/api/MessagingApiAdvice.java
   - src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java
   - src/main/java/com/softropic/skillars/platform/security/api/SanitizePreviewResource.java
+  - src/main/java/com/softropic/skillars/platform/messaging/repo/Conversation.java
+  - src/main/java/com/softropic/skillars/platform/messaging/service/MessagingReportService.java
 summary: Chat safety (S-04) - sanitizer bypasses, no hold for minors, prompt-delimiter stripping, no rate limits, suspended coaches
 expected_findings:
   - id: F1
@@ -77,8 +79,32 @@ expected_findings:
         symbol: verifyIsParty
       - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
         symbol: initiateConversation
+  - id: F6
+    title: Unversioned full-row Conversation saves can overwrite a concurrently committed BLOCKED status
+    category: concurrency
+    severity: high
+    description: >
+      Conversation extends BaseEntity, which declares no @Version, and the entity is not @DynamicUpdate,
+      so every conversationRepository.save(conv) writes all columns from the in-memory copy. getMessages
+      loads the conversation (status ACTIVE), updates the caller's last-read timestamp and saves; if
+      MessagingReportService.reportConversation commits BLOCKED in between, that save writes
+      status=ACTIVE back over it. sendMessage's transactionTemplate block has the same window: it
+      re-reads the row without a lock, the BLOCKED re-check passes, and the save after the message
+      insert overwrites a BLOCKED committed a moment later. A reported conversation silently becomes
+      active again, and the same race can clobber lastMessageAt and the other parties' last-read columns.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: getMessages
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: sendMessage
+      - file: src/main/java/com/softropic/skillars/platform/messaging/repo/Conversation.java
+        symbol: Conversation
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingReportService.java
+        symbol: reportConversation
 source: PR #386 description, S-04
 notes: >
   True systemInstruction/role separation for the Gemini client was explicitly not done (client takes a
   single prompt). S-08 and S-16 are the separate cases 386-review-flag-auto-hold and
   386-coach-profile-fields-contact-details.
+  F6 added 2026-11-03 from real-sample S18 (owner-verified); Conversation.java and
+  MessagingReportService.java were added to scope for it.

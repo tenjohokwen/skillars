@@ -51,8 +51,26 @@ expected_findings:
     anchors:
       - file: src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java
         symbol: deleteUserInformation
+  - id: F3
+    title: AlertRule update deletes the old rule before saving the new one outside a transaction, so a failed save loses the rule
+    category: database
+    severity: medium
+    description: >
+      AlertRuleAdminResource.update is not @Transactional, and its AlertRuleRequest body is neither
+      @Valid nor constrained. alertRuleRepository.deleteById(id) commits in its own repository
+      transaction, then the rebuilt AlertRule is saved in a separate one. A PUT with a null metricName or
+      threshold, or a threshold outside precision(10,4), violates the NOT NULL or numeric constraint on
+      save after the delete has already committed, so the rule is gone and alerting on that metric stops
+      silently. Even when the save succeeds the rule gets a new generated id, so PUT /{id} changes the
+      resource's id.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java
+        symbol: update
+      - file: src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java
+        symbol: AlertRuleRequest
 source: PR #398 description, "Summary"
 notes: >
   References to #392/#395/#396 in the PR body are coordination notes, not introducers. Which endpoints
   stay shared (reads/moderation) vs ADMIN-only is an owner decision; score F1 on "LTD_ADMIN == ADMIN
   everywhere", not on the exact split. No grant/revoke endpoint was added (follow-up).
+  F3 added 2026-11-03 from real-sample S20 (owner-verified).

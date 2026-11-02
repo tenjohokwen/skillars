@@ -1,0 +1,34 @@
+id: pending-logout-successor-revocation
+kind: pre-fix-snapshot
+fix_pr: pending
+input_rev: 9923ffb02479
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/RefreshToken.java
+summary: Logout revokes only the presented refresh token, and only while it is unused; a concurrently rotated successor stays live
+expected_findings:
+  - id: F1
+    title: Logout does not revoke the live refresh token when the presented token was already rotated
+    category: concurrency
+    severity: high
+    description: >
+      AuthService.logout looks up the token from the rtkn cookie and marks it used only when
+      `.filter(t -> !t.isUsed())` passes; an already-used token is left alone and nothing else
+      belonging to the user is touched. When a /api/auth/refresh from another tab or an interceptor
+      retry rotates the token while the logout POST is in flight with the old cookie, logout finds a
+      used token and does nothing, so the successor token minted by that refresh stays valid for its
+      full TTL. RefreshToken has no successor link, so logout cannot follow the rotation, and if the
+      refresh response lands after the logout response its Set-Cookie headers put the session back in
+      the browser: the user is logged in again right after clicking Logout.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: logout
+      - file: src/main/java/com/softropic/skillars/platform/security/repo/RefreshToken.java
+        symbol: rotatedAt
+source: results/baseline-2026-11-02/real-sample.md S01, owner-verified 2026-11-03
+notes: >
+  Open bug, no fix PR yet. input_rev is the 242-logout-race-and-cookie-id input revision the reviewer
+  saw. The account-wide grace-window lookup inside refresh at this same revision is the separate case
+  pending-refresh-grace-window-account-wide, not a finding here.

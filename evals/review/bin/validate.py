@@ -66,14 +66,25 @@ def check(path):
     if kind not in KINDS:
         p(f"kind '{kind}' not in {sorted(KINDS)}")
         return probs, c
-    for k in ("fix_pr", "fix_merge", "summary", "expected_findings"):
+    for k in ("fix_pr", "summary", "expected_findings"):
         if k not in c:
             p(f"missing key '{k}'")
     if c.get("confidence") not in CONF:
         p(f"confidence '{c.get('confidence')}' not in {sorted(CONF)}")
-    fix_merge = str(c.get("fix_merge", ""))
-    if fix_merge and not rev_ok(fix_merge):
-        p(f"fix_merge {fix_merge} does not resolve")
+    pending = str(c.get("fix_pr")) == "pending"
+    fix_merge = str(c.get("fix_merge") or "")
+    pinned = str(c.get("input_rev") or "")
+    if pending:
+        # Open bug: no fix exists yet, so the input revision is pinned explicitly.
+        if not pinned:
+            p("fix_pr: pending requires input_rev")
+        elif not rev_ok(pinned):
+            p(f"input_rev {pinned} does not resolve")
+    else:
+        if not fix_merge:
+            p("missing key 'fix_merge'")
+        elif not rev_ok(fix_merge):
+            p(f"fix_merge {fix_merge} does not resolve")
     if kind == "introducing-diff":
         im = str(c.get("introducing_merge", ""))
         if not im:
@@ -86,7 +97,10 @@ def check(path):
         if "introducing_pr" not in c:
             p("introducing-diff needs introducing_pr")
     else:
-        input_rev = f"{fix_merge}^1" if fix_merge and rev_ok(fix_merge) else None
+        if pending:
+            input_rev = pinned if pinned and rev_ok(pinned) else None
+        else:
+            input_rev = f"{fix_merge}^1" if fix_merge and rev_ok(fix_merge) else None
         scope = c.get("scope") or []
         if not scope:
             p("pre-fix-snapshot needs a non-empty scope")

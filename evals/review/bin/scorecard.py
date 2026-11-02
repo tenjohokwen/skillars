@@ -25,7 +25,7 @@ def main():
     per_case_rows = []
     for arm in arms:
         d = os.path.join(run_dir, arm)
-        agg = collections.defaultdict(lambda: {"exp": 0, "pts": 0.0, "rep": 0, "good": 0})
+        agg = collections.defaultdict(lambda: {"exp": 0, "pts": 0.0, "rep": 0, "good": 0, "unv": 0})
         cost = 0.0; cases = 0; errors = 0
         for f in sorted(os.listdir(d)):
             if not f.endswith(".verdict.json"):
@@ -51,20 +51,21 @@ def main():
                 if pts > 0:
                     matched_reported.update(m.get("reported_ids") or [])
             real = {u["reported_id"] for u in v["verdict"]["unmatched_reported"] if u["verdict"] == "real"}
+            unverified = sum(u["verdict"] == "unverified" for u in v["verdict"]["unmatched_reported"])
             n_rep = len(rep.get("findings") or [])
             n_good = len(matched_reported | real)
             for key in ("all", f"kind:{case['kind']}"):
-                agg[key]["rep"] += n_rep; agg[key]["good"] += n_good
+                agg[key]["rep"] += n_rep; agg[key]["good"] += n_good; agg[key]["unv"] += unverified
             per_case_rows.append((arm, cid, case["kind"], c_exp, c_pts, n_rep, n_good))
         a = agg["all"]
         lines += [f"## Arm: {arm}", "",
                   f"{cases} cases ({errors} reviewer errors), ${cost:.2f} reviewer cost.", "",
-                  "| slice | expected | recall | reported | precision |", "|---|---|---|---|---|",
-                  f"| **all** | {a['exp']} | **{pct(a['pts'], a['exp'])}** | {a['rep']} | **{pct(a['good'], a['rep'])}** |"]
+                  "| slice | expected | recall | reported | precision | unverified |", "|---|---|---|---|---|---|",
+                  f"| **all** | {a['exp']} | **{pct(a['pts'], a['exp'])}** | {a['rep']} | **{pct(a['good'], a['rep'])}** | {a['unv']} |"]
         for key in sorted(k for k in agg if k.startswith("kind:")):
-            s = agg[key]; lines.append(f"| {key} | {s['exp']} | {pct(s['pts'], s['exp'])} | {s['rep']} | {pct(s['good'], s['rep'])} |")
+            s = agg[key]; lines.append(f"| {key} | {s['exp']} | {pct(s['pts'], s['exp'])} | {s['rep']} | {pct(s['good'], s['rep'])} | {s['unv']} |")
         for key in sorted(k for k in agg if k.startswith("cat:")):
-            s = agg[key]; lines.append(f"| {key} | {s['exp']} | {pct(s['pts'], s['exp'])} | - | - |")
+            s = agg[key]; lines.append(f"| {key} | {s['exp']} | {pct(s['pts'], s['exp'])} | - | - | - |")
         lines.append("")
     lines += ["## Per case", "", "| arm | case | kind | expected | recall | reported | precision |", "|---|---|---|---|---|---|---|"]
     for arm, cid, kind, e, p, r, g in per_case_rows:

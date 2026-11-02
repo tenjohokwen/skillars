@@ -11,6 +11,7 @@ Matching rules:
 
 For unmatched reported findings:
 - `real`: a genuine defect that the answer key does not list. Be strict: you must be able to state the concrete trigger from the reported text alone. If it is speculative or unverifiable, it is `noise`.
+- A `verification` caveat on a reported finding is not evidence either way. Grade on the described trigger; every `real` verdict is re-checked against the code in a second pass that runs the caveat.
 - `non_finding`: matches an entry in NON-FINDINGS.
 - `duplicate`: the same defect as another reported finding that you already matched or judged.
 - `noise`: style, speculation, something the code visibly already handles, or a claim with no concrete trigger.

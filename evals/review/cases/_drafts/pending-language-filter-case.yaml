@@ -1,0 +1,38 @@
+id: pending-language-filter-case
+kind: pre-fix-snapshot
+fix_pr: pending
+input_rev: deefa90f6d10
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java
+  - src/frontend/src/components/profileBuilder/ProfileBuilderStep1.vue
+summary: Coach search language filter lowercases the query but compares it against languages stored verbatim
+expected_findings:
+  - id: F1
+    title: findIdsByLanguage lowercases only the input, not the stored array elements
+    category: logic
+    severity: medium
+    description: >
+      CoachProfileRepository.findIdsByLanguage runs `lower(:lang) = ANY(languages)`: the parameter is
+      lowercased, the stored array elements are not. CoachProfileService.saveStep1 stores
+      req.languages() exactly as submitted (ProfileBuilderStep1Request only requires non-blank
+      strings) and the profile builder's picker offers capitalised values such as 'English' and
+      'German'. A stored 'English' never equals 'english', so the id list CoachSearchService feeds
+      into the search is empty and any coach search with a language set returns no coach at all.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+        symbol: findIdsByLanguage
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+        symbol: saveStep1
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchService.java
+        symbol: findIdsByLanguage
+      - file: src/frontend/src/components/profileBuilder/ProfileBuilderStep1.vue
+        symbol: languageOptions
+source: results/baseline-2026-11-02/real-sample.md S05, owner-verified 2026-11-03
+notes: >
+  Open bug, no fix PR yet. input_rev is the 330-missing-version-lost-updates input revision. The
+  frontend picker is in scope so a reviewer can see that stored values are capitalised; the
+  EditCoachIdentityDialog uses the same option list.

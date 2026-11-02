@@ -108,6 +108,11 @@ source: PR #353 description, "Gap 1"
 notes: anything a future curator should know
 ```
 
+**Open-bug cases.** A defect found by a reviewer and confirmed by a human before any fix
+exists (see `results/*/real-sample.md`) is still a case: set `fix_pr: pending`, omit
+`fix_merge`, and pin `input_rev:` to the commit the reviewer saw. When the fix merges,
+replace `pending` with the PR number, add `fix_merge`, drop `input_rev`.
+
 Rules for `expected_findings`:
 
 - One entry per independent defect. A fix PR that closes five gaps yields five entries,
@@ -152,11 +157,17 @@ An expected finding scores 1 for a `full` match, 0.5 for `partial`, 0 for `none`
 - recall = matched points / expected findings
 - precision = reported findings that matched something or were judged `real` / reported findings
 
-Both are reported per arm, per category, per case kind and per case. The judge is a
-tool-less `claude -p` call that sees the case YAML (the answer key) and the reported
-findings, never the fix. It is instructed to be strict about `real`: an unmatched report
-with no concrete trigger is `noise`. Precision is therefore the noisier metric; treat
-differences of a few points as nothing.
+Both are reported per arm, per category, per case kind and per case. The judge runs in
+two passes. Pass 1 is a tool-less `claude -p` call that sees the case YAML (the answer key)
+and the reported findings and does the matching. Pass 2 (judge v2) re-checks each unmatched
+report graded `real` that carries a `verification` caveat, with one tool-less call that gets
+the cited file (or, for a diff case, that file's hunks) inlined, and downgrades refuted ones
+to `noise`. A check that cannot settle it (the caveat points outside what the reviewer saw)
+yields `unverified`: not credited to precision, not called noise, reported in its own
+column. The judge never sees the fix. A 20-item owner sample of the v1 judge's `real` verdicts held up at 90%, and both
+misses were findings whose own caveat named the check that refutes them, which is what pass 2
+runs. Matching is identical across versions, so recall is comparable; precision is not,
+and verdict files record `judge_version`.
 
 ### Cost and isolation
 
