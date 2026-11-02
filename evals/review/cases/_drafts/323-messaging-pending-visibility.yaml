@@ -1,0 +1,45 @@
+id: 323-messaging-pending-visibility
+kind: pre-fix-snapshot
+fix_pr: 323
+fix_merge: be46d7bb
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+  - src/main/java/com/softropic/skillars/platform/messaging/repo/MessageRepository.java
+  - src/main/java/com/softropic/skillars/platform/messaging/service/ModerationResultApplier.java
+summary: Messaging — unmoderated PENDING message content is returned to recipients, and the recipient's read mark advances past messages they could not see
+expected_findings:
+  - id: F1
+    title: PENDING (not yet moderated) message content is visible to recipients
+    category: security
+    severity: high
+    description: >
+      MessagingService.toMessageDto sets contentHidden only when moderationStatus is BLOCKED or
+      UNDER_REVIEW. A freshly sent message is saved as PENDING before the moderation verdict
+      arrives, and getMessages / getMessagesForPlayerConversation map every row through the same
+      toMessageDto regardless of who the caller is. A recipient (or the parent oversight view)
+      polling the history therefore reads content that moderation has not yet cleared, including
+      content that will later be BLOCKED.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: toMessageDto
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: getMessages
+  - id: F2
+    title: Reading the history advances lastReadAt past messages the reader has not been shown
+    category: logic
+    severity: low
+    description: >
+      getMessages calls updateLastRead(conv, role) with the current time on every call, before
+      the page is mapped and independently of what the page contains. Any message held back from
+      the reader at that moment (PENDING or UNDER_REVIEW from another party) is thereby marked as
+      read; when it is later approved it is already behind the read mark and never counts as unread.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: updateLastRead
+source: PR #323 description, item 1
+notes: >
+  The SSE path (ids only, NEW_MESSAGE after an APPROVED verdict commits) was already safe and
+  should not be flagged. F2 is described at the input revision as a consequence of the hidden
+  statuses that exist there (UNDER_REVIEW); the fix PR framed it around PENDING once PENDING became
+  hidden too. Either framing counts.

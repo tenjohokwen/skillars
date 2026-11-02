@@ -1,0 +1,44 @@
+id: 384-stripe-oauth-state-and-payout-destination
+kind: pre-fix-snapshot
+fix_pr: 384
+fix_merge: a4b3ed40
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachStripeAccount.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+summary: Stripe Connect onboarding (S-01, S-02) - predictable OAuth state, silent payout destination change
+expected_findings:
+  - id: F1
+    title: Stripe OAuth state is the coach's public id, so the callback is CSRF-able
+    category: security
+    severity: high
+    description: >
+      generateOnboardingUrl sets state to coachId.toString() and handleOAuthCallback accepts the callback
+      when state equals the authenticated coach's id. The coach id is a public UUID, so an attacker can
+      complete the Stripe OAuth flow with their own Stripe account, capture the resulting code, and lure a
+      logged-in coach to the callback URL with state=<victim coach id>; the victim's payouts are then
+      routed to the attacker's account. The value is also logged on mismatch.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java
+        symbol: generateOnboardingUrl
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java
+        symbol: handleOAuthCallback
+  - id: F2
+    title: Replacing the connected Stripe account is silent and takes effect immediately
+    category: security
+    severity: medium
+    description: >
+      upsertCoachStripeAccount overwrites an existing row's stripeAccountId with the new account, resets
+      the status fields and returns. No notification is sent to the coach and no cooling-off period is
+      applied, so a session-hijacker or an F1 attacker who swaps the payout destination receives the next
+      released payouts before the coach can notice.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java
+        symbol: upsertCoachStripeAccount
+source: PR #384 description, S-01 / S-02
+notes: >
+  S-05 (sessions survive password change/reset) is in the security module and is a separate case,
+  384-password-change-keeps-sessions. Re-authentication before changing the payout destination was
+  explicitly left out of scope.

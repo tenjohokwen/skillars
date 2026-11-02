@@ -1,0 +1,148 @@
+id: 318-cashout-money-integrity
+kind: pre-fix-snapshot
+fix_pr: 318
+fix_merge: 9ef52ed9
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/PaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CashOutRequest.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CreditLedgerEntryType.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/BookingPaymentRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/AdminFinanceOverviewDto.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/RevenueSummaryDto.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CoachRevenueAdminDto.java
+  - src/frontend/src/pages/parent/ParentCreditWalletPage.vue
+summary: payment module — parent credit cash-out (balance check, debit, Stripe refund and compensation) and the admin finance overview figures
+expected_findings:
+  - id: F1
+    title: Cash-out balance check and ledger debits are not atomic
+    category: concurrency
+    severity: high
+    description: >
+      CashOutService.processCashOut is not transactional: it reads getBalance in one transaction, then writes
+      CASH_OUT_DEBIT and STRIPE_FEE_DEBIT through two separate @Transactional writeLedgerEntry calls with no
+      lock on the payer. Two concurrent cash-outs (or a cash-out racing a booking deduction) both pass the
+      balance check and both debit, driving the wallet negative. The SERIALIZABLE
+      CreditWalletService.debitForCashOut that was meant for this has no callers.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+        symbol: debitForCashOut
+  - id: F2
+    title: Stripe fee is charged twice on cash-out
+    category: logic
+    severity: high
+    description: >
+      processCashOut debits the wallet by requestedAmount (CASH_OUT_DEBIT) and additionally by feeAmount
+      (STRIPE_FEE_DEBIT), but refunds the card only netAmount = requestedAmount - feeAmount. The parent
+      loses the fee on both sides: a cash-out of the full balance leaves the wallet at -fee while the card
+      receives balance - fee.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+  - id: F3
+    title: Refund idempotency key collides across different cash-outs on the same PaymentIntent
+    category: logic
+    severity: high
+    description: >
+      StripePaymentGateway.refund always uses the key "refund-" + paymentIntentId, and cash-out refunds
+      against the customer's lastPaymentIntentId. A parent's second cash-out (or a cash-out after a pack
+      compensation refund) on the same PaymentIntent replays Stripe's first refund response instead of
+      issuing a new refund, while the wallet is debited again. Nothing checks that the PaymentIntent still
+      has enough refundable amount for the requested net.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: refund
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+  - id: F4
+    title: Every Stripe failure is treated as a definite refund failure and credit is restored
+    category: logic
+    severity: high
+    description: >
+      The catch in processCashOut writes CASH_OUT_REVERSAL rows for any PaymentGatewayException, and the
+      gateway maps every StripeException (including timeouts, connection errors and 5xx) to that one exception.
+      When Stripe already executed the refund but the response was lost, the parent gets the card refund and
+      the restored credit. The two reversal writes are also separate transactions, so a crash between them
+      leaves a half-restored wallet.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: refund
+  - id: F5
+    title: Wallet page reads a response field the backend never sends, so every failure shows "insufficient credit"
+    category: logic
+    severity: low
+    description: >
+      ParentCreditWalletPage sets cashoutError from err.response.data.message with a fallback to the
+      insufficient-credit text. The backend ErrorDto has helpCode, errorMsg and fieldErrors but no message
+      field, so a declined refund, a missing payment method or a too-small amount is all reported to the
+      parent as insufficient credit.
+    anchors:
+      - file: src/frontend/src/pages/parent/ParentCreditWalletPage.vue
+        symbol: cashoutError
+  - id: F6
+    title: Admin finance overview derives commission and Stripe fees from gross × live rates
+    category: logic
+    severity: medium
+    description: >
+      getAdminOverview computes totalCommissionCollected as sumTotalGross × the current platform.commission.rate,
+      although each booking_payments row carries the rate stamped at capture (the one CoachPayoutOutboxSupport
+      actually deducts). The gross includes credit- and pack-funded sessions (which have no coach payout and
+      so no commission) and refunded bookings (still CAPTURED), and excludes session-pack sales entirely
+      because SessionPackPurchase never records what was charged. The Stripe-fee estimate applies the card fee
+      to the whole gross, including the credit-funded part that never touched a card.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+        symbol: getAdminOverview
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/BookingPaymentRepository.java
+        symbol: sumTotalGross
+  - id: F7
+    title: Cash-out total ignores reversed cash-outs
+    category: logic
+    severity: low
+    description: >
+      sumTotalCashOuts sums every CASH_OUT_DEBIT row in the period. A cash-out whose refund failed writes
+      CASH_OUT_REVERSAL rows but the debit row remains, so the admin overview reports money as cashed out that
+      never left the platform.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java
+        symbol: sumTotalCashOuts
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+        symbol: getAdminOverview
+  - id: F8
+    title: Coach net payout subtracts an estimated Stripe fee the coach never pays
+    category: logic
+    severity: medium
+    description: >
+      getCoachRevenueSummary takes the ledger net (gross - commission, the amount actually transferred) and
+      subtracts stripeFees estimated from gross × payment.stripe.feeRate + fixed × sessionCount. Under separate
+      charges and transfers the platform pays Stripe's fee, so the coach dashboard and the admin coach
+      drill-down show a netPayout lower than what was transferred.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+        symbol: getCoachRevenueSummary
+non_findings:
+  - title: subscriptionRevenue and outstandingDisputeCount are hard-coded to zero
+    reason: Both are marked TODO in code and were removed rather than computed by the fix; a reviewer noting them is right but they are not scored defects.
+  - title: PaymentLifecycleService reads the credit balance outside any cash-out lock
+    reason: Known booking-settlement vs cash-out race, explicitly left out of scope by PR 318.
+source: PR #318 description, items 1-3
+notes: >
+  Input revision 8661a41e. Dead code (PaymentProperties.feeRate/feeFixed, SessionPackExpiryWarningEvent.coachEmail)
+  and stale comments (ReliabilityStrikeService, routes.js) from items 4-5 are not findings. CashOutRequest
+  accepting sub-cent amounts was fixed in the PR but is a hardening, not a defect a reviewer would reliably
+  flag; left out. F8 relies on a Stripe billing fact (platform pays fees under separate charges and
+  transfers) rather than code alone.

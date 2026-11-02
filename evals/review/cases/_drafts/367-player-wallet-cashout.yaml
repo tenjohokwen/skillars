@@ -1,0 +1,44 @@
+id: 367-player-wallet-cashout
+kind: pre-fix-snapshot
+fix_pr: 367
+fix_merge: b123c73d
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/api/CreditWalletResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/RevenueResource.java
+  - src/main/java/com/softropic/skillars/platform/security/service/PlayerOwnershipGuard.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/PlayerProfileRepository.java
+summary: wallet endpoints are gated by role, so a self-registered adult player who owns cashable credit cannot cash it out
+confidence: high
+expected_findings:
+  - id: F1
+    title: Cash-out is PARENT-only although self-registered adult players own cashable wallet credit
+    category: logic
+    severity: medium
+    description: >
+      `CreditWalletResource.cashOut` is annotated `HAS_PARENT_ROLE`. A self-registered adult player has no
+      parent; their bookings carry their own user id as `Booking.parentId`, so refunds land in a wallet
+      keyed by their id and `CashOutService` would process them unchanged. The role gate means that credit
+      can be viewed via `/balance` (PARENT or PLAYER) but never withdrawn, and the comment citing UAT.5
+      "out of scope" is the only justification.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/CreditWalletResource.java
+        symbol: cashOut
+  - id: F2
+    title: Wallet read endpoints accept any PLAYER, including parent-linked minors who own no wallet
+    category: security
+    severity: low
+    description: >
+      `getBalance`, `getBatchQuote` and `RevenueResource.getCreditStatement` use `HAS_PARENT_OR_PLAYER_ROLE`.
+      A player whose profile has a parent is not a payer (the wallet belongs to the parent's user id), yet
+      the endpoints answer for the caller's own id and expose an empty-but-valid wallet surface. There is no
+      ownership predicate distinguishing a parentless adult player from a linked child;
+      `PlayerOwnershipGuard` has `check` and `owns` but nothing for wallet ownership.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/CreditWalletResource.java
+        symbol: getBalance
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/RevenueResource.java
+        symbol: getCreditStatement
+      - file: src/main/java/com/softropic/skillars/platform/security/service/PlayerOwnershipGuard.java
+        symbol: owns
+source: PR #367 description
+notes: Input revision b123c73d^1. F2 is a precision/consistency finding; F1 is the user-facing defect.

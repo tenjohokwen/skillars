@@ -1,0 +1,178 @@
+id: 360-wrapup-mode-and-time-gates
+kind: pre-fix-snapshot
+fix_pr: 360
+fix_merge: ee7e1ae6
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/admin/contract/DisputeError.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingError.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingExpiryScheduler.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+summary: Session completion and time gates — client-trusted wrap-up mode, accept after start, no-show at start+0, abandoned live sessions, reminders and reschedules
+expected_findings:
+  - id: F1
+    title: Wrap-up trusts the client's mode; a never-started session can be completed as LIVE and paid without parent confirmation
+    category: security
+    severity: high
+    description: >
+      BookingCompletionService.submitWrapUp stores req.mode() verbatim and, when it is "LIVE", fires
+      QUICK_COMPLETE and publishes BookingCompletedEvent immediately, which pays the coach. The server never
+      checks that the session was actually started (liveStartedAt) and not auto-ended. A coach who did
+      Quick Complete, or never ran the session, can submit mode=LIVE and skip the parent confirmation
+      window entirely.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: submitWrapUp
+  - id: F2
+    title: A REQUESTED booking can be accepted and charged after its start time has passed
+    category: logic
+    severity: high
+    description: >
+      BookingService.acceptBooking and BookingBatchService.acceptOneBooking check ownership, suspension,
+      slot overlap and price, but never compare requestedStartTime to now. A stale request can be
+      accepted after the slot has passed, which charges the parent for a session that can no longer
+      happen. BookingExpiryScheduler only sweeps by createdAt (findRequestedBookingsOlderThan), so a
+      request made shortly before its start is neither expired nor refused.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: acceptBooking
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: acceptOneBooking
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+        symbol: findRequestedBookingsOlderThan
+  - id: F3
+    title: Player no-show can be reported the instant the session starts
+    category: edge-case
+    severity: medium
+    description: >
+      recordNoShowPlayer refuses only when now is before requestedStartTime. At start + 0 seconds the
+      coach can record NO_SHOW_PLAYER, which is a full-fee forfeit paid to the coach with no refund. The
+      coach no-show path grants a 30-minute window; the player side has no grace at all.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: recordNoShowPlayer
+  - id: F4
+    title: IN_PROGRESS / PAUSED / ended-but-unstarted sessions are dead ends with the money captured
+    category: logic
+    severity: high
+    description: >
+      Once a session is started (IN_PROGRESS or PAUSED) nothing moves it on if the coach never submits a
+      wrap-up: no scheduler watches these statuses, and BookingStateMachine offers no SYSTEM path out of
+      them. Likewise an UPCOMING booking whose end time has passed without ever being started stays
+      UPCOMING forever. In all cases payment has already been captured and neither the coach payout nor a
+      parent refund can ever be produced.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+        symbol: IN_PROGRESS
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: submitWrapUp
+  - id: F5
+    title: Parent cannot dispute a live session, and cancelling a PAUSED one is a forfeit paying the coach
+    category: logic
+    severity: medium
+    description: >
+      DisputeService.ELIGIBLE_STATUSES lists only terminal statuses, so a parent whose session is stuck
+      IN_PROGRESS or PAUSED has no dispute path. Their only exit is cancelBookingAsParent, which the state
+      machine allows from PAUSED and which BookingService treats as moneyTaken with refundEligible=false,
+      i.e. a forfeit that pays the coach in full for a session that may never have finished.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: ELIGIBLE_STATUSES
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsParent
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+        symbol: PAUSED
+  - id: F6
+    title: Accepting a reschedule does not reset the reminder stamps
+    category: logic
+    severity: low
+    description: >
+      RescheduleService.acceptRescheduleShared overwrites requestedStartTime/requestedEndTime but leaves
+      primaryReminderSentAt and secondaryReminderSentAt untouched. An UPCOMING booking that already had
+      its 2h reminder and is then moved later never gets a reminder for the new time, because
+      findUpcomingWithin2hWindow filters on secondaryReminderSentAt IS NULL.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+        symbol: acceptRescheduleShared
+  - id: F7
+    title: Secondary reminder does not re-check status inside its transaction
+    category: concurrency
+    severity: low
+    description: >
+      BookingReminderScheduler reads the candidate ids unlocked, then in the per-booking transaction
+      reloads the row, stamps secondaryReminderSentAt and publishes the reminder without re-checking that
+      the booking is still UPCOMING or that the stamp is still null. A booking cancelled or rescheduled
+      between the id query and the write still gets a reminder.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingReminderScheduler.java
+        symbol: setSecondaryReminderSentAt
+  - id: F8
+    title: getCoachWeekSchedule resolves player names one query per booking
+    category: performance
+    severity: low
+    description: >
+      getCoachWeekSchedule batches the completion data with findByBookingIdIn but then calls
+      resolvePlayerName(b.getPlayerId()) inside the per-booking map, issuing one player lookup per
+      booking in the week (N+1).
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: getCoachWeekSchedule
+  - id: F9
+    title: Batch bookings stamp the coach's raw timezone without the UTC fallback
+    category: edge-case
+    severity: low
+    description: >
+      BookingBatchService.createBatch sets canonicalTimezone from coach.getCanonicalTimezone()
+      directly, while the single-request path goes through BookingService.resolveCoachTimezone, which
+      validates the zone and falls back to UTC. A coach with a null or invalid stored timezone produces
+      batch bookings with a null/invalid canonical_timezone.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveCoachTimezone
+  - id: F10
+    title: Duplicate-next-week adds 7 days as an Instant, shifting local time across DST
+    category: edge-case
+    severity: low
+    description: >
+      BookingDuplicationService.duplicateNextWeek computes newStart/newEnd with
+      Instant.plus(7, ChronoUnit.DAYS), i.e. exactly 168 hours. Across a DST change in the booking's
+      canonical timezone the duplicate lands one hour earlier or later in local time than the original,
+      and may fall outside the coach's availability window.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: duplicateNextWeek
+  - id: F11
+    title: submitWrapUp reads the booking unlocked and relies on an unreachable constraint catch for idempotency
+    category: concurrency
+    severity: low
+    description: >
+      submitWrapUp loads the booking via getBookingOrThrow without a row lock, so two concurrent QUICK
+      submits both pass verifyStatus. The duplicate is meant to be absorbed by catching
+      DataIntegrityViolationException around completionDataRepository.save, but with JPA the constraint
+      violation surfaces at flush/commit, after the method returns, so the catch never fires and the
+      second caller gets a 500 instead of a no-op.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: submitWrapUp
+non_findings:
+  - title: confirmProposedBooking refuses with START_TIME_IN_PAST rather than a dedicated code
+    reason: The parent-confirm path (C2) already has a start-time check; the error-code rename is cosmetic.
+  - title: resolveDispute does not refuse while the booking is IN_PROGRESS / PAUSED / CPC
+    reason: >
+      At the input revision a dispute can never exist on those statuses (F5), so the missing guard in
+      resolveDispute is a consequence of fixing F5, not an independently observable defect.
+source: PR #360 description, fixes table (booking H1, H2, L1–L6, M4; payouts M2, L4)
+notes: >
+  All findings anchored at ee7e1ae6^1. "booking L7" (expiry paging) is folded into F2's expiry query
+  anchor. The admin alert type / V209 migration / i18n / frontend changes are consequences of the fixes.

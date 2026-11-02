@@ -1,0 +1,44 @@
+id: 364-commission-key-allowed-clients
+kind: pre-fix-snapshot
+fix_pr: 364
+fix_merge: 2ad84416
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/service/ProjectedRevenueService.java
+  - src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+  - src/main/resources/application.yaml
+summary: projected revenue reads a duplicate commission config key; placeholder machine client ids ship in the base config
+confidence: low
+expected_findings:
+  - id: F1
+    title: ProjectedRevenueService reads platform.commission_rate while settlement uses platform.commission.rate
+    category: logic
+    severity: medium
+    description: >
+      `ProjectedRevenueService` calls `configService.getString("platform.commission_rate")` and silently
+      defaults to 0 commission when missing. Every other reader (`BookingPaymentPersistenceService`,
+      `CoachPayoutOutboxSupport`, `SessionPackPurchase`) stamps and computes from `platform.commission.rate`.
+      An admin changing the live rate therefore leaves the coach's projected-revenue figure on a stale
+      duplicate key, and the projection diverges from what is actually settled.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/ProjectedRevenueService.java
+        symbol: platform.commission_rate
+  - id: F2
+    title: Placeholder machine client ids are accepted in every environment
+    category: security
+    severity: medium
+    description: >
+      `application.yaml` sets `allowed.clients: myClientId,hisClientId,herClientId,ourClientId` in the base
+      profile, and `SecurityConfiguration.allowedClients` splits that straight into the list
+      `ClientIdAccessDecisionManager` trusts. Unless an environment overrides the property, production
+      accepts these well-known placeholder values as valid `X-Client-Id` machine clients.
+    anchors:
+      - file: src/main/resources/application.yaml
+        symbol: allowed
+      - file: src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+        symbol: allowedClients
+source: PR #364 description, "Backend" bullets 2 and 5
+notes: >
+  Most of #364 is provisioning (compose passthroughs, deploy backup step, blank-key boot warnings, SMS/OTP
+  config guard, resync scheduler) and is not a reviewer-detectable code defect; only these two items are
+  anchorable at 2ad84416^1. Low confidence that an audit scoped to three files is a fair test; consider
+  dropping if the suite needs tighter cases.

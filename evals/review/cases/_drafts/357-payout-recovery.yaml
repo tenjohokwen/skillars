@@ -1,0 +1,187 @@
+id: 357-payout-recovery
+kind: pre-fix-snapshot
+fix_pr: 357
+fix_merge: c5403f2d
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/api/RevenueResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CoachPayoutStatus.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachPayout.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachPayoutRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutReversalHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachStripeAccountStatusApplier.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StalePayoutAlertScheduler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeTransferErrorClassifier.java
+summary: coach payout recovery — UPHOLD_COACH after a cut, HOLD rows never re-driven, refused reversals, transfer adoption, reporting bounds
+expected_findings:
+  - id: F1
+    title: UPHOLD_COACH does not restore a payout that a refund already cut, nor top up a RELEASED/REVERSED one
+    category: logic
+    severity: high
+    description: >
+      payInFull handles only a missing row or a CANCELLED row. A PENDING_RELEASE/HOLD/FROZEN row that
+      applyRefund already reduced via cutNet keeps the reduced net (cutNet overwrites net/gross/commission in
+      place, so the original amounts are gone), and a RELEASED or REVERSED row is explicitly "left as it is".
+      When an admin upholds the coach after a partial refund, the coach is therefore not paid the full net
+      the resolution promises.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+        symbol: payInFull
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+        symbol: cutNet
+  - id: F2
+    title: HOLD payouts are never re-driven when the coach's Stripe account becomes payable
+    category: logic
+    severity: high
+    description: >
+      CoachPayoutTransferHandler parks a non-retryable transfer failure in HOLD without throwing, so the
+      outbox row is consumed. Nothing listens for the account later becoming usable: CoachStripeAccountStatusApplier
+      publishes CoachStripeOnboardingCompleteEvent only when onboarding flips to COMPLETE (charges && payouts),
+      not when the transfers capability turns active, and no code re-enqueues a coach's HOLD rows. A coach who
+      fixes their account stays unpaid until an operator intervenes by SQL.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+        symbol: handle
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachStripeAccountStatusApplier.java
+        symbol: publishOnboardingCompleteAfterCommit
+  - id: F3
+    title: A pending transfers capability or a freshly reconnected account is a terminal HOLD instead of a retry
+    category: edge-case
+    severity: medium
+    description: >
+      resolveTransferDestination throws a non-retryable CoachPayoutTransferException (ACCOUNT_NOT_READY) for any
+      transfers_capability other than "active", including Stripe's transient "pending", and for an account with
+      no status yet after OAuth. The handler turns that into HOLD, so a payout that would have succeeded minutes
+      later is parked permanently.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: resolveTransferDestination
+  - id: F4
+    title: Reversal handler reads the payout row without a lock
+    category: concurrency
+    severity: medium
+    description: >
+      CoachPayoutReversalHandler.handle loads the row with findById while the transfer handler and the
+      dispute/adjustment code lock the same row with findByIdForUpdate. A concurrent writer can change status,
+      reversed_amount or net between this read and the save, and the handler's computed amount/status
+      overwrites it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutReversalHandler.java
+        symbol: handle
+  - id: F5
+    title: An existing transfer in the group is adopted regardless of its amount, and one to another destination is ignored
+    category: logic
+    severity: high
+    description: >
+      findExistingTransfer adopts the first non-reversed transfer in the transfer group whose destination equals
+      the coach's current account, without comparing the amount to the net being paid. A transfer that went to a
+      previous (still live) connected account is filtered out, so a second transfer is created and the coach is
+      paid twice. Neither mismatch is surfaced.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: findExistingTransfer
+  - id: F6
+    title: balance_insufficient on a reversal retries forever and a refused reversal leaves no recoverable debt
+    category: logic
+    severity: high
+    description: >
+      StripeTransferErrorClassifier treats balance_insufficient as retryable, which is right for an outgoing
+      transfer but wrong for a reversal: the coach has already withdrawn the money and the outbox row spins into
+      OUTBOX_STUCK. When a reversal does fail non-retryably the handler only sets REVERSAL_FAILED and alerts; the
+      amount is not recorded as owed by the coach and nothing offsets it against later payouts. A later reversal
+      arriving on a REVERSAL_FAILED row is an INFO no-op because the status is "not RELEASED".
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeTransferErrorClassifier.java
+        symbol: classify
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutReversalHandler.java
+        symbol: handle
+  - id: F7
+    title: Transfer reversals rely solely on Stripe's 24h idempotency window
+    category: edge-case
+    severity: medium
+    description: >
+      reverseTransfer creates a reversal with only an idempotency key and no identifying metadata, and never lists
+      the transfer's existing reversals first. A reversal re-driven more than 24 hours after a partial success
+      (for example after a long OUTBOX_STUCK) creates a second reversal for the same share.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: reverseTransfer
+  - id: F8
+    title: Coach share of a refund is computed from the already-cut net and gross
+    category: logic
+    severity: medium
+    description: >
+      applyRefund calls coachShareOfRefund with row.getNetAmount(), and ChargeDisputeWebhookService passes
+      row.getGrossAmount() as the price base; both are the current values after earlier cuts by cutNet. For a
+      pending payout two partial refunds therefore cost the coach less than the same two refunds on a released
+      payout (where the share is capped against the effective net but based on the original), so the outcome
+      depends on timing.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+        symbol: applyRefund
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+        symbol: onDisputeClosed
+  - id: F9
+    title: Stale payout alert scheduler processes only the first page
+    category: edge-case
+    severity: low
+    description: >
+      alertStalePayouts fetches a single PageRequest.of(0, BATCH_SIZE) from findStaleUnreleased and never
+      continues. Once more than BATCH_SIZE payouts are stale, the excess are never alerted on, and because
+      alerting does not change updated_at the same first page is returned every day.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StalePayoutAlertScheduler.java
+        symbol: alertStalePayouts
+  - id: F10
+    title: Revenue endpoints accept an unbounded page size and negative page index
+    category: performance
+    severity: low
+    description: >
+      getCoachTransactions and getCreditStatement pass the raw page and size request parameters to
+      PageRequest.of. A caller can request size=1000000 and pull the whole table in one query, or a negative
+      page that throws a 500 instead of a 400.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/RevenueResource.java
+        symbol: getCoachTransactions
+  - id: F11
+    title: refundsIssued is built from an IN-list of released booking ids and misses other refunds
+    category: logic
+    severity: low
+    description: >
+      getCoachRevenueSummary collects the released booking ids for the period and sums refunds with
+      sumRefundsByBookingIds over that list. Refunds on the coach's bookings that have no released payout (a
+      cancelled or disputed session) are not counted, and the IN-list grows with the coach's history.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+        symbol: getCoachRevenueSummary
+  - id: F12
+    title: Revenue summary currency is hard-coded to "EUR"
+    category: logic
+    severity: low
+    description: >
+      RevenueSummaryDto is built with the literal "EUR" although the platform currency is a configured value
+      (platform.payment.currency, read elsewhere by StripePaymentGateway and CoachPayoutOutboxSupport). A
+      non-EUR deployment reports the wrong currency label on every coach dashboard.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java
+        symbol: getCoachRevenueSummary
+non_findings:
+  - title: Unmapped Stripe 4xx errors on a transfer are retryable rather than HOLD
+    reason: Deliberate fail-safe (AC8.1) so a human sees them via OUTBOX_STUCK; documented in the classifier javadoc.
+  - title: Transfer to coach is adopted from the group listing before creating a new one
+    reason: The listing itself is intended (24h idempotency window); only the missing amount/destination checks (F5) are defects.
+source: PR #357 description — payouts H1, H3, M3, M4, M5/stripe M5, stripe L1, M6, L1, L2/L3
+notes: >
+  Items not turned into findings: the new admin release-held endpoint, heldAmount/heldCount dashboard fields and
+  CoachPayoutDebt/TopUp handlers are additions with no defect at the input revision. "payouts L5" (payout currency
+  from the charge) was explicitly skipped by the PR. TRANSFER_*_MISMATCH never being re-driven is part of the fix,
+  not a pre-existing defect. The REVERSAL_FAILED-row-with-transfer back to RELEASED is a migration concern.

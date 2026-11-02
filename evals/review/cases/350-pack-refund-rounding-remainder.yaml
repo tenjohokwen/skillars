@@ -1,0 +1,52 @@
+id: 350-pack-refund-rounding-remainder
+kind: introducing-diff
+fix_pr: 350
+fix_merge: c89ec9a6
+introducing_pr: 338
+introducing_merge: cb239255
+summary: session pack refunds use a rounded-down per-session share that is not reconciled with the coach payout ledger, leaking cents
+confidence: high
+expected_findings:
+  - id: F1
+    title: Pack session refunds at the rounded-down share are never reconciled against the pack's charged amount
+    category: logic
+    severity: high
+    description: >
+      `SessionPackPurchase.perSessionShare()` divides `amount_charged` by `session_count` with
+      `RoundingMode.DOWN`, and `BookingService.resolveAmountPaid` refunds a pack booking at exactly that
+      value. The coach payout side (`CoachPayoutOutboxSupport.allocatePackShare`) tracks only
+      `payout_sessions_allocated` / `payout_gross_allocated` and gives the remainder to the last PAID
+      session; a refunded session is never recorded on that ledger. For a 1000.00 / 3 pack where every
+      session is refunded the payer receives 999.99, and in mixed payout/refund orders up to
+      `session_count - 1` cents reach neither the coach nor the payer. Every wallet refund of a pack
+      session (coach cancel on an expired pack, coach no-show, admin cancel, pause) takes this path.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java
+        symbol: perSessionShare
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveAmountPaid
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+        symbol: allocatePackShare
+  - id: F2
+    title: Pack refunds are not idempotent per booking and can be credited twice on redelivery
+    category: edge-case
+    severity: medium
+    description: >
+      The refund amount is computed statelessly from the pack row in `resolveAmountPaid` and handed to the
+      refund outbox; nothing on the pack records that this booking's session has already been settled as a
+      refund. A re-delivered cancellation event or a clawback followed by a new refund therefore has no
+      per-booking marker to detect that the session was already refunded, and the pack-level totals cannot
+      tell a refunded session from one still unsettled.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveAmountPaid
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+        symbol: onBookingCancelledByCoach
+non_findings:
+  - title: perSessionShare rounds DOWN rather than HALF_UP
+    reason: Rounding down is deliberate (3 x 66.67 would exceed a 200.00 charge); the defect is the missing remainder reconciliation, not the rounding direction.
+source: PR #350 description, "Gap"
+notes: >
+  #338 (cb239255) introduced perSessionShare and routed resolveAmountPaid through it; allocatePackShare
+  pre-dates #338 and is unchanged in that diff but is the counterpart a reviewer must read to see the leak.
+  F2 is weaker evidence; a reviewer may only report F1.

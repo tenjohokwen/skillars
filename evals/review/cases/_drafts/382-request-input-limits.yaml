@@ -1,0 +1,48 @@
+id: 382-request-input-limits
+kind: pre-fix-snapshot
+fix_pr: 382
+fix_merge: fa62da9d
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/messaging/api/MessagingResource.java
+  - src/main/java/com/softropic/skillars/platform/video/api/VideoWebhookResource.java
+  - src/main/resources/mails/profileChange.html
+summary: Request input limits (S-26) - page size floor, webhook body cap, unescaped mail template value
+expected_findings:
+  - id: F1
+    title: Messaging page size is capped at 100 but not floored at 1
+    category: edge-case
+    severity: low
+    description: >
+      MessagingResource builds PageRequest.of(Math.max(0, page), Math.min(size, 100)). A size of 0 or a
+      negative value passes through and PageRequest throws IllegalArgumentException, surfacing as a 500
+      for a trivially crafted query parameter.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/api/MessagingResource.java
+        symbol: MessagingResource
+  - id: F2
+    title: Video webhook reads an unbounded body before HMAC verification
+    category: security
+    severity: medium
+    description: >
+      receiveBunnyWebhook binds the whole request body as a String and only then calls verifyWebhook. An
+      unauthenticated caller can post arbitrarily large payloads that are fully buffered and HMAC'd before
+      rejection; there is no Content-Length check or bounded read.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoWebhookResource.java
+        symbol: receiveBunnyWebhook
+  - id: F3
+    title: profileChange mail template renders a user-influenced message with th:utext
+    category: security
+    severity: low
+    description: >
+      The EMAIL_CHANGED branch uses th:utext with the old and new email values interpolated into the
+      message, so the values are emitted unescaped into the HTML mail. An email address containing markup
+      is rendered as HTML in the recipient's client.
+    anchors:
+      - file: src/main/resources/mails/profileChange.html
+        symbol: th:utext
+source: PR #382 description, S-26
+notes: >
+  spring.data.web.pageable.max-page-size (AdminGdprResource) and the PublicPrefixPreAuthorize convention
+  test are configuration/test additions without a code anchor; not findings.

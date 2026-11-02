@@ -1,0 +1,123 @@
+id: 381-auth-hardening-rate-limits-and-keys
+kind: pre-fix-snapshot
+fix_pr: 381
+fix_merge: c9c10fa6
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java
+  - src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+  - src/main/java/com/softropic/skillars/platform/security/api/AccountResource.java
+  - src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/PhoneOtpToken.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/PhoneOtpTokenRepository.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/LoginAttemptRepository.java
+  - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+  - src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java
+  - src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java
+  - src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java
+  - src/main/java/com/softropic/skillars/platform/security/service/PlayerRegistrationService.java
+summary: Authentication hardening (S-11, S-13, S-14, S-15) - login, activation/reset keys, OTP, enumeration, security toggle
+expected_findings:
+  - id: F1
+    title: Login rate limit is keyed per (login, IP) only; distributed attacks on one account are unbounded
+    category: security
+    severity: medium
+    description: >
+      LoginRateLimiter.checkLimited builds its identifier from login plus client IP. An attacker rotating
+      source IPs gets a fresh failed-attempt budget per IP against the same account, so there is no cap on
+      total guesses per account per window even though a subjectHash(login) column already exists.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java
+        symbol: checkLimited
+      - file: src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java
+        symbol: identifier
+  - id: F2
+    title: Activation and password-reset keys are 10 digits from a non-cryptographic generator
+    category: security
+    severity: high
+    description: >
+      RandomUtil.generateActivationKey and generateResetKey return RandomStringUtils.randomNumeric(10):
+      about 33 bits of entropy from commons-lang's default (non-secure) random. Combined with endpoints
+      that look the key up by exact match, a reset key is guessable in a feasible number of requests.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java
+        symbol: generateResetKey
+      - file: src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java
+        symbol: generateActivationKey
+  - id: F3
+    title: POST /account/activate is not rate limited
+    category: security
+    severity: medium
+    description: >
+      AccountResource.activateAccount takes a key from the query string and activates the matching
+      account with no @RateLimited on the endpoint or the facade method, unlike reset_password/finish.
+      Together with F2 it allows unbounded online guessing of activation keys.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/api/AccountResource.java
+        symbol: activateAccount
+  - id: F4
+    title: Phone OTP is never invalidated by wrong guesses; throttling is a per-JVM in-memory bucket
+    category: security
+    severity: medium
+    description: >
+      verifyPhone in the three registration services throttles wrong guesses with
+      rateLimitingService.tryConsume keyed on the OTP id (5 per 10 minutes, in memory). The PhoneOtpToken
+      row has no failed-attempt counter and is never marked used on failure, so the limiter state is lost
+      on restart or across instances and the same OTP stays guessable for its whole lifetime.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java
+        symbol: verifyPhone
+      - file: src/main/java/com/softropic/skillars/platform/security/repo/PhoneOtpToken.java
+        symbol: PhoneOtpToken
+  - id: F5
+    title: Login reveals whether an account exists through response timing
+    category: security
+    severity: low
+    description: >
+      AuthService.login throws BadCredentialsException immediately when findOneByLogin is empty, and only
+      runs passwordEncoder.matches (a bcrypt compare, tens of ms) for existing users. The latency
+      difference lets a caller enumerate registered emails.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: login
+  - id: F6
+    title: Password-reset init answers differently for ineligible accounts
+    category: security
+    severity: medium
+    description: >
+      sendPasswordResetMail returns a success/help code when prepareForPasswordReset finds an eligible
+      user and otherwise throws OperationNotAllowedException(PWD_RESET_REJECTED) carrying the submitted
+      email, so the response distinguishes "no such / inactive account" from "mail sent" and enables
+      account enumeration on an unauthenticated endpoint.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+        symbol: sendPasswordResetMail
+  - id: F7
+    title: Resend-verification is throttled per IP only, so one address can be spammed from many IPs
+    category: security
+    severity: low
+    description: >
+      resendVerificationEmail in the registration services is guarded by @RateLimited (3 per 30 min),
+      which keys on the caller's IP. Nothing limits sends per target email, so an attacker with several
+      IPs can flood a victim's inbox with verification mails.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java
+        symbol: resendVerificationEmail
+      - file: src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java
+        symbol: resendVerificationEmail
+  - id: F8
+    title: activate.security=false is honoured in prod/uat
+    category: security
+    severity: medium
+    description: >
+      SecurityConfiguration.activateSecurity reads activate.security from the Environment and, when false,
+      installs permit-all authorization managers. There is no profile guard, so a mis-set property or
+      environment variable in a prod or uat deployment silently disables authentication.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+        symbol: activateSecurity
+source: PR #381 description, S-11 / S-13 / S-14 / S-15
+notes: >
+  Registration emailInUse/phoneInUse enumeration was deliberately left unchanged by the PR
+  (non-finding if a reviewer raises it, but do not penalise). The fix also keyed IPv6 by /64; that is an
+  improvement, not a pre-existing defect anchored here.

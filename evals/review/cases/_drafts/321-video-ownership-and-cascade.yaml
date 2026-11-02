@@ -1,0 +1,129 @@
+id: 321-video-ownership-and-cascade
+kind: pre-fix-snapshot
+fix_pr: 321
+fix_merge: b5851405
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/video/service/PlaybackService.java
+  - src/main/java/com/softropic/skillars/platform/video/api/VideoPlayResource.java
+  - src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java
+  - src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java
+  - src/main/java/com/softropic/skillars/platform/video/service/AccountDeletionCascadeListener.java
+  - src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java
+  - src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionService.java
+  - src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+  - src/main/java/com/softropic/skillars/platform/security/contract/event/AccountDeletionRequestedEvent.java
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java
+  - src/frontend/src/stores/video.store.js
+summary: Video ownerId (coach-profile UUID or PlayerProfile id) compared with or looked up as a user id / login across playback, SSE, GDPR cascade and CSAM suspension; admin delete bypasses deletion bookkeeping; SSE without credentials
+expected_findings:
+  - id: F1
+    title: Owner download URL compares the viewer's username with video.ownerId, so no owner ever gets one
+    category: logic
+    severity: medium
+    description: >
+      PlaybackService.authorizePlayback issues a downloadUrl only when viewerId.equals(video.getOwnerId()).
+      VideoPlayResource passes securityUtil.getCurrentUserName() as viewerId, while Video.ownerId
+      is a CoachProfile UUID or a PlayerProfile id, never a login. The comparison can never be
+      true, so the owner download feature is dead for every video.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/service/PlaybackService.java
+        symbol: authorizePlayback
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoPlayResource.java
+        symbol: getCurrentUserName
+  - id: F2
+    title: SSE/status owner check compares a coach video's UUID ownerId with the username
+    category: logic
+    severity: medium
+    description: >
+      VideoEventResource.isCurrentUserOwner resolves player-owned videos through
+      PlayerProfileRepository.existsByIdAndUserId but, for a UUID ownerId, falls back to
+      ownerId.equals(securityUtil.getCurrentUserName()). A coach's ownerId is their CoachProfile
+      id, not their login, so coaches are refused (403) on /events and /status for their own
+      uploads, while VideoAccessGuard already holds a correct owner check that this resource
+      does not reuse.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java
+        symbol: isCurrentUserOwner
+      - file: src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java
+        symbol: isOwner
+  - id: F3
+    title: Parent account deletion looks linked PlayerProfile ids up as user ids, so children's videos are never purged
+    category: logic
+    severity: high
+    description: >
+      AccountDeletionCascadeListener iterates event.linkedPlayerIds() (PlayerProfile ids),
+      calls userRepository.findOneById(playerId) and cascades on String.valueOf(user.getId()).
+      Player videos are owned by the PlayerProfile id, so the lookup either finds nothing
+      (logged as "Player not found, skipping") or an unrelated user whose id happens to
+      collide; in both cases the children's videos survive the GDPR erasure.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/service/AccountDeletionCascadeListener.java
+        symbol: linkedPlayerIds
+  - id: F4
+    title: Self-registered player erasure publishes the user id, but player videos are keyed by PlayerProfile id
+    category: logic
+    severity: high
+    description: >
+      In GdprErasureService the PLAYER branch publishes AccountDeletionRequestedEvent with
+      eventUserId = String.valueOf(userId). The COACH branch correctly maps to the CoachProfile id,
+      but player videos (VideoResource.currentPlayerProfileId) are owned by the PlayerProfile id,
+      so the cascade runs in the wrong id space and a self-registered player's videos are never
+      purged on erasure.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+        symbol: AccountDeletionRequestedEvent
+  - id: F5
+    title: CSAM suspension listener logs and returns when the owner cannot be resolved, so the orchestrator's failure alert never fires
+    category: security
+    severity: high
+    description: >
+      AccountSuspensionEventListener resolves the account from ownerId and, when resolveAccountId
+      returns null or the user row is gone, logs "CRITICAL: Cannot suspend account" and returns
+      normally. ModerationOrchestrationService.runArachnidLayer wraps suspendAccount in a catch
+      that raises the urgent "CSAM match — account suspension FAILED" admin alert only on an
+      exception, so a silent return means a CSAM match on an unresolvable owner produces no
+      suspension and no failure alert.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java
+        symbol: resolveAccountId
+      - file: src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+        symbol: suspendAccount
+  - id: F6
+    title: Admin video delete bypasses quota decrement, deletion log, outbox and the DrillVideoRef ref-count
+    category: logic
+    severity: high
+    description: >
+      AdminVideoService.deleteVideo calls videoProviderAdapter.deleteAsset inline and then sets
+      OperationalState.DELETED in its own TransactionTemplate, never going through
+      VideoDeletionService.deleteVideo. It therefore writes no video_deletion_log row, no
+      video_deletion_outbox row, does not decrement the owner's storage_used_bytes, and ignores
+      the DrillVideoRef reference count that VideoDeletionOutboxProcessor honours, so a drill
+      asset still referenced elsewhere is deleted at the provider.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/service/AdminVideoService.java
+        symbol: deleteVideo
+      - file: src/main/java/com/softropic/skillars/platform/video/service/VideoDeletionService.java
+        symbol: deleteVideo
+  - id: F7
+    title: Video status EventSource and polling fetch are opened without credentials
+    category: logic
+    severity: low
+    description: >
+      video.store.js creates new EventSource(`/api/video/${videoId}/events`) without
+      { withCredentials: true } and the polling fallback calls fetch(`/api/video/${videoId}/status`)
+      without credentials: 'include'. Both endpoints are owner-guarded and authenticate from the
+      session cookie, so whenever the frontend origin differs from the API origin (the booking and
+      messaging stores already pass withCredentials) the stream and the fallback fail as
+      unauthenticated.
+    anchors:
+      - file: src/frontend/src/stores/video.store.js
+        symbol: EventSource
+source: PR #321 description, items 2, 3, 4
+notes: >
+  The introducing-diff check for F5 against #319 (90b8cb80) was NOT confirmed: the pre-#319 code
+  already logged "Cannot suspend account — user not found" and returned (visible as a removed line
+  in that diff), so #319 preserved rather than introduced the swallow. Hence F5 is kept here as a
+  snapshot finding. Item 5 (stale "Tier gate first" comment in RadarAssessmentService) is comment-only
+  and omitted. The flagged-video owner email and the approval emails are in 321-video-approval-emails.

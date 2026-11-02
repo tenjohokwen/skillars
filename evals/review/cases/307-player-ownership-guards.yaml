@@ -1,0 +1,124 @@
+id: 307-player-ownership-guards
+kind: pre-fix-snapshot
+fix_pr: 307
+fix_merge: 513fa082
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/session/api/HomeworkResource.java
+  - src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java
+  - src/main/java/com/softropic/skillars/platform/session/repo/HomeworkCompletionRepository.java
+  - src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java
+  - src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java
+  - src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/SubscriptionResource.java
+  - src/main/java/com/softropic/skillars/platform/security/service/PlayerOwnershipGuard.java
+summary: Role guards and owner-id resolution for self-registered players across homework completion, player videos and player subscriptions
+expected_findings:
+  - id: F1
+    title: Homework complete endpoint is parent-only and resolves ownership via parentId, locking out self-registered players
+    category: security
+    severity: medium
+    description: >
+      HomeworkResource.markComplete is annotated HAS_PARENT_ROLE and passes
+      securityUtil.getCurrentCoachUserId() as the "parentId" into HomeworkAssignmentService.markComplete,
+      which then requires playerProfileRepository.findByIdAndParentId(assignment.playerId, parentId).
+      A self-registered player (ROLE_PLAYER, PlayerProfile.userId set, parentId null) is rejected at the
+      role check, and even with the role widened the ownership lookup only recognises the parent
+      relation, never PlayerProfile.userId. The player's own locker-room UI already exposes the toggle,
+      so the player cannot mark their own homework done.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/session/api/HomeworkResource.java
+        symbol: markComplete
+      - file: src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java
+        symbol: markComplete
+  - id: F2
+    title: markComplete catches DataIntegrityViolationException after saveAndFlush inside the transaction, leaving it rollback-only
+    category: concurrency
+    severity: medium
+    description: >
+      HomeworkAssignmentService.markComplete is @Transactional, does an existsByAssignmentId pre-check,
+      then saveAndFlush and swallows DataIntegrityViolationException as the "idempotent" path for the
+      UNIQUE(assignment_id) race. A flush failure inside a Spring-managed JPA transaction marks the
+      transaction rollback-only, so when two taps race the loser's swallowed exception is followed by an
+      UnexpectedRollbackException at commit and the client receives a 500 instead of a no-op 200.
+      HomeworkCompletion has no @Version, and HomeworkCompletionRepository offers no atomic
+      insert-if-absent.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java
+        symbol: markComplete
+      - file: src/main/java/com/softropic/skillars/platform/session/repo/HomeworkCompletionRepository.java
+        symbol: existsByAssignmentId
+  - id: F3
+    title: Player video endpoints admit only legacy ROLE_USER, so ROLE_PLAYER gets 403
+    category: security
+    severity: medium
+    description: >
+      VideoResource's player upload initiate (/player/uploads/initiate) is @PreAuthorize("hasAnyRole('ROLE_USER')")
+      and GET /my and GET /quotas/me are hasAnyRole('ROLE_USER','ROLE_COACH'). Self-registered players
+      are issued ROLE_PLAYER (SecurityConstants.HAS_PARENT_OR_PLAYER_ROLE exists for this), so the
+      /player/videos page fails with 403 on every call for the role that is supposed to use it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java
+        symbol: initiatePlayerUpload
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java
+        symbol: resolveCurrentOwnerId
+  - id: F4
+    title: Player video ownerId is taken from the user id but every consumer treats it as the PlayerProfile id
+    category: logic
+    severity: high
+    description: >
+      VideoResource.currentPlayerProfileId and resolveCurrentOwnerId return securityUtil.requireCurrentUserId()
+      (the Principal.businessId, which Principal documents as the user id) and the comments claim
+      "businessId = PlayerProfile.id". Downstream, initiatePlayerUpload does playerProfileRepository.findById(ownerId),
+      the quota tier, subscription lifecycle and ParentPlayerLink lookups all key on PlayerProfile.id.
+      For a self-registered player whose profile id differs from their user id the lookup 403s
+      ("Player profile not found"), and quota/owner comparisons are made in the wrong id space.
+      VideoAccessGuard.isOwner has the same bug: it compares the current user's Long id to
+      video.ownerId for player videos, so a player never matches their own video on canPlay/canDelete.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java
+        symbol: currentPlayerProfileId
+      - file: src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java
+        symbol: isOwner
+  - id: F5
+    title: VideoEventResource owner check compares a coach video's UUID ownerId to the username
+    category: security
+    severity: medium
+    description: >
+      VideoEventResource.isCurrentUserOwner parses ownerId as a Long and compares it to
+      Principal.businessId (user id, not PlayerProfile id — same id-space bug as F4); on
+      NumberFormatException it treats the video as coach-owned and compares the coach-profile UUID
+      string to securityUtil.getCurrentUserName(). A UUID never equals a login, so coaches get 403 on
+      /events and /status for their own uploads and cannot follow processing, and self-registered
+      players fail the Long branch. The correct owner resolution already exists in VideoAccessGuard.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java
+        symbol: isCurrentUserOwner
+  - id: F6
+    title: Player subscription mutations are HAS_PARENT_ROLE although the service accepts a self-owned profile
+    category: security
+    severity: medium
+    description: >
+      SubscriptionResource subscribePlayer, changePlayerTier and cancelPlayerSubscription are gated by
+      SecurityConstants.HAS_PARENT_ROLE, while GET /player/me on the same resource uses
+      @playerOwnershipGuard.check(authentication, #playerId). SubscriptionService.assertPlayerOwnership
+      already admits either a ParentPlayerLink or PlayerProfile.existsByIdAndUserId, so the
+      controller-level role check is the only thing preventing a self-registered player from
+      managing their own subscription; they can read it but every mutation returns 403.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/SubscriptionResource.java
+        symbol: subscribePlayer
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/SubscriptionResource.java
+        symbol: cancelPlayerSubscription
+non_findings:
+  - title: VideoAccessGuard HIDDEN bypass is parent-only (isParentOf)
+    reason: The minor parental-approval gate is intentionally parent-only; PR 307 left it untouched.
+  - title: SubscriptionService.assertPlayerOwnership checks ParentPlayerLink while PlayerOwnershipGuard checks PlayerProfile.parentId
+    reason: Both relations are enforced; PR 307 documented the asymmetry and left it as is.
+  - title: PlaybackService owner downloadUrl compares caller email to ownerId
+    reason: Real bug but explicitly out of scope for PR 307 (fixed later in PR 321); do not count it against this case's recall.
+source: PR #307 description, items B1, B2, B3 and the self-review VideoEventResource note
+notes: >
+  Input revision is 513fa082^1. F6 intentionally reverses deferred-150 AC5's controller-level
+  parent-only pin; the eval treats the fix PR's judgement as ground truth. PlayerOwnershipGuard.java is
+  in scope because the fix added a shared owns() helper there, but no defect is anchored on it.

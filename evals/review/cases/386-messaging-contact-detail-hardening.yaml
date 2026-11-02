@@ -1,0 +1,84 @@
+id: 386-messaging-contact-detail-hardening
+kind: pre-fix-snapshot
+fix_pr: 386
+fix_merge: 3542eef7
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/infrastructure/sanitizer/ContactDetailSanitizer.java
+  - src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+  - src/main/java/com/softropic/skillars/platform/messaging/service/GeminiModerationService.java
+  - src/main/java/com/softropic/skillars/platform/messaging/api/MessagingApiAdvice.java
+  - src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java
+  - src/main/java/com/softropic/skillars/platform/security/api/SanitizePreviewResource.java
+summary: Chat safety (S-04) - sanitizer bypasses, no hold for minors, prompt-delimiter stripping, no rate limits, suspended coaches
+expected_findings:
+  - id: F1
+    title: Contact-detail sanitizer is defeated by trivial obfuscation
+    category: security
+    severity: high
+    description: >
+      ContactDetailSanitizer only matches a literal email regex and a phone regex of 7-14 digit-ish
+      characters. "john at gmail dot com", "[at]", "wa.me/..." or bare domains, "insta: jsmith99",
+      spelled-out digits, digits separated by words, or zero-width/fullwidth characters all pass through
+      unredacted, so a coach can exchange contact details with a minor despite the filter.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/sanitizer/ContactDetailSanitizer.java
+        symbol: sanitize
+  - id: F2
+    title: Messages with contact details in supervised conversations are stored and delivered before moderation
+    category: security
+    severity: high
+    description: >
+      sendMessage persists the message as PENDING and then calls moderationService.moderate; the
+      sanitizer verdict is not consulted in the send path at all, and no distinction is made for
+      conversations where a parent has oversight of a minor. A coach or player message containing contact
+      details is held only if the Gemini call happens to flag it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: sendMessage
+  - id: F3
+    title: Prompt delimiter stripping is a single non-recursive replace
+    category: security
+    severity: medium
+    description: >
+      GeminiModerationService (and ReviewModerationService) remove the literal BEGIN/END USER CONTENT
+      delimiters with String.replace once. Content such as "---BEGIN USER ---BEGIN USER CONTENT---CONTENT---"
+      reassembles the delimiter after the strip, and variants with different spacing, case, dash count or
+      zero-width characters are not matched at all, so user content can close the content block and
+      inject instructions into the moderation prompt.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/GeminiModerationService.java
+        symbol: moderate
+      - file: src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java
+        symbol: USER_CONTENT_BEGIN_DELIMITER
+  - id: F4
+    title: No rate limit on sending messages or on the sanitize-preview endpoint
+    category: security
+    severity: medium
+    description: >
+      sendMessage has no per-sender or per-conversation throttle and SanitizePreviewResource.preview is
+      unthrottled. A sender can flood a conversation (each message triggering a paid Gemini call) and can
+      use the preview endpoint as an oracle to iterate until a contact detail passes the sanitizer.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: sendMessage
+      - file: src/main/java/com/softropic/skillars/platform/security/api/SanitizePreviewResource.java
+        symbol: preview
+  - id: F5
+    title: Suspended coaches and locked users can keep messaging
+    category: security
+    severity: medium
+    description: >
+      verifyIsParty checks only that the caller is a party to the conversation. A coach whose profile is
+      SUSPENDED (admin suspension or safety hold) can still send, read, list and initiate threads with
+      families, and a locked user is not refused anywhere in the messaging module.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: verifyIsParty
+      - file: src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java
+        symbol: initiateConversation
+source: PR #386 description, S-04
+notes: >
+  True systemInstruction/role separation for the Gemini client was explicitly not done (client takes a
+  single prompt). S-08 and S-16 are the separate cases 386-review-flag-auto-hold and
+  386-coach-profile-fields-contact-details.

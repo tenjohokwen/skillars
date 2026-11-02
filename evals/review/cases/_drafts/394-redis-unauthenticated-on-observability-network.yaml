@@ -1,0 +1,27 @@
+id: 394-redis-unauthenticated-on-observability-network
+kind: pre-fix-snapshot
+fix_pr: 394
+fix_merge: 7c2e8071
+confidence: low
+scope:
+  - docker-compose.yml
+summary: Deployment compose (S-24) - Redis runs without a password on the shared observability network
+expected_findings:
+  - id: F1
+    title: Redis has no password and is reachable from every observability container
+    category: security
+    severity: medium
+    description: >
+      The redis service starts "redis-server --appendonly yes" with no requirepass, its healthcheck is an
+      unauthenticated ping, and it joins skillars-observability, the same network as Grafana, Loki, Tempo,
+      Prometheus and node_exporter. Any compromised third-party image on that network can read and write
+      the app's Redis state unauthenticated; the app's SPRING_DATA_REDIS_* env carries no password.
+    anchors:
+      - file: docker-compose.yml
+        symbol: services.redis
+source: PR #394 description, "Summary"
+notes: >
+  Pure deployment configuration; included because a reviewer reading docker-compose.yml can spot the
+  missing requirepass and the shared network. Drop this case if infra files are out of the reviewer's
+  remit. The DeployedSecretsValidator addition is part of the fix, not a finding. Anchor "symbol" is a
+  YAML path, not a code symbol.

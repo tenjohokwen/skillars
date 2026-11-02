@@ -1,0 +1,57 @@
+id: 368-pack-status-badges
+kind: pre-fix-snapshot
+fix_pr: 368
+fix_merge: 89a4a951
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachSoldPackQueryService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CoachSoldPackDto.java
+  - src/frontend/src/pages/parent/SessionPackDashboardPage.vue
+summary: pack status derivation ignores frozen and revoked packs, the dashboard mis-renders PAUSED, and pause/extend lack state guards
+confidence: high
+expected_findings:
+  - id: F1
+    title: computeStatus never returns FROZEN or REVOKED, so frozen and revoked packs read ACTIVE
+    category: logic
+    severity: medium
+    description: >
+      `SessionPackPaymentService.computeStatus` checks exhausted, paused and expired, then returns
+      "ACTIVE". `SessionPackPurchase` has `disputeFrozenAt` and `revokedAt`, and `deductSession` refuses a
+      frozen pack with `payment.packFrozen`, yet a dispute-frozen or chargeback-revoked pack with sessions
+      left is reported ACTIVE to the family dashboard, the coach sold-packs list (`CoachSoldPackQueryService`
+      reuses the function) and the booking pack picker. `revokedReason` is not exposed at all.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: computeStatus
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachSoldPackQueryService.java
+        symbol: computeStatus
+  - id: F2
+    title: Dashboard badge checks status === 'ACTIVE' && isPaused, but the backend returns PAUSED
+    category: logic
+    severity: low
+    description: >
+      `SessionPackDashboardPage.vue` derives the badge colour and label with
+      `pack.status === 'ACTIVE' && isPaused(pack)`. Since `computeStatus` already returns "PAUSED" during a
+      pause, that branch never matches and a paused pack falls through to the green "Active" badge. The
+      "Pause pack" button condition likewise keys on ACTIVE plus `pausedUntil`.
+    anchors:
+      - file: src/frontend/src/pages/parent/SessionPackDashboardPage.vue
+        symbol: isPaused
+  - id: F3
+    title: Pause and extend have no guard for frozen or revoked packs
+    category: edge-case
+    severity: low
+    description: >
+      `PackSessionService.pausePackTransactional` checks only `getPausedUntil()` and the pause-duration
+      bound before writing, and `SessionPackPaymentService.extendPack` checks ownership, `extendedAt` and
+      the timing window. Neither looks at `disputeFrozenAt` or `revokedAt`, so a family can pause a pack a
+      chargeback has frozen and a coach can extend a pack whose sessions were revoked.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: pausePackTransactional
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: extendPack
+source: PR #368 description
+notes: Input revision 89a4a951^1 (after #362 added disputeFrozenAt/revokedAt). The frontend file is in scope because F2 is a frontend defect.

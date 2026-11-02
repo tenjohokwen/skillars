@@ -1,0 +1,33 @@
+id: 330-filestorage-quota-race
+kind: pre-fix-snapshot
+fix_pr: 330
+fix_merge: 7a950883
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/repo/FileStorageObjectRepository.java
+summary: filestorage confirmUpload quota check runs outside the insert transaction with no per-owner serialisation
+expected_findings:
+  - id: F1
+    title: Quota check in confirmUpload is a read-then-insert with no lock, so parallel confirms overshoot the quota
+    category: concurrency
+    severity: medium
+    description: >
+      confirmUpload reads sumSizeBytesByOwnerId(ownerId) and compares usage + contentLength to
+      the quota outside any transaction, and only afterwards opens transactionTemplate.execute
+      to insert the FileStorageObject row. Two or more confirms for the same owner can each read
+      the pre-insert usage, each pass the check, and each insert, so the owner ends up above
+      defaultBytes. Nothing (row lock, advisory lock, unique constraint) serialises the
+      check-and-insert per owner. The same read-then-write shape also means a concurrent confirm
+      of the same key is only caught by the unique-index race after the fact.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/repo/FileStorageObjectRepository.java
+        symbol: sumSizeBytesByOwnerId
+source: PR #330 description, item 2 "Filestorage quota at confirm"
+notes: >
+  Input revision deefa90f. PR #317 had already stated in its design notes that "the quota check is
+  still not under a lock ... documented as a soft limit", so a reviewer may see a comment calling
+  this intentional; it is still a real overshoot and #330 treated it as a defect. Severity medium
+  because the quota is a soft per-owner limit, not a security boundary.

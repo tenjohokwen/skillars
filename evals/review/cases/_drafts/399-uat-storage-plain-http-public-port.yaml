@@ -1,0 +1,27 @@
+id: 399-uat-storage-plain-http-public-port
+kind: pre-fix-snapshot
+fix_pr: 399
+fix_merge: 519c32e5
+confidence: low
+scope:
+  - docker-compose.uat-hostwinds.yml
+summary: UAT deployment compose (S-25) - object storage served over plain HTTP on a public port with presigned URLs
+expected_findings:
+  - id: F1
+    title: UAT storage endpoint is http on a publicly published port, so presigned URLs leak the access key over cleartext
+    category: security
+    severity: medium
+    description: >
+      docker-compose.uat-hostwinds.yml sets APP_STORAGE_ENDPOINT_URL=http://${DOMAIN}:9500 and publishes the
+      storage container's port 9500 on all interfaces. S3Presigner bakes this endpoint into every presigned
+      URL handed to browsers, so each upload/download travels in cleartext with the SigV4 access key id in
+      the query string, and the S3 API is directly reachable from the internet (Docker-published ports
+      bypass ufw).
+    anchors:
+      - file: docker-compose.uat-hostwinds.yml
+        symbol: services.app.environment.APP_STORAGE_ENDPOINT_URL
+source: PR #399 description, "Summary"
+notes: >
+  Deployment configuration only; the nginx TLS front and the https validator in DeployedSecretsValidator
+  are the fix. Included because the http:// endpoint plus public port is visible to anyone reading the
+  compose file; drop if infra is out of scope. Least-privilege app key was not implemented (documented).

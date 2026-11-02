@@ -1,0 +1,25 @@
+id: 385-gdpr-leaves-stripe-customer
+kind: pre-fix-snapshot
+fix_pr: 385
+fix_merge: 6c0039fc
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+summary: GDPR erasure (S-19) leaves the Stripe Customer and saved card untouched
+expected_findings:
+  - id: F1
+    title: GDPR erasure never erases or detaches the user's Stripe customer data
+    category: security
+    severity: medium
+    description: >
+      eraseTransactional scrubs local profile, booking and messaging data but contains no step for the
+      payment processor: the stripe_customers row keeps stripe_payment_method_id and nothing is enqueued to
+      detach payment methods or delete/anonymise the Stripe Customer (name, email, phone, metadata
+      userId). Personal data persists at Stripe after a completed erasure.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+        symbol: eraseTransactional
+source: PR #385 description, S-19
+notes: >
+  The fix keeps ledger/payout rows and the Stripe customer id (legitimate retention). A reviewer who
+  flags those as remaining PII is raising a non-finding.

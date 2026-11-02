@@ -1,0 +1,36 @@
+id: 340-unpaid-paused-grace-sweep
+kind: introducing-diff
+fix_pr: 340
+fix_merge: 1f1240ac
+introducing_pr: 337
+introducing_merge: eea53ee9
+confidence: high
+summary: PR 337 starts persisting UNPAID/PAUSED subscription statuses but leaves the grace sweep PAST_DUE-only
+expected_findings:
+  - id: F1
+    title: UNPAID and PAUSED subscriptions are never swept, so the Stripe subscription lingers
+    category: logic
+    severity: medium
+    description: >
+      This diff makes normalizeStripeStatus persist UNPAID and PAUSED, removes their paid
+      entitlement, and widens the status CHECK for them, but checkPastDueGracePeriod still
+      selects only PAST_DUE rows and isGraceExpired returns true only for PAST_DUE. The failure
+      handler also starts pastDueSince only when the status becomes PAST_DUE. A subscription
+      that Stripe moves to unpaid or paused therefore never reaches the grace cancel: the Stripe
+      subscription stays alive (UNPAID keeps raising invoices) and the local row is never closed.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: checkPastDueGracePeriod
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: isGraceExpired
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: normalizeStripeStatus
+non_findings:
+  - title: PAST_DUE is deferred rather than voided by the applicator
+    reason: Intentional in this diff; Stripe may still recover a PAST_DUE subscription.
+source: PR #340 description, Problem 2; confirmed in PR #337 diff (normalizeStripeStatus, isGraceExpired)
+notes: >
+  PR #337 itself listed this as an open risk, so a reviewer of that diff had the information
+  needed. The sweep is invoked from SubscriptionGracePeriodChecker, which this diff does not
+  change. The card-sync gap (PR #340 Problem 1) is pre-existing and is a separate snapshot case,
+  340-card-sync-not-repointed.

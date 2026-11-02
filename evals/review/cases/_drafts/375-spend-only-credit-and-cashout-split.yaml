@@ -1,0 +1,90 @@
+id: 375-spend-only-credit-and-cashout-split
+kind: pre-fix-snapshot
+fix_pr: 375
+fix_merge: ec997389
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/DisputeCreditService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java
+summary: Parent credit wallet integrity - spend-only credit laundering, cash-out refund targeting, expired-pack refunds
+expected_findings:
+  - id: F1
+    title: Booking refund and dispute credit return spend-only credit as cashable
+    category: logic
+    severity: high
+    description: >
+      A BOOKING_DEDUCTION records the share it took from the spend-only pool, but the matching
+      BOOKING_REFUND written by the refund outbox handler sets spend-only to zero unless the payload is
+      flagged spendOnly, and DISPUTE_CREDIT is always written with no spend-only part. A parent can book
+      with spend-only credit, cancel more than 24h out (or receive a dispute credit) and the whole amount
+      comes back cashable, convertible to a card refund via cash-out.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+        symbol: handle
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/DisputeCreditService.java
+        symbol: credit
+  - id: F2
+    title: Cash-out refunds the whole amount onto one charge, leaving funding charges disputable
+    category: logic
+    severity: medium
+    description: >
+      refundTarget picks a single funding PaymentIntent only if it can absorb the full net amount and
+      otherwise falls back to the payer's most recent charge for everything. Credit funded by several
+      earlier charges is then refunded onto an unrelated charge, so those earlier charges keep their full
+      disputable amount; a chargeback on one of them after the cash-out pays the parent twice. A funding
+      charge that Stripe cannot read is simply skipped and the fallback applies, so a transient Stripe
+      error silently routes money onto a different charge.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: refundTarget
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+  - id: F3
+    title: Session restored to a pack that expired between cancel and restore is lost
+    category: edge-case
+    severity: low
+    description: >
+      restoreSessionForBooking only diverts to a wallet refund for expired packs when the reason is one
+      of the coach/admin-side reasons in WALLET_ON_EXPIRY_REASONS. For a parent cancellation or pack
+      pause whose pack expired after the cancel committed but before the outbox-driven restore runs, a
+      session is written back to an already-expired pack and the parent loses it with no credit.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: restoreSessionForBooking
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: WALLET_ON_EXPIRY_REASONS
+  - id: F4
+    title: Excused coach cancel and pack pause on an expired pack refund cashable credit
+    category: logic
+    severity: medium
+    description: >
+      onBookingCancelledByCoach and the pack-pause path in RefundEnqueueListener enqueue the expired-pack
+      wallet refund with spendOnly=false regardless of the cancel reason. A parent whose pack has expired
+      can ask the coach for a mutual-agreement or weather cancel (an excused reason, not the coach's
+      fault) and turn a forfeited pack session into cashable credit, while the parent's own >24h cancel
+      of the same booking is spend-only. The excused-reason set in CancellationRefundService is private,
+      so the refund path cannot even consult it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+        symbol: onBookingCancelledByCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: EXCUSED_REASONS
+non_findings:
+  - title: Coach payouts are released after a flat 48h hold for every coach
+    reason: >
+      The PR also introduced a longer new-coach hold (policy decision, risk management), but a flat hold
+      is not a defect a reviewer can point at; recorded in notes.
+source: PR #375 description, "Fixes" bullets 1-4
+notes: >
+  Bullet 5 (new-coach payout hold) is a risk-policy change, not a code defect; excluded from findings.
+  F4 is an owner policy decision (excused cancel treated like parent cancel), so recall on it may be
+  low even for a good reviewer; keep severity medium but do not weight it heavily. At the input
+  revision CreditWalletService already tracks spend-only shares on deductions (restoreBookingDeduction),
+  which makes F1 visible: the refund path does not use that information.

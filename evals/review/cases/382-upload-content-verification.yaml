@@ -1,0 +1,76 @@
+id: 382-upload-content-verification
+kind: pre-fix-snapshot
+fix_pr: 382
+fix_merge: fa62da9d
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/filestorage/config/FileStorageProperties.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java
+summary: File upload confirmation (S-17) - declared content type trusted, orphaned rejects, photo key trust
+expected_findings:
+  - id: F1
+    title: confirmUpload trusts the declared content type; stored bytes are never inspected
+    category: security
+    severity: high
+    description: >
+      confirmUpload HEADs the object and compares the S3 content type and size against the request and
+      limits, but never reads the object. A client can presign an image/png, PUT arbitrary bytes (HTML,
+      a polyglot, an executable) with that content type and have it confirmed and later served under an
+      image type.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+  - id: F2
+    title: Rejected confirms leave the uploaded object in the bucket
+    category: security
+    severity: medium
+    description: >
+      When confirmUpload throws StorageValidationException (type mismatch, oversize) or
+      QuotaExceededException, the object the client already PUT stays in the bucket with no
+      file_storage_objects row, so it is not counted against any quota and never cleaned up. Repeated
+      rejected uploads fill storage for free.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+  - id: F3
+    title: application/octet-stream and .bin are in the default allow-list
+    category: security
+    severity: low
+    description: >
+      FileStorageProperties defaults allow application/octet-stream and the bin extension although no
+      caller uploads such files. Any content can be uploaded under the opaque type, defeating the
+      allow-list's purpose.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/config/FileStorageProperties.java
+        symbol: allowedMimeTypes
+  - id: F4
+    title: Upload entity is free text; only three values are owner-bound
+    category: security
+    severity: low
+    description: >
+      signUpload accepts any entity string, sanitises it into the key and only checks entityId ownership
+      for OWNER_BOUND_ENTITIES. Any other entity name yields a key under an arbitrary entityId with no
+      ownership relation, letting a caller write objects into namespaces the frontend never uses.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: signUpload
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: OWNER_BOUND_ENTITIES
+  - id: F5
+    title: saveStep5 accepts any photo key with the right prefix
+    category: security
+    severity: medium
+    description: >
+      saveStep5 only checks that photoUrl starts with "coach_profile/{userId}/" and then writes it as the
+      profile photo. It does not verify that the key refers to a confirmed, non-deleted object owned by
+      the caller with an image content type, so a never-confirmed key, a PDF, or a key containing ".."
+      segments after the prefix becomes the public profile photo.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+        symbol: saveStep5
+source: PR #382 description, S-17
+notes: >
+  Expiry sweep for unconfirmed uploads was not added by the PR (bucket lifecycle rule recommended);
+  do not penalise a reviewer who raises it. S-26 items are in 382-request-input-limits.

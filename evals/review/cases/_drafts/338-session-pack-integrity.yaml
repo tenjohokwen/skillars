@@ -1,0 +1,131 @@
+id: 338-session-pack-integrity
+kind: pre-fix-snapshot
+fix_pr: 338
+fix_merge: cb239255
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledDueToPauseEvent.java
+summary: Session pack purchase idempotency, pack usage validation, pause handling and restore durability
+expected_findings:
+  - id: F1
+    title: Pack purchase idempotency key is tier + parent + one-minute bucket
+    category: logic
+    severity: high
+    description: >
+      purchasePack passes the shared packTierId as referenceId to chargeAndCapture, whose key is
+      pi-{referenceId}-{parentId}-{minuteBucket}. Two purchases of the same tier by one parent
+      inside the same minute (a sibling, or a double submit) replay the first PaymentIntent, yet
+      createPurchase runs twice and two packs are saved against one charge. A client retry that
+      crosses the minute boundary gets a fresh key and is charged twice. Nothing prevents two
+      purchase rows sharing one stripe_payment_intent_id.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: purchasePack
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: chargeAndCapture
+  - id: F2
+    title: A DB failure saving last_payment_intent_id leaves a captured charge with no pack and no refund
+    category: logic
+    severity: high
+    description: >
+      Inside chargeAndCapture, after the PaymentIntent is created and captured, the code sets
+      stripeCustomer.lastPaymentIntentId and calls stripeCustomerRepository.save inside a try
+      that catches only StripeException. A persistence failure there propagates out of
+      chargeAndCapture before purchasePack's compensating try/catch starts, so the money is taken
+      and neither a purchase row nor a refund nor a reconciliation record exists.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: chargeAndCapture
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: purchasePack
+  - id: F3
+    title: A pack bought for one child can be spent on a sibling
+    category: security
+    severity: medium
+    description: >
+      createBookingRequest validates the pack's parentId, expiresAt, coachId and remaining
+      sessions but never compares pack.playerId with req.playerId. SessionPackPurchase stores the
+      player it was bought for, so a parent can book sessions for a different child out of a pack
+      priced and sold for the first one.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+  - id: F4
+    title: A paused pack is still usable, so a pause is a free extension
+    category: logic
+    severity: medium
+    description: >
+      pausePackTransactional extends expiresAt by the pause duration and records pausedUntil,
+      but neither the booking-request validation in BookingService nor
+      PackSessionService.deductSession checks pausedUntil. A parent can pause, keep booking and
+      consuming sessions during the pause, and still enjoy the pushed-out expiry.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: deductSession
+  - id: F5
+    title: Pause-triggered cancellation refunds nothing
+    category: logic
+    severity: high
+    description: >
+      cancelDueToPause transitions the booking with CANCEL_DUE_TO_PAUSE and publishes
+      BookingCancelledDueToPauseEvent, which carries no payment information. No listener in
+      RefundEnqueueListener or CancellationRefundService handles that event, so a booking whose
+      pack session was already deducted, or whose card/credit payment was captured, is cancelled
+      with the money kept.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelDueToPause
+      - file: src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledDueToPauseEvent.java
+        symbol: BookingCancelledDueToPauseEvent
+  - id: F6
+    title: Pack session restores run inline in AFTER_COMMIT listeners and are neither durable nor idempotent
+    category: concurrency
+    severity: medium
+    description: >
+      onBookingCancelledByParent/ByCoach/ByAdmin and onCoachNoShow in CancellationRefundService
+      are AFTER_COMMIT + REQUIRES_NEW and call packSessionService.restoreSession directly. The
+      booking cancellation is already committed, so a NOWAIT lock timeout or any exception in
+      restoreSession loses the session permanently; conversely nothing records that a restore
+      happened, so a redelivered event restores twice.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: onBookingCancelledByParent
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: onBookingCancelledByCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: restoreSession
+  - id: F7
+    title: Per-session refunds use the HALF_UP pricePerSession and can exceed what was paid
+    category: logic
+    severity: low
+    description: >
+      createTier stores pricePerSession = totalPrice / sessionCount rounded HALF_UP, and
+      resolveSessionPrice returns that figure for every pack-funded booking. Refunding three
+      sessions of a 200.00 three-session pack therefore pays out 3 x 66.67 = 200.01, one cent
+      more than was charged.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: createTier
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveSessionPrice
+non_findings:
+  - title: deductSession does not re-check expiresAt
+    reason: "Policy decision (item 8 of the known-issues brief): expiry is enforced at request time only, so a booking requested while valid can still be honoured."
+source: PR #338 description, Problems 1-7
+notes: >
+  Frontend half of Problem 1 (SessionPackPurchasePage.vue sends no per-attempt key and
+  BookingRequestPage double submit) is not listed as a finding: the page already gates the
+  button with a loading flag (purchasing), so the visible frontend defect depends on the backend key
+  design and is covered by F1.

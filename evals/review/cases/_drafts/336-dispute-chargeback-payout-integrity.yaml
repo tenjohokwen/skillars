@@ -1,0 +1,146 @@
+id: 336-dispute-chargeback-payout-integrity
+kind: pre-fix-snapshot
+fix_pr: 336
+fix_merge: ec1742aa
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutReversalHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutFreezeService.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachPayout.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachPayoutRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachStripeAccount.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+summary: Coach payout lifecycle vs. Stripe disputes, external refunds, connected-account state and transfer idempotency
+expected_findings:
+  - id: F1
+    title: Webhook handler ignores charge disputes and externally issued refunds
+    category: logic
+    severity: high
+    description: >
+      handleEventAtomically dispatches only account.updated, customer.subscription.updated,
+      customer.subscription.deleted and invoice.payment_failed; every other type is dropped
+      after the idempotency record is written. A chargeback (charge.dispute.*) on a platform
+      charge leaves the coach payouts funded by that charge releasing on schedule, and a refund
+      issued from the Stripe Dashboard (charge.refunded) is never noticed by the application.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java
+        symbol: handleEventAtomically
+  - id: F2
+    title: Raising a dispute does not stop the coach payout from releasing
+    category: logic
+    severity: high
+    description: >
+      raiseDispute validates and inserts the dispute row but never touches payment.coach_payouts.
+      CoachPayoutTransferHandler gates only on status being payable and release_after (48h)
+      having passed, while the dispute window is 14 days. A dispute raised on day 3 is therefore
+      racing a transfer that will go out regardless, and reconcileCoachPayout at resolution time
+      then has to claw money back from the coach instead of holding it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: raiseDispute
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+        symbol: handle
+  - id: F3
+    title: A partial dispute credit cancels the whole pending payout but only reverses a share of a released one
+    category: logic
+    severity: medium
+    description: >
+      reconcileCoachPayout computes coachShareOfRefund for a RELEASED payout and enqueues a
+      proportional reversal, but for PENDING_RELEASE/HOLD/FROZEN it sets the row to CANCELLED
+      regardless of creditAmount. The coach's outcome for the same PARTIAL_CREDIT resolution
+      therefore depends on whether the 48h release had already happened: nothing versus
+      net minus the share.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: reconcileCoachPayout
+  - id: F4
+    title: Unusable connected account makes the payout retry forever instead of going to HOLD
+    category: logic
+    severity: medium
+    description: >
+      transferToCoach calls resolveCoachStripeAccountId before its try block, and that helper
+      throws a plain PaymentGatewayException when the account is missing or not
+      COMPLETE+charges_enabled. CoachPayoutTransferHandler catches only
+      CoachPayoutTransferException, so the exception escapes, the outbox re-drives the message
+      indefinitely, and the row never reaches HOLD nor increments attempts. The gate also checks
+      charges_enabled, which governs charging on the account, not whether a Transfer to it can land.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: transferToCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: resolveCoachStripeAccountId
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+        symbol: handle
+  - id: F5
+    title: account.updated events applied without ordering guard
+    category: concurrency
+    severity: medium
+    description: >
+      handleAccountUpdated copies charges_enabled/payouts_enabled from whichever event arrives
+      and sets onboarding COMPLETE or RESTRICTED from it. Stripe does not guarantee delivery
+      order and retries on 500, so a stale account.updated delivered after a newer one
+      overwrites the newer capability state; nothing compares event.created against what was
+      last applied.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java
+        symbol: handleAccountUpdated
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/CoachStripeAccount.java
+        symbol: CoachStripeAccount
+  - id: F6
+    title: Partial transfer reversal marks the whole payout REVERSED and only one reversal per transfer is possible
+    category: logic
+    severity: medium
+    description: >
+      CoachPayoutReversalHandler reverses p.amount() (which may be a proportional share) and
+      then sets the row to REVERSED unconditionally. Reporting and the coach's transaction list
+      count only RELEASED rows, so the coach's remaining earnings on that booking disappear from
+      their figures. The Stripe key reversal-{transferId} is fixed per transfer, so a second
+      reversal for the same booking replays the first instead of creating a new one.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutReversalHandler.java
+        symbol: handle
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: reverseTransfer
+  - id: F7
+    title: Transfer can be duplicated once Stripe's 24h idempotency window has passed
+    category: concurrency
+    severity: medium
+    description: >
+      transferToCoach relies solely on the transfer-{bookingId} idempotency key to make
+      re-drives safe. If Transfer.create succeeds but the local commit fails repeatedly for more
+      than 24 hours (Stripe's key retention), the next re-drive creates a second real transfer to
+      the coach. Nothing looks up existing transfers by transfer_group before creating one.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: transferToCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java
+        symbol: createTransfer
+  - id: F8
+    title: HOLD and REVERSAL_FAILED outcomes are only logged
+    category: architecture
+    severity: low
+    description: >
+      When a payout lands in HOLD (transfer handler) or REVERSAL_FAILED (reversal handler) the
+      code increments a metric and writes a WARN/ERROR log with a runbook pointer, but raises no
+      admin alert and nothing appears in the admin queue. Money that must be reconciled by an
+      operator is invisible unless someone is reading logs.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java
+        symbol: handle
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutReversalHandler.java
+        symbol: handle
+non_findings:
+  - title: Wallet credit funded by a later-disputed charge is not traced back to that charge
+    reason: Listed as a known limit in PR #336 and still unaddressed after it; not a defect a reviewer is expected to flag here.
+  - title: The charge-time coach readiness check uses charges_enabled
+    reason: isCoachPaymentReady gates whether a charge can be taken for the coach, where charges_enabled is the right capability; only the transfer-time gate (F4) is wrong.
+source: PR #336 description, Problems 1-8
+notes: >
+  F2 and F3 both live in DisputeService (admin module) but concern payment.coach_payouts rows;
+  kept in one case because the fix touched both modules together and a payout audit would read
+  both files.

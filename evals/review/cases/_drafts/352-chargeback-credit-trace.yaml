@@ -1,0 +1,83 @@
+id: 352-chargeback-credit-trace
+kind: pre-fix-snapshot
+fix_pr: 352
+fix_merge: 783845c7
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ChargeDispute.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedger.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachPayoutRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CreditLedgerEntryType.java
+summary: card chargebacks ignore wallet credit the disputed charge funded, and payouts enqueued after a lost dispute are stranded in HOLD
+confidence: medium
+expected_findings:
+  - id: F1
+    title: Wallet credit funded by a disputed charge is untouched when the chargeback opens or is lost
+    category: logic
+    severity: high
+    description: >
+      `ChargeDisputeWebhookService.onDisputeCreated` freezes coach payouts funded by the payment intent and
+      alerts, and `onDisputeClosed` cuts those payouts pro rata when lost, but neither looks at the
+      `parent_credit_ledger`. A booking paid by card, then cancelled with a `BOOKING_REFUND` to the wallet,
+      then charged back, leaves the payer with both the Stripe chargeback and the full wallet credit, which
+      they can spend or cash out. No ledger entry type exists for reversing or restoring such credit.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+        symbol: onDisputeCreated
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+        symbol: onDisputeClosed
+      - file: src/main/java/com/softropic/skillars/platform/payment/contract/CreditLedgerEntryType.java
+        symbol: CreditLedgerEntryType
+  - id: F2
+    title: Cash-out is allowed while a card dispute is open on one of the payer's charges
+    category: logic
+    severity: medium
+    description: >
+      `CreditWalletService.debitForCashOut` locks the customer row, checks the balance against the
+      requested amount and writes the debit. It never consults `charge_disputes`, so a payer whose charge is
+      under an open chargeback can cash out the refund credit that charge funded before the dispute closes,
+      leaving nothing to reverse if the dispute is lost.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+        symbol: debitForCashOut
+  - id: F3
+    title: A payout enqueued after a lost card dispute is parked in HOLD with no automatic resolution
+    category: logic
+    severity: medium
+    description: >
+      `CoachPayoutOutboxSupport.enqueuePayout` checks `chargeDisputeStatuses(bookingId)`; when the funding
+      charge has a LOST dispute the row is written `HOLD` with `REASON_CHARGEBACK_LOST` and an alert. The
+      lost fraction (disputed / charged) is known at close time in `onDisputeClosed` but is not stored on
+      `ChargeDispute`, so a session that completes after the dispute closed cannot be cut by the same rule
+      applied to payouts that already existed, and the coach is never paid without operator intervention.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+        symbol: REASON_CHARGEBACK_LOST
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+        symbol: lostFraction
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/ChargeDispute.java
+        symbol: ChargeDispute
+  - id: F4
+    title: Wallet refund re-driven after a lost dispute is credited in full
+    category: edge-case
+    severity: low
+    description: >
+      `CreditWalletRefundOutboxHandler.handle` writes the `BOOKING_REFUND` whenever no row exists for the
+      booking. A refund that lands after the charge that paid for it lost a card dispute is credited to the
+      wallet in full, with no check against `charge_disputes`, so the payer is refunded twice (once by the
+      card network, once in credit).
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+        symbol: handle
+source: PR #352 description, "Gap 1" and "Gap 2"
+notes: >
+  Input revision 783845c7^1. The body also adds a StalePayoutAlertScheduler (no FROZEN/HOLD payout aging
+  alert existed); that is a missing component with no anchorable symbol, so it is not an expected finding.
+  F1 is the core defect; F2–F4 are consequences a thorough reviewer should also raise.

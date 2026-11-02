@@ -46,10 +46,12 @@ fi
 # docs/) nor any test reads.
 #   docs/**         — except the files tests read, listed in NEEDS_BUILD
 #   _bmad-output/** — planning and story artifacts
+#   evals/**        — AI code-review eval cases and their local-only runner scripts; nothing in
+#                     mvn verify, the Docker image or any test reads them (see evals/review/README.md)
 #   *.md at the repository root (README.md, CLAUDE.md, ...)
 # NEEDS_BUILD: docs/deployment/monitoring.md is parsed by AlertDocumentationParityTest. Add any
 # other doc a test starts reading here, or a docs-only edit to it could skip the test that guards it.
-ALLOWED='^(docs/|_bmad-output/|[^/]+\.md$)'
+ALLOWED='^(docs/|_bmad-output/|evals/|[^/]+\.md$)'
 NEEDS_BUILD='^docs/deployment/monitoring\.md$'
 
 CODE_FILES=$(printf '%s\n' "$CHANGED_FILES" | grep -Ev "$ALLOWED")

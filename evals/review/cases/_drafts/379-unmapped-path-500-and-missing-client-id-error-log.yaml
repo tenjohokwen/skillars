@@ -1,0 +1,37 @@
+id: 379-unmapped-path-500-and-missing-client-id-error-log
+kind: pre-fix-snapshot
+fix_pr: 379
+fix_merge: 71c4c999
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java
+summary: Error handling - crawler traffic surfaces as server errors in status codes and ERROR logs
+expected_findings:
+  - id: F1
+    title: Unmapped paths return 500 via the catch-all Throwable handler
+    category: logic
+    severity: medium
+    description: >
+      ApiAdvice has handlers for method-not-supported, ResponseStatusException and many domain
+      exceptions, but none for NoResourceFoundException / NoHandlerFoundException. A request to a path
+      nothing maps to (e.g. a bot probing /wp-login.php) falls into defaultErrorHandler, returns 500 and
+      logs ERROR with a stack trace, inflating the server-error rate.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java
+        symbol: defaultErrorHandler
+  - id: F2
+    title: A request without a client cookie is logged as a genuine denial at ERROR
+    category: logic
+    severity: low
+    description: >
+      JWTAuthorizationFilter calls ensureClientHasPostLoginId before the token check, so a request with no
+      client cookie throws MissingClientIdException. mintHelpCode treats only MissingAuthenticationException
+      and JWTExpiredException as expected traffic; the missing-client-id case is logged via
+      ErrorLog.logError with a stack trace although it is the same anonymous bot traffic as a tokenless
+      request.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java
+        symbol: mintHelpCode
+source: PR #379 description, "Why" 1-2
+notes: Dashboard JSON changes are not findings.

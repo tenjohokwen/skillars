@@ -1,0 +1,76 @@
+id: 330-missing-version-lost-updates
+kind: pre-fix-snapshot
+fix_pr: 330
+fix_merge: 7a950883
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java
+  - src/main/java/com/softropic/skillars/platform/session/repo/Session.java
+  - src/main/java/com/softropic/skillars/platform/session/repo/SessionRepository.java
+  - src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+summary: CoachProfile and Session are mutable JPA entities with many writers and no optimistic-locking guard; the GDPR coach scrub is an unlocked full-row save
+expected_findings:
+  - id: F1
+    title: CoachProfile has no @Version, so a stale full-row save silently reverts concurrent writes
+    category: concurrency
+    severity: high
+    description: >
+      CoachProfile is written by many paths across modules (status changes, strikes, publish,
+      rating recompute, photo confirm, GDPR scrub) but carries neither @Version nor @DynamicUpdate.
+      Any writer that saves a managed instance loaded before another transaction committed emits
+      a static full-row UPDATE that overwrites the newer values with the stale snapshot, with no
+      error. The entity's own Javadoc on verificationTier acknowledges this and works around it
+      for one column only (updatable = false); every other column remains exposed.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java
+        symbol: CoachProfile
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+        symbol: eraseTransactional
+  - id: F2
+    title: Session has no @Version; plan edits and completion events can overwrite each other
+    category: concurrency
+    severity: medium
+    description: >
+      The Session entity has no @Version column. SessionPlanService saves whole managed Session
+      rows (createSession, updateSession), and completion/cancellation listeners also write the
+      same rows. Correctness relies entirely on every writer remembering to take the row lock and
+      refresh; a writer that forgets, or one added later, will write a stale full row with no
+      conflict detected. The repository's bulk UPDATEs likewise have no version column to bump.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/session/repo/Session.java
+        symbol: Session
+      - file: src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+        symbol: updateSession
+  - id: F3
+    title: GDPR coach scrub does an unlocked findByUserId + full-row save of CoachProfile
+    category: concurrency
+    severity: medium
+    description: >
+      In the COACH branch of the erasure transaction the coach profile is loaded with
+      coachProfileRepository.findByUserId (no lock), bio/city/district/photoUrl are nulled, and
+      the whole entity is saved. A concurrent coach write (rating recompute, photo confirm,
+      strike, suspension) between that read and commit is either silently overwritten by the
+      stale snapshot or, if the other side holds the row, fails the entire erasure at commit.
+      The inline comment accepts a "milliseconds" residual, but the window spans the rest of the
+      (long) erasure transaction, not milliseconds.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java
+        symbol: eraseTransactional
+non_findings:
+  - title: CoachProfile.verificationTier is updatable = false
+    reason: Intentional defence-in-depth so stale saves cannot revert an admin tier change; documented on the field.
+  - title: CoachProfileRepository.markRecapDataErased does not bump any version
+    reason: Its column is unmapped and it runs in the GDPR REQUIRES_NEW transaction while the outer transaction holds the row; PR #330 allow-lists it explicitly.
+source: PR #330 description, item 1 "@Version on CoachProfile and Session" and the GDPR coach scrub paragraph
+notes: >
+  Input revision deefa90f (= 7a950883^1). Verified: neither entity has @Version at that revision;
+  GdprErasureService lines ~432-446 show findByUserId(...).ifPresent(cp -> {...; coachProfileRepository.save(cp)})
+  with a comment explaining why no lock is taken (self-deadlock with the REQUIRES_NEW recap scrub).
+  Not findings: (a) the ConfigBounds call-site cleanup in #330 is a behaviour-preserving refactor;
+  (b) the findByIdForUpdate lock-upgrade StaleObjectStateException issue only arises once @Version
+  exists, so it cannot be seen at the input revision. #323 had already made saveStep5 and the photo
+  listener targeted UPDATEs, so those are not stale-save sites at this revision.
