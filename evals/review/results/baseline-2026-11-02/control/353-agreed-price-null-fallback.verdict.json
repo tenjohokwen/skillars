@@ -1,0 +1,60 @@
+{
+  "arm": "control",
+  "case": "353-agreed-price-null-fallback",
+  "judge_cost_usd": 0.05204940000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes NULL agreed_price at request falling back to the current coach price in resolveSessionPrice and batchBookingPrice, so the parent is charged a price they never saw.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 and R7 together cover createBatch storing a zero totalAmount, the \u20ac0 quote and NULL agreed_price, with the later charge at the current price.",
+        "reported_ids": [
+          "R1",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No report flags the null price set on the non-pack branch of BookingDuplicationService; R6 names that class only for a proxy-visibility issue.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Speculative: it assumes unseen work after the commit throws and gives no concrete trigger.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "Only asks to verify isTerminal handling; it shows no defect.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculates about sweeper behaviour it has not seen.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Unverified guess about how unique-key conflicts are handled; no concrete defect is shown.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative failure that only happens with a DevTools classloader; not a concrete defect in this code.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

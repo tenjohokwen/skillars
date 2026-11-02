@@ -1,0 +1,96 @@
+{
+  "arm": "blind-hunter",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "Every other cancel path (coach, admin, coach no-show, pause) works out packExpired and, for an expired pack, sends the session to enqueueWalletRefund. That path settles it on the pack ledger through PackRefundAllocationService. The parent path does neither. cancelBookingAsParent never computes packExpired, BookingCancelledByParentEvent has no field for it, and the listener calls enqueuePackRestore for any refund-eligible pack booking. Scenario: a parent cancels more than 24h ahead on a pack that expired after the booking was confirmed. The session goes back to a pack that can't be booked any more (createBookingRequest rejects expired packs with payment.packExpired), so the parent loses the money. The listener's own javadoc says restoring an expired pack's session 'would be worthless'. If the restore handler instead turns an expired pack into a refund itself, it does so outside the ledger allocation the other paths use, and the session can end up settled twice.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "onBookingCancelledByParent",
+      "title": "Parent cancel of an expired-pack booking restores a worthless session instead of a wallet refund",
+      "verification": "Check PackRestoreOutboxSupport and its handler for how they treat an expired pack: dropped, restored, or refunded. If refunded, check whether they call PackRefundAllocationService.allocateSessionRefund. Also check whether BookingStateMachine allows CANCEL_PARENT on a pack booking after expiry."
+    },
+    {
+      "category": "logic",
+      "description": "When there is no payout row ('a refunded booking never completed'), payInFull calls enqueuePayout. For a pack booking that goes to allocatePackShare, which calls recordPayoutAllocation and takes nextSettlementValue from the pack ledger. If the dispute refund was a pack-session refund already recorded on that ledger (refundSessionsIssued), the same session is now counted as both refunded and paid out. That breaks the 'payouts + refunds sum to exactly amount_charged' invariant: later sessions get less, or are marked PACK_FULLY_ALLOCATED and paid nothing. allocatePackShare's own comment assumes 'a refunded session never completes', and this path breaks that assumption. Separately, the reinstate branch (CANCELLED with net > 0) keeps the pack's original payout allocation while the refund was also allocated.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "payInFull",
+      "title": "payInFull re-allocates a pack share for a booking whose pack session was already refunded",
+      "verification": "Check whether the DisputeService refund for a pack booking goes through PackRefundAllocationService. Check whether SessionPackPurchase.recordPayoutAllocation or allocatePackShare can tell that this booking's session is already settled as a refund."
+    },
+    {
+      "category": "logic",
+      "description": "The share is coachShareOfRefund(row.getNetAmount(), ...). The REDUCED branch overwrites netAmount, but the RELEASED branch leaves it alone. Example: two partial refunds of 60% of the price each. Unreleased: the first cut leaves 0.4N, the second share is 0.4N*0.6 = 0.24N, and the coach still gets 0.16N. Released: the first reversal is 0.6N, the second is min(0.6N, effective 0.4N) = 0.4N, and the coach ends at 0. The class header promises the same outcome in both cases. Successive refunds on an unreleased payout undercharge the coach.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "applyRefund",
+      "title": "Pro-rata cut is computed on the already-cut net, so 'same outcome regardless of timing' is false",
+      "verification": "Check whether a payout can receive more than one applyRefund (several partial dispute refunds, or a dispute plus a chargeback on the same booking)."
+    },
+    {
+      "category": "logic",
+      "description": "The javadoc says the coach 'is paid their full net for the booking'. Only a missing row or a CANCELLED row is rebuilt or reinstated. A pending payout that applyRefund already cut pro rata, or a RELEASED payout with a reversal enqueued or completed, is 'left as it is'. The method then returns getEffectiveNetAmount(), which is less than the full net, so the coach is underpaid. Any caller that treats the return value as 'paid in full' never notices.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "payInFull",
+      "title": "UPHOLD_COACH does not restore a payout that was cut (REDUCED) or already reversed",
+      "verification": "Check DisputeService: does applyRefund run before payInFull within one dispute's lifecycle (for example a partial refund followed by an upheld decision)? Is a pending reversal cancelled on uphold?"
+    },
+    {
+      "category": "logic",
+      "description": "enqueuePayout writes CANCELLED/CHARGEBACK_LOST rows with the computed net still on them (net isn't zeroed). payInFull treats 'CANCELLED with a net' as 'a dispute refund cut it to nothing' and reinstates and releases it. An in-app UPHOLD_COACH on a booking whose card dispute was lost therefore pays the full net that the lost-chargeback logic deliberately cancelled. The javadoc's list of cases doesn't mention this one.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "payInFull",
+      "title": "payInFull reinstates a CHARGEBACK_LOST cancelled payout, paying money the bank clawed back",
+      "verification": "Decide whether UPHOLD_COACH should override a lost card dispute. If not, look at last_error (CHARGEBACK_LOST) before reinstating."
+    },
+    {
+      "category": "edge-case",
+      "description": "enqueue catches JsonProcessingException and only logs it. applyRefund then returns REVERSAL_ENQUEUED, and payInFull/releaseIfUnfrozen leave the row PENDING_RELEASE, even though no outbox message exists. The comment says the row is 'still written (PENDING_RELEASE)', which doesn't hold for reversals: no row changes, and nothing durable marks that a reversal is still owed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "enqueue",
+      "title": "Swallowed serialisation failure is reported to callers as REVERSAL_ENQUEUED"
+    },
+    {
+      "category": "logic",
+      "description": "After a partial CHARGEBACK_LOST cut, the row is set to PENDING_RELEASE with last_error still 'CHARGEBACK_LOST -x'. If the row is frozen, that text is overwritten by the freeze reason, so the record of the cut is lost. last_error carries both the freeze marker and the audit note, and each branch keeps only one of them.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "enqueuePayout",
+      "title": "Lost-chargeback cut text left in last_error on a normal PENDING_RELEASE payout"
+    },
+    {
+      "category": "architecture",
+      "description": "Any publisher still using the old constructor gets paymentCaptured=false, so isForfeit() is always false. A captured cancellation with less than 24h notice then neither refunds the parent nor pays the coach; the money just stays with the platform.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledByParentEvent.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "BookingCancelledByParentEvent",
+      "title": "12-arg BookingCancelledByParentEvent constructor silently sets paymentCaptured=false and suppresses forfeit payouts",
+      "verification": "Search for callers of the 12-argument constructor outside tests."
+    },
+    {
+      "category": "edge-case",
+      "description": "bp.getCreditDebited().add(bp.getStripeCharged()) throws a NullPointerException if either column is null. CoachPayoutOutboxSupport null-guards both columns, which suggests nulls exist. resolveAmountPaidOrZero only catches ResourceNotFoundException, so this NPE would roll back an admin suspension, which that method's javadoc says must never happen.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "resolveAmountPaid",
+      "title": "resolveAmountPaid NPEs on a null credit_debited/stripe_charged that enqueuePayout treats as nullable",
+      "verification": "Check whether booking_payments.credit_debited and stripe_charged are NOT NULL in the schema."
+    }
+  ],
+  "input_rev": "dd2ec9c7cb2879b65b1d34d94fb75a69dfe2d5e4",
+  "model": null
+}

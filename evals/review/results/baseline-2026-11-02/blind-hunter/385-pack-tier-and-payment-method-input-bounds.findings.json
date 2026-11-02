@@ -1,0 +1,138 @@
+{
+  "arm": "blind-hunter",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "`getOrCreateStripeCustomer(parentId, paymentMethodId)` writes `stripe_customers.stripe_payment_method_id` before `chargeAndCapture`. If the charge is declined or throws, nothing restores `previousCard`. The javadoc on `scheduleSubscriptionCardSync` says the card change happens only after the charge succeeds ('a declined card is never pushed'), but only the subscription sync is gated that way; the saved default has already been changed. Result: a declined or invalid card becomes the default that `subscribeCoach`/`subscribePlayer` and later pack charges use, while the Stripe subscriptions still point at the old card. The DB and Stripe now disagree, and because `syncPaymentMethodToSubscriptions`' 'superseded' check compares against this new value, the mismatch is never fixed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "purchasePack / getOrCreateStripeCustomer",
+      "title": "Client-supplied card is saved as the payer's default before the charge, so a declined card sticks",
+      "verification": "Check whether `PaymentGateway.chargeAndCapture` reads the card from `stripe_customers` (the comment says it does). If so, a failed charge needs to restore `previousCard`, or the card should be passed to the charge directly and saved only after it succeeds."
+    },
+    {
+      "category": "edge-case",
+      "description": "`paymentMethodId` has no `@Size` and no `@Pattern` (for example `pm_[A-Za-z0-9]+`). Any string is saved to `stripe_customers` before the charge (see above). A string longer than the column fails the save after `createStripeCustomer` has already created a Stripe customer for a first-time payer, leaving an orphan Stripe customer. A well-formed but bogus id is saved and later breaks subscriptions.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/PurchaseSessionPackRequest.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "PurchaseSessionPackRequest.paymentMethodId",
+      "title": "paymentMethodId is not bounded or validated at the DTO or service layer",
+      "verification": "Check the column length of `stripe_customers.stripe_payment_method_id`, and whether the controller adds any validation beyond this record."
+    },
+    {
+      "category": "edge-case",
+      "description": "`@NotBlank` alone accepts arbitrary-length, arbitrary-format strings. `savePaymentMethodAndScheduleSync` saves the value as-is and adds it to the outbox. A too-long value fails at flush time with a 500 instead of a 400. A malformed value is saved as the default card: `getSavedPaymentMethod` then reports `hasCard=true` with null details (the StripeException is swallowed), and the sync logs `InvalidRequestException` and stops.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/SavedPaymentMethodRequest.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "SavedPaymentMethodRequest",
+      "title": "SavedPaymentMethodRequest only checks for blank: no length or format bound",
+      "verification": "Add `@Size(max=\u2026)` matching the DB column and `@Pattern(regexp=\"pm_[A-Za-z0-9]+\")`. Confirm the column length and whether the controller first checks that the card is attached to the caller's Stripe customer."
+    },
+    {
+      "category": "security",
+      "description": "The stored payment-method id comes from the client (purchase or save-card) and is saved without checking that it belongs to this payer's Stripe customer. `retrievePaymentMethod(id)` is a platform-key call, so it works for any payment method on the account. A user who stores another user's `pm_\u2026` id (for example in a purchase that is then declined; it stays saved per the first finding) can call GET saved-payment-method and get that card's brand, last 4 digits and expiry.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "getSavedPaymentMethod",
+      "title": "getSavedPaymentMethod can show another account's card details",
+      "verification": "Check that `paymentMethod.getCustomer()` equals `stripeCustomer.getStripeCustomerId()` before returning card details, or confirm the controller or `StripeClient` already enforces ownership."
+    },
+    {
+      "category": "edge-case",
+      "description": "`sessionCount` has only `@Min(1)`, and `totalPrice` has only `@DecimalMin(\"0.01\")`: no `@Max`, `@DecimalMax` or `@Digits`. Concrete failures: (1) totalPrice=0.01 with sessionCount=3 gives `pricePerSession` 0.00 after HALF_UP to 2 decimal places, so per-session coach payouts are zero. (2) totalPrice=0.015 or another value with more than 2 decimals is accepted, which then has to round when stored in a fixed-scale column or converted to Stripe minor units, so the amount charged can differ from the price shown. (3) Huge values overflow the numeric column, or exceed Stripe's maximum amount, and fail at purchase time rather than at creation. (4) A price under Stripe's minimum charge (about 0.50 in most currencies) creates a tier that no one can ever buy.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CreateSessionPackTierRequest",
+      "title": "Pack tier price and session count have no upper or precision bounds",
+      "verification": "Check the precision and scale of `session_pack_tiers.total_price` and `price_per_session` in the migrations, and how `chargeAndCapture` converts BigDecimal to minor units. Add `@Digits(integer=\u2026, fraction=2)`, a minimum at least Stripe's minimum charge, and a sensible `@Max` on sessionCount."
+    },
+    {
+      "category": "edge-case",
+      "description": "The service takes a primitive `int sessionCount` and divides by it. Any caller that skips bean validation (another service, an admin path, or a controller missing `@Valid`) with 0 gets a `/ by zero` and a 500. A negative count gives a negative per-session price, and nothing rejects a null or negative totalPrice either.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "createTier",
+      "title": "createTier does not re-check its inputs; sessionCount \u2264 0 throws ArithmeticException",
+      "verification": "Confirm the controller uses `@Valid` on `CreateSessionPackTierRequest` and that no other caller of `createTier` exists. If not, add a guard in the service."
+    },
+    {
+      "category": "edge-case",
+      "description": "The `isActive()` and coach-bookable checks run before the idempotent replay lookup. If the coach creates a new tier (which deactivates the old one) or gets suspended between a client's first submit and its retry with the same Idempotency-Key, the retry gets `packTierInactive` or a booking-status error instead of the already-paid pack. The idempotency comment ('a double-submit replays ... gets back the pack') doesn't hold in that window.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "purchasePack",
+      "title": "Retrying a purchase fails after the tier is deactivated, even though the pack was already recorded",
+      "verification": "Decide whether a replay should bypass the activity checks, for example by looking up an existing purchase for the attempt key before validating."
+    },
+    {
+      "category": "logic",
+      "description": "Every live Stripe subscription not found in `paymentCoachSubscriptionRepository` is passed to `resolveCoachAndAlertIfOrphaned`. Player subscriptions live in `payment_player_subscriptions` and are never found there, so each daily run can raise an orphan alert or cause a wrong resolution for every live player subscription.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "reconcileOneStripeSubscription",
+      "title": "Stripe\u2192payment reconciliation only checks the coach table, so live player subscriptions can be flagged as orphans",
+      "verification": "Check whether `StripeWebhookService.resolveCoachAndAlertIfOrphaned` skips subscriptions that `paymentPlayerSubscriptionRepository.findByStripeSubscriptionId` matches. If not, add that lookup before alerting."
+    },
+    {
+      "category": "architecture",
+      "description": "Entitlement elsewhere goes through `SubscriptionEntitlement.BILLING_HEALTHY_STATUSES` and `effectiveCoachTier`, but these public helpers filter on a local `Set.of(\"ACTIVE\",\"TRIALLING\")`. If the two sets ever differ, for example if PAST_DUE grace is entitled in `SubscriptionEntitlement`, callers of the effective-tier helpers and the marketplace projection will disagree about the same coach.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "ACTIVE_STATUSES / getEffectiveCoachTier",
+      "title": "getEffectiveCoachTier/PlayerTier use a hand-typed status set that may not match BILLING_HEALTHY",
+      "verification": "Compare against `SubscriptionEntitlement.BILLING_HEALTHY_STATUSES` and `effectiveCoachTier`, then replace with `SubscriptionEntitlement.effectiveCoachTier(sub.getTier(), sub.getStatus())`."
+    },
+    {
+      "category": "edge-case",
+      "description": "`tier` is checked only against SCOUT, then used with `toLowerCase()` (NPE if null) to build a config key, and `toUpperCase()` result is saved. The only guard against an arbitrary tier is the absence of a matching priceId config key. If a key exists for a non-enum value, the payment row is written and then `CoachSubscriptionTier.valueOf` in `syncMarketplaceTier` throws IllegalArgumentException after Stripe has charged, rolling back `persistCoachSubscription`. That is the same orphaned-charge outcome the Decision-3 comment is trying to avoid. `subscribePlayer` doesn't check against PLAYER_TIERS either.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "subscribeCoach",
+      "title": "subscribeCoach does not validate the tier string before using it",
+      "verification": "Check that `tier` is in COACH_TIERS / PLAYER_TIERS (and not null) at entry, or confirm the controller validates it."
+    },
+    {
+      "category": "logic",
+      "description": "If `savePaymentMethodAndScheduleSync` fails, the error is only logged; the javadoc says 'saving the card again re-runs the sync'. But the new card is already saved in `stripe_customers` (by `getOrCreateStripeCustomer`), and the save-card flow may see it as unchanged and do nothing. Subscriptions then stay on the old card with no outbox entry.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "scheduleSubscriptionCardSync",
+      "title": "Default payment-method sync runs after commit but the purchase-path call gives up on enqueue failure",
+      "verification": "Check whether the save-card controller skips the sync when the card equals the stored value. If so, this failure path is never recovered."
+    },
+    {
+      "category": "logic",
+      "description": "V186 stores `sessionCount` on the purchase because 'the tier ... can change', yet the responses read `tier.getSessionCount()`. In `getPacksForParent` a missing tier gives 0, so a pack with remaining sessions shows total=0 (remaining > total).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "getPacksForParent / replayedPurchase",
+      "title": "Pack response reports the tier's current session count instead of the count stored on the purchase",
+      "verification": "Confirm `SessionPackPurchase.getSessionCount()` is populated (pre-V186 rows may be null) and prefer it, falling back to the tier's value."
+    },
+    {
+      "category": "concurrency",
+      "description": "`subscribeCoach` and `subscribePlayer` are not `@Transactional`. Two first-time subscribe requests both find no row and both insert. One hits the unique constraint and returns a raw 500 instead of the intended `inProgress` / `alreadyActive` response, because the claim lock only exists once the row does.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "findOrCreateCoachSubscription / subscribeCoach",
+      "title": "findOrCreate*Subscription runs outside a transaction and can race",
+      "verification": "Check for a unique constraint on `coach_id` / `player_id` and how ApiAdvice maps a DataIntegrityViolation here."
+    }
+  ],
+  "input_rev": "980eff338df64b0b3704c756c53a9c5db56c3224",
+  "model": null
+}

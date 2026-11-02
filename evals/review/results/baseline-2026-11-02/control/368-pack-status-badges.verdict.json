@@ -1,0 +1,53 @@
+{
+  "arm": "control",
+  "case": "368-pack-status-badges",
+  "judge_cost_usd": 0.0486454,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 covers frozen packs reading ACTIVE and R3 covers revoked packs that never get a REVOKED status and have no exposed reason; together they cover the computeStatus defect in both views.",
+        "reported_ids": [
+          "R2",
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the same impossible ACTIVE && isPaused branch, which lets PAUSED packs fall through to the green Active badge.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 covers the missing frozen guard in pausePackTransactional and R4 covers the missing revoked guard in extendPack.",
+        "reported_ids": [
+          "R7",
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "new Date('YYYY-MM-DD') parses as UTC midnight while the minimum date is computed in local time, so the server can reject a valid 'tomorrow' pick, with a concrete UTC-5 repro.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "The default card is saved before the charge, so a declined card stays as the default and a later successful retry skips the subscription card sync, with a concrete trigger.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "The tier and coach checks run before the idempotent replay lookup, so a retry after createTier fails even though the parent was already charged.",
+        "reported_id": "R8",
+        "verdict": "real"
+      }
+    ]
+  }
+}

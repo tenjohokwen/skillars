@@ -1,0 +1,148 @@
+{
+  "arm": "blind-hunter",
+  "case": "350-pack-refund-rounding-remainder",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "perSessionShare returns amountCharged / sessionCount rounded DOWN for every session, with no handling for what is left over. For a 200.00 / 3 pack, refunding all three sessions returns 3 x 66.66 = 199.98, so the parent loses 0.02 every time. The comment's claim that refunding every session 'can never return more than was paid' is true. But it hides the opposite problem: it can never return everything that was paid either. The fix trades an over-refund of 0.01 for a permanent under-refund of up to (sessionCount-1) cents. A correct split gives the remainder to one share, for example the last session refunded, which needs a count of sessions already refunded. Alternatively, cap the total refunded against amountCharged.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "SessionPackPurchase.perSessionShare",
+      "title": "Rounding each pack session's refund down means the leftover cents are never refunded",
+      "verification": "Evidence: the test perSessionShare_roundsDown_soAllSharesNeverExceedTheCharge only checks sum <= charge and never checks sum == charge. Check whether any later path (the final session, or a pack-level refund) refunds amountCharged minus what was already refunded."
+    },
+    {
+      "category": "edge-case",
+      "description": "When amountCharged or sessionCount is null, the method returns pricePerSession. The Javadoc itself says that value is HALF_UP and can over-refund (3 x 66.67 = 200.01). If pricePerSession is also null, it returns null. resolveAmountPaid then passes null on as the refund amount. Only the new pause listener guards against null; the coach, no-show and admin refund sites may not.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "SessionPackPurchase.perSessionShare",
+      "title": "The legacy fallback brings back the over-refund this fix exists to remove",
+      "verification": "Check whether any rows remain that V181/V186 left unstamped, and whether the other RefundEnqueueListener branches and RefundOutboxSupport.enqueueBookingRefund accept a null amount."
+    },
+    {
+      "category": "logic",
+      "description": "bookingStore.purchasePack awaits purchaseSessionPack and then loadPlayerPacks. If the purchase succeeds (charge captured, pack created) and loadPlayerPacks then fails with an HTTP response (any 4xx/5xx), the catch block sees e.response, sets attemptKey = null, and shows 'purchase failed'. The user clicks again and sends a new Idempotency-Key, and the server charges for and creates a second pack. The idempotency key never protects the case where the purchase worked but a later step failed.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "confirmPurchase",
+      "title": "An error while reloading packs after a successful purchase mints a new key, so a retry charges again",
+      "verification": "booking.store.js purchasePack: confirm loadPlayerPacks uses the same axios instance (so its errors carry .response). The page test mocks the whole store action, so this path is untested."
+    },
+    {
+      "category": "logic",
+      "description": "The comment calls a response 'a definite failure', but the server's own design says otherwise. In SessionPackPaymentService, the path where the charge is captured but the pack record and intent lookup fail returns payment.lifecycleFailure WITHOUT a refund (PACK_PURCHASE_UNRECONCILED). The same applies when the compensating refund fails, and to any 5xx from a gateway or proxy timeout. Stripe also answers a concurrent in-flight request on the same key with an idempotency error, which is mapped to lifecycleFailure. In all these cases the client mints a fresh key and the retry captures a second charge. The test 'mints a new key once the server answered a failure' with a 500 locks this unsafe behaviour in. Only clearly pre-charge 4xx validation errors should release the key.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "confirmPurchase",
+      "title": "Throwing away the key on any server response lets a retry double-charge after the server's own failures",
+      "verification": "Map each status/errorKey that purchasePack can return to whether a charge may already have been captured. In particular, check what HTTP status PaymentGatewayException('payment.lifecycleFailure') becomes."
+    },
+    {
+      "category": "architecture",
+      "description": "createTestingPinia stubs purchasePack, and src/api/payment.api is mocked with only fetchCoachSessionPackTiers. Nothing checks that the store forwards the key, that purchaseSessionPack sets the Idempotency-Key header, or that the header is left out when no key is given. The file header claims the change dedupes a double-submit 'so a retry replays the same charge', but the tests only cover a local variable passed to a stubbed function.",
+      "file": "src/frontend/src/pages/parent/__tests__/SessionPackPurchasePageSpec.js",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "SessionPackPurchasePageSpec",
+      "title": "The page tests stub the store and the API, so the header that does the deduplication is never exercised",
+      "verification": "Add a test against payment.api.js that checks api.post's third argument, plus a store test that checks the 4th argument is forwarded."
+    },
+    {
+      "category": "edge-case",
+      "description": "Both checks reject the pack as paused whenever pausedUntil > now. A pause has a future start (the IT test pauses from now+1 day for 14 days). That means: (a) from the moment the pause is scheduled, the parent cannot book any session at all, including sessions before the pause starts or after it ends; (b) any already-requested booking outside the pause window that the coach accepts while pausedUntil is in the future fails deductSession with packPaused, which records a payment failure. The rule tests the current time, not the session time against the pause interval.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "deductSession / BookingService.createBookingRequest",
+      "title": "The pause check ignores when the pause starts, blocking bookings and settlements before and outside the pause window",
+      "verification": "Check the SessionPackPurchase pause fields (is there a pausedFrom/pauseStart?) and the rule findActivePacks really applies, which the comment cites as 'the same rule'."
+    },
+    {
+      "category": "edge-case",
+      "description": "Objects.equals(pack.getPlayerId(), req.playerId()) rejects any pack whose playerId is null, such as old rows, with packPlayerMismatch. The comment claims 'Both ids are PlayerProfile PKs (purchasePack stores the profile id)'. That is unverified for the self-registered player branch (Deferred-81), where ids are mixed between user id and profile id.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "createBookingRequest",
+      "title": "The new player check may reject legacy or self-registered packs whose playerId is null or holds a different kind of id",
+      "verification": "Check that session_pack_purchases.player_id is NOT NULL and that every row has it filled. Confirm that createPurchase stores the PlayerProfile id in both branches of purchasePack and that CreateBookingRequest.playerId is also a profile id."
+    },
+    {
+      "category": "edge-case",
+      "description": "The new pack branch calls orElseThrow(ResourceNotFoundException) when the pack is missing. Previously a pack booking reached resolveSessionPrice. Now a coach, admin or no-show cancellation of an expired pack booking whose pack row is gone fails outright instead of refunding. cancelDueToPause also calls resolveAmountPaid before the transition, so a single bad booking aborts the whole pause.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "resolveAmountPaid",
+      "title": "A pack booking now fails to cancel if its pack row is missing; the old code fell back to the session price",
+      "verification": "Check whether session_pack_purchases rows can be deleted (the V195 FK uses ON DELETE CASCADE, which implies they can) and whether bookings.session_pack_purchase_id has an FK."
+    },
+    {
+      "category": "logic",
+      "description": "paymentCaptured is true only for CONFIRMED or UPCOMING. Two problems: (1) any other status that comes after capture, short of completion (for example IN_PROGRESS, or a status whose settle has already run), returns nothing even though money was taken; (2) a pack booking in CONFIRMED whose deductSession failed (now possible with packPaused) still gets a session 'restored' that was never deducted. That is a free session. For card bookings, resolveAmountPaid already uses booking_payments CAPTURED. The pack decision should use an equally reliable signal.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "cancelDueToPause",
+      "title": "cancelDueToPause decides whether the booking was paid from its status, not from the payment record",
+      "verification": "List the BookingStatus values that rejectIfPostCompletion lets through and the states in which PaymentLifecycleService has deducted or charged."
+    },
+    {
+      "category": "concurrency",
+      "description": "packExpired is read through sessionPackPurchaseRepository.findById inside the pausePack transaction. If pausePack extends expiresAt before calling cancelDueToPause, the managed entity shows the extended expiry. In that case an expired pack is treated as unexpired and gets a session restored instead of a wallet refund, or the reverse depending on the order.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "cancelDueToPause",
+      "title": "The pack-expiry check in cancelDueToPause may read an expiry the pause has already extended",
+      "verification": "Check the order in PackSessionService.pausePack: when is expiresAt changed relative to the cancelDueToPause calls?"
+    },
+    {
+      "category": "edge-case",
+      "description": "The per-booking marker only stops the same booking being restored twice. Nothing checks that the booking actually consumed a session from this pack, or caps remainingSessions at sessionCount. The IT test itself ends with remaining_sessions = 4 on a 3-session pack (its bookings never deducted anything), which shows a free session can appear.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "restoreSessionForBooking",
+      "title": "A restored session can push remaining sessions above the pack's session count",
+      "verification": "SessionPackIntegrityIT.pauseCancellingPaidBookings...: insertPack(3) with session_count 3, then it asserts remainingSessions == 4."
+    },
+    {
+      "category": "edge-case",
+      "description": "replayedPurchase's 409 for a different tier is effectively unreachable when the amount or metadata differ. Stripe rejects a reused idempotency key with different parameters before any intent is returned, and StripePaymentGateway maps that to payment.lifecycleFailure. The client then mints a new key (see the frontend finding). Separately, Stripe idempotency keys expire after about 24h, so a much later retry with the same key charges again and records a second pack, because the intent id is new.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "purchasePack / replayedPurchase",
+      "title": "Reusing a key for a different tier returns lifecycleFailure, not the intended 409",
+      "verification": "Check which PaymentIntent params include tier, player or amount, and how StripeException idempotency errors are mapped."
+    },
+    {
+      "category": "architecture",
+      "description": "The Javadoc still says 'Replicate the exact enqueue conditions from the six sites in CancellationRefundService'. This PR removed those restore sites, and the parent and admin listeners, from CancellationRefundService. Separately, removing PackSessionService.restoreSession(UUID) may break callers outside the diff.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "RefundEnqueueListener",
+      "title": "Class comment still points to enqueue sites that this PR deleted",
+      "verification": "grep for restoreSession( and for the removed CancellationRefundService.onBookingCancelledByParent / onBookingCancelledByAdmin across the codebase."
+    },
+    {
+      "category": "edge-case",
+      "description": "The Javadoc says 'A sibling's purchase of the same tier inside the same minute is a second pack', but both calls use PLAYER_ID. The scenario with a sibling (different player, same parent and tier) is never tested.",
+      "file": "src/test/java/com/softropic/skillars/platform/payment/service/SessionPackIntegrityIT.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "twoAttemptsOfTheSameTier_twoPacks_twoCharges",
+      "title": "The test named for a sibling's purchase uses the same player",
+      "verification": "Test body: both purchasePack calls pass PLAYER_ID."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

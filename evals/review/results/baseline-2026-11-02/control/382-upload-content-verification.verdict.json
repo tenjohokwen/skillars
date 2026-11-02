@@ -1,0 +1,61 @@
+{
+  "arm": "control",
+  "case": "382-upload-content-verification",
+  "judge_cost_usd": 0.047761399999999996,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 says confirm never inspects the bytes, so arbitrary content can be stored under the image type the client declared.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions objects left in the bucket after a rejected confirm.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "R3 mentions octet-stream only as context for a different defect; nothing flags the default allow-list itself.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "Nothing reported covers free-text entity names that skip the ownership check.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R4 identifies the prefix-only check in saveStep5, which lets unconfirmed, wrong-type or '..' keys through.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The presigned PUT stays valid after confirm and is not bound to a content length, so a second PUT can replace the confirmed object and get around the recorded size and quota.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "The confirm event listener sets photo_url for any confirmed coach_profile key without checking content type or size, a separate path from saveStep5.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Reconfirming an older key inside the TTL window re-fires the event, and the unconditional UPDATE puts the older photo back.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

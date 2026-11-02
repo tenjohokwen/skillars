@@ -1,0 +1,158 @@
+{
+  "arm": "blind-hunter",
+  "case": "330-missing-version-lost-updates",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "When a COACH recap scrub or PLAYER/PARENT child deletion is skipped, eraseTransactional sets status FAILED via request.setStatus(skipped ? \"FAILED\" : \"COMPLETED\") but never calls setFailedAt. eraseChildTransactional does set it, which suggests the step was missed here. retryFailedErasures selects with findByRequestTypeAndStatusAndFailedAtBeforeAndRetryCountLessThan, and a null failedAt never satisfies `failedAt < :deadline`. Failure scenario: a coach erasure hits COACH_RECAP_SCD_LOCK_TIMEOUT on its first run. The request is FAILED with failedAt=null and is never automatically re-driven, so the coach's recap text, timeline metadata and report rows stay in place indefinitely. That defeats the 'skipped \u2192 FAILED \u2192 daily retry' design described in the comments. On a retry run the old failedAt is kept, so the grace window is computed from a stale time. The Javadoc on markFailedStatusUpdate also claims 'every path to FAILED goes through this one method', which these two direct status writes contradict.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "eraseTransactional",
+      "title": "Skipped coach/player erasure is written FAILED without failedAt, so the retry sweep never re-drives it",
+      "verification": "Check GdprRequest for a @PreUpdate or DB default/trigger that sets failed_at whenever status becomes FAILED. If there is none, the bug is confirmed. Add request.setFailedAt(Instant.now()) when skipped, as eraseChildTransactional does."
+    },
+    {
+      "category": "logic",
+      "description": "The coach_profiles anonymisation nulls only bio, city, district and photoUrl. displayName (typically the coach's real name), languages and canonicalTimezone are kept, and status is not changed to DEACTIVATED. getPublicProfile serves ACTIVE/REDUCED/PENDING_REVIEW profiles, and city is now null, so the erased coach's named profile is still publicly reachable by id. Inbound links, existing bookings and the session builder all keep resolving it.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "eraseTransactional (COACH branch)",
+      "title": "Coach erasure leaves the profile ACTIVE with display name, languages and timezone, so the erased coach stays searchable",
+      "verification": "Check whether a UserErasedEvent/AccountDeletionRequestedEvent listener in the marketplace module deactivates the coach profile and scrubs display_name. If none does, the erasure is incomplete."
+    },
+    {
+      "category": "concurrency",
+      "description": "The comments rely on the pending coach_profiles UPDATE from save(cp) staying unflushed until the outer commit. Otherwise the outer transaction holds the row lock, and the inner markRecapDataErased (an UPDATE on the same row) waits into lock_timeout. The logo-deletion comment itself says 'a native statement auto-flushes this transaction's pending coach_profiles UPDATE'. Yet blobDeletionOutboxSupport.enqueue(photoKey) and enqueue(galleryKeys), plus coachMediaItemRepository queries, run between save(cp) and the inner scrub. If enqueue uses a native INSERT, or a flush-triggering IDENTITY persist, the row lock is taken early. Every coach erasure with a photo or gallery would then fail with COACH_RECAP_SCD_LOCK_TIMEOUT on every retry and never complete.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "eraseTransactional (COACH branch)",
+      "title": "Outer full-row save(cp) can self-deadlock the REQUIRES_NEW recap scrub if anything flushes before it",
+      "verification": "Inspect BlobDeletionOutboxSupport.enqueue: does it use a native query or em.flush(), or does IDENTITY insert trigger a full action-queue flush in this Hibernate version? Run a GdprErasureIT case with a coach that has an owned photo key and confirm the request ends COMPLETED."
+    },
+    {
+      "category": "concurrency",
+      "description": "This branch fixes the lost update for the other coach_profiles writers but leaves this one. CoachProfile still has no @Version/@DynamicUpdate, and cp is loaded unlocked. The full-row UPDATE is flushed at the outer commit, which comes after the REQUIRES_NEW scrubs and several bulk deletes, so the window is wide. Anything committed in that window reverts to the stale snapshot: suspendCoach/strike status and statusChangedAt, updateRatingAggregate's averageRating/reviewCount, and a photo_url written by CoachProfilePhotoEventListener. The comment calls the photo case an accepted residual but doesn't mention the status and rating reverts.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "eraseTransactional (coachProfileRepository.save(cp))",
+      "title": "GDPR's unlocked full-row save(cp) still reverts concurrent status, rating and photo writes on CoachProfile",
+      "verification": "Confirm that no AdminCoachEnforcementService or rating writer can run concurrently with an erasure, for example because the user is locked first. Otherwise replace save(cp) with a targeted UPDATE of bio/city/district/photo_url."
+    },
+    {
+      "category": "architecture",
+      "description": "erase()/eraseChild() set the GDPR datasource key, and deletePlayerDevelopmentData sets it again and then clear()s it in its finally block while the outer erase() is still running. After the first child, every later REQUIRES_NEW acquisition on this thread draws from the primary pool, which assertConnectionPoolNotSaturated never checked. That includes raiseErasureAlert for that child and the next children's alerts. This contradicts the 'dedicated pool' guarantee.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "deletePlayerDevelopmentData",
+      "title": "RoutingDataSourceContext is not re-entrant: the inner clear() drops the GDPR routing for the rest of erase()",
+      "verification": "Check whether RoutingDataSourceContext.clear() removes the key outright or restores a previous value from a stack. If it removes it, save and restore the previous key."
+    },
+    {
+      "category": "edge-case",
+      "description": "The loop always re-reads page 0 and stops when that page contains no unconsidered id. Dedup-skipped rows remain in the result set unchanged. If page 0 fills with 50 such rows, the loop exits and FAILED rows beyond position 50 are never looked at in that sweep, or in later sweeps while those rows persist.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "retryFailedErasures",
+      "title": "retryFailedErasures starves rows beyond page 0 when \u226550 candidates are dedup-skipped",
+      "verification": "Add an ORDER BY to the repository query and exclude consideredThisSweep ids in the query (or advance pages), then test with 51+ dedup-blocked rows."
+    },
+    {
+      "category": "database",
+      "description": "Session uses GenerationType.UUID, so sessionRepository.save() persists without executing the INSERT. GdprErasureService's own comment notes this for AdminAlert. Two concurrent createSession calls for the same booking both pass existsByBookingId, and the unique violation surfaces at commit, outside the try. The client gets a generic 500/DataIntegrityViolation instead of SESSION_ALREADY_EXISTS.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "createSession",
+      "title": "createSession catch of DataIntegrityViolationException around save() is ineffective because the UUID id doesn't flush",
+      "verification": "Confirm that a unique index exists on session.sessions.booking_id, and use saveAndFlush inside the try."
+    },
+    {
+      "category": "concurrency",
+      "description": "createSession validates booking.status()=CONFIRMED from an unlocked snapshot. If the booking completes and its AFTER_COMMIT markCompletedByBookingId runs before createSession commits, the UPDATE matches 0 rows and only logs at debug. The new plan then commits as DRAFT against a COMPLETED booking. updateSession refuses it because the booking is terminal, and the focus-thread/SLU queries that filter on SAVED/COMPLETED never include it. The same applies to cancellation via markCancelledIfOpenByBookingId.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "createSession / handleBookingCompleted",
+      "title": "Session created concurrently with booking completion is never moved to COMPLETED",
+      "verification": "Check whether BookingService transitions lock the booking row and whether createSession takes that lock (or re-checks booking status at commit). If neither, the race is open."
+    },
+    {
+      "category": "logic",
+      "description": "session.setStatus(req.status() != null ? req.status() : ...) applies no allow-list. A coach can mark a plan COMPLETED before the booking completes, which bypasses handleBookingCompleted and feeds SLU/focus-thread queries early. They can also mark it CANCELLED, or send any \u226420-char string, which breaks requireOpen's assumptions. The new locking guards against the listeners reverting status but not against this direct write.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "updateSession",
+      "title": "updateSession writes client-supplied status verbatim, so a coach can set COMPLETED/CANCELLED or arbitrary strings",
+      "verification": "Check UpdateSessionPlanRequest.status for @Pattern/enum validation limiting it to DRAFT/SAVED."
+    },
+    {
+      "category": "logic",
+      "description": "The 'Session plan can only be created for a confirmed booking' branch throws SessionErrorCode.SESSION_BOOKING_NOT_OWNED, copied from the ownership check above it. The frontend will report an ownership error for a status problem. requireOpen likewise says 'Completed sessions cannot be modified' for CANCELLED plans.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "createSession",
+      "title": "Wrong error code for a non-plannable booking (copy-paste of SESSION_BOOKING_NOT_OWNED)",
+      "verification": "Check SessionErrorCode for a status-specific code such as SESSION_BOOKING_NOT_PLANNABLE."
+    },
+    {
+      "category": "edge-case",
+      "description": "BookingStatus.valueOf(event.newStatus()) throws IllegalArgumentException or NPE for a value that doesn't map to the enum. AFTER_COMMIT listener exceptions are swallowed and logged, so the plan silently stays open.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "handleBookingTerminalNonCompletion",
+      "title": "handleBookingTerminalNonCompletion crashes on an unknown or null newStatus",
+      "verification": "Confirm that BookingStatusChangedEvent.newStatus() is always a valid non-null BookingStatus name."
+    },
+    {
+      "category": "database",
+      "description": "saveStep2/saveStep3 document that Hibernate runs INSERTs before DELETEs, so deleteByCoachId must be followed by entityManager.flush() before re-inserting. saveStep4 does the same coachAvailabilityWindowRepository.deleteByCoachId followed by saveAll with no flush. If windows have a unique constraint, resubmitting an unchanged schedule (the common 'edit' case) fails with a constraint violation.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "saveStep4",
+      "title": "saveStep4 deletes then re-inserts windows without the flush that saveStep2/3 needed",
+      "verification": "Check whether deleteByCoachId is a derived delete (entity removes, so the ordering problem applies) or a @Modifying JPQL delete. Also check for a unique constraint on coach_availability_windows."
+    },
+    {
+      "category": "logic",
+      "description": "`lower(:lang) = ANY(languages)` matches only if stored values are already lowercase. saveStep1 stores req.languages() verbatim. A coach who saved \"EN\" or \"German\" never appears in language-filtered search.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java",
+      "id": "R13",
+      "severity": "medium",
+      "symbol": "findIdsByLanguage",
+      "title": "findIdsByLanguage lowercases only the input, not the stored array elements",
+      "verification": "Check ProfileBuilderStep1Request validation or normalisation of languages, and existing data (SELECT DISTINCT unnest(languages))."
+    },
+    {
+      "category": "architecture",
+      "description": "The justification says saveStep5 and CoachProfilePhotoEventListener 'save a managed CoachProfile they loaded without the row lock'. Both now use the targeted updatePhotoUrlByUserId. The real unlocked full-row writer left is GdprErasureService's save(cp), which this comment doesn't name. updateVerificationTier is also not clearAutomatically, so a caller that locked the entity keeps reading the old tier from its managed instance after the bulk UPDATE.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "verificationTier",
+      "title": "Stale comment: verificationTier Javadoc says saveStep5 and the photo listener do full-row saves",
+      "verification": "grep for remaining coachProfileRepository.save( call sites without a preceding findByIdForUpdate. Check whether updateVerificationTier callers read getVerificationTier() afterwards."
+    },
+    {
+      "category": "database",
+      "description": "@Modifying(clearAutomatically = true) without flushAutomatically detaches every managed entity in the caller's transaction. Any unflushed changes to them (for example the review entity just moderated) are silently discarded. The method is also not lock-aligned with the GDPR full-row save that can revert it.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "updateRatingAggregate",
+      "title": "updateRatingAggregate clears the persistence context without flushing first",
+      "verification": "Inspect the callers of updateRatingAggregate (review moderation) for pending dirty entities before the call. Add flushAutomatically = true."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

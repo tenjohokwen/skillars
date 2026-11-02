@@ -1,0 +1,278 @@
+{
+  "arm": "blind-hunter",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The listener's only write is `user.setVerificationStatus(SUSPENDED)`. It does not set `locked`, does not stamp `securitySessionInvalidatedAt`, and does not call `refreshTokenRepository.markAllUsedByUserId`. Every liveness gate shown checks `activated`/`locked` instead: `AuthService.ensureAccountIsLive`, Spring's `accountNonLocked` in `Principal.instanceFrom`, and AdminUserService's Javadoc says plainly that 'suspended' means the `locked` flag. `AuthService.login` only rejects a non-BASIC_VERIFIED status when `skillarsRole != null && security.registration.phone-otp-required` is true. So a user with a null role, or any user once that config is false, logs in normally. `AuthService.refresh` never looks at `verificationStatus`, so an account suspended over CSAM keeps getting new access and refresh tokens indefinitely, and its current JWT stays valid. Even where login is blocked, the error is `SkillarsAccountNotVerifiedException` ('not verified'), not a suspension.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "onAccountSuspensionRequested",
+      "title": "CSAM account suspension sets only verificationStatus; login, refresh and JWT re-auth are not blocked",
+      "verification": "Check whether JWTAuthorizationFilter / DaoAuthProvider.authorize or any other filter rejects `verificationStatus == SUSPENDED`. Grep for `SkillarsVerificationStatus.SUSPENDED` outside this listener. Integration test: suspend through the event, then call /api/auth/refresh with the user's refresh cookie and expect a 401."
+    },
+    {
+      "category": "architecture",
+      "description": "Admin suspension uses `locked` and leaves `verificationStatus` alone. CSAM suspension uses `verificationStatus = SUSPENDED` and leaves `locked` alone. As a result, a CSAM-suspended user shows as locked=false in admin search and detail. `reactivateUser` returns false ('not suspended') and cannot lift it. `suspendUser` treats the user as live. Also, the CSAM listener overwrites the previous verification status (e.g. BASIC_VERIFIED) without saving it, so nothing can restore it later. The two paths contradict each other about what suspension is.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/AdminUserService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "suspendUser / reactivateUser",
+      "title": "Two different meanings of 'suspended': CSAM suspension can't be seen or lifted from the admin console",
+      "verification": "Decide which field is the source of truth for suspension. Check whether AdminUserDetailDto or the admin UI ever reads verificationStatus=SUSPENDED."
+    },
+    {
+      "category": "concurrency",
+      "description": "The listener loads the user with `findOneByLogin` (no lock) and then calls `userRepository.save(user)`. AdminUserService takes a PESSIMISTIC_WRITE lock on the user row specifically to stop stale full-row saves, and its own Javadoc expects that 'a stale managed save of the user row' might write `locked` back to false. If an admin suspend (locked=true) commits between this listener's read and its flush, and User has no @Version and no @DynamicUpdate, this save writes locked=false back.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "onAccountSuspensionRequested",
+      "title": "CSAM listener saves a full row from an unlocked read and can revert a concurrent admin lock",
+      "verification": "Check User for @Version / @DynamicUpdate. If neither is present, use findByIdForUpdate or a targeted @Modifying update here."
+    },
+    {
+      "category": "logic",
+      "description": "`event.ownerId()` is looked up with `findOneByLogin(ownerId).or(findOneByEmail(ownerId))`. The name suggests a user id, and elsewhere user ids are numeric TSIDs (`String.valueOf(user.getId())`). If the moderation service passes the numeric id or businessId, both lookups miss, and the CSAM suspension silently becomes an ERROR log line ('user not found') with no retry and no durable record. The value is also not lowercased, unlike AuthService's `findOneByLogin(email.toLowerCase())`.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "onAccountSuspensionRequested",
+      "title": "Suspension lookup treats 'ownerId' as a login or email",
+      "verification": "Check what ModerationOrchestrationService puts in AccountSuspensionRequestedEvent.ownerId (video owner's user id, or login). Add a test that publishes the event with the real producer's value."
+    },
+    {
+      "category": "concurrency",
+      "description": "The header says the event 'is published outside an active TX from ModerationOrchestrationService'. If any publisher calls it inside a transaction that has already written the user row, the REQUIRES_NEW update waits on the suspended outer transaction (the same self-deadlock UserRepository documents for invalidateSessionsForUser). A synchronous @EventListener also passes any exception (e.g. a lock timeout) back into the moderation flow.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "class comment / @Transactional(REQUIRES_NEW)",
+      "title": "Listener comment assumes the event is never published inside a transaction; if it is, REQUIRES_NEW can deadlock or detach from the outcome",
+      "verification": "Check every publishEvent(AccountSuspensionRequestedEvent) call site for an active transaction (TransactionSynchronizationManager.isActualTransactionActive)."
+    },
+    {
+      "category": "logic",
+      "description": "In the grace branch the code calls `findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId, now)`, which returns the newest live token for the user across all sessions, then rotates it. Scenario: device A refreshes (T0\u2192T1), and within 30 s device B logs in (creates T2). A stale request carrying T0 then 'redirects' to T2 and rotates it to T3, which is sent to the stale caller. Device B's cookie T2 is now used; its next refresh more than 30 s later hits the theft branch and revokes every session for the user. The same lookup also gives anyone replaying a just-rotated token, within 30 s, a fresh credential for whatever session is newest. There is no successor link (e.g. replacedBy) tying T0 to T1.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R6",
+      "severity": "high",
+      "symbol": "refresh",
+      "title": "Refresh grace window consumes the user's newest live token from any device, not this token's successor",
+      "verification": "Check whether RefreshToken has a successor/family column. Integration test: two logins, then replay one session's rotated token within 30 s and assert the other session's token is untouched."
+    },
+    {
+      "category": "logic",
+      "description": "`findFirstByIdentifierOrderByAttemptedAtAsc(identifier)` ignores `windowStart`. Attempt rows are purged only by `deleteByAttemptedAtBefore` (comments mention 24 h). If an identifier has attempts from hours ago plus five in the current window, the oldest row is outside the window, so `between(now, oldest+15min)` is negative and clamps to 1 s. The client is told to retry in 1 s while it stays locked for up to 15 minutes. Even within the window, the correct unlock time is when the count drops below max (the (count\u2212max+1)th oldest in-window attempt), not the oldest one.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "login",
+      "title": "Retry-After is based on the oldest attempt ever recorded, not the oldest in the window",
+      "verification": "Unit test: seed one attempt at now\u221260min and five at now\u22121min, then assert retryAfterSeconds is about 14 minutes, not 1."
+    },
+    {
+      "category": "security",
+      "description": "`countByIdentifierAndAttemptedAtAfter` is only queried with `identifier = sha256(email|ip)`. `subjectHash` (per account) is recorded but never enforced, only used for the admin read-out. An attacker with a pool of IPs (or a spoofable client IP) gets 5 guesses per IP per 15 minutes against any account, with no account-level cap. The legacy LoginAttemptsService explicitly has a per-user cap (MAX_FAILED_USER_ATTEMPTS) for this case, but /api/auth/login doesn't use that service. Also count-then-insert isn't atomic, so concurrent requests can go past maxAttempts.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "login",
+      "title": "DB login limiter is keyed only on (email, IP): unlimited guesses against one account from rotating IPs",
+      "verification": "Check how the controller derives clientIp (X-Forwarded-For trust / ForwardedHeaderFilter). Decide whether a higher per-subjectHash threshold should be enforced."
+    },
+    {
+      "category": "security",
+      "description": "When `findOneByLogin` misses, BadCredentialsException is thrown with no BCrypt work. For an existing user, `passwordEncoder.matches` costs about 2^10 rounds. The response-time gap reveals which emails are registered. The legacy path has AuthenticationManagerSimulator for exactly this, but the hand-rolled login does not use it.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "login",
+      "title": "Timing difference on unknown accounts allows user enumeration",
+      "verification": "Time /api/auth/login for an existing versus a non-existent email."
+    },
+    {
+      "category": "edge-case",
+      "description": "`user.getVerificationStatus() != BASIC_VERIFIED` rejects any other value. If the enum has a higher tier than BASIC_VERIFIED, those users cannot log in. SUSPENDED users get a misleading 'account not verified' error and may be sent to the OTP flow.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "login",
+      "title": "Login treats every verification status except BASIC_VERIFIED as 'not verified'",
+      "verification": "List the values of SkillarsVerificationStatus. Check what the frontend does with SkillarsAccountNotVerifiedException."
+    },
+    {
+      "category": "security",
+      "description": "`deleteCookies` lists JAVA_SESSION_COOKIE, JWT_COOKIE_NAME, B_COOKIE, USER_COOKIE and ADMIN_COOKIE, but not REFRESH_TOKEN_COOKIE (or the SkillarsProfileCookie). Nothing in this logout configuration marks the refresh_tokens row used. After 'logout', the browser (or anyone who copied the cookie) can call /api/auth/refresh and get a new JWT. AuthService.logout \u2192 terminateSession is a separate path; it's unclear which one the SPA calls.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java",
+      "id": "R11",
+      "severity": "high",
+      "symbol": "filterChain (http.logout)",
+      "title": "/api/logout doesn't delete the refresh-token cookie or revoke the refresh token",
+      "verification": "Check AjaxLogoutSuccessHandler for refresh-token revocation. Check which logout URL the frontend auth store calls. Test: POST /api/logout, then /api/auth/refresh with the old cookie, and expect a 401."
+    },
+    {
+      "category": "security",
+      "description": "`formLogin(withDefaults())` registers UsernamePasswordAuthenticationFilter on POST /login, backed by the plain `authenticationManager` bean (ProviderManager(DaoAuthProvider)), not FraudAwareAuthenticationManager. It runs before authorization, so it can't be guarded by request matchers. It doesn't go through AuthService.login (no DB rate limit, no phone-OTP/verification check) or LoginAttemptsService.isAllowed, so it's an unthrottled password-guessing endpoint, and on success it creates an HttpSession-based login. DefaultLoginPageGeneratingFilter also serves GET /login, which collides with the SPA's /login route in history mode.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java",
+      "id": "R12",
+      "severity": "high",
+      "symbol": "filterChain (http.formLogin(Customizer.withDefaults()))",
+      "title": "Default formLogin adds an extra login path that skips both rate limiters and the OTP gate",
+      "verification": "Test: POST /login with username/password form fields; check whether it returns 302 with a JSESSIONID and whether repeated failures are ever throttled. Check whether the JWT filters accept a session-held SecurityContext."
+    },
+    {
+      "category": "security",
+      "description": "With CSRF disabled, LogoutConfigurer matches /api/logout for any HTTP method. Combined with Lax cookies, a cross-site top-level navigation to /api/logout logs the victim out.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "filterChain (http.logout)",
+      "title": "Logout URL accepts GET with CSRF disabled (logout CSRF)",
+      "verification": "Send GET /api/logout and confirm the logout handlers run."
+    },
+    {
+      "category": "logic",
+      "description": "A rate-limit denial throws LockedException, which the AuthService Javadoc says ApiAdvice maps to 401 `security.accLocked`. The client can't tell a temporary throttle from an admin lock. Also, if `simulator.authenticate` throws (a simulator plausibly ends in BadCredentialsException), the original AccountStatusException is never rethrown. A BadCredentials-style failure then propagates and may be recorded as a failed attempt, which the class Javadoc says must not happen.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/FraudAwareAuthenticationManager.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "verifyAccountStatusThenAuthenticate",
+      "title": "Rate-limited requests surface as LockedException ('account locked')",
+      "verification": "Check whether AuthenticationManagerSimulator.authenticate can throw, and whether JWTAuthenticationFilter publishes BadCredentialsEvent on that path."
+    },
+    {
+      "category": "edge-case",
+      "description": "Cache keys use `metadata.getUserName()` exactly as typed. AdminUserService.unlockLogin passes `user.getLogin()` (stored form, lowercase in AuthService's lookups). Failures typed as 'Bob@x.com' are stored under that key and survive an unlock of 'bob@x.com'. They can also be spread across case variants to multiply the per-user cap. Separately, `escapeField` doesn't escape '%', so the literal value '%7C' collides with an escaped '|'.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java",
+      "id": "R15",
+      "severity": "medium",
+      "symbol": "unlockUser / loginFailed",
+      "title": "Legacy limiter keys are case-sensitive, so admin unlock can miss the cached entries",
+      "verification": "Check whether RequestMetadata normalises userName to lowercase before it reaches this service."
+    },
+    {
+      "category": "logic",
+      "description": "`u.setLogin(newEmail)` stores the value as given. AuthService.login looks up `findOneByLogin(email.toLowerCase())`, so a new email with any uppercase letter can never log in again. There's no check that the new email/login is free, so a duplicate fails at flush as a raw constraint error. Every service method resolves the user by `securityUtil.getCurrentUser().getUsername()` (the old login in the JWT), so after the change all profile calls return 'User not found' until the user logs in again. The failure branch puts `passwordMatch`/`emailMatch` in the exception context, which is a password oracle if that context reaches the client, and runs BCrypt twice.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R16",
+      "severity": "medium",
+      "symbol": "updateUserEmail",
+      "title": "Email change sets login without lowercasing or a uniqueness check, and leaves the active JWT pointing at a login that no longer exists",
+      "verification": "Check AccountManagementFacade.changeEmail (used by ProfileResource) for lowercasing and a uniqueness check, and whether the ProfileActionException context is serialised into the API response."
+    },
+    {
+      "category": "security",
+      "description": "After a password change (the usual response to a suspected compromise), existing JWTs and refresh tokens stay valid. There's no `invalidateSessionsForUser` stamp and no `markAllUsedByUserId`, unlike the theft and suspend paths. An attacker with a stolen refresh cookie keeps access indefinitely.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R17",
+      "severity": "medium",
+      "symbol": "changePassword",
+      "title": "Password change doesn't revoke other sessions or refresh tokens",
+      "verification": "Check whether any AccountChangeEvent(PASSWORD_CHANGED) listener revokes tokens."
+    },
+    {
+      "category": "security",
+      "description": "Registration and login enforce phone-OTP verification (BASIC_VERIFIED), but updatePhone replaces the number with an unverified one, without a password or OTP, while verificationStatus stays BASIC_VERIFIED.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "updatePhone",
+      "title": "Phone number changes with no OTP re-verification, even though login depends on phone OTP verification",
+      "verification": "Confirm whether any downstream flow (2FA/OTP delivery) uses User.phone."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc says 'Sends verification email to the new address', and the success message is 'Your email address has been updated'. UserProfileService.updateUserEmail applies the change at once and only notifies the old address. Also, getProfile returns 500 when the user is not found, instead of 401/404.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/ProfileResource.java",
+      "id": "R19",
+      "severity": "low",
+      "symbol": "updateEmail",
+      "title": "ProfileResource Javadoc says a verification email is sent; the path shown changes the email immediately",
+      "verification": "Read AccountManagementFacade.changeEmail to see whether it sends a verification or delegates to UserProfileService.updateUserEmail. ChangeEmailDto has no import, so confirm it lives in the api package."
+    },
+    {
+      "category": "database",
+      "description": "`parentPlayerLinkRepository.save(link)` doesn't flush for an entity with a generated/assigned id, so a unique-constraint violation is raised at transaction commit, outside the try. The intended `security.playerAlreadyHasParent` error never fires; the caller gets a generic 500/409 instead. In createPlayerProfile the player was just created, so 'already has a parent' can't happen there anyway (copy-paste residue). Adults also get a made-up consent version of '1.0'.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java",
+      "id": "R20",
+      "severity": "medium",
+      "symbol": "createPlayerProfile / linkAdditionalParent",
+      "title": "DataIntegrityViolationException catch around save() is dead code: the violation surfaces at commit",
+      "verification": "Use saveAndFlush and confirm the catch is reached in a DB-backed test with two concurrent link inserts."
+    },
+    {
+      "category": "logic",
+      "description": "The service method's name says it adds an additional parent, but it throws if `existsByPlayerId(playerId)` is true, so it can only ever link a first parent. It also does no ownership/authorization check of its own. The REST endpoint `POST /{playerId}/link-parent` ignores the service and always throws 'Player already has a parent', so the feature is unreachable and the error message is a fixed string unrelated to the actual state.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java",
+      "id": "R21",
+      "severity": "medium",
+      "symbol": "linkParent",
+      "title": "'linkAdditionalParent' rejects any player that already has a parent, and the endpoint never calls it",
+      "verification": "Decide the intended multi-parent design. Grep for callers of linkAdditionalParent."
+    },
+    {
+      "category": "logic",
+      "description": "listPlayerProfiles filters out `developmentDataErasedAt != null`, and its comment says erased children 'must disappear from every \"my children\" surface'. getPlayerProfile, updateChildPosition and updateOwnPosition don't check the tombstone, so a parent with the id (bookmark, history) can still fetch and modify an erased child's profile. Within this file, only the list path honours the tombstone.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java",
+      "id": "R22",
+      "severity": "medium",
+      "symbol": "getPlayerProfile / updateChildPosition / updateOwnPosition",
+      "title": "GDPR-erased child profiles are hidden from the list but can still be read and edited by id",
+      "verification": "Check whether PlayerOwnershipGuard.check rejects erased profiles."
+    },
+    {
+      "category": "concurrency",
+      "description": "`existsByUserId` followed by an insert isn't atomic, so a double-submit can create two profiles unless a unique constraint exists on user_id. The name is built as `firstName + \" \" + lastName`, which gives 'null null' when names are missing. `getAgeTier(user.getDateOfBirth())` may throw an NPE if DOB is null. `independentAccountAllowed` is hard-coded true without checking ageTier.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java",
+      "id": "R23",
+      "severity": "low",
+      "symbol": "createSelfOwnedPlayerProfile",
+      "title": "Self-owned player profile creation: check-then-insert race and null-name handling",
+      "verification": "Check for a unique index on player_profiles.user_id and for User.dateOfBirth nullability."
+    },
+    {
+      "category": "logic",
+      "description": "The guard handles `meta.role === 'PARENT'`, `meta.role === 'PLAYER'`, `requiresCoach` and `meta.roles`. `coach/revenue` and `coach/bookings/:bookingId/receipt` declare `meta: { role: 'COACH' }`, which nothing checks, so parents and players reach coach pages and see raw 401/403s. This is the same bug the comment on coach/profile-builder describes fixing for its own route. `parent/create-player` and `player/profile-builder` likewise have no role gate.",
+      "file": "src/frontend/src/router/index.js",
+      "id": "R24",
+      "severity": "medium",
+      "symbol": "beforeEach",
+      "title": "Router has no check for meta.role 'COACH'; coach revenue and coach receipt routes are open to any authenticated role",
+      "verification": "Route as a PARENT to /coach/revenue and observe that no redirect happens."
+    },
+    {
+      "category": "edge-case",
+      "description": "`await pbStore.loadStatus()` has no try/catch. If it rejects (network error, 401 during refresh), the navigation is aborted with an unhandled error. If it swallows errors and leaves isComplete false, a coach with a complete profile is wrongly sent to the profile builder.",
+      "file": "src/frontend/src/router/index.js",
+      "id": "R25",
+      "severity": "low",
+      "symbol": "beforeEach (coach/command-center)",
+      "title": "Command-center guard has no error handling around loadStatus",
+      "verification": "Read profileBuilder.store loadStatus to see how it handles errors and what isComplete defaults to."
+    },
+    {
+      "category": "logic",
+      "description": "`CaseUtils.toCamelCase(\"mary ann\", true)` returns 'MaryAnn', and 'JEAN-LUC' becomes 'Jean-luc'. That value is returned in LoginResponse.displayName. The boxed `Boolean enabled`/`otpEnabled` fields also throw an NPE in the constructor if a caller of the builder doesn't set them. `phone` and `loginIdType` are never filled in by instanceFrom.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/contract/Principal.java",
+      "id": "R26",
+      "severity": "low",
+      "symbol": "Builder.displayName",
+      "title": "Principal.displayName uses toCamelCase, which strips spaces from first names",
+      "verification": "Unit test instanceFrom with a first name containing a space."
+    },
+    {
+      "category": "architecture",
+      "description": "A comment points to the reassignment at ':158-165', and the grace-branch comment says 'markAllUsedByUserId above has already revoked', but the call actually comes right after the comment. Principal's comment refers to login() clearing the column, which no longer happens. Line-number references go stale, and these comments are the main justification for the deadlock-safety reasoning.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R27",
+      "severity": "low",
+      "symbol": "refresh",
+      "title": "Stale line references and history in comments",
+      "verification": "Check the current line numbers of the grace-window reassignment."
+    }
+  ],
+  "input_rev": "651ed1effc048bc7e6fe04cf68c77464b22ed6f5",
+  "model": null
+}

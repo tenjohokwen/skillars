@@ -1,0 +1,139 @@
+{
+  "arm": "blind-hunter",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "judge_cost_usd": 0.1142174,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R3 targets the minute-bucket key with no attempt component for batch re-issues, but describes cross-minute double charges and same-minute IdempotencyException, not a replayed first PaymentIntent leaving the second settlement uncharged.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same defect: charge() maps every StripeException to a decline, so a timeout or 5xx after capture declines a booking whose card was charged.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "Same defect: the PaymentIntent status is never checked before the booking is confirmed.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding covers the single-booking settle failure after capture having no compensation.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers the single batch-level credit debit made before the charge.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions Stripe's minimum charge amount.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding covers the missing Stripe timeout and retry configuration.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding covers the subscribe double-click race that creates two subscriptions.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F9",
+        "match": "full",
+        "note": "Same defect: a chunked request bypasses the Content-Length check.",
+        "reported_ids": [
+          "R6"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: an unwrapped declineBatchBooking throw inside the pack-loop catch aborts the listener and leaves the remaining bookings PAYMENT_PENDING.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Self-deadlock is speculative and depends on unverified enqueue locking.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: coachProfileNotFound or IllegalArgumentException from syncMarketplaceTier rolls back the local persist after Stripe has charged, and nothing cancels the subscription.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "The reconciliation looks only in the coach subscription repository, so every live player subscription is treated as unmatched.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "The fixed key sub-pm-{sub}-{pm} makes an A\u2192B\u2192A card switch within 24h replay the first response, leaving the subscription on card B.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "The quote prices from current coach_pricing while settlement uses agreed_price, so a price change makes the quoted and charged figures diverge.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "A comment and logging mismatch, not a functional defect in the code.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: only triggers if someone configures a non-two-decimal currency.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: requires more than 10 transfers per group with no evidence that this happens.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Only asks to verify a possible rule mismatch; no concrete divergence is shown.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: the subscription id changes between the Stripe proration charge and persist, so a paid upgrade is silently dropped.",
+        "reported_id": "R15",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on unverified DTO validation.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "A consequence of R1's unknown-outcome-as-failure defect on the batch path.",
+        "reported_id": "R17",
+        "verdict": "duplicate"
+      }
+    ]
+  }
+}

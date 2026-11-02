@@ -1,0 +1,408 @@
+{
+  "arm": "blind-hunter",
+  "case": "307-frontend-links-and-tus",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The P18 fix compares `state` to `coachId.toString()`. A coach's UUID can be predicted or found: the marketplace exposes it at /coaches/:coachId. An attacker can start OAuth with their own Stripe account, take the resulting `code`, and send a logged-in victim coach to /api/payment/coaches/me/stripe/callback?code=<attacker code>&state=<victim coachId>. The state check passes, and onboardingService.handleOAuthCallback links the attacker's Stripe account to the victim, so the victim's payouts go to the attacker. The state has to be an unguessable value bound to the session and used only once.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback",
+      "title": "Stripe OAuth state is the coach's own (public) coachId, not a nonce \u2014 CSRF account-linking still possible",
+      "verification": "Check StripeOnboardingService.generateOnboardingUrl to see what it puts in `state`. If it is coachId, the attack works. Also check that public coach-profile URLs or DTOs expose the same UUID."
+    },
+    {
+      "category": "logic",
+      "description": "`:to=\"{ name: 'coach-dashboard' }\"`, but routes.js defines no route named 'coach-dashboard'. The coach routes are coach-availability, coach-players, coach-session-templates and so on. The coach home is the unnamed 'coach/command-center'. Vue Router 4 throws `No match for {name: 'coach-dashboard'}` when it resolves a RouterLink, which can break rendering of the whole vault page or at least the back button.",
+      "file": "src/frontend/src/pages/coach/SessionTemplateVault.vue",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "template q-btn :to",
+      "title": "SessionTemplateVault back button targets non-existent route name 'coach-dashboard'",
+      "verification": "grep routes.js for `name: 'coach-dashboard'` (it isn't in the file shown) and check whether any other route module adds it."
+    },
+    {
+      "category": "logic",
+      "description": "In routes.js the marketplace route is `{ path: 'marketplace', component: ... }` with no `name`. Resolving `{ name: 'marketplace' }` throws in Vue Router 4. This CTA is the AC4 'no active packs' path, so a parent with no active packs gets a render error or a dead link instead of reaching the marketplace.",
+      "file": "src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "template q-btn :to=\"{ name: 'marketplace' }\"",
+      "title": "Parent portal 'Find a coach' CTA targets route name 'marketplace', which has no name",
+      "verification": "routes.js marketplace entry: there is no `name` key. Add `name: 'marketplace'` or use `to=\"/marketplace\"`."
+    },
+    {
+      "category": "logic",
+      "description": "At 95% or more of storage, the user is shown an upgrade link to '/upgrade'. routes.js has no such path, so the catch-all ErrorNotFound (meta.notFound) catches it. That is the moment the prompt matters most. Coach subscription lives at 'coach/subscription' and player subscription at 'parent/player/:id/subscription'. The TODO says this is a placeholder, but the link is live in production markup.",
+      "file": "src/frontend/src/components/video/QuotaUsageBar.vue",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "router-link to=\"/upgrade\"",
+      "title": "QuotaUsageBar upgrade link points at /upgrade, which has no route (lands on 404)",
+      "verification": "routes.js contains no 'upgrade' path."
+    },
+    {
+      "category": "logic",
+      "description": "`bookingsUrl = appBaseUrl + \"/bookings\"`. The SPA's bookings page is '/parent/bookings' (route parent-bookings), and '/bookings' falls into the 404 catch-all. On top of that, appBaseUrl is `baseurl + \":\" + server.port`, the backend's listening port. If baseurl is the public frontend origin, the link becomes something like https://app.example.com:8080/bookings and is unreachable in production.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "onQuickCompleteConfirmationRequired / appBaseUrl",
+      "title": "Quick-complete email link uses '/bookings', which is not a frontend route, and is built on backend host:port",
+      "verification": "Check the `baseurl` and `server.port` values per profile, and whether the frontend is served from the same origin and port as the backend."
+    },
+    {
+      "category": "logic",
+      "description": "reportsPageUrl = baseUrl + \"/portal/players/\" + playerId + \"/reports\". routes.js has no '/portal/...' route. Parents see reports on 'parent/players/:playerId/development' through PerformanceReportsPanel, so every PERFORMANCE_REPORT_SHARED email links to the 404 page. This class also uses bare `baseUrl`, while BookingEmailListener, AccountChangeEmailListener and AccountManagementFacade append `:server.port`. At most one of the two conventions can be right.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "notifyParent",
+      "title": "Performance-report email links to /portal/players/{id}/reports, which does not exist; also omits the port other links add",
+      "verification": "Compare with routes.js (parent-development is the reports host) and the deployed `baseurl` value."
+    },
+    {
+      "category": "concurrency",
+      "description": "The panel is reused without a remount as props.drill changes (the AC14 comment says so). startUpload reads `props.drill.id` again after the tus upload finishes: `sessionStore.updateDrillVideoState(props.drill.id, { hasVideo: true ... })`. If the coach switches drills during a long upload, drill B is marked hasVideo:true and drill A, which really has the video, is not. The upload controls (selectedVideoFile, isUploading, uploadPercent) are also not reset on drill change, so drill B shows A's progress bar. Capture the drill id at the start of the call and reset the state in a watch on props.drill.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R7",
+      "severity": "high",
+      "symbol": "startUpload",
+      "title": "Upload completion writes video state to whichever drill is open now, not the drill that was uploaded",
+      "verification": "Find where DrillDetailPanel is used (DrillLibraryPage / SessionBuilderPage) and confirm the :drill prop is swapped without a :key."
+    },
+    {
+      "category": "edge-case",
+      "description": "fetchVideoUploadEligibility runs only if the first drill at mount time is PRIVATE. If the panel mounts with a null or PLATFORM drill and later gets a PRIVATE drill, canUploadVideo is never fetched. The strict `=== true` check then hides the upload section for good.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "onMounted / sessionStore.canUploadVideo",
+      "title": "Upload eligibility fetched only on mount, so a reused panel never shows upload for later PRIVATE drills",
+      "verification": "Check whether sessionStore.canUploadVideo is populated elsewhere (for example in DrillLibraryPage onMounted)."
+    },
+    {
+      "category": "logic",
+      "description": "In tus-js-client, `uploadUrl` means 'resume an upload that already exists': it sends a HEAD for Upload-Offset, then PATCHes. It does not create anything. If the backend's signedUploadUrl is a creation endpoint or a provider URL that needs auth headers (for example Bunny-style AuthorizationSignature/Expire/VideoId headers, or tus `metadata`), every upload fails right away. DrillUploadInitiateResponse also returns uploadSessionId and expiresAt, which the client ignores, so an expired URL is never refreshed and a resume after a failure is impossible.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "runTusUpload",
+      "title": "tus upload passes the signed URL as `uploadUrl` (resume) and never uses the returned uploadSessionId/expiresAt",
+      "verification": "Check what VideoService.initializeUpload returns as signedUploadUrl for the configured provider. It must be a tus upload resource that already exists and needs no extra headers for `uploadUrl` to be correct."
+    },
+    {
+      "category": "edge-case",
+      "description": "tus `abort()` calls neither onSuccess nor onError, so the promise in startUpload never settles and its finally block never runs. Separately, onUnmounted sets `sessionStore.uploadingDrillId = null` without any condition, even though this component never sets it. That clears another panel or flow's in-progress marker.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "onUnmounted / runTusUpload",
+      "title": "Aborting the tus upload on unmount leaves the startUpload promise unresolved",
+      "verification": "Check where sessionStore.uploadingDrillId is set (probably in initiateVideoUpload) and who reads it."
+    },
+    {
+      "category": "logic",
+      "description": "The backend throws `new DrillConstraintViolationException(\"video\", msg)`. The frontend matches `errorKey === 'video.constraintViolated'`. If the exception's errorKey is a drill-specific code, the constraint branch never fires and users see the generic 'uploadFailed' message. QUOTA_EXCEEDED and UPLOAD_RATE_LIMITED use a different casing convention from the other dotted keys, which suggests they were copied from another caller.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "startUpload catch",
+      "title": "Drill upload errorKey 'video.constraintViolated' likely doesn't match the backend's DrillConstraintViolationException key",
+      "verification": "Check the errorKey that DrillConstraintViolationException, the quota exception and the rate-limit exception produce through ApiAdvice."
+    },
+    {
+      "category": "logic",
+      "description": "Every other page reads `e.response.data.errorMsg.errorKey`. In this codebase helpCode is the random ShortCode support tracker (see sendMail/sendEmail). If ApiAdvice follows the same convention, SESSION_ALREADY_EXISTS and SESSION_BOOKING_NOT_OWNED never match, and every deploy failure shows the generic error.",
+      "file": "src/frontend/src/pages/coach/SessionTemplateVault.vue",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "confirmDeploy",
+      "title": "Template deploy error handling switches on `helpCode` instead of `errorMsg.errorKey`",
+      "verification": "Check ApiAdvice's error response shape: whether helpCode holds the error code or a tracking id."
+    },
+    {
+      "category": "edge-case",
+      "description": "The branches are loading \u2192 empty \u2192 list, with no error branch. When fetchTemplates fails, templates stays [] and the coach is told they have no saved templates. That is a false statement, the same pattern the ParentDevelopmentPortalPage comment calls out.",
+      "file": "src/frontend/src/pages/coach/SessionTemplateVault.vue",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "template v-else-if=\"!templateStore.templates.length\"",
+      "title": "Template vault shows the 'no templates' empty state when the fetch failed",
+      "verification": "Check whether sessionTemplate.store exposes an error field and swallows fetch errors."
+    },
+    {
+      "category": "logic",
+      "description": "The comment says 'Collect all non-null error strings so no failure is silently hidden', but the code returns `errors[0]`. Any second or third failure (packsError, coachContributionsError) is hidden behind the first, which is exactly what the comment says it prevents.",
+      "file": "src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "pageError",
+      "title": "pageError shows only the first error, contradicting its own comment",
+      "verification": "Read the computed: it returns errors[0]."
+    },
+    {
+      "category": "concurrency",
+      "description": "When a parent switches from child A to child B quickly, both loads run. The store actions (fetchRadarDisplay, fetchExposure, fetchNarrative, fetchCoachContributions, loadPlayerPacks) write their results into shared store state when they finish. If A's responses arrive after B's, B's page shows A's radar, narrative and packs. Only `loading` is protected by `gen`.",
+      "file": "src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue",
+      "id": "R15",
+      "severity": "medium",
+      "symbol": "loadPortal",
+      "title": "Generation counter guards only the loading flag; a slower stale load still overwrites store data for the newly selected child",
+      "verification": "Check development.store and booking.store actions for per-request playerId or generation checks before assigning state."
+    },
+    {
+      "category": "edge-case",
+      "description": "The contributions empty state is gated on `store.coachContributionsLoading`. If that field doesn't exist in development.store, it is always undefined, and the 'No coach contribution data' claim shows while loading, which is the bug the comment says was fixed. The noPacksState message (`!hasActivePacks`) has no guard at all: it says 'no packs' while packs are loading and after packsError.",
+      "file": "src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "hasActivePacks / v-else-if coachContributionsLoading",
+      "title": "'No packs' CTA and contribution empty state rely on store flags that may not exist or that don't cover loading",
+      "verification": "grep development.store for `coachContributionsLoading` and check that it is set to true for the duration of fetchCoachContributions."
+    },
+    {
+      "category": "logic",
+      "description": "`delta.divide(base, 1, HALF_UP).multiply(100)` rounds the ratio to scale 1 first. A 23% improvement becomes 0.2, shown as '+20.0%', and 4% becomes '+0.0%'. Parents get a materially wrong progress figure. Multiply first, or divide with scale 3 and then multiply.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R17",
+      "severity": "medium",
+      "symbol": "buildPdf (improvement column)",
+      "title": "Report 'Improvement' percentage is rounded to one decimal before \u00d7100, so every value is a multiple of 10%",
+      "verification": "Example: base=10, composite=12.3 gives 2.3/10 = 0.23, which becomes 0.2 at scale 1, so the report shows '+20.0%'."
+    },
+    {
+      "category": "performance",
+      "description": "Deferred-77 moved the S3 upload into an async post-commit handler 'so it no longer holds this method's DB connection'. buildPdf, called inside the transaction, still does `fileStorageService.downloadBytes(logoKey)`, which is the same kind of external I/O, plus chart rendering. So the connection is still held across an S3 round trip for every ACADEMY report. The font comment also claims buildPdf runs on the @Async('reportExecutor') pool, but buildPdf runs on the request thread.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "generateReport / buildPdf",
+      "title": "Logo S3 download and PDF rendering still run inside the @Transactional generateReport, despite the stated reason for moving I/O out",
+      "verification": "Trace the call chain generateReport \u2192 buildPdf \u2192 downloadBytes, all inside @Transactional."
+    },
+    {
+      "category": "logic",
+      "description": "A per-coach report quota hit is raised as a *login* rate-limit exception. If ApiAdvice maps it to a login-specific errorKey or message (for example 'too many login attempts'), the coach gets a misleading error and metrics count it as a login throttle.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R19",
+      "severity": "low",
+      "symbol": "generateReport",
+      "title": "Report rate-limit rejection throws LoginRateLimitedException",
+      "verification": "Check how ApiAdvice translates LoginRateLimitedException, and whether a generic rate-limit exception exists."
+    },
+    {
+      "category": "security",
+      "description": "There is no ownership check in the service. If the controller passes a path or query coachId instead of resolving it from the principal, any user can enumerate other academies' logo keys and signed URLs.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R20",
+      "severity": "low",
+      "symbol": "getBranding",
+      "title": "getBranding accepts an arbitrary coachId and returns a signed logo URL",
+      "verification": "Check the controller that calls getBranding to see whether coachId comes from the security context."
+    },
+    {
+      "category": "edge-case",
+      "description": "`new Paragraph(nextSteps, normalFont)` with a null nextSteps may throw inside openpdf, which surfaces as 'PDF generation failed', and `\"Player: \" + playerName` prints 'null'. The session-notes comment admits buildPdf has no null handling, but nextSteps was not given the same guard.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R21",
+      "severity": "low",
+      "symbol": "buildPdf",
+      "title": "nextSteps / playerName nulls reach buildPdf without handling",
+      "verification": "Check whether the request DTO marks nextSteps @NotBlank, and how openpdf Paragraph(String null, Font) behaves."
+    },
+    {
+      "category": "logic",
+      "description": "The comment says 'Guarded per recipient so one bad address cannot cost the other recipient their reminder.' But the try sits outside the for-loop. If enqueueEmail throws for the parent, the coach's reminder is skipped. The scheduler has already stamped primaryReminderSentAt, so it is never retried. onRescheduleAccepted has the same shape.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R22",
+      "severity": "medium",
+      "symbol": "onBookingReminder",
+      "title": "Booking reminder 'guarded per recipient' claim is false: one try/catch wraps the whole recipient loop",
+      "verification": "Read the structure: try { ... for (...) enqueue } catch."
+    },
+    {
+      "category": "database",
+      "description": "These listeners run inside the publisher's transaction. If notificationOutboxSupport.enqueueEmail is @Transactional (REQUIRED) and throws a runtime or DB exception, Spring marks the outer transaction rollback-only before this catch runs. The commit then fails with UnexpectedRollbackException, rolling back the booking, cancellation or reminder stamp, which is the opposite of 'logged like every sibling'. A Postgres statement error also aborts the transaction whatever the catch does.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R23",
+      "severity": "medium",
+      "symbol": "all on* handlers",
+      "title": "Swallowing enqueue exceptions in BEFORE_COMMIT does not protect the business transaction if the transaction is marked rollback-only",
+      "verification": "Check NotificationOutboxSupport.enqueueEmail's @Transactional propagation, and whether it writes with JPA or JDBC in the caller's transaction."
+    },
+    {
+      "category": "logic",
+      "description": "Each handler passes a fresh random UUID as the dedup or correlation key. A re-published or replayed event, such as a retried transaction or a duplicate scheduler run, always produces a duplicate email. A key derived from bookingId, template and recipient would make the enqueue idempotent.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R24",
+      "severity": "low",
+      "symbol": "enqueueEmail(..., UUID.randomUUID().toString())",
+      "title": "Random idempotency key on every enqueue defeats outbox dedup",
+      "verification": "Check what the fourth parameter of enqueueEmail is used for (unique constraint or dedup)."
+    },
+    {
+      "category": "logic",
+      "description": "These handlers use `getRequestedStartTime().toString()`, which gives a string like '2026-11-02T14:00:00Z', next to `canonicalTimezone`. The cancellation, reschedule and no-show siblings format the time in the zone with formatInstantInZone. If the template prints '{requestedStartTime} ({canonicalTimezone})', recipients see a UTC wall-clock time labelled as, say, Europe/Berlin, which is off by the zone offset. This affects the reminder email in particular.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R25",
+      "severity": "medium",
+      "symbol": "onBookingRequested/Confirmed/Declined/Expired/PaymentUnresolved/Reminder",
+      "title": "Several booking emails render raw ISO-UTC instants labelled with the coach's timezone",
+      "verification": "Check the BOOKING_REQUESTED/CONFIRMED/REMINDER templates for how requestedStartTime is shown."
+    },
+    {
+      "category": "edge-case",
+      "description": "Both enqueue a Recipient with whatever email the event holds, possibly null or blank. That either throws inside the try (and, per the rollback-only finding, can break the transaction) or leaves an outbox row that can never be sent.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R26",
+      "severity": "low",
+      "symbol": "onQuickCompleteConfirmationRequired / onBookingCancelledDueToPause",
+      "title": "QuickComplete and CancelledDueToPause handlers lack the blank-email guard every sibling has",
+      "verification": "Check whether the event constructors guarantee non-null emails."
+    },
+    {
+      "category": "security",
+      "description": "sendMail builds the recipient from the user returned by updateUserEmail, whose email is now newEmail. If an attacker with a session and password changes the email, the PROFILE_CHANGE alert goes to the attacker's inbox and the real owner gets nothing. The notice has to go to oldEmail. If updateUserEmail also publishes AccountChangeEvent (handled by AccountChangeEmailListener), a second duplicate PROFILE_CHANGE email is sent too.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R27",
+      "severity": "medium",
+      "symbol": "changeEmail",
+      "title": "Email-change security notice goes to the NEW address only",
+      "verification": "Check whether User returned by UserProfileService.updateUserEmail has its email already updated, and whether that service publishes AccountChangeEvent."
+    },
+    {
+      "category": "edge-case",
+      "description": "`Map.of(\"email\", ..., \"loginId\", ..., \"dob\", ...)` throws NullPointerException on any null value. A password-reset request that leaves out loginId or dob, or a null key or login, fails with an NPE (500) instead of OperationNotAllowedException. The response then differs from the success path in a different way, and the exception details also carry PII (email, dob).",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R28",
+      "severity": "medium",
+      "symbol": "sendPasswordResetMail / changeEmail / finishPasswordReset / resendRegistrationLink",
+      "title": "Map.of with possibly-null values turns rejection paths into NPEs (500s and an enumeration signal)",
+      "verification": "Check the ChangePasswordDto validation: are loginId and dob both required and non-null?"
+    },
+    {
+      "category": "logic",
+      "description": "findUserByEmailOrLogin runs before login is overwritten with the email or phone. For phone registration it searches by email=null and whatever `login` the client sent, not the phone, so an existing phone account is not detected and createUser either duplicates it or fails on a constraint (500). For email registration, an arbitrary client `login` matching another user sends a CREATION_DUP alert to that unrelated user.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R29",
+      "severity": "medium",
+      "symbol": "registerAccount",
+      "title": "Registration lookup ignores phone and uses client-supplied login before it is normalised",
+      "verification": "Check what UserDto.login holds from the register forms, and the unique constraints on users.login and users.phone."
+    },
+    {
+      "category": "security",
+      "description": "No constant-time logic exists. The new-user path runs persistUser, including password hashing, plus an event, while the existing-user path skips both. The response-time difference reveals whether an account exists, which contradicts the documented guarantee.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R30",
+      "severity": "low",
+      "symbol": "registerAccount",
+      "title": "Javadoc claims a timing-safe comparison against user enumeration; the existing-user path is measurably faster",
+      "verification": "Look at the code: there is no dummy hash or equalisation on the notifyUserExists branch."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc says 'The activation email has no deadline', but the code passes `Instant.now(clock)` as the Envelope deadline. If the mail pipeline drops or deprioritises envelopes past their deadline, activation emails expire as soon as they are created, which can block every new registration.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/registration/EmailRegistrationStrategy.java",
+      "id": "R31",
+      "severity": "medium",
+      "symbol": "notifyNewUser",
+      "title": "Activation email deadline is 'now', contradicting the 'no deadline' Javadoc",
+      "verification": "Check how the Envelope consumer or outbox uses `deadline` (skip if past? TTL?)."
+    },
+    {
+      "category": "logic",
+      "description": "`.map(emailStrategy::notifyNewUser)` ignores loginIdType. A PHONE user who has not activated gets an envelope addressed to user.getEmail(), which is null, so the resend silently does nothing while a tracking code is returned.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R32",
+      "severity": "low",
+      "symbol": "resendRegistrationLink",
+      "title": "resendRegistrationLink always uses the email strategy, even for phone-registered users",
+      "verification": "Check whether phone-registered users can reach this endpoint."
+    },
+    {
+      "category": "security",
+      "description": "The facade deliberately logs only userId, but this strategy logs `user.getLogin()`, which is the email address or phone number, for every activation and duplicate-registration email. That is PII in the logs and inconsistent with the sibling code.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/registration/EmailRegistrationStrategy.java",
+      "id": "R33",
+      "severity": "low",
+      "symbol": "sendEmail",
+      "title": "EmailRegistrationStrategy logs the user's login (email or phone) at INFO",
+      "verification": "Compare with AccountManagementFacade.sendMail's userId-only log."
+    },
+    {
+      "category": "logic",
+      "description": "`response.sendRedirect(\"/coach/payment-settings\")` resolves against the backend request's origin. If the SPA is on a different origin or port, the coach lands on a backend 404. The defaults for oauthCallbackUrl are also relative, but Stripe requires an absolute registered redirect_uri. Appending '?stripe_error=' also breaks if the configured URL already has a query string.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/config/PaymentProperties.java",
+      "id": "R34",
+      "severity": "medium",
+      "symbol": "callbackSuccessUrl / oauthCallbackUrl",
+      "title": "OAuth success/callback URLs default to relative paths, which resolve against the backend host",
+      "verification": "Check application-*.yml for app.payment.stripe.callback-success-url and oauth-callback-url overrides in every deployed profile."
+    },
+    {
+      "category": "architecture",
+      "description": "Stripe redirects the browser to this endpoint with a plain GET. If the API authenticates with an Authorization header token held in SPA storage, the redirect carries no credentials. @PreAuthorize then rejects it with 401/403 and onboarding can never finish. The unencoded `error` value is also logged as is (log injection).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R35",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback",
+      "title": "Stripe callback requires bearer-authenticated COACH role on a top-level browser redirect",
+      "verification": "Check the security filter chain: cookie-based session/JWT, or header-only?"
+    },
+    {
+      "category": "database",
+      "description": "withBoundedRetry runs inside the class-level @Transactional. On Postgres, a lock_timeout or deadlock error aborts the current transaction, and every later statement fails with 'current transaction is aborted'. A retry within the same transaction then fails every time unless the retryer uses savepoints. The Hibernate session can also be left inconsistent after a lock exception.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java",
+      "id": "R36",
+      "severity": "medium",
+      "symbol": "initiateUpload / deleteVideo withBoundedRetry",
+      "title": "Retrying pessimistic-lock acquisition within the same transaction may be impossible on Postgres",
+      "verification": "Read PessimisticLockRetryer.withBoundedRetry: does it use savepoints or a new transaction per attempt?"
+    },
+    {
+      "category": "edge-case",
+      "description": "videoService.initializeUpload makes an external provider call and then setVideoId or upsertVideoId runs. If the write or the commit fails, the provider video and its quota reservation exist with no drill ref and no compensation, and rely only on the reaper. The declared fileSizeBytes and durationSeconds are client-asserted, and the frontend sends 0 when duration can't be read. Whether the size limit is really enforced depends on the provider binding the declared size.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java",
+      "id": "R37",
+      "severity": "low",
+      "symbol": "initiateUpload",
+      "title": "Provider video created before the ref write; a later rollback orphans it",
+      "verification": "Check whether initializeUpload persists a videos row in this transaction (rolled back with it), and whether the signed upload enforces Upload-Length or the declared size."
+    },
+    {
+      "category": "logic",
+      "description": "Copy-paste leftover: the ownership rejection on delete says 'Drill upload not allowed'. The comment 'fetched at line 63' is also stale and points nowhere meaningful in this file.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java",
+      "id": "R38",
+      "severity": "low",
+      "symbol": "deleteVideo",
+      "title": "deleteVideo reuses the 'Drill upload not allowed' message from initiateUpload",
+      "verification": "Compare the two throw sites."
+    },
+    {
+      "category": "logic",
+      "description": "The purchase-sessions and packs routes defined above it already use `roles: ['PARENT','PLAYER']`, so the claim is stale. Separately, coach/revenue and coach-receipt use `role: 'COACH'` while every other coach route uses `requiresCoach: true`. If the guard handles only one of these, those pages are either unguarded or wrongly bounced.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R39",
+      "severity": "low",
+      "symbol": "parent/coaches/:coachId/request-booking",
+      "title": "routes.js comment calls request-booking 'the FIRST dual-role route', but earlier routes are already dual-role",
+      "verification": "Check router/index.js beforeEach: does it check meta.role === 'COACH' the same way as meta.requiresCoach?"
+    },
+    {
+      "category": "edge-case",
+      "description": "After 'booking.availabilityChanged' the page reloads availability but keeps selectedSlot and the batch basket. Resubmitting sends the same stale slot or slots and gets the same rejection, or books a slot no longer in the grid. Also, packs are loaded once at mount only if playerStore.activePlayerId is already set. If it hydrates later, the parent sees a false 'no credits' warning and an empty pack selector.",
+      "file": "src/frontend/src/pages/parent/BookingRequestPage.vue",
+      "id": "R40",
+      "severity": "low",
+      "symbol": "submit / submitBatchRequest availabilityChanged branch",
+      "title": "Batch/single selections survive an availabilityChanged reload",
+      "verification": "Check whether bookingStore.loadAvailability clears selections or the basket, and when playerStore.activePlayerId is hydrated."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}

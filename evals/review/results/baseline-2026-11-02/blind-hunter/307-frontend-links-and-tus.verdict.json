@@ -1,0 +1,234 @@
+{
+  "arm": "blind-hunter",
+  "case": "307-frontend-links-and-tus",
+  "judge_cost_usd": 0.1691174,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R5 flags the dead /bookings link built on baseurl:port, and R6 flags the dead /portal/players/{id}/reports link; together they cover both call sites.",
+        "reported_ids": [
+          "R5",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding says the activation, password-reset or account-change links resolve to localhost:port in production.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R34 identifies the relative callbackSuccessUrl redirect resolving against the backend origin, so the coach lands on a 404.",
+        "reported_ids": [
+          "R34"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R9 suspects the bare uploadUrl lacks the Bunny AuthorizationSignature/Expire/VideoId headers, but only as a conditional 'verify' and without noting that the response DTO drops those fields.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R2 covers coach-dashboard, R3 covers the unnamed marketplace route and R4 covers the /upgrade 404.",
+        "reported_ids": [
+          "R2",
+          "R3",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "Nothing reports the !authStore.isPlayer gating that hides packs from players.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The callback compares state to the caller's public coachId, so an attacker can forge the state and link their own Stripe account to a victim coach.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "props.drill.id is read again after the async upload, so switching drills mid-upload marks the wrong drill as having the video.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on whether eligibility is fetched elsewhere, which the report leaves unverified.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Already matched to F4.",
+        "reported_id": "R9",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "An unsettled promise after unmount does no practical harm; the claim about the uploadingDrillId flag is speculative.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculation about the backend errorKey value.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on an unverified ApiAdvice response shape.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on how the store handles fetch errors, which is unverified.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Showing only the first error is a UX choice that only conflicts with a comment.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative race condition that depends on unverified store internals.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Conditional on store fields that may not exist.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "divide(base, 1, HALF_UP) rounds the ratio to one decimal before \u00d7100, so improvement figures are quantised to 10%.",
+        "reported_id": "R17",
+        "verdict": "real"
+      },
+      {
+        "note": "A minor performance concern, not a defect.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about how the exception gets mapped.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on an unverified controller.",
+        "reported_id": "R20",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative null handling; DTO validation is unknown.",
+        "reported_id": "R21",
+        "verdict": "noise"
+      },
+      {
+        "note": "The try/catch wraps the whole loop, so one failed enqueue skips the other recipient's reminder, which is never retried.",
+        "reported_id": "R22",
+        "verdict": "real"
+      },
+      {
+        "note": "Conditional on enqueueEmail's transaction propagation.",
+        "reported_id": "R23",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative dedup concern with no confirmed trigger.",
+        "reported_id": "R24",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified template rendering.",
+        "reported_id": "R25",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified guarantees in the event constructors.",
+        "reported_id": "R26",
+        "verdict": "noise"
+      },
+      {
+        "note": "Conditional on what updateUserEmail returns; not verified.",
+        "reported_id": "R27",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on DTO validation.",
+        "reported_id": "R28",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about what the client sends as login.",
+        "reported_id": "R29",
+        "verdict": "noise"
+      },
+      {
+        "note": "A low-signal timing claim against a doc comment.",
+        "reported_id": "R30",
+        "verdict": "noise"
+      },
+      {
+        "note": "Conditional on unknown deadline semantics.",
+        "reported_id": "R31",
+        "verdict": "noise"
+      },
+      {
+        "note": "Unverified whether phone users can reach the endpoint.",
+        "reported_id": "R32",
+        "verdict": "noise"
+      },
+      {
+        "note": "Minor logging-hygiene issue.",
+        "reported_id": "R33",
+        "verdict": "noise"
+      },
+      {
+        "note": "Already matched to F3.",
+        "reported_id": "R34",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "Depends on the unknown authentication mechanism.",
+        "reported_id": "R35",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified retryer internals.",
+        "reported_id": "R36",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative orphaning; the report itself says a reaper exists.",
+        "reported_id": "R37",
+        "verdict": "noise"
+      },
+      {
+        "note": "A copy-paste wording issue, i.e. style.",
+        "reported_id": "R38",
+        "verdict": "noise"
+      },
+      {
+        "note": "A stale comment plus a speculative concern about the route guard.",
+        "reported_id": "R39",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about whether stale selections survive the reload.",
+        "reported_id": "R40",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

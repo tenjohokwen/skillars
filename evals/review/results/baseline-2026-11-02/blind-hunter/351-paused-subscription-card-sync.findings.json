@@ -1,0 +1,128 @@
+{
+  "arm": "blind-hunter",
+  "case": "351-paused-subscription-card-sync",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "PAUSED is now in GRACE_STATUSES. It gets a grace clock from the webhook or from startMissingGraceClocks, and once the grace period ends it is cancelled immediately at Stripe. But nothing lets the user recover first:\n- It is excluded from RETRY_ON_NEW_PAYMENT_METHOD. The comment says it 'resumes via Stripe's resume flow', but nothing in this diff calls resume.\n- Saving a card only sets default_payment_method.\n- The frontend paymentIssue banner only covers PAST_DUE and UNPAID, so a PAUSED user is never prompted.\n- The subscriptionNote text ('retries any outstanding payment') promises a recovery that never happens.\n\nFailure scenario: the trial ends without a card, so Stripe sets the subscription to paused. The user sees no warning. Seven days later the nightly sweep cancels it at Stripe and drops the tier, even if the user saved a card in the meantime.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "GRACE_STATUSES / RETRY_ON_NEW_PAYMENT_METHOD / syncPaymentMethod",
+      "title": "PAUSED subscriptions are cancelled after grace with no way back: no banner, no resume, and a new card doesn't help",
+      "verification": "Search StripeClient and SubscriptionService for a resume call (Subscription.resume / SubscriptionResumeParams). Also confirm how a row reaches PAUSED (trial end without a payment method, or a user-initiated pause) to see whether this cancels pauses the user asked for."
+    },
+    {
+      "category": "logic",
+      "description": "The key is 'sub-pm-' + subId + '-' + pmId. Sequence: save card A (sub moves to A), save card B (sub moves to B), save card A again. Stripe replays the cached response for the first A request and does not run the update. The subscription stays on B while the app shows A as saved. The method's Javadoc says the point is that the subscription follows the newly saved card, which this breaks.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "updateSubscriptionDefaultPaymentMethod",
+      "title": "Fixed idempotency key on the default-payment-method update silently ignores switching back to an earlier card within 24h",
+      "verification": "Stripe documents that a reused idempotency key with the same parameters returns the stored result without re-executing. Check whether the save flow can reuse a pm id (re-attaching an existing card)."
+    },
+    {
+      "category": "logic",
+      "description": "For UNPAID subscriptions, Stripe keeps creating new invoices (often left as draft), or marks the failed one uncollectible, depending on dunning settings. In both cases latest_invoice is not 'open': the method returns it unpaid and logs a 'retried' line. The real outstanding open invoice is never paid, so saving a card does not restore the plan, contradicting the new updatePaymentMethod/paymentIssue copy. The same happens when a renewal draft is newer than the failed invoice.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "payLatestOpenInvoice",
+      "title": "payLatestOpenInvoice only looks at latest_invoice, so older open invoices (common for UNPAID) are never retried",
+      "verification": "Check the Stripe dunning settings ('if all retries fail' \u2192 mark unpaid / leave past due / mark uncollectible) and whether invoices on unpaid subscriptions are auto-finalized. A fix would list invoices with status=open for the subscription."
+    },
+    {
+      "category": "logic",
+      "description": "syncPaymentMethod catches CardException (including authentication_required for SCA cards) and only logs it. The endpoint always returns 204. On the page, @saved just closes the dialog and does not reload the subscription.\n\nResult: the user is told 'we will retry the payment straight away', saves a card that declines or needs 3DS, sees success, and the past-due banner stays put indefinitely. Even when the payment succeeds, the banner stays until a manual reload, because the status only changes on the async invoice.paid webhook. There is no path to complete SCA.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "savePaymentMethod / syncPaymentMethod",
+      "title": "A declined or authentication-required retry is swallowed: the user gets a success response and the banner stays with no explanation",
+      "verification": "Check whether PaymentMethodCard emits 'saved' and whether either subscription page re-fetches the subscription on it. Neither handler in the diff does."
+    },
+    {
+      "category": "edge-case",
+      "description": "Only the per-subscription Stripe calls are inside try/catch. The repository lookups (coachProfileRepository.findByUserId, parentPlayerLinkRepository.findByParentId, playerProfileRepository.findByUserId, find*ByXId) run outside it. A DB error, or a NonUniqueResult from findByUserId, escapes after the card was already persisted. The client then gets a 500 and re-saves. The resource comment 'Best-effort; never fails the save' is false.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "syncPaymentMethodToSubscriptions",
+      "title": "syncPaymentMethodToSubscriptions can throw despite its 'never throws' contract, turning a saved card into a 500",
+      "verification": "Check whether savePaymentMethod is @Transactional. If it is, an exception would also roll back the stripeCustomer save, and the Stripe calls would run while a DB transaction is held open."
+    },
+    {
+      "category": "security",
+      "description": "Player IDs are gathered from all ParentPlayerLinks for the user plus their own player profile. The code never checks that each player subscription is billed to this user's StripeCustomer.\n\n- With multiple linked parents, or a player-paid subscription, parent B's card save tries to set B's PM as default on a subscription paid by parent A. Stripe rejects it, so it just logs errors on every save.\n- If customers are shared, this could silently move who pays for the subscription.\n- Links that are revoked or pending may also be included.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "syncPaymentMethodToSubscriptions",
+      "title": "Caller's card is pushed onto every linked player's subscription without checking the subscription belongs to the caller's Stripe customer",
+      "verification": "Check whether ParentPlayerLink has a status or active flag that findByParentId ignores. Check which customer a player subscription is created under (SubscriptionService.subscribePlayer) and whether a player can have more than one linked parent."
+    },
+    {
+      "category": "security",
+      "description": "PlayerSubscriptionPage already hides mutating actions by role (see the 'mutating controls by role' spec). The new banner's 'Update card' button is shown whenever the status is PAST_DUE or UNPAID, with no role check, and opens the add-card dialog. A non-paying viewer, such as a player watching a parent-managed subscription, can then save a card that the backend pushes onto subscriptions. The new spec only mounts as PARENT, so this is untested. The coach page has the same banner.",
+      "file": "src/frontend/src/pages/parent/PlayerSubscriptionPage.vue",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "payment-issue-banner",
+      "title": "'Update card' button in the payment-issue banner bypasses the page's role gating for mutating controls",
+      "verification": "Check how actionButtons/canMutate is computed on PlayerSubscriptionPage and whether the addCardDialog is otherwise gated by role. Add a test for the banner action under the non-mutating role."
+    },
+    {
+      "category": "edge-case",
+      "description": "paymentIssue = ['PAST_DUE','UNPAID'], but the backend now runs a grace clock and cancels PAUSED too. RECOVERABLE_ON_PAYMENT also includes INCOMPLETE. Users in those states lose their plan without ever seeing the banner. The list is duplicated in both pages with nothing tying it to the backend.",
+      "file": "src/frontend/src/pages/coach/CoachSubscriptionPage.vue",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "paymentIssue",
+      "title": "Frontend banner states don't match the backend delinquent set (PAUSED and INCOMPLETE are missing)",
+      "verification": "Compare against GRACE_STATUSES and RECOVERABLE_ON_PAYMENT in SubscriptionService."
+    },
+    {
+      "category": "logic",
+      "description": "Existing UNPAID or PAUSED rows with a null pastDueSince (every one from before this deploy) get pastDueSince = Instant.now() on the first run. That gives them a fresh full grace period, even if they have kept their paid entitlement (if any) or a lingering Stripe subscription for months. The Javadoc presents this as the fix for 'never swept' rows, but it adds another full grace period instead. Also, the grace checker's Javadoc sizing claim leaves out these two new unbounded scans.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "startMissingGraceClocks",
+      "title": "startMissingGraceClocks restarts the grace window at 'now' for rows that have been delinquent for a long time",
+      "verification": "Check whether these rows still hold paid entitlements, and whether a timestamp such as updatedAt or lastStripeEventAt could seed the clock instead."
+    },
+    {
+      "category": "architecture",
+      "description": "Both the unit test and the IT (SubscriptionLifecycleIT.newCardSaved_...) mock StripeClient and only verify that the calls were made. Nothing tests the invoice-selection logic (latest_invoice null, non-open status, which invoice gets paid) or the idempotency-key behaviour. The IT's name claims 'invoice retried', but it only checks that a mocked method was called.",
+      "file": "src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionPaymentMethodSyncTest.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "payLatestOpenInvoice / updateSubscriptionDefaultPaymentMethod",
+      "title": "Stripe client methods are never exercised; every test mocks StripeClient",
+      "verification": "Check for a stripe-mock or WireMock test that covers StripeClient."
+    },
+    {
+      "category": "logic",
+      "description": "These existing tests now pass whatever status set is queried, including an empty one. Only one new test in SubscriptionPaymentMethodSyncTest verifies the exact list. If GRACE_STATUSES is reordered, that test's List.of(...) equality check fails spuriously, while the weakened tests would not catch an empty or wrong set.",
+      "file": "src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionEntitlementIntegrityTest.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "findByStatusInAndPastDueSinceBefore stubs",
+      "title": "Grace-sweep test stubs changed from eq(\"PAST_DUE\") to any(), so they no longer check which statuses are queried",
+      "verification": "Use argThat(c -> c.containsAll(...)) or a shared constant."
+    },
+    {
+      "category": "edge-case",
+      "description": "A user who has already scheduled cancellation, then saves a card for a session-pack purchase, gets charged for the outstanding subscription invoice as a side effect. The save endpoint is shared with session-pack checkout, and the PR only shows the subscriptionNote on the subscription pages. Users saving a card elsewhere are never told it will charge their subscription.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "syncPaymentMethod",
+      "title": "A PAST_DUE/UNPAID row's open invoice is retried even when cancelAtPeriodEnd is set",
+      "verification": "Check where else PaymentMethodCard or POST /save-payment-method is used, for example in the session-pack purchase flow."
+    }
+  ],
+  "input_rev": "1f1240ac91e1e334178b56cf40e2994f8b1077f7",
+  "model": null
+}

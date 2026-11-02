@@ -1,0 +1,258 @@
+{
+  "arm": "blind-hunter",
+  "case": "318-cashout-money-integrity",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "The ledger is debited requestedAmount (CASH_OUT_DEBIT) plus feeAmount (STRIPE_FEE_DEBIT), and then paymentGateway.refund sends netAmount = requestedAmount \u2212 feeAmount. Example: a \u20ac100 cash-out with a \u20ac1.75 fee takes \u20ac101.75 off the wallet and sends the parent \u20ac98.25. The fee is lost twice. debitForCashOut has the same split. One of the two must go: either debit requested+fee and refund requested, or debit requested and refund requested\u2212fee (with no separate fee row).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out charges the Stripe fee twice: debits requested+fee but refunds requested\u2212fee",
+      "verification": "Evidence is in the code: the two writeLedgerEntry calls (\u2212requested, \u2212fee) and refund(paymentIntentId, netAmount) where netAmount = requested \u2212 fee."
+    },
+    {
+      "category": "logic",
+      "description": "The check is balance >= requestedAmount, but the code then debits requestedAmount + feeAmount. A parent with exactly \u20ac50 who cashes out \u20ac50 ends at \u2212\u20ac(fee). CreditWalletService.debitForCashOut has the same flaw. The frontend also only checks cashoutAmount > balance.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Balance check ignores the fee, so the wallet can go negative",
+      "verification": "Check whether chk_ledger_amount_sign or any balance constraint rejects a negative running balance. If nothing does, this is reachable every time someone cashes out their full balance."
+    },
+    {
+      "category": "concurrency",
+      "description": "processCashOut is not @Transactional. It calls getBalance (no transaction), then writes each ledger row in its own REQUIRES/new transaction via the proxy. Two concurrent \u20ac100 cash-outs on a \u20ac100 balance both pass the check, both debit, and both refund. CreditWalletService.debitForCashOut is a SERIALIZABLE check-and-debit written for exactly this case, but CashOutService never calls it. It reimplements the debit inline without the isolation.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out balance check and debit run outside any transaction or lock, so concurrent requests overdraw",
+      "verification": "Search for callers of CreditWalletService.debitForCashOut. None are visible here, and CreditLedgerEntryType's Javadoc claims debitForCashOut writes CASH_OUT_DEBIT, which contradicts CashOutService."
+    },
+    {
+      "category": "logic",
+      "description": "Cash-out always refunds stripe_customers.last_payment_intent_id. If a parent makes two cash-outs within 24h with no new charge in between, both use key 'refund-pi_X'. With the same amount, Stripe replays the cached first refund and reports success, so the ledger is debited twice and only one refund is paid. With a different amount, Stripe returns an idempotency error, compensation runs, and the cash-out fails for no visible reason. The same key is also shared with SessionPackPaymentService's compensating refund on that intent. The key was designed for 'one compensating refund per intent' and was reused for a many-per-intent operation.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.refund",
+      "title": "Refund idempotency key 'refund-{intentId}' makes a second cash-out against the same PaymentIntent replay the first",
+      "verification": "Evidence: refund() builds the key only from stripePaymentIntentId, and CashOutService passes lastPaymentIntentId, which only changes when a new charge happens."
+    },
+    {
+      "category": "logic",
+      "description": "Wallet credit builds up across many bookings and refunds, but Stripe can refund at most the remaining captured amount of a single intent. Example: a parent whose last charge was \u20ac20 and who holds \u20ac200 in credit can never cash out more than about \u20ac20. If that last intent was already refunded (for example by purchasePack's compensating refund), every cash-out fails. Either way the user only ever gets the generic refundFailed error.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out refunds against only the last PaymentIntent, so any cash-out above that charge's refundable amount fails",
+      "verification": "Confirm product intent. If cash-out is meant to return arbitrary wallet balances, it needs to spread the refund across several intents or use a payout or transfer instead."
+    },
+    {
+      "category": "edge-case",
+      "description": "The debits are already committed before the refund call. Any non-PaymentGatewayException from refund(), for example ArithmeticException from toCents().longValueExact() or a RuntimeException from the SDK or HTTP layer, skips the reversal and the parent loses the credit. If the second debit write (the fee) throws after the first committed, nothing is compensated either. If the compensating writes themselves fail, no reconciliation record exists, unlike the purchasePack path, which records to RefundReconciliationService. A Stripe timeout where the refund actually succeeded triggers compensation and pays the parent twice: the refund goes out and the credit is restored.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R6",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Compensation only runs on PaymentGatewayException, so other failures leave the parent debited",
+      "verification": "Compare with SessionPackPaymentService.purchasePack, which catches Exception and writes a stripe_refund_failures row. CashOutService has neither."
+    },
+    {
+      "category": "database",
+      "description": "Each writeLedgerEntry call goes through the Spring proxy with its own @Transactional, because the caller has no transaction. A crash or constraint failure between CASH_OUT_DEBIT and STRIPE_FEE_DEBIT leaves a half-applied cash-out, and the same is true between the two CASH_OUT_REVERSAL rows.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Debit and fee ledger rows are written in separate transactions",
+      "verification": "Confirm that CashOutService has no transaction propagated from its controller. Nothing shown here would supply one."
+    },
+    {
+      "category": "database",
+      "description": "The Javadoc says adding a value requires widening chk_ledger_type and checking chk_ledger_amount_sign. If CASH_OUT_REVERSAL (a positive amount) is not permitted, the compensating insert fails exactly when the refund has already failed. The parent then permanently loses the credit and gets a constraint-violation error instead of payment.refundFailed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CreditLedgerEntryType.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "CreditLedgerEntryType.CASH_OUT_REVERSAL",
+      "title": "CASH_OUT_REVERSAL may not be allowed by chk_ledger_type / chk_ledger_amount_sign",
+      "verification": "Check the V138 baseline and any later migrations: chk_ledger_type must include 'CASH_OUT_REVERSAL', and chk_ledger_amount_sign must allow positive amounts for it."
+    },
+    {
+      "category": "architecture",
+      "description": "The comment points readers to the SERIALIZABLE method as the debit site. The production path actually writes both rows unguarded from CashOutService, so the comment hides the concurrency bug.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CreditLedgerEntryType.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "CreditLedgerEntryType.CASH_OUT_DEBIT",
+      "title": "Javadoc names debitForCashOut as the writer of CASH_OUT_DEBIT/STRIPE_FEE_DEBIT, but the live path is CashOutService",
+      "verification": "Check for any caller of debitForCashOut."
+    },
+    {
+      "category": "edge-case",
+      "description": "@DecimalMin(\"0.01\") does not limit scale. A request for 10.005 is debited as 10.005 in the ledger (the column may round it to scale 2 differently), while toCents rounds netAmount HALF_UP. The ledger and the money actually sent can differ by a cent, and the comparison against balance uses the unrounded value.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CashOutRequest.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "CashOutRequest.amount",
+      "title": "Amounts with more than 2 decimal places diverge between the ledger and Stripe",
+      "verification": "Add @Digits(integer=\u2026, fraction=2), or setScale in the service. Also check the precision and scale of the ledger amount column."
+    },
+    {
+      "category": "logic",
+      "description": "sumTotalCashOuts sums ABS(amount) of CASH_OUT_DEBIT only. A cash-out whose refund failed and was reversed still counts as money paid out in AdminFinanceOverviewDto.totalCashOuts. Retries after failures inflate the figure further.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java",
+      "id": "R11",
+      "severity": "medium",
+      "symbol": "ParentCreditLedgerRepository.sumTotalCashOuts",
+      "title": "Admin totalCashOuts counts failed cash-outs because it ignores CASH_OUT_REVERSAL",
+      "verification": "Subtract CASH_OUT_REVERSAL rows, which today can only be told apart by description, or link reversals to their debit with a referenceId (currently null) so they can be netted out."
+    },
+    {
+      "category": "database",
+      "description": "Every cash-out row is written with referenceId = null. The fee reversal is also typed CASH_OUT_REVERSAL, the same as the principal reversal. Reconciliation, the uq_pcl_reference_type idempotency index, and reporting cannot match a reversal to its cash-out or detect a duplicate submission.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out ledger rows have null referenceId, so a debit cannot be tied to its fee, reversal or Stripe refund",
+      "verification": "Generate a cashOutId per request and use it as referenceId for all four rows, and as part of the Stripe idempotency key."
+    },
+    {
+      "category": "logic",
+      "description": "The bucket is epochSecond/60. A retry sent at 12:00:59.9 and 12:01:00.1 gets a new key and charges twice. Two separate purchases of the same tier within the same minute share a key, so Stripe replays the first PaymentIntent and purchasePack creates a second SessionPackPurchase for the same intent id: two packs for one charge. The comment says the window 'still dedupes true retries\u2026 without blocking a second, later, genuinely separate purchase', which holds only by chance. The fix is to pass a per-attempt purchaseId as referenceId.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R13",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.chargeAndCapture",
+      "title": "The time-bucket idempotency key gives no retry dedup at minute boundaries and silently replays real purchases within a minute",
+      "verification": "In purchasePack, referenceId = packTierId (a value that repeats across purchases). The PaymentGateway Javadoc says referenceId is 'purchaseId for pack purchases', which contradicts the actual caller."
+    },
+    {
+      "category": "logic",
+      "description": "chargeAndCapture sets transfer_group = referenceId = packTierId. Every parent's purchase of that tier lands in one Stripe transfer group, which breaks the AC1.2 link between each charge and its later coach transfer and makes Stripe-side reconciliation ambiguous.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R14",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Pack charges use the shared packTierId as transfer_group and referenceId metadata",
+      "verification": "Check how pack-session payouts derive transferGroupId in transferToCoach. If they use bookingId, the pack charge's transfer_group never matches anything."
+    },
+    {
+      "category": "edge-case",
+      "description": "stripeCustomerRepository.save runs inside the try block, after the PaymentIntent has been captured. A DB exception there is not a StripeException, so it propagates raw. In purchasePack, chargeAndCapture sits outside the compensating try, so the parent has been charged with no purchase, no refund and no reconciliation row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R15",
+      "severity": "medium",
+      "symbol": "StripePaymentGateway.chargeAndCapture",
+      "title": "Failure to save lastPaymentIntentId after a successful charge leaves an unrefunded charge",
+      "verification": "Move the save out of the charge path, or make purchasePack's compensation cover failures inside chargeAndCapture after the intent is created."
+    },
+    {
+      "category": "edge-case",
+      "description": "resolveCoachStripeAccountId (coach not COMPLETE or charges disabled) and resolveCurrency (bad config) throw PaymentGatewayException outside the try block. The PaymentGateway Javadoc says failures come pre-classified as retryable-vs-HOLD. An outbox handler that catches only CoachPayoutTransferException will mishandle these, for example by retrying forever or crashing the drain.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R16",
+      "severity": "medium",
+      "symbol": "StripePaymentGateway.transferToCoach",
+      "title": "transferToCoach can throw PaymentGatewayException, not the pre-classified CoachPayoutTransferException its contract promises",
+      "verification": "Check the COACH_PAYOUT_TRANSFER outbox handler's catch clauses."
+    },
+    {
+      "category": "logic",
+      "description": "The comments on transfers, reversals and refunds claim a re-driven outbox row 'must replay the original transfer at Stripe, never create a second'. Stripe drops idempotency keys after 24 hours, so an operator re-driving a failed row a day later creates a second transfer or refund.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R17",
+      "severity": "medium",
+      "symbol": "StripeClient.createTransfer",
+      "title": "The 'never a second transfer' guarantee rests on Stripe idempotency keys, which expire after about 24h",
+      "verification": "Confirm the outbox handler checks for a stored stripeTransferId (or queries Stripe by transfer_group) before calling createTransfer."
+    },
+    {
+      "category": "logic",
+      "description": "The method is documented as reversing '(part of)' a transfer, but the key contains no amount or dispute id. A second partial reversal within 24h either replays the first (same amount) or gets an idempotency error (different amount). The same options object is also passed to Transfer.retrieve.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "StripePaymentGateway.reverseTransfer",
+      "title": "The reversal key 'reversal-{transferId}' blocks a second partial reversal of the same transfer",
+      "verification": "Check whether more than one dispute or reversal per transfer is possible."
+    },
+    {
+      "category": "architecture",
+      "description": "The Javadoc refers to the caller's `catch (IllegalStateException | NumberFormatException)`. The caller in chargeAndCapture catches only IllegalStateException, and transferToCoach catches nothing, so a missing key there propagates as a raw IllegalStateException. The comment is stale copy.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R19",
+      "severity": "low",
+      "symbol": "StripePaymentGateway.resolveCurrency",
+      "title": "resolveCurrency Javadoc describes a caller catch clause that doesn't exist",
+      "verification": "Compare against the catch block in chargeAndCapture."
+    },
+    {
+      "category": "logic",
+      "description": "Under B-1 the platform account absorbs Stripe fees and the coach receives exactly net_amount via Transfer. Subtracting estimated fees makes netPayout understate what was actually transferred. The estimate is applied to gross including credit_debited, which never went through Stripe. It also uses the current fee config rather than the rate in force at the time.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R20",
+      "severity": "medium",
+      "symbol": "RevenueReportingService.getCoachRevenueSummary",
+      "title": "Coach netPayout subtracts a Stripe fee estimate the coach never pays under B-1, and counts credit-funded sessions",
+      "verification": "Compare netPayout with the sum of coach_payouts.net_amount for RELEASED rows. They will differ by the fee estimate."
+    },
+    {
+      "category": "logic",
+      "description": "totalCommissionCollected = gross \u00d7 platform.commission.rate (live config). The chargeAndCapture Javadoc states the rate is stamped into booking_payments.commission_rate and never re-read. After a rate change, historical admin commission figures are silently wrong and stop agreeing with coach_payouts.commission_amount. Stripe fees are also estimated on gross that includes credit_debited.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R21",
+      "severity": "medium",
+      "symbol": "RevenueReportingService.getAdminOverview",
+      "title": "Admin commission is recomputed from the current config rate, contradicting the 'stamped at capture, never re-read' design",
+      "verification": "Sum bp.commission_rate \u00d7 gross per row, or sum coach_payouts.commission_amount, instead of using the config value."
+    },
+    {
+      "category": "edge-case",
+      "description": "Collectors.toMap does not allow null values. A single BookingPayment with a null creditDebited makes the coach's entire transaction page fail with a 500.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R22",
+      "severity": "low",
+      "symbol": "RevenueReportingService.getCoachTransactions",
+      "title": "Collectors.toMap throws an NPE if creditDebited is null on any booking payment",
+      "verification": "Check whether booking_payments.credit_debited is NOT NULL with a default of 0."
+    },
+    {
+      "category": "logic",
+      "description": "Charges use platform.payment.currency, but RevenueSummaryDto always reports 'EUR'. The frontend also hardcodes '\u20ac'. Any non-EUR deployment shows the wrong currency.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R23",
+      "severity": "low",
+      "symbol": "RevenueReportingService.getCoachRevenueSummary",
+      "title": "Currency hardcoded to 'EUR' in revenue summaries although the charge currency is configurable",
+      "verification": "Check the platform.payment.currency value in each environment."
+    },
+    {
+      "category": "edge-case",
+      "description": "The catch falls back to t('payment.credits.insufficientCredit') for network errors, refundFailed, noPaymentMethod and so on. A server message that is an i18n key (for example 'payment.refundFailed') is shown raw rather than translated. The success toast shows the requested amount, not the net amount actually refunded. The balance is not re-fetched after an error, so a partially applied server state is not reflected. The disable rule doesn't account for the fee.",
+      "file": "src/frontend/src/pages/parent/ParentCreditWalletPage.vue",
+      "id": "R24",
+      "severity": "low",
+      "symbol": "handleCashOut",
+      "title": "Cash-out UI shows 'insufficient credit' for every error and claims the gross amount was paid out",
+      "verification": "Check what err.response.data.message contains for PaymentGatewayException: a translated text or a message key."
+    },
+    {
+      "category": "edge-case",
+      "description": "sessionCount = 0 throws ArithmeticException after the existing active tiers have been deactivated and flushed. The transaction rolls back, but the caller gets a 500.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R25",
+      "severity": "low",
+      "symbol": "SessionPackPaymentService.createTier",
+      "title": "createTier divides by sessionCount with no guard",
+      "verification": "Check whether the controller request DTO enforces @Min(1) on sessionCount."
+    }
+  ],
+  "input_rev": "8661a41e51611978823b1d3c6688c524a449d7e3",
+  "model": null
+}

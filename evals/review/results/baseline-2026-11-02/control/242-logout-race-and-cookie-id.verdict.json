@@ -1,0 +1,79 @@
+{
+  "arm": "control",
+  "case": "242-logout-race-and-cookie-id",
+  "judge_cost_usd": 0.0703894,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "R5 looks at the same handleLogout race, but it never mentions that the sessionManager is still running and fires a spurious session:expired.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R8 identifies buildRedirectQuery setting redirect unconditionally on deliberate logout, which sends the next account to the previous user's page.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding covers the missing requiresCoach guard on coach/profile-builder.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding covers the skp cookie's numeric id losing precision.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers /manage/health/smoke being absent from the public endpoints.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Under class-level @Transactional, the BadCredentialsException rolls back the LoginAttempt save, so the rate limit never counts failures; the trigger is concrete.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "The oldest-ever attempt ignores windowStart, so Retry-After clamps to 1s while the lock is still active when stale rows exist.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Logout skips an already-used token, so a refresh that rotates the token concurrently leaves the successor unrevoked; the trigger is concrete.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "The grace-window successor is chosen as the newest unused token across all sessions, so another device's token is consumed and reuse detection later fires.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "A logout response arriving after the 3s race can clear a newly logged-in session's cookies, and a logout that never arrives leaves the refresh token unrevoked.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Hedged and speculative: it depends on an in-flight refresh happening to land after logout, and it asks the reader to confirm the hydration path.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "handleLogout never resets MainLayout's persistent selfPlayerId ref, so the packs link keeps the previous player's id on a same-tab re-login.",
+        "reported_id": "R7",
+        "verdict": "real"
+      }
+    ]
+  }
+}

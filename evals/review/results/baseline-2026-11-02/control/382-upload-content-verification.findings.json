@@ -1,0 +1,57 @@
+{
+  "arm": "control",
+  "case": "382-upload-content-verification",
+  "findings": [
+    {
+      "category": "security",
+      "description": "confirmUpload only checks a HEAD snapshot (size, ETag) and stores head.contentLength() in the FSO. The presigned PUT URL from signUpload stays valid for uploadTtlSeconds and does not bind the length, so the uploader can confirm a small file and then PUT again to the same key with up to S3's 5 GB limit. The stored sizeBytes, the per-owner quota, maxSizeBytes and CoachGalleryService's 5 MB / findActiveObject checks all trust the stale confirm-time value, so stored usage is under-counted and oversized media gets served on public profiles.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "confirmUpload / signUpload",
+      "title": "After confirm, the still-valid presigned PUT URL can overwrite the object, getting around the size, quota and gallery checks",
+      "verification": "Confirm that StorageResource does not revoke the URL or re-HEAD on later reads, and that the bucket has no policy limiting overwrites or content-length-range. Then PUT twice with the same presigned URL, calling confirm between the two PUTs."
+    },
+    {
+      "category": "security",
+      "description": "The Content-Type that confirm checks is the header the client chose at sign time. Nothing reads the bytes (magic number sniffing), and nothing ties the extension to the MIME type, so a key like `.../uuid.pdf` can carry image/png, and arbitrary bytes (HTML, script, executables) can be stored as image/jpeg. request.checksum() from the confirm request is stored without running ChecksumValidationStep and is never compared with the object. findActiveObject still returns it as \"sha256:<hex>\" and documents the record as verified, so downstream modules (gallery, branding) trust claims nobody checked.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "confirmUpload / persistConfirmed",
+      "title": "Uploaded bytes are never checked; content type and checksum are whatever the client declared",
+      "verification": "Upload a non-image body with Content-Type image/png and an arbitrary 64-hex checksum, then confirm it. Check that the FSO row and findActiveObject report image/png and that checksum."
+    },
+    {
+      "category": "logic",
+      "description": "The listener sets photo_url for every confirmed key under coach_profile/<id>/ without looking at the FSO's contentType or sizeBytes. The global allowlist accepts application/pdf, text/plain and application/octet-stream up to 100 MB. A coach can therefore upload a PDF, a text file or a binary blob as their public profile photo, and resolvePhotoUrl signs it for every visitor. CoachGalleryService.addImage applies the JPEG/PNG/WebP and 5 MB checks for the same kind of public coach media; this path skips them.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "onStorageConfirmed",
+      "title": "Coach profile photo is linked from any confirmed coach_profile upload, with no image-type or size check"
+    },
+    {
+      "category": "logic",
+      "description": "saveStep5 only checks that req.photoUrl() starts with \"coach_profile/<userId>/\" and then writes it to photo_url. It never calls findActiveObject or assertOwnership. A coach can store a key that was never uploaded or confirmed, one whose FSO is soft-deleted (it vanishes at physical deletion), or one of any content type (for example a PDF uploaded under coach_profile). The public profile then signs a URL to a broken or non-image object. It also skips the D9 \"validate the HEAD-verified record before linking\" rule that CoachGalleryService follows, and the free-form suffix (e.g. `coach_profile/5/x/../..`) isn't checked against the generated-key format.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "saveStep5",
+      "title": "saveStep5 accepts any photoUrl with the right prefix, including unconfirmed, nonexistent or soft-deleted objects",
+      "verification": "Call saveStep5 with photoUrl=\"coach_profile/<ownId>/nonexistent.jpg\" and see that it persists. Calling isClientUploadKey/findActiveObject on this path would reject it."
+    },
+    {
+      "category": "logic",
+      "description": "reconfirm re-publishes StorageObjectConfirmedEvent for any of the owner's keys confirmed within uploadTtlSeconds. CoachProfilePhotoEventListener then runs an unconditional UPDATE that sets photo_url to that key. If a coach uploads photo A, then uploads B (or picks one via saveStep5), and a delayed or retried confirm for A arrives inside the window, photo_url silently goes back to A. The comment says late replays must not re-link an older upload, but the time window only shrinks this race; it doesn't prevent it.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "reconfirm",
+      "title": "Retrying confirm on an older upload inside the TTL window reverts the coach's newer profile photo",
+      "verification": "Confirm A, confirm B, then send confirm for A again within uploadTtlSeconds. photo_url reads A afterwards."
+    }
+  ],
+  "input_rev": "6c0039fca63e7ef9d7a8a44dea5144918fc44cfd",
+  "model": null
+}

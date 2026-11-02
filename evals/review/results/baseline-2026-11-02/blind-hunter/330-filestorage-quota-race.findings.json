@@ -1,0 +1,148 @@
+{
+  "arm": "blind-hunter",
+  "case": "330-filestorage-quota-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "`sumSizeBytesByOwnerId(ownerId)` runs outside any transaction. The insert happens later in a separate `transactionTemplate.execute`, and nothing locks it per owner (no lock on an owner/quota row, no SERIALIZABLE isolation, no DB constraint). Failure scenario: the owner has 90 MB used of a 100 MB quota and signs two different 9 MB uploads. Both pass the sign-time check, since neither is counted until it is confirmed. The client then fires both confirms in parallel. Each reads usage=90 MB, sees 90+9 <= 100, and inserts, so usage ends at 108 MB. With N parallel confirms the overshoot is up to N times the max file size. The unique key index does not help because the keys are different.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Quota check in confirmUpload is a non-atomic check-then-insert; concurrent confirms overrun the quota",
+      "verification": "Run two concurrent confirmUpload calls for different keys from the same owner whose combined size crosses the quota; both succeed. A fix needs the sum and the insert in one transaction, with a per-owner lock (e.g. SELECT ... FOR UPDATE on an owner quota row, or pg_advisory_xact_lock(hash(ownerId)))."
+    },
+    {
+      "category": "logic",
+      "description": "signUpload only adds up confirmed rows. A client can request any number of presigned PUT URLs (each passes against the same usage figure), upload to all of them, and never confirm. The bytes stay in the bucket forever and never count toward quota. The quota therefore limits only the DB ledger, not storage actually used.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "FileStorageService.signUpload",
+      "title": "Sign-time quota check ignores signed-but-unconfirmed uploads, so it does not bound S3 usage",
+      "verification": "Check whether anything (an S3 lifecycle rule on the upload prefix, or a sweeper job) deletes objects under generated keys that have no file_storage_objects row after the TTL. Nothing in the files shown does this."
+    },
+    {
+      "category": "security",
+      "description": "The comment says the presigned PUT does not bind the length, and the real size is checked only once, at confirm time via HEAD. The URL is still valid until `uploadTtlSeconds` runs out. Scenario: the client PUTs a 1 KB file, confirms it (sizeBytes=1 KB recorded, quota and max-size checks pass), then reuses the same URL to PUT a multi-GB object, or different content, to the same key. The FSO row keeps the stale size, quota accounting is wrong, and the max-size limit is defeated. Content already checked by domain modules through findActiveObject can be swapped after the check.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Presigned PUT URL stays valid after confirm, so the object can be overwritten and its size and quota checks bypassed",
+      "verification": "Check whether the bucket has versioning or object-lock, or whether confirm copies the object to a final key or revokes the URL. Otherwise, reproduce with PUT, confirm, PUT a larger object to the same URL, then HEAD it."
+    },
+    {
+      "category": "edge-case",
+      "description": "When confirm throws QuotaExceededException, a contentType or size mismatch, or a max-size StorageValidationException, the S3 object that was already uploaded is never deleted and has no DB row. Oversize or over-quota uploads, which this code is supposed to block, still use storage permanently.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Rejected confirms leave the uploaded object orphaned in the bucket",
+      "verification": "Check for an S3 lifecycle rule or orphan-sweeper on generated-key prefixes."
+    },
+    {
+      "category": "logic",
+      "description": "The caller's comment says 'Any other constraint failure is a real error', and the Javadoc says it distinguishes idx_storage_objects_key 'as opposed to any other constraint'. But the plain `SQLException` branch returns true for any SQLState 23505 without checking the constraint name. The Hibernate branch also returns true when `getConstraintName()` is null. A unique violation on another constraint (e.g. on outbox_replication_jobs) is treated as an idempotent race. It only gets rethrown by luck, because `findByKey` finds nothing after the rollback.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "FileStorageService.isDuplicateKeyViolation",
+      "title": "isDuplicateKeyViolation treats any unique violation as a duplicate key, contradicting its own comment",
+      "verification": "Check whether a Hibernate ConstraintViolationException always comes before the SQLException in the cause chain with this driver/dialect, and whether any other unique constraint exists on the tables written in persistConfirmed."
+    },
+    {
+      "category": "architecture",
+      "description": "`publishEvent(new StorageObjectConfirmedEvent(...))` runs after `transactionTemplate.execute` has committed, so no transaction is active. Spring drops events for `@TransactionalEventListener` handlers when no transaction is active, unless `fallbackExecution=true`. In that case the coach-photo link would never happen on first confirm or on reconfirm. If the listeners are plain `@EventListener` instead, an exception in a listener propagates out of confirmUpload. The client then gets an error and an error metric for an upload that was in fact persisted.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload / reconfirm",
+      "title": "Confirm event may be silently dropped if listeners are @TransactionalEventListener",
+      "verification": "Inspect the StorageObjectConfirmedEvent listeners and check their annotation type and fallbackExecution setting."
+    },
+    {
+      "category": "logic",
+      "description": "The time window is meant to stop a 'late replay of an OLD key' from re-linking it. Within uploadTtlSeconds of confirm, though, the sequence 'confirm A, confirm B, retry confirm A' re-publishes A's event, and the idempotent listener sets the photo back to A. The guard limits this by age only, not by whether a newer upload has replaced A.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "FileStorageService.reconfirm",
+      "title": "reconfirm re-publish window can still revert to an older upload",
+      "verification": "Check whether the listeners compare uploadConfirmedAt against what is currently linked."
+    },
+    {
+      "category": "security",
+      "description": "Ownership everywhere else is `fso.getOwnerId()` compared with `securityUtil.requireCurrentBusinessId()`. softDelete instead compares the JPA audit `createdBy` with a login string the caller passes in. If createdBy is null (no auditing, system writes, rows from the race path), this throws an NPE (logged as 'UNKNOWN', HTTP 500). If logins can change, the owner loses delete rights. Unlike signDownload, there is no admin bypass. The caller also supplies the identity as a parameter instead of the service reading it from the security context.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "FileStorageService.softDelete",
+      "title": "softDelete authorizes by createdBy/login while every other path uses ownerId/business id",
+      "verification": "Check that FileStorageObject.createdBy is populated by @CreatedBy auditing, what value it holds (login or business id), and how callers obtain currentUserLogin."
+    },
+    {
+      "category": "database",
+      "description": "The method has its own `@Transactional`. If the caller (DeletionSchedulerService.processDeletions) is not already in a transaction, the row locks end when this query's transaction commits on return. Concurrent scheduler instances then pick up the same rows and both delete from S3. markPhysicallyDeleted's conditional update stops the duplicate outbox enqueue, but not duplicate processing.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/repo/FileStorageObjectRepository.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "FileStorageObjectRepository.findEligibleForPhysicalDeletion",
+      "title": "FOR UPDATE SKIP LOCKED is ineffective because locks are released when the repository method returns",
+      "verification": "Check whether DeletionSchedulerService.processDeletions is @Transactional and covers both the select and the S3 delete and mark."
+    },
+    {
+      "category": "edge-case",
+      "description": "`request.contentType().equals(head.contentType())` throws NPE if the confirm request has no contentType. It also fails on exact string comparison if the provider normalises the header, e.g. a different case or an added '; charset=...'.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "contentType comparison NPEs or false-mismatches",
+      "verification": "Check that ConfirmUploadRequest has @NotNull on contentType and that the controller uses @Valid. Also check how the S3-compatible provider in use returns Content-Type."
+    },
+    {
+      "category": "edge-case",
+      "description": "`currentUsage + request.fileSizeBytes()` can be made to pass with a negative or near-Long.MAX declared size (overflow), unless ValidationChain rejects it first.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "FileStorageService.signUpload",
+      "title": "Sign-time quota arithmetic trusts client-declared size and can overflow",
+      "verification": "Confirm that ValidationChain enforces 0 < fileSizeBytes <= maxSizeBytes."
+    },
+    {
+      "category": "security",
+      "description": "Only the three OWNER_BOUND_ENTITIES are checked. A client can pass entity='reports' or 'gdpr' with any entityId. If StorageKeyGenerator.generate is deterministic or predictable, or overlaps the server-written prefixes, the client could get a PUT URL that overwrites a server-written object (report PDF, GDPR export). The confirm-time `isGeneratedKey` guard protects only the DB record, not the bytes.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "FileStorageService.signUpload",
+      "title": "Client can sign keys in arbitrary entity namespaces",
+      "verification": "Inspect StorageKeyGenerator.generate: does it add a random UUID, and does it use a prefix that server-written keys never use? Also check whether there is an allowlist of entity values."
+    },
+    {
+      "category": "security",
+      "description": "The owner check runs only if `storageKeyGenerator.parse(key)` returns a value. If parse returns empty for a key that `isGeneratedKey` still accepts, the confirm goes ahead with no entityId ownership check for coach_* keys.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Owner-bound check is skipped when parse() fails on a key that isGeneratedKey() accepts",
+      "verification": "Confirm that StorageKeyGenerator.parse and isGeneratedKey accept exactly the same set of keys."
+    },
+    {
+      "category": "edge-case",
+      "description": "Module-facing URL minting does not check deletedAt, so a soft-deleted coach photo or gallery image linked from a profile stays downloadable until the physical purge. downloadBytes and deleteRawBytes wrap NoSuchKeyException in a generic RuntimeException, so callers cannot return a 404 and instead produce a 500.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "FileStorageService.signedDownloadUrl / downloadBytes",
+      "title": "signedDownloadUrl and downloadBytes ignore soft-delete, and wrapping hides not-found",
+      "verification": "Check whether callers of signedDownloadUrl unlink references on soft delete, and how callers handle a missing object in downloadBytes."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

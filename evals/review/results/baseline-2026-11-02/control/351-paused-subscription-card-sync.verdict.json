@@ -1,0 +1,74 @@
+{
+  "arm": "control",
+  "case": "351-paused-subscription-card-sync",
+  "judge_cost_usd": 0.06794140000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 says syncPaymentMethod only sets the default card for PAUSED subscriptions, never resumes them, and the grace sweep then cancels them.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R5 sees that the save-card request swallows sync errors, but frames the problem as missing user feedback rather than a synchronous Stripe call with no durable retry or outbox.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding points out that retryable and permanent Stripe errors get the same handling.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Saving card A, then B, then A within 24h reuses the idempotency key, so Stripe returns the cached first response and the subscription stays on B.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "A successful synchronous invoice payment leaves the local row delinquent until the webhook arrives, so a sweep that runs first can cancel a subscription the user just paid for.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Stripe leaves later invoices of an unpaid subscription in draft, so retrying only the latest invoice can skip the open invoice that is actually owed.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Already used as the partial match for F2 (swallowed sync errors in the save-card request).",
+        "reported_id": "R5",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "Depends on role-gating behaviour inferred from other tests that the diff doesn't confirm; the trigger is speculative.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "The cross-customer scenario is speculative and only asks to verify whether customers are shared.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Existing UNPAID rows still carry an old pastDueSince and become sweepable only after this change, so the first run cancels them immediately.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "INCOMPLETE_EXPIRED rows are not skipped, so Stripe rejects the update and an error is logged on every card save.",
+        "reported_id": "R9",
+        "verdict": "real"
+      }
+    ]
+  }
+}

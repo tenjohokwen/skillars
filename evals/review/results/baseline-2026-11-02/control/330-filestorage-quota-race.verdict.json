@@ -1,0 +1,30 @@
+{
+  "arm": "control",
+  "case": "330-filestorage-quota-race",
+  "judge_cost_usd": 0.031817399999999996,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same unlocked read of sumSizeBytesByOwnerId followed by a separate insert transaction, so parallel confirms overshoot the quota.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The orphaned-object claim depends on there being no bucket lifecycle rule or sweeper, which the reviewer did not establish; the sign-time check is advisory by design.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "The NPE needs rows with a null created_by, which the reviewer only guesses exist and asks to be verified, so no concrete trigger is shown.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

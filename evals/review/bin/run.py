@@ -17,7 +17,7 @@ Arms:
 Both arms run FROM the export directory with --setting-sources project, so neither the repo's
 nor ~/.claude skills are loaded. See evals/review/README.md.
 """
-import argparse, concurrent.futures, os, sys, time
+import argparse, concurrent.futures, os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import *  # noqa
 
@@ -28,17 +28,40 @@ ARMS = {
 INLINE_CAP = 400_000  # bytes of inlined source before we refuse rather than truncate silently
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "findings.schema.json")
 
+# Paths whose diff hunks are dropped before a diff is shown to a reviewer: generated or
+# documentation files that no reviewer needs and that can be enormous (a minified search
+# index was 300 KB of one line in PR #337).
+DROP_FROM_DIFF = re.compile(r"^(docs/|.*search-index\.js$|.*package-lock\.json$|.*/dist/|.*\.min\.(js|css)$)")
+
+def filter_diff(diff):
+    """Remove whole per-file sections of a unified diff whose path matches DROP_FROM_DIFF."""
+    out, keep = [], True
+    for line in diff.splitlines(keepends=True):
+        if line.startswith("diff --git "):
+            m = re.match(r"diff --git a/(.*?) b/", line)
+            keep = not (m and DROP_FROM_DIFF.match(m.group(1)))
+        if keep:
+            out.append(line)
+    return "".join(out)
+
 def build(case, arm, work):
     kind = case["kind"]
     tpl = read_prompt(ARMS[arm]["prompt"])
     if kind == "introducing-diff":
         with open(os.path.join(work, "input.diff")) as fh:
-            diff = fh.read()
-        if len(diff) > INLINE_CAP:
-            raise RuntimeError(f"diff too large to inline ({len(diff)} bytes)")
-        prompt = tpl.replace("{{MODE_INSTRUCTIONS}}", read_prompt("mode-diff.md")).replace(
-            "{{INPUT}}", "```diff\n" + diff + "\n```")
-        return prompt, work, "", 8
+            diff = filter_diff(fh.read())
+        if len(diff) <= INLINE_CAP:
+            prompt = tpl.replace("{{MODE_INSTRUCTIONS}}", read_prompt("mode-diff.md")).replace(
+                "{{INPUT}}", "```diff\n" + diff + "\n```")
+            return prompt, work, "", 8
+        # Too large to inline even after filtering: let the reviewer read the (filtered) diff
+        # from disk. The export directory holds nothing but the diff, so this is still
+        # diff-only review, just paged.
+        with open(os.path.join(work, "input.filtered.diff"), "w") as fh:
+            fh.write(diff)
+        prompt = tpl.replace("{{MODE_INSTRUCTIONS}}", read_prompt("mode-diff-file.md")).replace(
+            "{{INPUT}}", f"The diff is {len(diff)} bytes in ./input.filtered.diff.")
+        return prompt, work, "Read,Grep", 40
     tree = os.path.join(work, "tree")
     scope = case.get("scope") or []
     if ARMS[arm]["snapshot_mode"] == "tools":
@@ -111,9 +134,17 @@ def main():
     ids = a.cases.split(",") if a.cases else promoted_case_ids()
     write_json(os.path.join(RESULTS, a.run_id, "run.json"),
                {"run_id": a.run_id, "model": a.model, "effort": a.effort, "arms": sorted(ARMS)})
+    def guarded(c):
+        # One case's failure (export error, unreadable file, ...) must not abort the run.
+        try:
+            return run_one(a.run_id, a.arm, c, a.model, a.effort, a.max_turns)
+        except Exception as e:  # noqa: BLE001
+            log(f"[{a.arm}] {c}: FAILED: {type(e).__name__}: {e}")
+            write_json(os.path.join(RESULTS, a.run_id, a.arm, f"{c}.findings.json"),
+                       {"case": c, "arm": a.arm, "error": f"{type(e).__name__}: {e}", "findings": []})
+            return c, "error"
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.parallel) as ex:
-        futs = [ex.submit(run_one, a.run_id, a.arm, c, a.model, a.effort, a.max_turns) for c in ids]
-        statuses = [f.result() for f in futs]
+        statuses = [f.result() for f in [ex.submit(guarded, c) for c in ids]]
     bad = [c for c, s in statuses if s == "error"]
     log(f"done: {len(statuses)} cases, {len(bad)} errors" + (f": {', '.join(bad)}" if bad else ""))
     sys.exit(1 if bad else 0)

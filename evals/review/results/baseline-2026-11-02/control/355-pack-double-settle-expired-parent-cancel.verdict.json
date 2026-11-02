@@ -1,0 +1,39 @@
+{
+  "arm": "control",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "judge_cost_usd": 0.044985399999999995,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 describes the same mechanism: a sub-cent pack share is allocated, then payInFull deletes the NOTHING_CHARGED row and allocates it again, so the remainder is taken early and a later session gets PACK_FULLY_ALLOCATED.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the unconditional pack restore in onBookingCancelledByParent on an expired pack, and R2 identifies the missing packExpired in cancelBookingAsParent and the event, which together cover the expected defect.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "R4 gives a concrete trigger with numbers: two partial refunds on an unreleased payout divide the cut net by the original price, so the coach keeps 20 instead of 0, unlike the released path.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "R5 is speculative: it depends on whether CoachPayoutReversalHandler re-caps the amount, which the reviewer did not check and only asks the reader to verify.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

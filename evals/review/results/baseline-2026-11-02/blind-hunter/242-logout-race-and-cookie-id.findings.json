@@ -1,0 +1,216 @@
+{
+  "arm": "blind-hunter",
+  "case": "242-logout-race-and-cookie-id",
+  "findings": [
+    {
+      "category": "database",
+      "description": "The class is @Transactional, so Spring rolls back when a RuntimeException is thrown. In login(), recordAttempt(identifier) saves a LoginAttempt and then BadCredentialsException (a RuntimeException) is thrown in the same transaction. The insert is rolled back, so countByIdentifierAndAttemptedAtAfter never goes up and the max-attempts lockout never triggers: unlimited password guessing. The same happens in refresh(): markAllUsedByUserId(ownerId) followed by throw new BadCredentialsException(...) rolls back the theft-response revocation. The client loses its cookies, but every other refresh token (including the attacker's) stays valid.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AuthService.login / AuthService.refresh / recordAttempt",
+      "title": "Login-attempt records and 'revoke all sessions' writes are rolled back by the exceptions thrown right after them",
+      "verification": "Check whether LoginAttemptRepository.save / RefreshTokenRepository.markAllUsedByUserId run in REQUIRES_NEW (or the service declares noRollbackFor=BadCredentialsException). Also check whether an outer transaction or advice changes this. An integration test (5 bad passwords, then assert 429 on the 6th) settles it."
+    },
+    {
+      "category": "concurrency",
+      "description": "logout() marks only the refresh token whose hash matches the request cookie, and only if it is still unused (.filter(t -> !t.isUsed())). If another tab's refresh (or the axios 401 refresh interceptor) rotates that token while the logout is in flight, the logout finds it already used and does nothing. The newly minted successor stays valid. The refresh response can also arrive after the logout response and re-set rt/skp/login-token cookies, so the next hydrateFromCookie() or router guard signs the user back in. MainLayout makes this more likely: it stops waiting after LOGOUT_BACKEND_WAIT_MS and navigates while the backend call may still be in flight or get aborted by the hard-navigation reload, leaving the HttpOnly refresh cookie in place.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "AuthService.logout",
+      "title": "Logout revokes only the presented token; a concurrent refresh's successor survives and brings the session back",
+      "verification": "Check whether the refresh interceptor can fire during logout, and whether RefreshToken has a family/chain id that logout could revoke as a whole (or use markAllUsedByUserId for the device)."
+    },
+    {
+      "category": "security",
+      "description": "findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId, now) picks the most recently created unused token for the user, with no link to the rotated token. Scenario: device A rotates its token; within 30s a stale request from A presents the old token, while device B logged in more recently. B's token is selected, marked used, and a new token is issued to A. B's next refresh presents a used token. If that is more than 30s after the rotation, markAllUsedByUserId logs out every device; otherwise B consumes someone else's token. It also means anyone holding a just-rotated stolen token can take over whichever session is newest. A successor/family reference is needed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "AuthService.refresh (token.isUsed() grace branch)",
+      "title": "Grace-window refresh takes the user's newest unused token from any device, not this token's successor",
+      "verification": "Check the RefreshToken entity for a parent/successor/family column. None is used here."
+    },
+    {
+      "category": "security",
+      "description": "`user.getSkillarsRole() != null ? ... : \"ADMIN\"` labels every account without a skillars role (legacy USER, LTD_ADMIN, or any row missing the column) as ADMIN in both the skp cookie and LoginResponse. The frontend then sets isAdmin=true and shows the admin nav. The same null-role accounts also skip the phone-OTP verification check (`user.getSkillarsRole() != null && phoneOtpRequired && ...`). The name says 'role' but the value is not derived from the user's authorities.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AuthService.login / refresh (role fallback)",
+      "title": "Users with no Skillars role are reported as ADMIN to the client",
+      "verification": "Check whether any non-admin user can have skillarsRole == null (USER/LTD_ADMIN are in SECURED_AUTHORITIES), and whether backend admin endpoints check authorities rather than this string."
+    },
+    {
+      "category": "security",
+      "description": "Both the 'admin' parent route and the 'health-dashboard' child set only `requiresAuth: true`, with no `role: 'ADMIN'`. Any authenticated coach, parent, or player can open #/admin/health-dashboard directly. Other role-gated routes set role/roles/requiresCoach.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "admin/health-dashboard",
+      "title": "Admin route has no role restriction",
+      "verification": "Check router/index.js's beforeEach for any special handling of paths under /admin, and whether the dashboard's backend endpoints (/manage/** is ADMIN-only) are the only data source."
+    },
+    {
+      "category": "security",
+      "description": "Routes use `role`, `roles`, `requiresCoach` and `requiresParent`. `requiresParent` appears exactly once (parent/player/:playerId/subscription, which also uses singular 'player' unlike the other parent/players/* routes). If the guard only handles role/roles/requiresCoach, this route is open to any authenticated user. Several player/parent-scoped routes (parent/create-player, parent/dashboard, player/locker-room/:playerId, player/development/:playerId, coach/profile-builder) have no role at all.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "player-subscription route meta.requiresParent",
+      "title": "Four different role-meta conventions; `requiresParent` may not be enforced",
+      "verification": "Check router/index.js's guard for each key: meta.role, meta.roles, meta.requiresCoach, meta.requiresParent."
+    },
+    {
+      "category": "logic",
+      "description": "MainLayout is the layout for every route, including /login, and stays mounted through login and logout. onMounted fetches the self player id only if `authStore.isPlayer` is true at mount time. A player who logs in through the SPA (mounted as guest) never gets packsRoute, so the 'packs' nav item is missing until a full reload. handleLogout calls playerStore.resetSelfPlayerId() but never clears the component's own `selfPlayerId` ref, and App.vue's expiry teardown doesn't either. If a second player logs in in the same tab, packsRoute still points to /parent/players/<previous player id>/packs.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "onMounted / selfPlayerId / handleLogout",
+      "title": "selfPlayerId is fetched only on mount and never reset, so the packs link is missing or belongs to the previous user",
+      "verification": "Confirm whether login uses router.push (SPA) rather than a full reload. A watch on authStore.userId/isPlayer would fix both cases."
+    },
+    {
+      "category": "concurrency",
+      "description": "The comment says the pre-race rint clear is for sibling tabs' fast-teardown branch. But this tab's own monitoring is still running: destroySession() is called only after the up-to-LOGOUT_BACKEND_WAIT_MS race. The comment itself says MainLayout, unlike useSession, does not stop monitoring first. If this tab's tick() sees rint missing, it dispatches session:expired, and App.vue calls pushLoginOrHardNavigate({expired:true}). pendingExpired then upgrades to true (by design 'never downgrades'), so a deliberate logout shows 'Your session has expired'. This is the bug deferred-125 says it fixed.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "handleLogout",
+      "title": "Pre-race 'rint' clear can trigger this tab's own session monitor and show a false 'session expired' banner on deliberate logout",
+      "verification": "Check useSession.js computeTimeUntilExpiry/tick: does a missing rint in the same tab dispatch session:expired, and how often does monitoring tick (and does the axios interceptor run it on the logout response)?"
+    },
+    {
+      "category": "logic",
+      "description": "buildRedirectQuery always sets redirect = currentRoute.fullPath, including for deliberate logout (expired:false). After user A logs out from /parent/players/42/packs, user B logging in on the same browser is sent to A's player-scoped URL (403/empty page or wrong context). A redirect back to the previous page only makes sense after an expiry, which the code already tracks with `expired`.",
+      "file": "src/frontend/src/utils/sessionRedirect.js",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "buildRedirectQuery",
+      "title": "Deliberate logout stores the current page as `redirect`, so the next user to sign in lands on the previous user's page",
+      "verification": "Check LoginPage.vue: does it honor route.query.redirect regardless of `expired`?"
+    },
+    {
+      "category": "edge-case",
+      "description": "The comment claims reload() is 'a no-op in history mode'. In history mode the href assignment only schedules a cross-document navigation; location.href is unchanged until it commits. Calling reload() right away can cancel that navigation and reload the current, still-authenticated-route URL, so the fallback never reaches /login. It works in hash mode only because the hash change updates the URL synchronously. Separately, `hardNavigated` latches permanently; that is safe only if the reload really happens.",
+      "file": "src/frontend/src/utils/sessionRedirect.js",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "hardNavigateToLogin",
+      "title": "`location.href = X; location.reload()` can reload the old URL in history mode, contradicting the comment",
+      "verification": "Confirm quasar.config.js vueRouterMode is 'hash' in every build (including SSR/Capacitor targets) and that no deployment uses history mode."
+    },
+    {
+      "category": "concurrency",
+      "description": "pendingExpired is read once, after one microtask. A caller that arrives later but while inFlight is still pending (e.g. during guard resolution or an async component load of LoginPage) sets pendingExpired=true, which is never read. Its returned promise resolves as if the expiry banner were handled. The JSDoc says coalescing callers 'fold their own expired in', which holds only for same-tick callers.",
+      "file": "src/frontend/src/utils/sessionRedirect.js",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "pushLoginOrHardNavigate",
+      "title": "Coalesced `expired:true` is lost once the in-flight call has already built its query",
+      "verification": "Test: start a deliberate logout push, then after a macrotask dispatch session:expired while the push is pending, and assert the resulting query."
+    },
+    {
+      "category": "logic",
+      "description": "hydrateFromCookie sets only userId/role. The comment says displayName 'will be populated on next login response', but after a reload the user is already logged in and won't log in again. The header dropdown `:label=\"authStore.displayName\"` stays null for the whole session. The JSDoc above says the `user=` cookie holds the display name, yet it is never read. (That JSDoc also sits above dismissTimezoneNotice instead of hydrateFromCookie.)",
+      "file": "src/frontend/src/stores/auth.store.js",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "hydrateFromCookie",
+      "title": "Display name is never restored after a page reload",
+      "verification": "Check whether any boot file calls setUser after hydrateFromCookie (e.g. from a /refresh or /me response)."
+    },
+    {
+      "category": "logic",
+      "description": "`coachTier.value = response.tier`: for a standard axios instance the payload is response.data.tier, so coachTier would always be undefined and tier-gated UI would act as if there were no tier.",
+      "file": "src/frontend/src/stores/auth.store.js",
+      "id": "R13",
+      "severity": "medium",
+      "symbol": "fetchCoachTier",
+      "title": "fetchCoachTier probably reads `tier` from the axios response object, not its data",
+      "verification": "Check src/boot/axios.js for a response interceptor that returns response.data."
+    },
+    {
+      "category": "security",
+      "description": "The AC15 comment says prefix matchers were removed so a future controller can't be 'silently permitAll()'d with no review step'. Yet `/api/marketplace/coaches/**` is a broad public prefix and the frontend calls `/api/marketplace/coaches/me/tier`, which is coach-only. That endpoint is reachable anonymously: a null principal gives a 500 or wrong data instead of 401, unless method security guards it. Any new coach-self endpoint under this prefix is public by default. `/api/reviews/coaches/**` relies on @PreAuthorize in the same way.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java",
+      "id": "R14",
+      "severity": "medium",
+      "symbol": "PUBLIC_ENDPOINTS",
+      "title": "`/api/marketplace/coaches/**` permitAll also covers the authenticated `/coaches/me/tier` endpoint and any future coach-only path",
+      "verification": "Check the /coaches/me/tier controller for @PreAuthorize, and how it handles an anonymous principal."
+    },
+    {
+      "category": "logic",
+      "description": "findFirstByIdentifierOrderByAttemptedAtAsc has no lower time bound. If attempts older than the window still exist (no purge visible), the result is negative and Math.max(1, \u2026) clamps it to 1 second. The client is told to retry in 1s while the lock lasts up to lockWindowMin minutes.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "AuthService.login (retryAfterSeconds)",
+      "title": "Retry-After is computed from the oldest attempt ever, not the oldest attempt in the window",
+      "verification": "Check whether LoginAttempt rows are purged after the window. If not, this happens to any identifier with older failures."
+    },
+    {
+      "category": "concurrency",
+      "description": "count \u2192 check \u2192 (later) insert without a lock lets N parallel requests each see count < max, so a burst bypasses maxAttempts. Successful login never clears prior failures, so a legitimate user who failed 4 times, then logged in, is locked out after one more typo within the window. The key also includes the IP, so an attacker spreading attempts across IPs has no limit per account.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Rate-limit check and record are not atomic, and the lockout never resets on success",
+      "verification": "Check for any other throttle (gateway/WAF) on /api/auth/login."
+    },
+    {
+      "category": "security",
+      "description": "login() rejects users who are not activated or not BASIC_VERIFIED, but refresh() only checks that the user exists. A deactivated or suspended user keeps a rolling REFRESH_TOKEN_TTL session forever by refreshing.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R17",
+      "severity": "medium",
+      "symbol": "AuthService.refresh",
+      "title": "Refresh never re-checks whether the account is activated or verified",
+      "verification": "Check whether deactivation calls markAllUsedByUserId."
+    },
+    {
+      "category": "concurrency",
+      "description": "The catch assumes optimistic locking. Without a @Version field, two parallel refreshes with the same unused token both pass isUsed()==false, both save, and both mint new tokens, so one token forks into two live chains. Logout's save in the same situation could also throw an unhandled optimistic-lock exception at commit, returning a 500.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R18",
+      "severity": "medium",
+      "symbol": "AuthService.refresh (ObjectOptimisticLockingFailureException catch)",
+      "title": "Concurrent-refresh protection depends on an unseen @Version on RefreshToken",
+      "verification": "Check RefreshToken for a @Version field."
+    },
+    {
+      "category": "edge-case",
+      "description": "`skp=; Max-Age=0; path=/`, `user=\u2026`, `rint=\u2026` and `lang=\u2026` are cleared with path=/ and no Domain. If CookieUtil/JwtManagerImpl/CookieLocaleResolver set a Domain attribute or another path, the clears do nothing and hydrateFromCookie re-authenticates the UI on reload (when the backend logout timed out). If `user` is HttpOnly, JS cannot delete it at all, and backend logout doesn't remove it explicitly.",
+      "file": "src/frontend/src/stores/auth.store.js",
+      "id": "R19",
+      "severity": "low",
+      "symbol": "logout / MainLayout deleteUserCookie / changeLanguage",
+      "title": "Client-side cookie clears may not match the server-set cookie attributes",
+      "verification": "Check CookieUtil.addCookie path/domain, JwtManagerImpl's 'rint'/'user' cookie attributes, and MvcConfig's locale cookie name/path."
+    },
+    {
+      "category": "logic",
+      "description": "`darkMode ? t('theme.toggle') : t('theme.toggle')`: the ternary is pointless. The tooltip next to it uses theme.light/theme.dark, so screen-reader users don't hear which mode the button switches to.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R20",
+      "severity": "low",
+      "symbol": "theme toggle q-btn :aria-label",
+      "title": "Theme toggle aria-label has identical branches (copy-paste)"
+    },
+    {
+      "category": "concurrency",
+      "description": "Header and drawer both bind handleLogout, and nothing blocks a double click. A second invocation sends another POST /logout (now without a refresh cookie, or with a rotated one) and repeats teardown. With the refresh-rotation race above, overlapping logouts can hit the used-token path. Limited impact because pushLoginOrHardNavigate coalesces the navigation.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R21",
+      "severity": "low",
+      "symbol": "handleLogout",
+      "title": "handleLogout has no re-entrancy guard"
+    }
+  ],
+  "input_rev": "9923ffb024799b1fe7b98324191481ec3a74acb5",
+  "model": null
+}

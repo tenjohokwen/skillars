@@ -1,0 +1,118 @@
+{
+  "arm": "control",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "judge_cost_usd": 0.09164939999999999,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 names the same ownerId-vs-login/email mismatch and the same outcome; R2 adds the point that the failure is only logged, so no alert fires.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R3 covers the missing lock, session invalidation and token revocation plus the ensureAccountIsLive/Principal gaps; R4 covers the SUSPENDED check being tied to the phone-OTP flag.",
+        "reported_ids": [
+          "R3",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding mentions /api/logout or the logout handler.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "R12 and R13 touch the in-memory caches but neither raises the separate, per-instance attempt budget.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "R15 is about the profile-builder redirect, not meta.role COACH going unenforced.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions otpEnabled or the 2FA toggle not being enforced.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "R14 is about createSelfOwnedPlayerProfile, not linkAdditionalParent.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "Same unfiltered oldest-row lookup, giving a Retry-After clamped to 1 second while the user stays locked.",
+        "reported_ids": [
+          "R7"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "This is the count-then-insert race that the non-findings list says was knowingly left unfixed.",
+        "reported_id": "R5",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "The limiter key is email|ip and has no account-wide cap, so rotating source IPs gets a fresh budget against the same account each time.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "Unknown emails skip bcrypt, so the response-time difference reveals which accounts exist, which the legacy path's simulator prevents.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "changePassword does not revoke refresh tokens or stamp session invalidation, so stolen sessions keep working.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "The login is stored with its original case but looked up lowercased, so a mixed-case new email locks the user out.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "It depends on unverified DTO validation and on how ApiAdvice serialises the context; the reviewer's own text says to verify both.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "The caches have no maximumSize and get() stores an entry for every new key, so rotating identifiers grows the heap without limit.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "The cache key uses the username as typed, but unlock passes the stored lowercase login, so a mixed-case lock is never removed.",
+        "reported_id": "R13",
+        "verdict": "real"
+      },
+      {
+        "note": "Concurrent requests pass the unlocked existsByUserId check together, and the second hits the unique index and returns a 500.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "A failed status load leaves isComplete false, so the guard wrongly redirects a coach whose profile is finished.",
+        "reported_id": "R15",
+        "verdict": "real"
+      }
+    ]
+  }
+}

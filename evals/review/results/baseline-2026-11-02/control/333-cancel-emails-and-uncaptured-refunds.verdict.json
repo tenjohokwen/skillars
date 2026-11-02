@@ -1,0 +1,65 @@
+{
+  "arm": "control",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "judge_cost_usd": 0.0653614,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R5 names the same four missing templates, the same lowerCamel resolution and the same render failure.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R6 identifies the mismatch between PACK_PAUSED/packPaused and sessionPackPaused.html, and the failed render.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 covers the wallet refund for an uncaptured ACCEPTED booking and R2 covers the pack-session restore; together they match the expected defect.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R3 identifies resolveSessionPrice using the current coach price instead of resolveAmountPaid on the coach-cancel, no-show and parent-cancel paths.",
+        "reported_ids": [
+          "R3"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "It only triggers on a missing coach_pricing row, an assumed data-integrity failure rather than a demonstrated defect.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "It is a content and design suggestion about the email data map, not a concrete defect.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "It depends on a missing coach profile and on enqueueEmail not rejecting blanks, which the reviewer itself says needs checking.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "It needs both a missing payment row and a missing pricing row, a speculative degenerate data state.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

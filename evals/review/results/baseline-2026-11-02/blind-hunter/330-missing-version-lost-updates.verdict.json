@@ -1,0 +1,100 @@
+{
+  "arm": "blind-hunter",
+  "case": "330-missing-version-lost-updates",
+  "judge_cost_usd": 0.0907294,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R4 names the missing @Version/@DynamicUpdate and stale full-row revert, but only for the GDPR writer; it treats other writers as already fixed, not as an entity-wide exposure.",
+        "reported_ids": [
+          "R4",
+          "R14"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding flags the missing @Version on Session or stale full-row Session saves.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R4 identifies the unlocked findByUserId plus full-row save(cp) in the COACH branch, the wide window up to outer commit, and the reverted concurrent writes.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Skipped erasure is set to FAILED without failedAt, so the failedAt-before-deadline retry query never selects it.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "Coach erasure leaves the profile ACTIVE with displayName, so the erased coach stays publicly reachable.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "The self-deadlock only happens if enqueue flushes, which the finding doesn't establish.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified clear() semantics of RoutingDataSourceContext.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "The loop always re-reads page 0, so 50+ dedup-skipped rows starve later FAILED rows.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "With UUID ids, save() doesn't flush, so the unique violation escapes the try at commit and SESSION_ALREADY_EXISTS is never returned.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "The unlocked booking status check lets a plan commit as DRAFT after the completion UPDATE already matched 0 rows.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on unverified request validation of the status field.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "The status check throws the ownership error code, so the client gets a misleading error.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative; no shown path produces an invalid newStatus.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Conditional on a unique constraint and derived delete, neither of which is verified.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Only the input is lowercased, so mixed-case stored languages never match.",
+        "reported_id": "R13",
+        "verdict": "real"
+      },
+      {
+        "note": "Hibernate AUTO flush mode flushes before a JPQL update runs, so pending changes aren't lost as claimed.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

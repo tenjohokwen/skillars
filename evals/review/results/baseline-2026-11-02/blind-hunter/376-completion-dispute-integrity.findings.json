@@ -1,0 +1,168 @@
+{
+  "arm": "blind-hunter",
+  "case": "376-completion-dispute-integrity",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "ELIGIBLE_STATUSES has no COMPLETED_PENDING_CONFIRMATION, and LIVE_STATUSES only adds IN_PROGRESS/PAUSED. So raiseDispute rejects a pending-confirmation booking with NOT_ELIGIBLE. Several comments say the opposite. UnresolvedSessionSweeperService's javadoc says that after an auto-end 'the parent's confirm / dispute window applies'. cancelBookingAsParent says the sweeper 'opens the parent's confirm / dispute window'. submitWrapUp's H1 comment says QUICK 'stays pending until the parent confirms'. The state machine has no CANCEL_PARENT out of COMPLETED_PENDING_CONFIRMATION, so during that window the parent can only confirm. Failure scenario: a coach quick-completes or is auto-ended, then submits a QUICK wrap-up. The parent wants to contest it but cannot until the quick-complete timeout auto-completes it and starts the coach payout. UNSETTLED_STATUSES does list COMPLETED_PENDING_CONFIRMATION, but the only way to get there is a dispute raised while the session was live.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "DisputeService.ELIGIBLE_STATUSES / raiseDispute",
+      "title": "Parent cannot raise a dispute while the booking is COMPLETED_PENDING_CONFIRMATION, despite the code relying on a 'confirm / dispute window'",
+      "verification": "Check that no other entry point (another controller or service) lets a parent dispute or reject a pending-confirmation booking, and that the frontend does not offer a 'dispute' action in that state."
+    },
+    {
+      "category": "concurrency",
+      "description": "raiseDispute reads the booking status without a lock and then calls freezeForDispute. That finds no coach_payouts row while the completion transaction (the BEFORE_COMMIT enqueuePayout) is still uncommitted. The completing transaction checks for an open dispute (per the UNSETTLED_STATUSES javadoc, 'the payout is created frozen by the open dispute'), but it cannot see the dispute insert, which is not yet committed. Both commit: the dispute is open and the payout is PENDING_RELEASE, not frozen, so it releases after the 48h hold. Disputes are now accepted on IN_PROGRESS/PAUSED, which makes this window much wider: a parent disputing a live session while the coach ends it and submits a LIVE wrap-up is exactly this race.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "raiseDispute / coachPayoutAdjustmentService.freezeForDispute",
+      "title": "Dispute raised as the session completes can miss the payout freeze (no shared lock)",
+      "verification": "Check whether CoachPayoutOutboxSupport.enqueuePayout's open-dispute check and raiseDispute both take a common lock (for example the booking row FOR UPDATE). If neither does, the race is real."
+    },
+    {
+      "category": "concurrency",
+      "description": "The duplicate check is check-then-insert with no lock. Two raises at the same moment (for example parent and player, or a double-submit) both see none and both insert. After that, findOpenByBookingId returns Optional<Dispute> over two rows and throws IncorrectResultSizeDataAccessException on every later raise. One-dispute-per-booking reasoning elsewhere (the reconcile code assuming the freeze belongs to this dispute) also stops holding: resolving one dispute lifts dispute_frozen while the other is still open.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/repo/DisputeRepository.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "findOpenByBookingId",
+      "title": "Concurrent raiseDispute can create two open disputes for one booking, which breaks findOpenByBookingId",
+      "verification": "Check for a partial unique index on disputes(booking_id) WHERE status NOT IN ('RESOLVED','DISMISSED') in the migrations."
+    },
+    {
+      "category": "concurrency",
+      "description": "resolveDispute and dismissDispute load the dispute with findById and check RESOLVED/DISMISSED with no row lock. Two concurrent PARTIAL_CREDIT resolutions both pass, both call disputeCreditService.credit, and both cut or reverse the coach share. The reconcileCoachPayout javadoc says idempotency comes from 'the already resolved 409 at the top', but that check is not atomic. A resolve racing a dismiss can also commit both outcomes.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "resolveDispute",
+      "title": "Two admins resolving the same dispute at once can both pay a credit (unlocked status check)",
+      "verification": "Check whether Dispute has an @Version field (the last writer would then fail at flush), or whether DisputeCreditService.credit or a ledger unique index keys on disputeId."
+    },
+    {
+      "category": "logic",
+      "description": "For a pack booking, sessionPrice is coachPayoutRepository.findGrossAmountByBookingId. But CoachPayoutAdjustmentService.cutNet lowers gross_amount on every pending partial refund. On a second dispute (or a dispute after an earlier partial cut), sessionPrice is the reduced gross. remainingRefundable(booking, reducedPrice) then subtracts earlier credits from an already-reduced figure, so the parent gets less back than they paid. Meanwhile applyRefund computes the coach share as originalNet * refund / reducedPrice, which is larger than proportional. The code should use the original gross (getOriginalGross), matching how applyRefund uses originalNet.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "paidForSession",
+      "title": "Pack session price is read from the payout's current (already-cut) gross, so later disputes under-refund and over-cut",
+      "verification": "Confirm that findGrossAmountByBookingId selects gross_amount rather than the original gross column."
+    },
+    {
+      "category": "logic",
+      "description": "dispute.setCreditAmount(clawback == null ? creditAmount : null) stores the admin's request argument. FULL_CREDIT credits `remaining` but usually stores null. NO_ACTION with a creditAmount in the request stores e.g. 50 although nothing was credited. COACH_WARNING with a zero or negative amount stores it. AdminDisputeDetailDto shows this field, and any credit cap or reporting that sums disputes.credit_amount will be wrong. The B6 comment explicitly says 'what was actually credited... never the requested outcome alone', which contradicts this. It should store `credited`.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "resolveDispute (dispute.setCreditAmount)",
+      "title": "Persisted creditAmount records the requested amount, not what was credited",
+      "verification": "Check whether DisputeCreditService.remainingRefundable or any report reads disputes.credit_amount rather than the wallet ledger."
+    },
+    {
+      "category": "logic",
+      "description": "mode = LIVE whenever liveStartedAt != null && autoEndedAt == null. A coach who presses Start at the start time and then End at once (endSession allows this with no minimum duration) gets LIVE. The booking completes and the payout is queued with no parent confirmation window. That is the very 'Start then Pause and never coached' abuse this branch is meant to address, reached by ending instead of pausing. The only remedy is a later dispute, which depends on the payout freeze working (see the race finding).",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "submitWrapUp (mode derivation)",
+      "title": "Coach can still self-certify LIVE completion with no parent confirmation by pressing Start then End",
+      "verification": "Product decision: should LIVE also require a minimum elapsed live time or the session's end time to have passed?"
+    },
+    {
+      "category": "logic",
+      "description": "Inside `if (\"LIVE\".equals(mode))` the transition is BookingEvent.QUICK_COMPLETE, while the QUICK path does not transition at all. Any listener or audit keyed on the event or state-machine name will classify a live completion as a quick one.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "submitWrapUp",
+      "title": "The LIVE wrap-up path fires the QUICK_COMPLETE event (name contradicts behaviour)",
+      "verification": "Check whether BookingStatusChangedEvent consumers or audit logs record the BookingEvent name."
+    },
+    {
+      "category": "edge-case",
+      "description": "The auto-end happens at requestedEnd + 120 min and moves the booking to COMPLETED_PENDING_CONFIRMATION with no SCD row. If StuckCompletionSweeperService chooses rows by requestedEndTime (or any anchor already past), its next tick force-completes with placeholder data. That publishes BookingCompletedEvent and releases the payout, so the coach never gets to submit a QUICK wrap-up and the parent never gets a confirm window. The class javadoc only says the stuck sweeper 'takes over'.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/UnresolvedSessionSweeperService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "endAbandonedLiveSessions",
+      "title": "Auto-ended sessions may be force-completed by StuckCompletionSweeper at once, skipping both the wrap-up and the parent window",
+      "verification": "Read StuckCompletionSweeperService's query. Which timestamp is its stale threshold measured from (requested_end_time, updated_at, status anchor, auto_ended_at)?"
+    },
+    {
+      "category": "edge-case",
+      "description": "Both status lists include IN_PROGRESS but not PAUSED. A paused session (which can now sit until the sweeper ends it, and which the parent is told to dispute) vanishes from both schedules. The coach cannot find it to resume or end it, and the parent cannot find it to dispute it.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "getCoachWeekSchedule / getParentPlayerSchedule",
+      "title": "Paused sessions disappear from the coach week schedule and the parent schedule",
+      "verification": "Check whether the frontend uses another endpoint to show paused sessions."
+    },
+    {
+      "category": "edge-case",
+      "description": "The only time check is verifyNotBeforeStartTime. A never-started session that SESSION_NEVER_STARTED flagged can be quick-completed by the coach weeks later. It then auto-confirms on the quick-complete timeout and pays out. Combined with the parent being unable to dispute while it is pending, the parent's only recourse is a dispute after completion, if they notice.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "initiateQuickComplete",
+      "title": "An UPCOMING session can be quick-completed with no upper time limit",
+      "verification": "Confirm whether the QuickCompleteTimeoutService timeout is anchored on the transition time or on requestedStartTime."
+    },
+    {
+      "category": "security",
+      "description": "The service works out whether the caller is payer-side or the coach, but stores the raisedByRole argument without checking it. A mismatch flips the raiserSide audience in resolveDispute and DisputeCoachUpheldEvent: the wrong party is notified and the other side's notice goes to the raiser. The admin queue also shows a false role.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "raiseDispute(raisedByRole)",
+      "title": "raisedByRole is caller-supplied and not checked against the resolved identity",
+      "verification": "Check that the controller derives raisedByRole from the authenticated principal and not from the request body."
+    },
+    {
+      "category": "logic",
+      "description": "FULL_CREDIT, PARTIAL_CREDIT and COACH_WARNING always credit booking.getParentId(). DisputeResolvedEvent goes to the raiser with `credited`. For a coach-raised dispute (for example contesting NO_SHOW_COACH), the coach is told 'credited X' and the parent receives money with no notice. It is not defined what these resolutions mean when the coach raised the dispute.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "resolveDispute",
+      "title": "Credit resolutions on a coach-raised dispute credit the parent, and the coach is told the amount",
+      "verification": "Check whether the admin UI limits which resolutions are offered by raisedByRole."
+    },
+    {
+      "category": "database",
+      "description": "upholdAuditNote truncates to admin_action_log.reason's varchar(500), but the non-uphold resolve path and dismissDispute pass resolutionNote/reason unchanged. A long note raises a DB error at flush and rolls back the credit, the payout reconciliation and the status change.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "logAdminAction",
+      "title": "Admin notes over 500 chars can fail the whole resolve/dismiss transaction",
+      "verification": "Check for @Size(max<=500) on the resolve/dismiss request DTOs."
+    },
+    {
+      "category": "architecture",
+      "description": "The comments say an unexpired pack booking's 'session is restored by CancellationRefundService instead'. In fact this listener enqueues the restore itself (isPackRestore), and CancellationRefundService says it does no money handling. The class javadoc also says CancellationRefundService's AFTER_COMMIT listeners 'handle cancellation history' (now BEFORE_COMMIT), and tells readers to 'Replicate the exact enqueue conditions from the six sites in CancellationRefundService', which no longer exist. Someone maintaining this could add a second restore or remove the only one.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "class javadoc / onBookingCancelledByCoach / onBookingCancelledByAdmin",
+      "title": "Stale or false comments in RefundEnqueueListener: pack restores attributed to CancellationRefundService",
+      "verification": "Search CancellationRefundService and PackSessionService for any remaining pack restore call."
+    },
+    {
+      "category": "architecture",
+      "description": "DisputeService never fires BookingEvent.DISPUTE. Its javadoc says 'The booking keeps its status' and its rules depend on the booking reaching COMPLETED and similar statuses. Yet the state machine maps IN_PROGRESS/PAUSED/COMPLETED_PENDING_CONFIRMATION/COMPLETED to DISPUTED, and EVENT_ROLES lets PARENT/COACH fire it. If anything does fire DISPUTE, the booking enters a status that is in neither ELIGIBLE_STATUSES nor UNSETTLED_STATUSES. resolveDispute would then proceed with no payout row, and the sweepers would never settle it.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "TRANSITIONS (DISPUTE / SETTLE_*)",
+      "title": "The state machine's DISPUTED transitions (including the new ones from IN_PROGRESS/PAUSED) are unused, contradicting DisputeService",
+      "verification": "Search callers of BookingEvent.DISPUTE / SETTLE_REFUND / SETTLE_COMPLETE across the codebase."
+    }
+  ],
+  "input_rev": "ec997389b69f9ad84b0fbf5020d725fed5caca54",
+  "model": null
+}

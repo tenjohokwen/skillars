@@ -1,0 +1,30 @@
+{
+  "arm": "control",
+  "case": "353-excused-cancel-cap-race",
+  "judge_cost_usd": 0.0375574,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same insert-then-count race under READ COMMITTED in onBookingCancelledByCoach/exceedsExcusedCancellationCap, where both transactions miss the cap strike. Its suggested coach-row lock fix is the wrong shape (see NON-FINDINGS), but the defect it identifies is correct.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "issueStrikeSafely catches only PessimisticLockingFailureException, so any other exception from issue() (for example ResourceNotFoundException) rolls back the REQUIRES_NEW transaction, deleting the history row that was just saved.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "The reviewer says there is only one publisher and no redelivery path, so no concrete trigger exists for double delivery.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

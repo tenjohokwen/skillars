@@ -1,0 +1,115 @@
+{
+  "arm": "blind-hunter",
+  "case": "382-upload-content-verification",
+  "judge_cost_usd": 0.09273340000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 states confirm only compares declared vs header content type and never inspects bytes, so a file labelled image/png can hold HTML or an executable.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies that rejected confirms leave the object in S3 with no FSO row, so quota is bypassed and storage fills.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R4 explicitly flags application/octet-stream and .bin in the default allow-list as accepting arbitrary binaries.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding says that arbitrary entity names bypass the ownership check; R13 only comments on stale Javadoc.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R1 describes the prefix-only check in saveStep5 that skips the confirmed/owned/content-type checks, and also mentions '..' segments.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "persistConfirmed stores filename, checksum and tags from ConfirmUploadRequest that were never validated, and they differ from the values validated at sign time; this is a concrete client-controlled trigger.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "This depends entirely on an unverified guess that the business id differs from the numeric userId.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is a speculation about a repository query the reviewer did not see.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "The lost-update claim depends on how the repository is written and on @DynamicUpdate, neither of which the reviewer verified.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "deletePhoto swallows AuthorizationException from softDelete and clears photoUrl, leaving the FSO active; the trigger is a login change.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "The listener links any confirmed coach_profile object as the photo without checking for an image/* content type, which is a different code path from saveStep5.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "A delayed reconfirm of an earlier key within the TTL republishes the event and reverts photo_url to that older photo.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "The NPE depends on an unverified missing @NotNull, and the provider-normalisation part is speculative.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "The SQLException fallback treats any 23505 as the key race, which contradicts the Javadoc and can mask other unique violations.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "This is about stale Javadoc or comment accuracy.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is about a comment's count.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Metrics inconsistency is observability style with no functional defect.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "This speculates about null displayName rows without evidence.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

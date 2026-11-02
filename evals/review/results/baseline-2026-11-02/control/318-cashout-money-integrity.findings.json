@@ -1,0 +1,99 @@
+{
+  "arm": "control",
+  "case": "318-cashout-money-integrity",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "netAmount is already requestedAmount \u2212 feeAmount, and that is what gets refunded. On top of that the wallet is debited the full requestedAmount plus a separate STRIPE_FEE_DEBIT of feeAmount. Example: cashing out \u20ac100 with a \u20ac3 fee debits \u20ac103 but pays out \u20ac97, so the parent loses \u20ac6 instead of \u20ac3.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out takes the Stripe fee twice: the debit is requested+fee while the payout is requested\u2212fee"
+    },
+    {
+      "category": "edge-case",
+      "description": "The guard only checks balance >= requestedAmount, but the code then debits requestedAmount + feeAmount. With a \u20ac50 balance, cashing out \u20ac50 passes the check and leaves the wallet at about \u2212\u20ac1.75, which later bookings or reports will treat as debt. The unused CreditWalletService.debitForCashOut has the same flaw. The frontend also allows amount == balance.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Balance check ignores the fee, so a cash-out can push the wallet negative"
+    },
+    {
+      "category": "concurrency",
+      "description": "processCashOut has no @Transactional and no lock. getBalance and each writeLedgerEntry run in separate auto-committed transactions. Two parallel POST /cashout calls (double click, two tabs, or a script) can both read a \u20ac100 balance, both pass the check and both write \u20ac100 debits. The SERIALIZABLE CreditWalletService.debitForCashOut that seems meant to prevent this is never called.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out balance check and debit are not atomic, so concurrent requests overdraw the wallet"
+    },
+    {
+      "category": "logic",
+      "description": "The refund key is always \"refund-\" + paymentIntentId, and cash-out always refunds against the parent's lastPaymentIntentId. A second cash-out against the same PaymentIntent reuses the key. If the amount matches, Stripe returns the earlier Refund and the code treats it as success, so the wallet is debited again with no money sent. If the amount differs, Stripe rejects the reused key and the cash-out fails for good until a new charge happens. The same key is also used by the pack-purchase compensating refund, so the two flows can block or replay each other.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.refund",
+      "title": "Fixed refund idempotency key per PaymentIntent makes later cash-outs silently pay nothing"
+    },
+    {
+      "category": "logic",
+      "description": "The refund targets stripe_customers.last_payment_intent_id, whichever charge was most recent (for example a \u20ac20 single booking or a session-pack purchase). Credit built up from several or larger payments can exceed that charge's remaining refundable amount, so Stripe rejects the refund and the parent can never cash out more than the last charge. A cash-out can also refund a pack purchase that still has its sessions available, or a charge whose net was already transferred to the coach.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out refunds against an arbitrary PaymentIntent with no check that it can cover the amount"
+    },
+    {
+      "category": "concurrency",
+      "description": "Every StripeException, including APIConnectionException or a read timeout after Stripe has already created the refund, is mapped to PaymentGatewayException. The catch block then writes CASH_OUT_REVERSAL entries. In that case the parent gets the money on their card and the credit back in the wallet. No failure record or reconciliation entry is written, unlike the pack-purchase path.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R6",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Ambiguous Stripe failure (e.g. timeout) restores credit even though the refund may have gone through"
+    },
+    {
+      "category": "database",
+      "description": "The two debit rows are committed before paymentGateway.refund runs, and the method is not transactional and keeps no durable 'pending cash-out' state. If the JVM dies, the request is cut off, or refund throws something other than PaymentGatewayException (for example an ArithmeticException from toCents or a RuntimeException from the SDK), the debits stay and no refund or reversal ever happens. The ledger is append-only and nothing records that the cash-out is incomplete.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Crash or non-gateway exception between the debit and the refund leaves credit debited with no payout"
+    },
+    {
+      "category": "logic",
+      "description": "sumTotalCashOuts adds up every CASH_OUT_DEBIT row and ignores the matching CASH_OUT_REVERSAL rows written when the Stripe refund fails. Each failed cash-out therefore inflates totalCashOuts by its full amount even though no money left. It also reports the requested gross rather than the net actually refunded, and cash-out STRIPE_FEE_DEBIT revenue does not appear anywhere.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "RevenueReportingService.getAdminOverview / ParentCreditLedgerRepository.sumTotalCashOuts",
+      "title": "Admin finance overview counts failed (reversed) cash-outs and reports the gross amount, not what was paid"
+    },
+    {
+      "category": "logic",
+      "description": "After a successful cash-out the toast reports cashoutAmount (for example \u20ac100), but the card is refunded requested \u2212 fee and the wallet loses requested + fee. The fee is never shown before or after submitting, so the parent sees amounts that don't match their bank statement or wallet balance. The button also allows cashoutAmount == balance, which the backend fee debit then overdraws.",
+      "file": "src/frontend/src/pages/parent/ParentCreditWalletPage.vue",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "handleCashOut",
+      "title": "Cash-out success message shows the requested amount, not what the parent receives"
+    },
+    {
+      "category": "edge-case",
+      "description": "@DecimalMin(\"0.01\") does not limit scale, so an amount like 10.005 is accepted. The balance check uses the exact value, Postgres numeric(10,2) rounds the stored debit, and toCents rounds HALF_UP separately for Stripe. The ledger and the payout can disagree by a cent, and the balance check can pass for an amount that rounds up above the balance.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CashOutRequest.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "CashOutRequest.amount",
+      "title": "Amounts with more than two decimals are rounded differently in the ledger and at Stripe",
+      "verification": "Confirm that no @Digits constraint or global scale normalisation is applied before CashOutService (for example in a Jackson deserializer)."
+    }
+  ],
+  "input_rev": "8661a41e51611978823b1d3c6688c524a449d7e3",
+  "model": null
+}

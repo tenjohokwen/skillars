@@ -1,0 +1,118 @@
+{
+  "arm": "blind-hunter",
+  "case": "398-ltd-admin-full-admin-rights",
+  "judge_cost_usd": 0.09430140000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies HAS_ADMIN_ROLE including ROLE_LTD_ADMIN as the only admin expression, giving limited admins finance, config, GDPR and dispute powers.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 flags deleteUserInformation guarded by HAS_ANY_ROLE, which lets any authenticated role delete any user by login.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "With no @Transactional, the delete commits before the save, so a failed save loses the rule; a successful update also changes its id.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "The primitive enabled field defaults to false when omitted, contradicting the documented default of true, and there is no validation on documented ranges.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "The list only returns cached enabled rules, so a disabled rule cannot be found again to re-enable it.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative concern about filter-chain differences that cannot be verified, with no concrete trigger.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether ConfigService reads the security context, which is unverified.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The literal \"ADMIN\" is hardcoded as the actor for a payout release that moves money, so the action is not attributed to the real admin.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "The outcome depends on the downstream service; speculative.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculation that two identity sources may differ, with no shown mismatch.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Duplication and a hypothetical future non-numeric id; a style concern.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about AdminUserService's role checks.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "An admin-only diagnostic tool sending to an arbitrary address is a design concern, not a concrete defect.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Always reading page 0 and filtering failures in Java means a page full of failed users ends the run before later deletable users are reached.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "The Javadoc links to a removed constant and describes a cap mechanism that no longer exists.",
+        "reported_id": "R15",
+        "verdict": "real"
+      },
+      {
+        "note": "Dead code and doc drift; a maintainability issue only.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "The raw batchSize is still passed to PageRequest.of, so batchSize=0 throws despite the defensive clamp.",
+        "reported_id": "R17",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on whether a global exception handler exists; generic input-hardening.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on the Spring version; unverified.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether the service reads the security context; speculative.",
+        "reported_id": "R20",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

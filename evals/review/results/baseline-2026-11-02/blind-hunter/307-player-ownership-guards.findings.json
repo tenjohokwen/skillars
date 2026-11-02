@@ -1,0 +1,168 @@
+{
+  "arm": "blind-hunter",
+  "case": "307-player-ownership-guards",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "currentPlayerProfileId() returns securityUtil.requireCurrentUserId(), and initiatePlayerUpload then runs playerProfileRepository.findById(thatId). The comments here say businessId = PlayerProfile.id (TSID). PlayerOwnershipGuard says the opposite: 'businessId is the caller's own userId regardless of role', and it checks existsByIdAndUserId(playerId, callerId), which only makes sense if profile id != user id. VideoAccessGuard's Javadoc also says player ownerId is the 'Long user ID'. If the guard is right, findById(userId) returns empty for every player, so every player gets a 403 on upload, or the lookup hits an unrelated profile if the ID spaces collide. getMyVideos/getMyQuota would then key on userId, while homework and parent links key on PlayerProfile.id. If the comments here are right instead, PlayerOwnershipGuard's self-owned branch is wrong.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "currentPlayerProfileId / initiatePlayerUpload / resolveCurrentOwnerId",
+      "title": "Player ownerId/profile lookup uses userId while comments claim it is PlayerProfile.id",
+      "verification": "Check what Principal.instanceFrom puts into businessId for ROLE_USER players, and whether PlayerProfile.id ever equals the owning User.id. Also check which ID ParentPlayerLink.playerId stores."
+    },
+    {
+      "category": "logic",
+      "description": "For coach videos, ownerId is the coach profile UUID (set from coachProfileService.getCoachIdByUserId in VideoResource.initiateUpload). The fallback compares it with securityUtil.getCurrentUserName(). VideoAccessGuard's Javadoc says getCurrentUserName() returns an email and 'does NOT match either ownerId format'. Result: a coach always gets OperationNotAllowedException on /{id}/events and /{id}/status for their own DRILL_DEMO/COACH_REVIEW uploads, so upload progress can't be tracked. The player branch has the same ID-model problem as the VideoResource finding.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "isCurrentUserOwner",
+      "title": "Coach ownership check compares coach-profile UUID to username, so it never matches",
+      "verification": "Confirm what SecurityUtil.getCurrentUserName returns (email or login). Check for an integration test where a coach polls /api/video/{id}/status on their own upload."
+    },
+    {
+      "category": "architecture",
+      "description": "VideoAccessGuard.canPlay lets admins, parents (for the HIDDEN parental-approval flow) and recently booked coaches in. VideoEventResource allows only the strict owner, through its own separate ID-matching logic. A parent reviewing a minor's upload under moderation can play it but can't see its status or processing events. The two owner checks can also drift apart.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "findAndVerifyOwnership",
+      "title": "Video status/SSE endpoints skip the access policy used for playback (no admin, no parent)",
+      "verification": "Check whether the parental approval UI calls /api/video/{id}/status or /events."
+    },
+    {
+      "category": "edge-case",
+      "description": "The BLOCKED and ARCHIVED access states are checked before the PURGED\u2192DELETED mapping. A video that is PURGED/DELETED or FAILED but still has accessState BLOCKED shows 'SUBSCRIPTION_LOCKED' (prompting the user to resubscribe for content that is gone) instead of DELETED/FAILED. The comment claims parity with the SSE stream, but nothing ensures the SSE path applies the same precedence.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "computeDisplayState",
+      "title": "Display-state branch order lets access state hide DELETED/PURGED/FAILED",
+      "verification": "Check whether deletion/purge resets accessState, and how VideoSseService orders access vs operational state."
+    },
+    {
+      "category": "logic",
+      "description": "The comment claims 'the SSE stream never surfaces [PURGED] as-is'. subscribeToEvents passes video.getOperationalState().name() unchanged as the initial state, so subscribing to a purged video can send 'PURGED' to the client unless VideoSseService.subscribe translates it. canPlay returns 404 for PURGED, but events/status don't.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "subscribeToEvents",
+      "title": "SSE subscribe is seeded with the raw PURGED state, contradicting the parity comment",
+      "verification": "Read VideoSseService.subscribe to see whether the initialState argument is translated before it is emitted."
+    },
+    {
+      "category": "database",
+      "description": "saveAndFlush goes through SimpleJpaRepository's @Transactional proxy, which joins the outer @Transactional markComplete. When the UNIQUE(assignment_id) violation passes through that proxy, the shared transaction is marked rollback-only (and the Hibernate session is left unusable). The catch block ignores the error, then the commit throws UnexpectedRollbackException, so the 'idempotent' race becomes a 500. handleBookingCompleted's own comment describes exactly this hazard ('duplicate-key failure mark it rollback-only'), so the two methods contradict each other.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "markComplete",
+      "title": "markComplete swallows the duplicate-key exception inside a transaction that is already rollback-only",
+      "verification": "Write a concurrency test: two simultaneous POST /complete calls for the same assignment. Both should return 200."
+    },
+    {
+      "category": "logic",
+      "description": "The endpoint is restricted to HAS_PARENT_ROLE but gets parentId from securityUtil.getCurrentCoachUserId(). The name says coach. It looks copied from a coach endpoint. If that method checks for ROLE_COACH or resolves a coach-specific ID, every parent call fails or the ownership check runs against the wrong ID. Every other parent endpoint (SubscriptionResource.currentParentId) uses requireCurrentUserId().",
+      "file": "src/main/java/com/softropic/skillars/platform/session/api/HomeworkResource.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "markComplete",
+      "title": "Parent-only endpoint resolves the caller with getCurrentCoachUserId",
+      "verification": "Read SecurityUtil.getCurrentCoachUserId: does it check the role or throw for non-coaches? Does it return the same value as requireCurrentUserId()?"
+    },
+    {
+      "category": "logic",
+      "description": "GET homework uses playerOwnershipGuard, which (after skillars-deferred-147) accepts the self-owned branch. markComplete requires HAS_PARENT_ROLE, and the service checks only playerProfileRepository.findByIdAndParentId. A self-registered player has parentId null (chk_pp_owner), so they see their drills but get 403/404 on completion. This is the same bug class deferred-147 claims to have fixed.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/api/HomeworkResource.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "markComplete",
+      "title": "Self-registered adult players can read homework but cannot mark it complete",
+      "verification": "Check whether self-registered players hold the parent role, and whether a findByIdAndUserId fallback exists anywhere."
+    },
+    {
+      "category": "logic",
+      "description": "The guard passes when the caller is either the parent or the self-owning player. The handler always calls subscriptionService.getPlayerSubscription(currentParentId(), playerId), treating the player's own userId as the parent. If the service checks parent ownership or looks up a subscription by payer, a self-registered player gets not-found or forbidden even though authorization succeeded. The other player-subscription endpoints are HAS_PARENT_ROLE only, which is inconsistent with this one. The '/me' path name also contradicts the explicit playerId parameter.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SubscriptionResource.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "getMyPlayerSubscription",
+      "title": "getMyPlayerSubscription passes the caller as parentId even when the guard admitted them as the player",
+      "verification": "Read SubscriptionService.getPlayerSubscription to see how it uses parentId (an ownership check, or a query by parent)."
+    },
+    {
+      "category": "architecture",
+      "description": "VideoAccessGuard decides parenthood from ParentPlayerLinkRepository. PlayerOwnershipGuard and markComplete use PlayerProfile.parentId. A second linked parent, or a link revoked in one store but not the other, gets different answers per feature. For example, they can watch and delete a child's videos but not see homework, or the reverse. A revoked parent may keep delete rights.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "canPlay / canDelete / isParentOf",
+      "title": "Two separate sources of truth for the parent relationship",
+      "verification": "Check whether ParentPlayerLink and PlayerProfile.parentId are kept in sync, or whether one of them is deprecated."
+    },
+    {
+      "category": "security",
+      "description": "isParentOf takes currentUserId but never uses it. It returns videoAccessCache.getParentDecision(videoId), which is keyed by video only, and otherwise reads the identity from the security context. If VideoAccessCache isn't strictly request-scoped, one user's parent=true decision is served to another user requesting the same video. The method name and parameter suggest the decision is per user, but the cache isn't.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java",
+      "id": "R11",
+      "severity": "medium",
+      "symbol": "isParentOf",
+      "title": "Parent decision cache keyed only by videoId; currentUserId parameter ignored",
+      "verification": "Check the VideoAccessCache scope (@RequestScope or a ThreadLocal cleared per request) and whether the cache key includes the user."
+    },
+    {
+      "category": "edge-case",
+      "description": "catch (Exception e) with an empty body around the coach-window check also catches DB/config failures (e.g. an ArithmeticException from toIntExact, a booking query timeout). A legitimate coach gets PlaybackDeniedException with no log entry, unlike isOwner, which logs OWNER_CHECK_INFRA_FAILURE.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "canPlay",
+      "title": "Coach access step swallows all exceptions, hiding infrastructure failures as denials",
+      "verification": "Look at the PlaybackDeniedException rate for coaches in logs and metrics."
+    },
+    {
+      "category": "edge-case",
+      "description": "The catch assumes every DIVE is the UNIQUE(booking_id, drill_id) race. An FK violation (an unknown or deleted drillId, a missing pack/coach) or a NOT NULL violation is also logged as 'Duplicate homework assignment \u2026 ignored', so bad homework IDs vanish silently and the log message misleads.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "handleBookingCompleted",
+      "title": "Any DataIntegrityViolationException is logged as a duplicate and silently skipped",
+      "verification": "Check the schema for FK constraints on homework_assignment.drill_id and pack_id."
+    },
+    {
+      "category": "edge-case",
+      "description": "stream().limit(2) with no distinct(): input [A, A, B] assigns only A. The second A hits ALREADY_ASSIGNED, and B is dropped without any warning, because the size>2 warning reports the raw count.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "handleBookingCompleted",
+      "title": "Truncation to 2 is applied before de-duplication",
+      "verification": "Check whether WrapUpRequest validates that homeworkDrillIds are unique."
+    },
+    {
+      "category": "edge-case",
+      "description": "If the caller has ROLE_COACH, the coach path always wins. A user holding both ROLE_COACH and ROLE_USER can never list their player HOMEWORK uploads or see that quota. If the coach profile is missing, they get 403 even though a player identity exists.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "resolveCurrentOwnerId",
+      "title": "Dual-role users only see coach videos and quota",
+      "verification": "Check whether one account can hold both roles."
+    },
+    {
+      "category": "database",
+      "description": "@Modifying without clearAutomatically/flushAutomatically: during erasure, HomeworkCompletion entities already loaded in the same persistence context stay managed and stale. Pending inserts may not be flushed before the delete, so a completion saved earlier in the same transaction can survive erasure.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/repo/HomeworkCompletionRepository.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "deleteAllByPlayerId",
+      "title": "Bulk delete without clearing the persistence context",
+      "verification": "Check the erasure service's transaction: does it load or save completions in the same unit of work before calling this?"
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}

@@ -1,0 +1,129 @@
+{
+  "arm": "control",
+  "case": "337-subscription-entitlement-integrity",
+  "judge_cost_usd": 0.1074334,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "Same defect: pending downgrades are not voided on cancellation, and applyPendingChanges re-grants the paid tier without checking status.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same defect: under allow_incomplete an incomplete subscription is persisted with the paid tier.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R14 covers the quota reader and R6 names both CoachProfileService and QuotaConfigService reading the tier without a status check.",
+        "reported_ids": [
+          "R14",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "Same defect: downgrades never update the Stripe price, so billing stays at the higher tier.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "Same defect: tier upgrade is allowed on PAST_DUE or CANCELLED rows.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "Same defect: grace expiry is local only, Stripe keeps billing, and a re-subscribe creates a second subscription.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "Same defect: the stale pastDueSince removes the grace period on the next failure.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "partial",
+        "note": "Covers only the missing ordering guard, not the unmapped-status CHECK violation and webhook retry loop or the missing invoice.paid handler.",
+        "reported_ids": [
+          "R13"
+        ]
+      },
+      {
+        "expected_id": "F9",
+        "match": "full",
+        "note": "Same defect: a stale detached entity is saved after the Stripe call with no @Version.",
+        "reported_ids": [
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F10",
+        "match": "full",
+        "note": "Same defect: the customer+price idempotency key replays a stale subscription within 24h.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F11",
+        "match": "none",
+        "note": "No reported finding addresses CREATE_PRORATIONS deferring the upgrade charge.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: a lowercase tier makes CoachSubscriptionTier.valueOf throw after the Stripe charge, which rolls back the local row.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete race: the lock is released before the per-item apply, so a change voided by a later upgrade is still applied and the merge overwrites voided_at.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "LIMIT 1 with SKIP LOCKED leaves an older pending downgrade unvoided after a double-submit followed by an upgrade.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "The unlocked alreadyActive check lets concurrent subscribes for different tiers create two live Stripe subscriptions.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on an unverified assumption that coach and parent share one StripeCustomer, which the reviewer itself asks to be confirmed.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Find-then-insert with no lock or upsert races on first access and hits the unique constraint, returning a 500.",
+        "reported_id": "R16",
+        "verdict": "real"
+      }
+    ]
+  }
+}

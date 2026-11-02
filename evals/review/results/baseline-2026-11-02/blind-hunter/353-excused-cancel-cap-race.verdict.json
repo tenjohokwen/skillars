@@ -1,0 +1,60 @@
+{
+  "arm": "blind-hunter",
+  "case": "353-excused-cancel-cap-race",
+  "judge_cost_usd": 0.0548694,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same READ COMMITTED count-then-act race between saving history and counting, in which concurrent excused cancels each miss the other's row and no cap strike fires. Its suggestion to lock the coach row is a flawed fix, but it also offers an advisory lock, and it identifies the defect correctly.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "This depends on an unverified createdAt mapping and has no concrete trigger.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "The claimed exceptions and how they propagate are speculative, and nothing concrete is shown to fail.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is a stale-comment documentation issue, not a defect in behaviour.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "It is a hypothetical about propagation that the code comment already asserts, so it is a verify-only point.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "It assumes events get duplicated without showing any path that republishes them.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "The risk of enum drift is speculative, and no mismatch is shown.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The clock-skew concern is speculative and has no concrete trigger.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is a naming and style comment.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

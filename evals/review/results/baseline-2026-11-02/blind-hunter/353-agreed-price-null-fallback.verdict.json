@@ -1,0 +1,93 @@
+{
+  "arm": "blind-hunter",
+  "case": "353-agreed-price-null-fallback",
+  "judge_cost_usd": 0.0793054,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the NULL agreed_price fallback in resolveSessionPrice/batchBookingPrice from createBookingRequest, which charges a price the parent never saw.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 flags createBatch storing a zero total for a null price that is later charged at the current price, and R1 adds the \u20ac0 quote.",
+        "reported_ids": [
+          "R2",
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R13 says duplication stores NULL when the coach has no pricing row and so hits the same fallback, and R1 also names the duplication path.",
+        "reported_ids": [
+          "R13",
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Speculative; it depends on an unverified post-commit throw inside settle.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "A verify-only claim that isTerminal may not list the status, with no concrete evidence.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative refund-key collision whose behaviour is left for the reader to verify.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified sweeper behaviour.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculation about which exception types are caught, with no concrete trigger.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Comment and lock-scope concern that depends on an unverified pricing-update path.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Comment inconsistency, with the possible lost constraint value left unverified.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "With a \u20ac20 wallet the deduction assertion is \u20ac20 at either price, so it cannot check the claimed 30-vs-40 split.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative test flakiness concerns, each left to verify.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative flakiness, and its missing-test part repeats R1.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Verify-only claim about a method body the reviewer did not read; it touches the deliberate refund fallback.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

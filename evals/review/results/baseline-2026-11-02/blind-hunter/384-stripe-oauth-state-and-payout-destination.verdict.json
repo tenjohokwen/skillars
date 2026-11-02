@@ -1,0 +1,83 @@
+{
+  "arm": "blind-hunter",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "judge_cost_usd": 0.08315739999999999,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same thing: the predictable coachId used as state lets an attacker link their own Stripe account through CSRF.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies the same defect: the upsert silently overwrites stripeAccountId with no alert or freeze, so the next payouts go to the new account.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Whether the callback is rejected depends on an auth configuration that wasn't shown, so this is speculation.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The failure only happens on certain Hibernate versions and the reviewer didn't confirm which version is used.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "A reused or invalid OAuth code makes the service throw, and nothing catches it, so the user gets a backend error page instead of the stripe_error redirect.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "The PENDING state is temporary and only occurs if the sync fails; the applier semantics it depends on weren't checked.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is the same silent account-replacement issue as R2.",
+        "reported_id": "R7",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "This depends on how the gateway handles idempotency keys, which wasn't checked.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "This depends on the outbox backoff and enqueue configuration, which wasn't checked.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "The reviewer says this may be harmless, and the outcome depends on applier behaviour that wasn't checked.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "The rate limit is documented as a soft guard, so this is not a real defect.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "This depends on unverified URL configuration, and the property-name complaint is a style point.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Log injection only applies if the logging encoder doesn't escape newlines, which wasn't checked.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

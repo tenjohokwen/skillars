@@ -1,0 +1,170 @@
+{
+  "arm": "blind-hunter",
+  "case": "337-subscription-entitlement-integrity",
+  "judge_cost_usd": 0.1512054,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R6 notes deletion never voids pending changes, but says the harm is applying them after a re-subscribe, not that applyPendingChanges re-grants a paid tier on a CANCELLED row.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same defect: no payment_behavior, so an incomplete subscription still has the paid tier persisted and synced.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "Both say resolvePlayerTierKey and the marketplace projection read the stored tier without any status gate.",
+        "reported_ids": [
+          "R17",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "Same defect: downgrade and applyPendingChanges never update the Stripe price, so billing stays at the old tier.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No report says changeCoachTier/changePlayerTier skip the status check.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "partial",
+        "note": "R10 catches that grace expiry is local-only and Stripe keeps billing, but wrongly says re-subscribe is blocked; in fact the CANCELLED row passes the guard and a second Stripe subscription is created.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "Same stale pastDueSince that gives zero grace on a later payment failure.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "partial",
+        "note": "R11 covers the missing event-ordering guard and R2 mentions UNPAID normalisation, but neither raises the CHECK violation and webhook retry loop, or the missing invoice.paid handler.",
+        "reported_ids": [
+          "R11",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F9",
+        "match": "full",
+        "note": "Same defect: stale detached entity saved after the Stripe call with no @Version.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F10",
+        "match": "full",
+        "note": "R1 explicitly flags the customer+price key replaying a stale subscription within 24h.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F11",
+        "match": "partial",
+        "note": "R2 notes the local tier is upgraded before the proration is collected, but not the deferral mechanism of CREATE_PRORATIONS or the upgrade-then-cancel loss.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Challenges the deliberate Decision 3 swallowing of PessimisticLockingFailureException, which the answer key lists as a non-finding.",
+        "reported_id": "R4",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "Concrete trigger: a lowercase tier makes valueOf throw after Stripe has created the subscription, which rolls back the local row.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: SKIP LOCKED LIMIT 1 in the void query can miss a pending downgrade the scheduler has locked, so the downgrade is later applied.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: choosing the same tier goes down the downgrade branch, voiding the real pending change and inserting an X\u2192X change.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: an update webhook arriving before the local persist is acknowledged and lost, so the status transition is dropped.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Low-impact alert-accuracy speculation about the orphan grace window.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: a coach who also pays for a child's player subscription gets a false orphan alert from the sweep every day.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on unverified listener annotations.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative; the reporter itself says it is safe if the listener is AFTER_COMMIT.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete race: two concurrent subscribes for different tiers have different idempotency keys, so both create Stripe subscriptions and one is left billing unlinked.",
+        "reported_id": "R18",
+        "verdict": "real"
+      },
+      {
+        "note": "Comment inconsistency only.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "Javadoc reference issue.",
+        "reported_id": "R20",
+        "verdict": "noise"
+      },
+      {
+        "note": "The price fields are filled from the priceId config key, so clients see Stripe ids instead of amounts.",
+        "reported_id": "R21",
+        "verdict": "real"
+      },
+      {
+        "note": "Comment and alert-noise speculation that depends on unverified registration code.",
+        "reported_id": "R22",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

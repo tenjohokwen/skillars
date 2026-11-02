@@ -1,0 +1,79 @@
+{
+  "arm": "blind-hunter",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "judge_cost_usd": 0.0784174,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R5 names the same unbounded sessionCount/totalPrice, the 0.01\u00f73\u21920.00 rounding trigger, and the numeric-column overflow on huge values.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Together, R2 and R3 flag that paymentMethodId has no format or length validation on either request, so bad values are saved and sent to Stripe instead of getting a 400.",
+        "reported_ids": [
+          "R2",
+          "R3"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: the client card is written to stripe_customers before chargeAndCapture, and nothing restores the old card when the charge is declined.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: another payer's pm_ id can be stored without an ownership check, and the platform-key retrieve then returns that card's brand, last 4 digits and expiry.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Defensive point that only applies if a caller skips bean validation, which the request already enforces.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: the tier-active check runs before the idempotent replay lookup, so a retry after the tier is deactivated fails instead of returning the paid pack.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative: it depends on whether resolveCoachAndAlertIfOrphaned already handles player subscriptions, which the finding itself asks to verify.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hypothetical drift that only matters if the two status sets ever differ.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: it needs a config key for a non-enum tier and an unvalidated controller.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: it depends on unverified save-card controller behaviour.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: there is no shown path where a tier's session count changes or the tier goes missing.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: it depends on an unverified unique constraint and on how ApiAdvice maps the error.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

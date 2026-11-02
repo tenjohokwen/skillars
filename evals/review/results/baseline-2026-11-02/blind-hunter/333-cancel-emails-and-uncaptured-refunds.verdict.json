@@ -1,0 +1,117 @@
+{
+  "arm": "blind-hunter",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "judge_cost_usd": 0.1087254,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 names the same four missing templates, the LOWER_CAMEL resolution and the render-time failure that leaves nobody notified.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions PACK_PAUSED or the mismatch with sessionPackPaused.html.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 describes CANCEL_COACH from ACCEPTED with no capture check, which leads to a wallet refund or a pack restore through both listeners.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R4 identifies the three resolveSessionPrice call sites that refund the current price instead of the amount paid, and contrasts them with resolveAmountPaid in the admin path.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "This depends on an unverified @Transactional annotation on enqueueEmail, so the trigger is speculative.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "This depends on unknown other exception types from ReliabilityStrikeService.issue, so it is speculative.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Whether the wrong bookings are cancelled depends on an unseen caller, and refund handling for pause is speculative.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "The finding assumes unverified payment-row states can coexist with a PAYMENT_PENDING booking.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The raw UTC Instant.toString() is printed next to the coach's timezone label, so the displayed local time is off by the zone offset.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "The same model goes to the coach, so the coach's reminder reads 'Your session with <their own name>'.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "A single try/catch wraps the recipient loop, so an enqueue failure for the parent skips the coach, which contradicts the per-recipient comment.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "cancelDueToPause can pass an empty coachEmail, and these two handlers enqueue it without the blank guard that the other handlers have.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "The unlocked read and the error-code complaint are minor and have no concrete harmful trigger.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is about stale Javadoc and ledger label text.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "This depends on an unverified derivation of isWalletRefund().",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "The answer key lists coach no-show refunding without a capture check as deliberate, since NO_SHOW_COACH is only legal from UPCOMING.",
+        "reported_id": "R15",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "This is a copy-wording concern and is speculative about the message bundle.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "No producer is shown to actually pass a null langKey.",
+        "reported_id": "R17",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is unverified speculation about the sweeper's timeout window.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      }
+    ]
+  }
+}
