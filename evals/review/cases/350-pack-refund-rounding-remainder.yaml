@@ -42,6 +42,25 @@ expected_findings:
         symbol: resolveAmountPaid
       - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
         symbol: onBookingCancelledByCoach
+  - id: F3
+    title: Client discards the idempotency key on any server response, so a retry after a post-capture failure double-charges
+    category: logic
+    severity: high
+    description: >
+      SessionPackPurchasePage.confirmPurchase sets attemptKey = null in its catch block whenever
+      e.response exists, treating every HTTP answer as a definite failure, and mints a fresh key on the
+      next click. The server does not guarantee that an error response means no charge was captured:
+      SessionPackPaymentService.purchasePack throws payment.lifecycleFailure after the charge when the
+      pack record and the intent lookup both fail (PACK_PURCHASE_UNRECONCILED, explicitly not refunded)
+      and when the compensating refund itself fails, and a gateway 5xx or proxy timeout after capture
+      also arrives as a response. In each of these cases the retry carries a new Idempotency-Key and
+      captures a second charge; the spec "mints a new key once the server answered a failure" locks
+      this behaviour in.
+    anchors:
+      - file: src/frontend/src/pages/parent/SessionPackPurchasePage.vue
+        symbol: confirmPurchase
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: purchasePack
 non_findings:
   - title: perSessionShare rounds DOWN rather than HALF_UP
     reason: Rounding down is deliberate (3 x 66.67 would exceed a 200.00 charge); the defect is the missing remainder reconciliation, not the rounding direction.
@@ -50,3 +69,4 @@ notes: >
   #338 (cb239255) introduced perSessionShare and routed resolveAmountPaid through it; allocatePackShare
   pre-dates #338 and is unchanged in that diff but is the counterpart a reviewer must read to see the leak.
   F2 is weaker evidence; a reviewer may only report F1.
+  F3 added 2026-11-03 from real-sample S09 (owner-verified).

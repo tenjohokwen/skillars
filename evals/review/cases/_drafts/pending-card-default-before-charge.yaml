@@ -1,0 +1,40 @@
+id: pending-card-default-before-charge
+kind: pre-fix-snapshot
+fix_pr: pending
+input_rev: 980eff338df6
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/StripeCustomer.java
+summary: Pack purchase saves the client-supplied card as the payer's default before charging it
+expected_findings:
+  - id: F1
+    title: The parent's saved default card is overwritten before the charge, so a declined card sticks and the subscription sync is skipped later
+    category: logic
+    severity: high
+    description: >
+      SessionPackPaymentService.purchasePack calls getOrCreateStripeCustomer(parentId, paymentMethodId),
+      which writes the new paymentMethodId into stripe_customers.stripe_payment_method_id and saves,
+      before paymentGateway.chargeAndCapture runs (the gateway reads the card from that row). If the
+      charge is declined or throws, nothing restores previousCard: the declined card is now the saved
+      default that subscribeCoach/subscribePlayer and later pack charges use, while the Stripe
+      subscriptions still point at the old card. Only scheduleSubscriptionCardSync is gated on
+      success, although its javadoc says the card change happens only after the charge succeeds. If
+      the parent then retries with the same card and it succeeds, previousCard already equals
+      paymentMethodId, so scheduleSubscriptionCardSync returns early and the subscriptions are never
+      moved onto the new card.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: purchasePack
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: getOrCreateStripeCustomer
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: scheduleSubscriptionCardSync
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: chargeAndCapture
+source: results/baseline-2026-11-02/real-sample.md S13 and S17, owner-verified 2026-11-03
+notes: >
+  Open bug, no fix PR yet. S13 saw it at b123c73de463 (368 input) and S17 at 980eff338df6 (385
+  input); purchasePack and getOrCreateStripeCustomer are identical at both, so the case is pinned to
+  the later one. Severity high follows S17; S13 rated the same defect medium.

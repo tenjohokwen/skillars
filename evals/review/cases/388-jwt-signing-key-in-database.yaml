@@ -31,6 +31,23 @@ expected_findings:
         symbol: addSecretToThread
       - file: src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java
         symbol: run
+  - id: F2
+    title: Bootstrap runner's guard against a corrupt or undecryptable secret row never fires
+    category: logic
+    severity: low
+    description: >
+      JwtSecretBootstrapRunner.run calls secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME) and treats
+      any SecException other than KEY_NOT_FOUND as a broken row that must stop the boot. fetchSecret only
+      loads the entity via findOneByVersionAndBusId and never calls getSecretBytes, so the decryption and
+      blank-value errors Secret.getSecretBytes raises cannot be reached from here. A row that exists but
+      cannot be decrypted (for example one written with a different Jasypt password) is logged as
+      skip_existing SUCCESS and the application starts, then fails on every request when the key is
+      actually decrypted, contrary to the runner's documented fail-at-startup behaviour.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java
+        symbol: run
+      - file: src/main/java/com/softropic/skillars/platform/security/service/SecretService.java
+        symbol: fetchSecret
 non_findings:
   - title: JWT key is fetched from the database on every request
     reason: >
@@ -40,3 +57,4 @@ source: PR #388 description, S-03
 notes: >
   Compose/env changes (JWT_SIGNING_KEY) are part of the fix, not findings. The deploy impact (all users
   signed out) is a consequence of the fix.
+  F2 added 2026-11-03 from real-sample S19 (owner-verified).

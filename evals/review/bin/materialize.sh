@@ -52,9 +52,15 @@ case "$kind" in
     echo "wrote ${work}/input.diff ($(wc -l < "${work}/input.diff" | tr -d ' ') lines) at ${rev:0:8}"
     ;;
   pre-fix-snapshot)
-    m="$(field fix_merge)"
-    [ -n "$m" ] || { echo "fix_merge missing" >&2; exit 1; }
-    rev="$(git -C "$root" rev-parse --verify "${m}^1^{commit}")"
+    # An open-bug case (fix_pr: pending) pins input_rev; otherwise input is fix_merge^1.
+    pinned="$(field input_rev)"
+    if [ -n "$pinned" ]; then
+      rev="$(git -C "$root" rev-parse --verify "${pinned}^{commit}")"
+    else
+      m="$(field fix_merge)"
+      [ -n "$m" ] || { echo "fix_merge missing (or set input_rev for a pending fix)" >&2; exit 1; }
+      rev="$(git -C "$root" rev-parse --verify "${m}^1^{commit}")"
+    fi
     tree="${work}/tree"
     # Two reviewer arms often materialise the same case at the same moment. Serialise on a
     # mkdir lock (atomic on every POSIX filesystem; macOS has no flock), and build the export

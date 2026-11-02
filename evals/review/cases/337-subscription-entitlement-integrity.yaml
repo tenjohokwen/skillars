@@ -182,6 +182,53 @@ expected_findings:
         symbol: updateSubscriptionTier
       - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
         symbol: persistCoachTierUpgrade
+  - id: F12
+    title: customer.subscription.updated arriving before the local persist is acknowledged and the transition lost
+    category: concurrency
+    severity: medium
+    description: >
+      subscribeCoach calls stripeClient.createSubscription outside any transaction and only then
+      self.persistCoachSubscription writes stripeSubscriptionId. A customer.subscription.updated
+      delivered in that window finds no row by stripeSubscriptionId in handleSubscriptionUpdated; the
+      orphan alert is suppressed because resolveCoachAndAlertIfOrphaned sees the coach's row touched
+      within SUBSCRIBE_RACE_GRACE_WINDOW, the handler returns normally and handleEventAtomically commits
+      the idempotency row, so the event is acknowledged and Stripe never redelivers it. A status
+      transition carried by that event (for example incomplete to active after 3DS) is never applied,
+      and reconcileStripeSubscriptions only alerts on orphans and never re-reads the status of a matched
+      row, so the local row keeps the stale status.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java
+        symbol: handleSubscriptionUpdated
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java
+        symbol: resolveCoachAndAlertIfOrphaned
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: subscribeCoach
+  - id: F13
+    title: Tier string is stored unnormalised, so a lowercase tier rolls back the local row after Stripe has charged
+    category: edge-case
+    severity: high
+    description: >
+      CoachSubscribeRequest.tier is validated only with @NotNull. subscribeCoach resolves the price with
+      tier.toLowerCase() and the rank checks use toUpperCase(), but persistCoachSubscription and
+      persistCoachTierUpgrade call sub.setTier(tier) with the string as received and then
+      syncMarketplaceTier calls CoachSubscriptionTier.valueOf(tier). For tier="instructor" Stripe
+      creates and charges the subscription, then valueOf throws IllegalArgumentException, which the
+      surrounding catch (PessimisticLockingFailureException only) does not cover, so the @Transactional
+      persist rolls back and the charged Stripe subscription has no local row; changeCoachTier("academy")
+      rolls back the same way after Stripe was moved to the ACADEMY price. For players "pro" is stored
+      as-is and QuotaConfigService.resolvePlayerTierKey's valueOf on the stored tier fails, so a paying
+      PRO player gets the fallback quotas.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: subscribeCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: persistCoachSubscription
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: persistCoachTierUpgrade
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: syncMarketplaceTier
+      - file: src/main/java/com/softropic/skillars/platform/video/service/QuotaConfigService.java
+        symbol: resolvePlayerTierKey
 non_findings:
   - title: getEffectiveCoachTier / getEffectivePlayerTier filter on ACTIVE_STATUSES
     reason: Those helpers are correct; the defect (F3) is that the marketplace and quota readers do not go through them.
@@ -193,3 +240,5 @@ notes: >
   #340, so they are not expected here -- save-payment-method does not repoint existing Stripe
   subscriptions to the new card, and UNPAID/PAUSED rows are never swept. The F1 anchor on
   handleSubscriptionDeleted covers the "pending changes never voided" half of Problem 1.
+  F12 added 2026-11-03 from real-sample S06 (owner-verified).
+  F13 added 2026-11-03 from real-sample S07 (owner-verified).

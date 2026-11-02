@@ -1,0 +1,48 @@
+id: pending-login-case-normalisation
+kind: pre-fix-snapshot
+fix_pr: pending
+input_rev: fa62da9dc634
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java
+  - src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+  - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+summary: Two write paths store user.login in the submitted case while login looks it up lower-cased
+expected_findings:
+  - id: F1
+    title: Email change stores the raw new email as the login, with no lowercasing or uniqueness check
+    category: logic
+    severity: medium
+    description: >
+      UserProfileService.updateUserEmail sets u.setEmail(newEmail) and u.setLogin(newEmail) exactly
+      as submitted; nothing lowercases the value and nothing checks whether another account already
+      uses that email or login before the write. AuthService.login resolves the account with
+      findOneByLogin(email.toLowerCase()), so after changing to a mixed-case address such as
+      John@X.com the lookup for john@x.com finds no row and the user can no longer sign in. The
+      change is applied immediately in the same call.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java
+        symbol: updateUserEmail
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: login
+  - id: F2
+    title: Legacy registerAccount stores the raw-case email as the login while lower-casing the email field
+    category: logic
+    severity: medium
+    description: >
+      AccountManagementFacade.registerAccount sets userDTO.setLogin(userDTO.getEmail()) and toUser
+      copies it into user.login unchanged, while user.email is lower-cased. A registration with
+      Bob@X.com produces login 'Bob@X.com' and email 'bob@x.com'; AuthService.login looks up
+      findOneByLogin('bob@x.com'), finds nothing, and the account can never authenticate once
+      activated. The duplicate check at the top of registerAccount passes lower-cased values to
+      findUserByEmailOrLogin, so it also misses a mixed-case login that is already stored.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+        symbol: registerAccount
+      - file: src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+        symbol: toUser
+source: results/baseline-2026-11-02/real-sample.md S04 and S16, owner-verified 2026-11-03
+notes: >
+  Open bug, no fix PR yet. S04 saw updateUserEmail at 651ed1effc04 (319 input) and S16 saw
+  registerAccount at fa62da9dc634 (381 input); updateUserEmail is unchanged between the two, so the
+  case is pinned to the later revision and carries both siblings of the one root cause.
