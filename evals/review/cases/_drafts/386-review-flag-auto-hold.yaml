@@ -1,0 +1,36 @@
+id: 386-review-flag-auto-hold
+kind: pre-fix-snapshot
+fix_pr: 386
+fix_merge: 3542eef7
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/reviews/service/ReviewFlagService.java
+  - src/main/java/com/softropic/skillars/platform/reviews/repo/ReviewFlagRepository.java
+  - src/main/java/com/softropic/skillars/platform/reviews/api/ReviewApiAdvice.java
+summary: Review flags (S-08) - any accounts can auto-hide a coach review; no per-user flag limit
+expected_findings:
+  - id: F1
+    title: Auto-hold threshold counts flags from any user, so strangers or coaches can hide a review
+    category: security
+    severity: medium
+    description: >
+      flag() auto-holds an APPROVED review when countByReviewIdAndResolvedAtIsNull reaches the configured
+      threshold (default low). Nothing requires the flaggers to have a booking relationship with the coach
+      or to not be coaches themselves, so a competitor with a few throwaway accounts can take a rival's
+      positive reviews offline until an admin reviews them.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/reviews/service/ReviewFlagService.java
+        symbol: flag
+  - id: F2
+    title: No limit on how many reviews one user can flag per hour
+    category: security
+    severity: low
+    description: >
+      flag() enforces one flag per (review, user) via the unique constraint but nothing limits the number
+      of distinct reviews a single user may flag in a period, so one account can flag every review on the
+      platform in a loop, each flag generating an admin event.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/reviews/service/ReviewFlagService.java
+        symbol: flag
+source: PR #386 description, S-08
+notes: All flags remain recorded and admin-visible after the fix; approve/block unchanged.

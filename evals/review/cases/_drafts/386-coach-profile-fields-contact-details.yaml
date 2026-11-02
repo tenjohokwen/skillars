@@ -1,0 +1,44 @@
+id: 386-coach-profile-fields-contact-details
+kind: pre-fix-snapshot
+fix_pr: 386
+fix_merge: 3542eef7
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep2Request.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java
+summary: Coach profile free-text fields (S-16) accept contact details and unbounded list items
+expected_findings:
+  - id: F1
+    title: displayName, specialties, languages and pack labels are not screened for contact details
+    category: security
+    severity: medium
+    description: >
+      The profile builder requests validate only presence and size on displayName, specialty and language
+      items and pack labels. A coach can put a phone number, email or handle into any of these fields and
+      it is shown on the public profile, bypassing the chat sanitizer entirely.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java
+        symbol: ProfileBuilderStep1Request
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep2Request.java
+        symbol: ProfileBuilderStep2Request
+      - file: src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java
+        symbol: CreateSessionPackTierRequest
+  - id: F2
+    title: Specialty and language items have no per-item size limit; languages list is uncapped
+    category: edge-case
+    severity: low
+    description: >
+      ProfileBuilderStep2Request caps the specialties list at 20 but each item is only @NotBlank, and
+      ProfileBuilderStep1Request.languages has neither a list cap nor an item size. Arbitrarily long
+      strings and lists reach the service and the profile page.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep1Request.java
+        symbol: languages
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep2Request.java
+        symbol: specialties
+source: PR #386 description, S-16
+notes: >
+  The fix rejects rather than redacts (so names are never stored as "[contact details removed]"); a
+  reviewer proposing redaction has still found F1.

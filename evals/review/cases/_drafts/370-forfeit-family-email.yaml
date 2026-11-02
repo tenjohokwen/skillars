@@ -1,0 +1,49 @@
+id: 370-forfeit-family-email
+kind: pre-fix-snapshot
+fix_pr: 370
+fix_merge: de29c71f
+scope:
+  - src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/PlayerNoShowEvent.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java
+  - src/main/java/com/softropic/skillars/platform/notification/service/NotificationCatalog.java
+summary: the paying family is never notified when their session is forfeited (player no-show or late cancel)
+confidence: low
+expected_findings:
+  - id: F1
+    title: Player no-show forfeits the family's payment but only the coach is emailed
+    category: edge-case
+    severity: medium
+    description: >
+      `BookingEmailListener.onPlayerNoShow` sends `PLAYER_NO_SHOW` to `event.getCoachEmail()` only, and
+      `PlayerNoShowEvent` carries no parent email at all (`BookingService.recordNoShowPlayer` does not
+      resolve one). The family loses the session fee or pack session with no notice and no pointer to the
+      dispute window, while every other money-moving booking event (coach cancel, admin cancel, coach
+      no-show) emails the parent.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+        symbol: onPlayerNoShow
+      - file: src/main/java/com/softropic/skillars/platform/booking/contract/PlayerNoShowEvent.java
+        symbol: coachEmail
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: recordNoShowPlayer
+  - id: F2
+    title: A forfeited late cancel by the family sends the family nothing
+    category: edge-case
+    severity: low
+    description: >
+      `BookingEmailListener.onBookingCancelledByParent` emails only the coach. `BookingCancelledByParentEvent`
+      exposes `isForfeit()` and `getParentEmail()`, but no branch uses them, so a cancel inside 24h (or in
+      the post-start grace) that keeps the money produces no confirmation to the payer that the fee was
+      forfeited or how to dispute it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+        symbol: onBookingCancelledByParent
+      - file: src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledByParentEvent.java
+        symbol: isForfeit
+source: PR #370 description
+notes: >
+  Input revision de29c71f^1. This is closer to a product gap than a code defect; kept at low confidence
+  because a notification audit could reasonably flag the asymmetry. Scope includes EmailTemplate and
+  NotificationCatalog so the reviewer can see no forfeit template exists.

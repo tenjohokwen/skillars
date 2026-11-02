@@ -1,0 +1,61 @@
+id: 353-agreed-price-null-fallback
+kind: introducing-diff
+fix_pr: 353
+fix_merge: b6a7945f
+introducing_pr: 335
+introducing_merge: e60141fc
+summary: agreed_price lock falls back to the coach's current price when the coach had no pricing at request time
+confidence: high
+expected_findings:
+  - id: F1
+    title: Accept and charge fall back to the coach's current price when agreed_price is NULL
+    category: logic
+    severity: high
+    description: >
+      `BookingService.resolveSessionPrice` returns `booking.getAgreedPrice()` when present but otherwise
+      calls `currentCoachPrice` and charges that. `createBookingRequest` stores
+      `currentCoachPrice(req.coachId())`, which is null for a coach with no `coach_pricing` row, so every
+      request made while the coach is unpriced is created with `agreed_price = NULL`. If the coach then adds
+      or raises pricing before accepting, the parent is charged a price they never saw. The same fallback is
+      duplicated in `PaymentLifecycleService.batchBookingPrice`.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveSessionPrice
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: batchBookingPrice
+  - id: F2
+    title: Batch creation silently records a zero total and NULL agreed_price for an unpriced coach
+    category: logic
+    severity: medium
+    description: >
+      `BookingBatchService.createBatch` reads the coach price with `.orElse(null)`, writes
+      `batch.setTotalAmount(ZERO * count)` when it is null and stamps `agreed_price = null` on every booking
+      instead of refusing. The parent sees a 0.00 quote (and `BatchPaymentQuoteService` likewise quotes
+      `BigDecimal.ZERO` for a missing price), while the batch will later be charged at whatever the coach's
+      price is at acceptance.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java
+        symbol: coachPricingRepository
+  - id: F3
+    title: Coach duplicate-next-week locks a possibly null price for non-pack bookings
+    category: edge-case
+    severity: low
+    description: >
+      `BookingDuplicationService` sets `newBooking.setAgreedPrice(bookingService.currentCoachPrice(...))`
+      on the non-pack branch with no null check, so a coach without pricing creates a proposal that will be
+      priced only at acceptance time, the same NULL-fallback path as F1.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: setAgreedPrice
+non_findings:
+  - title: Refund path still falls back to the coach's current price in resolveAmountPaid
+    reason: Deliberate; a refund of a row-less pre-V192 booking must not fail the cancellation (PR #353 "Refunds keep the legacy fallback").
+source: PR #353 description, "Gap 1"
+notes: >
+  Confirmed by `git diff e60141fc^1 e60141fc`: #335 added resolveSessionPrice's agreed-price-then-current
+  fallback, currentCoachPrice returning null, and the orElse(null) batch path. Gap 2 of #353 is a separate
+  case (353-excused-cancel-cap-race).

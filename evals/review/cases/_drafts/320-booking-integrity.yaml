@@ -1,0 +1,177 @@
+id: 320-booking-integrity
+kind: pre-fix-snapshot
+fix_pr: 320
+fix_merge: 2f5482c0
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/CreateBatchRequest.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingEvent.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/GdprRequestService.java
+  - src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+summary: Booking integrity audit — batch create parity with single create, erased-player guard, admin suspension bypassing the state machine, updated_at-anchored windows, email listener NPE
+expected_findings:
+  - id: F1
+    title: Batch create stores the client-supplied totalAmount instead of pricing the batch on the server
+    category: security
+    severity: high
+    description: >
+      BookingBatchService.createBatch copies req.totalAmount() straight onto the BookingBatch
+      (falling back to ZERO when null) and CreateBatchRequest declares it as a required
+      @DecimalMin("0.00") field. Nothing recomputes the amount from coach_pricing × slot count,
+      so a parent can submit any non-negative figure and that figure is what the batch carries
+      into the accept/settle flow, where BatchPaymentQuoteService and the accept path price
+      from the coach's pricing row.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/booking/contract/CreateBatchRequest.java
+        symbol: totalAmount
+  - id: F2
+    title: Batch create skips the coach Stripe-readiness check that single create performs
+    category: logic
+    severity: medium
+    description: >
+      BookingService.createBookingRequest refuses a request when
+      paymentGateway.isCoachPaymentReady(coachId) is false (payment.coachStripeNotConfigured).
+      BookingBatchService.createBatch has no equivalent check, so a batch of requests can be
+      created against a coach who cannot be paid and the failure surfaces only at accept time.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+  - id: F3
+    title: Batch create never checks the requested slots against the coach's existing bookings
+    category: logic
+    severity: high
+    description: >
+      createBatch validates slots against availability windows and against each other
+      (duplicate start times, intra-batch overlap) but, unlike createBookingRequest which calls
+      bookingRepository.findOverlappingBookings under the coach row lock, it never looks at the
+      coach's existing REQUESTED/ACCEPTED/CONFIRMED bookings. A batch can therefore be created
+      on top of slots that are already taken, and the conflict is only discovered later.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: findOverlappingBookings
+  - id: F4
+    title: Batch create uses a stricter coach-status gate than single create
+    category: logic
+    severity: low
+    description: >
+      createBatch rejects any coach whose status is not exactly ACTIVE (both before and after
+      the row lock), while createBookingRequest allows ACTIVE, REDUCED and PENDING_REVIEW. A
+      REDUCED coach, who is still shown in search and can receive single bookings, cannot be
+      batch-booked, and the two create paths disagree on who is bookable.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+  - id: F5
+    title: Players with erased or erasure-pending development data can still be booked
+    category: logic
+    severity: high
+    description: >
+      None of the three create paths (BookingService.createBookingRequest,
+      BookingBatchService.createBatch, BookingDuplicationService.duplicateNextWeek) checks
+      PlayerProfile.developmentDataErasedAt or an in-flight child-scoped ERASURE request before
+      inserting a booking. A parent who has asked for their child's data to be erased, or whose
+      child has already been erased, can keep creating bookings that generate new development
+      data for that child.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: duplicateNextWeek
+  - id: F6
+    title: Child erasure request's live-booking check is not serialised with booking creation
+    category: concurrency
+    severity: medium
+    description: >
+      GdprRequestService.requestChildErasure checks bookingRepository.existsByPlayerIdAndStatusIn
+      and then inserts the ERASURE request without holding any lock on the player_profiles row.
+      A booking create that commits between the check and the insert produces a PENDING erasure
+      request alongside a live booking, a state neither side detects.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/GdprRequestService.java
+        symbol: requestChildErasure
+  - id: F7
+    title: Admin coach suspension writes booking status directly, bypassing the state machine and its events
+    category: architecture
+    severity: high
+    description: >
+      AdminCoachEnforcementService.suspendCoach loads the coach's REQUESTED bookings and calls
+      booking.setStatus("CANCELLED") on each, without going through BookingStateMachine (which
+      has no admin cancel event from REQUESTED) and without taking the booking row lock or
+      publishing BookingStatusChangedEvent. Listeners keyed on that event (batch roll-up, SSE
+      push, session-plan cancellation) never learn about the cancellation, so a batch whose
+      bookings were all cancelled this way keeps its old status.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java
+        symbol: suspendCoach
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+        symbol: buildTransitions
+  - id: F8
+    title: Dispute submission window is measured from booking.updatedAt
+    category: logic
+    severity: medium
+    description: >
+      DisputeService compares booking.getUpdatedAt() against now minus disputes.submissionWindowDays.
+      Booking's @PreUpdate stamps updatedAt on every write, so any later unrelated update to a
+      completed booking (a recap edit, a reminder flag, a payout stamp) reopens the dispute window,
+      and a settlement whose row is never touched again closes it from the wrong anchor.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: getUpdatedAt
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+        symbol: updatedAt
+  - id: F9
+    title: Review eligibility maturity is anchored on updatedAt rather than on when the booking completed
+    category: logic
+    severity: medium
+    description: >
+      BookingRepository.findQualifyingCompletedBookings filters COMPLETED bookings with
+      b.updatedAt <= :maturedBefore AND b.updatedAt > :sinceAfter. Because updatedAt moves on
+      any write to the row, a post-completion write (recap edit, payout bookkeeping) pushes a
+      matured booking back out of the window or into a later one, so review eligibility
+      depends on unrelated row activity.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+        symbol: findQualifyingCompletedBookings
+  - id: F10
+    title: List.of with a null email NPEs in reminder and reschedule listeners and silently drops both emails
+    category: edge-case
+    severity: medium
+    description: >
+      BookingEmailListener.onBookingReminder and onRescheduleAccepted build the recipient list
+      with List.of(event.getParentEmail(), event.getCoachEmail()). List.of throws
+      NullPointerException on a null element, so when either party has no email the whole
+      statement fails before any send is enqueued, and the surrounding catch (Exception) logs
+      and swallows it, dropping the other party's email too.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+        symbol: onBookingReminder
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+        symbol: onRescheduleAccepted
+non_findings:
+  - title: DISPUTED, REFUND_PENDING and REFUNDED booking states are unreachable
+    reason: Nothing fires DISPUTE, SETTLE_* or REFUND_PROCESSED; the enum values and DB states are kept on purpose as reserved states, per the fix PR's brief.
+  - title: BookingStateMachine comment says admin/system can cancel from PAUSED
+    reason: Comment-only inaccuracy; the role map is correct and unchanged. Not a code defect.
+source: PR #320 description, items 1-5
+notes: >
+  Item 6 (dead CoachReliabilityStrikeQueuedEvent, stale PAUSED comment) is not a reviewer-detectable
+  defect and is omitted. F1-F4 are split because each is an independent omission in createBatch, but
+  a reviewer who reports "batch create does not mirror single create's validation" in one finding
+  should be credited for all four. F5 lists three anchors because the same omission exists on all
+  three create paths; one finding covering any of them counts.

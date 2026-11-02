@@ -1,0 +1,38 @@
+id: 380-backlog-metrics-query-timeout-and-staleness
+kind: pre-fix-snapshot
+fix_pr: 380
+fix_merge: 1aa2fbea
+confidence: medium
+scope:
+  - src/main/java/com/softropic/skillars/infrastructure/persistence/OperationalBacklogMetrics.java
+summary: Scheduled backlog gauge refresh - unbounded query and silent staleness
+expected_findings:
+  - id: F1
+    title: Backlog refresh query has no statement timeout
+    category: database
+    severity: medium
+    description: >
+      refresh() runs BACKLOGS_SQL through the shared JdbcTemplate with no query timeout. If one of the
+      polled tables is locked (e.g. an ACCESS EXCLUSIVE lock from a long migration), the scheduled call
+      blocks indefinitely holding a pooled connection, and since the scheduler thread never returns the
+      refresh stops for the life of the lock.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/persistence/OperationalBacklogMetrics.java
+        symbol: refresh
+  - id: F2
+    title: Gauges keep stale values with no signal that the refresh stopped working
+    category: architecture
+    severity: low
+    description: >
+      When refresh() throws, the MultiGauge rows keep their last values (deliberately, so an outage does
+      not read as "nothing waiting"), but nothing records when the last successful refresh happened. An
+      operator looking at skillars.backlog.count cannot tell a healthy queue from a gauge frozen since the
+      last failure.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/persistence/OperationalBacklogMetrics.java
+        symbol: refresh
+source: PR #380 description, "Why" / "Change"
+notes: >
+  Follow-up to #378 (which introduced the class). #378 is not in this slice, so kind is snapshot rather
+  than introducing-diff; a curator may re-pair it against #378's merge if that diff contains refresh().
+  Alert-rule and dashboard changes are not findings.

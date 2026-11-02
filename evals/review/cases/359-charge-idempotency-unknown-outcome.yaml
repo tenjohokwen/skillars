@@ -1,0 +1,153 @@
+id: 359-charge-idempotency-unknown-outcome
+kind: pre-fix-snapshot
+fix_pr: 359
+fix_merge: 51f48b6f
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/api/StripeWebhookResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/config/PaymentConfig.java
+  - src/main/java/com/softropic/skillars/platform/payment/config/PaymentProperties.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/PaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/BookingPayment.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/BookingPaymentRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/PaymentCoachSubscription.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/PaymentPlayerSubscription.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditCardSplit.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PaymentPendingSweeper.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+  - src/main/resources/application.yaml
+summary: Stripe charge path — idempotency key collisions, unknown outcomes treated as declines, no post-charge compensation, subscribe double-charge, webhook body limit
+expected_findings:
+  - id: F1
+    title: Batch charge idempotency key collides across two settlements of the same batch
+    category: concurrency
+    severity: high
+    description: >
+      chargeAndCaptureForBatch delegates to chargeAndCapture with the batch id as referenceId, so the key is
+      "pi-{batchId}-{parentId}-{minuteBucket}" with no attempt-specific component. Two acceptAll settlements of
+      one batch within the same bucket (a concurrent second call, or a retry after a partial failure) send
+      different amounts under the same key: Stripe replays the first PaymentIntent and the second set of
+      bookings is confirmed without ever being charged.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: chargeAndCaptureForBatch
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: charge
+  - id: F2
+    title: Any StripeException on a charge is reported as a decline, including timeouts and 5xx
+    category: logic
+    severity: high
+    description: >
+      StripePaymentGateway.charge catches every StripeException and rethrows a plain
+      PaymentGatewayException("payment.lifecycleFailure"). PaymentLifecycleService.handleCreditBasedBooking and
+      onBatchBookingAccepted catch that and decline the booking(s). A network timeout, 5xx, 409 or idempotency
+      error after Stripe captured the money therefore declines the booking while the parent's card is charged,
+      and nothing later reconciles the CAPTURE_PENDING reservation against Stripe. The refund path already
+      classifies these as unknown-outcome; the charge path does not.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: charge
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: handleCreditBasedBooking
+  - id: F3
+    title: A booking is confirmed on any returned PaymentIntent without checking its status
+    category: logic
+    severity: medium
+    description: >
+      charge returns intent.getId() as soon as createPaymentIntent returns, treating the call as "captured".
+      A PaymentIntent that comes back requires_action, processing or requires_payment_method is recorded as a
+      successful capture and the booking is confirmed for free.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java
+        symbol: charge
+  - id: F4
+    title: Single-booking settle after the charge has no compensation and the intent id is not persisted first
+    category: logic
+    severity: high
+    description: >
+      handleCreditBasedBooking calls chargeAndCapture and then persistPaymentSuccess inside the same
+      REQUIRES_NEW listener transaction. If the settle fails after the capture (constraint, optimistic lock,
+      DB outage), the transaction rolls back: the PaymentIntent id is never written to the CAPTURE_PENDING
+      reservation, the booking stays PAYMENT_PENDING and the parent's card share is not returned. The batch
+      path already has a per-booking compensation (declineBatchBookingAfterCharge); the single path does not.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: handleCreditBasedBooking
+  - id: F5
+    title: Batch wallet credit is debited before the card charge, as one batch-level entry
+    category: logic
+    severity: medium
+    description: >
+      onBatchBookingAccepted writes a single BOOKING_DEDUCTION for the whole creditToUse keyed on the batch id
+      before calling chargeAndCaptureForBatch, then reverses it with BOOKING_DEDUCTION_REVERSAL on failure. A
+      crash between the debit and the reversal strands the credit, and a per-booking compensation after the
+      charge cannot tell how much credit that one booking consumed because the deduction is not per booking.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: onBatchBookingAccepted
+  - id: F6
+    title: Card share below Stripe's minimum charge is sent as-is
+    category: edge-case
+    severity: medium
+    description: >
+      CreditCardSplit.of(walletBalance, amount) splits credit first and puts the remainder on the card with no
+      lower bound. A parent whose credit leaves a card share of e.g. 0.20 EUR produces a PaymentIntent under
+      Stripe's per-currency minimum, which Stripe rejects, and the booking is declined. BatchPaymentQuoteService
+      shows the same unchargeable split to the parent.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditCardSplit.java
+        symbol: of
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java
+        symbol: quote
+  - id: F7
+    title: Stripe SDK has no connect/read timeout or retry limit configured
+    category: performance
+    severity: medium
+    description: >
+      PaymentConfig sets only Stripe.apiKey; the SDK's default read timeout (80s) and retry count apply.
+      handleCreditBasedBooking holds the payer's stripe_customers wallet lock across the charge, so a hung
+      Stripe call blocks every other settlement and cash-out for that payer for the full default timeout.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/config/PaymentConfig.java
+        symbol: PaymentConfig
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: walletBalanceForSettlement
+  - id: F8
+    title: Subscribe double-click creates two Stripe subscriptions and the loser's first invoice is not refunded
+    category: concurrency
+    severity: high
+    description: >
+      subscribeCoach/subscribePlayer check assertCanSubscribe on an unlocked read, then call
+      createPaidStripeSubscription with a random per-attempt key ("sub-create-" + UUID) outside any transaction.
+      Two near-simultaneous clicks both pass the check and both create and pay a subscription; the loser of
+      persistCoachSubscription is only cancelled via cancelStripeSubscriptionQuietly, so its already-paid first
+      invoice stays charged.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: subscribeCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: createPaidStripeSubscription
+  - id: F9
+    title: Webhook body size limit is bypassed by a chunked request
+    category: security
+    severity: low
+    description: >
+      StripeWebhookResource checks request.getContentLength() against MAX_WEBHOOK_BODY_BYTES and then calls
+      readAllBytes(). With Transfer-Encoding: chunked there is no Content-Length (-1), the check passes and the
+      whole body is read into memory, so the 1 MB cap does not hold for an unauthenticated endpoint.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/StripeWebhookResource.java
+        symbol: MAX_WEBHOOK_BODY_BYTES
+non_findings:
+  - title: The wallet lock is held across the Stripe charge
+    reason: Documented trade-off (walletBalanceForSettlement javadoc) so a cash-out cannot overdraw between charge and deduction; the PR kept it and only capped the duration.
+source: PR #359 description — review-stripe H1, H2, L5, M1, M2, L3, L2, L4; review-packs-subs M1
+notes: >
+  The pack purchase path (SessionPackPaymentService) also treats any PaymentGatewayException as a failure; the PR
+  explicitly left that to a later chunk, so it is not listed. Rows reserved without a key and credit-only batch
+  confirms remain manual (PaymentPendingSweeper) by design.

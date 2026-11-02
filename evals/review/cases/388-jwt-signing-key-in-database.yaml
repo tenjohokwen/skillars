@@ -1,0 +1,42 @@
+id: 388-jwt-signing-key-in-database
+kind: pre-fix-snapshot
+fix_pr: 388
+fix_merge: 049344d9
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/repo/Secret.java
+  - src/main/java/com/softropic/skillars/platform/security/service/SecretService.java
+  - src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretProvider.java
+summary: JWT HMAC key storage (S-03) - key lives in the database under a derivable encryption password
+expected_findings:
+  - id: F1
+    title: JWT signing key is stored in the database encrypted with a password derived from its own row
+    category: security
+    severity: high
+    description: >
+      The JWT HS512 key is a Secret row in the sec table; Secret.getSecretBytes decrypts encryptedValue
+      with a BasicTextEncryptor whose password is derivePassword(), i.e. the reversed concatenation of
+      busId and version ("jot", "v1") that are constants in the source. Anyone with read access to the
+      table (a backup, a SQL injection, a DBA) can decrypt the key and forge JWTs for any user including
+      ADMIN. The key is also generated and persisted by the app itself at boot, so it is never controlled
+      by the deployment.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/repo/Secret.java
+        symbol: derivePassword
+      - file: src/main/java/com/softropic/skillars/platform/security/repo/Secret.java
+        symbol: getSecretBytes
+      - file: src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java
+        symbol: addSecretToThread
+      - file: src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java
+        symbol: run
+non_findings:
+  - title: JWT key is fetched from the database on every request
+    reason: >
+      The key is read once per process and cached in volatile fields (JwtSecretService.secret,
+      JwtSecretProvider); the PR body confirms there was no per-request DB hit.
+source: PR #388 description, S-03
+notes: >
+  Compose/env changes (JWT_SIGNING_KEY) are part of the fix, not findings. The deploy impact (all users
+  signed out) is a consequence of the fix.

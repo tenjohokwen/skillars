@@ -1,0 +1,110 @@
+id: 358-booking-request-consent
+kind: pre-fix-snapshot
+fix_pr: 358
+fix_merge: 97f527f1
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/api/BookingResource.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingError.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingResponse.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+summary: Booking request lifecycle — who may accept a coach-proposed booking, parent withdrawal, request quotas, concurrent batch accept-all
+expected_findings:
+  - id: F1
+    title: Coach can create a booking for a family and accept it, charging the saved card without consent
+    category: security
+    severity: high
+    description: >
+      BookingDuplicationService.duplicateNextWeek lets a coach create a new REQUESTED booking on a
+      family's behalf, and BookingService.acceptBooking lets the same coach accept any REQUESTED booking
+      they own. Nothing records that the request originated from the coach rather than the parent, so the
+      coach can propose and accept in two calls and BookingAcceptedEvent triggers a charge on the parent's
+      saved card with no parent action at all.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: duplicateNextWeek
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: acceptBooking
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+        symbol: Booking
+  - id: F2
+    title: Parent cannot withdraw a REQUESTED booking
+    category: logic
+    severity: medium
+    description: >
+      BookingStateMachine has no CANCEL_PARENT edge from REQUESTED (only ACCEPT, DECLINE,
+      CANCEL_DUE_TO_PAUSE, CANCEL_ADMIN), so cancelBookingAsParent on a still-pending request fails with a
+      state-transition error. A family that sent a request by mistake, or wants to turn down a
+      coach-proposed one, has no way to remove it until the coach declines or the expiry scheduler sweeps
+      it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+        symbol: REQUESTED
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsParent
+  - id: F3
+    title: Unlimited free REQUESTED holds let a parent black out a coach's calendar
+    category: logic
+    severity: medium
+    description: >
+      createBookingRequest and BookingBatchService.createBatch write REQUESTED rows with no cap on how
+      many pending requests one parent may hold with a coach and no limit on how far ahead a slot may
+      be. REQUESTED rows cost nothing but still occupy slots, so a parent can hold a coach's whole
+      calendar indefinitely. The repository method countInFlightBookings that looks intended for such a
+      check is unused, is keyed on the player rather than the parent, and also counts already-paid
+      bookings.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: createBatch
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+        symbol: countInFlightBookings
+  - id: F4
+    title: Concurrent acceptAll on one batch can split it and settle twice
+    category: concurrency
+    severity: high
+    description: >
+      BookingBatchService.acceptAll reads the batch status unlocked, checks it is PENDING, and then loops
+      the per-booking accepts each in its own REQUIRES_NEW transaction; the batch row is only locked in
+      the trailing transaction. Two concurrent calls for the same batch both pass the PENDING check, each
+      accepts the REQUESTED bookings the other has not yet claimed, and both publish settlement events
+      for the batch, so the payment pipeline sees two settlements for one batch.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: acceptAll
+  - id: F5
+    title: Repeat-next-week only works for pack-paid sessions and can attach another parent's pack
+    category: logic
+    severity: medium
+    description: >
+      duplicateNextWeek calls PackSessionService.findActivePackId, which throws
+      OperationNotAllowedException when the player has no active pack with the coach, so the
+      packId == null price-lock branch below it is unreachable and a per-session (card) booking can
+      never be repeated. findActivePackId is also keyed on (playerId, coachId) only, so when the player
+      has packs bought by different payers the duplicate may be drawn on a pack that does not belong to
+      the booking's own parent.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: duplicateNextWeek
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: findActivePackId
+non_findings:
+  - title: acceptAll does not hold the batch row lock across the per-booking loop
+    reason: >
+      Deliberate: the per-booking REQUIRES_NEW transactions and updateBatchStatusFromBooking lock the
+      same row and would self-deadlock. The defect (F4) is the missing claim before the loop, not the
+      absence of a lock held through it.
+  - title: acceptAll's suspended-coach check is unlocked
+    reason: Documented in the code; the authoritative locked check is in acceptOneBooking.
+source: PR #358 description, H3 / M1 / M2 / M3+H1 / packs-subs L2
+notes: >
+  All findings anchored at 97f527f1^1. The accept-after-start guard and the expiry query are
+  explicitly left to C1 (#360) and are not findings here. The frontend changes are consequences of the
+  backend fixes and are out of scope.

@@ -1,0 +1,169 @@
+id: 362-pack-pause-freeze-suspension
+kind: pre-fix-snapshot
+fix_pr: 362
+fix_merge: 4db90562
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/contract/ConflictingBookingItem.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/SessionPackPurchaseResponse.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundClawbackService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackForfeitureScheduler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+summary: session pack pause — refund loophole and wrong conflict scope; disputed/externally refunded packs stay spendable; suspended coach's packs
+expected_findings:
+  - id: F1
+    title: A pack pause cancels card/credit/other-pack bookings with a full refund
+    category: logic
+    severity: high
+    description: >
+      pausePackTransactional finds conflicts with findConflictingBookingsForPause(playerId, coachId, window),
+      which matches every booking of that player with that coach in the window regardless of
+      session_pack_purchase_id. cancelDueToPause then checks only parent and coach, and refunds
+      resolveAmountPaid for any captured non-pack booking. A parent can therefore pause a cheap pack to
+      cancel an unrelated card-paid or other-pack session and receive 100% back, bypassing the 24h
+      cancellation rule.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+        symbol: findConflictingBookingsForPause
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelDueToPause
+  - id: F2
+    title: Pause may start earlier today and is not refused inside 24h of a paid session
+    category: logic
+    severity: high
+    description: >
+      The start check only rejects pauseStartDate.isBefore(todayInCoachZone), so a pause can begin at any
+      instant of the current day, including hours already past. Combined with the conflict cancellation this
+      lets a parent cancel a paid session minutes before it starts (or after it should have started) with a
+      full refund, where a normal parent cancel would be a forfeit. No conflict item is marked as
+      non-cancellable and no 24h check exists in pausePackTransactional or cancelDueToPause.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: pausePackTransactional
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelDueToPause
+  - id: F3
+    title: Only paused_until is stored, so a pause scheduled for later blocks the pack immediately
+    category: logic
+    severity: medium
+    description: >
+      SessionPackPurchase has pausedUntil but no pause start. deductSession, createBookingRequest,
+      findActivePacks, findCoachIdsWithActivePack and computeStatus all treat "pausedUntil > now" as paused.
+      A pause scheduled to begin next week therefore makes the pack unusable from the moment it is saved: pending
+      accepts fail with payment.packPaused, the pack disappears from the active list, and expiresAt has already
+      been extended by the full duration.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: deductSession
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java
+        symbol: findActivePacks
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+  - id: F4
+    title: A card dispute or full external refund on a pack purchase leaves its sessions spendable
+    category: logic
+    severity: high
+    description: >
+      onDisputeCreated and onDisputeClosed locate the pack purchases funded by the PaymentIntent only to adjust
+      payouts and alert; the SessionPackPurchase itself is never frozen while the dispute is open and its
+      remaining sessions are not revoked when the dispute is lost. onChargeRefunded only alerts on an external
+      refund. A payer who charges back or is refunded from the Stripe Dashboard keeps booking sessions on a
+      pack they no longer paid for.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+        symbol: onDisputeCreated
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/ChargeDisputeWebhookService.java
+        symbol: onChargeRefunded
+  - id: F5
+    title: A pack can be bought from a suspended or non-bookable coach
+    category: logic
+    severity: medium
+    description: >
+      purchasePack validates the player, the tier's active flag and the payment method, then charges the card.
+      It never looks at the coach profile's status, although BookingService.requireBookableCoachStatus exists
+      and is applied to every booking request. A parent is charged for a pack on a suspended coach they cannot
+      book, and the money sits in a pack nobody can use.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: purchasePack
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: requireBookableCoachStatus
+  - id: F6
+    title: UPHOLD_COACH re-deduct fails on a paused pack
+    category: edge-case
+    severity: medium
+    description: >
+      RefundClawbackService.rededuct takes the session back from the pack through the ordinary deduction, which
+      throws payment.packPaused while pausedUntil is in the future. A dispute resolved in the coach's favour
+      while the parent has paused the pack cannot claw the restored session back, and the resolution fails or
+      leaves the parent with the extra session.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundClawbackService.java
+        symbol: rededuct
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: deductSession
+  - id: F7
+    title: A restore that lands after the pack expired gives back a worthless session
+    category: edge-case
+    severity: medium
+    description: >
+      restoreSessionForBooking increments remainingSessions after claiming the V195 marker without checking
+      expiresAt. The restore runs on the outbox after the cancellation commits; if the pack has expired by then
+      (coach cancellation, coach no-show or admin cancellation shortly before expiry), the parent's session goes
+      back into a pack that can no longer be used and no wallet credit is issued.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: restoreSessionForBooking
+  - id: F8
+    title: Forfeiture scheduler loads every expired pack in one unpaged query
+    category: performance
+    severity: low
+    description: >
+      forfeitExpiredPacks calls findExpiredNotYetNotified(now), a List query with no Pageable, then iterates.
+      As the number of expired-but-unstamped packs grows (rows deliberately left unstamped when the coach is
+      missing are re-read every hour), each run loads the whole set into memory.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackForfeitureScheduler.java
+        symbol: forfeitExpiredPacks
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java
+        symbol: findExpiredNotYetNotified
+  - id: F9
+    title: getSavedPaymentMethod holds a read-only transaction across the Stripe call
+    category: performance
+    severity: low
+    description: >
+      getSavedPaymentMethod is annotated @Transactional(readOnly = true) and performs a Stripe API round trip
+      inside it, pinning a database connection for the duration of the remote call. Under Stripe latency the
+      pool drains for a method that needs no transactional read.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: getSavedPaymentMethod
+  - id: F10
+    title: A pack bought with a new card does not become the subscription's payment method
+    category: edge-case
+    severity: low
+    description: >
+      purchasePack accepts a paymentMethodId and attaches it via getOrCreateStripeCustomer, but unlike
+      POST /save-payment-method it never schedules the subscription payment-method sync. A parent who pays for a
+      pack with a replacement card keeps a past-due or paused subscription on the old card.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: purchasePack
+non_findings:
+  - title: deductSession does not re-check expiry
+    reason: Documented policy ("book within validity; the session may take place later"); the expiry check belongs to createBookingRequest.
+  - title: Expired-pack restore with reason PARENT_CANCELLATION still restores to the pack
+    reason: Explicitly deferred to the spend-only-credit chunk (C6) by this PR.
+source: PR #362 description — review-cancel-refund H1/M4, review-packs-subs H1/H2/H3/M3/L1/L3/L4/L7
+notes: >
+  Not anchored, kept here: a coach suspension (CoachSuspendedEvent from AdminCoachEnforcementService) has no
+  payment listener, so unexpired packs of a suspended coach keep their money and later restores go back into
+  the unusable pack. The missing listener has no symbol inside the fix's scope (AdminCoachEnforcementService was
+  not touched), so a reviewer of this scope can only infer it from F5. F3's computeStatus also reports PAUSED for
+  a future-scheduled pause.

@@ -1,0 +1,58 @@
+id: 398-ltd-admin-full-admin-rights
+kind: pre-fix-snapshot
+fix_pr: 398
+fix_merge: cd7136bc
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminAppealResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminBookingResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminCoachEnforcementResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminDisputeResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminGdprResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminModerationResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/api/AdminUserResource.java
+  - src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java
+  - src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java
+  - src/main/java/com/softropic/skillars/platform/notification/api/SesCutoverPreflightResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java
+  - src/main/java/com/softropic/skillars/platform/video/api/AdminVideoResource.java
+  - src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java
+summary: Admin role tiers (S-28) - LTD_ADMIN has the full admin surface; user deletion open to any role
+expected_findings:
+  - id: F1
+    title: ROLE_LTD_ADMIN is granted every admin endpoint, including finance, config, GDPR and all state changes
+    category: security
+    severity: high
+    description: >
+      SecurityConstants.HAS_ADMIN_ROLE is "hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')" and it is
+      the only admin expression used, applied at class level on AdminFinanceResource and per method on
+      ConfigResource, AdminGdprResource, AdminDisputeResource and the other admin resources. A "limited"
+      admin can release held payouts, change platform config, list GDPR requests, resolve disputes and
+      suspend users exactly like a full ADMIN; the tier is nominal.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java
+        symbol: HAS_ADMIN_ROLE
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java
+        symbol: AdminFinanceResource
+      - file: src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java
+        symbol: ConfigResource
+      - file: src/main/java/com/softropic/skillars/platform/admin/api/AdminGdprResource.java
+        symbol: AdminGdprResource
+  - id: F2
+    title: UserAdminService.deleteUserInformation is authorised for any authenticated role
+    category: security
+    severity: high
+    description: >
+      deleteUserInformation is annotated @PreAuthorize(HAS_ANY_ROLE), which includes USER, COACH, PARENT
+      and PLAYER, while the sibling lockUserAccount requires an admin role. Any authenticated caller that
+      reaches this service method can delete another user's information by login; it also has no
+      production callers.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java
+        symbol: deleteUserInformation
+source: PR #398 description, "Summary"
+notes: >
+  References to #392/#395/#396 in the PR body are coordination notes, not introducers. Which endpoints
+  stay shared (reads/moderation) vs ADMIN-only is an owner decision; score F1 on "LTD_ADMIN == ADMIN
+  everywhere", not on the exact split. No grant/revoke endpoint was added (follow-up).

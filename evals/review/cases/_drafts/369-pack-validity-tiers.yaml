@@ -1,0 +1,31 @@
+id: 369-pack-validity-tiers
+kind: pre-fix-snapshot
+fix_pr: 369
+fix_merge: 6f2715c7
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+  - src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java
+  - src/main/resources/db/migration/V139__baseline_seed_data.sql
+summary: pack expiry is hard-coded to 60 days while the seeded pack.expiry.days.tier1..4 config keys are never read
+confidence: medium
+expected_findings:
+  - id: F1
+    title: Pack expiry hard-coded to 60 days; seeded tier config keys are dead
+    category: logic
+    severity: medium
+    description: >
+      `SessionPackPaymentService.createPurchase` sets `expiresAt = Instant.now().plus(60, DAYS)` for every
+      pack regardless of size. `V139__baseline_seed_data.sql` seeds `pack.expiry.days.tier1..tier4`
+      (90/180/365/548 days by session count) but no code reads them and `ConfigBounds` does not register
+      them, so an admin editing those values in `/admin/config` changes nothing. An 11-session pack expires
+      in 60 days instead of the documented 548.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: createPurchase
+      - file: src/main/resources/db/migration/V139__baseline_seed_data.sql
+        symbol: pack.expiry.days.tier1
+source: PR #369 description
+notes: >
+  Input revision 6f2715c7^1. Detectable only if the reviewer cross-references the seed data or the
+  provisioning checklist; medium confidence that a code-only audit raises it.

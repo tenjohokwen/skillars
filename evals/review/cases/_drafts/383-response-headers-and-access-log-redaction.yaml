@@ -1,0 +1,43 @@
+id: 383-response-headers-and-access-log-redaction
+kind: pre-fix-snapshot
+fix_pr: 383
+fix_merge: 980eff33
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+  - src/main/java/com/softropic/skillars/infrastructure/web/Slf4jAccessLogValve.java
+  - src/main/java/com/softropic/skillars/infrastructure/config/AccessLogConfig.java
+summary: Security response headers (S-22) and access-log token leakage (S-23)
+expected_findings:
+  - id: F1
+    title: X-Frame-Options is disabled with no replacement framing or referrer policy
+    category: security
+    severity: medium
+    description: >
+      SecurityConfiguration configures http.headers with frameOptions disabled and nothing else, so
+      responses carry no X-Frame-Options, no Content-Security-Policy frame-ancestors, no Referrer-Policy,
+      no Permissions-Policy and no explicit HSTS. The SPA embeds no iframes, so the disable has no
+      purpose and leaves every page clickjackable.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+        symbol: filterChain
+  - id: F2
+    title: Access log writes query strings, including tokens and keys, verbatim
+    category: security
+    severity: medium
+    description: >
+      Slf4jAccessLogValve.log forwards the formatted entry unchanged, and the configured pattern includes
+      %r (full request line with query string) and the Referer header. Activation keys, reset keys, OAuth
+      codes/state and signed-URL parameters passed as query parameters are therefore written to the
+      access log and shipped to Loki.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/web/Slf4jAccessLogValve.java
+        symbol: log
+      - file: src/main/java/com/softropic/skillars/infrastructure/config/AccessLogConfig.java
+        symbol: AccessLogConfig
+source: PR #383 description, S-22 / S-23
+notes: >
+  S-21 was already fixed on master (no change). S-25 (fail-fast on blank/dev-default deployed secrets)
+  introduced a brand-new DeployedSecretsValidator; at the input revision there is no class or symbol to
+  anchor "no validation exists" to, so it is recorded here rather than as a finding. A reviewer scoped to
+  these files would not reach it anyway.

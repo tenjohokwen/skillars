@@ -1,0 +1,84 @@
+id: 321-video-approval-emails
+kind: pre-fix-snapshot
+fix_pr: 321
+fix_merge: b5851405
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/video/service/VideoApprovalService.java
+  - src/main/java/com/softropic/skillars/platform/video/contract/event/VideoApprovalParentNotificationEvent.java
+  - src/main/java/com/softropic/skillars/platform/video/contract/event/VideoApprovalOwnerNotificationEvent.java
+  - src/main/java/com/softropic/skillars/platform/video/contract/event/VideoModerationOwnerNotificationEvent.java
+  - src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+  - src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java
+  - src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java
+  - src/main/java/com/softropic/skillars/platform/notification/service/NotificationCatalog.java
+summary: Video approval and moderation owner notifications — events with no consumer, event published outside the transaction, owner email addressed to a non-email ownerId and published without a transaction
+expected_findings:
+  - id: F1
+    title: Parental-approval notification events have no listener, so parents are never told a video awaits approval
+    category: logic
+    severity: high
+    description: >
+      VideoApprovalService publishes VideoApprovalParentNotificationEvent when a minor's video is
+      gated HIDDEN and VideoApprovalOwnerNotificationEvent on approve/reject. Both event classes
+      say they are consumed by VideoApprovalEmailListener, but no class with that name exists and
+      nothing in the notification module subscribes to either event. The only notice that releases
+      a HIDDEN video is never sent.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/contract/event/VideoApprovalParentNotificationEvent.java
+        symbol: VideoApprovalEmailListener
+      - file: src/main/java/com/softropic/skillars/platform/video/service/VideoApprovalService.java
+        symbol: VideoApprovalParentNotificationEvent
+  - id: F2
+    title: Approval owner event is published after the TransactionTemplate commits
+    category: architecture
+    severity: medium
+    description: >
+      VideoApprovalService.approveVideo runs the approval-row and video-state writes inside
+      transactionTemplate.execute(...) and only afterwards calls
+      publisher.publishEvent(new VideoApprovalOwnerNotificationEvent(...)). Any
+      @TransactionalEventListener (the project's outbox pattern uses BEFORE_COMMIT with
+      fallbackExecution=false) would never see it because no transaction is active at publish
+      time, so even a correctly written listener could not enqueue a durable notification.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/service/VideoApprovalService.java
+        symbol: approveVideo
+  - id: F3
+    title: Video-flagged owner email is addressed to ownerId as if it were an email address
+    category: logic
+    severity: medium
+    description: >
+      VideoModerationEmailListener.onOwnerNotification builds a Recipient with
+      recipient.setEmail(event.ownerId()), under a comment claiming ownerId is the user's
+      login/email. Video.ownerId is a CoachProfile UUID or a PlayerProfile id (see
+      ModerationOrchestrationService.runMinorSafetyGate parsing it as a Long or UUID), so the
+      envelope is addressed to a non-address and the owner is never told their video was flagged.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java
+        symbol: onOwnerNotification
+      - file: src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+        symbol: notifyOwner
+  - id: F4
+    title: Owner notification Envelope is published from the @Async moderation pipeline with no transaction
+    category: architecture
+    severity: medium
+    description: >
+      ModerationOrchestrationService.notifyOwner is called from the @Async("moderationTaskExecutor")
+      pipeline outside any transaction, and VideoModerationEmailListener.onOwnerNotification
+      re-publishes a raw Envelope event. The mail and in-app inbox listeners for Envelope are
+      @TransactionalEventListener(fallbackExecution=false), so with no active transaction the
+      Envelope is dropped; the message is never durably enqueued even if the recipient were valid.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/VideoModerationEmailListener.java
+        symbol: onOwnerNotification
+      - file: src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+        symbol: notifyOwner
+non_findings:
+  - title: Parent-managed minors with no login cannot upload, so the approval gate is unreachable today
+    reason: Data-model limitation acknowledged in the fix PR as needing a product decision; the gate code is intended and left as is.
+source: PR #321 description, items 1 and 2 ("Your video was flagged" email)
+notes: >
+  F3 and F4 are two defects on the same code path; a reviewer who reports only one of them has still
+  found a real bug and should be scored on that one. The admin-alert path in the same listener
+  (adminAlertEnvelope) uses a configured admin address and a direct MailManager call, so it is not
+  affected and should not be flagged.

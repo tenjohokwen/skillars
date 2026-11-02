@@ -1,0 +1,52 @@
+id: 323-reviews-role-and-stuck-pending
+kind: pre-fix-snapshot
+fix_pr: 323
+fix_merge: be46d7bb
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/reviews/api/ReviewResource.java
+  - src/main/java/com/softropic/skillars/platform/reviews/service/ReviewSubmissionService.java
+  - src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java
+  - src/main/java/com/softropic/skillars/platform/reviews/repo/CoachReviewRepository.java
+  - src/main/java/com/softropic/skillars/platform/reviews/contract/HeldReason.java
+summary: Reviews — author role derived from token authorities (dual-role users rejected) and PENDING reviews that never get a verdict are stuck with no recovery path
+expected_findings:
+  - id: F1
+    title: Author role is taken from token authorities with COACH winning, so a COACH+PARENT user cannot review
+    category: logic
+    severity: medium
+    description: >
+      ReviewResource.resolveRole returns "COACH" if the authentication holds ROLE_COACH, then
+      "PARENT", else "PLAYER", and submitReview passes that string to
+      ReviewSubmissionService.submitReview, which maps it to AuthorRole and rejects COACH with
+      AUTHOR_ROLE_NOT_ALLOWED. A user who is both a coach and a parent (allowed by the @PreAuthorize
+      HAS_PARENT_OR_PLAYER_ROLE) is resolved as COACH and refused, even though their relation to the
+      reviewed coach is as the parent of a trained child. The role should come from the booking
+      relation that makes the author eligible, not from which authorities they hold.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/reviews/api/ReviewResource.java
+        symbol: resolveRole
+      - file: src/main/java/com/softropic/skillars/platform/reviews/service/ReviewSubmissionService.java
+        symbol: submitReview
+  - id: F2
+    title: A review whose moderation write fails stays PENDING forever with no sweeper and no admin visibility
+    category: edge-case
+    severity: medium
+    description: >
+      ReviewModerationService.handleReviewSubmitted runs AFTER_COMMIT; if the status write throws
+      (lock timeout, DB error, process crash between the submit commit and the listener) the
+      exception is swallowed with a comment that the status "will be resolved via admin queue", but
+      the admin queue lists UNDER_REVIEW rows only and there is no scheduled job that re-examines
+      PENDING reviews (messaging has MessageModerationSweeper; reviews has nothing). Such a review
+      is never published, never held, and never surfaces to anyone.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/reviews/service/ReviewModerationService.java
+        symbol: handleReviewSubmitted
+source: PR #323 description, item 2
+notes: >
+  The coach self-review guard ("a coach could review their own profile as the parent of a child they
+  trained") only becomes reachable once the role is derived from the booking relation; at the input
+  revision a COACH principal is rejected outright by resolveRole, so it is not a finding here. The
+  HeldReason.MANUAL value is dead (never written) — dead code, not a defect. A reviewer who flags
+  that the admin queue is UNDER_REVIEW-only without also noting the PENDING orphan path has found
+  half of F2; score as a partial match.

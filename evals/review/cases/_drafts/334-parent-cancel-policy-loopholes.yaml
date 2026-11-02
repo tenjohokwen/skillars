@@ -1,0 +1,75 @@
+id: 334-parent-cancel-policy-loopholes
+kind: pre-fix-snapshot
+fix_pr: 334
+fix_merge: 5b08b557
+confidence: medium
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/CoachCancellationHistoryRepository.java
+summary: refund/strike policy loopholes in parent late-cancel, reschedule-then-cancel and self-declared excused coach cancellations
+expected_findings:
+  - id: F1
+    title: Parent cancel becomes fully refundable one second after the session start
+    category: logic
+    severity: medium
+    description: >
+      In cancelBookingAsParent, refundEligible is true when payment was captured and either the
+      start is more than 24h away or Instant.now() is after requestedStartTime. A booking inside
+      the <24h forfeit window therefore flips to 100% refundable the instant its start time
+      passes while it is still CONFIRMED/UPCOMING. Since the coach cannot start the session
+      before its start time, a parent who waits until start+1s gets the full refund the forfeit
+      window was meant to deny, with no grace period and no coach strike.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsParent
+  - id: F2
+    title: Reschedule resets the 24h notice window, so a late booking can be laundered into a refundable one
+    category: logic
+    severity: medium
+    description: >
+      The 24h refund rule in cancelBookingAsParent is measured only against the booking's current
+      requestedStartTime. RescheduleService.acceptRescheduleShared overwrites requestedStartTime
+      and requestedEndTime with the proposed slot and keeps no record of the original start. A
+      parent inside the forfeit window can therefore propose a later slot, have it accepted, and
+      then cancel more than 24h before the new time for a full refund of a session they would
+      otherwise have forfeited.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsParent
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+        symbol: acceptRescheduleShared
+      - file: src/main/java/com/softropic/skillars/platform/booking/repo/Booking.java
+        symbol: requestedStartTime
+  - id: F3
+    title: Self-declared excused cancel reasons never strike, with no frequency cap
+    category: logic
+    severity: medium
+    description: >
+      CancellationRefundService.onBookingCancelledByCoach skips the strike whenever the coach's
+      own cancelReason is in EXCUSED_REASONS (MUTUAL_AGREEMENT, HEALTH_MEDICAL, FAMILY_EMERGENCY,
+      WEATHER). The reason is free text chosen by the coach and is not verified, and the
+      cancellation history that is saved is never consulted. A coach can cancel every booking
+      with an excused reason indefinitely and never accumulate a reliability strike.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: onBookingCancelledByCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: EXCUSED_REASONS
+non_findings:
+  - title: recordNoShowCoach accepts a report from start+0s (full refund plus strike)
+    reason: Known, acknowledged as an open risk in PR #334 and deliberately out of scope there.
+  - title: After-start parent cancel issues no coach strike
+    reason: Intended; the after-start path is refund-only by design (Deferred-64 AC4) and #334 kept that.
+source: PR #334 description, Problems 1-3
+notes: >
+  Input revision 394a9c17 (= 5b08b557^1, PR #333's merge). All three are policy loopholes rather
+  than crashes; the thresholds that close them (30-min grace, earlier-of original/current start,
+  3 excused per 90 days) were owner decisions, so a reviewer can only be expected to flag the
+  loophole, not the numbers. Hence severity medium and confidence medium. Verified at the input
+  revision: cancelBookingAsParent line ~1101 has the `isAfter(now+24h) || now.isAfter(start)`
+  expression; Booking has requestedStartTime but no original-start field; acceptRescheduleShared
+  lines ~443-446 setRequestedStartTime/EndTime then save; EXCUSED_REASONS at
+  CancellationRefundService line 27 gates issueStrikeSafely with no count query.

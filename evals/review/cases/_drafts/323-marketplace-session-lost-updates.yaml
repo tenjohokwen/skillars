@@ -1,0 +1,110 @@
+id: 323-marketplace-session-lost-updates
+kind: pre-fix-snapshot
+fix_pr: 323
+fix_merge: be46d7bb
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchSpecification.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+  - src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java
+  - src/main/java/com/softropic/skillars/platform/session/repo/Session.java
+  - src/main/java/com/softropic/skillars/platform/session/repo/SessionRepository.java
+  - src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+summary: Marketplace search language filter applied after paging with a narrower status set; unlocked full-row saves on CoachProfile and Session (no @Version) losing concurrent writes
+expected_findings:
+  - id: F1
+    title: Language filter is applied in memory after the page is fetched, so pages are short and totals come from a second query
+    category: logic
+    severity: medium
+    description: >
+      CoachSearchService.searchCoaches runs the paged Specification query first and then
+      applyLanguageFilter removes non-matching coaches from profilePage.getContent(). A page of
+      size 20 can come back with 0-20 rows depending on how many of that DB page speak the
+      language, and totalElements is taken from a separate countByLanguageAndCity, so page count
+      and hasNext disagree with what the page actually contains; matching coaches on later DB
+      pages are skipped entirely when an earlier page is nearly empty.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchService.java
+        symbol: applyLanguageFilter
+  - id: F2
+    title: Language queries use status = 'ACTIVE' while the search specification also admits REDUCED
+    category: logic
+    severity: low
+    description: >
+      CoachSearchSpecification.isActive() includes CoachProfileStatus.ACTIVE and REDUCED, but the
+      native findIdsByLanguage and countByLanguageAndCity queries in CoachProfileRepository filter
+      WHERE status = 'ACTIVE'. A REDUCED coach appears in an unfiltered search but vanishes as soon
+      as a language filter is set, and is excluded from the total.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+        symbol: findIdsByLanguage
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachSearchSpecification.java
+        symbol: isActive
+  - id: F3
+    title: saveStep5 writes the whole unlocked CoachProfile row to set photoUrl
+    category: concurrency
+    severity: medium
+    description: >
+      CoachProfileService.saveStep5 loads the profile with requireProfile (no lock), sets photoUrl
+      and calls coachProfileRepository.save(profile). CoachProfile has neither @Version nor
+      @DynamicUpdate, so Hibernate issues a full-row UPDATE from the stale snapshot; a status
+      change (admin suspension, strike-driven REDUCED, verification tier) committed by another
+      transaction between the load and the save is silently reverted.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java
+        symbol: saveStep5
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfile.java
+        symbol: CoachProfile
+  - id: F4
+    title: Photo-confirm listener performs an unlocked full-row CoachProfile save
+    category: concurrency
+    severity: medium
+    description: >
+      CoachProfilePhotoEventListener loads the profile via findByUserId inside the file-storage
+      confirm transaction, sets photoUrl and calls save(profile). With no @Version/@DynamicUpdate
+      and no row lock, every other column is rewritten from the loaded snapshot, so a concurrent
+      status or tier write to the same coach is lost, the same way as in saveStep5.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java
+        symbol: setPhotoUrl
+  - id: F5
+    title: updateSession edits an unlocked Session with no @Version, racing the completion listener
+    category: concurrency
+    severity: medium
+    description: >
+      SessionPlanService.updateSession loads the Session with findById, checks it is not
+      COMPLETED/CANCELLED, mutates the plan and calls save(session). Session has no @Version and
+      SessionRepository exposes no locking read, so a BookingCompletedEvent that marks the same plan
+      COMPLETED between the check and the save is overwritten by the coach's full-row save and the
+      plan reverts to an editable status after its booking completed.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+        symbol: updateSession
+      - file: src/main/java/com/softropic/skillars/platform/session/repo/Session.java
+        symbol: Session
+  - id: F6
+    title: Booking-completion and terminal listeners write the Session with unlocked full-row saves
+    category: concurrency
+    severity: low
+    description: >
+      handleBookingCompleted and handleBookingTerminalNonCompletion each load the plan, set the
+      status and call sessionRepository.save(session) wrapped in a catch that only logs. Without
+      a lock, a conditional UPDATE or a version column, a concurrent coach edit can be clobbered
+      by the listener's full-row write (or the listener's status flip lost to the edit), and the
+      catch hides the failure.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+        symbol: handleBookingCompleted
+      - file: src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java
+        symbol: handleBookingTerminalNonCompletion
+source: PR #323 description, items 3, 4, 5
+notes: >
+  Missing @Version/@DynamicUpdate on CoachProfile and Session is the root cause of F3-F6 and was
+  deliberately left for a later story (added in #330); a reviewer who reports the missing version
+  column as the finding has found F3-F6 and should be credited. Item 6 (dead getOrCreateDraft, stale
+  minRating and PRO/ELITE comments) is omitted as non-defect. The deletePhoto and publishProfile
+  paths in CoachProfileService carry comments acknowledging the same full-row-save hazard; flagging
+  them is a correct observation, not a false positive.

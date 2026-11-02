@@ -1,0 +1,123 @@
+id: 376-completion-dispute-integrity
+kind: pre-fix-snapshot
+fix_pr: 376
+fix_merge: 710dbca4
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+  - src/main/java/com/softropic/skillars/platform/admin/repo/DisputeRepository.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/UnresolvedSessionSweeperService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutEnqueueListener.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+summary: Session completion, no-show and dispute flows - ways a coach who did not show can shut out the family's remedies
+expected_findings:
+  - id: F1
+    title: A quick-completed booking cannot be disputed by the family
+    category: logic
+    severity: high
+    description: >
+      initiateQuickComplete moves an UPCOMING booking to COMPLETED_PENDING_CONFIRMATION at start+0 with
+      no live session. DisputeService.raiseDispute only accepts ELIGIBLE_STATUSES (COMPLETED, CANCELLED*,
+      NO_SHOW*) plus LIVE_STATUSES (IN_PROGRESS, PAUSED); COMPLETED_PENDING_CONFIRMATION is in neither,
+      although the state machine has a DISPUTE transition from it. The parent's only options are to
+      confirm or wait for the sweeper to pay the coach.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: raiseDispute
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: ELIGIBLE_STATUSES
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: initiateQuickComplete
+  - id: F2
+    title: A coach no-show cannot be reported once the coach quick-completed
+    category: logic
+    severity: high
+    description: >
+      recordNoShowCoach requires the NO_SHOW_COACH transition, which the state machine only offers from
+      UPCOMING. A coach who never showed can press Quick Complete at the start time, moving the booking to
+      COMPLETED_PENDING_CONFIRMATION, after which the parent's no-show report is refused and the sweeper
+      eventually pays the coach.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: recordNoShowCoach
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+        symbol: buildTransitions
+  - id: F3
+    title: A live session ended seconds after start completes and pays out without parent confirmation
+    category: logic
+    severity: high
+    description: >
+      endSession accepts any IN_PROGRESS/PAUSED booking regardless of how long it ran, and a LIVE-mode
+      wrap-up then completes the booking and enqueues the payout with no parent confirmation window.
+      A coach can press Start then End within a minute and be paid for the full session; the family
+      gets no chance to confirm or object first.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: endSession
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: submitWrapUp
+  - id: F4
+    title: Parent confirm before the coach's wrap-up transitions the booking then fails with 404
+    category: logic
+    severity: low
+    description: >
+      confirmCompletion transitions the booking to COMPLETED first and only then loads
+      SessionCompletionData, throwing ResourceNotFoundException when the coach has not yet submitted a
+      wrap-up. The transition is already applied in the same transaction, so the outcome depends on
+      rollback semantics, and the parent sees a 404 for a legitimate action with no event published.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: confirmCompletion
+  - id: F5
+    title: Coach cancel after the start of a never-started session with an excused reason avoids any strike
+    category: logic
+    severity: medium
+    description: >
+      cancelBookingAsCoach accepts any reason at any time before completion and
+      onBookingCancelledByCoach classifies strictly by reason: an excused reason records history only and
+      counts toward the excused cap. A coach who did not show up can cancel after the start time with
+      WEATHER or MUTUAL_AGREEMENT and avoid the COACH_NO_SHOW strike a parent-reported no-show would
+      produce; the event does not even carry whether the cancel was after the start.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: onBookingCancelledByCoach
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsCoach
+  - id: F6
+    title: Refund-eligible parent late cancel after start records no coach no-show strike
+    category: logic
+    severity: medium
+    description: >
+      cancelBookingAsParent treats a parent cancel after start+grace on a never-started UPCOMING booking
+      as refund-eligible (the coach did not start), but publishes only BookingCancelledByParentEvent,
+      which has no listener issuing a coach strike. A parent who cancels instead of using the no-show
+      report gets the refund while the coach's reliability record stays clean.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsParent
+  - id: F7
+    title: One open dispute per booking lets the coach's dispute block the family's, and nothing caps repeat disputes
+    category: logic
+    severity: medium
+    description: >
+      raiseDispute refuses a second dispute while findOpenByBookingId returns one, regardless of who
+      raised it, so a coach who disputes first (e.g. contesting a no-show claim) locks the family out
+      until an admin resolves. Once resolved, there is no limit on how many disputes a party may raise
+      on the same booking, so either side can keep re-raising and keep the payout frozen.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: raiseDispute
+      - file: src/main/java/com/softropic/skillars/platform/admin/repo/DisputeRepository.java
+        symbol: findOpenByBookingId
+source: PR #376 description, "Fixes" bullets 1-6
+notes: >
+  The PR also serialised raise/resolve/dismiss per booking and made payout unfreeze wait for all
+  disputes; at the input revision only one open dispute exists per booking (unique index), so those are
+  consequences of the per-side change, not pre-existing defects. The parent email on entering
+  COMPLETED_PENDING_CONFIRMATION is a feature, not a defect. F1 and F2 are two remedies closed by the
+  same quick-complete gap; a reviewer naming either counts for that one, both for both.

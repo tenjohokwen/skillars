@@ -1,0 +1,82 @@
+id: 335-agreed-price-negative-wallet-batch-decline
+kind: pre-fix-snapshot
+fix_pr: 335
+fix_merge: e60141fc
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditCardSplit.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java
+summary: Booking price resolution at accept/settle time, wallet credit split, and batch settlement failure handling after a Stripe charge
+expected_findings:
+  - id: F1
+    title: Accept charges the coach's current price instead of the price shown when the booking was requested
+    category: logic
+    severity: high
+    description: >
+      A booking row stores no price. At accept time resolveSessionPrice reads
+      coach_pricing.per_session_price as it is now, and that value is what the parent's saved
+      card is charged. A coach who raises the price between the parent's request and the
+      accept charges the parent the new, never-agreed amount with no consent step.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveSessionPrice
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: acceptBooking
+  - id: F2
+    title: Batch settlement prices bookings from current pricing with a zero fallback
+    category: logic
+    severity: high
+    description: >
+      onBatchBookingAccepted re-reads coach_pricing for every credit-funded booking and uses
+      .orElse(BigDecimal.ZERO) when the coach has no pricing row. The batch is then settled and
+      the bookings confirmed for 0.00, so a coach without pricing gives sessions away for free,
+      and a coach who re-priced after the request is settled at the new price. The single-accept
+      path throws in the same situation, so the two paths disagree.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: onBatchBookingAccepted
+  - id: F3
+    title: Negative wallet balance produces a negative credit share and an over-charge with no ledger entry
+    category: logic
+    severity: high
+    description: >
+      Both the single-booking path (balance.min(sessionPrice) in handleCreditBasedBooking) and
+      CreditCardSplit.of (walletBalance.min(amount)) assume the wallet balance is non-negative.
+      When the ledger sums to a negative balance, creditToUse is negative, the Stripe amount
+      becomes price + |balance|, and nothing in the ledger records that the parent's debt was
+      collected through the card. The batch quote shown to the parent inherits the same split.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: handleCreditBasedBooking
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditCardSplit.java
+        symbol: of
+  - id: F4
+    title: A per-booking settle failure after the batch Stripe charge keeps the parent's money
+    category: logic
+    severity: high
+    description: >
+      In the credit settle loop, when confirmCreditBatchPayment throws for one booking the catch
+      calls declineBatchBooking, which writes credit_debited=0 and stripe_charged=0 with status
+      CHARGE_FAILED and fires PAYMENT_FAILED. The batch PaymentIntent has already been captured
+      for that booking's share and the wallet deduction has already been written, so the share
+      is neither recorded nor refunded. The same loop also skips reserved bookings whose row is
+      already settled or missing (isSettled / b == null) without returning their share.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+        symbol: onBatchBookingAccepted
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java
+        symbol: declineBatchBookingTransactional
+non_findings:
+  - title: Pack-funded bookings read the pack's locked pricePerSession
+    reason: The pack purchase row stores its price at purchase time; resolveSessionPrice uses it first and that branch is correct at this revision.
+source: PR #335 description, Problems 1-3
+notes: >
+  BookingBatchService.createBatch and BookingDuplicationService also create bookings without
+  storing a price, which is the root of F1/F2; a reviewer may anchor the finding there instead.
+  The batch quote (BatchPaymentQuoteService) uses CreditCardSplit and so shows the negative split
+  to the parent; it is covered by F3 rather than listed separately.

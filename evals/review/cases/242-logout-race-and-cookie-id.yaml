@@ -1,0 +1,107 @@
+id: 242-logout-race-and-cookie-id
+kind: pre-fix-snapshot
+fix_pr: 242
+fix_merge: 38cc862a
+confidence: high
+scope:
+  - src/frontend/src/layouts/MainLayout.vue
+  - src/frontend/src/utils/sessionRedirect.js
+  - src/frontend/src/router/routes.js
+  - src/frontend/src/stores/auth.store.js
+  - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+  - src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java
+summary: Frontend logout/session-redirect flow and the backend-issued skp profile cookie (login -> logout -> relogin as another role)
+expected_findings:
+  - id: F1
+    title: MainLayout logout tears down session monitoring only after the backend /logout call
+    category: concurrency
+    severity: medium
+    description: >
+      MainLayout.vue's handleLogout awaits authStore.logout() (raced against LOGOUT_BACKEND_WAIT_MS)
+      and only afterwards calls destroySession(), which is what stops the sessionManager tick. The
+      backend's logout response clears the rint/user cookies, so while the race is pending the still-armed
+      sessionManager "shared session torn down" branch (checkIntervalId set, rint seen, no user cookie)
+      sees the user's own deliberate logout as a cross-tab expiry and dispatches session:expired. That
+      spurious event drives App.vue's expiry handler, which fires a second backend logout and overrides
+      the deliberate-logout redirect intent. useSession.js's handleLogout already does
+      stopSessionMonitoring() first, so the two logout paths diverge on exactly this point.
+    anchors:
+      - file: src/frontend/src/layouts/MainLayout.vue
+        symbol: handleLogout
+      - file: src/frontend/src/plugins/sessionManager.js
+        symbol: computeTimeUntilExpiry
+  - id: F2
+    title: Deliberate logout carries a redirect query param back to the previous account's page
+    category: logic
+    severity: medium
+    description: >
+      sessionRedirect.js's buildRedirectQuery unconditionally sets redirect to the current route's
+      fullPath, for both expired-session and deliberate-logout callers of pushLoginOrHardNavigate.
+      When the user signs out and a different account signs in on the same browser, the login page
+      replays the previous account's role-specific URL for the new account, which lands on a page whose
+      role guard does not match the new role and 401s where the guard is incomplete. Only the expiry
+      case has a reason to return the user to where they were.
+    anchors:
+      - file: src/frontend/src/utils/sessionRedirect.js
+        symbol: buildRedirectQuery
+      - file: src/frontend/src/utils/sessionRedirect.js
+        symbol: pushLoginOrHardNavigate
+  - id: F3
+    title: coach/profile-builder route lacks the requiresCoach guard its sibling coach routes have
+    category: security
+    severity: low
+    description: >
+      In routes.js the coach/profile-builder route has meta { requiresAuth: true } only, while every
+      other coach/* route (command-center, availability, players, ...) also sets requiresCoach: true.
+      A non-coach who reaches the page via a stale link or redirect is not bounced to their own home by
+      the router guard; the page renders and its coach-only API calls fail with raw 401/403s.
+    anchors:
+      - file: src/frontend/src/router/routes.js
+        symbol: coach/profile-builder
+  - id: F4
+    title: Hand-built skp cookie writes the Long user id as a bare JSON number, losing precision in the browser
+    category: logic
+    severity: high
+    description: >
+      AuthService.login and AuthService.refresh build the skp profile cookie by string concatenation as
+      {"id":<user.getId()>,"role":"..."}, emitting the id as an unquoted JSON number. The rest of the API
+      serializes Long as a JSON string (CommonConfig.longToStringModule) precisely because the TSID-sized
+      ids exceed Number.MAX_SAFE_INTEGER. The frontend's auth.store hydrateFromCookie JSON.parses this
+      cookie on every page load and stores parsed.id as authStore.userId, so the id is silently rounded,
+      and any later request that sends authStore.userId as an owner-bound id (for example the coach
+      photo-upload entityId) is rejected with 403.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: login
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: refresh
+      - file: src/frontend/src/stores/auth.store.js
+        symbol: hydrateFromCookie
+  - id: F5
+    title: /manage/health/smoke is not in the public management endpoint list
+    category: security
+    severity: low
+    description: >
+      AppEndpoints.PUBLIC_MGMT_ENDPOINTS permits /manage/prometheus, /manage/health and /manage/info
+      only; the matcher is an exact-path requestMatchers permitAll in SecurityConfiguration, so the
+      health group endpoint /manage/health/smoke (declared under management.endpoint.health.group.smoke
+      in application.yaml) is not covered. The Docker HEALTHCHECK in docker-compose.yml and the deploy
+      workflow both poll /manage/health/smoke unauthenticated, so the container health probe is answered
+      with an auth failure.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java
+        symbol: PUBLIC_MGMT_ENDPOINTS
+non_findings:
+  - title: JwtSecretBootstrapRunner refuses any non-loopback datasource host
+    reason: >
+      The literal localhost/127.0.0.1/[::1] regex in targetsLoopback is a deliberate, documented
+      fail-closed guard (deferred-91 AC18). PR 242 loosened it to accept resolved private/loopback
+      addresses so Docker Compose's `postgres` hostname passes, but a reviewer reading the file alone
+      would not call the strict form a defect.
+source: PR #242 description, bullets for MainLayout.vue, sessionRedirect.js, routes.js, AuthService.java, AppEndpoints.java
+notes: >
+  Input revision is 38cc862a^1. F1 is a frontend race; the reviewer needs sessionManager.js
+  (not touched by the fix) to see the torn-down branch, so it is anchored there too but kept out of
+  scope. The compose storage-CORS, APP_FRONTEND_URL override and deferred-work entries in the PR
+  are config/docs and are not findings. The JwtSecretBootstrapRunner change is recorded as a
+  non-finding rather than a defect.

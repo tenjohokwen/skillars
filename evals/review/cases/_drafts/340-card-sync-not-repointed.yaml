@@ -1,0 +1,32 @@
+id: 340-card-sync-not-repointed
+kind: pre-fix-snapshot
+fix_pr: 340
+fix_merge: 1f1240ac
+confidence: medium
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java
+summary: Saving a new card does not reach the customer's existing Stripe subscriptions
+expected_findings:
+  - id: F1
+    title: save-payment-method stores the card locally but existing subscriptions keep billing the old card
+    category: logic
+    severity: medium
+    description: >
+      savePaymentMethod writes request.paymentMethodId onto the StripeCustomer row and returns.
+      A Stripe subscription keeps the default_payment_method it was created with, and nothing
+      here updates the coach's or the owned players' subscriptions or retries an open invoice.
+      A PAST_DUE subscriber who follows the "update your card" advice therefore still fails the
+      next retry and is cancelled when the grace period runs out.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java
+        symbol: savePaymentMethod
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: subscribeCoach
+source: PR #340 description, Problem 1
+notes: >
+  Pre-existing before PR #337 (the save endpoint predates it); #337 recorded it as an open risk.
+  Confidence medium because the defect is an omission visible only by knowing Stripe's
+  default_payment_method semantics; the subscribeCoach anchor shows where the card is bound at
+  creation time.

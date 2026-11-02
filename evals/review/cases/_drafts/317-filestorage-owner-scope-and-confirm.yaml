@@ -1,0 +1,156 @@
+id: 317-filestorage-owner-scope-and-confirm
+kind: pre-fix-snapshot
+fix_pr: 317
+fix_merge: 5c2656b4
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/filestorage/api/StorageResource.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/service/StorageKeyGenerator.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/service/DeletionSchedulerService.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/repo/FileStorageObjectRepository.java
+  - src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java
+summary: filestorage module — presigned download/confirm endpoints missing owner scoping, ownership assertion that passes on no record, quota and replication hygiene
+expected_findings:
+  - id: F1
+    title: Any authenticated user can obtain a signed download URL for any storage key
+    category: security
+    severity: high
+    description: >
+      GET /api/storage/sign/download/** is gated only by HAS_ANY_ROLE and FileStorageService.signDownload
+      looks the object up by key alone, never comparing fso.ownerId with the caller. Any logged-in user who
+      knows or guesses a key (keys embed entity, entityId, year/month and a UUID) receives a presigned GET
+      for another user's object, including server-stored artefacts such as report PDFs and GDPR export ZIPs.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/api/StorageResource.java
+        symbol: signDownload
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: signDownload
+  - id: F2
+    title: Confirm's idempotent path returns another user's record and accepts soft-deleted objects
+    category: security
+    severity: high
+    description: >
+      confirmUpload first calls findByKey(key) and, if a row exists, returns it to the caller without
+      checking that fso.ownerId equals the current business id and without checking deletedAt. Any user can
+      therefore "confirm" an arbitrary existing key and receive its metadata (owner, filename, size, checksum,
+      tags), and a soft-deleted object is reported back as live.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+  - id: F3
+    title: A new confirm accepts any key shape, so a client can claim ownership of server-stored objects
+    category: security
+    severity: medium
+    description: >
+      On the non-idempotent path confirmUpload only HEADs the object and compares declared contentType/size;
+      it never checks that the key has the shape StorageKeyGenerator.generate produces, nor that an owner-bound
+      key (coach_profile, coach_branding, coach_gallery) carries the caller's own id. A caller can confirm a
+      storeBytes key such as reports/... or gdpr/exports/... and become its recorded ownerId, or confirm a key
+      generated for another coach's entityId.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/StorageKeyGenerator.java
+        symbol: generate
+  - id: F4
+    title: assertOwnership passes when the key has no FileStorageObject row
+    category: security
+    severity: high
+    description: >
+      assertOwnership uses findByKey(key).ifPresent(...) and only throws when a row exists with a different
+      owner. A key with no row at all (every storeBytes artefact: report PDFs, GDPR ZIPs) or a soft-deleted
+      row passes silently, so callers such as the branding logoKey save can bind a coach's public logo to
+      any server-stored object.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: assertOwnership
+  - id: F5
+    title: Quota sum counts soft-deleted objects
+    category: logic
+    severity: medium
+    description: >
+      sumSizeBytesByOwnerId sums f.sizeBytes for every row with the owner id and has no deletedAt IS NULL
+      predicate, while the rest of the module treats deletedAt as the liveness marker. A user who deletes
+      files never regains quota, so a few upload/delete cycles permanently block further uploads at the
+      signUpload check.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/repo/FileStorageObjectRepository.java
+        symbol: sumSizeBytesByOwnerId
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: signUpload
+  - id: F6
+    title: Replication outbox jobs are enqueued even when replication is disabled
+    category: architecture
+    severity: low
+    description: >
+      confirmUpload always saves a REPLICATE OutboxReplicationJob and DeletionSchedulerService always saves a
+      DELETE job after a physical delete, but every replication worker bean is
+      @ConditionalOnProperty("app.storage.replication.enabled"). With replication off (the default) PENDING
+      rows accumulate forever with nothing to consume them.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/DeletionSchedulerService.java
+        symbol: outboxReplicationJobRepository
+  - id: F7
+    title: StorageObjectConfirmedEvent is not re-published on a confirm retry
+    category: logic
+    severity: medium
+    description: >
+      The StorageObjectConfirmedEvent that drives downstream linking (for example the coach photo listener)
+      is published only on the first successful confirm, after the transaction commits. If the client retries
+      confirm because the response was lost, or the listener failed, the idempotent path returns the existing
+      row and publishes nothing, so the uploaded object is never linked and the retry cannot repair it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+  - id: F8
+    title: Owner-bound sign check compares the raw entity string, not the sanitized one used in the key
+    category: security
+    severity: medium
+    description: >
+      StorageResource.signUpload checks OWNER_BOUND_ENTITIES.contains(request.entity()) against the raw
+      request value, but StorageKeyGenerator.generate sanitizes entity with replaceAll("[^a-zA-Z0-9_-]", "_")
+      before building the key. An entity such as "coach profile" or "coach.profile" skips the entityId-must-match
+      check yet produces a key under coach_profile/<victimId>/..., so a coach can sign uploads into another
+      coach's owner-bound key space.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/api/StorageResource.java
+        symbol: OWNER_BOUND_ENTITIES
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/StorageKeyGenerator.java
+        symbol: generate
+  - id: F9
+    title: Confirm never re-checks max size or quota against the real object size
+    category: security
+    severity: medium
+    description: >
+      Max-size validation and the quota check run only in signUpload against the client-declared
+      fileSizeBytes. The presigned PUT does not bind the content length, and confirmUpload only verifies that
+      the confirm request's declared size equals the HEAD contentLength. A client can sign a 1-byte upload,
+      PUT a much larger object and confirm with the larger size, bypassing both the size limit and the quota.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+  - id: F10
+    title: Two concurrent confirms of the same key race on the unique key index and the loser gets a 500
+    category: concurrency
+    severity: low
+    description: >
+      confirmUpload does an unlocked findByKey, and if absent inserts a new FileStorageObject. Two concurrent
+      confirms both see no row and both insert; idx_storage_objects_key is UNIQUE, so the second insert fails
+      with a DataIntegrityViolationException that propagates as a server error instead of taking the
+      idempotent path.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+non_findings:
+  - title: Quota check is not under a lock, so concurrent confirms by one owner can overshoot
+    reason: Known and documented as a soft limit at this revision; not addressed by PR 317 (closed later by PR 330).
+  - title: Objects already replicated keep their backup copy after physical delete when replication is off
+    reason: Accepted trade-off documented by the fix PR; not a defect at this revision.
+source: PR #317 description, items 1-6 plus "Extra fixes from self-review"
+notes: >
+  Input revision is 9ef52ed9 (= 5c2656b4^1). F8-F10 come from the PR's self-review section but are all
+  present at the input revision. ReportGenerationService is in scope only because the fix touched it
+  (callers adapt to the stricter assertOwnership); it carries no finding of its own.

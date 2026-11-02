@@ -1,0 +1,173 @@
+id: 361-wallet-dispute-integrity
+kind: pre-fix-snapshot
+fix_pr: 361
+fix_merge: 22c86f25
+confidence: medium
+scope:
+  - src/main/java/com/softropic/skillars/platform/admin/contract/AdminAlertType.java
+  - src/main/java/com/softropic/skillars/platform/admin/contract/AdminSuspendCoachResponse.java
+  - src/main/java/com/softropic/skillars/platform/admin/contract/DisputeError.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/AdminQueueService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/AdminUserService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/CreditWalletResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CreditBalanceResponse.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CreditLedgerEntryType.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/event/PaymentIntegrityAlertEvent.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ChargeDisputeRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedger.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/ParentCreditLedgerRepository.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/ChargebackCreditReversalService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundClawbackService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundOutboxSupport.java
+  - src/main/resources/db/migration/V138__baseline_schema.sql
+summary: Wallet credit, admin dispute credits and cash-out integrity — refund pools, dispute caps and traces, refund-row collisions, suspension transaction boundaries
+expected_findings:
+  - id: F1
+    title: Expired-pack parent-cancel refunds are cashable credit
+    category: logic
+    severity: medium
+    description: >
+      RefundEnqueueListener.onBookingCancelledByParent routes a refund-eligible cancel on an expired
+      pack through enqueueWalletRefund as an ordinary BOOKING_REFUND, and the ledger has no notion of a
+      restricted pool. The parent can then take that credit out as cash via CashOutService, turning an
+      expired pack's unusable session into a card refund, which the pack terms never offered.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+        symbol: onBookingCancelledByParent
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+        symbol: debitForCashOut
+  - id: F2
+    title: Cash-out is not blocked while an in-app dispute is open on the payer's bookings
+    category: logic
+    severity: medium
+    description: >
+      CreditWalletService.debitForCashOut blocks a cash-out only when a Stripe card dispute is open
+      (chargeDisputeRepository.existsOpenDisputeForPayer). An open in-app dispute raised through
+      DisputeService may still end in UPHOLD_COACH, which claws the refund back from the wallet; if the
+      parent cashes out first there is nothing to recover.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java
+        symbol: debitForCashOut
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+  - id: F3
+    title: Cash-out always refunds onto the payer's latest PaymentIntent, not the charge that funded the credit
+    category: logic
+    severity: medium
+    description: >
+      CashOutService.processCashOut picks StripeCustomer.lastPaymentIntentId as the refund target. The
+      credit being cashed out may have been funded by an earlier charge (and possibly a different card),
+      so the refund lands on an unrelated charge, fails payment.cashOutExceedsRefundable when the latest
+      charge is small, and breaks the refund-to-source trail used by dispute and chargeback tracing.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java
+        symbol: processCashOut
+  - id: F4
+    title: Admin dispute credits are uncapped, written as BOOKING_REFUND, and never traced for chargebacks
+    category: logic
+    severity: high
+    description: >
+      DisputeService.resolveDispute writes FULL_CREDIT as sessionPrice and PARTIAL_CREDIT as the requested
+      amount, with no deduction for refunds already issued or still pending in the outbox, so a booking
+      refunded then disputed can be credited twice. It writes the row as BOOKING_REFUND, which collides
+      with uq_pcl_booking_refund if a refund already exists (raw constraint error instead of a clean 409).
+      The credit bypasses ChargebackCreditReversalService, so credit for a charge that already lost a card
+      dispute stays in the wallet, and reconcileCoachPayout cuts the coach by the requested creditAmount
+      rather than what was actually credited.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: resolveDispute
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java
+        symbol: reconcileCoachPayout
+  - id: F5
+    title: Batch-share refunds reuse the booking's BOOKING_REFUND row and collide with a later refund
+    category: database
+    severity: medium
+    description: >
+      BookingPaymentPersistenceService.declineBatchBookingAfterCharge enqueues the declined booking's
+      card share as a wallet BOOKING_REFUND keyed on the booking id. uq_pcl_booking_refund allows one
+      BOOKING_REFUND per reference, and CreditWalletRefundOutboxHandler treats an existing row as "already
+      refunded", so any later cancellation refund for the same booking is silently dropped as a
+      duplicate.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java
+        symbol: declineBatchBookingAfterCharge
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+        symbol: handle
+  - id: F6
+    title: Zero-amount admin refund is enqueued and retried forever
+    category: edge-case
+    severity: low
+    description: >
+      RefundEnqueueListener.enqueueWalletRefund guards against a 0.00 amount only when packId != null; a
+      non-pack admin cancellation whose resolved amount is zero is enqueued anyway. The outbox handler
+      then tries to write a 0.00 ledger row on every drain with no success path and no alert, so the
+      message never completes.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+        symbol: enqueueWalletRefund
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletRefundOutboxHandler.java
+        symbol: handle
+  - id: F7
+    title: Coach cancellation history is written AFTER_COMMIT in a separate transaction
+    category: concurrency
+    severity: medium
+    description: >
+      CancellationRefundService.onBookingCancelledByCoach runs AFTER_COMMIT with REQUIRES_NEW and only
+      then saves the coach_cancellation_history row and evaluates the excused-cancel cap. If the listener
+      fails or the process dies after the booking commit, the cancellation is recorded but the history
+      row and strike decision are lost; the two can never be made atomic from this phase.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: onBookingCancelledByCoach
+  - id: F8
+    title: No index on booking_payments.stripe_payment_intent_id
+    category: database
+    severity: low
+    description: >
+      ChargeDisputeRepository runs several native queries that filter payment.booking_payments by
+      stripe_payment_intent_id (dispute → booking tracing, funded-amount sums), but no migration since
+      the V138 baseline creates an index on that column; only session_pack_purchases has one (V195).
+      Every webhook lookup is a sequential scan over booking_payments.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/repo/ChargeDisputeRepository.java
+        symbol: stripe_payment_intent_id
+  - id: F9
+    title: Admin suspension cancels every booking in one transaction and fails whole on a busy row
+    category: concurrency
+    severity: medium
+    description: >
+      AdminCoachEnforcementService.suspendCoach is @Transactional and sweepBookings cancels each booking
+      inline; a single PAYMENT_IN_PROGRESS outcome throws a 409 that rolls back the status change and
+      every cancellation already made. A coach with one capture in flight cannot be suspended at all
+      until it settles, and a row lock held elsewhere fails the whole suspension the same way.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java
+        symbol: suspendCoach
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/AdminCoachEnforcementService.java
+        symbol: sweepBookings
+non_findings:
+  - title: Expired-pack refunds already written are not backfilled into a restricted pool
+    reason: Deliberate; the ledger is append-only (trg_ledger_no_update) and only dev/UAT data is affected.
+  - title: CashOutService refundable headroom is not re-checked under the wallet lock
+    reason: Documented in the code; Stripe rejects and the compensation path restores the credit.
+  - title: Multi-PaymentIntent split cash-out refunds are unsupported
+    reason: Documented design limit, unchanged by the fix.
+source: PR #361 description (owner decision, cancel-refund M2/M3/L1/L2/L3/L4/L5, stripe M3/M4, payouts M6)
+notes: >
+  Anchored at 22c86f25^1. Confidence medium because F1 is partly a policy decision (the "spend-only"
+  concept did not exist at the input revision) and F6's "retried forever" relies on the ledger
+  rejecting a 0.00 row, which was inferred from the PR body rather than a CHECK constraint found in the
+  schema. "UPHOLD_COACH reversal takes from the refund's own pool first" and "chargeback reversal takes
+  cashable first" are consequences of introducing pools and have no standalone defect at the input
+  revision; they are folded into F1. The "DISPUTE_CREDIT" ledger type and `payout cut by what was
+  actually credited` are part of F4.

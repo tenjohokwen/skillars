@@ -1,0 +1,105 @@
+id: 333-cancel-emails-and-uncaptured-refunds
+kind: pre-fix-snapshot
+fix_pr: 333
+fix_merge: 394a9c17
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java
+  - src/main/java/com/softropic/skillars/platform/notification/service/EmailContentRenderer.java
+  - src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+  - src/main/resources/mails/
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingStateMachine.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledByCoachEvent.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/CoachNoShowEvent.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+summary: booking cancellation emails with no template body, and coach-cancel refund logic that ignores whether payment was captured or what was paid
+expected_findings:
+  - id: F1
+    title: Four booking EmailTemplate constants have no Thymeleaf body under mails/
+    category: logic
+    severity: high
+    description: >
+      EmailContentRenderer resolves the template as CaseFormat.UPPER_UNDERSCORE -> LOWER_CAMEL of
+      the enum name, so BOOKING_CANCELLED_BY_PARENT, BOOKING_CANCELLED_BY_COACH, COACH_NO_SHOW and
+      PLAYER_NO_SHOW need bookingCancelledByParent.html, bookingCancelledByCoach.html,
+      coachNoShow.html and playerNoShow.html. None of those files exist in src/main/resources/mails,
+      while the constants are live (BookingEmailListener sends them). Every such send throws a
+      TemplateInputException at render time, which is not a permanent transport error, so the
+      envelope is retried until its delivery deadline and then expires with nobody notified.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java
+        symbol: BOOKING_CANCELLED_BY_PARENT
+      - file: src/main/java/com/softropic/skillars/platform/notification/service/EmailContentRenderer.java
+        symbol: templateEngine.process
+  - id: F2
+    title: PACK_PAUSED resolves to packPaused.html but the file is named sessionPackPaused.html
+    category: logic
+    severity: medium
+    description: >
+      The enum constant PACK_PAUSED maps to template name "packPaused", but the only matching
+      body in src/main/resources/mails is sessionPackPaused.html. The pack-paused email therefore
+      fails to render on every send with the same silent retry-until-expiry failure mode as the
+      missing booking templates. There is no test asserting that every EmailTemplate has a body.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java
+        symbol: PACK_PAUSED
+  - id: F3
+    title: Coach cancel from ACCEPTED refunds or restores money that was never captured
+    category: logic
+    severity: high
+    description: >
+      BookingStateMachine allows CANCEL_COACH from ACCEPTED, where no payment has been captured
+      and no pack session has been deducted (both happen at settle). cancelBookingAsCoach never
+      determines whether payment was captured and publishes BookingCancelledByCoachEvent with no
+      such flag. RefundEnqueueListener.onBookingCancelledByCoach then enqueues a BOOKING_REFUND
+      wallet credit for every card booking, and CancellationRefundService.onBookingCancelledByCoach
+      calls restoreSession for every non-expired pack booking. For an ACCEPTED booking this hands
+      the parent free credit or a free pack session. cancelBookingAsParent already has the
+      CONFIRMED/UPCOMING captured whitelist that this path lacks.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+        symbol: onBookingCancelledByCoach
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java
+        symbol: onBookingCancelledByCoach
+  - id: F4
+    title: Coach cancel, coach no-show and parent cancel refund the coach's current price, not the amount paid
+    category: logic
+    severity: medium
+    description: >
+      cancelBookingAsCoach, recordNoShowCoach and cancelBookingAsParent all compute the refund via
+      resolveSessionPrice, which reads coach_pricing.perSessionPrice at cancel time. If the coach
+      re-priced after the booking was charged, the parent is refunded the new price rather than
+      what was captured on their booking_payments row. The class already contains
+      resolveAmountPaid, which reads the captured booking_payments amount, but only the admin
+      cancel path uses it.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: resolveSessionPrice
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsCoach
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: recordNoShowCoach
+non_findings:
+  - title: PAUSED counts as payment-captured for a coach cancel
+    reason: A paused session was already captured (UPCOMING -> IN_PROGRESS -> PAUSED); refunding the family on coach cancel is intended.
+  - title: Parent cancel from PAUSED is non-refundable
+    reason: Pre-existing deliberate policy, unchanged by #333.
+  - title: An excused coach cancel from ACCEPTED still records history / an unexcused one still strikes
+    reason: Strike policy was explicitly kept unchanged; the coach still let the family down.
+  - title: Coach no-show refunds without a captured check
+    reason: NO_SHOW_COACH is only legal from UPCOMING, where payment is always captured.
+source: PR #333 description, sections 1 and 2
+notes: >
+  Input revision 7a950883 (= 394a9c17^1, PR #330's merge). Verified with git ls-tree that
+  bookingCancelledByParent.html, bookingCancelledByCoach.html, coachNoShow.html, playerNoShow.html
+  and packPaused.html are all absent and sessionPackPaused.html is present. F3: BookingStateMachine
+  lines 32/50/59/78 list CANCEL_COACH from ACCEPTED, CONFIRMED, UPCOMING and PAUSED;
+  BookingCancelledByCoachEvent has no captured flag; RefundEnqueueListener line ~50 enqueues on
+  sessionPackPurchaseId == null unconditionally. F4: agreed_price did not exist yet (#335), so
+  "amount paid" at this revision means the CAPTURED booking_payments row that resolveAmountPaid reads.
+  Section 3 of the PR (admin single-booking cancel endpoint, V189, UI) is a new feature, not a
+  defect; its touched admin files are left out of scope on purpose.

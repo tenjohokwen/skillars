@@ -1,0 +1,81 @@
+id: 392-media-scanning-fail-open
+kind: pre-fix-snapshot
+fix_pr: 392
+fix_merge: 1ee47152
+confidence: medium
+scope:
+  - src/main/java/com/softropic/skillars/infrastructure/arachnid/ArachnidClientImpl.java
+  - src/main/java/com/softropic/skillars/infrastructure/arachnid/ArachnidProperties.java
+  - src/main/java/com/softropic/skillars/infrastructure/videointel/VideoIntelClientImpl.java
+  - src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+  - src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+  - src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java
+  - src/main/resources/application.yaml
+  - docker-compose.yml
+summary: Abuse-media scanning (S-18) - images unscanned, fail-open video stub, blank API key accepted
+expected_findings:
+  - id: F1
+    title: Uploaded images are never scanned for abuse material
+    category: security
+    severity: high
+    description: >
+      Arachnid scanning exists only in the video moderation pipeline. FileStorageService.confirmUpload
+      accepts and serves coach photos and gallery images with no scan step, no pending state and no
+      sweeper; a confirmed image is immediately visible to everyone with the signed URL.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java
+        symbol: confirmUpload
+  - id: F2
+    title: VideoIntelClientImpl is a stub that returns clean for every video
+    category: security
+    severity: high
+    description: >
+      VideoIntelClientImpl.detectExplicitContent logs a warning and returns a non-flagged result for any
+      URL. With VIDEOINTEL_ENABLED=true the Layer 2 scan passes everything; the class comment admits the
+      fail-open but nothing in code refuses to run the stub in a deployed profile.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/videointel/VideoIntelClientImpl.java
+        symbol: detectExplicitContent
+  - id: F3
+    title: Arachnid client runs with a blank API key
+    category: security
+    severity: medium
+    description: >
+      ArachnidProperties.apiKey defaults to "" and ArachnidClientImpl's constructor stores whatever it is
+      given. With ARACHNID_ENABLED on and no key set, every scan sends "Bearer " and depends on the
+      remote rejecting it; the misconfiguration is not detected at startup.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/infrastructure/arachnid/ArachnidProperties.java
+        symbol: apiKey
+      - file: src/main/java/com/softropic/skillars/infrastructure/arachnid/ArachnidClientImpl.java
+        symbol: ArachnidClientImpl
+  - id: F4
+    title: Arachnid layer only handles ArachnidException
+    category: edge-case
+    severity: low
+    description: >
+      runArachnidLayer catches ArachnidException and records FAILED plus an admin alert, but any other
+      RuntimeException from the scan (e.g. a malformed response body or a runtime failure in the client)
+      propagates out of the layer without a FAILED scan record or alert, so the video is left in an
+      inconsistent state rather than deterministically blocked.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/video/service/ModerationOrchestrationService.java
+        symbol: runArachnidLayer
+  - id: F5
+    title: Compose never passes the Arachnid toggle or API key to the app
+    category: security
+    severity: low
+    description: >
+      docker-compose.yml forwards ARACHNID_API_BASE_URL and the VideoIntel settings to the app but not
+      ARACHNID_API_KEY nor the arachnid-enabled feature toggle, so a deployment that sets them in .env
+      still runs with scanning off and an empty key.
+    anchors:
+      - file: docker-compose.yml
+        symbol: services.app.environment
+source: PR #392 description, "Summary" bullets
+notes: >
+  Scanning is off by default (application.yaml arachnid-enabled: false) and videos were playable before
+  a real scan verdict; both are configuration/policy (decision B) rather than code defects and are not
+  findings. F4 is narrow because ArachnidClientImpl wraps RestClientException; confidence low on that
+  one. F5 is a compose-file defect a reviewer reading the file can spot; drop it if deployment config is
+  out of the reviewer's scope.

@@ -1,0 +1,92 @@
+id: 296-homework-ids-and-id-space
+kind: pre-fix-snapshot
+fix_pr: 296
+fix_merge: d60635b1
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/service/QuickCompleteTimeoutService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/GdprExportService.java
+  - src/main/java/com/softropic/skillars/platform/development/service/TimelineQueryService.java
+  - src/frontend/src/stores/sessionBuilder.store.js
+summary: Session wrap-up / quick-complete homework drill handling, GDPR export booking lookup id-space, timeline metadata exposure
+expected_findings:
+  - id: F1
+    title: Quick Complete timeout publishes BookingCompletedEvent with an empty homework drill list
+    category: logic
+    severity: medium
+    description: >
+      QuickCompleteTimeoutService.processExpiredQuickCompletes builds BookingCompletedEvent from the
+      stored SessionCompletionData but passes List.of() for the homework drill ids, even though the row
+      carries the coach's serialized homeworkDrillIds JSON (written by submitWrapUp). When the parent
+      never confirms and the timeout auto-confirms, downstream listeners (homework assignment, timeline)
+      see a session with no homework, so the drills the coach assigned at wrap-up are silently dropped.
+      The manual confirmCompletion path in BookingCompletionService deserializes the same column and
+      publishes them, so the two completion paths diverge.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/QuickCompleteTimeoutService.java
+        symbol: processExpiredQuickCompletes
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: deserializeHomeworkDrillIds
+  - id: F2
+    title: submitWrapUp stores and publishes homeworkDrillIds without validating they are real, accessible drills
+    category: security
+    severity: medium
+    description: >
+      BookingCompletionService.submitWrapUp serializes req.homeworkDrillIds() straight into
+      SessionCompletionData and forwards them on BookingCompletedEvent without checking that each id is
+      an existing drill the coach may assign (an ACTIVE platform drill or the coach's own ACTIVE private
+      drill). Arbitrary UUIDs, deleted drills, or another coach's private drill ids are accepted and
+      become homework assignments for the player; nothing is rejected and the row is saved before any
+      check could run.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java
+        symbol: submitWrapUp
+  - id: F3
+    title: GDPR export PLAYER branch queries bookings by user id where a PlayerProfile id is expected
+    category: logic
+    severity: medium
+    description: >
+      GdprExportService.buildBookings calls bookingRepository.findAllByPlayerId(userId) for a PLAYER
+      user. Booking.playerId is a PlayerProfile primary key, not a User id, so for a self-registered
+      player (whose profile id differs from their user id) the query matches no rows, or in principle
+      another profile's rows if the id spaces collide. The export therefore omits the player's own
+      sessions. The adjacent coach branch correctly resolves the CoachProfile id before querying.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/admin/service/GdprExportService.java
+        symbol: buildBookings
+  - id: F4
+    title: Timeline response exposes referenceId to coaches who did not author the event
+    category: security
+    severity: low
+    description: >
+      TimelineQueryService.getTimeline maps every PlayerTimelineEvent to a TimelineEventResponse that
+      always includes e.getReferenceId() (the booking / homework-assignment / report id), while only the
+      metadata map goes through redactCoachPrivateFieldsIfNotAuthoringCoach. A coach viewing a shared
+      player's timeline therefore receives the reference ids of other coaches' sessions and
+      assignments, which the metadata allowlist was designed to keep private to the authoring coach.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/development/service/TimelineQueryService.java
+        symbol: getTimeline
+      - file: src/main/java/com/softropic/skillars/platform/development/service/TimelineQueryService.java
+        symbol: redactCoachPrivateFieldsIfNotAuthoringCoach
+  - id: F5
+    title: sessionBuilder store checks the feature-gate code on helpCode instead of errorMsg.errorKey
+    category: logic
+    severity: low
+    description: >
+      In sessionBuilder.store.js the 403 branch tests e.response.data.helpCode === 'security.featureGated'.
+      The backend's ApiAdvice featureGatedHandler returns an ErrorDto whose feature-gate code is in
+      errorMsg.errorKey (helpCode is a generated log id); other frontend callers
+      (SkillsRadarAssessmentPanel.vue, DrillDetailPanel.vue) read errorMsg.errorKey. The condition is
+      never true, so a tier-gated coach never gets isGated set and instead sees a generic error.
+    anchors:
+      - file: src/frontend/src/stores/sessionBuilder.store.js
+        symbol: fetchExistingPlan
+source: PR #296 description, summary bullets 1-5
+notes: >
+  Input revision is d60635b1^1. HomeworkDrillIds.java does not exist at the input revision (it was
+  introduced by the fix), so F1 is anchored on the service and the existing deserialize helper. The
+  PARENT erasure two-child test, CoachAccessWindow Javadoc and ledger bookkeeping items are
+  tests/docs and are not findings. F5 is anchored on fetchExistingPlan, whose catch block holds the helpCode check around
+  line 153 of the input-revision file.

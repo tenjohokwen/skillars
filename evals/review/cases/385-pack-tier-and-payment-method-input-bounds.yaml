@@ -1,0 +1,44 @@
+id: 385-pack-tier-and-payment-method-input-bounds
+kind: pre-fix-snapshot
+fix_pr: 385
+fix_merge: 6c0039fc
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/PurchaseSessionPackRequest.java
+  - src/main/java/com/softropic/skillars/platform/payment/contract/SavedPaymentMethodRequest.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+summary: Payment request validation (S-10) - pack tier bounds and Stripe payment method id format
+expected_findings:
+  - id: F1
+    title: Pack tier sessionCount and totalPrice have no upper bound and can produce a 0.00 per-session price
+    category: edge-case
+    severity: medium
+    description: >
+      CreateSessionPackTierRequest only requires sessionCount >= 1 and totalPrice >= 0.01 with no scale
+      limit. createTier divides totalPrice by sessionCount to 2 decimals; a total of 0.01 with 2+ sessions
+      (or a huge sessionCount) rounds to 0.00, which violates the price CHECK constraint and surfaces as
+      a 500, and a totalPrice beyond numeric(10,2) fails the same way.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java
+        symbol: CreateSessionPackTierRequest
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: createTier
+  - id: F2
+    title: paymentMethodId is passed to Stripe without format validation
+    category: security
+    severity: low
+    description: >
+      SavedPaymentMethodRequest only requires a non-blank string and PurchaseSessionPackRequest accepts
+      any paymentMethodId. The value is stored on the StripeCustomer and sent to Stripe as-is, so garbage
+      or oversized ids reach the gateway and the database instead of being rejected with 400 up front.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/contract/SavedPaymentMethodRequest.java
+        symbol: SavedPaymentMethodRequest
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java
+        symbol: getOrCreateStripeCustomer
+source: PR #385 description, S-10
+notes: >
+  Reschedule-request caps were not implemented (policy). S-19 (Stripe customer erasure) is the separate
+  case 385-gdpr-leaves-stripe-customer.

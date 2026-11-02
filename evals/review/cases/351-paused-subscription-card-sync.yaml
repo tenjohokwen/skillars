@@ -1,0 +1,59 @@
+id: 351-paused-subscription-card-sync
+kind: introducing-diff
+fix_pr: 351
+fix_merge: 00b269df
+introducing_pr: 340
+introducing_merge: 1f1240ac
+summary: saving a card syncs subscriptions inline in the request and never resumes a Stripe-PAUSED subscription
+confidence: high
+expected_findings:
+  - id: F1
+    title: A PAUSED subscription is never resumed when the user saves a new card
+    category: logic
+    severity: high
+    description: >
+      Stripe pauses a subscription whose trial ends without a payment method; `GRACE_STATUSES` even lists
+      PAUSED as a state that is grace-cancelled later. `SubscriptionService.syncPaymentMethod` only calls
+      `updateSubscriptionDefaultPaymentMethod` and retries an open invoice for the statuses in
+      `RETRY_ON_NEW_PAYMENT_METHOD` (PAST_DUE, UNPAID). For a PAUSED subscription setting the default card
+      has no effect at Stripe, no resume call exists in `StripeClient`, so the user stays de-entitled until
+      the grace sweep cancels the subscription they just tried to fix.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: syncPaymentMethod
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: RETRY_ON_NEW_PAYMENT_METHOD
+  - id: F2
+    title: Stripe subscription sync runs synchronously inside the save-card request with no durable retry
+    category: architecture
+    severity: medium
+    description: >
+      `SessionPackPaymentResource.savePaymentMethod` persists the card and then calls
+      `subscriptionService.syncPaymentMethodToSubscriptions` in the same request. The sync makes one or more
+      Stripe calls per subscription and swallows every exception with a log line, so a Stripe outage or
+      timeout during the request silently leaves subscriptions on the old card with nothing to retry them,
+      and the request latency includes every Stripe round trip. The codebase already has an outbox for
+      exactly this kind of after-commit side effect.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java
+        symbol: savePaymentMethod
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: syncPaymentMethodToSubscriptions
+  - id: F3
+    title: Transient and permanent Stripe failures are treated alike during the sync
+    category: edge-case
+    severity: low
+    description: >
+      `syncPaymentMethod` catches `CardException` separately but lumps every other `StripeException` and
+      `RuntimeException` into one logged-and-ignored branch. A connection timeout (retryable) and an
+      `InvalidRequestException` (permanent) get identical handling, so there is no way to retry the former
+      without replaying the latter, and a failure on the first subscription does not stop later ones from
+      being attempted while still reporting nothing to the caller.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java
+        symbol: syncPaymentMethod
+source: PR #351 description, "Gap 1" and "Gap 2"
+notes: >
+  #340 (1f1240ac) added both the inline call in the resource and syncPaymentMethod with its PAUSED gap;
+  its own comment says PAUSED "resumes via Stripe's resume flow" but no code performs it. F3 only matters
+  once the sync is retried, so it is a soft expectation.

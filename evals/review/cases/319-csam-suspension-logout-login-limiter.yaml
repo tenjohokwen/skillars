@@ -1,0 +1,151 @@
+id: 319-csam-suspension-logout-login-limiter
+kind: pre-fix-snapshot
+fix_pr: 319
+fix_merge: 90b8cb80
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java
+  - src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+  - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+  - src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/FraudAwareAuthenticationManager.java
+  - src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AuthenticationFailureListener.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/LoginAttemptRepository.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/UserRepository.java
+  - src/main/java/com/softropic/skillars/platform/security/contract/Principal.java
+  - src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java
+  - src/main/java/com/softropic/skillars/platform/security/api/ProfileResource.java
+  - src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java
+  - src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java
+  - src/main/java/com/softropic/skillars/platform/admin/service/AdminUserService.java
+  - src/frontend/src/router/index.js
+  - src/frontend/src/router/routes.js
+summary: security module — CSAM-triggered account suspension, /api/logout teardown, login rate limiting, 2FA toggle, frontend role guard
+expected_findings:
+  - id: F1
+    title: CSAM suspension listener looks up Video.ownerId as a login or email, so no account is ever found
+    category: logic
+    severity: high
+    description: >
+      AccountSuspensionEventListener resolves event.ownerId() via findOneByLogin / findOneByEmail. The video
+      ownerId published by the moderation pipeline is a CoachProfile UUID (coach and drill uploads) or a
+      PlayerProfile id (homework uploads), never a login or email, so every real CSAM match ends in the
+      "user not found" branch and nobody is suspended. The failure is only logged, so the orchestrator does
+      not alert either.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java
+        symbol: onAccountSuspensionRequested
+  - id: F2
+    title: Suspension sets verificationStatus but does not lock the account or revoke live sessions
+    category: security
+    severity: high
+    description: >
+      Even when the listener finds the user it only sets SUSPENDED and saves. It does not set locked, clear
+      persistent tokens, stamp securitySessionInvalidatedAt or revoke refresh tokens, so existing JWTs and
+      refresh tokens keep working. AuthService.ensureAccountIsLive and Principal.instanceFrom check only
+      activated/locked, and the SUSPENDED check in login runs only while security.registration.phone-otp-required
+      is true, so with that flag off a suspended user can still log in and refresh. Compare
+      AdminUserService.suspendUser, which does the full teardown.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java
+        symbol: onAccountSuspensionRequested
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: ensureAccountIsLive
+      - file: src/main/java/com/softropic/skillars/platform/security/contract/Principal.java
+        symbol: instanceFrom
+  - id: F3
+    title: /api/logout does not revoke the refresh token and matches any HTTP method
+    category: security
+    severity: medium
+    description: >
+      SecurityConfiguration registers logoutUrl("/api/logout") with only AjaxLogoutSuccessHandler, which never
+      calls SecurityUtil.terminateSession, so the refresh token stays usable after logout (unlike
+      /api/auth/logout). Because CSRF is disabled, logoutUrl() matches every method, so a cross-site GET to
+      /api/logout logs the victim out.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java
+        symbol: logoutUrl
+  - id: F4
+    title: Legacy login path keeps failed-attempt counters in a per-instance in-memory cache, separate from the DB limiter
+    category: security
+    severity: medium
+    description: >
+      LoginAttemptsService counts failures in Guava LoadingCaches (attemptsByUserCache, attemptsByIpUserCache,
+      attemptsByClientUserCache) while AuthService.login records attempts in main.login_attempts. The legacy
+      /authenticate path and the SPA /api/auth/login path therefore have independent budgets, and the legacy
+      budget resets on restart and is not shared across instances, so an attacker can alternate paths or
+      instances to multiply allowed guesses.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java
+        symbol: attemptsByUserCache
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: recordAttempt
+  - id: F5
+    title: Frontend router guard enforces meta.role only for PARENT and PLAYER
+    category: security
+    severity: low
+    description: >
+      router/index.js derives requiresParent and requiresPlayer from meta.role === 'PARENT' / 'PLAYER' and
+      requiresCoach from a separate meta.requiresCoach flag. Routes declared with meta.role 'COACH'
+      (coach/revenue, coach/bookings/:bookingId/receipt) match none of these, so they are only login-gated
+      and a parent or player can navigate to them.
+    anchors:
+      - file: src/frontend/src/router/index.js
+        symbol: beforeEach
+      - file: src/frontend/src/router/routes.js
+        symbol: coach/revenue
+  - id: F6
+    title: 2FA toggle persists otpEnabled but nothing enforces a second factor
+    category: security
+    severity: medium
+    description: >
+      UserProfileService.toggle2fa (behind PUT /api/account/2fa) sets user.otpEnabled after a password check,
+      and the UI presents it as enabling two-factor login. AuthService.login never reads the flag and issues
+      refresh and skp cookies directly after password verification; Principal carries otpEnabled but no
+      filter or manager consults it. A user who believes 2FA is on is protected by the password alone.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java
+        symbol: toggle2fa
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: login
+  - id: F7
+    title: ShadowAccountService.linkAdditionalParent writes a parent link without any ownership or consent check
+    category: security
+    severity: low
+    description: >
+      linkAdditionalParent inserts a ParentPlayerLink for an arbitrary (requestingParentId, playerId) with a
+      hard-coded consent version, guarded only by "no link exists yet". It has no caller (the REST stub always
+      throws 409), but any future caller would let a parent attach themselves to an unlinked player profile
+      with no verification.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java
+        symbol: linkAdditionalParent
+      - file: src/main/java/com/softropic/skillars/platform/security/api/ShadowAccountResource.java
+        symbol: linkParent
+  - id: F8
+    title: Retry-After is computed from the oldest attempt row overall, not the oldest inside the lock window
+    category: logic
+    severity: low
+    description: >
+      When recentAttempts reaches maxAttempts, AuthService.login derives retryAfterSeconds from
+      findFirstByIdentifierOrderByAttemptedAtAsc, the oldest row for the identifier regardless of age. Attempt
+      rows are only purged after 24h (deleteByAttemptedAtBefore), so a user locked a second time later the same
+      day gets a Retry-After clamped to 1 second while the window-based count still refuses them.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: findFirstByIdentifierOrderByAttemptedAtAsc
+      - file: src/main/java/com/softropic/skillars/platform/security/repo/LoginAttemptRepository.java
+        symbol: findFirstByIdentifierOrderByAttemptedAtAsc
+non_findings:
+  - title: Login count-then-insert in AuthService.login is not atomic
+    reason: Parallel requests can exceed the budget by the concurrency factor; known and explicitly left unfixed by PR 319.
+  - title: /otp has no attempt counter beyond its 10-minute expiry
+    reason: Legacy-only path; acknowledged and left unfixed.
+  - title: AdminLoginResource DELETE login-lock duplicates the audited admin unlock endpoint
+    reason: Removed as hygiene; the endpoint was admin-only and had no caller, not a security defect.
+source: PR #319 description, items 1-4, 5, 7 and the "owner resolution" follow-up
+notes: >
+  Input revision 651ed1ef. The PR body frames the Retry-After bug as a self-review fix of the new
+  LoginRateLimiter, but the same computation exists at the input revision in AuthService.login, so it is
+  scored as F8. reactivateUser not refusing a SUSPENDED account is a design decision in the PR, not a defect
+  at input. The managed-minor-to-parent suspension branch is defensive and unreachable today; not a finding.

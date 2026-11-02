@@ -1,0 +1,131 @@
+id: 307-frontend-links-and-tus
+kind: pre-fix-snapshot
+fix_pr: 307
+fix_merge: 513fa082
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+  - src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/AccountChangeEmailListener.java
+  - src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java
+  - src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/config/PaymentProperties.java
+  - src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+  - src/main/java/com/softropic/skillars/platform/security/api/registration/EmailRegistrationStrategy.java
+  - src/main/java/com/softropic/skillars/platform/session/contract/DrillUploadInitiateResponse.java
+  - src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java
+  - src/frontend/src/components/session/DrillDetailPanel.vue
+  - src/frontend/src/pages/coach/SessionTemplateVault.vue
+  - src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue
+  - src/frontend/src/components/video/QuotaUsageBar.vue
+  - src/frontend/src/pages/parent/BookingRequestPage.vue
+  - src/frontend/src/router/routes.js
+summary: Backend-generated links into the hash-routed SPA, drill TUS upload credentials, and broken frontend route references
+expected_findings:
+  - id: F1
+    title: Booking and report emails link to backend-origin paths that are not SPA routes
+    category: logic
+    severity: medium
+    description: >
+      BookingEmailListener builds bookingsUrl as "${baseurl}:${server.port}" + "/bookings" and
+      ReportGenerationService builds reportsPageUrl as "${baseurl}" + "/portal/players/{id}/reports".
+      The SPA is a hash router served from app.frontend-url (the property CoachRegistrationService and
+      ParentRegistrationService already use for verify-email links as "<frontend>/#/..."), so neither
+      URL resolves: /bookings and /portal/... are not routes, and baseurl defaults to http://localhost
+      in application.yaml. Every quick-complete and report-ready email therefore carries a dead link.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java
+        symbol: appBaseUrl
+      - file: src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java
+        symbol: reportsPageUrl
+  - id: F2
+    title: Activation, password-reset and account-change emails use ${baseurl}:${server.port}, which is localhost in production
+    category: logic
+    severity: medium
+    description: >
+      EmailRegistrationStrategy, AccountManagementFacade and AccountChangeEmailListener compute their
+      mail "baseUrl" as @Value("${baseurl}") + ":" + @Value("${server.port}"). baseurl is defined once in
+      application.yaml as http://localhost and is never overridden per environment, so activation.html,
+      passwordReset.html and creationDup.html links in production point at http://localhost:<port>/#/....
+      The frontend origin is already available as app.frontend-url and is used correctly by the
+      role-registration services.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/api/registration/EmailRegistrationStrategy.java
+        symbol: host
+      - file: src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java
+        symbol: host
+      - file: src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/AccountChangeEmailListener.java
+        symbol: fullBaseUrl
+  - id: F3
+    title: Stripe OAuth callback redirects to a relative path on the backend origin without the hash prefix
+    category: logic
+    severity: medium
+    description: >
+      StripeOnboardingResource's callback calls response.sendRedirect(paymentProperties.getCallbackSuccessUrl()
+      [+ "?stripe_error=..."]) where PaymentProperties.callbackSuccessUrl defaults to the relative
+      "/coach/payment-settings". A relative redirect resolves against the backend request origin and
+      the SPA only serves routes under /#/, so after connecting Stripe the coach lands on a 404 and the
+      stripe_error query never reaches the Vue route (it is outside the hash fragment).
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java
+        symbol: sendRedirect
+      - file: src/main/java/com/softropic/skillars/platform/payment/config/PaymentProperties.java
+        symbol: callbackSuccessUrl
+  - id: F4
+    title: Drill upload initiate response drops the Bunny TUS authorisation fields, so the browser upload is unauthenticated
+    category: logic
+    severity: high
+    description: >
+      DrillUploadService.initiateUpload receives an InitializeUploadResponse carrying
+      tusAuthorizationSignature, tusAuthorizationExpire, tusLibraryId and the provider upload id, but
+      DrillUploadInitiateResponse only exposes videoId, uploadSessionId, signedUploadUrl and expiresAt.
+      DrillDetailPanel.vue then starts a bare `new Upload(file, { uploadUrl })` with no AuthorizationSignature /
+      AuthorizationExpire / VideoId / LibraryId headers, unlike the shared videoApi.createTusUpload path
+      used by the video store. Bunny rejects the unsigned TUS handshake, so drill demo uploads fail.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/session/contract/DrillUploadInitiateResponse.java
+        symbol: DrillUploadInitiateResponse
+      - file: src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java
+        symbol: initiateUpload
+      - file: src/frontend/src/components/session/DrillDetailPanel.vue
+        symbol: runTusUpload
+  - id: F5
+    title: Frontend navigates to route names and paths that do not exist
+    category: logic
+    severity: low
+    description: >
+      SessionTemplateVault.vue's back button targets { name: 'coach-dashboard' } and
+      ParentDevelopmentPortalPage.vue links to { name: 'marketplace' }, but routes.js defines neither
+      name (the command-center and marketplace routes are unnamed), so vue-router throws "No match for
+      route". QuotaUsageBar.vue's upgrade prompt links to "/upgrade", which is not a route (the TODO
+      above it says so), so the >=95% quota prompt lands on the 404 page.
+    anchors:
+      - file: src/frontend/src/pages/coach/SessionTemplateVault.vue
+        symbol: coach-dashboard
+      - file: src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue
+        symbol: marketplace
+      - file: src/frontend/src/components/video/QuotaUsageBar.vue
+        symbol: /upgrade
+      - file: src/frontend/src/router/routes.js
+        symbol: coach/command-center
+  - id: F6
+    title: BookingRequestPage hides the pack tracker and pack loading from self-registered players
+    category: logic
+    severity: low
+    description: >
+      BookingRequestPage.vue gates the pack tracker, the no-credits/buy-sessions banner and the
+      loadPlayerPacks call on !authStore.isPlayer. The backend already serves packs to players
+      (GET /api/payment/session-packs is HAS_PARENT_OR_PLAYER_ROLE and keys packs to the caller) and
+      BookingService validates pack.parentId against the caller, which holds for a player's own
+      purchases, so a player who bought a pack cannot see or use their credits on the request page.
+    anchors:
+      - file: src/frontend/src/pages/parent/BookingRequestPage.vue
+        symbol: loadPlayerPacks
+non_findings:
+  - title: Registration services build verify-email links as frontendUrl + "/#/..." by hand
+    reason: Working and intentionally left untouched by PR 307; a shared link builder was added only for the broken call sites.
+source: PR #307 description, items B4, B5, B7, B10
+notes: >
+  Input revision is 513fa082^1. FrontendLinkBuilder does not exist at the input revision. B9
+  (stripe_error banner) and A21 (share-slot link) are new features, not defects, and are excluded.
+  F6 is low confidence as a reviewer-detectable defect because the gating looks deliberate (stale
+  UAT-5 decision); kept because the PR body classifies it as a bug and the backend evidence is in-repo.

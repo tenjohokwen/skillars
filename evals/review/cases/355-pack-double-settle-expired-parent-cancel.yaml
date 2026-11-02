@@ -1,0 +1,50 @@
+id: 355-pack-double-settle-expired-parent-cancel
+kind: pre-fix-snapshot
+fix_pr: 355
+fix_merge: 2c6c9fdc
+scope:
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledByParentEvent.java
+summary: UPHOLD_COACH re-enqueues an already-settled zero-value pack session; a >24h parent cancel restores a session to an expired pack
+confidence: high
+expected_findings:
+  - id: F1
+    title: payInFull deletes and re-enqueues a pack payout that already settled on the pack ledger
+    category: logic
+    severity: high
+    description: >
+      `CoachPayoutAdjustmentService.payInFull` deletes any CANCELLED row whose `netAmount` is null or
+      non-positive and calls `enqueuePayout` again. For a pack session this includes rows cancelled with
+      `REASON_NOTHING_CHARGED` (a pack charged under a cent per session), whose share was already allocated
+      via `allocatePackShare` and counted in `payout_sessions_allocated`. Re-enqueueing allocates the
+      session a second time, so a later session takes the pack remainder early and the genuine last session
+      is skipped as `PACK_FULLY_ALLOCATED`. Only the skip reasons that never allocated
+      (`PACK_AMOUNT_UNKNOWN`, `PACK_FULLY_ALLOCATED`) are safe to recompute.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java
+        symbol: payInFull
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutOutboxSupport.java
+        symbol: REASON_NOTHING_CHARGED
+  - id: F2
+    title: A refund-eligible parent cancel on an expired pack restores the session to the expired pack
+    category: logic
+    severity: medium
+    description: >
+      `RefundEnqueueListener.onBookingCancelledByParent` enqueues a pack restore whenever
+      `sessionPackPurchaseId != null && isRefundEligible()`, without checking whether the pack is still
+      valid. `BookingCancelledByParentEvent` carries no expiry flag even though `cancelBookingAsParent`
+      sits next to code that computes `packExpired` for the coach, admin and no-show events. The parent
+      gets a session back on a pack they can no longer use, while the sibling events route the same case
+      to a wallet refund.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java
+        symbol: onBookingCancelledByParent
+      - file: src/main/java/com/softropic/skillars/platform/booking/contract/BookingCancelledByParentEvent.java
+        symbol: isRefundEligible
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: cancelBookingAsParent
+source: PR #355 description, sections 1 and 2
+notes: Input revision 2c6c9fdc^1. F1 is subtle; it requires reading allocatePackShare alongside payInFull.

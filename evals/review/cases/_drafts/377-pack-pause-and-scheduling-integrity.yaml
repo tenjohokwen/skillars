@@ -1,0 +1,117 @@
+id: 377-pack-pause-and-scheduling-integrity
+kind: pre-fix-snapshot
+fix_pr: 377
+fix_merge: c3a7cbcd
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/ProjectedRevenueService.java
+  - src/main/java/com/softropic/skillars/platform/booking/service/AvailabilityService.java
+  - src/main/java/com/softropic/skillars/platform/booking/api/ScheduleResource.java
+  - src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+  - src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseRepository.java
+  - src/main/java/com/softropic/skillars/platform/booking/repo/BookingRepository.java
+summary: Booking creation and scheduling - pack pause enforcement, reservation, slot grid, horizon, coach-zone weeks
+expected_findings:
+  - id: F1
+    title: Pack pause is only enforced at request time, not on accept, confirm, reschedule or duplicate
+    category: logic
+    severity: medium
+    description: >
+      createBookingRequest refuses a pack booking whose start falls inside the pack's pause, but
+      acceptBooking, confirmProposedBooking, the reschedule propose/accept paths and duplicateNextWeek
+      never check isPausedAt. A family can pause a pack (which extends its expiry) and keep training by
+      rescheduling existing pack bookings into the pause window or confirming the coach's repeat-next-week
+      proposals; the paused weeks are then effectively free sessions.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: acceptBooking
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: confirmProposedBooking
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+        symbol: validateRescheduleProposal
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: duplicateNextWeek
+  - id: F2
+    title: A pack can be paused while a PAYMENT_PENDING booking is drawing on it
+    category: concurrency
+    severity: low
+    description: >
+      pausePackTransactional checks conflicts with findConflictingBookingsForPause using CONFLICT_STATUSES
+      (REQUESTED, ACCEPTED, CONFIRMED, UPCOMING). PAYMENT_PENDING is not in the list, so a booking that is
+      mid-capture against the pack is invisible to the pause; the pause can start while the deduction
+      completes, leaving a session inside a paused window.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: CONFLICT_STATUSES
+      - file: src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java
+        symbol: pausePackTransactional
+  - id: F3
+    title: Coach week schedule and projected revenue compute week bounds in UTC, not the coach's zone
+    category: logic
+    severity: medium
+    description: >
+      getCoachWeekSchedule and calculateWeeklyRevenue convert weekStart with atStartOfDay(ZoneOffset.UTC),
+      while the availability calendar on the same page uses the coach's canonical time zone. For a coach
+      east or west of UTC, bookings near midnight on the week boundary appear in the wrong week or are
+      missing, and the projected revenue total disagrees with the calendar.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: getCoachWeekSchedule
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/ProjectedRevenueService.java
+        symbol: calculateWeeklyRevenue
+  - id: F4
+    title: Parent requests may start at any instant inside an availability window, not on the offered slot grid
+    category: logic
+    severity: low
+    description: >
+      createBookingRequest and the batch path validate only that the slot lies within an availability
+      window, has the right duration and is not blocked or overlapping. A client calling the API directly
+      can request a start of e.g. 10:07 inside a 10:00-12:00 window, fragmenting the coach's day with
+      sessions the calendar never offered.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java
+        symbol: validateSlotDurationAndAvailability
+  - id: F5
+    title: Reschedule proposals ignore the booking horizon
+    category: logic
+    severity: low
+    description: >
+      validateRescheduleProposal checks status, future start, end after start, availability window,
+      blocks and duration, but not booking.request.maxHorizonDays, which createBookingRequest enforces.
+      A booking can be rescheduled years ahead at its locked price, bypassing the horizon.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/RescheduleService.java
+        symbol: validateRescheduleProposal
+  - id: F6
+    title: Duplicate-next-week ignores REQUESTED bookings in its overlap check
+    category: logic
+    severity: low
+    description: >
+      duplicateNextWeek runs findOverlappingBookings with ACTIVE_SLOT_STATUSES_EXCLUDING_REQUESTED, so a
+      second duplicate (which itself creates a REQUESTED booking) or any pending request for the same slot
+      is not seen. Double-clicking Duplicate produces two REQUESTED bookings for the same slot.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java
+        symbol: duplicateNextWeek
+  - id: F7
+    title: Pack sessions are not reserved by open requests
+    category: logic
+    severity: low
+    description: >
+      createBookingRequest attaches the active pack to a new request without comparing the pack's
+      remaining sessions to the number of open REQUESTED/ACCEPTED/PAYMENT_PENDING bookings already
+      drawing on it. A family with one session left can have several requests accepted; all but the
+      first fail at capture time, and the coach has reserved slots for nothing.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java
+        symbol: createBookingRequest
+source: PR #377 description, "Fixes" bullets 1-7
+notes: >
+  Duplicate silently falling back to card pricing when the pack is paused/fully reserved is folded into
+  F1 (resolveParentsActivePackId). Frontend wording changes are not findings.
