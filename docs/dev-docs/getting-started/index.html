@@ -88,14 +88,14 @@
 <pre>git clone git@github.com:tenjohokwen/skillars.git &amp;&amp; cd skillars
 docs/deployment/local/setup.sh     # interactive, idempotent wizard
 docs/deployment/local/start.sh     # starts app postgres redis storage-init grafana
-curl -s http://localhost:8367/manage/health   # {"status":"UP"} once Flyway has run
+curl -s http://localhost:8367/manage/health   # {"status":"UP","groups":["smoke"]} once Flyway has run
 docs/deployment/local/stop.sh      # docker compose ... down (volumes kept)</pre>
     <p><code>setup.sh</code> checks and fixes, in order: Docker daemon + Compose plugin; <code>.env.local</code> (copied from <code>.env.example</code>, placeholders filled, the generated Grafana admin password printed); the checked-in <code>docker-compose.local.yml</code>; <code>deploy/seaweedfs/s3-identity.json</code>; the <code>/etc/hosts</code> entry (it prints the command and waits, it never sudo-s for you); a world-writable <code>target/mails/</code>; the <code>skillars:local</code> image build (Maven + Quasar inside Docker, several minutes the first time); and finally that <code>start.sh</code> exists. Re-run it any time as a status check.</p>
     <table>
       <thead><tr><th></th><th>Mode A: all-Docker</th><th>Mode B: infra in Docker, app on host</th></tr></thead>
       <tbody>
         <tr><td>Use for</td><td>Clicking through the product</td><td>Changing code (hot reload, debugger)</td></tr>
-        <tr><td>Start</td><td><code>docs/deployment/local/start.sh</code></td><td><code>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d postgres redis storage storage-init</code><br><code>export APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder</code><br><code>mvn spring-boot:run -Dspring-boot.run.profiles=dev -DskipFrontend</code><br><code>cd src/frontend &amp;&amp; npx quasar dev</code></td></tr>
+        <tr><td>Start</td><td><code>docs/deployment/local/start.sh</code></td><td>Postgres and Redis are not published, so layer <code>docs/deployment/local/docker-compose.host-ports.yml</code> on the compose command, export the datasource, Redis-password, Stripe-placeholder and <code>APP_VIDEO_BUNNY_LIBRARY_ID</code> variables, then <code>mvn spring-boot:run -Dspring-boot.run.profiles=dev -DskipFrontend</code> and <code>cd src/frontend &amp;&amp; npm install &amp;&amp; npx quasar dev</code>. Exact block: <a href="../../deployment/local/manual-testing.md">manual-testing.md</a>, "Mode B".</td></tr>
         <tr><td>UI</td><td><code>http://localhost:9990</code> (the jar serves the SPA)</td><td><code>http://localhost:9000</code>, proxying <code>/api</code> to <code>:9990</code> (<code>devServer.proxy</code> in <code>quasar.config.js</code>)</td></tr>
         <tr><td>Picking up changes</td><td>Nothing rebuilds automatically: <code>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local up -d --build app</code></td><td>Restart the backend; the frontend hot-reloads</td></tr>
       </tbody>
@@ -121,7 +121,7 @@ docs/deployment/local/stop.sh      # docker compose ... down (volumes kept)</pre
     </table>
     <p>Then make the coach bookable and the parent solvent, still without Stripe:</p>
 <pre>docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local \
-  exec -T postgres psql -U postgres -d skillars \
+  exec -T postgres psql -U skillars -d skillars \
   -v coach_email=coach@example.com -v owner_email=parent@example.com \
   &lt; docs/deployment/local/seed-accounts.sql</pre>
     <p>It writes a <code>COMPLETE</code> <code>payment.coach_stripe_accounts</code> row (the booking payment-readiness gate is a pure DB read), sets the coach tier (<code>ACADEMY</code> by default, <code>-v coach_tier=INSTRUCTOR</code> to override), adds 5000.00 of wallet credit to the owner as one <code>BOOKING_REFUND</code> ledger row (so bookings settle to <code>CONFIRMED</code> with no gateway call), and an active <code>PRO</code> player subscription. The seeded credit lands in the wallet's <em>cashable</em> pool (V208's <code>spend_only_amount</code> defaults to 0); that makes no difference to bookings, because settlement splits on the whole balance and spends the spend-only pool first anyway. Each booking is charged at the <code>agreed_price</code> locked when it was requested, so the coach must have set a price before the parent requests. The credit ledger is append-only: <strong>every re-run adds more credit</strong> and cannot be undone. The script refuses to run on any database other than <code>skillars</code>, <code>skillars_dev</code> or <code>skillars_local</code>.</p>

@@ -398,8 +398,8 @@ compose logs` just work.
 
 **One thing this stripped-down setup does need to turn off, though:**
 `docker-compose.yml` hardcodes `LOKI_ENABLED=true`/`LOKI_URL=http://loki:3100`
-on the `app` service unconditionally, and — unlike an older assumption
-recorded in `local/deployment.md`'s own Logs section — `logback-spring.xml`
+on the `app` service unconditionally, and — contrary to an older
+assumption that it did not — `logback-spring.xml`
 *does* attach a real `Loki4jAppender` to the root logger when
 `loki.enabled=true`.
 

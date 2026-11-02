@@ -10,12 +10,12 @@ docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env
   up -d app postgres redis storage-init grafana
 cat <<'MSG'
 
-Skillars is starting in the background. First boot can take up to ~60s while
-SeaweedFS's healthcheck passes, then Flyway migrations run.
+Skillars is starting in the background. A first boot takes a minute or two: SeaweedFS's
+healthcheck has to pass, then Flyway migrations run. It is ready when the health URL says UP.
 
   App:      http://localhost:9990
-  Health:   http://localhost:8367/manage/health
-  Grafana:  http://localhost:3000
+  Health:   http://localhost:8367/manage/health   ({"status":"UP",...})
+  Grafana:  http://localhost:3000   (user admin, password = GF_SECURITY_ADMIN_PASSWORD in .env.local)
 
 Check status:   docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local ps
 Tail app logs:  docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local logs -f app

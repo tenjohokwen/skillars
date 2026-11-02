@@ -5,18 +5,27 @@
 below (Docker, `.env.local`, the compose override, storage, `/etc/hosts`,
 building the image), creating or fixing what it can and telling you exactly
 what to do by hand otherwise. Re-run it any time; once everything checks out
-it just prints the one command that starts the app. The rest of this document
-is the detailed reference behind what that script automates.
+it just prints the one command that starts the app
+([`start.sh`](./start.sh); [`stop.sh`](./stop.sh) stops it). The rest of this
+document is the detailed reference behind what that script automates.
 
 Run Skillars on your own machine using Docker — no domain or TLS required. This
 trims the production [`docker-compose.yml`](../../../docker-compose.yml) down to
 the services the app needs to run (`app`, `postgres`, `redis`, `storage` — a
-local S3-compatible store for file uploads, running SeaweedFS as of
-2026-09-24, see [Step 3](#step-3-the-local-compose-override) — with `loki`
-and `tempo` coming along automatically too — see [Notes](#notes) below), plus
-`prometheus` and `grafana` so you can browse metrics, traces and logs locally
-instead of relying solely on `docker logs` (see
-[Step 6.1](#step-61-browse-grafana-optional) and the [Logs](#logs) section).
+local S3-compatible store for file uploads, running SeaweedFS, see
+[Step 3](#step-3-the-local-compose-override) — with `loki` and `tempo` coming
+along automatically too, see [Notes](#notes)), plus `prometheus` and `grafana`
+so you can browse metrics, traces and logs locally instead of relying solely
+on `docker logs` (see [Step 6.1](#step-61-browse-grafana-optional) and the
+[Logs](#logs) section).
+
+The local stack runs the Spring **`dev`** profile (there is no `local` profile).
+The prod/uat-only boot validators (`DeployedSecretsValidator`,
+`DeployedMediaScanningValidator`, which refuse dev-default secrets, a non-https
+storage endpoint, or switched-off image scanning) are `@Profile({"prod","uat"})`
+and never run here, so none of their requirements apply to this guide. Last
+verified end to end on 2026-11-02 against master `01770303` (Flyway migrations
+through `V223`).
 
 For the full production stack (Traefik/TLS, backups), see
 [`first-time-setup.md`](../first-time-setup.md) instead.
@@ -25,15 +34,27 @@ For the full production stack (Traefik/TLS, backups), see
 
 ## Prerequisites
 
-- Docker Engine + Docker Compose plugin (`docker compose version`)
-- A local clone of this repository
+- Docker Engine + the Docker Compose v2 plugin (`docker compose version`). The
+  steps were verified with Compose v2.2.3; anything newer works too.
+- A local clone of this repository. Compose names containers after the checkout
+  directory (`skillars-app-1` below assumes the directory is called `skillars`;
+  use `dcl ps` / `dcl logs` if yours differs).
+- Free host ports: `9990` (app), `8367` (health/actuator), `3000` (Grafana),
+  `9500` (S3 storage). Redis and Postgres are deliberately **not** published
+  (see [Step 3](#step-3-the-local-compose-override)).
+- `127.0.0.1 storage` in `/etc/hosts` (see [Step 3](#step-3-the-local-compose-override)).
+- Nothing else for Mode A: the image build compiles the backend (Java 17) and
+  the Quasar frontend (Node 22.16.0) **inside Docker**. You only need a local
+  Java 17 + Maven 3.9 and Node 22 (`^20 || ^22 || ^24`, CI uses 22.16.0) for the
+  host-run "Mode B" in [`manual-testing.md`](./manual-testing.md#which-run-mode).
 
 ---
 
 ## Step 1: Build the image
 
 The production `docker-compose.yml` only references `image: ${APP_IMAGE}` (pulled
-from GHCR) — there's no `build:` section, so build the image yourself first:
+from GHCR) — there's no `build:` section, so build the image yourself first
+(a cold build, Maven plus npm plus `quasar build`, takes several minutes):
 
 ```bash
 docker build -t skillars:local .
@@ -43,10 +64,10 @@ docker build -t skillars:local .
 [Step 3](#step-3-the-local-compose-override), it's not a file you create
 yourself) — also carries a `build:` block, so once you're using it you can
 rebuild with `docker compose -f docker-compose.yml -f docker-compose.local.yml
-build app` instead. Note that **`docker compose build app` without the local
-override silently does nothing and exits 0** — the base file has no `build:`
-key — so if a change you just made appears to have no effect, check which
-command you rebuilt with before debugging the code.
+--env-file .env.local build app` instead. Note that **`docker compose build app`
+without the local override silently does nothing and exits 0** — the base file
+has no `build:` key — so if a change you just made appears to have no effect,
+check which command you rebuilt with before debugging the code.
 
 ---
 
@@ -55,6 +76,8 @@ command you rebuilt with before debugging the code.
 ```bash
 cp .env.example .env.local
 ```
+
+(`./setup.sh` does this and fills in the values below for you.)
 
 Use `.env.local`, not `.env`. `first-time-setup.md` (Step 5) also does
 `cp .env.example .env` at this same repo root, as a staging file it later
@@ -65,8 +88,9 @@ explicitly via `--env-file` below, so the two never collide. It's already
 covered by the `.env.*` line in `.gitignore`.
 
 For local use you only need to set the values below — everything else in
-`.env.example` (domain, TLS email, Bunny CDN, Grafana/SMTP alerting, Hetzner
-backup credentials) is for the production stack and can be left as-is or removed.
+`.env.example` (domain, TLS email, Bunny CDN, Grafana SMTP alerting, Hetzner
+backup credentials, Stripe keys) is for the production stack and can be left
+as-is or removed.
 
 | Variable | Required? | Local value |
 |---|---|---|
@@ -76,47 +100,50 @@ backup credentials) is for the production stack and can be left as-is or removed
 | `MONITORING_DOMAIN` | Yes (placeholder only) | Any value, e.g. `unused` |
 | `GF_ALERT_NOTIFY_EMAIL` | Yes (placeholder only) | Any non-empty email-shaped value, e.g. `alerts@localhost` |
 | `GF_SLACK_WEBHOOK_URL` | Yes (placeholder only) | Any non-empty URL, e.g. `https://hooks.slack.com/services/unused/unused/unused` |
-| `POSTGRES_DB` | No | Defaults to `skillars` |
-| `POSTGRES_USER` | No | Defaults to `postgres` |
+| `POSTGRES_DB` | No | `.env.example` sets `skillars` (also the compose default) |
+| `POSTGRES_USER` | No | `.env.example` sets **`skillars`** (the compose default, if you delete the line, is `postgres`). This is the role every `psql -U` below uses |
+| `APP_BOOTSTRAP_ADMIN_EMAIL` / `_PASSWORD` / `_PHONE` | Optional | Creates the first `ADMIN` on app start, see [Step 5](#step-5-create-accounts) |
 
 `GF_SECURITY_ADMIN_PASSWORD` and `MONITORING_DOMAIN` use Compose's hard-required
 `${VAR:?error}` syntax on the `grafana` service, so both must resolve to
 *something* or the command fails outright with `invalid interpolation format`.
-This guide now starts `grafana` locally (see Step 4), so
-`GF_SECURITY_ADMIN_PASSWORD` is a real, actually-used value — set it to
-whatever you want your local Grafana login to be. `MONITORING_DOMAIN` only
-feeds `GF_SERVER_ROOT_URL` and Traefik labels (`traefik` itself never starts
-here), so it can stay a throwaway placeholder.
+`MONITORING_DOMAIN` only feeds `GF_SERVER_ROOT_URL` and Traefik labels
+(`traefik` itself never starts here), so it can stay a throwaway placeholder.
 
 `GF_ALERT_NOTIFY_EMAIL` and `GF_SLACK_WEBHOOK_URL` aren't Compose-required,
 but *are* required in practice: `deploy/lgtm/grafana-alerts.yml` provisions an
 email + Slack contact point for infra alerts using these two variables, and
 Grafana validates each contact point at startup — an email integration with a
 blank `addresses` or a Slack integration with a blank `url` both fail
-validation and crash the container in a restart loop (found by actually
-running this locally, not a hypothetical). Any non-empty placeholder value
-satisfies the validation; neither is ever actually sent to anywhere locally.
-Once both are set, you'll reach Grafana at
-`http://localhost:3000` regardless of what it's set to.
+validation and crash the container in a restart loop. Any non-empty
+placeholder satisfies the validation; neither is ever actually sent anywhere
+locally.
 
-Everything else the app reads (mail credentials, video/payment/AI provider
-keys, PIN encryption secret) resolves to safe placeholder defaults **only**
+Everything else the app reads resolves to safe placeholder defaults **only**
 when the Spring `dev` profile is active — which is what the override file in
-the next step turns on. You do not need to set `JWT_SIGNING_KEY`
-or `REDIS_PASSWORD` either: `docker-compose.local.yml` carries clearly-labelled dev-only values for both (see
-Step 3 and Step 5).
+the next step turns on. You do not need to set `JWT_SIGNING_KEY` (the JWT
+signing key comes from that env var and is no longer stored in the database)
+or `REDIS_PASSWORD` (redis now refuses to start without one): 
+`docker-compose.local.yml` carries clearly-labelled dev-only values for both,
+which `DeployedSecretsValidator` rejects on prod/uat. The other security-round
+settings also have local-safe defaults: `ARACHNID_ENABLED=false` (image
+scanning off, see [`manual-testing.md`](./manual-testing.md#media-scanning-and-video-privacy-s-18)),
+`GEMINI_MODE=developer` (no warning outside prod) and `GEMINI_API_KEY=dev-key`.
 
 **Important:** `.env.local` only feeds `${VAR}` placeholders written directly
 in the compose YAML files — it is *not* automatically injected into a
 container's process environment. A variable only reaches the app's JVM if
 `docker-compose.yml` or `docker-compose.local.yml` explicitly lists it under
-that service's `environment:`. All four variables above qualify because
-`docker-compose.yml` already references them (`${APP_IMAGE}`,
-`${POSTGRES_PASSWORD}`, etc.). If you ever need to pass some *other* Spring
+that service's `environment:`. If you ever need to pass some *other* Spring
 property through to the app, add it to `docker-compose.local.yml`'s
 `app.environment` list (Step 3) — adding it only to `.env.local` silently does
-nothing, which is exactly what happened during this guide's own testing (see
-Step 3's `APP_VIDEO_BUNNY_LIBRARY_ID`).
+nothing.
+
+**Shell variables beat `.env.local`.** Compose resolves `${VAR}` from your shell
+environment before `--env-file`. A stray `export GMX_PASSWORD=...`,
+`GMAIL_PASSWORD`, `GEMINI_API_KEY` or `ENVIRONMENT` in your shell leaks straight
+into the containers; run `docker compose ... config | grep -n <NAME>` when a
+value looks wrong.
 
 ---
 
@@ -126,69 +153,49 @@ Step 3's `APP_VIDEO_BUNNY_LIBRARY_ID`).
 root** — it's a real, git-tracked file the team maintains, not a personal
 override you create or a `.gitignore`d scratch file (only `.env.local` is
 that). If you cloned the repo, you already have it; there's nothing to do in
-this step beyond understanding what it contains and why, which the rest of
-this section walks through. (If it's ever missing —a shallow/partial
-checkout, or you deleted it by hand— restore it with `git checkout --
-docker-compose.local.yml` rather than retyping it from this doc.)
+this step beyond understanding what it contains. (If it's ever missing, restore
+it with `git checkout -- docker-compose.local.yml`. `setup.sh` embeds a
+fallback copy, kept identical to the file apart from one header comment line,
+and uses it only when the file is neither in the working tree nor tracked.)
 
 `docker-compose.yml` doesn't publish the app's ports to your host (only
 Traefik does that in production) and doesn't set `SPRING_PROFILES_ACTIVE`.
-`docker-compose.local.yml` fixes both. It also mounts data directories from fixed host paths that `provision.sh`
-creates on the production Node — `postgres` (`/opt/skillars/data/postgres`),
-`redis` (`/opt/skillars/data/redis`, since UAT.2 moved it off a named volume),
-`loki` and `tempo` (`/opt/skillars/data/{loki,tempo}`, pulled in as
-dependencies of `app` — see [Notes](#notes)), and `prometheus`/`grafana`
-(`/opt/skillars/data/{prometheus,grafana}`, pulled in as a dependency of
-`grafana`). None of those paths exist on your machine, and Docker Desktop
-refuses to bind-mount a host directory it hasn't been granted access to. So
-the checked-in file replaces all of them with plain named volumes, publishes
-Grafana's port so you can reach its UI from the host, and adds a local
-S3-compatible store (the `storage` service, `app`'s newest hard dependency —
-see below) plus a one-shot bucket creator. In full:
-
-The file itself is the reference (its comments explain each line); `setup.sh` checks it and restores it from git if it is
-missing. What it does:
+`docker-compose.local.yml` fixes both. The base file also mounts data
+directories from fixed host paths that `provision.sh` creates on the production
+Node (`/opt/skillars/data/{postgres,redis,loki,tempo,prometheus,grafana}`).
+None of those paths exist on your machine, and Docker Desktop refuses to
+bind-mount a host directory it hasn't been granted access to, so the override
+replaces all of them with plain named volumes, publishes Grafana's port, and
+adds a local S3-compatible store (`storage`, `app`'s newest hard dependency)
+plus a one-shot bucket creator. The file's comments explain each line; in
+short:
 
 | Part | What and why |
 |---|---|
 | `app.build` | `docker compose build app` needs a `build:` block, or it exits 0 having built nothing |
 | `app.environment` | Turns on the `dev` profile and restates `application-dev.yaml`'s own defaults, because the base file passes each variable with an empty `${VAR:-}` default and an empty value overrides a profile default: `APP_FRONTEND_URL`, `APP_STORAGE_*`, `APP_VIDEO_*_SECRET`, `PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`, `GMAIL_PASSWORD`/`GMX_PASSWORD`, `APP_SES_FROM_ADDRESS`, `ALLOWED_CLIENTS`, `GEMINI_API_KEY` |
-| `app.environment` (startup blockers) | `APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder`, `APP_VIDEO_BUNNY_LIBRARY_ID=123456`, `MANAGEMENT_HEALTH_MAIL_ENABLED=false`; see the list after the next paragraphs |
-| `app.environment` (security round) | `JWT_SIGNING_KEY` (the published dev key) and `SPRING_DATA_REDIS_PASSWORD` plus `redis`'s `REDIS_PASSWORD` (`dev-redis-password-NOT-for-prod`). `DeployedSecretsValidator` rejects both values on `prod`/`uat`, so they can never leak into a deployed environment |
+| `app.environment` (startup blockers) | `APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder`, `APP_VIDEO_BUNNY_LIBRARY_ID=123456`, `MANAGEMENT_HEALTH_MAIL_ENABLED=false` (the last is now a harmless no-op) |
+| `app.environment` (security round) | `JWT_SIGNING_KEY` (the published dev key) and `SPRING_DATA_REDIS_PASSWORD` plus `redis`'s `REDIS_PASSWORD` (`dev-redis-password-NOT-for-prod`). Redis sits alone with the app on the `internal: true` network `skillars-data`; it is never published to the host |
 | `app.volumes`, `ports` | `./target/mails` for the dev email dump; publishes `9990` (app) and `8367` (management) |
 | `postgres`, `redis`, `loki`, `tempo`, `prometheus`, `grafana` | Named volumes instead of the `/opt/skillars/data/*` bind mounts; publishes Grafana on `3000` |
-| `storage`, `storage-init` | SeaweedFS S3 API on `9500` (credentials from `deploy/seaweedfs/s3-identity.json`), and a one-shot job that creates the `skillars-dev` bucket and its CORS policy |
+| `storage`, `storage-init` | SeaweedFS S3 API on `9500` (credentials `minioadmin`/`minioadmin123` from `deploy/seaweedfs/s3-identity.json`), and a one-shot job that creates the `skillars-dev` bucket and its CORS policy |
 | `volumes:` | The named volumes the above use |
 
 Compose merges `volumes:` entries by matching container target path, so each
 of these overrides only replaces the matching production bind mount — the
 other mounts on `loki`/`tempo`/`prometheus`/`grafana` (their read-only
-`./deploy/lgtm/*.yml` config files, relative paths, not a problem) are
-untouched. The top-level `volumes:` block declares all the named volumes this
-stack needs; `docker-compose.yml` itself declares none for `redis` since
-UAT.2 moved it onto the Hetzner Volume bind mount, and its production `storage`
-service runs a shell entrypoint that writes the S3 identity from `STORAGE_ROOT_*`
-and routes through Traefik, so both need an override here. `traefik` has the same kind of fixed
-host-path/config dependency, but since it never starts in this trimmed stack,
-it's never evaluated and doesn't need an override.
+`./deploy/lgtm/*.yml` config files, relative paths) are untouched. `traefik`
+has the same kind of fixed host-path dependency, but since it never starts in
+this trimmed stack it doesn't need an override.
 
-**Why `storage` runs SeaweedFS, not MinIO.** As of 2026-09-24 (`8b5a5fb3`, #229),
-`quay.io/minio/minio` — both this pinned tag and `:latest` — returns 401 on
-anonymous pulls, a widely-reported break affecting every project that used it,
-not something specific to this repo. `chrislusf/seaweedfs:3.97` (Docker Hub,
-confirmed pullable) replaced it here, in the UAT compose files, and in the
-integration-test Testcontainers setup alike. The service and volume were
-briefly kept named `minio` right after that migration to minimize the diff,
-then renamed to `storage` on 2026-09-28 once it was clear that name would
-only confuse a future reader — nothing here has run MinIO for a while.
-Credentials (`minioadmin`/`minioadmin123`) are unchanged, but come from the
-mounted `deploy/seaweedfs/s3-identity.json` (already checked into the repo —
-nothing to create yourself) rather than `MINIO_ROOT_USER`/`MINIO_ROOT_PASSWORD`-style
-env vars, because SeaweedFS's own env-var credential path has a live upstream
-reliability issue ([seaweedfs/seaweedfs#7311](https://github.com/seaweedfs/seaweedfs/issues/7311)).
-`amazon/aws-cli` stands in for `quay.io/minio/mc` in `storage-init` for the same
-pull-blocking reason — it's a generic S3 client, so it works against
-SeaweedFS's S3 gateway unmodified.
+**Why `storage` runs SeaweedFS, not MinIO.** `quay.io/minio/minio` started
+returning 401 on anonymous pulls on 2026-09-24, so `chrislusf/seaweedfs:3.97`
+replaced it here, in the UAT compose files and in the Testcontainers setup.
+The service is called `storage` (not `minio`); `amazon/aws-cli` stands in for
+`mc` in `storage-init`. Credentials come from the mounted
+`deploy/seaweedfs/s3-identity.json` (already in the repo), not env vars, because
+SeaweedFS's own env-var credential path has a live upstream reliability issue
+([seaweedfs/seaweedfs#7311](https://github.com/seaweedfs/seaweedfs/issues/7311)).
 
 **Browser-side uploads need one `/etc/hosts` entry.** The app container reaches
 this service over the compose network as `storage:9500`, and the presigned
@@ -200,111 +207,53 @@ resolve `storage` on its own. Add this once:
 127.0.0.1 storage
 ```
 
-That, plus the published `9500:9500` port above, makes `http://storage:9500/...`
-resolve to this container from both the app and your browser.
+That, plus the published `9500:9500` port, makes `http://storage:9500/...`
+resolve to this container from both the app and your browser. (An old
+`127.0.0.1 minio` line from before the rename is unused and can be removed.)
 
-**Upgrading from before 2026-09-28?** Your `/etc/hosts` still has the old
-`127.0.0.1 minio` line — add the `storage` line above alongside it (the old
-one is now unused and can be removed whenever convenient).
-
-The additional `app.environment` entries beyond the storage/video ones above
-(`GMAIL_PASSWORD`/`GMX_PASSWORD`, `APP_SES_FROM_ADDRESS`,
-`APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET`, `APP_VIDEO_PLAYBACK_SIGNING_SECRET`,
-`PLATFORM_PIN_ENCRYPTION_SECRET`, `PLATFORM_REGISTRATION_VERIFICATION_SECRET`)
-all restate `application-dev.yaml`'s own defaults, and — like the storage keys
-above — are required rather than tidy: `docker-compose.yml` passes each
-through with a `${VAR:-}` empty default so a production deploy can set it, but
-an empty environment variable is present-and-blank, not absent, so it
-*overrides* `application-dev.yaml`'s own `${VAR:dev-default}` fallback the
-moment the base file lists it. Found by running it: an empty
+The `app.environment` entries that restate `application-dev.yaml` defaults are
+required rather than tidy. Found by running it: an empty
 `APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET` aborts startup in
 `BunnyVideoProviderAdapter` ("webhookSigningSecret must not be blank"), and an
 empty `APP_STORAGE_S3_ACCESS_KEY` silently drops storage back onto the AWS
-default credential chain, breaking every upload. Keep this block in step with
+default credential chain, breaking every upload. Keep that block in step with
 `application-dev.yaml`.
 
-The three startup-blocking `app.environment` entries below (Stripe, video
-library ID, mail health) fix real crash loops found by actually running this
-stack, not hypothetical ones:
+Three entries fix real startup crash loops (not hypothetical ones) and are
+the ones to remember if you ever run the app outside this compose file:
 
-- **`APP_VIDEO_BUNNY_LIBRARY_ID=123456`** — `VideoProviderConfig`'s
-  `videoProviderAdapter` bean eagerly validates `app.video.bunny.library-id`
-  as numeric. It defaults to an empty string, and that bean sits behind a
-  non-lazy dependency chain (`DrillLibraryResource` → `DrillLibraryService`),
-  so the *entire app context* fails to start over an unused Bunny video
-  setting. `123456` is the same placeholder the integration test suite
-  already uses (`src/test/resources/application-test.yaml`).
-- **`MANAGEMENT_HEALTH_MAIL_ENABLED=false`** — historically Spring Boot
-  Actuator's `MailHealthIndicator` opened a real SMTP connection to
-  `mail.gmx.net` and authenticated with whatever mail password was
-  configured, and the `dev` profile's placeholder password always failed
-  that, dragging `/manage/health` to `DOWN`. Story ses-1.2 (D9) deleted
-  `spring.mail.host` and everything that fed it, so Boot's mail health
-  contributor — `@ConditionalOnBean(JavaMailSenderImpl)` — no longer has a
-  bean to activate on and is inert regardless of this flag's value. This
-  codebase's real SMTP reachability check is now `SmtpHealthIndicator`
-  (`infrastructure.email.smtp`), registered under the separate
-  `notification` actuator group — only when `app.email.transport=smtp`, so
-  not in `dev` any more (ses-1.5: `dev` runs `log`, which has no health indicator); it never authenticates (TCP connect + `220`
-  banner + `EHLO`/TLS only), so a placeholder password cannot fail it
-  either. `MANAGEMENT_HEALTH_MAIL_ENABLED=false` is kept here as a
-  belt-and-braces no-op rather than removed — see `docker-compose.uat.yml`
-  for the same note.
+- **`APP_VIDEO_BUNNY_LIBRARY_ID=123456`** — the `videoProviderAdapter` bean
+  eagerly validates `app.video.bunny.library-id` as numeric. It defaults to an
+  empty string and `application-dev.yaml` does not set it, so the *entire app
+  context* fails to start over an unused video setting
+  (`app.video.bunny.library-id must be numeric, got: `). Verified again on
+  2026-11-02 when running the app on the host without it.
 - **`APP_PAYMENT_STRIPE_API_KEY=sk_test_local_placeholder`** —
-  `PaymentConfig.configureStripe()` throws `AppSetupException` when
-  `app.payment.stripe.api-key` is blank, and blank is exactly what it resolves
-  to here: `application.yaml` defaults it to `""` and `application-dev.yaml`
-  doesn't override it. `docker-compose.yml` does pass the variable through since
-  2026-09-02, but it has no value on your machine, so this local override still
-  has to supply one. Without it the app context refuses to start. This fail-fast
-  arrived in `82a89a9` (2026-08-27), after the rest of this guide was written and
-  verified, which is why it isn't reflected in the step-by-step above. Any
-  test-shaped placeholder works — the adjacent guard in the same method only
-  rejects keys matching `^(sk|rk)_live_`, and refuses those outside the `prod`
-  profile precisely so a local or UAT environment can never charge real money.
-
-Two further crash loops used to sit behind these and needed environment
-variables of their own. Both were real bugs that broke production deploys as much
-as local ones, and both are now fixed in the code — no override required:
-
-- The Loki appender in `logback-spring.xml` was written against the loki4j 1.x
-  schema and was never updated when `loki-logback-appender` was bumped to 2.1.0
-  in `039b1a8` (PR #48). Logback threw `IncompatibleClassException`, which Spring
-  Boot treats as fatal, killing the JVM before any bean existed.
-- `application-dev.yaml` set `app.ses.enabled: true`, which asked for a real AWS
-  SES client that then failed with
-  `NoClassDefFoundError: org/apache/hc/client5/...` — because `pom.xml` declared
-  `httpclient5` at *test* scope, stripping it from the shipped jar even though
-  `software.amazon.awssdk:apache5-client` needs it at runtime.
-
-See [`manual-testing.md`](./manual-testing.md) for the full
-write-up, including the two latent logback problems the first crash was masking.
-
-A third problem sat alongside those, visible on every start as:
-
-```
-ERROR AccessLogValve - Failed to create directory [/usr/local/var/ledger] for access logs
-```
-
-`application.yaml` pointed Tomcat's access log at an absolute path the non-root
-`appuser` in the image cannot create. Tomcat logged it and continued, so the app
-still reached `UP` — it just never produced an access log, in any environment.
-Also fixed: access logging is now emitted through SLF4J and reaches Loki, so
-**you should no longer see that error**. If you do, you are running an image
-built before 2026-09-01. See the [Logs](#logs) section.
+  `PaymentConfig.configureStripe()` throws `AppSetupException` when the key is
+  blank, and blank is what it resolves to locally. Any test-shaped placeholder
+  works: the guard in the same method only rejects `^(sk|rk)_live_` keys outside
+  the `prod` profile, so a local environment can never charge real money. Note
+  the placeholder is non-blank, so Stripe-backed features that only check "is a
+  key configured" consider Stripe set up (see the age-verification scenario in
+  `manual-testing.md`).
+- **`MANAGEMENT_HEALTH_MAIL_ENABLED=false`** — kept as a belt-and-braces no-op.
+  The dev profile runs `app.email.transport: log`, which has no health
+  indicator and sends nothing.
 
 It's deliberately named `docker-compose.local.yml` and passed explicitly with
 `-f`, rather than `docker-compose.override.yml`, which Compose auto-loads. The
 deploy scripts in `first-time-setup.md` run `docker compose up -d` with no
 `-f` flags on the production Node — an auto-loaded override sitting in the
-repo would silently leak `dev` profile and exposed ports into that deploy.
+repo would silently leak the `dev` profile and exposed ports into that deploy.
 
 ---
 
 ## Step 4: Start the stack
 
-Every command from here on needs the same three flags — `-f docker-compose.yml
--f docker-compose.local.yml --env-file .env.local` — so it's worth an alias:
+Either run `docs/deployment/local/start.sh` (it creates `target/mails`, runs the
+command below and prints the URLs), or do it by hand. Every command from here
+on needs the same three flags — `-f docker-compose.yml -f
+docker-compose.local.yml --env-file .env.local` — so it's worth an alias:
 
 ```bash
 alias dcl='docker compose -f docker-compose.yml -f docker-compose.local.yml --env-file .env.local'
@@ -319,58 +268,53 @@ dcl up -d app postgres redis storage-init grafana
 Compose will also start `loki`, `tempo`, and `storage` automatically — `app`
 declares a hard `depends_on` on all three (`loki`/`tempo` just *started*,
 `storage` actually *healthy*), so they come up even though only `storage-init`
-was named explicitly. Naming `grafana` similarly pulls in `prometheus`, since
-`grafana` depends on it (`condition: service_started`). `traefik` and
-`node_exporter` are not dependencies of anything named here and stay stopped.
+was named explicitly. Naming `grafana` similarly pulls in `prometheus`.
+`traefik` and `node_exporter` are not dependencies of anything named here and
+stay stopped.
 
 `storage-init` has to be named explicitly — unlike `storage` itself, nothing
 declares a hard dependency on it, so leaving it off the command means the
 `skillars-dev` bucket is never created and every upload fails with a
 "no such bucket" error the first time you try one.
 
-Give it a minute, then confirm everything is healthy:
+Give it a minute or two, then confirm everything is healthy:
 
 ```bash
 dcl ps
 ```
 
-`app` runs its database migrations (Flyway) on this first startup, which is
-why the next step can't happen until the container is up.
+`app` runs its database migrations (Flyway, `V138` through `V223`) on this first
+startup, which is why the next step can't happen until the container is up.
 
 ---
 
-## Step 5: Seed required bootstrap data
+## Step 5: Create accounts
 
-The JWT signing key is no longer stored in the database. It comes from `JWT_SIGNING_KEY`
-(`app.security.jwt.signing-key`); `docker-compose.local.yml` and `application-dev.yaml` carry a
-dev-only default, so **there is nothing to seed and nothing to set locally**. Do not run
-`secData.sql`; it only writes a now-unused `main.sec` row.
+There is nothing to seed to get the app running: the JWT signing key comes from
+`JWT_SIGNING_KEY` (with a dev-only default in `docker-compose.local.yml` and
+`application-dev.yaml`) and every role registration needs is seeded by Flyway.
+**Do not run** `src/test/resources/sql/secData.sql` or `initTestData.sql`: they
+only write a now-unused legacy `main.sec` row, and `initTestData.sql` still
+assumes a `local` Spring profile that no longer exists.
 
-### Optional: sample login users — still not reliable, for a different reason now
+Register coach / parent / adult-player accounts through the UI (or the API, see
+[`manual-testing.md`](./manual-testing.md#creating-the-accounts)), then use
+[`seed-accounts.sql`](./seed-accounts.sql) to give them paid state without Stripe.
+The ones that cannot be registered:
 
-`src/test/resources/sql/initTestData.sql` seeds the same JWT secret row
-**plus** roles and test accounts (including an admin), and this guide used to
-offer it as a shortcut past registration. **It still fails under `dev`**, but
-not for the reason previously written here: its `main.authority` insert was
-patched to add `ON CONFLICT (name) DO NOTHING`, so it no longer collides with
-the role rows Flyway seeds (previously cited as migrations `V21`/`V92`; the
-whole migration history was squashed on 2026-09-24 by `skillars-deferred-112`
-into `V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`, which now
-seed those same role names).
-
-What still fails is the very first statement in the file, an `INSERT INTO main.sec` with no
-`ON CONFLICT` (`src/test/resources/sql/initTestData.sql:11`); it writes the unused legacy JWT row.
-
-Skip it and register accounts through the app. Every
-role the registration flows need is already seeded by Flyway, so no user
-fixture is required.
-
-If you specifically want an admin account, use the `AdminBootstrapRunner`
-environment variables instead (`APP_BOOTSTRAP_ADMIN_EMAIL`,
-`APP_BOOTSTRAP_ADMIN_PASSWORD`, `APP_BOOTSTRAP_ADMIN_PHONE` — see
-`.env.example`). Put them in `.env.local`: the base `docker-compose.yml` already
-passes all three through to the app container (`app.environment`), so no compose
-edit is needed — just run compose with `--env-file .env.local`.
+- **Admin.** There is no admin registration. Put `APP_BOOTSTRAP_ADMIN_EMAIL`,
+  `APP_BOOTSTRAP_ADMIN_PASSWORD` and `APP_BOOTSTRAP_ADMIN_PHONE` in `.env.local`
+  (the base compose file already passes them to the app) and `dcl up -d app`.
+  `AdminBootstrapRunner` creates one `ROLE_ADMIN` account, already activated;
+  it never elevates an existing user, so use an address no one registered with.
+  Example values: `admin@example.com`, a throwaway password such as
+  `Adm1n-Local-Only!`, `+491701234599`.
+- **Limited admin (`ROLE_LTD_ADMIN`).** Bootstrap an account as above, then
+  demote it with `seed-accounts.sql -v ltd_admin_email=<that address>` (or the
+  runbook SQL, [Create a limited administrator](../runbook.md#create-a-limited-administrator-role_ltd_admin)).
+  To have both tiers, bootstrap the limited one first, change the
+  `APP_BOOTSTRAP_ADMIN_*` values to a second address and `dcl up -d app` again.
+  Verified: the second boot creates the full admin and leaves the demoted one alone.
 
 For the full manual-testing path — getting a paid coach and a paid
 parent/player through every workflow without Stripe — see
@@ -382,55 +326,95 @@ parent/player through every workflow without Stripe — see
 
 ```bash
 curl -s http://localhost:8367/manage/health
-# {"status":"UP"}
+# {"status":"UP","groups":["smoke"]}
 ```
 
-This whole flow (build → `.env.local` → override file → `up` → seed → this
-health check) was run end-to-end while writing this guide, including chasing
-down each failure above by reading actual container logs rather than
-guessing — not just assembled from reading the config.
+Details are hidden from anonymous callers (they need an admin session), so you
+only ever see `UP` or `DOWN` here. Other URLs that should answer: the app and
+UI at `http://localhost:9990` (200), Grafana at `http://localhost:3000/login`
+(200), and the S3 port `http://storage:9500/` (403 is correct: it wants
+signed requests).
 
 `management.server.port` (8367) runs as a separate embedded server from the
 main app port (9990), so health/actuator endpoints are only reachable on 8367
 — not under `/manage` or `/actuator` on 9990. Application API traffic (e.g.
-login, once you've seeded data) goes to `http://localhost:9990`. The frontend,
-if you run it separately, expects the API there too (see
-`custom.cors.allowed-origins` in `application.yaml`).
+login) goes to `http://localhost:9990`. The Docker healthcheck polls the
+narrower `/manage/health/smoke` group; the default group also includes Redis,
+so it goes `DOWN` (503) while the container still reports healthy if the
+app cannot authenticate to Redis.
 
 ---
 
 ## Step 6.1: Browse Grafana (optional)
 
 Open `http://localhost:3000` and log in with user `admin` and whatever you set
-`GF_SECURITY_ADMIN_PASSWORD` to in `.env.local`. The `loki`, `tempo`, and
-`prometheus` datasources are already provisioned (via
+`GF_SECURITY_ADMIN_PASSWORD` to in `.env.local`. The `Loki`, `Tempo`, and
+`Prometheus` datasources are already provisioned (via
 `deploy/lgtm/grafana-datasources.yml`), along with the dashboards under
-`deploy/lgtm/dashboards/` — traces (Tempo), metrics (Prometheus)
-and, since the appender fix, logs (Loki) are all queryable through the UI. Try
-`{app="skillars"}` in Explore against the `Loki` datasource; see the
-[Logs](#logs) section below.
+`deploy/lgtm/dashboards/` — traces (Tempo), metrics (Prometheus) and logs
+(Loki) are all queryable through the UI. Try `{app="skillars"}` in Explore
+against the `Loki` datasource; see the [Logs](#logs) section below. Grafana is
+pinned to 11.6.16.
 
 `GF_SERVER_ROOT_URL` is still set to `https://${MONITORING_DOMAIN}` (whatever
 placeholder you gave it in Step 2) since that variable is shared with the
 production stack. This only affects things like OAuth callback URLs, which
-this guide doesn't use — plain username/password login and browsing at
-`http://localhost:3000` both work fine regardless of what `MONITORING_DOMAIN`
-is set to.
+this guide doesn't use — plain username/password login at
+`http://localhost:3000` works regardless.
+
+The base compose file defaults `ENVIRONMENT` to `prod`, so every local log line
+and metric is labelled `environment="prod"`. That is only a label (nothing in the
+app branches on it); dashboards filtered on `environment="prod"` will show your
+local data.
 
 ---
 
 ## Tearing down
 
 ```bash
-dcl down
+docs/deployment/local/stop.sh      # same as: dcl down
 ```
 
-Add `-v` to also delete the Postgres data volume and start fresh next time
-(you'll need to repeat Step 5 after doing this).
+Add `-v` (`dcl down -v`) to also delete every named volume (Postgres, Redis,
+storage, Loki, Tempo, Prometheus, Grafana) and start completely fresh next time.
+You will then need to register your accounts again (and re-run
+`seed-accounts.sql`). A bootstrap admin from `.env.local` is recreated on the
+next boot.
+
+To start over without a full wipe, prefer `down -v` to hand-written `DELETE`s:
+once an account has been seeded, rows in the `payment` schema reference it and a
+plain `DELETE FROM main."user"` fails on those foreign keys. For a single
+account use the admin GDPR erasure flow instead.
 
 ---
 
 ## Troubleshooting
+
+**`Bind for 0.0.0.0:9990 failed: port is already allocated` (or 8367 / 3000 /
+9500)** — something else on the host owns the port; stop it or find it with
+`lsof -iTCP:9990 -sTCP:LISTEN`. The same applies to `5432` if you publish
+Postgres for Mode B (the Mode B override defaults to `5433` for that reason).
+
+**`psql: FATAL: role "postgres" does not exist`** — your `.env.local` came from
+`.env.example`, which sets `POSTGRES_USER=skillars`. Use `-U skillars` (or
+`-U "$POSTGRES_USER"` inside the container shell).
+
+**Wrong or changed Redis password** — the app still boots (login keeps working)
+but `curl http://localhost:8367/manage/health` flips to `503 DOWN` with a
+`RedisConnectionFailureException: Unable to connect to Redis` warning in the
+app log, while `/manage/health/smoke` and the Docker healthcheck stay `UP`.
+Keep `SPRING_DATA_REDIS_PASSWORD` (app) and `REDIS_PASSWORD` (redis) identical;
+both are set to `dev-redis-password-NOT-for-prod` in `docker-compose.local.yml`.
+
+**`REDIS_PASSWORD is not set; refusing to start redis`** (redis container exits)
+— you started the base file without `docker-compose.local.yml`. Always pass all
+three flags (use `dcl` or `start.sh`).
+
+**Grafana restart-loops** — `GF_ALERT_NOTIFY_EMAIL` or `GF_SLACK_WEBHOOK_URL` is
+blank in `.env.local` (see Step 2).
+
+**Shell-exported secrets leaking in** (`GMX_PASSWORD`, `GEMINI_API_KEY`,
+`ENVIRONMENT`, ...) — see the note at the end of Step 2.
 
 **`no space left on device` in container logs (Postgres/Loki/Tempo/Prometheus/Redis/storage
 crash-looping, `node_exporter` permission errors)** — this is Docker
@@ -453,17 +437,11 @@ docker image prune -af
 ```
 
 If you need more, `docker volume prune -f` (no `--all`) removes only
-*anonymous* volumes (random-hex names, orphaned once their container was
-removed) — it never touches this project's named volumes
-(`skillars_skillars-local-postgres`, etc.) or any other project's named
-volumes, even while stopped. Skip `--all` unless you specifically mean to
-remove named-but-unattached volumes too, since those could belong to other
-projects.
-
-After freeing space, `dcl down` then `dcl up -d app postgres redis storage-init grafana`
-again — Postgres/Loki/Tempo/Prometheus/Redis/storage all recover cleanly from a
-disk-full crash on restart (WAL/AOF replay), no need to wipe volumes with `-v`
-unless something still looks broken afterward.
+*anonymous* volumes — it never touches this project's named volumes
+(`skillars_skillars-local-postgres`, etc.). After freeing space, `dcl down`
+then `dcl up -d app postgres redis storage-init grafana` again — everything
+recovers cleanly from a disk-full crash on restart, no need to wipe volumes
+with `-v` unless something still looks broken afterward.
 
 ---
 
@@ -474,35 +452,19 @@ unless something still looks broken afterward.
   `dev` profile) lives in `docker-compose.local.yml`, which you pass in
   explicitly and never gets picked up by the production deploy.
 - You'll see `WARN: The "DOMAIN" variable is not set. Defaulting to a blank
-  string.` — harmless. Unlike the two Grafana variables above, `DOMAIN` isn't
-  declared required (no `:?`), so it just warns and interpolates to an empty
-  string in the (unused) `traefik` labels.
+  string.` — harmless (`DOMAIN` only feeds the unused `traefik` labels).
 - `loki`, `tempo`, and `storage` start regardless of the service list you pass
   to `up`, because `app`'s `depends_on` requires them (`loki`/`tempo` just
-  *started*, `storage` actually *healthy* — see
-  [Step 3](#step-3-the-local-compose-override)); `prometheus` similarly
-  starts because `grafana` depends on it. This is harmless locally — all are
-  lightweight — but explains why you'll see extra containers you didn't ask
-  for by name, and why `app` won't report `running` until SeaweedFS's
-  healthcheck passes (up to ~60s on a cold start: 10s `start_period` plus up
-  to 5×10s retries).
-- If you'd rather run the app outside Docker for a tighter debug loop (e.g.
-  attaching a remote debugger), see the commented steps at the top of
-  `src/test/resources/sql/initTestData.sql`, which assume `postgres` and
-  `redis` running locally (e.g. via `dcl up -d postgres redis`) and the app
-  started with `mvn spring-boot:run -Dspring-boot.run.profiles=dev`.
-- `tempo`'s healthcheck in `docker-compose.yml` used to be broken
-  independently of anything in this guide: `CMD-SHELL` requires `/bin/sh`,
-  but the `grafana/tempo` image has no shell at all (only a BusyBox `wget` at
-  a non-standard path) — so the healthcheck could never pass, in production
-  either. Fixed in `docker-compose.yml` to call `wget --spider` directly via
-  the exec-form `CMD` (no shell needed). Two similar bugs — `loki.yml`
-  missing `compactor.delete_request_store` and `tempo.yaml`'s compactor
-  fields needing to nest under `compaction:` — were fixed the same way,
-  in `deploy/lgtm/loki.yml` and `deploy/lgtm/tempo.yaml`, since both would
-  have crash-looped identically on a fresh production deploy.
-
-
+  *started*, `storage` actually *healthy*); `prometheus` similarly starts because
+  `grafana` depends on it. This is harmless locally, but explains why you'll see
+  extra containers and why `app` won't report `running` until SeaweedFS's
+  healthcheck passes (up to ~60s on a cold start).
+- At boot the app logs one `ERROR ... platform.admin_alert_email config is
+  blank` line from `VideoModerationEmailListener`. It only matters if image
+  scanning is switched on; ignore it locally.
+- To run the app on the host instead of in Docker (debugger, hot reload), see
+  "Mode B" in [`manual-testing.md`](./manual-testing.md#which-run-mode). It needs
+  a small extra compose file, because Postgres and Redis are not published.
 
 ## Logs
 
@@ -568,27 +530,14 @@ Other containers work the same way — swap the container name:
 
 ### Via Grafana
 
-**This now works.** Earlier revisions of this guide were wrong about why it did
-not, twice over, so it is worth being precise:
-
-1. The original text claimed no Loki appender was declared at all. That was
-   wrong; one *was* declared.
-2. A later revision said the appender was never attached, because the
-   `<appender-ref>` sat inside an `<if>` nested in `<root>` — a shape logback
-   warns about. Also wrong: parsing that exact file shows the reference still took
-   effect. The construct is unsupported and now restructured, but it was not what
-   stopped logs.
-3. What actually stopped them: the appender's own config was written against the
-   loki4j 1.x schema and broke outright when `loki-logback-appender` was bumped to
-   2.1.0 — and since Spring Boot treats a logback error as fatal, that was a
-   startup crash, not just missing logs.
-
-If you are wondering about the "zero results" observation recorded here before
-that bump, note the query used was `{service="skillars"}` while the config's label
-is `app` — worth re-checking before concluding logs are missing.
-
-All of it is fixed, and `LogbackSpringConfigTest` now guards the parse. `LOKI_ENABLED=true` (the value `docker-compose.yml` already
-sets) now genuinely ships logs, verified by querying Loki directly:
+Logs reach Loki because `docker-compose.yml` sets `LOKI_ENABLED=true`; there is
+nothing to switch on locally. Open Grafana Explore at `http://localhost:3000`
+(Step 6.1) with the `Loki` datasource and query `{app="skillars"}`. Streams carry
+`app`, `environment` (always `prod` locally, see Step 6.1) and `level` labels,
+and each line is the full JSON event including `traceId`/`spanId`/`requestId`,
+so you can pivot from a Tempo trace to its logs and back. To query Loki directly
+(it has no published host port), run curl inside the observability network. The
+network is named after the checkout directory (`docker network ls`):
 
 ```bash
 docker run --rm --network skillars_skillars-observability curlimages/curl -s \
@@ -596,93 +545,56 @@ docker run --rm --network skillars_skillars-observability curlimages/curl -s \
   --data-urlencode 'query={app="skillars"}' --data-urlencode 'limit=5'
 ```
 
-Note `loki` has no published host port in this stack, so query it from inside the
-`skillars-observability` network as above, or use Grafana Explore at
-`http://localhost:3000`. Streams carry `app`, `environment` and `level` labels,
-and each line is the full JSON event including `traceId`/`spanId`/`requestId` —
-so you can pivot from a Tempo trace to its logs and back.
-
 Expect a delay before new lines appear: loki4j batches with a 60-second default
-timeout, so a request you just made will sit in the appender's buffer for up to a
-minute. `docker logs` shows it immediately.
+timeout, so a request you just made can sit in the appender's buffer for up to a
+minute. `docker logs` shows it immediately. Querying `{service="skillars"}`
+returns nothing: the label is `app`.
 
 ### Tomcat access logs
 
-These are in Loki too, under two loggers:
+These are in Loki too, emitted through SLF4J rather than written to a file:
 
 | Logger | Server |
 |---|---|
 | `skillars.access` | main app, port 9990 |
 | `skillars.access.management` | actuator, port 8367 |
 
-They are emitted through SLF4J rather than written to a file — Tomcat's stock
-file valve pointed at `/usr/local/var/ledger`, a path the image's non-root
-`appuser` cannot create, so it logged `Failed to create directory` on every boot
-in every environment and never produced an access log at all. Even had it worked,
-the file would have sat inside the container with nothing collecting it.
-
 The management logger is a child of the main one, so setting `skillars.access` to
-`OFF` in `config/logback-spring.xml` silences both, while
-`skillars.access.management` can be silenced on its own. Consider doing that: the
-actuator port carries the container healthcheck every 30 seconds plus Prometheus
-scrapes, and in a quiet environment that is the bulk of all access log volume.
-
-Turn both off entirely with `APP_ACCESS_LOG_ENABLED=false`.
-
-One gap remains: `src/test/resources/logback-test.xml` shadows
-`logback-spring.xml`, so no test ever loads the production logging config. That
-is why the Dependabot bump merged green, and the same class of regression can
-still slip through.
-
+`OFF` in `src/main/resources/config/logback-spring.xml` silences both, while
+`skillars.access.management` can be silenced on its own (the actuator port
+carries the container healthcheck every 30 seconds plus Prometheus scrapes, the
+bulk of access-log volume in a quiet environment). `APP_ACCESS_LOG_ENABLED=false`
+turns both off. Tokens in logged URLs are redacted.
 
 ## Manual migration
-* Spring boot will usually do the flyway migration once app is run, however it can be run manually
+
+Spring Boot runs the Flyway migrations itself when the app starts, but they can be
+applied by hand (the history starts at `V138`, the squashed baseline; nothing
+below it exists):
 
 ```shell
-  docker exec -i skillars-postgres-1 psql -U postgres -d skillars < src/main/resources/db/migration/V154__gdpr_requests_retry_tracking.sql
+dcl exec -T postgres psql -U skillars -d skillars -v ON_ERROR_STOP=1 \
+  < src/main/resources/db/migration/V223__coach_safeguarding_check.sql
 ```
 
-  (Substitute whatever the latest migration file actually is — `ls src/main/resources/db/migration | sort -V | tail -1`.
-  Numbering restarted at `V138` on 2026-09-24 when `skillars-deferred-112` squashed the
-  entire prior history into `V138__baseline_schema.sql` + `V139__baseline_seed_data.sql`;
-  any file below `V138` no longer exists.)
+(Substitute the migration you need: `ls src/main/resources/db/migration | sort -V | tail -1`
+is the latest. Applying files by hand bypasses Flyway's bookkeeping, so only do
+it on a throwaway database. The seed script was verified against a database built
+by applying `V138` ... `V223` in order with `psql`.)
 
 ## Data persistence
-* The `storage` service's data (SeaweedFS since 2026-09-24, renamed from `minio` on 2026-09-28 — see [Step 3](#step-3-the-local-compose-override)) lives in a named Docker volume (skillars-local-storage, shown as skillars_skillars-local-storage in docker volume ls), which is independent of the container lifecycle.
-* Recreating, restarting, or rebuilding the app or storage containers doesn't touch that volume — same as how your Postgres data survives app redeploys via skillars-local-postgres.
-* What would wipe it:
-    - docker compose down -v (or --volumes) — explicitly removes named volumes.
-    - docker volume rm skillars_skillars-local-storage directly.
-    - Deleting/pruning the volume manually.
 
-* Plain docker compose down / up, container recreates, and image rebuilds are all safe — the bucket and its objects stay put, and since Postgres (which stores the FileStorageObject metadata row pointing at that key) persists the same way, the two stay in sync.
+* Every stateful service keeps its data in a named volume (`skillars-local-postgres`,
+  `-redis`, `-storage`, `-loki`, `-tempo`, `-prometheus`, `-grafana`, shown as
+  `skillars_skillars-local-*` in `docker volume ls`), independent of the container
+  lifecycle.
+* Plain `docker compose down` / `up`, container recreates and image rebuilds are all
+  safe: Postgres (which stores the `FileStorageObject` metadata row) and the storage
+  bucket stay in sync.
+* What wipes them: `docker compose down -v`, `docker volume rm skillars_skillars-local-storage`
+  (or any other of the volumes) directly, or pruning them manually. Wiping only
+  `storage` leaves Postgres rows pointing at objects that no longer exist.
 
-## UAT
-*  When you're ready to point UAT at real AWS, that's just setting APP_STORAGE_ENDPOINT_URL, APP_STORAGE_S3_ACCESS_KEY, APP_STORAGE_S3_SECRET_KEY, and APP_STORAGE_BUCKET as real env vars for that environment — application-uat.yaml doesn't override storage today, so it already inherits from the base config and  
-   just needs those env vars supplied wherever UAT is deployed
-
-
-## Save deletes
-```shell
-
-   BEGIN;                                                                                                                                                                                                                                                                                                               
-                                                                                                                                                                                                                                                                                                                       
-  -- 1. Confirm you're targeting the right account                                                                                                                                                                                                                                                                     
-  SELECT id, login, email, first_name, last_name, skillars_role, activated                                                                                                                                                                                                                                             
-  FROM main."user"                                                                                                                                                                                                                                                                                                     
-  WHERE email = 'tenjoh_okwen@yahoo.com';                                                                                                                                                                                                                                                                              
-                                                                                                                                                                                                                                                                                                                       
-  -- 2. Delete the role link (no ON DELETE CASCADE on this FK)                                                                                                                                                                                                                                                         
-  DELETE FROM main.user_authority                                                                                                                                                                                                                                                                                      
-  WHERE user_id = (SELECT id FROM main."user" WHERE email = 'tenjoh_okwen@yahoo.com');                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                                                                                                       
-  -- 3. Delete the user itself — email_verification_tokens, persistent_token,                                                                                                                                                                                                                                          
-  --    phone_otp_tokens, refresh_tokens, player_profiles and parent_player_links                                                                                                                                                                                                                                      
-  --    all cascade automatically; verified this account has no rows in the                                                                                                                                                                                                                                            
-  --    non-cascading tables (persistent_token, user_addresses, coach_profiles)                                                                                                                                                                                                                                        
-  --    so nothing else needs cleanup.                                                                                                                                                                                                                                                                                 
-  DELETE FROM main."user"                                                                                                                                                                                                                                                                                              
-  WHERE email = 'tenjoh_okwen@yahoo.com';                                                                                                                                                                                                                                                                              
-                                                                                                                                                                                                                                                                                                                       
-  COMMIT;
-```
+For pointing a deployed environment at real object storage, see
+[`uat-deployment.md`](../uat-deployment.md) and [`secrets-reference.md`](../secrets-reference.md):
+prod/uat require an `https://` `APP_STORAGE_ENDPOINT_URL`.
