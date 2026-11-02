@@ -14,26 +14,26 @@ How to look: every item names the input revision. `git show <rev>:<file>` shows 
 
 | # | verdict | status at HEAD | note |
 |---|---|---|---|
-| S01 |  |  |  |
-| S02 |  |  |  |
-| S03 |  |  |  |
-| S04 |  |  |  |
-| S05 |  |  |  |
-| S06 |  |  |  |
-| S07 |  |  |  |
-| S08 |  |  |  |
-| S09 |  |  |  |
-| S10 |  |  |  |
-| S11 |  |  |  |
-| S12 |  |  |  |
-| S13 |  |  |  |
-| S14 |  |  |  |
-| S15 |  |  |  |
-| S16 |  |  |  |
-| S17 |  |  |  |
-| S18 |  |  |  |
-| S19 |  |  |  |
-| S20 |  |  |  |
+| S01 | real | open | HEAD terminateSession still skips used tokens (markUsedByTokenHash requires used=false); no successor link |
+| S02 | known | fixed | = case 384 F1; fixed by nonce-based consumeOAuthState |
+| S03 | real | open | same lookup at HEAD; duplicate of S15 — one draft case |
+| S04 | real | open | HEAD updateUserEmail unchanged |
+| S05 | real | open | frontend stores 'English' etc., so the filter never matches for anyone |
+| S06 | real | open | reconcile sweep skips matched rows, so the dropped transition is never healed |
+| S07 | real | fixed | HEAD uppercases tier before persist + invalidTier rejection |
+| S08 | known | fixed | root = 359 F "double-click creates two subscriptions" (same random per-attempt key); HEAD claim-marker design, narrow takeover residual |
+| S09 | real | open | HEAD frontend still drops key on any response; UNRECONCILED path answers 500 without refund |
+| S10 | not-real | - | refundEligible already requires CONFIRMED/UPCOMING (Deferred-12 AC4 whitelist in cancelBookingAsParent) |
+| S11 | real | open | superseded branch still warn-and-return at HEAD; caller reports success after proration invoice |
+| S12 | real | open | date-only string → UTC midnight vs server strict instant check; HEAD identical |
+| S13 | real | open | same defect as S17 — one draft case; HEAD identical |
+| S14 | not-real | - | idx_disputes_unique_open_per_booking (V138, partial unique) blocks the second open dispute; residue is only 23505→500 mapping |
+| S15 | real | open | duplicate of S03 — one draft case |
+| S16 | real | open | sibling of S04 (register path); HEAD identical |
+| S17 | real | open | same defect as S13 — one draft case |
+| S18 | real | open | no @Version anywhere; getMessages/sendMessage still full-row save at HEAD |
+| S19 | real | fixed | dead guard confirmed (fetchSecret never decrypts); runner deleted by #388 |
+| S20 | real | open | no @Transactional/@Valid at HEAD; delete commits before failing save |
 
 ---
 
@@ -296,3 +296,21 @@ update() is not @Transactional. alertRuleRepository.deleteById(id) commits in it
 ## When done
 
 Tally the verdicts. If `real`+`known` is below ~60% of the sample, both arms' precision in `scorecard.md` is materially overstated and the judge prompt needs a stricter `real` rule. Every `real` item becomes a draft case in `cases/_drafts/` (or an added expected finding on an existing case), and every `open` one is a bug to fix.
+
+---
+
+## Tally (reviewed 2026-11-03)
+
+**16 real · 2 known · 2 not-real → real+known = 18/20 (90%)**, well above the ~60% bar: the judge's `real` rule holds up and the scorecard precision is not materially overstated. Both arms sampled identically: control 8 real / 1 known (S08) / 1 not-real (S10); blind-hunter 8 real / 1 known (S02) / 1 not-real (S14).
+
+Both not-real items share a failure shape worth a judge-prompt note: the reviewer *named the exact check that would falsify the finding* in its own caveat (S10: "does refundEligible take captured status into account" — it does; S14: "is there a partial unique index on disputes(booking_id)" — there is, `idx_disputes_unique_open_per_booking` in V138), and the judge credited the finding without running that check.
+
+### Follow-up work
+
+Dedup: S03=S15 (refresh grace window) and S13=S17 (card saved before charge) are one defect each; S04+S16 are two siblings of one root (login stored raw-case, looked up lowercased).
+
+New draft cases: logout-successor-revocation (S01), refresh-grace-window-account-wide (S03/S15), login-case-normalisation (S04+S16), language-filter-case (S05), card-default-before-charge (S13/S17).
+
+Added expected findings on existing cases (same input revision, in scope): S06+S07 → 337, S09 → 350 (frontend file — check scope), S11 → 359, S12 → 368, S18 → 386, S19 → 388, S20 → 398.
+
+Open bugs to fix (status `open` above): S01, S03/S15, S04, S05, S06, S09, S11, S12, S13/S17, S16, S18, S20 — 12 distinct defects, headlined by the auth pair (S01 logout, S03/S15 grace window) and the messaging BLOCKED lost-update (S18).
