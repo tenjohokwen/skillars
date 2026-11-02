@@ -1,0 +1,24 @@
+# Mode B only (app and UI on the host, infrastructure in Docker): see docs/deployment/local/manual-testing.md.
+#
+# docker-compose.yml publishes neither postgres nor redis, and redis sits alone on the `internal: true`
+# network skillars-data (S-24), which Docker cannot publish ports from. Layer this file on top to reach both
+# from the host, bound to loopback only:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml \
+#     -f docs/deployment/local/docker-compose.host-ports.yml --env-file .env.local \
+#     up -d postgres redis storage storage-init
+#
+# Host ports default to 5433 (postgres, so a Postgres you already run on 5432 does not clash) and 6379 (redis);
+# override with HOST_POSTGRES_PORT / HOST_REDIS_PORT in your shell.
+#
+# Never use it with the full Mode A stack and never on a server: it deliberately weakens the redis isolation.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${HOST_POSTGRES_PORT:-5433}:5432"
+  redis:
+    networks:
+      - skillars-data
+      - skillars-internal
+    ports:
+      - "127.0.0.1:${HOST_REDIS_PORT:-6379}:6379"

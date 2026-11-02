@@ -7,6 +7,8 @@
 --
 -- EXECUTION TIME: ~1-2 seconds
 --
+-- Verified 2026-11-02 against a database migrated through V223 (Flyway V138..V223).
+--
 -- PREREQUISITES — this script only *upgrades* accounts, it does not create them:
 --   1. Coach registered, email verified, and profile PUBLISHED via the
 --      profile builder (publish is what creates marketplace.coach_subscriptions
@@ -18,11 +20,15 @@
 --      an adult player's self-owned profile). Both shapes are matched by this
 --      script's ownership joins (pp.parent_id OR pp.user_id).
 --
--- USAGE:
---   dcl exec -T postgres psql -U postgres -d skillars \
+-- USAGE (the database role is POSTGRES_USER from .env.local: `skillars` if you copied .env.example,
+-- `postgres` if you removed the line):
+--   dcl exec -T postgres psql -U skillars -d skillars \
 --     -v coach_email=coach@example.com \
 --     -v owner_email=parent@example.com \
 --     < docs/deployment/local/seed-accounts.sql
+--
+-- OPTIONAL, add `-v ltd_admin_email=<email>` to also demote an account that holds ROLE_ADMIN (created with the
+-- APP_BOOTSTRAP_ADMIN_* variables) to the limited admin tier ROLE_LTD_ADMIN, see step 6. Idempotent.
 --
 -- owner_email may be a parent's email (seeds every player profile the parent
 -- owns via parent_id) OR a self-registered adult player's own email (seeds
@@ -46,9 +52,8 @@
 -- ============================================================================
 -- SAFETY CHECK: Refuse to run against non-local databases
 -- ============================================================================
--- This check prevents accidental runs against UAT or production. Add this one
--- time to /etc/hosts to avoid false positives:
---   127.0.0.1 localhost.local
+-- This check prevents accidental runs against UAT or production. It is a name check only,
+-- not a guarantee: never point psql at a remote database with this file.
 DO $$
 BEGIN
   IF current_database() NOT IN ('skillars', 'skillars_dev', 'skillars_local') THEN
@@ -143,17 +148,16 @@ ON CONFLICT (coach_id) DO UPDATE
 --
 -- THIS IS THE STATEMENT THAT KEEPS BOOKINGS OFF STRIPE ENTIRELY.
 -- PaymentLifecycleService.handleCreditBasedBooking computes
---   stripeAmount = max(0, sessionPrice - creditBalance)
+--   stripeAmount = max(0, sessionPrice - min(creditBalance, sessionPrice))
 -- and only enters the charge branch when stripeAmount > 0. With enough credit,
 -- the booking settles to CONFIRMED with no gateway call at all.
 --
--- The chk_ledger_amount_sign CHECK only permits a positive amount for
--- BOOKING_REFUND / BOOKING_DEDUCTION_REVERSAL / CASH_OUT_REVERSAL, hence the type.
+-- The chk_ledger_amount_sign CHECK requires a negative amount for the debit types (BOOKING_DEDUCTION,
+-- CASH_OUT_DEBIT, STRIPE_FEE_DEBIT, BOOKING_REFUND_REVERSAL, CHARGEBACK_CREDIT_REVERSAL) and a positive one for
+-- every other type, hence the credit type BOOKING_REFUND.
 --
 -- IDEMPOTENCY WARNING: The table is append-only (trg_ledger_no_update /
--- trg_ledger_no_delete in V138__baseline_schema.sql reject UPDATE and DELETE;
--- these were previously in migration V79 before the 2026-09-24 migration
--- squash), so there is NO ON CONFLICT form here and NO way to correct a row.
+-- trg_ledger_no_delete in V138__baseline_schema.sql reject UPDATE and DELETE), so there is NO ON CONFLICT form here and NO way to correct a row.
 -- Re-running this file ADDS another credit row rather than replacing the previous
 -- one. If you mis-seed, you can only add more credit to offset the mistake, never
 -- delete or correct it. Be careful with email addresses.
@@ -191,6 +195,40 @@ ON CONFLICT (player_id) DO UPDATE
         status             = 'ACTIVE',
         current_period_end = EXCLUDED.current_period_end,
         updated_at         = now();
+
+-- ---------------------------------------------------------------------------
+-- 6. OPTIONAL: limited admin tier (S-28).
+--
+-- Only runs when -v ltd_admin_email=<email> is passed. There is no API or UI to grant roles, and the
+-- AdminBootstrapRunner only ever creates a full ROLE_ADMIN, so this is the local equivalent of the
+-- "Create a limited administrator" recipe in docs/deployment/runbook.md: swap ROLE_ADMIN for ROLE_LTD_ADMIN and
+-- end the account's sessions (JWTs carry the roles claim). It touches only an account that already holds
+-- ROLE_ADMIN or ROLE_LTD_ADMIN, so it can never turn an ordinary user into an admin. Safe to re-run.
+-- ---------------------------------------------------------------------------
+\if :{?ltd_admin_email}
+DELETE FROM main.user_authority ua
+USING main."user" u, main.authority a
+WHERE u.email = :'ltd_admin_email' AND ua.user_id = u.id
+  AND ua.authority_id = a.id AND a.name = 'ROLE_ADMIN'
+  AND EXISTS (SELECT 1 FROM main.user_authority ua2 JOIN main.authority a2 ON a2.id = ua2.authority_id
+              WHERE ua2.user_id = u.id AND a2.name IN ('ROLE_ADMIN', 'ROLE_LTD_ADMIN'));
+
+INSERT INTO main.user_authority (user_id, authority_id)
+SELECT u.id, a.id
+FROM main."user" u, main.authority a
+WHERE u.email = :'ltd_admin_email' AND a.name = 'ROLE_LTD_ADMIN'
+  AND EXISTS (SELECT 1 FROM main.user_authority ua JOIN main.authority a2 ON a2.id = ua.authority_id
+              WHERE ua.user_id = u.id AND a2.name IN ('ROLE_ADMIN', 'ROLE_LTD_ADMIN'))
+ON CONFLICT DO NOTHING;
+
+UPDATE main."user" SET security_session_invalidated_at = now()
+WHERE email = :'ltd_admin_email'
+  AND id IN (SELECT ua.user_id FROM main.user_authority ua JOIN main.authority a ON a.id = ua.authority_id
+             WHERE a.name = 'ROLE_LTD_ADMIN');
+
+UPDATE main.refresh_tokens SET used = true
+WHERE user_id IN (SELECT id FROM main."user" WHERE email = :'ltd_admin_email');
+\endif
 
 COMMIT;
 
@@ -232,3 +270,14 @@ FROM main.player_profiles pp
 JOIN main."user" u                        ON u.id = pp.parent_id OR u.id = pp.user_id
 LEFT JOIN payment.player_subscriptions ps ON ps.player_id = pp.id
 WHERE u.email = :'owner_email';
+
+\if :{?ltd_admin_email}
+\echo ''
+\echo '--- Admin tier (ROLE_LTD_ADMIN cannot do money / config / GDPR / suspend; see manual-testing.md) ---'
+SELECT u.email, string_agg(a.name, ', ' ORDER BY a.name) AS authorities
+FROM main."user" u
+JOIN main.user_authority ua ON ua.user_id = u.id
+JOIN main.authority a ON a.id = ua.authority_id
+WHERE u.email = :'ltd_admin_email'
+GROUP BY u.email;
+\endif
