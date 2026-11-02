@@ -1,0 +1,60 @@
+{
+  "arm": "control",
+  "case": "388-jwt-signing-key-in-database",
+  "judge_cost_usd": 0.0545854,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies that the Jasypt password is reverse(busId+version) from plaintext columns of the same row, so anyone who can read the row can decrypt the key and forge JWTs.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "fetchSecret ignores EntityStatus, so a JWT secret marked INACTIVE is still used to sign and verify tokens; that is a concrete revocation gap.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Caching the key for the life of the process is the deliberate design, and the multi-node divergence it describes needs out-of-band row changes, so it is speculative.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The race is benign and only causes redundant identical queries at startup, as the finding itself admits.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "fetchSecret never decrypts, so the documented fail-fast on a corrupt row cannot fire and the failure is pushed to every request as DECR_ERROR.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Map.of rejects null values, so null busId/version throws a raw NPE before the intended BLANK_* SecException validation runs.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "The per-request PBE cost is unquantified, and the finding itself asks for profiling to confirm it.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The finding says it is latent and that no caller of getKey was found.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "An IPv6 ULA edge case and a DNS TOCTOU in a local-dev guard are minor and have no concrete security impact.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

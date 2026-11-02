@@ -1,0 +1,95 @@
+{
+  "arm": "blind-hunter",
+  "case": "388-jwt-signing-key-in-database",
+  "judge_cost_usd": 0.0864774,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies that the Jasypt password is reverse(busId+version), taken from plaintext co-located columns and source constants, so anyone who can read the table can decrypt the key and forge JWTs.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "fetchSecret only loads the entity and never decrypts, so the bootstrap's claimed corrupt-row detection cannot trigger and a bad row passes as SUCCESS.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative ordering concern that depends on unverified JwtConfiguration behaviour; framed as something to verify.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The trigger depends on hypothetical NOT NULL audit failures that were not established from the code.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about ID generation and how the exception gets wrapped, with no confirmed trigger.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Mainly a javadoc inaccuracy; the claimed key disagreement depends on multiple versions that may not exist.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "findOneByVersionAndBusId has no status filter, so a deactivated JWT secret keeps being used to sign and verify tokens.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "secretMap is never invalidated, so after rotation or deactivation each instance keeps serving the stale key until restart.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "fetchSecret throws instead of returning null, so the AppSetupException branch is dead and callers get a different exception type.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "A documentation mismatch with no functional defect.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "getKey returns byte[0] on threads with no secret set instead of failing closed.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "Minor performance concern with no demonstrated impact.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Map.of is built before validation and rejects nulls, so a null busId or version throws a bare NPE instead of the intended SecException.",
+        "reported_id": "R13",
+        "verdict": "real"
+      },
+      {
+        "note": "The 'loopback' guard accepts RFC1918 addresses, so it passes for private-subnet production databases despite claiming to be local-only.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "Hypothetical misuse of public setters, with no caller shown.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Error-handling hygiene (lost cause, uncaught IllegalArgumentException) with no meaningful concrete impact.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

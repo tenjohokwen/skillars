@@ -1,0 +1,98 @@
+{
+  "arm": "blind-hunter",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "judge_cost_usd": 0.09336140000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same thing: the state is the predictable coach UUID, so an attacker's code can be linked to a logged-in victim coach and the victim's payouts go to the attacker.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies the same silent overwrite of stripeAccountId in upsertCoachStripeAccount, with no notification, so the next payouts go to the new account.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Whether this is a defect depends on a schema constraint and a repository return type that were not verified, so it is speculative.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Whether the callback breaks depends on the auth mechanism and SameSite settings, which the reported text does not establish.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Refreshing the page reuses an already-used code, so the token exchange throws PaymentGatewayException; with no catch, the browser gets an error body instead of the stripe_error redirect.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "The failure only happens on certain Hibernate versions, and the reviewer did not confirm which version is in use.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "This depends on how the unread applier compares timestamps and on Stripe's clock skew, so it is speculative.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The keyset cursor resets to the nil UUID on every run while maxPages caps the pages read, so accounts beyond pageSize*maxPages are never re-synced.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "This hinges on whether transferToCoach sets an idempotency key, which was not verified.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "The consequence is the same as R2: payouts go to whatever account is linked at the time of transfer.",
+        "reported_id": "R10",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "Throwing IllegalStateException while releaseAfter is in the future uses up outbox attempts during a normal hold window and can trigger stuck alerts or a cap.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "It is a doc mismatch plus a guess about what isPayable returns.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "It assumes planOffset might return more than net, which is unverified.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "It is a naming and documentation concern with no concrete failure shown.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Low-impact log forging that depends on the log encoder, which was not checked.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "The code already admits this is a soft per-instance guard, and no concrete defect follows from it.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

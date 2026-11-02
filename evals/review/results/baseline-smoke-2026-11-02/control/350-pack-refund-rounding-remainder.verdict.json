@@ -1,0 +1,61 @@
+{
+  "arm": "control",
+  "case": "350-pack-refund-rounding-remainder",
+  "judge_cost_usd": 0.058697400000000004,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies that the DOWN-rounded perSessionShare refunds never reconcile the remainder against the pack charge, so the payer loses cents; it does not cover the mixed payout/refund case, but the core defect and consequence are the same.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding covers the missing per-booking refund marker or double credit when an event is redelivered.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The claim depends on an unverified assumption about what isRefundEligible covers, and the reviewer itself asks for that to be checked.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "The claim depends on how pausePack sets pausedUntil versus the pause start, which the reviewer leaves to verification.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: a null attemptKey produces a fresh random UUID per request, so a header-less retry creates a second PaymentIntent and a second pack.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "The chain from Stripe conflict to gateway error mapping to frontend key reset is speculative and not shown.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "The finding only holds if purchasePack is @Transactional, which the reviewer says is unverified.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: the watch on `selected` discards the pending attempt key, so a retry after a toggle sends a new key and can charge twice.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "The finding depends on an unverified ordering inside pausePack.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

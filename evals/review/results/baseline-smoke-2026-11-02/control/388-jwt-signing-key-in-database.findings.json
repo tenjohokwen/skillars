@@ -1,0 +1,92 @@
+{
+  "arm": "control",
+  "case": "388-jwt-signing-key-in-database",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The Jasypt password is just reverse(busId + version), and both values sit in plaintext in the same `sec` row (and in the audit table) as the encrypted value. Anyone who can read that row, through a DB backup, a read replica, SQL injection, or the Envers audit table, can rebuild the password and decrypt the HMAC signing key. With the key they can forge a JWT for any user or role. So the 'encryption' does not protect the key at rest at all.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/Secret.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "Secret.derivePassword / generateEncryptedVal / getSecretBytes",
+      "title": "JWT signing key's encryption password is built from plaintext columns in the same row",
+      "verification": "Confirmed from the code: derivePassword uses only this.busId and this.version, and no external key, env var or KMS is involved."
+    },
+    {
+      "category": "security",
+      "description": "Both JwtSecretService and JwtConfiguration load the signing key with SecretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME), which runs findOneByVersionAndBusId and never looks at EntityStatus. Suppose an operator marks a leaked JWT secret INACTIVE to revoke it. The app still signs and accepts tokens with it, so forged tokens stay valid. The active-only lookup (fetchLatestActiveSecretAsBytes) exists but nothing calls it.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "JwtSecretService.addSecretToThread (also JwtConfiguration.getSecret)",
+      "title": "JWT signing secret is looked up without checking ACTIVE status"
+    },
+    {
+      "category": "logic",
+      "description": "After the first request, JwtSecretService.secret (and JwtConfiguration.secret) holds the entity for the life of the JVM, and nothing ever clears it. SecretService.secretMap also caches entries with no eviction or invalidation. If the DB row is replaced or deactivated, running nodes keep using the old key until restarted. Nodes that restart at different times then use different keys, and tokens fail at random depending on which node serves the request.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "JwtSecretService.secret / SecretService.secretMap",
+      "title": "Signing secret is cached forever in each node; revocation or rotation needs a restart"
+    },
+    {
+      "category": "concurrency",
+      "description": "`if (secret == null) secret = fetch...` has no lock, so a burst of concurrent first requests all run a DB query and each assigns its own Secret instance. The value is the same, so the harm is redundant queries at startup. But it differs from JwtConfiguration's double-checked locking and shows the load is not guarded.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "JwtSecretService.addSecretToThread",
+      "title": "Unsynchronised check-then-set when lazily loading the secret"
+    },
+    {
+      "category": "logic",
+      "description": "The javadoc and the inline comment say any SecException other than KEY_NOT_FOUND (for example an undecryptable or blank row) stops startup. But fetchSecret only loads the entity and never calls getSecretBytes, so a corrupt row is treated as 'already present'. Boot then succeeds, and every request later fails with DECR_ERROR from SecurityAdviceFilter instead of failing loudly at startup.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "JwtSecretBootstrapRunner.run",
+      "title": "Bootstrap runner's corrupt-row check never fires because fetchSecret does not decrypt"
+    },
+    {
+      "category": "edge-case",
+      "description": "The context map is built with Map.of(..., VERSION, version, BUS_ID, busId) before validateBusId/validateVersion run, and Map.of throws NPE on null values. So a null argument produces a raw NullPointerException instead of SecException(BLANK_BUS_ID/BLANK_VERSION). Secret.derivePassword does the same: its blank-check error path calls Map.of with the null field, so a Secret loaded with a null column throws NPE instead of BLANK_BUS_ID_OR_VERSION.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/SecretService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "createSecret / fetchSecret / fetchLatestActiveSecretAsBytes; Secret.derivePassword",
+      "title": "Null busId/version causes NullPointerException instead of a validation SecException"
+    },
+    {
+      "category": "performance",
+      "description": "Only the Secret entity is cached, not the decrypted key. Every getSecretKey/getKey call builds a new BasicTextEncryptor and runs a PBE key derivation (1000 MD5 iterations by default) plus a DES decrypt. With one or more JWT parse/sign operations per request, this CPU cost lands on every authenticated request.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/Secret.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "Secret.getSecretBytes (via JwtConfiguration.getSecretKey, JwtSecretProvider.getKey)",
+      "title": "Key is decrypted with PBE on every JWT operation",
+      "verification": "Count how many times getSecretKey is called per request in JwtUtil/token filters, and profile it under load."
+    },
+    {
+      "category": "security",
+      "description": "If code runs off the request thread (an @Async task, a scheduler, a message listener) where SecurityAdviceFilter never set the secret, getKey quietly returns new byte[0] instead of throwing. Any caller that signs or verifies with that key would use an empty HMAC key, or fail later with an unclear error. No main-code caller of getKey was found, so this is latent for now.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretProvider.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "JwtSecretProvider.getKey",
+      "title": "Missing thread-local secret returns an empty key instead of failing",
+      "verification": "Grep tests/other modules for JwtSecretProvider.getKey usages; if none exist this is dead code."
+    },
+    {
+      "category": "edge-case",
+      "description": "isSiteLocalAddress only matches the deprecated fec0::/10 range for IPv6, so a local Docker IPv6 network (fc00::/7) is rejected while the javadoc claims private ranges are accepted. Also, the host is resolved once here and again separately by the JDBC driver, so the guard's result does not prove which address the datasource actually connects to. The error message also wrongly says only localhost/127.0.0.1/[::1] are allowed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "JwtSecretBootstrapRunner.targetsLoopback / isNonRoutable",
+      "title": "Locality guard accepts IPv6 ULA/global hosts incorrectly and has a DNS TOCTOU"
+    }
+  ],
+  "input_rev": "0621d23f5462306070ae084dc294bbf501d37458",
+  "model": null
+}

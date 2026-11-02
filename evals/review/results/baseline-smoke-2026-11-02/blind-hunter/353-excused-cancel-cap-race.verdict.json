@@ -1,0 +1,60 @@
+{
+  "arm": "blind-hunter",
+  "case": "353-excused-cancel-cap-race",
+  "judge_cost_usd": 0.0517534,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same insert-then-count race under READ COMMITTED where two concurrent excused cancels both count max and neither issues the strike.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Its triggers, such as missing config or other exceptions, are hypothetical and need verification, so no concrete defect is shown.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is about a stale comment, not a behavioural defect.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "It only asks to verify propagation, and the code comment already states REQUIRES_NEW.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "It speculates about the createdAt mapping without showing that it is actually wrong.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "It assumes duplicate event publication but gives no concrete trigger.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "It speculates about mismatched reason strings without evidence.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is a naming and style complaint.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "A minor performance remark with no real defect.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

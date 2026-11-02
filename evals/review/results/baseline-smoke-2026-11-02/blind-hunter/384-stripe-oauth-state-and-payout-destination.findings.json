@@ -1,0 +1,168 @@
+{
+  "arm": "blind-hunter",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "findings": [
+    {
+      "category": "security",
+      "description": "`state` is `coachId.toString()`. It is predictable, never expires, is not tied to the session and is never used up. The P18 comment says this prevents CSRF account-linking, but it does not. An attacker completes Stripe OAuth with their own account, keeps the `code`, and gets a logged-in victim coach to load `/api/payment/coaches/me/stripe/callback?code=<attackerCode>&state=<victimCoachId>` (a GET, triggerable by an img/link or a top-level navigation). `state` equals the victim's coach id, so the check passes and `upsertCoachStripeAccount` sets the victim's `stripe_account_id` to the attacker's account. Later payouts go to the attacker. The coach id is a CoachProfile UUID, which a marketplace usually exposes in public URLs and APIs. Fix: use a random, single-use nonce stored server-side or in the session, bound to the coach, with an expiry.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback / StripeOnboardingService.generateOnboardingUrl",
+      "title": "OAuth state is the coach's own static UUID, so the CSRF check can be bypassed",
+      "verification": "Check whether CoachProfile.id appears in any public or marketplace API response or frontend route (e.g. coach profile pages or search results). If it does, the attack works as described."
+    },
+    {
+      "category": "security",
+      "description": "When a row already exists, `stripeAccountId` is overwritten with no re-authentication, no notification, no audit record and no check that it is the same account. `CoachPayoutTransferHandler` calls `paymentGateway.transferToCoach(bookingId, coachId, ...)`, which looks up the destination by coach at transfer time. So every PENDING_RELEASE or HOLD payout earned under account A is sent to account B after a reconnect (whether legitimate or done through the CSRF above). The old account is also never deauthorized (`OAuth.deauthorize`) and stays linked to the platform.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "upsertCoachStripeAccount(UUID,String,Instant)",
+      "title": "Reconnect silently swaps the payout destination for payouts already earned",
+      "verification": "Read PaymentGateway.transferToCoach to confirm it resolves the destination from coach_stripe_accounts by coachId at call time and does not use an account id stored on the coach_payouts row."
+    },
+    {
+      "category": "database",
+      "description": "Nothing stops the same Stripe account from being linked to two coach rows. Webhooks keyed by the Stripe `account` id (account.updated, account.application.deauthorized) then match more than one row. A single-result lookup would throw `IncorrectResultSizeDataAccessException`, or the update would hit only one coach. One person could also gather several coach profiles' payouts into one account.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "upsertCoachStripeAccount",
+      "title": "No uniqueness check on stripe_account_id across coaches",
+      "verification": "Check the migration for payment.coach_stripe_accounts for a UNIQUE constraint on stripe_account_id, and check CoachStripeAccountRepository.findByStripeAccountId's return type (Optional vs List)."
+    },
+    {
+      "category": "edge-case",
+      "description": "Stripe sends the browser to `redirect_uri` with a top-level navigation. If the API is authenticated by a bearer token held by the SPA (Authorization header), that navigation carries no credentials. If it uses a SameSite=Strict cookie, the cookie is not sent cross-site either. In both cases `@PreAuthorize(HAS_COACH_ROLE)` returns 401/403 JSON and the coach never gets back to the settings page. The error branch (also behind @PreAuthorize) has the same problem.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback",
+      "title": "Callback requires COACH auth on a cross-site redirect from Stripe and may always be rejected",
+      "verification": "Check how the security config authenticates /api/** (JWT in header vs. session cookie) and the cookie's SameSite attribute. Run an end-to-end redirect from connect.stripe.com and confirm the callback gets a 302, not a 401/403."
+    },
+    {
+      "category": "edge-case",
+      "description": "`onboardingService.handleOAuthCallback` throws PaymentGatewayException on any StripeException. That covers an expired or already-used code, which happens on a browser refresh or back-button. It also throws on a null stripeUserId. The resource has no catch, so the user's browser (on a top-level navigation) gets a JSON/500 error body from the backend instead of `withStripeError(\"...\")`. Every other failure path redirects with `stripe_error`; this one does not.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback",
+      "title": "Failed token exchange or empty stripe_user_id returns raw error output instead of a redirect",
+      "verification": "Check whether a @ControllerAdvice handles PaymentGatewayException with a redirect for this path. It most likely renders JSON instead."
+    },
+    {
+      "category": "database",
+      "description": "The id is assigned (coachId) and `@Version Integer version = 0` is non-null. For a wrapper-type version, Spring Data's `isNew()` returns false when the version is non-null, so `coachStripeAccountRepository.save(acct)` on a coach's first connect calls `em.merge`, not `persist`. On Hibernate 6.6+, merging a versioned entity whose row does not exist throws OptimisticLockException/StaleObjectStateException. The first connect would then fail after the OAuth code was already used up. On older Hibernate it costs an extra SELECT. Two concurrent callbacks also both take the insert branch, and one fails with a duplicate key.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/CoachStripeAccount.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "version",
+      "title": "CoachStripeAccount.version starts at 0, so save() on a new entity goes through merge",
+      "verification": "Check the Hibernate version (6.6+ throws) and run an integration test of a first-ever OAuth connect for a coach with no row."
+    },
+    {
+      "category": "logic",
+      "description": "`lastEventCreatedAt` is set to `connectedAt` (server clock, truncated to seconds) with no `FETCH_SNAPSHOT_SKEW_ALLOWANCE`. If Stripe's clock is a few seconds behind, an account.updated Stripe creates just after the connect has `created < connectedAt` and is rejected as stale. FETCH_SNAPSHOT_SKEW_ALLOWANCE's Javadoc describes exactly this case, but the fix is not applied to the connect marker. The callback's own fetch only helps if it succeeds. If it fails (it is swallowed), any poll on another instance within the next 30s uses `now-30s < connectedAt` and is also rejected as stale, so the coach can stay PENDING. The comment that the callback fetch 'applies' because it equals the marker depends on the applier comparing with >=, not >.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback / upsertCoachStripeAccount",
+      "title": "Connect marker ignores the clock-skew allowance, so the first account.updated after connect can be dropped",
+      "verification": "Read CoachStripeAccountStatusApplier.apply. Confirm whether it rejects when snapshotAt < lastEventCreatedAt or when <=, and how webhook events compare against the connect marker."
+    },
+    {
+      "category": "logic",
+      "description": "The keyset cursor is local and starts at `new UUID(0,0)` on every run. Once there are more COMPLETE accounts than `pageSize*maxPages`, the same lowest-UUID accounts are re-read every run and the rest are never checked. A restriction on one of those accounts reaches the platform only through webhooks, which is the gap this method was meant to close. The cursor needs to persist between runs, or the page cap should be removed. The comment that the nil UUID sorts first in Postgres holds only if the query orders by coach_id and filters with `coach_id > :after` on the uuid type.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "resyncCompleteAccounts",
+      "title": "resyncCompleteAccounts always restarts from the nil UUID, so accounts past maxPages*pageSize are never re-read",
+      "verification": "Read CoachStripeAccountRepository.findConnectedByStatusAfter for its ORDER BY and > predicate, and check the scheduler's pageSize/maxPages against the production COMPLETE account count."
+    },
+    {
+      "category": "concurrency",
+      "description": "`transferToCoach` runs inside the REQUIRES_NEW transaction. If anything after it fails \u2014 `applyOffset`, `save`, the outbox-row delete, the commit itself, or a lost DB connection \u2014 the transaction rolls back, the row stays PENDING_RELEASE, and the outbox runs it again, sending a second Stripe transfer. Only a stable idempotency key on the transfer (e.g. derived from bookingId) prevents this. That key must also keep the same parameters across retries: `toTransfer` depends on `planOffset`, which can change between attempts as debts change, and Stripe rejects a reused key with different params. Stripe keys also expire after 24h, while a long outbox backoff can retry later than that.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R9",
+      "severity": "high",
+      "symbol": "handle",
+      "title": "Possible double payout: Stripe transfer happens before the DB commit, and a retry repeats it",
+      "verification": "Read PaymentGateway.transferToCoach. Confirm it sets an Idempotency-Key derived only from bookingId, and decide what should happen when the amount differs on retry, or when a retry comes more than 24h later."
+    },
+    {
+      "category": "logic",
+      "description": "The handler checks freezes and holds but never checks the coach's CoachStripeAccount (onboarding COMPLETE, payoutsEnabled, transfersCapability active, not deauthorized, and the same account the payout was earned under). A transfer goes to whatever account is linked now, including one just swapped by a reconnect or a CSRF link that Stripe accepts. Only a Stripe rejection leads to HOLD.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "handle",
+      "title": "No check of the destination account before transferring; relies on Stripe rejecting",
+      "verification": "Check whether PaymentGateway.transferToCoach validates coach_stripe_accounts state (transfersCapability/deauthorized sentinel) before calling Stripe."
+    },
+    {
+      "category": "logic",
+      "description": "When `releaseAfter` is in the future the handler throws IllegalStateException. The outbox records attempts++ and last_error. With a hold window of days and exponential backoff, a perfectly normal payout can reach the 10-attempt [OUTBOX_STUCK] ERROR, or whatever the max-attempts or dead-letter limit is, before it becomes payable. That pages operators, and if attempts are capped the payout is never sent. The same applies to repeated retryable failures such as BALANCE_INSUFFICIENT.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R11",
+      "severity": "medium",
+      "symbol": "handle (releaseAfter branch)",
+      "title": "Normal hold window is treated as a failure and uses up outbox attempts",
+      "verification": "Check the OutboxRowProcessor backoff schedule and max-attempts or dead-letter behaviour against the configured release_after delay. Also check whether the outbox enqueue uses a scheduled-at time equal to release_after."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc and the log say '(not PENDING_RELEASE)', but the gate is `CoachPayoutStatus.isPayable(status)`. If isPayable also accepts another status (e.g. HOLD for recovery re-drive), the idempotency claim is false and a HOLD row can be transferred by a duplicate message. The listed non-payable statuses also leave out FROZEN, which this same handler writes.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "handle / class Javadoc",
+      "title": "Doc says it proceeds only on PENDING_RELEASE but the code uses isPayable(); the status list omits FROZEN",
+      "verification": "Read CoachPayoutStatus.isPayable and confirm it returns true only for PENDING_RELEASE."
+    },
+    {
+      "category": "edge-case",
+      "description": "`toTransfer = net - offset.amount()`. When `signum() <= 0` the handler sends nothing and records `debtOffsetAmount = offset.amount()`. If planOffset ever returns more than net, the payout records repaying more debt than it held, and the payout is marked RELEASED with no transfer.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "handle",
+      "title": "Negative transfer amount is not guarded if the planned debt offset is larger than net",
+      "verification": "Confirm CoachPayoutDebtService.planOffset caps the offset at the passed-in netAmount."
+    },
+    {
+      "category": "architecture",
+      "description": "The Javadoc says transfersCapability holds the Stripe `transfers` capability (active/inactive/pending) from the last account.updated. The service, however, treats `TRANSFERS_DEAUTHORIZED` stored there as the disconnect marker (`isDeauthorized`, `findConnectedByStatusAfter`). Any reader that treats the field as a capability (e.g. checking `!= \"active\"`, or mapping it to an enum) mis-handles it. Likewise, lastEventCreatedAt is documented as the `created` time of the last account.updated, but it is also set to connect times and to fetch times minus 30s.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/CoachStripeAccount.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "transfersCapability / lastEventCreatedAt",
+      "title": "transfersCapability column is also used as a 'deauthorized' marker, contradicting its name and doc",
+      "verification": "Grep for getTransfersCapability() callers and check each one handles the deauthorized value."
+    },
+    {
+      "category": "security",
+      "description": "`error` comes from the request and is logged raw, so CR/LF lets anyone forge log lines in a log format that isn't structured. The error branch also runs before state validation and logs coachId=unknown even though the caller is authenticated. Anyone can therefore create fake STRIPE_OAUTH_DENIED entries.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "handleOAuthCallback",
+      "title": "Unescaped OAuth error value logged; error branch skips the state check",
+      "verification": "Check whether the logback encoder escapes newlines (e.g. JSON encoder)."
+    },
+    {
+      "category": "performance",
+      "description": "`lastStatusSyncAttempt.put` in the callback skips the MAX_TRACKED_SYNC_ATTEMPTS check. clear() also wipes every coach's entry at once, so a burst of 10k distinct coach ids (or a script cycling accounts) resets the limit for everyone. With N instances behind a load balancer, the real limit is N calls per 30s per coach. The comment admits it is a soft guard; this is noted so nobody relies on it for Stripe quota.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "handleOAuthCallback / tryAcquireStatusSync",
+      "title": "Rate-limit map is only a per-instance guard; the callback's put bypasses the size bound",
+      "verification": "Check the instance count and whether Stripe's rate limits are a concern at peak page loads."
+    }
+  ],
+  "input_rev": "c9c10fa6262f6e0413171c942ab24504061c587f",
+  "model": null
+}

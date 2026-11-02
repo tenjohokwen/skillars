@@ -1,0 +1,88 @@
+{
+  "arm": "control",
+  "case": "350-pack-refund-rounding-remainder",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "perSessionShare divides amountCharged by sessionCount with RoundingMode.DOWN for every session, and no session ever gets the remainder. For a 200.00 / 3 pack, refunding all three sessions (expired-pack refunds after a coach cancellation, coach no-show, admin cancellation or pause) returns 3 \u00d7 66.66 = 199.98, so the parent permanently loses 0.02. A correct split gives the last refunded or remaining session the remainder (charge minus the shares already refunded), so that the total refunded equals the charge.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "SessionPackPurchase.perSessionShare / BookingService.resolveAmountPaid",
+      "title": "Rounding down per-session share means the remainder of a pack's charge is never refunded",
+      "verification": "Refund each session of a 200.00/3 pack through the expired-pack path and sum the BOOKING_REFUND ledger rows: 199.98 instead of 200.00."
+    },
+    {
+      "category": "logic",
+      "description": "The pack restore is enqueued whenever sessionPackPurchaseId != null && isRefundEligible() (more than 24h ahead). It does not check that the payment was captured, unlike the coach, no-show, admin and pause paths, which use isPackRestore(). Sessions are deducted only at settle, so a parent cancelling a REQUESTED or ACCEPTED pack booking more than 24h ahead gets +1 session for free. This PR moves the old logic onto a durable outbox, which makes the free session guaranteed rather than best-effort. The same path also restores a session to an already-expired pack where the coach path would refund cash.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "RefundEnqueueListener.onBookingCancelledByParent",
+      "title": "Parent cancellation restores a pack session for bookings whose session was never deducted",
+      "verification": "Check whether BookingCancelledByParentEvent.isRefundEligible already includes 'payment captured'. If not, cancel an ACCEPTED pack booking 48h ahead and see remaining_sessions go up by one."
+    },
+    {
+      "category": "logic",
+      "description": "Both checks reject when pausedUntil is after now. They ignore the pause start date and the session's own time. A pause scheduled to start tomorrow (as in the IT, start = now+1d) therefore immediately blocks any new booking, including sessions after the pause ends. Worse, an existing ACCEPTED booking the parent kept (not in the pause's cancel list, or scheduled before the pause starts) fails deductSession at settle with payment.packPaused and is recorded as a payment failure.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "PackSessionService.deductSession / BookingService.createBookingRequest",
+      "title": "Paused-pack check fires for a scheduled future pause and blocks bookings and settles outside the pause window",
+      "verification": "Check how pausePack sets pausedUntil and the pause start. Then schedule a pause starting in 2 days and accept a booking for tomorrow against that pack."
+    },
+    {
+      "category": "logic",
+      "description": "When attemptKey is null, the server builds the Stripe key from a fresh UUID.randomUUID(). Each request, including a network retry or double-tap from any client that doesn't send the header (older app builds, other callers of the 4-arg overload), therefore creates a new PaymentIntent and a second pack. The previous tier+parent+minute bucket at least deduped retries within the window, so this is a regression in charge dedup for header-less callers.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack(\u2026, attemptKey)",
+      "title": "Clients that send no Idempotency-Key lose all double-submit protection",
+      "verification": "POST the purchase endpoint twice without the header within one second: two charges and two packs."
+    },
+    {
+      "category": "concurrency",
+      "description": "If the client times out while the server is still processing, a retry with the same key reaches Stripe while the original is in flight. Stripe answers with an idempotency conflict, which the gateway maps to payment.lifecycleFailure. The frontend sees e.response, resets attemptKey, and the next click sends a new key, buying a second pack once the first also succeeds. The same reset happens on any definite error such as a 5xx from a proxy, even when the charge actually went through.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "confirmPurchase",
+      "title": "A retry while the first request is still running server-side mints a new key and double-charges",
+      "verification": "Make the first request slow (more than the axios timeout) and retry twice. Check Stripe for two PaymentIntents."
+    },
+    {
+      "category": "database",
+      "description": "If purchasePack (or createPurchase sharing its transaction) is @Transactional, a unique-index DataIntegrityViolation marks the transaction rollback-only. The later findByStripePaymentIntentId plus a normal return of replayedPurchase would then end in UnexpectedRollbackException, so the client sees an error even though a pack exists. On PostgreSQL the lookup itself fails ('current transaction is aborted'), which lands in the UNRECONCILED path without a refund.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "purchasePack catch block",
+      "title": "Insert-failure recovery may run inside a rollback-only transaction",
+      "verification": "Check whether purchasePack or createPurchase is @Transactional (the IT mocks the lookup, so it does not exercise this)."
+    },
+    {
+      "category": "edge-case",
+      "description": "After a lost response the key is kept so a retry dedupes. But any change to `selected`, even re-selecting the same tier, or leaving and re-entering the page (the key is per component instance), throws the key away. The retry then charges again even if the first charge succeeded.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "watch(selected)",
+      "title": "Changing the selection away and back drops a still-unresolved attempt key",
+      "verification": "Simulate a network error, toggle the tier off and on, retry: the stub sees two different keys."
+    },
+    {
+      "category": "logic",
+      "description": "packExpired comes from sessionPackPurchaseRepository.findById(...).expiresAt at cancellation. If pausePack extends expiresAt before cancelling the bookings in the same transaction, a pack that had really expired reads as unexpired and gets a session restore instead of a cash refund. A pack missing from the repository also defaults to 'not expired' and enqueues a restore that the handler then drops with only an error log.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "cancelDueToPause",
+      "title": "Pause refund amount and expiry are evaluated before the transition and may use a pause-extended expiry",
+      "verification": "Check the order in PackSessionService.pausePack: whether expiresAt/pausedUntil are updated before or after cancelDueToPause is called."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

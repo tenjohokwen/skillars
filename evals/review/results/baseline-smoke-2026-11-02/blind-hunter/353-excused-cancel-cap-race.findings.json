@@ -1,0 +1,95 @@
+{
+  "arm": "blind-hunter",
+  "case": "353-excused-cancel-cap-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "Each coach cancellation runs in its own REQUIRES_NEW transaction: it inserts a history row, then counts. Nothing serialises this per coach (no coach-row lock, no advisory lock, no SERIALIZABLE isolation). Under READ COMMITTED, two transactions running at once each see the committed rows plus only their own uncommitted row. Example: max=3 with 2 excused cancellations already in the window. The coach cancels two bookings at the same moment. Both transactions count 3, 3 > 3 is false, and neither issues a strike, even though the coach now has 4 excused cancellations. A coach who bulk-cancels in parallel (multiple tabs or a scripted client) can go over the cap without a strike. This is the self-declared-reason loophole the method was meant to close. The Javadoc only says the count includes the row just saved. It says nothing about other in-flight transactions.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "exceedsExcusedCancellationCap",
+      "title": "Excused-cancellation cap can be dodged with concurrent cancellations (count-then-decide race)",
+      "verification": "Check the isolation level in the datasource/JPA config and whether ReliabilityStrikeService or the booking cancel path takes a per-coach lock before this listener runs. To settle it, run two concurrent onBookingCancelledByCoach calls for one coach with count = max-1 and confirm no strike is issued."
+    },
+    {
+      "category": "logic",
+      "description": "The history save, the config reads (getBoundedLong), the count query and strike issuance all run in one REQUIRES_NEW transaction. Any exception except PessimisticLockingFailureException rolls back the cancellation-history insert. Examples: a config value missing or out of bounds, a DataIntegrityViolation in the strike, or a lock failure thrown by the count query itself, which is outside the try. The coach then permanently loses that entry in the excused count, which also weakens the cap. Also, in Spring an exception thrown from an AFTER_COMMIT listener is not swallowed by afterCommit. It propagates to whoever called commit, so the cancel request can return a 500 even though the booking cancellation and refund already committed. That invites client retries.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "onBookingCancelledByCoach / issueStrikeSafely",
+      "title": "Only PessimisticLockingFailureException is swallowed; any other failure loses the history row and can surface as an error after the cancellation committed",
+      "verification": "Check the Spring version's TransactionSynchronizationUtils.invokeAfterCommit behaviour and whether any global handler wraps @TransactionalEventListener failures. Check what ConfigService.getBoundedLong throws when a value is missing or out of bounds."
+    },
+    {
+      "category": "architecture",
+      "description": "The comment says the catch exists so the exception \"cannot propagate out of the listener and roll back the refund\", and the log line says \"the refund is unaffected\". The class header itself says refunds are enqueued BEFORE_COMMIT by RefundEnqueueListener and committed before this AFTER_COMMIT listener runs. This is stale reasoning carried over from before skillars-deferred-101. What the catch actually protects is the cancellation-history row, and it covers only one exception type (see the related finding). Because the comment points at the wrong invariant, future changes to this code are likely to go wrong.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "issueStrikeSafely",
+      "title": "Javadoc claims the swallow protects the refund, but this AFTER_COMMIT listener cannot roll back the refund"
+    },
+    {
+      "category": "database",
+      "description": "If issue() joins the listener's transaction (REQUIRED) instead of REQUIRES_NEW, a PessimisticLockingFailureException thrown through its proxy marks the shared transaction rollback-only. Catching it here then does not help: the outer commit throws UnexpectedRollbackException and the history row is lost anyway. The comment says issue() is REQUIRES_NEW, but nothing in the code shown proves it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "issueStrikeSafely",
+      "title": "Swallowing the lock exception only works if ReliabilityStrikeService.issue really runs in its own transaction",
+      "verification": "Confirm that ReliabilityStrikeService.issue has @Transactional(propagation = REQUIRES_NEW) and is called through the Spring proxy, not self-invoked or final."
+    },
+    {
+      "category": "database",
+      "description": "saveCancellationHistory never sets createdAt. The comment relies on the auto-flushed row matching createdAt > now-window. If createdAt is filled by a DB column default instead of @CreationTimestamp/@PrePersist/auditing, Hibernate inserts NULL explicitly (or the insert fails on NOT NULL). The row then never matches 'CreatedAtAfter', so the excused cap undercounts every time. If createdAt uses the DB clock while the window bound uses the JVM's Instant.now(), clock skew can also shift rows near the window edge.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "saveCancellationHistory / exceedsExcusedCancellationCap",
+      "title": "The count depends on createdAt being set on the entity before the auto-flush",
+      "verification": "Check the CoachCancellationHistory.createdAt mapping (@CreationTimestamp/@CreatedDate/@PrePersist vs insertable=false/DB default). Also confirm that FlushMode is AUTO so the derived count query flushes the pending insert."
+    },
+    {
+      "category": "edge-case",
+      "description": "The listener always inserts a new history row and may issue a strike, even though the repository already has findByBookingId. If BookingCancelledByCoachEvent is published twice for one booking (a retried request, a cancel that runs again after a state race, or replay), the coach gets duplicate history rows. Those inflate the excused count and cause extra strikes.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "onBookingCancelledByCoach",
+      "title": "No idempotency on history and strikes per booking",
+      "verification": "Check whether coach_cancellation_history has a unique constraint on booking_id, and whether the booking cancel path guarantees the event is published exactly once."
+    },
+    {
+      "category": "edge-case",
+      "description": "The reason is compared as a raw String against a hard-coded set. If the event carries a different spelling or casing (an enum's toString, a localised label, 'Weather'), a legitimately excused cancellation is treated as unexcused and strikes right away. The cap query also stops counting those rows. A missing reason silently becomes 'OTHER_UNEXCUSED', which may not be a valid value in the reason enum or column.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "EXCUSED_REASONS",
+      "title": "Reason matching is exact and case-sensitive against hard-coded strings",
+      "verification": "Check the type of BookingCancelledByCoachEvent.getCancelReason() and the source enum or validation of cancel reasons, and make sure the values match these four literals exactly."
+    },
+    {
+      "category": "architecture",
+      "description": "By its own header, refunds now live in RefundEnqueueListener and this class only records history and strikes. The name, its payment package, and comments like \"the refund this listener exists to protect\" are residue from the old design. They mislead maintainers into thinking refund correctness depends on this class.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "CancellationRefundService",
+      "title": "Class name CancellationRefundService contradicts its behaviour: it does no refunds"
+    },
+    {
+      "category": "performance",
+      "description": "Every player no-show takes a connection from the pool and opens and commits an empty transaction for nothing. Under pool pressure, an AFTER_COMMIT REQUIRES_NEW also needs a second connection while the original one may still be held, which adds to pool exhaustion.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "onPlayerNoShow",
+      "title": "onPlayerNoShow opens a REQUIRES_NEW transaction just to write a log line"
+    }
+  ],
+  "input_rev": "783845c71730318ab777657e2c55a9c5714feece",
+  "model": null
+}

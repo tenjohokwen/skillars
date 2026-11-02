@@ -1,0 +1,101 @@
+{
+  "arm": "blind-hunter",
+  "case": "350-pack-refund-rounding-remainder",
+  "judge_cost_usd": 0.0840534,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 identifies the rounded-down per-session refund leaving the remainder never reconciled, with nothing tracking the refunded total against amountCharged.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses double-crediting a pack refund on event redelivery or the missing per-booking refund marker.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Retrying with the same key after a compensating refund replays the refunded PaymentIntent and records a pack with no net payment.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "The frontend resets the attempt key on any 5xx, including a 504 where the charge may already be captured, so the retry charges a second time.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "The pausedUntil.isAfter(now) check blocks bookings and settlement as soon as a future pause is scheduled, before the pause starts.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative: depends on legacy rows with null amount or count, which the reviewer did not show exist.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: depends on zero-amount or null-priced packs, which the reviewer did not show exist.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Cancelling a REQUESTED or ACCEPTED pack booking as a parent restores a session that was never deducted, giving a free session.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative failure on missing legacy data, and the transaction scope is unverified.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: the claim depends on a transaction context the reviewer did not verify.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "The CORS problem depends on an unverified cross-origin deployment.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: assumes rows with a null playerId exist.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculation about how Stripe errors are mapped, with no concrete defect shown.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "A stale comment only.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "A test naming and coverage nit.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "A test coverage gap, not a code defect.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "A tone and style inconsistency in a translation string.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

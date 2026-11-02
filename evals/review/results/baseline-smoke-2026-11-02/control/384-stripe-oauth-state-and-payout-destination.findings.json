@@ -1,0 +1,48 @@
+{
+  "arm": "control",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "findings": [
+    {
+      "category": "security",
+      "description": "`state` is just `coachId.toString()`. It is not a random value tied to the session, and coach IDs are public (`GET /api/marketplace/coaches/{coachId}`). An attacker starts Stripe OAuth with their own Standard account, keeps the unused `code`, and gets a logged-in victim coach to open `/api/payment/coaches/me/stripe/callback?code=<attackerCode>&state=<victimCoachId>`. The state check passes, `upsertCoachStripeAccount` puts the attacker's `stripe_account_id` on the victim's row, and the immediate `syncAccountFromStripe` marks it COMPLETE/active. `CoachPayoutTransferHandler` then sends the victim's payouts to the attacker, because `resolveTransferDestination` reads the current row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback / StripeOnboardingService.generateOnboardingUrl",
+      "title": "OAuth state is the public coach UUID, so the CSRF check can be forged and an attacker can redirect a coach's payouts",
+      "verification": "Confirmed: state = coachId (StripeOnboardingService:78), and coachId is the public marketplace path variable (CoachMarketplaceResource:70). The attack needs the victim's browser to send its credentials on a top-level GET. That holds if auth is a cookie (SameSite=Lax still allows it). Check the JWT filter to see whether the token comes from a cookie or only from the Authorization header."
+    },
+    {
+      "category": "edge-case",
+      "description": "`stripe_account_id` has a unique index (idx_csa_stripe_account_id). A coach who connects a Stripe account already linked to another coach profile (or to an earlier profile of the same person) gets a DataIntegrityViolationException at commit. If OAuth.token fails or returns no stripe_user_id, the method throws PaymentGatewayException instead. Either way the exception escapes the browser-facing GET callback, so the coach sees a JSON/500 page on the backend origin instead of a redirect with `stripe_error`. When the token exchange succeeded, the platform is also authorized on that Stripe account with no local record of it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback / upsertCoachStripeAccount",
+      "title": "Callback failures return a raw error response instead of redirecting to the settings page; a failed DB write leaves the Stripe account authorized but unlinked",
+      "verification": "Unique index confirmed in V138__baseline_schema.sql:3862. Check whether any @ControllerAdvice turns these exceptions into a redirect for this endpoint."
+    },
+    {
+      "category": "concurrency",
+      "description": "The upsert is find-then-insert with no lock and no ON CONFLICT. If the callback is hit twice at once (double navigation, browser retry, or two tabs) for a coach with no row, both transactions see no row and both call save on a new entity. The second fails on pk_coach_stripe_accounts with a 500. With a reconnect, a concurrent webhook update can also raise an optimistic-lock failure here. Neither case is caught, unlike in applyFetchedAccount.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "upsertCoachStripeAccount",
+      "title": "Two concurrent first-time callbacks for the same coach both insert and one fails on the primary key",
+      "verification": "Fire two callbacks with valid codes for the same coach at the same moment against an empty coach_stripe_accounts table."
+    },
+    {
+      "category": "concurrency",
+      "description": "The handler locks only the coach_payouts row. `resolveTransferDestination` reads coach_stripe_accounts with a plain findById. If a coach reconnects to a different Stripe account (or one is linked through the state-forgery issue above) while a drain is running, the handler can read the old READY row before the upsert commits. The Transfer is then made to the previous account after the link has been replaced. The opposite interleaving pays the newly linked account as soon as its sync marks it active, with no delay or re-confirmation for a destination that changed recently.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "handle -> StripePaymentGateway.resolveTransferDestination",
+      "title": "Transfer destination is read without a lock, so a payout can go to an account the coach has just replaced",
+      "verification": "Interleave a reconnect commit between resolveTransferDestination and createTransfer in an integration test. Also check whether any cooldown or notification exists for a changed payout destination."
+    }
+  ],
+  "input_rev": "c9c10fa6262f6e0413171c942ab24504061c587f",
+  "model": null
+}

@@ -1,0 +1,85 @@
+{
+  "arm": "blind-hunter",
+  "case": "353-agreed-price-null-fallback",
+  "judge_cost_usd": 0.0737294,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the NULL agreed_price fallback to current price in resolveSessionPrice/batchBookingPrice for unpriced-at-request coaches, which leads to charging a later-set price.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R4 covers createBatch storing a 0 total and NULL agreed_price, then charging the later price. R1 adds the 0 quote from BatchPaymentQuoteService.",
+        "reported_ids": [
+          "R4",
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No finding flags the unchecked null price on the non-pack branch of BookingDuplicationService.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Speculative: it depends on an unverified post-commit throw inside the try block.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "A 'verify isTerminal' request with no concrete evidence that the status is mishandled.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative refund-key collision that depends on unknown enqueue semantics.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculation about sweeper behaviour, with no concrete trigger.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative 'other creation paths may exist' grep request.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Unverified concurrency concern about which row the pricing update locks.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Comment version inconsistency; the dropped-value claim is speculative.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "With a wallet of 20 and a total of 60 or 80, the deduction is 20 either way, so the labelled assertion cannot tell the agreed price from the current one.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "The refund path's fallback to the current price is the deliberate resolveAmountPaid behaviour.",
+        "reported_id": "R11",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "Speculative proxy concern; modern Spring handles package-private methods.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

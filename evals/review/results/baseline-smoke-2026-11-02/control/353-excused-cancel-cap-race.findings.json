@@ -1,0 +1,38 @@
+{
+  "arm": "control",
+  "case": "353-excused-cancel-cap-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "Each coach cancellation runs this AFTER_COMMIT listener in its own REQUIRES_NEW transaction. The listener inserts a history row and then counts excused rows with no lock on the coach row or the history table. Under PostgreSQL READ COMMITTED, each transaction sees only its own uncommitted insert plus rows that are already committed. Example: maxPerWindow=N, the coach already has N-1 excused cancellations, and they cancel two different bookings with excused reasons at the same time (two requests, so the booking row locks don't conflict). Both listeners count N, neither sees N+1, and no EXCUSED_LIMIT strike is issued. With more parallel requests the coach can go further past the cap. The strike service locks the coach row only inside issue(), which runs after this unlocked decision, so it cannot catch this.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "CancellationRefundService.exceedsExcusedCancellationCap / onBookingCancelledByCoach",
+      "title": "Excused-cancellation cap can be bypassed by concurrent cancellations (count-then-decide without serialization)",
+      "verification": "Integration test: seed maxPerWindow-1 excused history rows, then call cancelBookingAsCoach on two of the coach's bookings from two threads with a barrier just before the count query. Expect no COACH_CANCELLATION_EXCUSED_LIMIT strike even though the count ends at maxPerWindow+1."
+    },
+    {
+      "category": "database",
+      "description": "saveCancellationHistory inserts blindly. The table (V138 baseline) has only a PK on id, with no unique constraint on booking_id. The count query counts rows, not distinct bookings. If BookingCancelledByCoachEvent is delivered twice for one booking (a replay, a retried listener, or any future re-publish path), two history rows are written. Those rows count toward the rolling-window cap, so the coach can get a COACH_CANCELLATION_EXCUSED_LIMIT strike they don't deserve.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/CoachCancellationHistoryRepository.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "countByCoachIdAndCancelReasonInAndCreatedAtAfter / saveCancellationHistory",
+      "title": "No uniqueness on booking_id in coach_cancellation_history; replayed or duplicate events inflate the excused count and can cause a spurious strike",
+      "verification": "Check whether any path re-publishes or replays BookingCancelledByCoachEvent for the same booking (only BookingService.cancelBookingAsCoach was seen publishing it), and confirm that no later migration adds a unique index on coach_cancellation_history.booking_id."
+    },
+    {
+      "category": "logic",
+      "description": "issueStrikeSafely catches only PessimisticLockingFailureException. Any other runtime exception from ReliabilityStrikeService.issue (for example a DataIntegrityViolationException on the strike insert, or a missing coach profile) propagates out of onBookingCancelledByCoach. That rolls back the listener's REQUIRES_NEW transaction, including the history row saved just before. The cancellation is then permanently missing from history, which contradicts the 'Always record cancellation history' comment. Because AFTER_COMMIT listeners are not retried, it also means that cancellation never counts toward the future excused cap.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "CancellationRefundService.issueStrikeSafely",
+      "title": "Non-lock strike failures roll back the 'always recorded' cancellation history",
+      "verification": "Make reliabilityStrikeService.issue throw an IllegalStateException in a test, then assert whether a coach_cancellation_history row exists for the booking after the cancel commits."
+    }
+  ],
+  "input_rev": "783845c71730318ab777657e2c55a9c5714feece",
+  "model": null
+}

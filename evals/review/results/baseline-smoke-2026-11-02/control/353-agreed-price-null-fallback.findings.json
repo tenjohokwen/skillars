@@ -1,0 +1,78 @@
+{
+  "arm": "control",
+  "case": "353-agreed-price-null-fallback",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "If the coach has no pricing row when the parent requests, createBookingRequest stores agreed_price = currentCoachPrice() = NULL. NULL is also the marker for a pre-V192 row, so at accept resolveSessionPrice reads the coach's current price. The coach can create a pricing row at any amount (e.g. \u20ac500) and then accept, and the parent's saved card is charged that price, which they never saw or agreed to. This is exactly the re-pricing hole the PR claims to close. Because 'legacy row' and 'requested with no price' share one NULL value, the fallback cannot tell them apart. New rows should store an explicit marker or be refused, and the fallback should apply only to rows created before V192.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "resolveSessionPrice / createBookingRequest",
+      "title": "A NULL agreed_price for an unpriced coach falls back to whatever price the coach sets later, so the lock can be bypassed",
+      "verification": "Confirm that coach_pricing rows can be inserted or changed after a booking request (a coach pricing settings endpoint). If so: request with no pricing, create pricing at a high price, accept, and check stripe_charged."
+    },
+    {
+      "category": "logic",
+      "description": "With no pricing row, createBatch saves totalAmount = 0 (and the quote shows 0) but stores agreed_price NULL on every booking. acceptOneBooking's resolveSessionPrice check and PaymentLifecycleService.batchBookingPrice both fall back to the current coach_pricing. If the coach adds pricing before accepting, the batch charges price \u00d7 n against a batch the parent saw as \u20ac0. The comment says accept 'fails unless the coach has priced by then', but pricing afterwards is exactly the case where it succeeds and overcharges relative to the quote.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "createBatch / acceptOneBooking",
+      "title": "A batch shows the parent a \u20ac0 total but settles at the coach's later price for every session",
+      "verification": "Check whether batch creation is blocked elsewhere when the coach has no pricing. If not, create a batch while unpriced, add pricing, accept, and compare the charge with batch.total_amount."
+    },
+    {
+      "category": "logic",
+      "description": "currentCoachPrice() returns null when there is no pricing row, so the duplicated non-pack booking gets NULL. That NULL is treated as a legacy row and charged at whatever pricing exists when the booking is accepted. The duplicate also ignores the original booking's agreed_price, so a duplicate of a \u20ac50 booking is locked at the coach's current price, which may be higher, without the parent being told.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "duplicate (newBooking.setAgreedPrice)",
+      "title": "The duplication path stores NULL agreed_price when the coach is unpriced, so the duplicate also takes the later price",
+      "verification": "Check what price the duplication proposal shows the parent. If it shows the original's price, the lock should copy original.getAgreedPrice()."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc and migration say REFUNDED_TO_CREDIT is terminal (BookingPaymentStatus.isTerminal), but the diff only adds the constant. If isTerminal lists its statuses explicitly, a REFUNDED_TO_CREDIT row is treated as non-terminal. The cancel interlock, PaymentPendingSweeper or refund paths could then act on it again: refunding twice, escalating it, or blocking a cancel.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/BookingPaymentStatus.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "REFUNDED_TO_CREDIT / isTerminal",
+      "title": "The REFUNDED_TO_CREDIT status is added, but BookingPaymentStatus.isTerminal is not updated",
+      "verification": "Read BookingPaymentStatus.isTerminal and every switch or IN-list on booking_payments.status (sweeper, cancel interlock, refund amount resolution, revenue queries) to see whether REFUNDED_TO_CREDIT is handled."
+    },
+    {
+      "category": "concurrency",
+      "description": "The catch in onBatchBookingAccepted runs for any exception from the per-booking settle, including one thrown after the settle's own transaction committed CAPTURED and moved the booking to CONFIRMED (e.g. a failure in post-commit notification or event publishing). loadOrCreate then sets status to REFUNDED_TO_CREDIT without checking the current status. transitionOrReport(PAYMENT_FAILED) only reports, so the booking stays CONFIRMED, while the full share is refunded to the wallet. The parent gets a confirmed session for free. The write should be guarded on status = CAPTURE_PENDING.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java",
+      "id": "R5",
+      "severity": "high",
+      "symbol": "declineBatchBookingAfterChargeTransactional",
+      "title": "declineBatchBookingAfterCharge overwrites the payment row unconditionally and can refund a booking that was already confirmed",
+      "verification": "Check whether anything inside the settle lambda (persistPaymentSuccess plus the notification/BookingConfirmed publish) can throw after its transaction commits, and whether transitionOrReport swallows invalid-transition errors."
+    },
+    {
+      "category": "database",
+      "description": "When the booking is missing (not settled), the share is refunded, but the reserved CAPTURE_PENDING booking_payments row is deliberately left unchanged. PaymentPendingSweeper later escalates or abandons that row with no record that its money was already returned. Operators may then credit the parent a second time. If the sweeper refunds automatically, it may be stopped only if the refund is keyed the same way in uq_pcl_booking_refund. The 'settled elsewhere' case uses isSettled with no lock, so the decision can race with the sweeper settling the same row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "onBatchBookingAccepted (b == null branch) / refundBatchShareToCredit",
+      "title": "When a booking vanishes after the batch charge, its payment row stays CAPTURE_PENDING and is never tied to the refund",
+      "verification": "Check what PaymentPendingSweeper does with an orphaned CAPTURE_PENDING row, and whether its refund uses the same uq_pcl_booking_refund key as refundBatchShareToCredit."
+    },
+    {
+      "category": "database",
+      "description": "The new money column has no CHECK (agreed_price >= 0). A negative coach_pricing value, or a direct write, would be locked in permanently (updatable=false). It would then flow into CreditCardSplit and batch share arithmetic, producing a negative card charge or a negative refund share.",
+      "file": "src/main/resources/db/migration/V192__booking_agreed_price.sql",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "booking.bookings.agreed_price",
+      "title": "The agreed_price column has no non-negative check",
+      "verification": "Check whether coach_pricing.per_session_price has its own CHECK >= 0 (or > 0) constraint."
+    }
+  ],
+  "input_rev": "e60141fc480a55e75e8a5e45bace201999da07f7",
+  "model": null
+}
