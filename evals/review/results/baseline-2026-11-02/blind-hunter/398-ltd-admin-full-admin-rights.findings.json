@@ -1,0 +1,208 @@
+{
+  "arm": "blind-hunter",
+  "case": "398-ltd-admin-full-admin-rights",
+  "findings": [
+    {
+      "category": "security",
+      "description": "HAS_ADMIN_ROLE = \"hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')\" and it is the only expression used on every admin endpoint shown. There is no ADMIN-only expression. A limited admin can therefore edit platform config (ConfigResource.updateValue), release held coach payouts (AdminFinanceResource.releaseHeldPayouts), suspend or reactivate accounts and unlock logins (AdminUserResource), delete videos, create or rewrite alert rules, send email to any address via the SES preflight, read GDPR requests, issue strikes and settle disputes with credit. Either ROLE_LTD_ADMIN is not actually limited (then the role is pointless and the name is misleading), or this is a privilege escalation. The constant's name hides the change at every call site.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "HAS_ADMIN_ROLE",
+      "title": "HAS_ADMIN_ROLE grants ROLE_LTD_ADMIN every full-admin capability, erasing the limited/full distinction",
+      "verification": "Find the spec or ticket that defines ROLE_LTD_ADMIN. If it is 'limited admin', add an ADMIN-only expression (for example HAS_FULL_ADMIN_ROLE = hasRole('ROLE_ADMIN')) and apply it to config, finance, user-suspend, alert-rule, SES and video-delete endpoints. Grep for HAS_ADMIN_ROLE across the repo to list every endpoint that was silently widened."
+    },
+    {
+      "category": "security",
+      "description": "The method is guarded by HAS_ANY_ROLE, which includes ROLE_USER, ROLE_COACH, ROLE_PARENT and ROLE_PLAYER. It deletes whichever login it is given, with no check that the caller owns it. If a controller passes a request-supplied login, any player or parent can delete any account, including admins. The Javadoc says 'Requires ADMIN, LTD_ADMIN, or USER role', which understates what HAS_ANY_ROLE actually allows (coach, parent and player too).",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "deleteUserInformation",
+      "title": "deleteUserInformation lets any authenticated role delete any user by login",
+      "verification": "Grep for callers of deleteUserInformation and check whether the login argument comes from the authenticated principal or from request input. If it can come from input, restrict it to HAS_ADMIN_ROLE or add a `#login == authentication.name` check."
+    },
+    {
+      "category": "database",
+      "description": "The resource has no @Transactional. findById, deleteById and save each run in their own repository transaction, so the delete commits before the save. If the save fails (for example a NOT NULL violation from an unvalidated null threshold or metricName), the original rule is permanently gone and alerting silently stops. Even when it succeeds, the rule gets a new ID, so PUT /{id} followed by another PUT /{id} returns 404. Concurrent PUTs on the same id can both pass findById and produce two rules.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "update",
+      "title": "AlertRule update is non-atomic delete-then-save; a failed save loses the rule and the ID changes",
+      "verification": "Check whether AlertRuleRepository or the class is transactional elsewhere (for example an aspect). Check AlertRule column constraints. Confirm whether FeeRuleAdminResource (named as the pattern source) has the same defect."
+    },
+    {
+      "category": "edge-case",
+      "description": "There is no @Valid and the record has no constraints. The Javadoc says threshold is a ratio in [0.0, 1.0] and metricName is one of FAILURE_RATE, FRAUD_SPIKE_RATE or CALLBACK_ANOMALY, but null, negative, >1 or arbitrary strings are all accepted. windowSeconds can be 0 or negative, and notificationChannel can be any string. An omitted `enabled` deserialises to false (primitive), which contradicts the doc's 'default true'. A rule created without that field is silently disabled, and because list() only shows enabled rules, it then vanishes from the list.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AlertRuleRequest",
+      "title": "AlertRule endpoints accept unvalidated input",
+      "verification": "Check whether the AlertRule entity or the alert evaluator rejects or guards these values. Send a POST without `enabled` and confirm it is persisted as false."
+    },
+    {
+      "category": "logic",
+      "description": "GET returns alertRuleCache.getCachedRules(), which the doc says holds only enabled rules. A rule disabled via PUT disappears from the API, and the admin has no way to learn its id to re-enable it. Its id also changed on that PUT. The claim 'always current without a DB round-trip' only holds for the node that served the write. Other nodes keep a stale cache until their own refresh.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "list",
+      "title": "Alert-rule list returns only enabled rules from cache, so disabled rules cannot be found or re-enabled",
+      "verification": "Check what AlertRuleCache.refresh() loads, and whether it is refreshed cluster-wide or periodically."
+    },
+    {
+      "category": "security",
+      "description": "The doc asserts '/v1/admin/** excluded via NegatedRequestMatcher in TenantSecurityConfig'. AlertRule and SES preflight live under /v1/admin while every other admin resource lives under /api/admin. If the filter chains differ (API-key versus JWT, CSRF or CORS rules), these two endpoints may get different authentication or CSRF treatment from the rest of the admin console.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "AlertRuleAdminResource",
+      "title": "Javadoc claims a security-chain exclusion that cannot be verified here; admin paths differ (/v1/admin vs /api/admin)",
+      "verification": "Open TenantSecurityConfig and confirm the NegatedRequestMatcher pattern is exactly /v1/admin/**. Confirm the JWT chain covers /v1/admin/** with the same CSRF and role handling as /api/admin/**."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc says to prefer this endpoint 'because it validates the input and is audited', but configService.updateConfig(key, value) receives no admin id. Every other mutating admin endpoint passes resolveAdminId(). Unless ConfigService reads the security context itself, config changes (now possible for LTD_ADMIN too) cannot be attributed to anyone.",
+      "file": "src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "updateValue",
+      "title": "Config update Javadoc claims it is audited but no actor is passed",
+      "verification": "Read ConfigService.updateConfig and check whether it writes an audit record that includes the current principal (for example via SecurityContextHolder or Hibernate Envers @Audited with a revision listener)."
+    },
+    {
+      "category": "security",
+      "description": "redriveHeld(coachId, false, \"ADMIN\") hardcodes the actor, and the warn log carries no admin identity. A money-moving action can be triggered by any ADMIN or LTD_ADMIN with no record of who did it. The other admin resources resolve and pass the admin id.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "releaseHeldPayouts",
+      "title": "Held-payout release is attributed to the literal \"ADMIN\", not the acting admin",
+      "verification": "Check what CoachPayoutHoldRecoveryService.redriveHeld does with its third argument and whether any audit row captures the principal."
+    },
+    {
+      "category": "edge-case",
+      "description": "from=2026-10-10&to=2026-10-01 is passed through as an inverted Instant range. Whether that yields an empty report, a negative period or an exception depends on RevenueReportingService. Nothing returns a 400.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "getOverview",
+      "title": "Finance date range is not validated (from after to, open-ended)",
+      "verification": "Check RevenueReportingService.getAdminOverview and getAdminCoachRevenue for inverted-range handling."
+    },
+    {
+      "category": "logic",
+      "description": "AdminAppealResource uses securityUtil.requireCurrentUserId(). All the other admin resources use resolveAdminId(), which does Long.parseLong(principal.getBusinessId()). If requireCurrentUserId returns the login or user id while businessId is a different id space, decidedBy on appeals refers to a different entity than resolvedBy and suspendedBy elsewhere, which breaks audit joins.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminAppealResource.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "decide",
+      "title": "Appeal decide uses a different identity source from every other admin action",
+      "verification": "Compare SecurityUtil.requireCurrentUserId() with Principal.getBusinessId(). Confirm both return the same User primary key."
+    },
+    {
+      "category": "architecture",
+      "description": "The same private method is duplicated in AdminBooking, AdminCoachEnforcement, AdminDispute, AdminModeration and AdminUser resources. If businessId is ever non-numeric (for example a UUID, as coach and booking ids are), every mutating admin endpoint returns 401 'Invalid business ID'. Because of the duplication, a fix will drift between the copies. SecurityUtil already exposes requireCurrentUserId, which looks like the intended single source.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminBookingResource.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "resolveAdminId",
+      "title": "resolveAdminId assumes businessId is a numeric Long, copy-pasted in five controllers",
+      "verification": "Check the type and format of Principal.getBusinessId() and whether SecurityUtil.requireCurrentUserId() is equivalent."
+    },
+    {
+      "category": "security",
+      "description": "The doc says suspend or reactivate applies to 'any non-admin user'. If AdminUserService's non-admin check only tests ROLE_ADMIN, an LTD_ADMIN can suspend other LTD_ADMINs or themselves. If the check tests both roles, an LTD_ADMIN is protected exactly like a full admin. Neither outcome is visibly decided. Reactivate also reuses AdminUserStatusRequest, whose cancelUpcomingBookings field is meaningless there.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminUserResource.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "suspendUser",
+      "title": "Account suspend semantics with LTD_ADMIN now counted as admin are unclear (can a limited admin suspend admins?)",
+      "verification": "Read AdminUserService.suspendUser and reactivateUser and check which roles count as 'admin' and whether self-targeting is rejected."
+    },
+    {
+      "category": "security",
+      "description": "recipientEmail is free-form and there is no rate limit. Each call performs a real SES send and persists an envelope row. Repeated calls can burn sending quota or reputation and, via bounces or complaints, affect the account being certified, which undermines the cutover it is meant to verify.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/SesCutoverPreflightResource.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "runPreflight",
+      "title": "SES preflight lets any admin, including LTD_ADMIN, send real production email to an arbitrary address",
+      "verification": "Check whether there is any rate limiting on /v1/admin/** and whether the recipient should be restricted to the caller's own address or a verified-identity allowlist."
+    },
+    {
+      "category": "logic",
+      "description": "The query always reads page 0 (PageRequest.of(0, batchSize)) and only filters failures in Java. Once batchSize distinct users have failed in a run, page 0 consists only of failed users, users.isEmpty() is true, and the loop exits. Deletable users after them are never reached that run, and the same thing repeats for up to CLEANUP_FAILURE_THRESHOLD (3) days until the marker excludes them. The Javadoc claims 'deletable users behind a stuck one still get processed in the same run', which is only true while fewer than batchSize users have failed. The log message 'every remaining candidate already failed earlier this run' is false whenever more rows exist past page 0.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R14",
+      "severity": "medium",
+      "symbol": "removeNotActivatedUsers",
+      "title": "removeNotActivatedUsers stops the whole run when one page is fully failed, starving deletable users behind it",
+      "verification": "Integration-test with batchSize=2, two undeletable users with the lowest ids and one deletable user. The deletable user survives the run. Fix by excluding failedLogins in the query, or by advancing an id cursor (id > lastSeenId)."
+    },
+    {
+      "category": "logic",
+      "description": "The method doc says '{@link #MAX_BATCHES_PER_RUN} (100) caps the previously open-ended loop' and sizes lockAtMostFor from it. That constant was replaced by MAX_DELETE_ATTEMPTS_PER_RUN, so the {@link} is broken (javadoc -Xdoclint will fail) and the sizing argument cites a mechanism that no longer exists.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "removeNotActivatedUsers",
+      "title": "Javadoc links to removed constant MAX_BATCHES_PER_RUN and describes a fixed 100-batch cap that no longer exists",
+      "verification": "Grep for MAX_BATCHES_PER_RUN in this class. It is absent, which confirms the stale link."
+    },
+    {
+      "category": "architecture",
+      "description": "removeNotActivatedUsers calls fetchExpiredUsersPage and filters inline. findExpiredUsers is never called in this class, yet the class and method docs ('findExpiredUsers returns the same batch...', 'reads a batch snapshot') describe it as the live path. Tests that target the protected method would exercise code production never runs.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "findExpiredUsers",
+      "title": "findExpiredUsers is dead code but documented as the method the sweep uses",
+      "verification": "Grep the repo, including tests, for findExpiredUsers callers."
+    },
+    {
+      "category": "edge-case",
+      "description": "Math.max(1, batchSize) is used only for maxBatches. fetchExpiredUsersPage(cutoffDate, batchSize) still receives the raw value, so batchSize=0 throws IllegalArgumentException from PageRequest.of. The 'backstop' does not protect the one call it would matter for, as the comment half-admits.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R17",
+      "severity": "low",
+      "symbol": "removeNotActivatedUsers",
+      "title": "Defensive effectiveBatchSize is computed but the raw batchSize is still used for paging",
+      "verification": "Unit test with new SecurityProperties() and userCleanupBatchSize=0."
+    },
+    {
+      "category": "edge-case",
+      "description": "`int page` is unbounded in AdminModeration, Dispute, Appeal, CoachEnforcement, User and Video queue endpoints. page=-1 reaches PageRequest.of, which throws IllegalArgumentException. Unless a global handler maps it, the result is a 500 instead of a 400.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminModerationResource.java",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "getQueue",
+      "title": "Negative page parameter causes a 500 on admin queue and list endpoints",
+      "verification": "Check the global @ControllerAdvice for IllegalArgumentException mapping, or add @Min(0)."
+    },
+    {
+      "category": "edge-case",
+      "description": "The class has no @Validated. Constraints on a plain @RequestParam are only applied by Spring Framework 6.1+ built-in controller method validation. On older versions, a blank or 10k-character reason is accepted into the audit trail.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminCoachEnforcementResource.java",
+      "id": "R19",
+      "severity": "low",
+      "symbol": "deleteStrike",
+      "title": "deleteStrike's @NotBlank/@Size on @RequestParam may not be enforced",
+      "verification": "Check the Spring Framework version (6.1+ needed) or add @Validated to the class. Also confirm the service rejects blank reasons."
+    },
+    {
+      "category": "security",
+      "description": "setAccessState, deleteVideo and reconcile call the service without an admin id, unlike the other admin resources. A destructive delete, now available to LTD_ADMIN as well, cannot be attributed unless the service reads the security context.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/AdminVideoResource.java",
+      "id": "R20",
+      "severity": "low",
+      "symbol": "deleteVideo",
+      "title": "Admin video mutations pass no actor, so there is no attribution for access-state changes and deletes",
+      "verification": "Check AdminVideoService.deleteVideo and setVideoAccessState for audit logging that includes the principal."
+    }
+  ],
+  "input_rev": "4899534f12a1f87d89f49267522293609eb0a8d7",
+  "model": null
+}

@@ -1,0 +1,48 @@
+{
+  "arm": "control",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "judge_cost_usd": 0.045245400000000005,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies state=coachId as public and non-random, describes the CSRF that routes payouts to the attacker's account, and names both generateOnboardingUrl and handleOAuthCallback.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies the silent overwrite in upsertCoachStripeAccount with no notification, which lets queued payouts reach the new account before the coach notices.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "A concrete trigger is stated: a second coach links a Stripe account that already exists under the unique index, and the uncaught DataIntegrityViolationException gives a raw error after the OAuth code is spent.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "A concrete trigger is stated: PaymentGatewayException from the code exchange is not caught in the browser-redirect endpoint, so the coach gets a backend error instead of the settings-page redirect.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "This is a low-likelihood race on simultaneous first-time callbacks for one coach, and its only impact is an error response on a duplicate request.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "It is speculative: it needs a rollback after the transfer plus a concurrent debt change, and it ends with an unconfirmed verification hedge.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

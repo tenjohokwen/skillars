@@ -1,0 +1,66 @@
+{
+  "arm": "control",
+  "case": "350-pack-refund-rounding-remainder",
+  "judge_cost_usd": 0.059989400000000005,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the unreconciled rounded-down remainder on pack refunds via resolveAmountPaid, the under-refund consequence, and the last-session remainder fix.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding says pack refunds lack a per-booking settled marker and can be credited twice on redelivery.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: a parent cancels a REQUESTED/ACCEPTED pack booking more than 24h ahead, and a session is restored that was never deducted.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: a 502/504 or a 500 after Stripe captured the charge resets the idempotency key, so a retry can charge twice.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative: it depends on the first response being lost and on assumed Stripe 409 handling, with no demonstrated double-charge path.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: a pause scheduled to start in the future blocks booking and settlement right away because the check is only now < pausedUntil.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: an ACCEPTED pack booking not in the pause cancellation list fails settlement with packPaused even if its session date is outside the pause.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on unverified data states (amount_charged 0, NULL price_per_session) that the reviewer itself asks someone to check.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: it assumes legacy NULL player_id rows exist, without evidence.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: changing the selection during an in-flight purchase discards the key, so a retry after a network error can charge twice.",
+        "reported_id": "R9",
+        "verdict": "real"
+      }
+    ]
+  }
+}

@@ -1,0 +1,85 @@
+{
+  "arm": "blind-hunter",
+  "case": "330-filestorage-quota-race",
+  "judge_cost_usd": 0.07398940000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same unlocked read-then-insert of sumSizeBytesByOwnerId, done outside the transaction, which lets parallel confirms overshoot the quota.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: sign many uploads, PUT them all and never confirm; the bytes stay in storage and are never counted against the quota.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: reuse the still-valid presigned PUT URL after confirm to overwrite the object with a larger one, bypassing the size and quota checks.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: a confirm rejected for quota or size leaves the uploaded S3 object with no row and no cleanup in the shown code.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "The reporter admits the error is still rethrown, so there is no concrete wrong outcome.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on listener annotations it has not seen; this is speculative.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Whether this reverts the photo depends on unseen listener behaviour, so the consequence is speculative.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The NPE and identity mismatch depend on unverified auditing behaviour, so this is speculative.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether the caller is transactional, which is unverified.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative; this is likely already handled by request validation.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative; it only applies if ValidationChain fails to bound the size.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether key generation is predictable, which is unverified.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hypothetical mismatch between parse and isGeneratedKey with no concrete trigger.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Design speculation about callers and soft-delete semantics, with no concrete defect shown.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

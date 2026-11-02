@@ -1,0 +1,63 @@
+{
+  "arm": "control",
+  "case": "307-frontend-links-and-tus",
+  "judge_cost_usd": 0.0667174,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R6 and R7 identify the dead bookings and reports links: wrong origin, no hash prefix and non-existent routes.",
+        "reported_ids": [
+          "R6",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R3, R4 and R5 cover all three call sites that use baseurl:server.port, which resolves to localhost in prod.",
+        "reported_ids": [
+          "R3",
+          "R4",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R8 identifies the relative, non-hash redirect to callbackSuccessUrl, which also loses the stripe_error query.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 covers the backend response dropping the TUS auth fields, and R2 covers the frontend upload sending no auth headers.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R9, R10 and R11 cover the coach-dashboard name, the marketplace name and the /upgrade path.",
+        "reported_ids": [
+          "R9",
+          "R10",
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers the BookingRequestPage isPlayer gate on pack loading.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

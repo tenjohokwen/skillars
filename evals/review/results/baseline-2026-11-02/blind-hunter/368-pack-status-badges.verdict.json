@@ -1,0 +1,87 @@
+{
+  "arm": "blind-hunter",
+  "case": "368-pack-status-badges",
+  "judge_cost_usd": 0.07513740000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 identifies that computeStatus ignores the frozen and revoked state, so frozen packs read ACTIVE, and that the coach list shares the defect; its EXHAUSTED-for-revoked detail is an accurate refinement.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 describes the same issue: the badge checks ACTIVE && isPaused while the server sends PAUSED, so paused packs show a green Active badge.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R2 flags that pausePackTransactional has no frozen check, and R9 flags that extendPack accepts revoked packs; together they cover F3.",
+        "reported_ids": [
+          "R2",
+          "R9"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The new payment method is saved to stripe_customers before chargeAndCapture runs and is not restored when the charge fails, so a declined card stays as the default.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "new Date('YYYY-MM-DD') parses as UTC midnight, so users west of UTC can have the earliest allowed date rejected as pauseStartInPast.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "This only matters if the config is set below 90, which the report does not show.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "It depends on an unverified store mapping layer, so it is speculative.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "When the load fails, the page falls through to the empty 'no packs' state and offers a purchase, because it has no error state.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "It depends on store behaviour the report did not check.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "A clock mismatch only matters when ClockProvider is overridden, which is speculative.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "It depends on unchecked request validation, and the transaction rolls back anyway.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "It depends on unverified store assignment behaviour.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "This is a 'verify' request with no confirmed mismatch.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

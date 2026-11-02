@@ -1,0 +1,80 @@
+{
+  "arm": "control",
+  "case": "340-unpaid-paused-grace-sweep",
+  "judge_cost_usd": 0.0678054,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 says the grace sweep selects only PAST_DUE, so persisted UNPAID/PAUSED rows are never cancelled at Stripe and never closed locally.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "A random idempotency key on each call means a retry after a lost response creates and charges a second Stripe subscription.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Unlocked concurrent tier changes have a concrete interleaving that leaves Stripe billing a different price from the stored tier.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "The pending downgrade is voided and the price restored before the upgrade charge, so a declined card loses the user's scheduled downgrade.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "The SUPERSEDED early return reports success after Stripe has already been changed or charged, and nothing compensates.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Nothing clears cancel_at_period_end after a SCOUT downgrade, even when the coach re-selects a tier or pays for an upgrade.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "It depends on unverified assumptions about rows created for admin-provisioned coaches, and the report itself asks for verification.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "It assumes Stripe 'may' emit payment_failed for a rejected error_if_incomplete update, which is speculative.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Legacy pending change rows that target SCOUT have no price ID, so they are applied locally only while Stripe keeps billing.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "The helper bodies were not inspected ('appear to return'), so this cannot be verified.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "With one-second event timestamps, a strictly-older check lets an out-of-order event from the same second overwrite newer state.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "The code involved is outside the diff and unverified, and the issue is minor UX polish.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "It is speculative ('may be missing') and depends on how the template renders the status.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

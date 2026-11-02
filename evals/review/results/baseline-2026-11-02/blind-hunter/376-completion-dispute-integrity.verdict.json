@@ -1,0 +1,128 @@
+{
+  "arm": "blind-hunter",
+  "case": "376-completion-dispute-integrity",
+  "judge_cost_usd": 0.1041734,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies COMPLETED_PENDING_CONFIRMATION missing from ELIGIBLE/LIVE statuses so the parent cannot dispute a quick-completed booking.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses no-show reporting being blocked after quick-complete.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 describes Start then immediate End producing LIVE completion and payout with no parent confirmation.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No finding about confirmCompletion transitioning before the missing-SCD 404.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No finding about coach late cancel with excused reason avoiding a no-show strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No finding about parent late cancel after start not recording a coach strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "R3 covers a concurrent duplicate-insert race, not the coach's dispute blocking the family's or the missing cap on repeat disputes.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "A concrete check-then-act race: an uncommitted dispute is invisible to the completion transaction's freeze check, so the payout is created unfrozen.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "An unlocked check-then-insert lets a double-submit create two open disputes, which then breaks the Optional lookup.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "An unlocked status check lets two concurrent resolutions both issue credits.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Using the already-cut gross as the session price under-refunds and over-cuts on later disputes.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "The stored creditAmount is the requested argument rather than the amount actually credited, so it is wrong for NO_ACTION and FULL_CREDIT.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "A naming issue with no concrete behavioural consequence shown.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative, because it depends on an unread StuckCompletionSweeper query.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "Both schedule status lists omit PAUSED, so paused sessions are hidden from the coach and the parent.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "The missing upper time limit is a design concern; its harm comes from F1 rather than being a separate defect.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative, because it depends on the controller passing the role from the request body.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "The resolution semantics are undefined and no concrete defect is shown.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified DTO validation.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Stale comments only.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Unused transitions have no trigger in the code shown.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

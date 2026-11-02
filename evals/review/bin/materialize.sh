@@ -56,17 +56,30 @@ case "$kind" in
     [ -n "$m" ] || { echo "fix_merge missing" >&2; exit 1; }
     rev="$(git -C "$root" rev-parse --verify "${m}^1^{commit}")"
     tree="${work}/tree"
+    # Two reviewer arms often materialise the same case at the same moment. Serialise on a
+    # mkdir lock (atomic on every POSIX filesystem; macOS has no flock), and build the export
+    # in a temp dir that is renamed into place, so a reader never sees a half-written tree
+    # and a concurrent caller never deletes one that is still being extracted.
+    lock="${work}/.lock"
+    waited=0
+    until mkdir "$lock" 2>/dev/null; do
+      sleep 0.5; waited=$((waited + 1))
+      [ "$waited" -lt 600 ] || { echo "timed out waiting for ${lock}" >&2; exit 1; }
+    done
+    trap 'rmdir "$lock" 2>/dev/null' EXIT
     # Re-export if the case now points at a different commit than the existing export.
     if [ -d "$tree" ] && [ "$(cat "${work}/input.rev" 2>/dev/null)" != "$rev" ]; then
       echo "existing export is at $(cut -c1-8 "${work}/input.rev" 2>/dev/null || echo '?'), case wants ${rev:0:8}; re-exporting"
-      rm -rf "$tree"
+      rm -rf "$tree" "${work}/input.rev"
     fi
     if [ ! -d "$tree" ]; then
-      mkdir -p "$tree"
-      git -C "$root" archive --format=tar "$rev" | tar -x -C "$tree"
-      rm -rf "${tree}/.claude" "${tree}/_bmad" "${tree}/_bmad-output" "${tree}/evals"
+      tmp="${work}/tree.tmp.$$"
+      rm -rf "$tmp"; mkdir -p "$tmp"
+      git -C "$root" archive --format=tar "$rev" | tar -x -C "$tmp"
+      rm -rf "${tmp}/.claude" "${tmp}/_bmad" "${tmp}/_bmad-output" "${tmp}/evals"
+      mv "$tmp" "$tree"
+      echo "$rev" > "${work}/input.rev"
     fi
-    echo "$rev" > "${work}/input.rev"
     awk '/^scope:/{f=1;next} f&&/^[^ -]/{f=0} f&&/^ *- /{sub(/^ *- */,"");print}' "$case_file" > "${work}/scope.txt"
     echo "exported ${tree} at ${rev:0:8}; scope: $(wc -l < "${work}/scope.txt" | tr -d ' ') paths"
     ;;

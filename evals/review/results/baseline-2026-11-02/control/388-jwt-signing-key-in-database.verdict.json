@@ -1,0 +1,50 @@
+{
+  "arm": "control",
+  "case": "388-jwt-signing-key-in-database",
+  "judge_cost_usd": 0.0470694,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same flaw: the Jasypt password is derived from constant row fields busId/version, so anyone with DB read access can decrypt the key and forge JWTs.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "fetchSecret never decrypts, so a row that cannot be decrypted passes the bootstrap check and the app boots, which contradicts the documented fail-at-startup behaviour.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "findOneByVersionAndBusId ignores EntityStatus, so marking the row INACTIVE does not stop the key from being used to sign tokens.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "The reviewer says the method has no callers, so the stale cache is latent and has no current trigger.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Map.of throws NPE on null values, so null arguments raise an NPE instead of the intended SecException, and callers that catch SecException do not handle it.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "The reviewer says getKey has no callers, so the risk depends entirely on future code.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "The performance cost is speculative and unquantified; the reviewer itself asks for profiling.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

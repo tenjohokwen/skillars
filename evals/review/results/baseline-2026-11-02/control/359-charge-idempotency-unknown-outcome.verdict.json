@@ -1,0 +1,74 @@
+{
+  "arm": "control",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "judge_cost_usd": 0.0690374,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding covers the batch idempotency key colliding across two settlements of the same batch.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 and R2 both report that charge treats timeouts, 5xx and 409 errors as declines, covering the single-booking and batch paths, and that the bookings are declined while the card may be charged.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 reports that the PaymentIntent status is never checked, so an intent that is processing or requires_action is recorded as CAPTURED and the booking confirmed.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R3 reports that if the settle fails after a successful capture, the REQUIRES_NEW transaction rolls back and the intent id is never persisted on the CAPTURE_PENDING row.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "partial",
+        "note": "R4 targets the same batch-level BOOKING_DEDUCTION and its non-atomicity with per-booking work, but describes a rollback-in-settle-loop mechanism rather than debit-before-charge or the lack of per-booking deductions.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "Nothing reported about a card share below Stripe's minimum charge.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "Nothing reported about missing Stripe SDK timeouts or retry limits.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "Nothing reported about a subscribe double-click creating two paid subscriptions.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F9",
+        "match": "none",
+        "note": "Nothing reported about a chunked request bypassing the webhook body size limit.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

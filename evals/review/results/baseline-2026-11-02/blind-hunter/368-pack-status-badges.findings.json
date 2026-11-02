@@ -1,0 +1,138 @@
+{
+  "arm": "blind-hunter",
+  "case": "368-pack-status-badges",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "SessionPackPaymentService.computeStatus returns \"PAUSED\" whenever isPausedAt(now) is true, before the EXPIRED/ACTIVE checks. So a currently paused pack never reaches the client with status 'ACTIVE'. packBadgeColor/packBadgeLabel only handle 'ACTIVE' && isPaused, 'EXPIRED' and 'EXHAUSTED'. 'PAUSED' falls through to the default branch, which returns 'positive' and t('booking.packs.activeStatus'). The 'Paused until \u2026' caption appears next to a green 'Active' badge. The pausedStatus branch can only fire when client and server clocks disagree.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "packBadgeColor / packBadgeLabel",
+      "title": "Paused packs render with a green 'Active' badge: server sends status PAUSED, but the badge code only checks ACTIVE && isPaused",
+      "verification": "Check whether booking.store's loadPlayerPacks rewrites status (e.g. maps PAUSED\u2192ACTIVE). If it passes the server value through, the bug is confirmed. The fix is to branch on pack.status === 'PAUSED'."
+    },
+    {
+      "category": "logic",
+      "description": "revoke() sets remainingSessions=0, so a pack revoked for CHARGEBACK_LOST, EXTERNAL_REFUND or REVOKED_COACH_SUSPENDED shows as 'EXHAUSTED', as if the sessions had been played. A dispute-frozen pack (deductSession throws payment.packFrozen) shows as 'ACTIVE'. The parent dashboard then offers 'Pause' on a frozen pack, and pausePackTransactional has no frozen check, so the pause goes through and extends expiresAt during the dispute. The same status feeds CoachSoldPackQueryService, so the coach's list is wrong in the same way. The Javadoc says the shared precedence means the two views 'can never disagree', but both are wrong together.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "computeStatus(SessionPackPurchase, Instant)",
+      "title": "Revoked packs report EXHAUSTED and dispute-frozen packs report ACTIVE",
+      "verification": "Check whether there is an existing REVOKED/FROZEN status value that the frontend expects. Also check whether isRevoked()/isDisputeFrozen() are meant to influence the displayed status."
+    },
+    {
+      "category": "logic",
+      "description": "getOrCreateStripeCustomer overwrites stripe_customers.stripe_payment_method_id with the new paymentMethodId and saves it before chargeAndCapture runs. If the charge is declined or throws, the bad card stays saved as the default. The Javadoc on scheduleSubscriptionCardSync says 'a declined card is never pushed onto the subscriptions', and the subscription sync is indeed deferred. But anything else that reads stripe_customers (getSavedPaymentMethod, later charges, renewals that read the row) now uses the declined card. The previousCard captured earlier is never restored on failure.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "purchasePack / getOrCreateStripeCustomer",
+      "title": "A declined card is saved as the payer's default card before the charge is attempted",
+      "verification": "Check whether chargeAndCapture reads the payment method from stripe_customers (the comment says it does), and whether any renewal path uses that column outside the subscription sync."
+    },
+    {
+      "category": "edge-case",
+      "description": "`new Date('YYYY-MM-DD')` is parsed as UTC midnight. minPauseStartDate is computed from the local date. Example: a user in UTC-5 at 20:00 local on Nov 2 (01:00 UTC Nov 3) can pick at minimum Nov 3. That becomes 2026-11-03T00:00Z, which is already past, so the server throws booking.pauseStartInPast for the earliest date the UI allows. For every user, the pause also starts at UTC midnight rather than local midnight or the coach's timezone. Bookings in the hours around midnight are therefore included in or excluded from the conflict window unexpectedly.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "submitPause / minPauseStartDate",
+      "title": "The pause start date is sent as midnight UTC, so the earliest date the picker allows can be refused for users west of UTC",
+      "verification": "Pick tomorrow's date with the browser TZ set to America/New_York after 19:00 local. The request should be rejected with pauseStartInPast."
+    },
+    {
+      "category": "logic",
+      "description": "The server bounds the duration with configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS), which comments describe as defaulting to 90 but configurable. If it is set lower, the UI accepts values the server refuses with booking.pauseDurationInvalid. notifyPauseError only maps pauseStartInPast, so the user gets a generic error. `:max` on a number input is also not enforced when typing.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "pauseForm.durationDays input :max",
+      "title": "The pause-duration max is hardcoded to 90 while the server limit is configurable",
+      "verification": "Check whether PACK_PAUSE_MAX_DAYS can differ from 90 in any environment. Also check that i18n has a pauseDurationInvalid message."
+    },
+    {
+      "category": "logic",
+      "description": "SessionPackPurchaseResponse has purchaseId and remainingSessions; it has no id or creditsRemaining. The page uses pack.id for :key and as the packId in submitPause, and pack.creditsRemaining for the remaining count and the Pause button condition. Without a mapping layer, the key is undefined, the Pause button never shows (undefined > 0 is false), and submitPause returns early because packId is undefined. The same applies to the conflict items (b.id, b.cancellable versus whatever ConflictingBookingItem names its fields).",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "template v-for pack / submitPause",
+      "title": "Page reads pack.id / pack.creditsRemaining, but the DTO exposes purchaseId / remainingSessions",
+      "verification": "Inspect booking.store loadPlayerPacks / packPauseConflicts, and the ConflictingBookingItem record component names. Confirm they map purchaseId\u2192id, remainingSessions\u2192creditsRemaining, and expose id/requestedStartTime/cancellable."
+    },
+    {
+      "category": "edge-case",
+      "description": "The template only distinguishes loading from length === 0. If loadPlayerPacks fails (network error, 403), packsLoading goes false with an empty array. A parent who owns packs is then told they have none and sent to the marketplace to buy again. There is no error state, and onMounted does not catch errors.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "template packsLoading / sessionPacks branches",
+      "title": "A failed pack load shows the 'no packs yet, go buy one' empty state",
+      "verification": "Check whether booking.store exposes a packsError and whether loadPlayerPacks swallows or rethrows errors."
+    },
+    {
+      "category": "edge-case",
+      "description": "In the confirm path, the server can return pauseApplied=false: the D8 recheck finds a new booking, a paid booking enters the 24h window, or the user changed the date or duration after the first conflict list loaded. In that case there is no notification. The dialog stays open, and the old conflict list is shown unless the store replaces it. Editing the date or duration does not clear packPauseConflicts, so stale conflicts (and a stale hasBlockingConflict) apply to a different window.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "submitPause",
+      "title": "Second-round conflicts from confirmPausePack are silently ignored",
+      "verification": "Check whether confirmPausePack writes the returned conflicts into packPauseConflicts. Also check whether the store reloads packs after a successful pause; the page does not."
+    },
+    {
+      "category": "logic",
+      "description": "extendable = inWindow && extendedAt == null. It ignores remainingSessions, revokedAt and disputeFrozenAt. extendPack has no such checks either. A coach is therefore offered 'Extend' on a pack revoked by a lost chargeback, and can use it. The extension does nothing useful but uses up the one-time extension and misleads the coach. expiringSoon correctly requires remaining > 0, so the two flags disagree for the same pack.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachSoldPackQueryService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "toDto (extendable)",
+      "title": "Coach list marks exhausted/revoked packs as extendable, and extendPack accepts them",
+      "verification": "Confirm whether product intent is to block extending revoked or exhausted packs."
+    },
+    {
+      "category": "logic",
+      "description": "PackSessionService decides paused/expired with Instant.now(ClockProvider.getClock()). SessionPackPaymentService.computeStatus, extendPack, CoachSoldPackQueryService.getSoldPacks and PackSessionService.findActivePacks/hasActivePack use Instant.now(). With a shifted or fixed clock (tests, time-travel staging), the displayed status and the deduct/pause decisions disagree, which undermines the 'can never disagree' claim.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "computeStatus(SessionPackPurchase) / extendPack / CoachSoldPackQueryService.getSoldPacks",
+      "title": "Status calculations use the system clock instead of ClockProvider",
+      "verification": "Check whether ClockProvider is ever set to a non-system clock in tests or staging."
+    },
+    {
+      "category": "edge-case",
+      "description": "sessionCount == 0 throws ArithmeticException, which becomes a 500, after the existing active tier has been deactivated in the same transaction. That rolls back, but the result is a 500 instead of a 400. A negative sessionCount or a null totalPrice is not checked either.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "createTier",
+      "title": "createTier divides by sessionCount with no guard",
+      "verification": "Check the controller/request DTO for @Min(1) on sessionCount and @NotNull/@Positive on totalPrice."
+    },
+    {
+      "category": "edge-case",
+      "description": "The watch has no immediate:true and watches the array reference, not its contents (not deep). If the store already holds packs (navigating back to the page) and loadPlayerPacks mutates in place or skips reloading, resolveCoachNames never runs, and raw coach UUIDs are shown instead of names.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "watch(bookingStore.sessionPacks)",
+      "title": "Coach-name watcher does not fire if packs are already in the store",
+      "verification": "Check whether loadPlayerPacks always assigns a new array to sessionPacks."
+    },
+    {
+      "category": "logic",
+      "description": "isPaused treats a missing pausedFrom as 'paused since forever'. The server's status comes from SessionPackPurchase.isPausedAt, which is not shown. If isPausedAt handles a null pausedFrom differently (e.g. treats the pack as not paused), the badge and the server status disagree for pre-V210 pauses.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "isPaused",
+      "title": "Legacy pauses with no pausedFrom: the client treats them as paused from creation; check the server agrees",
+      "verification": "Read SessionPackPurchase.isPausedAt and confirm that a null pausedFrom with pausedUntil > now returns true."
+    }
+  ],
+  "input_rev": "b123c73de463e349f082c70b2a1861350e3eee83",
+  "model": null
+}

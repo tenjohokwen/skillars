@@ -1,0 +1,91 @@
+{
+  "arm": "control",
+  "case": "318-cashout-money-integrity",
+  "judge_cost_usd": 0.07124939999999999,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 covers the same non-atomic check-then-debit race, the concurrent overdraw, and the unused SERIALIZABLE debitForCashOut.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 describes the same double fee: the wallet is debited requested plus fee while the card is refunded only requested minus fee.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R4 flags the fixed refund-<PI> key that replays or blocks later cash-outs and pack refunds, and R5 adds the missing refundable-amount check.",
+        "reported_ids": [
+          "R4",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R6 flags that an ambiguous Stripe failure, such as a timeout, still restores credit, so the parent can get both the card refund and the credit back.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers the frontend reading a nonexistent message field.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers commission and fees being derived from gross times live rates.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R8 flags that sumTotalCashOuts ignores CASH_OUT_REVERSAL rows and so inflates the admin total.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding covers the coach net payout subtracting an estimated Stripe fee.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Going negative on a full-balance cash-out is the consequence of the double fee already matched in R1/F2.",
+        "reported_id": "R2",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "The debits are committed before refund runs, with no pending state or transaction, so a crash or a non-gateway exception leaves credit debited with no payout and no reversal.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "A UI message mismatch that follows from the fee issue already matched, not a separate defect.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative one-cent rounding difference that depends on unverified deserialization behaviour.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

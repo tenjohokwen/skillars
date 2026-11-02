@@ -1,0 +1,188 @@
+{
+  "arm": "blind-hunter",
+  "case": "340-unpaid-paused-grace-sweep",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "The grace sweep selects only status='PAST_DUE' (findByStatusAndPastDueSinceBefore(\"PAST_DUE\", \u2026) and isGraceExpired). If Stripe's own retry schedule ends first, a customer.subscription.updated event moves the row to UNPAID. applyStripeStatus does not clear pastDueSince on that transition, but the row has left the sweep's status filter for good. Stripe subscriptions created when a trial ends with no payment method can also sit as PAUSED, or as INCOMPLETE, with no time limit. Such a row keeps its stripeSubscriptionId forever and Stripe is never cancelled. assertCanSubscribe throws updatePaymentMethod for any linked, non-healthy, non-CANCELLED row, and changeCoachTier/changePlayerTier throw notActive. The user can neither subscribe again nor change plan, and no automatic path releases them. The SubscriptionEntitlement Javadoc says checkPastDueGracePeriod 'cancels it once the grace period runs out', but that is only true for PAST_DUE.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "checkPastDueGracePeriod / assertCanSubscribe",
+      "title": "UNPAID/PAUSED/INCOMPLETE subscriptions are never swept and leave the user permanently stuck",
+      "verification": "Trace a row through invoice.payment_failed \u2192 PAST_DUE \u2192 customer.subscription.updated{status:unpaid}. Confirm nothing in the diff, or in any other scheduler, ever selects UNPAID/PAUSED/INCOMPLETE rows for cancellation or release."
+    },
+    {
+      "category": "logic",
+      "description": "Subscriptions are created with a subscription-level default_payment_method, which overrides the customer default. The new error message tells users to 'Update your payment method to restore it instead of subscribing again'. If POST /save-payment-method only updates the customer or the stripe_customers row, the existing subscription's retries keep using the old card. An UNPAID subscription is not retried by Stripe at all. So the instruction cannot restore the subscription, and combined with the block in assertCanSubscribe the user cannot recover.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "createSubscription (setDefaultPaymentMethod) / subscription.errors.updatePaymentMethod",
+      "title": "The 'update your payment method' recovery the UI tells users about probably does not exist",
+      "verification": "Check the save-payment-method / setup-intent flow. Does it update the live subscription's default_payment_method, or pay the open invoice (Invoice.pay)? If neither, the updatePaymentMethod path is a dead end."
+    },
+    {
+      "category": "logic",
+      "description": "With payment_behavior=error_if_incomplete, a subscription is only returned once its first invoice has been paid. When persist*Subscription loses the concurrent-subscribe race (isOtherLiveSubscription), the new subscription is cancelled immediately with SubscriptionCancelParams.builder().build(), which has no prorate and no refund. The API then returns alreadyActive. The customer has paid a full period for a subscription that was destroyed. The non-active result path in createPaidStripeSubscription has the same pattern.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "subscribeCoach / subscribePlayer / cancelStripeSubscriptionQuietly",
+      "title": "Duplicate or legacy subscription is cancelled after its first invoice was already charged, with no refund",
+      "verification": "Check whether any refund or credit note is issued for the cancelled duplicate's latest_invoice. Nothing in the diff does this."
+    },
+    {
+      "category": "concurrency",
+      "description": "The Stripe update with ALWAYS_INVOICE + error_if_incomplete has already charged the proration when persist*TierUpgrade re-reads the row under lock. If stripeSubscriptionId has changed, it logs *_SUPERSEDED and returns normally. changeCoachTier then completes without an exception, so the client shows tierChangeSuccess even though no tier was granted and the charge stands. The downgrade and cancel 'superseded' paths also return silently after Stripe has been changed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "persistCoachTierUpgrade / persistPlayerTierUpgrade / persistCoachTierDowngrade / persist*Cancellation",
+      "title": "An upgrade that loses a race charges the proration but reports success and grants nothing",
+      "verification": "Confirm the controller treats a void return as success. Consider throwing on supersede instead."
+    },
+    {
+      "category": "logic",
+      "description": "When a downgrade is pending, changeCoachTier first restores the Stripe price to the current (higher) tier and voids the pending downgrade in a committed transaction. Only then does it attempt the charged upgrade. If the upgrade is declined (CardException \u2192 paymentDeclined), the user's scheduled downgrade is gone and Stripe now bills the higher price at the next renewal. The user did not ask for that. changePlayerTier has the same problem.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "changeCoachTier / restoreCoachPriceAndVoidDowngrade",
+      "title": "A declined upgrade after a pending downgrade silently discards the downgrade",
+      "verification": "Walk through: ACADEMY \u2192 downgrade to INSTRUCTOR (pending) \u2192 upgrade to ACADEMY with a declining card. Afterwards the pending change count is 0 and the Stripe price is price_acad."
+    },
+    {
+      "category": "edge-case",
+      "description": "isPaidTierEntitled returns false whenever any payment row exists with a non-entitled status, including null. findOrCreateCoachSubscription creates a row before Stripe is called. If that subscribe fails (declined card, priceNotConfigured, noPaymentMethod), the row stays with a placeholder status. An admin-provisioned coach (paid marketplace tier, no payment row by design according to the port's Javadoc) who ever opened the subscribe flow is now forced to SCOUT by getCoachSubscriptionTier. The widened reconcileMarketplaceTiers, which now uses findAll(), also actively overwrites their marketplace row to SCOUT.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/adapter/CoachSubscriptionEntitlementAdapter.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "isPaidTierEntitled / reconcileMarketplaceTiers",
+      "title": "A placeholder payment row now strips the marketplace paid tier from admin-provisioned coaches",
+      "verification": "Check what status and tier findOrCreateCoachSubscription assigns to a new row, and whether that row is committed before the Stripe call. The ConcurrencyIT comment says it is."
+    },
+    {
+      "category": "logic",
+      "description": "Any paid invoice on the subscription sets status to ACTIVE when the current status is PAST_DUE, UNPAID or INCOMPLETE. The handler does not check the subscription's actual Stripe status. If an UNPAID subscription has several open invoices and the user pays only one (or a $0 or proration invoice is paid), Stripe stays unpaid and sends no subscription.updated event. Locally the row is ACTIVE and entitled, and the marketplace tier is restored, for free.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "handleInvoicePaid / RECOVERABLE_ON_PAYMENT",
+      "title": "invoice.paid marks UNPAID/INCOMPLETE rows ACTIVE even while Stripe still reports unpaid",
+      "verification": "Read the subscription status from the event, or retrieve it from Stripe, instead of assuming that a paid invoice means the subscription is active."
+    },
+    {
+      "category": "edge-case",
+      "description": "Idempotency keys are now random for each attempt. If a network or read timeout (ApiConnectionException) happens after Stripe created and charged the subscription, the client sees stripeError. A retry creates a second subscription; the first is never linked and keeps billing. Likewise, if persistCoachSubscription throws (notFound, a DB error, an optimistic lock), the paid subscription is never cancelled. An upgrade that times out after Stripe applied it leaves Stripe billing the higher price while the local tier is unchanged, and nothing maps a priceId back to a tier to reconcile it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "createPaidStripeSubscription / updateStripePrice",
+      "title": "Charges that succeed but then fail to persist leave orphaned, billing Stripe subscriptions",
+      "verification": "Confirm that the 'StripeSubscriptionReconciliationScheduler orphan alert' referenced in cancelStripeSubscriptionQuietly exists, and that it also covers subscriptions that were never linked."
+    },
+    {
+      "category": "logic",
+      "description": "SubscriptionEntitlement claims 'before this, every entitlement reader used the stored tier regardless of status', but only QuotaConfigService and getCoachSubscriptionTier were changed. The unchanged context of getEffectivePlayerTier (`.orElse(\"ATHLETE\")`) suggests it still maps getTier directly. An UNPAID/PAUSED/INCOMPLETE player would then keep paid entitlements through any caller of these helpers.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "getEffectiveCoachTier / getEffectivePlayerTier / toCoachResponse",
+      "title": "Other tier readers may still ignore status",
+      "verification": "Inspect getEffectiveCoachTier/getEffectivePlayerTier and their callers. Check whether they apply SubscriptionEntitlement.effective*Tier."
+    },
+    {
+      "category": "concurrency",
+      "description": "Phase 1 selects the row while it is PAST_DUE and then releases the lock. If invoice.paid arrives before cancelAtStripeForGrace runs, the Stripe subscription that was just paid is still cancelled immediately with no refund. GraceTarget.matches then deliberately revokes even though the row is now ACTIVE. The user pays and loses the subscription anyway.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "checkPastDueGracePeriod / GraceTarget.matches",
+      "title": "Grace sweep can cancel a subscription the user paid moments earlier",
+      "verification": "Re-check the subscription's Stripe status (retrieve) before cancelling, or accept and document the race."
+    },
+    {
+      "category": "edge-case",
+      "description": "Only confirmSubscribe on PlayerSubscriptionPage uses subscriptionErrorI18nKey. changePlayerTier now throws notActive and paymentDeclined (when an upgrade is charged immediately), but a parent changing a player's tier still sees the generic error. The coach page was updated for both subscribe and tier change.",
+      "file": "src/frontend/src/pages/parent/PlayerSubscriptionPage.vue",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "handleChangeTier (player)",
+      "title": "Tier-change errors on the parent's player subscription page were not wired to the new messages",
+      "verification": "Check whether PlayerSubscriptionPage.vue has a tier-change catch block that still uses a fixed key."
+    },
+    {
+      "category": "edge-case",
+      "description": "The comment states that PaymentApiAdvice puts the code in errorMsg.errorKey. The spec's apiError() sets helpCode, errorKey and message all to the same code. If the backend actually puts the code only in helpCode (or errorKey holds a different value), every mapping silently falls back to the generic message and the spec still passes.",
+      "file": "src/frontend/src/utils/subscriptionErrors.js",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "subscriptionErrorCode",
+      "title": "The frontend reads the backend code from errorMsg.errorKey only, and the spec fixture fills both fields",
+      "verification": "Check what PaymentApiAdvice puts into ErrorDto.errorMsg.errorKey for a PaymentGatewayException(\"payment.subscription.paymentDeclined\")."
+    },
+    {
+      "category": "architecture",
+      "description": "A Mockito mock of CoachSubscriptionEntitlementPort returns false by default. Any existing test in CoachProfileServiceTest or elsewhere that stubs a paid projection and expects it back will now get SCOUT. A test that builds CoachProfileService without the new field gets an NPE whenever the projected tier is not SCOUT.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "getCoachSubscriptionTier",
+      "title": "Existing tests built with @InjectMocks get a mocked port that returns false, so paid tiers now come back as SCOUT",
+      "verification": "Run the marketplace and video test suites. Search for other CoachProfileService constructions and tests asserting INSTRUCTOR or ACADEMY from getCoachSubscriptionTier."
+    },
+    {
+      "category": "edge-case",
+      "description": "applyCoachChange now voids the change unless the subscription is ACTIVE or TRIALLING. If the unchanged coachSub()/playerSub() helpers build the row with Instancio and do not pin the status, the status is a random string. The 'valid change applied' cases would then void instead of apply, and the isolation assertions would pass or fail for the wrong reason.",
+      "file": "src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionSchedulerIsolationTest.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "coachSub / playerSub helpers",
+      "title": "Scheduler isolation tests depend on the coachSub/playerSub helpers setting an ACTIVE status",
+      "verification": "Check that coachSub() and playerSub() set status to ACTIVE explicitly."
+    },
+    {
+      "category": "edge-case",
+      "description": "The name describes a CANCELLED player but the fixture uses status UNPAID, so CANCELLED is not tested at all. Minor, but it is copy-paste residue that misdescribes what the test covers.",
+      "file": "src/test/java/com/softropic/skillars/platform/video/service/QuotaConfigServiceTest.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "storageQuota_cancelledSemiProPlayer_fallsBackToAthleteKey",
+      "title": "Test name says 'cancelled' but the test sets status UNPAID",
+      "verification": "Rename the test, or parameterize it over CANCELLED, UNPAID, INCOMPLETE and PAUSED."
+    },
+    {
+      "category": "concurrency",
+      "description": "Event `created` is in epoch seconds and the check is a strict isBefore. Events in the same second are never treated as stale. Two events from that second delivered out of order, for example customer.subscription.updated{active} and an earlier invoice.payment_failed, can still overwrite newer state. API-side writes (persist*Subscription, upgrades) never advance lastStripeEventAt, so the guard only orders webhooks against other webhooks.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "isStaleEvent",
+      "title": "The stale-event guard compares Stripe timestamps that only have one-second resolution",
+      "verification": "Decide whether ties need a tiebreaker, such as comparing the Stripe object's state or retrieving the subscription."
+    },
+    {
+      "category": "performance",
+      "description": "The sweep changed from findAllByStatusIn(ACTIVE, TRIALLING) to an unbounded findAll(). It then runs one transaction and one marketplace lookup per row. Most rows will be free or cancelled. getCoachSubscriptionTier also now makes an extra payment query on every call, which adds up if it is called per coach in search or listing loops.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R17",
+      "severity": "low",
+      "symbol": "reconcileMarketplaceTiers",
+      "title": "reconcileMarketplaceTiers now loads every coach subscription row on each run",
+      "verification": "Check the size of payment.coach_subscriptions and how often getCoachSubscriptionTier is called per request."
+    },
+    {
+      "category": "architecture",
+      "description": "The Javadoc notes that the endpoint 'must be subscribed to invoice.paid'. Nothing in the diff enforces or documents that config change. Without it, clearing pastDueSince on payment and recovering UNPAID rows depend entirely on customer.subscription.updated. invoice.getSubscription() also assumes a Stripe API version that still has Invoice.subscription; newer versions moved it to parent.subscription_details.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "handleInvoicePaid",
+      "title": "New invoice.paid recovery depends on the webhook endpoint subscribing to that event",
+      "verification": "Check the Stripe dashboard or infrastructure config for the webhook's enabled_events, and the pinned stripe-java / API version."
+    }
+  ],
+  "input_rev": "eea53ee9a61245dadeffcb003e2722793d7cba90",
+  "model": null
+}

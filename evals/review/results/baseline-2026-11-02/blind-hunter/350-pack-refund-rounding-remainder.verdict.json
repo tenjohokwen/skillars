@@ -1,0 +1,91 @@
+{
+  "arm": "blind-hunter",
+  "case": "350-pack-refund-rounding-remainder",
+  "judge_cost_usd": 0.0838294,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies that the rounded-down per-session refund share leaves up to sessionCount-1 cents of the charge unreturned, with no reconciliation of the remainder.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses the missing per-booking refund marker or double crediting when an event is redelivered.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "It depends on unverified legacy null rows and on null handling at other sites ('may not'), so it is speculative.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: the purchase succeeds, loadPlayerPacks then fails with an HTTP error, the key is discarded, and a retry charges again.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: after capture the server returns lifecycleFailure/5xx (PACK_PURCHASE_UNRECONCILED), the client mints a new key, and the retry double-charges.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "This is a test-coverage remark, not a defect.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "It depends on unverified pause-start semantics (whether a pausedFrom field exists), so it is speculative.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "It speculates about null or mixed player ids without a confirmed trigger.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "It needs a pack row to be deleted while bookings still reference it, which is unverified.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "It speculates about statuses and deduct failures without a concrete trigger.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "It depends on an unverified order of operations inside pausePack.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Restoring a session has no cap, and the IT test itself ends with 4 remaining sessions on a 3-session pack, so free sessions can appear.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "It speculates about how Stripe idempotency errors are mapped and about key expiry.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Stale Javadoc and possible outside callers are documentation or speculation.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "A mismatch between the test name and the test scenario is a coverage or style issue.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

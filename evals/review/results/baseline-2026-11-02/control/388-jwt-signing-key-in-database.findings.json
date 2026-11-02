@@ -1,0 +1,78 @@
+{
+  "arm": "control",
+  "case": "388-jwt-signing-key-in-database",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The Jasypt password is just reverse(busId + version), both stored in plaintext in the same row and hard-coded in SecurityConstants (\"jot\",\"v1\"), so the password is always \"1vtoj\". Anyone with read access to main.sec, main.sec_aud (Envers copies the value) or any DB dump/backup can decrypt the HMAC key and forge JWTs for any user, including admins. Because the entity is @Audited, rotated-out keys also remain recoverable in sec_aud after the documented 'delete the row' rotation.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/Secret.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "Secret.derivePassword / generateEncryptedVal / getSecretBytes",
+      "title": "JWT signing secret 'encryption' key is derived solely from public, constant row fields",
+      "verification": "Confirmed from code: derivePassword uses only busId/version; docs/deployment/secrets-reference.md shows JwtSecretBootstrapRunner is the production provisioning path for (v1, jot)."
+    },
+    {
+      "category": "logic",
+      "description": "The existence check calls secretService.fetchSecret, which only loads the entity and never calls getSecretBytes, so DECR_ERROR/BLANK_SECRET can never be raised here. A broken (v1, jot) row (e.g. hand-written SQL with the wrong Jasypt password) is logged as 'skip_existing SUCCESS' and the app boots, then fails every request when JwtConfiguration.getSecretKey decrypts it, contrary to the javadoc's promise to stop the boot.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "JwtSecretBootstrapRunner.run",
+      "title": "Bootstrap runner's 'fail on corrupt/undecryptable row' guard never fires",
+      "verification": "Confirmed by reading SecretService.fetchSecret (no decryption) versus the javadoc's 'Fails startup loudly' bullet."
+    },
+    {
+      "category": "logic",
+      "description": "JwtSecretService and JwtConfiguration resolve the key with findOneByVersionAndBusId, which ignores EntityStatus. Setting the row to INACTIVE to revoke a compromised key, or creating it with createInactiveSecret, has no effect: it keeps signing and verifying tokens. The bootstrap runner likewise treats an inactive row as 'present' and skips creation, while fetchLatestActiveSecretAsBytes would report KEY_NOT_FOUND for the same data.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "JwtSecretService.addSecretToThread (and SecretService.fetchSecret)",
+      "title": "JWT secret is fetched without regard to status; INACTIVE secrets are still used for signing",
+      "verification": "Confirm whether any operational procedure deactivates secrets via status; the code path itself is confirmed."
+    },
+    {
+      "category": "concurrency",
+      "description": "The first active secret fetched per busId is stored in secretMap forever. createActiveSecret never evicts it, and nothing else does either, so a newer active secret is never returned by this instance. Separate instances also cache different values. The size check followed by put is also non-atomic. The method currently has no callers in src/main, so this is latent.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/SecretService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "SecretService.fetchLatestActiveSecretAsBytes / secretMap",
+      "title": "Latest-active-secret cache is never invalidated, so rotation is ignored until restart",
+      "verification": "Grep shows no callers of fetchLatestActiveSecretAsBytes in src/main; becomes live once a caller is added."
+    },
+    {
+      "category": "edge-case",
+      "description": "The error-context maps are built with Map.of(..., VERSION, version, BUS_ID, busId) before validation, and Map.of rejects null values. So fetchSecret(null, x) or createActiveSecret(x, null) throws an NPE and never the BLANK_VERSION/BLANK_BUS_ID SecException. Secret.derivePassword has the same problem for a null field: it throws an NPE instead of BLANK_BUS_ID_OR_VERSION. Callers that catch SecException (like the bootstrap runner) do not handle it.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/SecretService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "SecretService.fetchSecret / createSecret / fetchLatestActiveSecretAsBytes; Secret.derivePassword",
+      "title": "Null busId/version causes NullPointerException from Map.of instead of the intended SecException",
+      "verification": "Java's Map.of throws NPE on null values; confirmed by reading the code."
+    },
+    {
+      "category": "security",
+      "description": "When the ThreadLocal is empty (e.g. code running outside SecurityAdviceFilter, async threads, schedulers), getKey silently returns new byte[0] instead of throwing. A caller that feeds this into an HMAC without a length check would sign or verify tokens with an empty key, and such tokens can be forged. No current caller exists in src/main, so this is latent.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretProvider.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "JwtSecretProvider.getKey",
+      "title": "JwtSecretProvider.getKey returns an empty key instead of failing when no secret is bound",
+      "verification": "Grep shows no callers of JwtSecretProvider.getKey in src/main; risk depends on future callers."
+    },
+    {
+      "category": "performance",
+      "description": "The Secret entity is cached, but each getSecretKey call builds a new BasicTextEncryptor and runs a full PBEWithMD5AndDES decrypt (1000 key-derivation iterations) to get the key. Each token sign or verify pays this CPU cost, so a burst of authenticated requests multiplies it.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/Secret.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "Secret.getSecretBytes (called from JwtConfiguration.getSecretKey)",
+      "title": "Signing key is PBE-decrypted on every getSecretKey call",
+      "verification": "Profile JwtConfiguration.getSecretKey under load to quantify."
+    }
+  ],
+  "input_rev": "0621d23f5462306070ae084dc294bbf501d37458",
+  "model": null
+}

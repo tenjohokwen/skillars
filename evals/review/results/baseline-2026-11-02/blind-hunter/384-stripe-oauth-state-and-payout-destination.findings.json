@@ -1,0 +1,138 @@
+{
+  "arm": "blind-hunter",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "findings": [
+    {
+      "category": "security",
+      "description": "`state` is set to `coachId.toString()`. It is predictable and never changes, it isn't tied to a session, and it can be reused. The callback only checks that `state` equals the logged-in coach's id. Attack: the attacker learns a victim coach's profile UUID (coach ids usually appear in marketplace URLs or API responses). The attacker opens the platform's Stripe authorize URL with `state=<victimCoachId>`, authorizes their own Stripe account, and stops at the redirect without using the `code`. They then get the logged-in victim to open `/api/payment/coaches/me/stripe/callback?code=<attackerCode>&state=<victimCoachId>`. State matches, `upsertCoachStripeAccount` replaces the victim's `stripe_account_id` with the attacker's account, and future payouts go to the attacker. The `// P18` comment claims this exact protection. The fix is a random, single-use nonce stored server-side (or in the session) when the URL is generated, checked and deleted in the callback.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback / StripeOnboardingService.generateOnboardingUrl",
+      "title": "OAuth state is the coach's own UUID, so the P18 check doesn't prevent CSRF account-linking",
+      "verification": "Evidence is in the code shown: `params.put(\"state\", coachId.toString())` plus an equality check against `coachId`. To confirm exposure, check whether `CoachProfile.id` is visible to other users (public profile routes or DTOs)."
+    },
+    {
+      "category": "security",
+      "description": "On an existing row, the upsert overwrites `stripeAccountId` with no check that it is the same account. There is no confirmation, no audit or alert, and no freeze of pending payouts. `CoachPayoutTransferHandler` calls `transferToCoach(bookingId, coachId, \u2026)`, which (apparently) looks up the destination from the coach's current link when the transfer runs. So every `PENDING_RELEASE` payout, and every HOLD that `CoachPayoutHoldRecoveryService` later re-drives, goes to whichever account was linked most recently, not the one active when the money was earned. Combined with the state CSRF above, this turns linking an attacker's account into taking the coach's earnings. Even without an attacker, a coach who reconnects a different account by mistake redirects all queued money with no signal. Nothing stops one Stripe account being linked to several coaches either.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "upsertCoachStripeAccount",
+      "title": "Any successful callback silently replaces where payouts go, including payouts already queued or on HOLD",
+      "verification": "Check `PaymentGateway.transferToCoach`: does it resolve the destination from `coach_stripe_accounts.stripe_account_id` at transfer time? Check whether `coach_stripe_accounts.stripe_account_id` has a UNIQUE constraint. Check whether `CoachPayout` stores the destination account at creation."
+    },
+    {
+      "category": "logic",
+      "description": "Stripe sends the user back with a top-level GET from stripe.com. That request carries only cookies, never an `Authorization: Bearer` header. The frontend is a hash-mode SPA, which suggests token auth. If the API authenticates with bearer/JWT headers, `@PreAuthorize(HAS_COACH_ROLE)` rejects every real callback and onboarding can never finish. If it uses cookies with SameSite=Strict, the cross-site navigation also arrives without credentials. When that happens the user gets a raw 401/403 from the backend origin instead of a redirect to the settings page with `stripe_error`. Even the `error` branch can't run, because the method-level `@PreAuthorize` is checked before the method body.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "handleOAuthCallback",
+      "title": "Callback is a browser redirect from Stripe but is protected like an API call; it may always return 401/403",
+      "verification": "Check the security config: how are `/api/**` requests authenticated (bearer header or session cookie)? What SameSite setting does the auth cookie use? Is `/api/payment/coaches/me/stripe/callback` permitted or handled differently?"
+    },
+    {
+      "category": "database",
+      "description": "`coachId` is set by hand and `version` starts at `Integer 0`. For a wrapper-type version field, Spring Data JPA's `isNew()` treats the entity as new only when `version == null`, so `save(acct)` calls `em.merge()`. Merge looks for a row with that id, finds none, and in Hibernate 6.6+ throws `OptimisticLockException`/`StaleObjectStateException` for an entity with a version but no row. Older versions quietly INSERT. If this applies, every coach's first OAuth callback fails after the Stripe code has already been used, so retrying the same link can't succeed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/CoachStripeAccount.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "version / upsertCoachStripeAccount (insert branch)",
+      "title": "First-time connect may fail: assigned id plus non-null `@Version` makes Spring Data call merge, not persist",
+      "verification": "Check the Hibernate ORM version (6.6+ has the strict merge behaviour). Also check for a test that inserts a brand-new `CoachStripeAccount` through the real repository rather than a mock. Fix by starting `version` as null or implementing `Persistable`."
+    },
+    {
+      "category": "edge-case",
+      "description": "`onboardingService.handleOAuthCallback` can throw `PaymentGatewayException`: when the token exchange fails, when the code is invalid, reused or expired, or when the response has no `stripe_user_id`. It can also throw DB exceptions from the upsert (PK race, unique violation, the merge problem above). `resolveCoachId` can throw `ResourceNotFoundException`. None of these are caught, so the browser gets a JSON or whitelabel error at the backend origin instead of `settingsPageUrl()?stripe_error=...`. The error handling covers the `error` and `missing_code` cases but not the more common failures. A user who refreshes the callback URL always hits this, because the code was already used.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback",
+      "title": "Service exceptions in the callback produce an error page instead of the settings-page redirect",
+      "verification": "Check whether a `@ControllerAdvice` handles `PaymentGatewayException` on this endpoint with a redirect. Most likely it returns JSON."
+    },
+    {
+      "category": "logic",
+      "description": "The reset (PENDING, charges and payouts false, transfers null) runs even when `stripeUserId` matches the stored account. The follow-up `syncAccountFromStripe` swallows every failure. If Stripe is slow or rate-limited, a fully onboarded coach who simply clicked 'connect' again stays PENDING: the status poll is blocked for 30s by the `lastStatusSyncAttempt.put` and is per instance. Meanwhile `last_event_created_at` is moved forward to `connectedAt`, and the skew allowance used for fetches isn't applied here. So a genuine `account.updated` that Stripe stamped a few seconds before this server's `connectedAt` is discarded as stale.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "upsertCoachStripeAccount / handleOAuthCallback",
+      "title": "Reconnecting the same, already COMPLETE account downgrades the coach to PENDING; a failed sync leaves them unbookable",
+      "verification": "Check whether `CoachStripeAccountStatusApplier.apply` compares with `>=` or `>` against `lastEventCreatedAt`. Also check whether the webhook path uses the same comparison."
+    },
+    {
+      "category": "logic",
+      "description": "The URL is generated whatever the current status (COMPLETE, deauthorized and so on), and the callback accepts a different account without asking. Together with the two findings above, re-onboarding is a quiet, destructive operation rather than an explicit 'change payout account' action.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "generateOnboardingUrl",
+      "title": "No backend guard against a coach re-running onboarding over a working account",
+      "verification": "Check whether the frontend hides the button once the account is COMPLETE; the backend doesn't enforce it."
+    },
+    {
+      "category": "concurrency",
+      "description": "`transferToCoach` runs inside the outbox `REQUIRES_NEW` transaction. If it succeeds and then `applyOffset` or `save` fails, or the commit fails (deadlock, connection loss, version conflict), everything rolls back and the outbox runs the handler again. If the gateway's idempotency key is the booking id, the second call works only if the amount and parameters match. But `planOffset` is re-planned against debt rows that may have changed, so `toTransfer` can differ. Stripe then returns an idempotency error, which may be classified as non-retryable and HOLD a payout that was in fact paid. Without a key derived from the booking id, the coach is paid twice.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "handle",
+      "title": "Every successful payout transfer may be duplicated, or turned into a HOLD, if the commit fails after Stripe succeeds",
+      "verification": "Check `PaymentGateway.transferToCoach`: does it send an `Idempotency-Key` derived from `bookingId`? How does it classify Stripe `idempotency_error`?"
+    },
+    {
+      "category": "logic",
+      "description": "A payout still inside `release_after` is deferred by throwing `IllegalStateException`. The outbox increments `attempts` for this, the same counter used for real failures. The comment says `[OUTBOX_STUCK]` fires after 10 attempts. If the backoff schedule over 10 attempts is shorter than the release window (often days), every normal payout is reported as stuck or dead-lettered before it becomes payable. This check also uses `Instant.now()` rather than an injected clock.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "handle (releaseAfter branch)",
+      "title": "Hold-window deferral throws and uses up outbox attempts; long windows may hit OUTBOX_STUCK",
+      "verification": "Check the outbox backoff schedule and maximum attempts against the configured release-after delay. Also check whether the payout is enqueued with `available_at = release_after` (in which case this branch is only a safety net)."
+    },
+    {
+      "category": "concurrency",
+      "description": "The callback sets `last_event_created_at = connectedAt` and stops the local poll for 30s. The rate limit is in memory and per instance, so a status request on another instance within 30s polls with `snapshotAt = now - 30s < connectedAt`. If the applier rejects snapshots older than the marker, that fetch is wasted, which is harmless. If it treats them differently (for example, applying while ignoring the deauthorized sentinel), the results depend on the instance. The comment's claim that the 30s gap guarantees the stamp is after connect only holds on one instance.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "getStripeStatus / pollSnapshotTime",
+      "title": "Status poll across instances can apply a snapshot stamped before the reconnect marker",
+      "verification": "Check how `CoachStripeAccountStatusApplier.apply` treats `snapshotAt < lastEventCreatedAt`."
+    },
+    {
+      "category": "performance",
+      "description": "Once the map passes 10k entries, every coach's throttle resets at once, including the entry the OAuth callback just set. There is also a race: concurrent callers can run `clear()` between another thread's size check and `compute`. It's a soft guard as documented, but a burst of Stripe `Account.retrieve` calls right after each clear is possible.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "tryAcquireStatusSync",
+      "title": "The rate-limit map is cleared entirely once it passes 10k entries, removing all throttling",
+      "verification": "Evidence is in the code shown."
+    },
+    {
+      "category": "edge-case",
+      "description": "Error results are sent to a property named `callbackSuccessUrl`, which contradicts its name and suggests a missing `callbackErrorUrl` setting. `url.contains(\"?\")` doesn't consider '#'. If the resolved URL has a real query before the hash (e.g. `https://app/?x=1#/coach/payment-settings`), `&stripe_error=` lands in the fragment with no `?`, and vue-router never sees `route.query.stripe_error`. That contradicts the Javadoc's claim.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "withStripeError / settingsPageUrl",
+      "title": "Error redirects use `getCallbackSuccessUrl`, and the '?' check can append into the wrong part of the URL",
+      "verification": "Check `FrontendLinkBuilder.resolve` output and the configured `callback-success-url` value."
+    },
+    {
+      "category": "security",
+      "description": "`error` and `state` come straight from the query string into `log.warn`. CR/LF or bracket characters can forge or split the `[STRIPE_OAUTH_...]` lines that alerting likely parses. The P19 encoding is applied only to the redirect.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "handleOAuthCallback",
+      "title": "User-supplied `error` and `state` values are logged as-is (log injection)",
+      "verification": "Check whether the logback encoder escapes newlines (a JSON encoder does; a plain pattern doesn't)."
+    }
+  ],
+  "input_rev": "c9c10fa6262f6e0413171c942ab24504061c587f",
+  "model": null
+}

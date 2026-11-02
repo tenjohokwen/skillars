@@ -1,0 +1,168 @@
+{
+  "arm": "blind-hunter",
+  "case": "382-upload-content-verification",
+  "findings": [
+    {
+      "category": "security",
+      "description": "saveStep5 accepts any photoUrl starting with \"coach_profile/<userId>/\" and writes it via updatePhotoUrlByUserId. It never checks that a confirmed, not-deleted FileStorageObject owned by the caller exists, and never checks the stored content type or size. Example: a coach signs an upload, PUTs a 2 GB file or a text/plain/octet-stream file to the presigned URL (the PUT does not bind length), and confirmUpload rejects it for size or quota. The S3 object is still there. The coach then submits that key as photoUrl in Step 5. getPublicProfile signs it via resolvePhotoUrl and serves it to every visitor. The same path re-links a photo the coach soft-deleted, or a key that was never uploaded at all (broken image). FileStorageService.findActiveObject and assertOwnership exist for exactly this check (the D9 Javadoc says so) but are not called. The prefix check also does not stop literal '..' segments, which some S3-compatible backends normalise.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "CoachProfileService.saveStep5",
+      "title": "saveStep5 links any key with the right prefix as the public photo, skipping all the checks confirm-time applies",
+      "verification": "Confirm that no ConstraintValidator or controller on ProfileBuilderStep5Request.photoUrl calls findActiveObject or assertOwnership. If none does, this is exploitable as described."
+    },
+    {
+      "category": "security",
+      "description": "The comment admits the presigned PUT does not bind the length, and confirm checks the real size and quota afterwards. But when confirm throws (contentType or size mismatch, size over maxSizeBytes, QuotaExceededException, missing ETag), the object already in the bucket is left there. It has no FSO row, so it never counts against the owner's quota. Any authenticated user can repeat sign \u2192 PUT a huge body \u2192 let confirm fail, and store unlimited data at the platform's expense. It could also have been fixed at the source: putObjectRequest(r -> r.contentLength(request.fileSizeBytes())) would make S3 enforce the declared length.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Uploads rejected at confirm are never deleted from S3, so quota and size limits can be bypassed",
+      "verification": "Check for a bucket lifecycle rule or sweeper that deletes objects with no file_storage_objects row (e.g. an orphan-cleanup job). Without one, nothing ever removes them."
+    },
+    {
+      "category": "security",
+      "description": "validationChain.validate runs on SignUploadRequest's checksum and tags and on a made-up filename (entity + \".\" + extension). persistConfirmed instead stores ConfirmUploadRequest.originalFilename(), .checksum() and .tags(), which are separate client fields that no validation touches. A client can sign with clean values and confirm with originalFilename=\"invoice.html\" or \"../../x\", arbitrary tags, or any checksum string. The checksum is never compared with the object (the presign does not set checksumSHA256, and HEAD is not asked for checksums). Yet findActiveObject and toConfirmUploadResponse return it as \"sha256:<value>\" alongside the HEAD-verified fields, and the findActiveObject Javadoc invites downstream modules to trust that DTO as verified.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "FileStorageService.persistConfirmed",
+      "title": "Confirm saves an unvalidated filename, checksum and tags that are different values from the ones validated at sign time",
+      "verification": "Check ConfirmUploadRequest for Bean Validation annotations on originalFilename, checksum and tags, and check whether any consumer uses StorageObjectDto.checksum or originalFilename (e.g. in a Content-Disposition header)."
+    },
+    {
+      "category": "security",
+      "description": "confirmUpload only checks that the client-declared contentType equals the Content-Type header the same client sent on the PUT. Nothing reads the leading bytes. A file labelled image/png can hold HTML, SVG or an executable. Separately, the default allow-list includes application/octet-stream / .bin, so arbitrary binaries pass validation outright. Both feed coach_profile and coach_gallery uploads that are served to other users.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/config/FileStorageProperties.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "FileStorageProperties.Validation.allowedMimeTypes",
+      "title": "Upload verification only checks headers; the file bytes are never inspected, and the default allow-list accepts arbitrary binaries",
+      "verification": "Check whether ValidationChain or a post-confirm job sniffs magic bytes, and whether the production config overrides allowedMimeTypes to drop application/octet-stream."
+    },
+    {
+      "category": "logic",
+      "description": "signUpload and confirmUpload require the entityId in a coach_profile key to equal securityUtil.requireCurrentBusinessId(). The listener runs Long.parseLong(entityId) and treats the result as the CoachProfile userId, and saveStep5 requires the prefix \"coach_profile/\" + userId (a Long). If the business id is not the same string as the numeric user id (e.g. a UUID or prefixed id), every legitimate coach photo upload is either rejected at sign time (when entityId=userId) or silently ignored by the listener (non-numeric) and rejected by saveStep5. In that case coach photos cannot work.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CoachProfilePhotoEventListener.onStorageConfirmed",
+      "title": "Coach keys are bound to the business id at sign time, but the photo listener and saveStep5 expect the numeric userId",
+      "verification": "Check SecurityUtil.requireCurrentBusinessId(): does it return String.valueOf(user.getId()) for coaches? If it returns anything else, the two sides contradict each other."
+    },
+    {
+      "category": "database",
+      "description": "`long currentUsage = fileStorageObjectRepository.sumSizeBytesByOwnerId(ownerId)` is assigned to a primitive. SQL SUM over zero rows returns NULL, so if the method returns Long without COALESCE, an owner's very first upload fails with an NPE (500). Separately, if the query does not filter deleted_at IS NULL, softDelete never frees quota, so a user who deletes files still hits QuotaExceededException.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "FileStorageService.signUpload / persistConfirmedWithinQuota",
+      "title": "Quota sum may be null (unboxing NPE) or may count soft-deleted rows",
+      "verification": "Check the @Query on FileStorageObjectRepository.sumSizeBytesByOwnerId for COALESCE(SUM(...),0), a primitive long return type, and a deleted_at IS NULL predicate."
+    },
+    {
+      "category": "concurrency",
+      "description": "The comment argues that the targeted UPDATE avoids racing suspendCoach. A JPQL/native @Modifying update does not increment the @Version column added in C5, though. A transaction that loaded CoachProfile before this update (e.g. suspendCoach or a strike writer) still holds a matching version, passes the optimistic check, and writes its stale photo_url back over the new one with a full-row UPDATE (unless @DynamicUpdate is on). The race is not removed; the losing side just changes from the status to the photo. saveStep5 uses the same method and has the same problem.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "CoachProfilePhotoEventListener.onStorageConfirmed",
+      "title": "Single-column photo_url UPDATE skips @Version, so a concurrent full-row save can silently revert it",
+      "verification": "Check CoachProfileRepository.updatePhotoUrlByUserId: does it SET version = version + 1? Also check whether CoachProfile has @DynamicUpdate."
+    },
+    {
+      "category": "logic",
+      "description": "After a login change, softDelete's createdBy-vs-login check throws AuthorizationException. deletePhoto logs a warning, clears photoUrl, and returns success. The file_storage_objects row stays active. It keeps counting toward quota (if the sum counts active rows), stays signable through signDownload by its ownerId, and can be re-linked by saveStep5, which only checks the prefix. The ownership models also disagree: softDelete authorizes on createdBy (login) while every other path uses ownerId (business id), which is why an email change breaks deletion in the first place. Each swallowed case is also recorded as a soft_delete error metric.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "CoachProfileService.deletePhoto",
+      "title": "deletePhoto swallows AuthorizationException and clears photoUrl, leaving the FSO live and still counted against quota",
+      "verification": "Check whether UserProfileService.updateUserEmail changes the login used as createdBy. Decide whether softDelete should authorize on ownerId to match signDownload, assertOwnership and reconfirm."
+    },
+    {
+      "category": "edge-case",
+      "description": "The listener filters only on entity == coach_profile. A coach can sign a coach_profile upload with application/pdf, text/plain or application/octet-stream (all allowed by default) and confirm it. The listener then makes it the public profile photo, and getPublicProfile serves a signed URL to that non-image object. fso.getContentType() is never checked against image/*.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "CoachProfilePhotoEventListener.onStorageConfirmed",
+      "title": "Photo listener links any confirmed coach_profile object as the photo, whatever its content type",
+      "verification": "Check whether StorageResource or ValidationChain restricts content types per entity (e.g. coach_profile \u2192 image/* only)."
+    },
+    {
+      "category": "logic",
+      "description": "reconfirm republishes StorageObjectConfirmedEvent for any key confirmed within uploadTtlSeconds. If a coach confirms photo A, then photo B, and a delayed retry of A's confirm arrives within the window, the listener sets photo_url back to A. The comment says late replays are blocked, but the window is the presign upload TTL, which has nothing to do with how long a confirm retry may legitimately take, and the mechanism does not order events. The listener's \"idempotent\" claim holds for one key, not across keys.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "FileStorageService.reconfirm",
+      "title": "Re-confirming within the TTL republishes the event and can revert the photo to an earlier upload",
+      "verification": "Check what uploadTtlSeconds is set to in production (window size), and whether the listener ignores keys older than the profile's current photo."
+    },
+    {
+      "category": "edge-case",
+      "description": "`request.contentType().equals(head.contentType())` dereferences the client field directly. A null contentType throws NullPointerException, which the catch records as error code UNKNOWN and rethrows as a 500 instead of a validation error. The exact string comparison also rejects legitimate uploads where the provider normalises the header (case, or a '; charset=' suffix on text/plain).",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Missing contentType in the confirm request causes an NPE, reported as UNKNOWN/500",
+      "verification": "Check whether ConfirmUploadRequest.contentType is @NotNull, and how the configured provider (e.g. MinIO or R2) echoes Content-Type on HEAD."
+    },
+    {
+      "category": "database",
+      "description": "The Hibernate branch checks the constraint name, but the SQLException branch returns true for any unique violation, such as one on outbox_replication_jobs. That contradicts the Javadoc ('as opposed to any other constraint'). Damage is limited: findByKey then finds no row (the transaction rolled back) and rethrows race. However, if a parallel confirm committed in between, the real error is masked as a successful reconfirm.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "FileStorageService.isDuplicateKeyViolation",
+      "title": "isDuplicateKeyViolation treats any SQLState 23505 as the key race when it falls back to SQLException",
+      "verification": "Check whether outbox_replication_jobs or file_storage_objects has other unique constraints that could raise 23505 from this transaction."
+    },
+    {
+      "category": "architecture",
+      "description": "The Javadoc says the sign-time check is done 'by StorageResource'. signUpload in this file performs it (on the sanitized entity). Either the check is duplicated in StorageResource, possibly with different semantics (raw vs sanitized entity, which the inline comment says is exploitable), or the comment is stale.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "FileStorageService.OWNER_BOUND_ENTITIES",
+      "title": "OWNER_BOUND_ENTITIES Javadoc says StorageResource does the sign-time check, but signUpload does it here",
+      "verification": "Search StorageResource for OWNER_BOUND_ENTITIES. If it compares the raw entity, it is the weaker check the inline comment warns about; if it doesn't use it at all, fix the Javadoc."
+    },
+    {
+      "category": "architecture",
+      "description": "The comment says the code matches 'the four sibling lock sites in this class (saveStep4, deletePhoto, publishProfile) and AvailabilityService.lockProfile'. Only three in-class sites are listed. saveStep2, saveStep3 and saveStep5 take no lock, and saveStep5 mutates photo_url without one. The count is either wrong or a lock site was removed.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "CoachProfileService.saveStep1",
+      "title": "saveStep1 comment says 'four sibling lock sites' but names three",
+      "verification": "grep for findByIdForUpdate in CoachProfileService to count the actual lock sites."
+    },
+    {
+      "category": "edge-case",
+      "description": "In signDownload and softDelete, findByKeyAndDeletedAtIsNull(...).orElseThrow runs before the try block, so a key that doesn't exist records no error metric. A key owned by someone else does throw the same StorageObjectNotFoundException inside the try and does record one. Error-rate dashboards therefore count the two 404s differently. In confirmUpload, the `saved == null` branch returns from inside the try without recording success latency.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "FileStorageService.signDownload / softDelete / confirmUpload",
+      "title": "signDownload records no metrics for a missing key, and confirm's lost-race return records no latency",
+      "verification": "Confirm whether dashboards or alerts for sign_download and soft_delete errors depend on these counters."
+    },
+    {
+      "category": "edge-case",
+      "description": "Collectors.toMap throws NullPointerException on a null value. If any CoachProfile in the set has a null displayName (a legacy or partially migrated row, or one created by another path), the whole batch lookup fails.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "CoachProfileService.getDisplayNamesByIds",
+      "title": "getDisplayNamesByIds throws if any profile has a null displayName",
+      "verification": "Check whether coach_profiles.display_name is NOT NULL in the schema and @NotBlank on ProfileBuilderStep1Request.displayName."
+    }
+  ],
+  "input_rev": "6c0039fca63e7ef9d7a8a44dea5144918fc44cfd",
+  "model": null
+}

@@ -1,0 +1,56 @@
+{
+  "arm": "control",
+  "case": "376-completion-dispute-integrity",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "startSession only checks that the start time has passed (verifyNotBeforeStartTime) and has no upper bound. Take an UPCOMING booking hours or days after its scheduled end, for example one already flagged SESSION_NEVER_STARTED. The coach can call start, then end, then submitWrapUp within one sweeper tick. liveStartedAt is set and autoEndedAt is null, so the server picks mode=LIVE: the booking completes and the payout is enqueued straight away. That skips the parent confirmation the H1 fix and the UnresolvedSessionSweeperService Javadoc promise ('never auto-paid'; the coach should have to go through quick-complete). The same trick works for a session the coach never ran, with no parent confirmation window at all.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "startSession / submitWrapUp (mode derivation)",
+      "title": "Coach can Start a long-past, never-started session and complete it LIVE, getting paid without the parent's confirmation",
+      "verification": "Check whether any controller or filter blocks /start once requestedEndTime has passed. Nothing in BookingCompletionService or BookingStateMachine does."
+    },
+    {
+      "category": "logic",
+      "description": "The sweeper moves an abandoned IN_PROGRESS/PAUSED session to COMPLETED_PENDING_CONFIRMATION and says this opens 'the parent's confirm / dispute window'. That window does not exist. DisputeService.raiseDispute rejects COMPLETED_PENDING_CONFIRMATION (it is in neither ELIGIBLE_STATUSES nor LIVE_STATUSES). confirmCompletion fails because there is no SessionCompletionData row. The state machine allows no cancel from that state. No QuickCompleteConfirmationRequiredEvent is sent, because that only happens on a QUICK submitWrapUp. If the coach (the Start-then-Pause case) never submits a wrap-up, StuckCompletionSweeperService force-completes the booking once updatedAt passes its timeout and the coach's payout is enqueued. The parent can only dispute after the fact.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/UnresolvedSessionSweeperService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "endAbandonedLiveSessions",
+      "title": "Auto-ended live session with no wrap-up is force-completed and paid; the parent can't confirm, dispute or cancel while it is pending",
+      "verification": "Confirm that no listener on BookingStatusChangedEvent(COMPLETED_PENDING_CONFIRMATION) notifies the parent, and that no UI or endpoint lets the parent dispute a pending booking."
+    },
+    {
+      "category": "logic",
+      "description": "For a pack-funded booking, sessionPrice is coach_payouts.gross_amount. CoachPayoutAdjustmentService.cutNet lowers gross_amount whenever an earlier dispute credit cuts a pending payout (and so does a CHARGEBACK_LOST cut at creation). Example: share 100, net 80; dispute 1 PARTIAL_CREDIT 50 cuts gross to 50. On dispute 2, remainingRefundable(50) subtracts the 50 already credited and returns 0. FULL_CREDIT gets 409 ALREADY_REFUNDED and any PARTIAL_CREDIT gets 400, even though 50 of what was paid is still unrefunded. Passing the cut gross as parentPrice to applyRefund, against originalNet, also mis-sizes the coach's share. The value should be original_gross, which is never cut.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "paidForSession",
+      "title": "Pack-booking dispute price is read from the payout's already-cut gross, so a later dispute is under-credited or blocked"
+    },
+    {
+      "category": "concurrency",
+      "description": "raiseDispute neither locks nor re-checks the booking row. It relies on freezeForDispute finding a committed payout row, while CoachPayoutOutboxSupport.enqueuePayout relies on existsOpenDisputeForBooking seeing a committed dispute. Under READ COMMITTED a parent can raise a dispute on an IN_PROGRESS/PAUSED booking (status read unlocked) while the coach's end-session and LIVE submitWrapUp commit. Each transaction misses the other's uncommitted row, so the payout is written PENDING_RELEASE with dispute_frozen=false next to an open dispute and releases after the hold.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "raiseDispute",
+      "title": "A dispute raised while the session is completing can miss the payout freeze",
+      "verification": "Run the two transactions interleaved in an integration test: dispute status read, then the completion's existsOpenDisputeForBooking, then the dispute's freezeForDispute, then both commit."
+    },
+    {
+      "category": "edge-case",
+      "description": "dispute.setCreditAmount stores the admin's raw creditAmount input, not `credited`. A FULL_CREDIT records null (or whatever unvalidated number the admin typed) instead of the amount actually refunded. A COACH_WARNING with a zero or negative amount credits nothing but stores that value. The admin dispute detail (getAdminDisputeDetail) and audit then show an amount that was never credited.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "resolveDispute",
+      "title": "Stored creditAmount doesn't match what was actually credited"
+    }
+  ],
+  "input_rev": "ec997389b69f9ad84b0fbf5020d725fed5caca54",
+  "model": null
+}

@@ -1,0 +1,105 @@
+{
+  "arm": "blind-hunter",
+  "case": "340-unpaid-paused-grace-sweep",
+  "judge_cost_usd": 0.0926294,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 says the grace sweep and isGraceExpired select only PAST_DUE, so UNPAID/PAUSED rows are never swept and the Stripe subscription is never cancelled.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Speculative: it depends on whether save-payment-method updates the subscription, which the finding never establishes.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "The losing concurrent subscribe cancels an already-charged subscription with no refund and still returns alreadyActive, so the customer pays for nothing.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "The superseded upgrade path returns normally after Stripe has charged the proration, so the client reports success but no tier is granted.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "The pending downgrade is voided and the price restored in a committed transaction before the charged upgrade; a decline then leaves the user on the higher price.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "A placeholder row left behind by a failed subscribe makes isPaidTierEntitled return false, and the findAll reconcile then overwrites an admin-provisioned coach's marketplace tier to SCOUT.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "invoice.paid sets UNPAID/INCOMPLETE rows to ACTIVE without checking Stripe's subscription status, so paying one of several open invoices grants entitlement.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "With per-attempt random idempotency keys, a timeout after Stripe has charged leads to a duplicate subscription on retry, and a persist failure leaves the paid subscription unlinked.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "It only guesses from unchanged context that the other readers ignore status, and gives no concrete defect.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "If invoice.paid arrives between the sweep's phase 1 selection and the Stripe cancel, a subscription the user just paid is still cancelled.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "The tier-change catch on PlayerSubscriptionPage is not wired to the new error mapping, so parents see the generic error for notActive and paymentDeclined.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative concern about where the backend puts the error code; no concrete trigger.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative concern about other tests' mocks with no specific failing test named.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on helper behaviour it does not verify; a request to check, not a defect.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Test naming mismatch; cosmetic.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Same-second ordering is a theoretical limitation with no concrete defect shown.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "Performance speculation with no shown impact.",
+        "reported_id": "R17",
+        "verdict": "noise"
+      },
+      {
+        "note": "Deployment config and API-version concern, not a code defect.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

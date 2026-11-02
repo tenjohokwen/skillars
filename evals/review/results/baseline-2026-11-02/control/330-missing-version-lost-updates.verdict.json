@@ -1,0 +1,61 @@
+{
+  "arm": "control",
+  "case": "330-missing-version-lost-updates",
+  "judge_cost_usd": 0.06282940000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R1 names the missing @Version/@DynamicUpdate on CoachProfile and the stale full-row overwrite, but only through the GDPR writer, not as the entity-wide defect affecting all writers.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R6 flags Session's missing @Version and silent overwrites in updateSession, but only between plan edits; it treats the completion-listener interaction as already lock-protected.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 describes the unlocked findByUserId plus full-row save in the COACH branch, the long window, and concurrent writes being reverted.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The erasure leaves displayName and languages, and the profile stays ACTIVE and publicly searchable; the trigger is concrete.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Replacing a photo overwrites photo_url without deleting the old object, so earlier photos survive erasure; the trigger is concrete.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "With UUID generation the INSERT is deferred to flush, so the DataIntegrityViolation catch never fires and the documented error code is lost.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Two concurrent first-time saveStep1 calls race with no lock and the second fails with an unhandled unique violation; the trigger is concrete.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "It depends on unverified behaviour (whether the auth filter rejects locked users on every request), so it is speculative.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

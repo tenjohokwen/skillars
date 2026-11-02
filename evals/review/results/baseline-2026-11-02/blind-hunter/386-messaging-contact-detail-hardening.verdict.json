@@ -1,0 +1,116 @@
+{
+  "arm": "blind-hunter",
+  "case": "386-messaging-contact-detail-hardening",
+  "judge_cost_usd": 0.08397740000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R1 shows only that formatted phone numbers bypass the sanitizer; it does not cover obfuscations such as 'at'/'dot', handles, spelled-out digits or zero-width characters.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 states the send path never consults the sanitizer, so contact details are held only if Gemini flags them.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 and R6 identify the single-pass delimiter replace and the nested-delimiter bypass, in both services.",
+        "reported_ids": [
+          "R5",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R16 covers the unthrottled preview oracle but not the missing rate limit on sendMessage.",
+        "reported_ids": [
+          "R16"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers suspended coaches or locked users continuing to message.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: after the player turns 18, the parent still passes the membership-only verifyIsParty in getMessages.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: an exception with a null message leaves failureReason null, so no failure event is published.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative; it depends on boxed types the reviewer did not confirm.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether the resource layer binds the IDs to the principal, which the reviewer did not verify.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: UNDER_REVIEW messages are not clamped, so they never count as unread once approved.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "The policy query is visibly issued twice in the PARENT branch.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "The per-row toSummary overload issues several queries per conversation.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "substring(0,60) can split a surrogate pair when an emoji sits at the boundary.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative; it depends on resolveRole returning null, which was not shown.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hypothetical mismatch with no concrete tier shown.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "API design preference, not a defect.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Conditional on applier behaviour the reviewer did not verify.",
+        "reported_id": "R17",
+        "verdict": "noise"
+      },
+      {
+        "note": "Unrealistic input; a prefix made entirely of unpaired surrogates is contrived.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,258 @@
+{
+  "arm": "blind-hunter",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "When a used token is presented within 30s of rotation, the code switches to findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId). That returns the newest live token of the whole account, not the successor of this token. A user with two devices (laptop A, phone B): A's tab-race refresh rotates and consumes B's token and gets a session. Phone B's next refresh, more than 30s later, presents a used token outside the grace window, so it is treated as theft: markAllUsedByUserId plus invalidateSessionsForUser log out every session. It also means anyone holding a just-rotated stolen token can mint a fresh session for 30s.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AuthService.refresh",
+      "title": "Refresh grace window hands the caller another session's live token, then triggers mass revocation",
+      "verification": "Check that RefreshToken has no successor/family link column. If there is none, the lookup is account-wide as written."
+    },
+    {
+      "category": "logic",
+      "description": "AuthService.login calls userRepository.findOneByLogin(email.toLowerCase()). The Coach/Parent/Player services call user.setLogin(req.email()) and findOneByEmail(req.email()) with the raw case. AccountManagementFacade sets login = userDTO.getEmail() without lower-casing, although it lower-cases the email field. Registering 'Alice@x.com' stores login 'Alice@x.com', and login with that email looks up 'alice@x.com' and gets BadCredentials. The duplicate-email check is also case-sensitive, so 'alice@x.com' and 'Alice@x.com' can both register unless the DB uses citext or a lower() index.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "registerCoach / registerParent / registerPlayer / AccountManagementFacade.registerAccount",
+      "title": "Mixed-case emails stored verbatim while login lookup lower-cases, so the account can never log in",
+      "verification": "Check whether UserRepository.findOneByLogin/findOneByEmail are case-insensitive (IgnoreCase, lower() in the query, or a citext column), whether the request records normalise email, and whether UserRegistrationService.createUser lower-cases login."
+    },
+    {
+      "category": "logic",
+      "description": "findUserByEmailOrLogin runs with the user-supplied login before the login is replaced by email/phone. For a phone registration (blank email), the lookup is (null, arbitraryLogin), while the persisted login is the phone. An existing phone is not detected, so persistUser hits a unique violation and returns a 500. Separately, an attacker-chosen login that matches someone else's login triggers notifyUserExists for that unrelated user. If both email and phone are blank, the login becomes null.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.registerAccount",
+      "title": "registerAccount duplicate lookup uses the pre-override login and never checks the phone",
+      "verification": "Check UserRegistrationService.findUserByEmailOrLogin semantics and the unique constraints on user.login/phone."
+    },
+    {
+      "category": "security",
+      "description": "The doc says 'Uses timing-safe comparison to prevent user enumeration'. No comparison exists. The existing-user branch skips persistUser (bcrypt encode plus INSERT) and the event publish, so response time reveals whether an email/login is registered. The doc's claim that strategies 'implement rate limiting' is also unsupported by anything shown.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.registerAccount",
+      "title": "Javadoc claims a timing-safe anti-enumeration defence that does not exist; existing-user path is measurably faster",
+      "verification": "Check whether EmailRegistrationStrategy/SmsRegistrationStrategy equalise timing; nothing in this file does."
+    },
+    {
+      "category": "edge-case",
+      "description": "Map.of rejects null values. A password-reset request that supplies only email (loginId or dob null) and is rejected throws NPE inside the orElseThrow supplier instead of OperationNotAllowedException/PWD_RESET_REJECTED, so the client gets a 500 and error-code handling is bypassed. The same applies to changeEmail (null oldEmail/newEmail) and finishPasswordReset (null key). The details map also carries email and DOB (PII), which may be logged or echoed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "sendPasswordResetMail / changeEmail / finishPasswordReset",
+      "title": "Map.of with nullable request fields turns a rejection into NullPointerException (500)",
+      "verification": "Check ChangePasswordDto validation: whether currentEmail, loginId and dob are all @NotNull. If any is optional, the NPE is reachable."
+    },
+    {
+      "category": "security",
+      "description": "generateResetKey and generateActivationKey return 10 decimal digits (about 33 bits). POST /v1/account/activate (AccountResource.activateAccount) has no @RateLimited, so outstanding activation keys can be brute-forced across many pending accounts. finishPasswordReset's per-IP limit (5/10min) does not stop distributed guessing over the 24h deadline. RandomStringUtils' legacy static methods use java.util.Random (not cryptographic) in commons-lang3 before 3.15/3.16, so the keys may also be predictable. Also, the activateAccount Javadoc says GET while the mapping is POST.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "generateActivationKey / generateResetKey",
+      "title": "Password-reset and activation keys are only 10 numeric digits; activation endpoint has no rate limit",
+      "verification": "Check the commons-lang3 version. In versions before 3.16 these methods use an insecure RNG; switch to RandomStringUtils.secure() or SecureRandom. Check whether UserRegistrationService.activateUser/completePasswordReset still consume keys from RandomUtil."
+    },
+    {
+      "category": "concurrency",
+      "description": "LoginAttemptRepository's Javadoc says the TRY lock 'never waits' because a waiting lock 'would park one pooled connection per queued request, so a burst ... could drain the pool'. AuthService.login says concurrent attempts are 'refused with 429 instead of queued'. claim() instead loops with Thread.sleep for CLAIM_WAIT=2s inside the MANDATORY transaction, so each burst request holds a connection (and a request thread) for 2s. A burst of N parallel requests on one (login, ip) key parks N connections, which is the drain the comments say is prevented, just time-bounded.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "LoginRateLimiter.claim",
+      "title": "Login lock retries for up to 2s holding a pooled connection, contradicting the documented rationale",
+      "verification": "Compare the Hikari pool size with expected per-key concurrency. Each blocked attempt holds one connection for up to 2s."
+    },
+    {
+      "category": "security",
+      "description": "The budget is keyed only on SHA-256(login|ip). subjectHash is recorded but never enforced, so a distributed attacker or proxy pool gets 5 guesses per IP per 15 min against one account with no account-wide ceiling. If clientIp comes from a client-controllable header (X-Forwarded-For), a single attacker can rotate it freely.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "LoginRateLimiter.checkLimited",
+      "title": "Failed-login limit is per (login, ip) only; IP rotation gives unlimited guesses per account",
+      "verification": "Check how AuthResource derives clientIp (request.getRemoteAddr behind a trusted RemoteIpValve vs raw X-Forwarded-For)."
+    },
+    {
+      "category": "security",
+      "description": "When findOneByLogin is empty, the method records the failure and throws immediately. For an existing user it runs passwordEncoder.matches (about 100ms of bcrypt). The latency difference lets an attacker enumerate registered emails despite the identical 'Invalid credentials' message.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Unknown-user login skips bcrypt, so timing reveals whether an account exists",
+      "verification": "Fix: run a dummy passwordEncoder.matches against a fixed hash on the not-found path."
+    },
+    {
+      "category": "security",
+      "description": "The phone-OTP gate only applies when user.getSkillarsRole() != null, and the profile cookie role defaults to \"ADMIN\" when skillarsRole is null. AccountManagementFacade.toUser never sets skillarsRole, so every account created via POST /v1/account/register bypasses verification gating and receives a SkillarsProfileCookie and LoginResponse role of ADMIN.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "AuthService.login / refresh",
+      "title": "Users without skillarsRole (legacy registerAccount path) skip the verification gate and are labelled ADMIN",
+      "verification": "Check whether UserRegistrationService.createUser sets skillarsRole, and whether the frontend or any backend code trusts the SkillarsProfileCookie/LoginResponse role for routing or authorization."
+    },
+    {
+      "category": "database",
+      "description": "refresh() inherits the class-level @Transactional (rollback on RuntimeException) and throws BadCredentialsException right after markAllUsedByUserId / invalidateSessionsForUser / markUsedByTokenHash. The comments assert those run REQUIRES_NEW. If any does not, theft-detection revocation is silently rolled back and the stolen token family stays live. The comments also cite stale line numbers (':158-165').",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R11",
+      "severity": "medium",
+      "symbol": "AuthService.refresh",
+      "title": "Revocation in refresh's reuse branches depends on REQUIRES_NEW that is not visible; otherwise it is rolled back",
+      "verification": "Check that RefreshTokenRepository.markAllUsedByUserId and markUsedByTokenHash, and UserRepository.invalidateSessionsForUser, are annotated @Transactional(propagation = REQUIRES_NEW)."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc calls ensureAccountIsLive 'the single account-liveness gate for both' entry points, but the BASIC_VERIFIED check (SkillarsAccountNotVerifiedException) exists only in login(). An account whose verificationStatus moves off BASIC_VERIFIED (other than SUSPENDED) keeps refreshing sessions indefinitely.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "AuthService.ensureAccountIsLive",
+      "title": "refresh() does not re-apply login's verification gate",
+      "verification": "Decide whether a regressed verification status should end sessions; currently only SUSPENDED/locked/deactivated do."
+    },
+    {
+      "category": "database",
+      "description": "ParentRegistrationService's own comment explains that the @Tsid id defers the INSERT past a bare save(), so the catch cannot fire. Coach and Player still use save(). A concurrent duplicate email or a duplicate phone surfaces at commit as an unmapped exception (500/generic 409) instead of security.emailInUse. Even with flush, Coach/Player would map a phone unique violation to 'Email already registered'. The Parent fix was not carried over.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R13",
+      "severity": "medium",
+      "symbol": "CoachRegistrationService.registerCoach / PlayerRegistrationService.registerPlayer",
+      "title": "Coach/Player save() defers the INSERT, so the DataIntegrityViolation catch is dead and phone conflicts are mislabelled",
+      "verification": "Confirm BaseEntity uses an app-assigned @Tsid id (the Parent comment says so)."
+    },
+    {
+      "category": "concurrency",
+      "description": "emailTokenRepository.save(evt) on a managed entity issues no SQL, so the version check happens at flush/commit, outside the try. Two concurrent clicks on the verification link both pass the isUsed check. The loser either fails at the saveAndFlush of the OTP (unique index, 409 otpResendInProgress) or at commit with an optimistic-lock error, never the intended security.emailTokenUsed. otpTokenRepository.save(otpToken) in verifyPhone has the same issue.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java",
+      "id": "R14",
+      "severity": "medium",
+      "symbol": "verifyEmail (all three registration services)",
+      "title": "ObjectOptimisticLockingFailureException catch around save() never fires; concurrent token use returns 500",
+      "verification": "Check that EmailVerificationToken has @Version. Use saveAndFlush inside the try to make the catch effective."
+    },
+    {
+      "category": "security",
+      "description": "A wrong OTP throws OtpVerificationException inside a class-level @Transactional that rolls back. If RateLimitingService.tryConsume persists to the DB in the ambient transaction, every failed guess un-counts itself. This is the exact bug AuthService.login's noRollbackFor comment describes, so the 5-per-OTP limit never engages and the 6-digit OTP becomes brute-forceable within its 10-minute life.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R15",
+      "severity": "medium",
+      "symbol": "verifyPhone (all three registration services)",
+      "title": "OTP-verify limiter consumption may be rolled back with the failed attempt",
+      "verification": "Check RateLimitingService's storage: in-memory, Redis or Bucket4j is fine; JPA without REQUIRES_NEW is broken."
+    },
+    {
+      "category": "security",
+      "description": "tryConsume(..., \"parent_otp_verify\", 10, ...) while coach/player use 5. The services are documented as mirrors of each other step-for-step. Parent OTPs get twice the guess budget per OTP, and with resends that compounds. This is likely a divergence, not a deliberate choice.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "ParentRegistrationService.verifyPhone",
+      "title": "Parent OTP verify allows 10 attempts per OTP vs 5 for Coach/Player",
+      "verification": "Confirm the intended per-OTP attempt budget."
+    },
+    {
+      "category": "logic",
+      "description": "The outer comment says 'Non-terminal (canResend = true) so a later unlock lets the user resume'. The next comment and the code say terminal (canResend = false). The stale claim is copy-pasted into all three services and misleads anyone reasoning about unlock behaviour.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R17",
+      "severity": "low",
+      "symbol": "verifyEmail (all three)",
+      "title": "Contradictory canResend comments in verifyEmail lock check",
+      "verification": "Code passes false; remove the outer claim."
+    },
+    {
+      "category": "architecture",
+      "description": "This copy-paste comment cites 'ParentRegistrationService's own AC10 OTP save' from inside ParentRegistrationService, and claims the same fix applies elsewhere ('three constraint-name precedents'), but the Coach/Player siblings were not updated.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "ParentRegistrationService.registerParent",
+      "title": "Parent comment references itself ('Mirrors ParentRegistrationService's own AC10')",
+      "verification": "Not applicable."
+    },
+    {
+      "category": "security",
+      "description": "First and last name (PII) are logged at INFO on an unauthenticated, enumeration-sensitive endpoint. The 'skipped' message says status must be 'null/blank or unverified', while EMAIL_VERIFIED is also accepted.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/PlayerRegistrationService.java",
+      "id": "R19",
+      "severity": "low",
+      "symbol": "PlayerRegistrationService.resendVerificationEmail",
+      "title": "Player resend logs names at INFO and the log message misstates the condition",
+      "verification": "Check the logging and PII policy."
+    },
+    {
+      "category": "security",
+      "description": "The comment justifies csrf().disable() as unnecessary for JWT token auth, but the JWT is a cookie (JWT_COOKIE_NAME, created by loginTokenManager.createLoginToken) and the refresh token is a SameSite=Lax cookie. Browsers attach them automatically, so state-changing endpoints rely solely on SameSite. Same-site sibling subdomains, or any endpoint reachable via top-level GET, are CSRF-exposed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java",
+      "id": "R20",
+      "severity": "medium",
+      "symbol": "SecurityConfiguration.filterChain",
+      "title": "CSRF disabled on the grounds of 'token-based auth' while auth credentials travel in cookies",
+      "verification": "Check the SameSite attribute of the JWT cookie and whether JWTAuthorizationFilter accepts the cookie, not only an Authorization header."
+    },
+    {
+      "category": "security",
+      "description": "login and password are bound as simple request params with no @RequestParam or @RequestBody, so they can be supplied in the query string and end up in access logs, LoggingFilter output and proxies. Without @Validated on the class (or Spring 6.1+ method validation), @NotNull is ignored. A null login then reaches Map.of(\"login\", login) and throws NPE.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountResource.java",
+      "id": "R21",
+      "severity": "medium",
+      "symbol": "AccountResource.registerLinkResend",
+      "title": "Password accepted as a plain request parameter on /regislink (may land in URLs and logs); @NotNull likely unenforced",
+      "verification": "Check the Spring version (6.1+ auto method validation) and what LoggingFilter logs."
+    },
+    {
+      "category": "logic",
+      "description": "PHONE-registered users get emailStrategy.notifyNewUser, an email to a possibly null address, instead of SMS. findUserByLogin(login) is not lower-cased, unlike registerAccount, so case variants fail.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R22",
+      "severity": "low",
+      "symbol": "AccountManagementFacade.resendRegistrationLink",
+      "title": "resendRegistrationLink always uses the email strategy and an un-normalised login lookup",
+      "verification": "Check EmailRegistrationStrategy.notifyNewUser behaviour when email is null."
+    },
+    {
+      "category": "edge-case",
+      "description": "A missing user maps to INTERNAL_SERVER_ERROR instead of 401/404. Monitoring sees server faults for an ordinary unauthenticated or deleted-user case.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountResource.java",
+      "id": "R23",
+      "severity": "low",
+      "symbol": "AccountResource.getAccount",
+      "title": "GET /v1/account returns 500 when there is no current user",
+      "verification": "Check what userService.getUserWithAuthorities returns for anonymous users."
+    },
+    {
+      "category": "edge-case",
+      "description": "AuthService and LoginRateLimiter use ClockProvider.getClock(), but token expiry here uses the system clock. Tests or behaviour that fix the clock through ClockProvider will see inconsistent expiry decisions across the flows.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java",
+      "id": "R24",
+      "severity": "low",
+      "symbol": "verifyEmail / verifyPhone / sendVerificationEmail",
+      "title": "Registration services use Instant.now() instead of ClockProvider",
+      "verification": "Check whether tests set ClockProvider for registration flows."
+    },
+    {
+      "category": "database",
+      "description": ":userId is bound by reflection on the parameter name. LoginAttemptRepository uses @Param explicitly. Building without -parameters fails at runtime with a binding error.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/PhoneOtpTokenRepository.java",
+      "id": "R25",
+      "severity": "low",
+      "symbol": "PhoneOtpTokenRepository.deleteByUserIdAndUsedFalse",
+      "title": "@Query named parameter without @Param relies on the -parameters compiler flag",
+      "verification": "Check that the Maven/Gradle compiler config passes -parameters (the Spring Boot parent does by default)."
+    }
+  ],
+  "input_rev": "fa62da9dc634130b1031b01e4ddc0cda668c2cb1",
+  "model": null
+}

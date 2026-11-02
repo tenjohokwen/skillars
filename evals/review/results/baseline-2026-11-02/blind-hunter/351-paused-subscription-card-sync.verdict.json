@@ -1,0 +1,87 @@
+{
+  "arm": "blind-hunter",
+  "case": "351-paused-subscription-card-sync",
+  "judge_cost_usd": 0.0762014,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 says PAUSED is excluded from RETRY_ON_NEW_PAYMENT_METHOD, nothing calls resume, and saving a card only sets the default PM, so the grace sweep cancels the subscription.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No report says the Stripe sync runs synchronously in the save request with no durable or outbox retry.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No report says transient and permanent Stripe exceptions get the same log-and-ignore handling.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The idempotency key is subId+pmId, so switching A\u2192B\u2192A within 24h replays the cached first A response and the subscription stays on B.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Only latest_invoice is checked, so when a newer draft or uncollectible invoice exists the actual open invoice is never retried.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "A declined or SCA-required retry is swallowed and the user gets a 204 success with no way to complete 3DS.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative: it relies on a generic DB error or a hypothetical NonUniqueResult with no concrete trigger.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about ownership of the customer or link; the reviewer itself defers to verification.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "An unverified role-gating concern that depends on how canMutate is computed.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "The missing PAUSED banner is already covered by R1.",
+        "reported_id": "R8",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "Seeding a fresh grace clock for legacy rows is a deliberate migration choice, not a concrete defect.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "A test coverage comment, not a defect.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "A complaint about test strictness, not a defect in production code.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Paying an outstanding invoice that is still owed under cancel-at-period-end is arguably correct; this is speculative UX.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

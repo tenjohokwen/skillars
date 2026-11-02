@@ -1,0 +1,68 @@
+{
+  "arm": "control",
+  "case": "386-messaging-contact-detail-hardening",
+  "judge_cost_usd": 0.054861400000000005,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R1 and R2 show the sanitizer can be bypassed (grouped digits, fullwidth digits), but they don't cover the broader obfuscation bypasses: spelled-out email, social handles, spelled-out digits.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding says sendMessage ignores the sanitizer verdict or delivers messages before moderation.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 and R6 describe the nested-delimiter bypass of the single-pass replace in both the Gemini and review moderation services.",
+        "reported_ids": [
+          "R5",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No rate-limiting finding was reported.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No finding about suspended coaches or locked users continuing to message.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger (\"License 20230415001\" is redacted), contradicting the stated intent, and the original text is lost on save.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete lost-update race: an unversioned full-row save in getMessages/sendMessage can overwrite a concurrently committed BLOCKED status.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "substring at maxInputChars can split a surrogate pair, unlike the guarded truncation in GeminiModerationService.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "The read-mark cap only checks PENDING, so UNDER_REVIEW hidden messages get read-marked and never show as unread after approval.",
+        "reported_id": "R8",
+        "verdict": "real"
+      }
+    ]
+  }
+}

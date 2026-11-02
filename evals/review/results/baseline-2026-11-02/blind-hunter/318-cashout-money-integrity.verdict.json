@@ -1,0 +1,149 @@
+{
+  "arm": "blind-hunter",
+  "case": "318-cashout-money-integrity",
+  "judge_cost_usd": 0.1264814,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 describes the non-transactional check-then-debit race and the unused SERIALIZABLE debitForCashOut.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the debit of requested+fee alongside a refund of requested\u2212fee, and R2 adds the resulting negative wallet.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R4 covers the 'refund-{intentId}' key replaying across cash-outs and pack compensation, and R5 covers the missing refundable-amount check.",
+        "reported_ids": [
+          "R4",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R6 notes that a Stripe timeout after a successful refund still triggers compensation and pays the parent twice, and R7 notes the reversal writes are in separate transactions.",
+        "reported_ids": [
+          "R6",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "partial",
+        "note": "R24 sees that errors fall back to the insufficient-credit text but assumes the message field may exist, and misses that ErrorDto has no message field.",
+        "reported_ids": [
+          "R24"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R21 flags commission as gross \u00d7 live config rate rather than the stamped rate, and the fee estimate applied to credit-funded gross.",
+        "reported_ids": [
+          "R21"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R11 notes that sumTotalCashOuts ignores CASH_OUT_REVERSAL, so failed cash-outs still count.",
+        "reported_ids": [
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "R20 notes that netPayout subtracts an estimated Stripe fee the coach never pays under separate charges and transfers.",
+        "reported_ids": [
+          "R20"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Speculative: R8 only asks whether the DB constraints allow CASH_OUT_REVERSAL, with no evidence that they don't.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Same root cause as R3: the unused debitForCashOut.",
+        "reported_id": "R9",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "Speculative cent-level rounding divergence that depends on the column's scale.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "A traceability and design concern with no concrete failure trigger beyond what F7 already covers.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "With a per-minute bucket and packTierId as the referenceId, two purchases of the same tier in one minute share an idempotency key, so the second replays the first charge and creates two packs for one payment.",
+        "reported_id": "R13",
+        "verdict": "real"
+      },
+      {
+        "note": "Using packTierId as transfer_group concretely puts every parent's purchase of a tier into one Stripe transfer group.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "A DB failure saving lastPaymentIntentId after capture escapes purchasePack's compensation and leaves a charge with no purchase and no refund.",
+        "reported_id": "R15",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on outbox handler catch clauses that R16 did not verify.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative operator re-drive after 24h, with no evidence the handler lacks a stored-ID check.",
+        "reported_id": "R17",
+        "verdict": "noise"
+      },
+      {
+        "note": "R18 leaves open whether more than one partial reversal per transfer can even happen.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      },
+      {
+        "note": "A stale-Javadoc issue with only a marginal config-missing trigger.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on the column's nullability, which R22 did not verify.",
+        "reported_id": "R22",
+        "verdict": "noise"
+      },
+      {
+        "note": "Only matters in a hypothetical non-EUR deployment.",
+        "reported_id": "R23",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on DTO validation that R25 did not check, and the transaction rolls back cleanly anyway.",
+        "reported_id": "R25",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

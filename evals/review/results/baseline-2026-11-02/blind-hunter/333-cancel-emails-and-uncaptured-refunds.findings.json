@@ -1,0 +1,188 @@
+{
+  "arm": "blind-hunter",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "BookingStateMachine allows CANCEL_COACH from ACCEPTED, where no money has been taken (batch bookings even rest in ACCEPTED, per the comments in cancelBookingAsParent). cancelBookingAsCoach never looks at the pre-cancel status or the payment row, and BookingCancelledByCoachEvent carries no paymentCaptured flag. So RefundEnqueueListener.onBookingCancelledByCoach enqueues a BOOKING_REFUND of the session price for any non-pack booking ('Coach cancellation \u2014 full refund'), and for an expired-pack booking. CancellationRefundService.onBookingCancelledByCoach also calls packSessionService.restoreSession for an unexpired pack, but the code itself says pack sessions are deducted only at settle (onBookingCancelledByAdmin comment). Failure: the coach accepts a request, then cancels before capture. The parent gets free wallet credit equal to the session price, or the pack gains a session it never lost. The parent path (whitelist on CONFIRMED/UPCOMING, Deferred-12 AC4) and the admin path (paymentCaptured) both guard against exactly this. The coach path is the odd one out.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "cancelBookingAsCoach",
+      "title": "Coach cancellation of an ACCEPTED (uncaptured) booking enqueues a full refund / restores a never-deducted pack session",
+      "verification": "Evidence: BookingStateMachine ACCEPTED map contains CANCEL_COACH; cancelBookingAsCoach builds the event without any status/capture check; RefundEnqueueListener.onBookingCancelledByCoach's else-branch is unconditional on capture. Confirm in RefundOutboxSupport/PackSessionService that there is no downstream capture check either."
+    },
+    {
+      "category": "logic",
+      "description": "EmailContentRenderer resolves the template name as LOWER_CAMEL of the enum name, so these four listeners need bookingCancelledByParent.html, bookingCancelledByCoach.html, coachNoShow.html and playerNoShow.html. None of them is in the supplied mails/ set, which otherwise looks complete (it even keeps the retired sendOtp.html). COACH_VISIBILITY_REDUCED (coachVisibilityReduced.html) and EMAIL_CHANGE (emailChange.html) are missing too. The VIDEO_APPROVAL Javadoc says a template with no file 'fails to render and is marked FAILED'. If so, no parent is ever told the coach cancelled or no-showed, and no coach is told about a parent cancellation or a player no-show. Each enqueue would still succeed, so the failure only shows up at send time.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "onBookingCancelledByParent / onBookingCancelledByCoach / onCoachNoShow / onPlayerNoShow",
+      "title": "Cancel/no-show email templates appear to be missing from mails/, so those emails would fail to render",
+      "verification": "Run `ls src/main/resources/mails/ | grep -iE 'cancelledBy(Parent|Coach)|NoShow|visibilityReduced|emailChange'`. If they are absent, render each template through EmailContentRenderer in a test."
+    },
+    {
+      "category": "concurrency",
+      "description": "Every listener runs BEFORE_COMMIT inside the publisher's transaction and catches Exception, presumably so an email failure cannot fail the booking operation. If NotificationOutboxSupport.enqueueEmail is a @Transactional(REQUIRED) proxy method, a RuntimeException thrown inside it marks the shared transaction rollback-only before the catch runs. A JPA/constraint exception during flush also leaves the persistence context unusable. The commit then fails with UnexpectedRollbackException, which rolls back the cancellation and the refund enqueue. The log line 'Failed to prepare/publish notification' would suggest the email was simply skipped.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "all on* listeners",
+      "title": "BEFORE_COMMIT try/catch may not isolate enqueue failures \u2014 rollback-only still kills the business transaction",
+      "verification": "Check whether NotificationOutboxSupport.enqueueEmail (or anything it calls) is annotated @Transactional without REQUIRES_NEW/noRollbackFor, and whether it can flush (e.g. envelope_entity CHECK constraint)."
+    },
+    {
+      "category": "logic",
+      "description": "These three paths compute the refund with resolveSessionPrice, which reads coachPricingRepository for non-pack bookings. resolveAmountPaid's own Javadoc says that value 'is wrong once the coach has re-priced', and that the booking_payments row (creditDebited + stripeCharged) is authoritative. Only cancelBookingAsAdmin uses resolveAmountPaid. Failure: the coach raises their price after a booking is captured. A parent cancelling more than 24h ahead, or after a coach no-show or coach cancel, is refunded the new, higher price. If the price was lowered, they are under-refunded. resolveSessionPrice also throws ResourceNotFoundException if pricing is missing, which blocks cancellation even of unpaid bookings.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "cancelBookingAsParent / cancelBookingAsCoach / recordNoShowCoach",
+      "title": "Parent/coach/no-show refunds use the coach's current price, not the amount actually paid",
+      "verification": "Evidence: these call sites use resolveSessionPrice(booking); the Javadoc of resolveAmountPaid describes the defect."
+    },
+    {
+      "category": "architecture",
+      "description": "restoreSession, saveCancellationHistory and the strike all share one REQUIRES_NEW transaction. issueStrikeSafely only swallows PessimisticLockingFailureException. Any other exception from reliabilityStrikeService.issue propagates and rolls back the pack-session restore and the history row. AFTER_COMMIT listener exceptions are only logged, so the parent silently loses the pack session. The Javadoc claims the swallow protects 'the refund'. The wallet refund was already committed BEFORE_COMMIT and cannot be rolled back from here, so the comment protects the wrong thing. Pack restores in general were left on a non-durable AFTER_COMMIT path, while wallet refunds were moved to a transactional outbox.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "onBookingCancelledByCoach / onCoachNoShow / issueStrikeSafely",
+      "title": "Strike failure in an AFTER_COMMIT listener rolls back the pack restore and cancellation history; pack restores are never retried",
+      "verification": "Check ReliabilityStrikeService.issue for other exception types (e.g. DataIntegrityViolation on duplicate strike). Check whether PackSessionService.restoreSession has any retry/outbox."
+    },
+    {
+      "category": "logic",
+      "description": "The error message says 'Booking does not belong to this parent/pack', but the code only compares parentId and coachId. sessionPackPurchaseId is never compared. A card-paid CONFIRMED booking with the same coach passes the check. CANCEL_DUE_TO_PAUSE moves CONFIRMED/UPCOMING to CANCELLED, and none of the shown listeners (RefundEnqueueListener, CancellationRefundService) handles BookingCancelledDueToPauseEvent. A captured booking cancelled this way gets no wallet refund, and a pack booking whose session was deducted at settle gets no restore. A PAYMENT_PENDING booking has no CANCEL_DUE_TO_PAUSE transition, so it throws an uncaught BookingStateTransitionException. That can abort the whole pause, depending on the caller.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "cancelDueToPause",
+      "title": "cancelDueToPause does not check the booking belongs to the paused pack, and issues no refund or restore",
+      "verification": "Inspect the caller (pack pause service) to see which bookings it passes. Search for a listener of BookingCancelledDueToPauseEvent that refunds/restores."
+    },
+    {
+      "category": "edge-case",
+      "description": "For PAYMENT_PENDING, only a CAPTURE_PENDING payment row blocks the cancel. Any other row state is treated as uncaptured, including CAPTURE_ABANDONED/unknown-outcome rows and a CAPTURED row whose booking transition never committed. In those cases paymentCaptured=false, refundType=NONE, and bookingCancelledCoachUnavailable.html states 'No payment had been taken for this session'. Decision D10 (BOOKING_PAYMENT_UNRESOLVED) exists precisely because the platform cannot assert that when the Stripe side is unknown. No refund is enqueued either.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "cancelBookingAsAdmin",
+      "title": "Admin-cancel email tells the parent 'No payment had been taken' when the payment outcome is unknown",
+      "verification": "List the BookingPaymentStatus values. Check whether a booking can sit in PAYMENT_PENDING with a CAPTURE_ABANDONED or CAPTURED row."
+    },
+    {
+      "category": "logic",
+      "description": "These handlers put event.getRequestedStartTime().toString() (e.g. '2026-11-03T17:00:00Z') into the model. The templates render it next to '(<canonicalTimezone>)', e.g. '2026-11-03T17:00:00Z (Europe/Berlin)'. The other handlers use formatInstantInZone. Readers will interpret a UTC wall time as local time, so the time shown is wrong by the zone offset. For a booking reminder or confirmation, that means people can turn up at the wrong time.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "onBookingRequested / onBookingConfirmed / onBookingDeclined / onBookingExpired / onQuickCompleteConfirmationRequired / onBookingPaymentUnresolved / onBookingReminder",
+      "title": "Times rendered as raw UTC Instant.toString() but labelled with the coach's timezone",
+      "verification": "Evidence: compare with the formatInstantInZone calls in the reschedule/cancel handlers. bookingReminder.html and bookingConfirmed.html print the value with the timezone label."
+    },
+    {
+      "category": "logic",
+      "description": "onBookingReminder sends the same data map to both parent and coach. The template reads 'Your session with <coachDisplayName>', so the coach is told they have a session with themselves. The header compares `${map.reminderType == 'PRIMARY'}`. If getReminderType() returns an enum, SpEL's == between an enum and a String literal is false, so every reminder, including the 24h primary, says 'Session in 2 hours'.",
+      "file": "src/main/resources/mails/bookingReminder.html",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "BookingEmailListener.onBookingReminder",
+      "title": "Booking reminder is sent to the coach as 'Your session with <coach's own name>'; header type comparison may always pick '2 hours'",
+      "verification": "Check the return type of BookingReminderEvent.getReminderType(). If it is an enum, render a PRIMARY reminder in a test and assert the header."
+    },
+    {
+      "category": "edge-case",
+      "description": "The onBookingReminder comment says 'Guarded per recipient so one bad address cannot cost the other recipient their reminder'. The try wraps the whole for-loop. If enqueueEmail throws for the parent (first element), the catch exits the loop and the coach gets nothing. onRescheduleAccepted has the same structure. The Stream.of fix only covers null/blank addresses, not enqueue failures.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "onBookingReminder / onRescheduleAccepted",
+      "title": "Comment claims per-recipient guarding, but one try/catch wraps both recipients",
+      "verification": "Evidence: the single try { ... for (...) { enqueueEmail } } catch structure."
+    },
+    {
+      "category": "edge-case",
+      "description": "cancelDueToPause passes coachEmail=\"\" when the coach profile is missing or resolveEmail fails. Unlike every sibling, these two handlers have no null/blank check, so an envelope is enqueued with an empty recipient. It will fail at send time and may count against the shared 'emailService' circuit breaker.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "onBookingCancelledDueToPause / onQuickCompleteConfirmationRequired",
+      "title": "Missing blank-email guards in two listeners",
+      "verification": "Check how NotificationOutboxSupport.enqueueEmail and MailManager treat an empty address."
+    },
+    {
+      "category": "concurrency",
+      "description": "rejectIfPostCompletion, the packExpired computation and the event payload are all derived from an unlocked getBookingOrThrow read. Only transitionInternal takes the lock. cancelBookingAsParent deliberately re-reads under the lock, but this path does not. Separately, an invalid cancelReason throws OperationNotAllowedException with SecurityError.MISSING_RIGHTS, which reports a validation error as an authorization failure (403). The OptimisticLockingFailureException catch around save() rarely fires, because the version check runs at flush/commit.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "cancelBookingAsCoach",
+      "title": "Coach cancel reads status and pack state without the row lock; invalid reason reported as MISSING_RIGHTS",
+      "verification": "Evidence: the code order in cancelBookingAsCoach vs cancelBookingAsParent."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc tells maintainers to 'replicate the exact enqueue conditions from the six sites in CancellationRefundService'. Every one of those sites has been removed (each now carries a comment saying refund enqueue moved here), so there is nothing to keep in sync and the instruction is circular. onBookingCancelledByParent always labels the refund 'Parent cancellation >24h'. Since Deferred-64 AC4, refundEligible is also true for cancellations after the session start, so the ledger reason is wrong for those.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "class Javadoc / onBookingCancelledByParent",
+      "title": "RefundEnqueueListener header refers to 'six sites in CancellationRefundService' that no longer exist; refund reason text is wrong for post-start cancels",
+      "verification": "Evidence: CancellationRefundService contains no enqueueBookingRefund calls."
+    },
+    {
+      "category": "edge-case",
+      "description": "resolveAmountPaid returns BigDecimal.ZERO when it can find neither a payment row nor a price, and logs ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN. If isWalletRefund() is derived from paymentCaptured && !packRestore rather than amount > 0, the email says 'You have been fully refunded: 0.00 has been credited' and a zero refund is enqueued. coachDisplayName falls back to \"\", which renders 'your session with  on \u2026'.",
+      "file": "src/main/resources/mails/bookingCancelledCoachUnavailable.html",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "BookingEmailListener.onBookingCancelledByAdmin",
+      "title": "Admin cancel can tell the parent 'fully refunded: 0.00'",
+      "verification": "Inspect BookingCancelledByAdminEvent's isWalletRefund()/isPackRestore() derivation from (refundAmount, paymentCaptured, packExpired)."
+    },
+    {
+      "category": "logic",
+      "description": "recordNoShowCoach checks rejectIfPostCompletion and the start time against an unlocked read, then publishes CoachNoShowEvent unconditionally. It is safe today only because NO_SHOW_COACH is legal solely from UPCOMING (which implies capture). If another source status is ever added, the refund path follows silently, which is the same class of defect as the ACCEPTED coach cancel. Note the asymmetry with the explicit capture whitelist in the parent and admin paths.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "recordNoShowCoach",
+      "title": "No-show and coach-cancel refunds don't verify capture for every path; PAUSED coach-cancel and no-show rely only on the state machine",
+      "verification": "Evidence: BookingStateMachine maps NO_SHOW_COACH only from UPCOMING; no capture check in recordNoShowCoach."
+    },
+    {
+      "category": "edge-case",
+      "description": "The enum comment admits the token TTL is 24h from issue and the delivery deadline is 12h. The templates' fallback text (and probably the message bundle) tells the user the link 'expires in 24 hours' counting from receipt. A mail delivered near its 12h deadline has a token valid for only about 12 more hours. The comment also cites 'CoachRegistrationService.java:250', a line-number claim that drifts easily.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "COACH_EMAIL_VERIFY / PARENT_EMAIL_VERIFY / PLAYER_EMAIL_VERIFY",
+      "title": "Verify-email copy says 'expires in 24 hours' though the mail may be delivered up to 12h after token issue",
+      "verification": "Check the email.*.verify.expiry message keys and the TTL constant in CoachRegistrationService."
+    },
+    {
+      "category": "edge-case",
+      "description": "Locale.forLanguageTag(recipient.getLangKey()) is evaluated before the NONE branch, and forLanguageTag(null) throws NullPointerException. Producers that build Recipients themselves (e.g. AlertNotificationListener ops alerts) without setting langKey would crash even though NONE never uses the locale. The class doc says the code was moved 'verbatim' and is pinned byte-identical by EmailRenderingCharacterizationTest.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/service/EmailContentRenderer.java",
+      "id": "R17",
+      "severity": "low",
+      "symbol": "render",
+      "title": "EmailContentRenderer NPEs on a null langKey; the 'verbatim' extraction claim can't be checked here",
+      "verification": "Check that every Recipient producer sets langKey. Confirm EmailRenderingCharacterizationTest exists and compares against the old MailService output rather than against the renderer itself."
+    },
+    {
+      "category": "logic",
+      "description": "The template states as fact that the session is confirmed automatically if the parent takes no action within 24 hours. Nothing shown enforces that timeout. If the sweeper's window differs, parents are told the wrong deadline for disputing a session.",
+      "file": "src/main/resources/mails/bookingQuickCompleteConfirm.html",
+      "id": "R18",
+      "severity": "low",
+      "symbol": "bookingQuickCompleteConfirm",
+      "title": "Quick-complete email promises auto-confirmation 'within 24 hours'",
+      "verification": "Check StuckCompletionSweeperService's auto-confirm threshold for COMPLETED_PENDING_CONFIRMATION."
+    }
+  ],
+  "input_rev": "7a9508836b55c97e28b9bfb96fb985c16aff0573",
+  "model": null
+}

@@ -1,0 +1,178 @@
+{
+  "arm": "blind-hunter",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "charge() catches every StripeException and throws PaymentGatewayException(\"payment.lifecycleFailure\"). It does not tell a 4xx rejection apart from an ApiConnectionException (timeout after Stripe captured), a 5xx, or an IdempotencyException/409. refund() in the same class makes exactly this distinction (payment.refundOutcomeUnknown); charge() does not. The callers treat any PaymentGatewayException as 'no money moved'. handleCreditBasedBooking calls persistPaymentFailure, which uses loadOrCreate to overwrite the reserved CAPTURE_PENDING row with the terminal CHARGE_FAILED, sets stripe_charged=0 and declines the booking. The batch path reverses the credit deduction and declines every reserved booking to CHARGE_FAILED. Scenario: the network times out after Stripe captured the PaymentIntent. The parent is charged, the booking is DECLINED, and the row says 'no money moved'. Because the row is no longer CAPTURE_PENDING, PaymentPendingSweeper never escalates it. This defeats the whole UAT.3 reservation invariant ('never re-charge or decide on CAPTURE_UNCONFIRMED; money may already be at Stripe'). The batch path also re-credits the wallet, so the parent can be paid twice.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.charge / PaymentLifecycleService.handleCreditBasedBooking / onBatchBookingAccepted",
+      "title": "Unknown-outcome Stripe charge failures are treated as definite declines, overwriting the CAPTURE_PENDING safety row",
+      "verification": "Evidence is in the code shown: the charge() catch block versus the refund() catch block; persistPaymentFailureTransactional/declineBatchBookingTransactional overwrite the status through loadOrCreate. Fix: classify ApiConnectionException/IdempotencyException/5xx/null status as outcome-unknown and leave the CAPTURE_PENDING row (and the credit deduction) untouched in that case."
+    },
+    {
+      "category": "edge-case",
+      "description": "After PaymentIntent.create(confirm=true, off_session=true) the code logs 'charge captured' and returns intent.getId() without looking at intent.getStatus(). If the intent comes back in 'processing', 'requires_action' or 'requires_payment_method' (for example an idempotent replay of an earlier incomplete intent, or a non-card payment method), the booking is marked CAPTURED and confirmed, and the coach is later paid out, with no captured money behind it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "StripePaymentGateway.charge",
+      "title": "Returned PaymentIntent status is never checked before treating it as captured",
+      "verification": "Check which statuses stripe-java can return without throwing for off_session confirm with the payment methods allowed; assert status == succeeded or route to an unknown/failed path."
+    },
+    {
+      "category": "logic",
+      "description": "The key is pi-{referenceId}-{owner}-{epochSecond/60}. The comment claims the bucket is 'a no-op' for booking and batch callers. In fact any re-issue of the same booking or batch charge (for example a manual operator re-drive) that crosses a minute boundary gets a new key and charges again. One inside the same minute with a different amount gets an IdempotencyException, which today is mapped to a decline (see the first finding). A per-booking key with no time component would be safe.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "StripePaymentGateway.charge (idempotencyKey derivation)",
+      "title": "Default idempotency key's one-minute bucket makes a replayed charge depend on wall-clock timing",
+      "verification": "Look for any operator or runbook path that re-invokes chargeAndCapture for a booking or batch id."
+    },
+    {
+      "category": "edge-case",
+      "description": "In the pack loop, catch(Exception) calls persistenceService.declineBatchBooking directly. Unlike declineQuietly, it is not wrapped. If it throws (lock contention, transition rejected), the exception escapes the listener. Every remaining pack booking and all credit bookings in the batch are never processed and stay PAYMENT_PENDING with no signal beyond Spring's listener log. The same applies to the `for (reserved) declineBatchBooking` loop after a Stripe failure: one throw leaves the rest of the bookings in CAPTURE_PENDING and rolls back the outer transaction's credit-restore ledger entries.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "onBatchBookingAccepted (pack loop catch and Stripe-failure decline loop)",
+      "title": "Pack-loop fallback decline is not guarded; one throw aborts the whole batch listener",
+      "verification": "Code shown: compare with declineQuietly/refundShareQuietly, which wrap the same calls."
+    },
+    {
+      "category": "concurrency",
+      "description": "walletBalanceForSettlement takes the stripe_customers row lock in the listener's transaction and keeps it until commit. It also writes an uncommitted BOOKING_DEDUCTION ledger entry. Later, still inside that transaction, declineBatchBookingAfterCharge and refundBatchShareToCredit open REQUIRES_NEW transactions on a second connection and enqueue a wallet BOOKING_REFUND. If the enqueue (or its MANDATORY handler) locks or updates the same payer's wallet or stripe_customers row, the thread blocks on itself. The DEADLOCK CONSTRAINT comments only cover booking.bookings, not the wallet row. Separately, confirmCreditBatchPayment commits per booking before the outer transaction's ledger debit commits. If the outer commit then fails, bookings are confirmed with creditDebited recorded but no deduction.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "onBatchBookingAccepted -> declineBatchBookingAfterCharge / refundBatchShareToCredit",
+      "title": "Batch listener holds the payer wallet lock while REQUIRES_NEW refund/decline transactions may need the same row",
+      "verification": "Check RefundOutboxSupport.enqueueBookingRefund and CreditWalletService for any lock or update on payment.stripe_customers or the wallet balance row in the enqueue transaction."
+    },
+    {
+      "category": "security",
+      "description": "request.getContentLength() returns -1 for chunked transfer encoding or a missing header, so the `> MAX_WEBHOOK_BODY_BYTES` check passes, and readAllBytes() then buffers an unbounded body. The 'P25: reject oversized bodies before buffering' claim does not hold on this IS_PERMIT_ALL, unauthenticated endpoint. An attacker can stream a very large chunked body to exhaust heap.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeWebhookResource.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "StripeWebhookResource.receive",
+      "title": "Webhook body size limit bypassed when Content-Length is absent (chunked)",
+      "verification": "Check whether Tomcat/proxy config (maxPostSize, Traefik/nginx client_max_body_size) caps chunked bodies; otherwise read through a bounded stream and stop at MAX+1."
+    },
+    {
+      "category": "logic",
+      "description": "The comment says rolling back after Stripe has charged is 'the worst available outcome'. Yet syncMarketplaceTierDeferrable only catches PessimisticLockingFailureException. syncMarketplaceTier can also throw PaymentGatewayException('coachProfileNotFound') and IllegalArgumentException from CoachSubscriptionTier.valueOf(tier); reconcileMarketplaceTiers explicitly expects that last one ('tier outside CoachSubscriptionTier's own values'). Either error rolls back persistCoachSubscription after the Stripe subscription was created and paid. subscribeCoach does not cancel it on that exception path, so the coach is billed with no local link.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "persistCoachSubscription / persistCoachTierUpgrade / syncMarketplaceTierDeferrable",
+      "title": "Marketplace sync after a Stripe charge only defers lock failures; other errors roll back the paid subscription",
+      "verification": "Compare the CoachSubscriptionTier enum names with COACH_TIERS strings; confirm subscribeCoach has no catch around self.persistCoachSubscription that cancels stripeSub."
+    },
+    {
+      "category": "logic",
+      "description": "It lists every live Stripe subscription but only looks in paymentCoachSubscriptionRepository.findByStripeSubscriptionId. Player subscriptions are never matched, so each one goes to resolveCoachAndAlertIfOrphaned. Depending on that method, the result is either a daily false orphan alert per player subscription or silent skipping, in which case genuinely orphaned player subscriptions are never detected. cancelStripeSubscriptionQuietly('PLAYER', ...) relies on this sweep's orphan alert.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "reconcileOneStripeSubscription",
+      "title": "Stripe\u2192payment reconciliation flags every live player subscription as an orphan",
+      "verification": "Check what StripeWebhookService.resolveCoachAndAlertIfOrphaned does for a customer that is not a coach (alert, or silent return)."
+    },
+    {
+      "category": "edge-case",
+      "description": "The key is 'sub-pm-{subId}-{pmId}'. If a user saves card A, then B, then A again within 24h, the third sync replays the first response. Stripe does not apply the update, so the subscription stays on card B while the app shows card A as current. cancelSubscriptionAtPeriodEnd has the same fixed key per subscription.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "StripeClient.updateSubscriptionDefaultPaymentMethod",
+      "title": "updateSubscriptionDefaultPaymentMethod fixed idempotency key loses an A\u2192B\u2192A card switch",
+      "verification": "Stripe idempotency semantics: same key within 24h returns the cached response without re-executing."
+    },
+    {
+      "category": "logic",
+      "description": "The Javadoc says it previews the charge 'exactly as onBatchBookingAccepted will compute it'. Settlement sums each booking's agreed_price, while the quote uses coach_pricing.per_session_price \u00d7 sessionCount. It also ignores pack-funded bookings, which settlement excludes from the card/credit split, and uses a wallet balance read now rather than at accept time. A price change between quote and createBatch, or a mix with pack bookings, makes the reviewed figure differ from the charged one. A missing pricing row quotes \u20ac0, and a negative sessionCount is not rejected.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "BatchPaymentQuoteService.quote",
+      "title": "Batch quote claims to match settlement but prices from current coach_pricing while settlement uses agreed_price",
+      "verification": "Confirm createBatch locks agreed_price atomically with the quote's read, and whether batch requests can include pack bookings."
+    },
+    {
+      "category": "logic",
+      "description": "The 'P26: ... fail-fast rather than silently break in prod' comment does not match the code, which logs a warning and continues, even under the prod profile with the default relative path. Stripe OAuth then fails at runtime. A null property (explicitly set to empty or null) would also NPE on startsWith.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/config/PaymentConfig.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "PaymentConfig.configureStripe",
+      "title": "PaymentConfig comment says 'fail-fast' for a relative OAuth callback but only logs a warning",
+      "verification": "Decide whether a relative callback under 'prod' should throw AppSetupException as the comment states."
+    },
+    {
+      "category": "edge-case",
+      "description": "resolveCurrency accepts any ISO-4217 code, but toCents always multiplies by 100 and getRefundableAmount always uses scale 2. With a zero-decimal currency (JPY, KRW) every charge, transfer and refund is 100\u00d7 wrong; with a three-decimal one (KWD) amounts are 10\u00d7 too small.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "toCents / getRefundableAmount",
+      "title": "Currency is configurable but amounts are converted with a fixed \u00d7100 / scale 2",
+      "verification": "Restrict platform.payment.currency to two-decimal currencies, or use Currency.getDefaultFractionDigits()."
+    },
+    {
+      "category": "edge-case",
+      "description": "listTransfersByGroup returns only the first 10 transfers and listTransferReversals only the first 100 reversals, with no pagination. If more exist, an existing transfer or reversal can be missed, and after the 24h idempotency window a duplicate transfer or reversal is created. Separately, the Javadoc for createTransferReversal ('reverses (part of)... reversal-{stripeTransferId}') is stranded above listTransferReversals: copy residue, and its key description contradicts the per-reversal key now used.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "listTransfersByGroup / listTransferReversals",
+      "title": "Transfer and reversal adoption checks only look at the first page",
+      "verification": "Confirm the maximum transfers per transfer_group; use autoPagingIterable."
+    },
+    {
+      "category": "logic",
+      "description": "These filter on the local ACTIVE_STATUSES {ACTIVE, TRIALLING}, while the marketplace sync and reconciliation use SubscriptionEntitlement.effectiveCoachTier. If the shared rule keeps the paid tier during PAST_DUE grace (or a different set), the two disagree: the API and gating say free tier while the marketplace projection says paid, or the other way round.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "getEffectiveCoachTier / getEffectivePlayerTier",
+      "title": "getEffectiveCoachTier/PlayerTier use a different entitlement rule from SubscriptionEntitlement",
+      "verification": "Compare SubscriptionEntitlement.effectiveCoachTier's status handling with ACTIVE_STATUSES."
+    },
+    {
+      "category": "edge-case",
+      "description": "changeCoachTier charges the proration at Stripe (ALWAYS_INVOICE) and then calls persist. If the row's stripeSubscriptionId changed in between, persist logs a warning and returns. The caller reports success, the user paid for an upgrade that was never applied locally, and nothing alerts or reverts the Stripe price.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "persistCoachTierUpgrade / persistPlayerTierUpgrade",
+      "title": "Paid upgrade silently not granted when the subscription is superseded after the Stripe charge",
+      "verification": "Code shown: the early return only logs a warning; the caller does not check a result."
+    },
+    {
+      "category": "edge-case",
+      "description": "validatePlayerTierInterval only checks SEMI_PRO/PRO against YEARLY. A null billingInterval for an ATHLETE tier causes an NPE in playerPriceKey (billingInterval.toLowerCase()). An arbitrary interval string is stored verbatim in billing_interval after a successful charge if its key happens to resolve. The tier is also never checked against PLAYER_TIERS.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R16",
+      "severity": "low",
+      "symbol": "subscribePlayer / validatePlayerTierInterval / playerPriceKey",
+      "title": "Player billing interval not validated before building the price key",
+      "verification": "Check whether the controller DTO validates billingInterval with an enum or @Pattern."
+    },
+    {
+      "category": "logic",
+      "description": "declineBatchBooking zeroes credit_debited and stripe_charged and sets CHARGE_FAILED. It also runs for reserved bookings after a batch charge exception. Combined with the first finding (unknown outcome mapped to failure), the reservation's operator reconciliation hint (the intended price) is erased exactly when it is needed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java",
+      "id": "R17",
+      "severity": "low",
+      "symbol": "declineBatchBookingTransactional",
+      "title": "Batch credit-path failure decline overwrites the CAPTURE_PENDING amounts and leaves the per-booking credit share unrecorded",
+      "verification": "See the first finding; check the runbook for whether operators rely on stripe_charged on these rows."
+    }
+  ],
+  "input_rev": "97f527f111a70dd0fdc2e50cd093fa65b8d9060e",
+  "model": null
+}

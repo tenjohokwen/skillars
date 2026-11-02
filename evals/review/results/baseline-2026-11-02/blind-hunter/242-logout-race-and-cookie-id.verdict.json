@@ -1,0 +1,138 @@
+{
+  "arm": "blind-hunter",
+  "case": "242-logout-race-and-cookie-id",
+  "judge_cost_usd": 0.11790139999999999,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R8 finds the same defect: this tab's session monitor is still armed during the logout race, so it dispatches session:expired and turns a deliberate logout into an expiry.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R9 finds the same defect: buildRedirectQuery always sets redirect, so the next user is sent to the previous user's page.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "partial",
+        "note": "R6 mentions only in passing that coach/profile-builder has no role guard, inside a broader point about role-meta conventions.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding raises the Long id being written into the skp cookie as an unquoted JSON number.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding raises /manage/health/smoke being absent from PUBLIC_MGMT_ENDPOINTS.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Whether the rollback happens depends on transaction config the reviewer has not seen, and the reviewer asks for that to be checked rather than showing it.",
+        "reported_id": "R1",
+        "verdict": "noise"
+      },
+      {
+        "note": "A speculative race between logout and refresh with no confirmed trigger.",
+        "reported_id": "R2",
+        "verdict": "noise"
+      },
+      {
+        "note": "The grace branch picks the user's newest unused token on any device, with no link to the rotated token, so a stale request from one device consumes another device's token.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on whether non-admin users can have a null skillarsRole, which the reviewer did not establish.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "The admin/health-dashboard routes set only requiresAuth, unlike the other role-gated routes, so any authenticated user can open them.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "The selfPlayerId ref is fetched only on mount and never cleared on logout, so the packs link is missing after an SPA login or points to the previous player.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Applies only in history mode, and the reviewer itself suggests the app uses hash mode.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "A speculative timing edge case in the coalescing logic with no demonstrated impact.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "hydrateFromCookie never restores displayName, so the header label stays null after a page reload.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on an axios interceptor the reviewer did not check.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether method security protects the endpoint, which the reviewer did not check.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on whether old LoginAttempt rows are ever purged, which is unknown.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "A generic hardening note about rate-limit atomicity with no concrete defect.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "refresh() checks only that the user exists, not activation or verification, so a deactivated user can keep extending the session by refreshing.",
+        "reported_id": "R17",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on a @Version field the reviewer did not check.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculation about cookie attributes that were not checked.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "Both branches of the ternary return the same aria-label, a copy-paste bug that leaves screen readers without the mode information.",
+        "reported_id": "R20",
+        "verdict": "real"
+      },
+      {
+        "note": "The reviewer itself says the impact is limited because the navigation is coalesced, so there is no concrete defect.",
+        "reported_id": "R21",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "arm": "blind-hunter",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "judge_cost_usd": 0.0644334,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R2 flags payInFull re-allocating a pack share and starving later sessions (PACK_FULLY_ALLOCATED), but blames the missing-row/refund-ledger case, not re-enqueueing CANCELLED REASON_NOTHING_CHARGED rows that were already allocated.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same defect: the parent-cancel path has no packExpired check or event field, so it restores the session to an expired pack instead of refunding to the wallet.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: two partial refunds on an unreleased payout compound the pro-rata cut on the already-reduced net, so the coach is cut less than in the released path.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on applyRefund running before payInFull in the same dispute, which the report leaves unverified.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: a CANCELLED/CHARGEBACK_LOST row keeps its positive net, so UPHOLD_COACH reinstates and pays it out.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "A JsonProcessingException is swallowed, but callers still report REVERSAL_ENQUEUED with no outbox message and nothing durable recording that a reversal is owed.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "Low-impact audit-text overwrite in last_error, not a functional defect.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: depends on unverified callers of the legacy constructor.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative NPE that depends on an unverified schema nullability.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

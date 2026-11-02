@@ -1,0 +1,98 @@
+{
+  "arm": "control",
+  "case": "351-paused-subscription-card-sync",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "PAUSED is now in GRACE_STATUSES, so its clock starts (applyStatus, startMissingGraceClocks) and the subscription is cancelled at Stripe once grace runs out. syncPaymentMethod only sets the default payment method for PAUSED; the comment says it 'resumes via Stripe's resume flow', but nothing calls resume, so the Stripe subscription stays paused after the user adds a card. The frontend `paymentIssue` check only covers PAST_DUE and UNPAID, so a paused user sees no warning before the subscription is cancelled. With gracePeriodDays=0 the cancellation happens on the next nightly run.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "GRACE_STATUSES / syncPaymentMethod / checkPastDueGracePeriod",
+      "title": "PAUSED subscriptions are now cancelled by the grace sweep, but saving a card never resumes them and no banner warns the user",
+      "verification": "Look for any code outside the diff that calls Subscription.resume() for PAUSED rows. If there is none, a PAUSED user who adds a card is still cancelled at the next sweep after grace."
+    },
+    {
+      "category": "logic",
+      "description": "The key is \"sub-pm-\" + subscriptionId + \"-\" + paymentMethodId. If a user saves card A, then card B, then card A again within Stripe's 24h idempotency window, the third call returns the cached response from the first call and does nothing. The subscription stays on card B even though the user's saved card is now A, so renewals and retries charge a card the user meant to replace.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "updateSubscriptionDefaultPaymentMethod",
+      "title": "Fixed idempotency key on the default-payment-method update replays an old card when the user switches back within 24h",
+      "verification": "Confirm Stripe replays the cached response for a reused key with identical parameters (it does, per Stripe's idempotency docs). An integration test that saves A\u2192B\u2192A and then reads default_payment_method would show the subscription still on B."
+    },
+    {
+      "category": "concurrency",
+      "description": "When payLatestOpenInvoice returns an invoice with status 'paid', the code only logs it. The local row stays PAST_DUE or UNPAID with its old pastDueSince until the invoice.paid webhook arrives. If the user saves a card just before the 3 a.m. sweep, or the webhook is delayed or failing, checkPastDueGracePeriod re-reads the row under lock, still sees a delinquent status, and cancels the subscription at Stripe right after charging the user. The user pays for a subscription that is then cancelled.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "syncPaymentMethod",
+      "title": "Successful synchronous invoice retry doesn't update local state, so the grace sweep can cancel a just-paid subscription",
+      "verification": "Check whether cancelAtStripeForGrace or GraceTarget.matches look at the Stripe-side status or latest invoice before cancelling. In the diff they only compare the local status and subscription ID."
+    },
+    {
+      "category": "edge-case",
+      "description": "The method only looks at sub.getLatestInvoice() and returns without paying if its status isn't 'open'. Once a subscription goes UNPAID, Stripe keeps generating later invoices, which may stay in draft. In that case the latest invoice is a draft or a newer open one, and older open invoices are never retried. The user is told that 'saving it retries the payment and restores your plan', but nothing is paid and the subscription is still cancelled at grace expiry.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "payLatestOpenInvoice",
+      "title": "Only the latest invoice is retried, so the invoice that actually made an UNPAID subscription delinquent may never be paid",
+      "verification": "In Stripe test mode, move a subscription to unpaid across two billing periods, then check latest_invoice.status and whether paying it makes the subscription active again."
+    },
+    {
+      "category": "logic",
+      "description": "syncPaymentMethod catches CardException (including invoice_payment_intent_requires_action for SCA cards) and all other Stripe errors, logs them, and the endpoint still returns 204. The new banner promises 'we will retry the payment straight away', but when the retry fails the dialog closes as if it worked, the banner stays, and the user isn't asked to authenticate or try another card. The subscription then quietly reaches grace expiry.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "savePaymentMethod / SubscriptionService.syncPaymentMethod",
+      "title": "Save-card endpoint returns 204 even when the invoice retry was declined or needs 3DS, so the user isn't told recovery failed",
+      "verification": "Check whether the frontend re-fetches the subscription status after `saved` and shows any message. The diff only closes the dialog."
+    },
+    {
+      "category": "security",
+      "description": "The existing tests show that some roles get no mutating action buttons on PlayerSubscriptionPage, but the new banner and its 'Update card' button only depend on `paymentIssue`. A read-only viewer, such as the player on a parent-paid subscription, can open the dialog and save a card. That runs syncPaymentMethodToSubscriptions for their own user ID, which includes their own player profile, and tries to repoint the parent-paid subscription at the player's card. The new test only checks the PARENT role.",
+      "file": "src/frontend/src/pages/parent/PlayerSubscriptionPage.vue",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "payment-issue-banner",
+      "title": "Update-card banner skips the role gating applied to other subscription controls",
+      "verification": "Mount the page with a PLAYER or other read-only role and a PAST_DUE status, then check whether the banner button renders. Also check whether Stripe rejects a payment method from a different customer."
+    },
+    {
+      "category": "logic",
+      "description": "The method gathers every player linked to the caller (all parent links plus the caller's own player profile) and tries to set the caller's card on each player's subscription, whoever pays for it. With co-parents, or a self-registered player whose subscription a parent pays, the subscription belongs to a different Stripe customer. Stripe will either reject the call (an error logged on every save) or, if customers are shared, move one payer's subscription onto another payer's card.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "syncPaymentMethodToSubscriptions",
+      "title": "Sync doesn't check that the subscription is billed to the caller's Stripe customer",
+      "verification": "Check whether PaymentPlayerSubscription records the paying user or customer ID, and whether one Stripe customer can be shared across parents."
+    },
+    {
+      "category": "database",
+      "description": "Before this change, a row that went PAST_DUE \u2192 UNPAID kept its pastDueSince, because UNPAID isn't billing-healthy and the field wasn't cleared, but UNPAID rows were never swept. On the first 3 a.m. run after deploy, every such row with an old pastDueSince matches findByStatusInAndPastDueSinceBefore and is cancelled at Stripe right away, with no banner shown and no chance to use the new card-update recovery. Only rows with a null clock get a fresh start from startMissingGraceClocks.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "checkPastDueGracePeriod",
+      "title": "First sweep after deploy immediately cancels existing UNPAID subscriptions whose old pastDueSince is long past",
+      "verification": "Count production rows with status UNPAID or PAUSED and pastDueSince older than the grace period. If any exist, decide whether to reset their clocks in a migration before deploying."
+    },
+    {
+      "category": "edge-case",
+      "description": "Only CANCELLED and a null subscription ID are skipped. Rows in INCOMPLETE_EXPIRED, or rows whose Stripe subscription was cancelled before the local row was updated, still get Subscription.retrieve plus update, which Stripe rejects for canceled or incomplete_expired subscriptions. That logs an error on every card save, and INCOMPLETE rows get a default card but no payment attempt, even though the UI text says saving restores the plan.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "syncPaymentMethod",
+      "title": "INCOMPLETE and other non-cancelled terminal statuses are synced to Stripe and fail on every card save",
+      "verification": "Check the full set of local status values (for example INCOMPLETE_EXPIRED) and whether Stripe accepts default_payment_method updates in those states."
+    }
+  ],
+  "input_rev": "1f1240ac91e1e334178b56cf40e2994f8b1077f7",
+  "model": null
+}

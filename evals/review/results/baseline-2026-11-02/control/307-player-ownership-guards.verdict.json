@@ -1,0 +1,66 @@
+{
+  "arm": "control",
+  "case": "307-player-ownership-guards",
+  "judge_cost_usd": 0.0653494,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R6 names both the HAS_PARENT_ROLE gate and the findByIdAndParentId ownership lookup that lock out self-registered players.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R7 describes how the swallowed DataIntegrityViolationException leaves the transaction rollback-only, so commit fails with UnexpectedRollbackException and the client gets a 500.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R2 identifies the ROLE_USER-only gates on initiate, /my and /quotas/me, which return 403 for ROLE_PLAYER.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 covers the user-id vs profile-id mismatch in VideoResource, and R4 covers the same bug in VideoAccessGuard.isOwner.",
+        "reported_ids": [
+          "R1",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R3 identifies the coach UUID vs username comparison and the player id-space mismatch in isCurrentUserOwner.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R5 identifies the HAS_PARENT_ROLE gates on subscribe, change-tier and cancel, while the service already accepts self-owned profiles.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "It is speculative because the reviewer itself asks to verify the NOWAIT locking and retry behaviour, and the trigger is not established from the report.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

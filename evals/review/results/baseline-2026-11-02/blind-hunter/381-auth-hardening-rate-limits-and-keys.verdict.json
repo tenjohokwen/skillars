@@ -1,0 +1,175 @@
+{
+  "arm": "blind-hunter",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "judge_cost_usd": 0.12924940000000001,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R8 identifies the per-(login, IP) key with no account-wide cap, which lets IP rotation give unlimited guesses.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R6 flags the 10-digit numeric keys (about 33 bits) and the non-cryptographic RandomStringUtils RNG.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R6 explicitly says POST /account/activate has no @RateLimited, which allows brute-forcing activation keys.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R15 targets the verifyPhone OTP limiter but guesses a DB-rollback mechanism; it misses the in-memory per-JVM state and the absent failed-attempt counter on the token.",
+        "reported_ids": [
+          "R15"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R9 describes the unknown-user path skipping bcrypt, which creates a timing difference that enables enumeration.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "R5 touches sendPasswordResetMail only for a Map.of NPE, not for the enumeration via different responses.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No finding mentions resend-verification being throttled per IP only.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No finding mentions activate.security=false having no profile guard.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The grace-window lookup returns the account's newest live token rather than this token's successor; the stated two-device trigger is concrete.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "Login lower-cases the email but registration stores the raw case, so a mixed-case registration cannot log in.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "The duplicate check uses the pre-override login, so an existing phone is missed during phone registration and the insert hits a unique violation.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "The registerAccount existing-user branch skips bcrypt and the insert, which creates a timing-based enumeration on that endpoint.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Map.of with null optional fields throws NPE, which turns the rejection into a 500.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "claim() sleeps for up to 2s inside the transaction and holds a pooled connection, which contradicts the documented no-wait design.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Users with a null skillarsRole bypass the verification gate and are labelled ADMIN in the cookie and response.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "Conditional speculation that the repository methods might lack REQUIRES_NEW, which the comments say they have.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "refresh omits the BASIC_VERIFIED gate that login enforces, so a regressed verification status keeps refreshing sessions.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Coach/Player use a bare save() with a deferred insert, so the DataIntegrityViolation catch is dead and the conflict surfaces at commit.",
+        "reported_id": "R13",
+        "verdict": "real"
+      },
+      {
+        "note": "save() on a managed entity defers the version check until commit, so the optimistic-lock catch never fires.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "The parent OTP verify allows 10 attempts per OTP against 5 for its sibling services, which doubles the guess budget.",
+        "reported_id": "R16",
+        "verdict": "real"
+      },
+      {
+        "note": "A stale comment contradiction with no behavioural impact.",
+        "reported_id": "R17",
+        "verdict": "noise"
+      },
+      {
+        "note": "A comment wording issue.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      },
+      {
+        "note": "A PII logging-policy and log-message wording concern.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "CSRF is disabled while the JWT and refresh token are sent as cookies, so state-changing endpoints rely on SameSite alone.",
+        "reported_id": "R20",
+        "verdict": "real"
+      },
+      {
+        "note": "The password is bound as a plain request param that can travel in the query string and be logged, and a null login hits a Map.of NPE.",
+        "reported_id": "R21",
+        "verdict": "real"
+      },
+      {
+        "note": "Resend always uses the email strategy, so phone-registered users get an email to a possibly null address.",
+        "reported_id": "R22",
+        "verdict": "real"
+      },
+      {
+        "note": "An error-code choice for the missing-user case; no security or functional defect.",
+        "reported_id": "R23",
+        "verdict": "noise"
+      },
+      {
+        "note": "A test-clock consistency nit.",
+        "reported_id": "R24",
+        "verdict": "noise"
+      },
+      {
+        "note": "Spring Boot's parent enables -parameters by default.",
+        "reported_id": "R25",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

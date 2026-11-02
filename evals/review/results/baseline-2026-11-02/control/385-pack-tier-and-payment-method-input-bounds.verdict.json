@@ -1,0 +1,40 @@
+{
+  "arm": "control",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "judge_cost_usd": 0.046277399999999996,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 covers the missing upper/scale bounds and numeric(10,2) overflow causing a 500, and R4 covers the per-session price rounding to 0.00 and breaking the CHECK constraint.",
+        "reported_ids": [
+          "R3",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R1 notes the id is only @NotBlank and is stored and sent unvalidated, but frames the problem as ownership; R6 covers only the blank-value case, so neither raises missing format/length validation.",
+        "reported_ids": [
+          "R1",
+          "R6"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: an existing customer buys with a card that gets declined, and stripe_customers keeps the bad card because getOrCreateStripeCustomer overwrote it before the charge.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: totalPrice=10.005 is stored as 10.01 in the DB, but the response and pricePerSession are computed from the unrounded value, so they don't match.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

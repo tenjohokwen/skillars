@@ -1,0 +1,113 @@
+{
+  "arm": "blind-hunter",
+  "case": "307-player-ownership-guards",
+  "judge_cost_usd": 0.155012,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R8 names the HAS_PARENT_ROLE gate and the findByIdAndParentId-only ownership check that lock self-registered players out of completion.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R6 describes the swallowed DIVE after saveAndFlush leaving the transaction rollback-only, which turns the race into an UnexpectedRollbackException/500.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No report says the player video endpoints admit only ROLE_USER and so return 403 for ROLE_PLAYER.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 finds that currentPlayerProfileId returns the user id but is used as the PlayerProfile id in findById, causing 403s and wrong-id-space keys; it only touches VideoAccessGuard through its Javadoc.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R2 finds the coach UUID-vs-username comparison that 403s coaches on /events and /status, and notes the player branch has the same id-space bug.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "partial",
+        "note": "R9 focuses on getMyPlayerSubscription's parentId argument and only mentions in passing that the mutation endpoints are HAS_PARENT_ROLE-only, without saying this locks out self-owned players.",
+        "reported_ids": [
+          "R9"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Speculative claim of a policy mismatch for parent/admin status access, with no concrete broken flow shown.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on an unverified combination of states (BLOCKED plus PURGED/FAILED).",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "The reviewer admits VideoSseService may translate the state, so this is unverified.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculates about what getCurrentCoachUserId does and does not show a concrete failure.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Matches the documented ParentPlayerLink vs PlayerProfile.parentId asymmetry listed as a non-finding.",
+        "reported_id": "R10",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "Only a defect if the cache is not request-scoped, which is not established.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Complaint about swallowed exceptions and missing logs (observability/style), not a demonstrated functional defect.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Misleading log message for non-duplicate DIVEs; minor and dependent on the schema.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "Input [A,A,B] concretely drops B, because limit(2) runs before de-duplication.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "Depends on whether one account can hold both roles, which is unverified.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative stale-persistence-context concern with no shown trigger in the erasure flow.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

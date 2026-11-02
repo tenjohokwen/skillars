@@ -1,0 +1,97 @@
+{
+  "arm": "control",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "judge_cost_usd": 0.0812454,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R10 says the key is per (login, IP) with no per-account cap, so rotating source addresses gives a fresh budget against one account.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R7 flags the 10-digit (~33-bit) key and says the reset key shares that space, but it misses the non-cryptographic RNG and treats the reset key as mitigated.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 says /account/activate has no @RateLimited, which allows unbounded online guessing of the activation key.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R9 attacks the per-OTP tryConsume budget in verifyPhone but only compares 10 vs 5; it misses that the bucket is in-memory and that the OTP is never invalidated after failed guesses.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R8 reports the same timing leak: the unknown-login path skips bcrypt.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "partial",
+        "note": "R6 notes that sendPasswordResetMail's paths fail differently and reveal account existence, but only through the dob-null NPE, not the PWD_RESET_REJECTED vs success response difference.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No finding covers per-IP-only throttling of resendVerificationEmail.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No finding covers activate.security=false having no profile guard.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: concurrent same-key logins each sleep in the advisory-lock retry loop while holding a pooled connection, which can exhaust the Hikari pool.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: a mixed-case email is stored raw as the login but looked up lower-cased, so that user can never log in.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: legacy registerAccount stores the raw-case email as the login while login looks it up lower-cased, so a mixed-case registrant cannot authenticate.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: save() without flush on app-assigned ids defers the unique-constraint violation to commit, outside the catch, so duplicate phone/email is not mapped to the registration error.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: the grace branch picks the user's newest live token, rotating another device's token, and that device's next refresh revokes every session.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

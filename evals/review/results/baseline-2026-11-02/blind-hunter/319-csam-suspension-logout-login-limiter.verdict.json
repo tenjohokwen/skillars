@@ -1,0 +1,173 @@
+{
+  "arm": "blind-hunter",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "judge_cost_usd": 0.1517374,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "Identifies that ownerId is looked up as login/email, so the lookup misses and the CSAM suspension ends as an error log; it guesses the id type wrong, but the defect and consequence are the same.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same finding: only verificationStatus is set, with no lock, session stamp or refresh revocation; liveness checks read only activated/locked; the login check is gated on the phone-otp flag.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R11 covers the refresh token not being revoked on /api/logout, and R13 covers the any-method logout CSRF.",
+        "reported_ids": [
+          "R11",
+          "R13"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No finding raises the separate in-memory, per-instance legacy budget against the DB limiter.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "Same finding: meta.role 'COACH' is never checked, so the coach revenue and receipt routes are open.",
+        "reported_ids": [
+          "R24"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No finding says the otpEnabled 2FA toggle is never enforced.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "partial",
+        "note": "Notes the missing ownership/authorization check and the absent caller, but its main point is the naming/semantics mismatch, and it never raises the consent issue.",
+        "reported_ids": [
+          "R21"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "Same finding: Retry-After comes from the oldest row overall and clamps to 1s.",
+        "reported_ids": [
+          "R7"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "A CSAM-suspended user has locked=false, so admin reactivateUser cannot lift the suspension and the admin console shows the user as live; the trigger is concrete.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Conditional on User lacking @Version/@DynamicUpdate, which the report does not verify; speculative.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hypothetical: it depends on some publisher that might call the event inside a transaction, and none is identified.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "The grace branch rotates the user's newest live token from any session, so a stale replay consumes another device's token, which later trips the theft revocation; the scenario is concrete.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "The DB limiter is keyed only on email+IP, with no per-account cap, so rotating IPs gives unlimited guesses against one account; the trigger is concrete.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "The unknown-user branch skips BCrypt, so the timing gap enumerates registered emails; the trigger is concrete.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative about other enum tiers; the misleading-message point is cosmetic.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "formLogin defaults expose POST /login through the plain authenticationManager, bypassing both rate limiters and the verification gate; the trigger is concrete.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Error-code ambiguity, plus speculation about how the simulator throws.",
+        "reported_id": "R14",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified RequestMetadata normalisation.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "setLogin(newEmail) without lowercasing, while login lowercases its lookup, so a new email containing uppercase letters can never log in.",
+        "reported_id": "R16",
+        "verdict": "real"
+      },
+      {
+        "note": "Password change leaves existing JWTs and refresh tokens valid, unlike the other revocation paths.",
+        "reported_id": "R17",
+        "verdict": "real"
+      },
+      {
+        "note": "Low-impact; its downstream use is unverified.",
+        "reported_id": "R18",
+        "verdict": "noise"
+      },
+      {
+        "note": "Javadoc/message mismatch only.",
+        "reported_id": "R19",
+        "verdict": "noise"
+      },
+      {
+        "note": "The flush-timing claim depends on unverified id-generation details.",
+        "reported_id": "R20",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on PlayerOwnershipGuard behaviour, which the report does not verify.",
+        "reported_id": "R22",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative race and null handling, with no confirmed constraint gap.",
+        "reported_id": "R23",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative error handling that depends on unread store code.",
+        "reported_id": "R25",
+        "verdict": "noise"
+      },
+      {
+        "note": "CaseUtils.toCamelCase strips spaces from multi-word first names in displayName; the trigger is concrete.",
+        "reported_id": "R26",
+        "verdict": "real"
+      },
+      {
+        "note": "Stale comments; style.",
+        "reported_id": "R27",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

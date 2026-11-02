@@ -1,0 +1,148 @@
+{
+  "arm": "blind-hunter",
+  "case": "353-agreed-price-null-fallback",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "NULL is stored both for legacy rows (written before V192) and for new requests made while the coach had no pricing row (createBookingRequest, createBatch and duplication all store `currentCoachPrice(...)`, which returns null). resolveSessionPrice's javadoc says the fallback to the current price is 'only for a pre-V192 row', but the code falls back for any NULL. Failure scenario: a parent requests (or batch-requests) while the coach has no pricing row. The batch quote and `batch.totalAmount` both show \u20ac0. The coach then creates a pricing row at \u20ac200 and accepts. resolveSessionPrice / batchBookingPrice return \u20ac200 and the parent's saved card is charged an amount they never saw or agreed to. That is exactly the re-pricing hole this PR claims to close. The comments in the migration, BookingBatchService and BatchPaymentQuoteService say 'accept then fails unless pricing exists by then', which admits this, yet the PR header still says the price 'cannot change'. Fix options: reject the request when no price exists, or keep a separate marker (for example a NOT NULL column for post-V192 rows, or a version flag) so the fallback only applies to legacy rows.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "resolveSessionPrice",
+      "title": "A NULL agreed_price means two different things, so a coach can set the price after the request",
+      "verification": "No test covers this case: request with no pricing \u2192 coach adds pricing \u2192 accept. Adding one to AgreedPriceLockIT would show the charge at the later price."
+    },
+    {
+      "category": "logic",
+      "description": "When agreedPrice is null, `totalAmount` is stored as ZERO \u00d7 n. Settlement (batchBookingPrice) then falls back to the current coach price, so the batch's recorded total and the amount actually charged differ. This breaks the stated invariant that 'the figure a parent reviews cannot drift from the one they are charged' (CreditCardSplit javadoc / A22).",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "createBatch",
+      "title": "Batch totalAmount and quote show \u20ac0 but settlement can charge the later price",
+      "verification": "Check which readers of BookingBatch.totalAmount (UI, emails, reconciliation) assume it equals the charged total."
+    },
+    {
+      "category": "concurrency",
+      "description": "The method does loadOrCreate, sets status=REFUNDED_TO_CREDIT unconditionally, uses transitionOrReport (which reports instead of throwing) and enqueues the refund. Nothing checks that the row is still CAPTURE_PENDING. Failure scenario: the per-booking settle commits CAPTURED + CONFIRMED and then throws (for example in post-commit or notification code, or a later step outside the settle transaction). The catch in onBatchBookingAccepted calls this method. The CAPTURED row is rewritten to REFUNDED_TO_CREDIT, the booking's PAYMENT_FAILED transition is rejected and only reported, and the full share is credited back. Result: the booking stays CONFIRMED and the parent gets the money back, so the session is free. BatchPaymentIT can't catch this because it makes `transition` throw, which presumably happens before anything commits.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "declineBatchBookingAfterChargeTransactional",
+      "title": "declineBatchBookingAfterCharge overwrites the payment row whatever its status, so it can refund a booking that is already confirmed",
+      "verification": "Confirm that everything inside the settle call (the lambda passed in the per-booking try) runs in one transaction that rolls back fully on any exception, with no REQUIRES_NEW persistPaymentSuccess and no post-commit throw. Either way, add a guard `if (!CAPTURE_PENDING.equals(bp.getStatus())) abort`."
+    },
+    {
+      "category": "logic",
+      "description": "Both the javadoc and V192 say the status is terminal 'BookingPaymentStatus.isTerminal', but the diff only adds the constant. If isTerminal (or the sweeper, cancel interlock, revenue or refund-amount logic) lists statuses explicitly, REFUNDED_TO_CREDIT is treated as non-terminal or unknown. The sweeper could then act on it again, or the full-refund method could compute credit+stripe from the row and refund a second time.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/BookingPaymentStatus.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "REFUNDED_TO_CREDIT",
+      "title": "The new REFUNDED_TO_CREDIT status is called 'Terminal' but is never added to isTerminal",
+      "verification": "Read BookingPaymentStatus.isTerminal and grep for every switch or comparison on CAPTURED / CHARGE_FAILED / CAPTURE_ABANDONED (PaymentPendingSweeper, the cancel interlock, the full-refund-amount method, revenue queries)."
+    },
+    {
+      "category": "database",
+      "description": "When isSettled(bookingId) is true after the batch charge, a BOOKING_REFUND keyed on bookingId is enqueued, which is idempotent through uq_pcl_booking_refund. If that booking was in fact CAPTURED by another path, a later cancellation refund for the same booking hits the same unique key and is dropped or deduplicated (or this refund is dropped, if a refund already exists). Either way the parent is under-refunded. The payment row is also 'left alone', so nothing in booking_payments records that the batch share was taken and returned, and reconciliation can only rely on logs.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "refundShareQuietly / refundBatchShareToCreditTransactional",
+      "title": "Refund of a 'settled elsewhere' booking collides with that booking's later legitimate refund",
+      "verification": "Check uq_pcl_booking_refund's columns and how the outbox consumer handles a duplicate (skip silently or error). Check what isSettled considers settled. If the booking is 'vanished', check whether a FK from the ledger reference_id to bookings blocks the refund."
+    },
+    {
+      "category": "edge-case",
+      "description": "The comment says the CAPTURE_PENDING row survives and 'PaymentPendingSweeper escalates it'. But the money has already been debited and charged, and the reserved row records the whole price under stripeCharged, not the real split. If the sweeper's escalation marks the row CAPTURE_ABANDONED or declines the booking without a refund, the parent's money is kept. The same applies to refundShareQuietly's failure branch, which only logs.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "onBatchBookingAccepted (catch RuntimeException de)",
+      "title": "Failed decline-and-refund leaves a charged booking for the sweeper, which may abandon it without refunding",
+      "verification": "Read PaymentPendingSweeper: does escalation refund, or only alert and abandon? Is the [BATCH_DECLINE_REFUND_FAILED] log line wired to an alert?"
+    },
+    {
+      "category": "edge-case",
+      "description": "The comment promises the failure is 'rolled back, reported in the per-booking results', but resolveSessionPrice throws ResourceNotFoundException (or a pack lookup failure). If the per-booking handler only catches BookingException or similar, one unpriced booking aborts the whole batch accept or returns a 404 for the batch. The check also isn't binding: the price is resolved again at settlement, so a pricing row deleted in between still reaches the backstop.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "acceptOneBooking",
+      "title": "Pre-accept price check may not produce a per-booking failure result",
+      "verification": "Check the exception types caught around acceptOneBooking in the batch accept loop. Check whether package-private resolveSessionPrice is reached correctly through BookingService's Spring proxy (CGLIB, same package)."
+    },
+    {
+      "category": "concurrency",
+      "description": "The lock taken is on coach_profiles (findByIdForUpdate). coach_pricing is a separate table, and the price-update path may not take the coach profile lock, so a concurrent re-price isn't serialised against the request. BookingBatchService.createBatch and BookingDuplicationService read the price with no such claim at all.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "createBookingRequest",
+      "title": "Comment says the price is read 'under the coach row lock', but that lock doesn't cover coach_pricing",
+      "verification": "Check whether the coach pricing update service takes coachProfileRepository.findByIdForUpdate before writing coach_pricing."
+    },
+    {
+      "category": "architecture",
+      "description": "The SQL comment says the constraint is rebuilt as the union of 'V138's 5 values', while the BookingPaymentStatus javadoc says 'V62, widened by V94, V124 and V192'. At least one is wrong. If another migration between V138 and V191 widened chk_bp_status, this DROP/ADD silently removes those values and inserts of that status start failing.",
+      "file": "src/main/resources/db/migration/V192__booking_agreed_price.sql",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "chk_bp_status",
+      "title": "Migration and Java constant disagree on the constraint's history (V138 vs V124)",
+      "verification": "Grep db/migration for every `chk_bp_status` definition and confirm the latest one has exactly CAPTURE_PENDING, CAPTURED, CHARGE_FAILED, FROZEN, CAPTURE_ABANDONED."
+    },
+    {
+      "category": "logic",
+      "description": "The wallet holds \u20ac20, so BOOKING_DEDUCTION is \u20ac20 whether each booking is priced 30 or 40. The message 'credit split on the agreed 2 x 30, not 2 x 40' claims something the assertion doesn't check. Only the stripe_charged assertions tell the prices apart. Those depend on the coach price in BasePaymentIT being 40, which this diff doesn't show.",
+      "file": "src/test/java/com/softropic/skillars/platform/payment/service/BatchPaymentIT.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "batchBooking_confirmFailsAfterCharge_shareRefundedToWallet_andAgreedPriceCharged",
+      "title": "BatchPaymentIT: the wallet-deduction assertion can't tell 30 from 40",
+      "verification": "Check the per_session_price seeded by BasePaymentIT. Assert the total card charge passed to the stub gateway (40 vs 60) instead."
+    },
+    {
+      "category": "edge-case",
+      "description": "(1) The test assumes `ok` gets all the credit and `failing` gets none, which only holds if creditIds keeps the event's list order. If it comes from a Set or a DB query, the test is flaky. (2) The await adds ledger BOOKING_REFUND to the outbox payload amounts. If drained outbox rows are kept (marked processed rather than deleted), the total becomes 60 and the test fails or flaps. (3) doThrow(...).when(bookingService) requires bookingService to be a Mockito spy in BasePaymentIT. Otherwise it throws NotAMockException, and spying on a shared context can leak into other tests.",
+      "file": "src/test/java/com/softropic/skillars/platform/payment/service/BatchPaymentIT.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "batchBooking_confirmFailsAfterCharge_shareRefundedToWallet_andAgreedPriceCharged",
+      "title": "BatchPaymentIT: order-dependent split and refund-sum check that can double count",
+      "verification": "Check how creditIds is built in onBatchBookingAccepted, whether outbox rows are deleted after drain, and whether BasePaymentIT declares bookingService as @MockitoSpyBean / @SpyBean."
+    },
+    {
+      "category": "edge-case",
+      "description": "booking_payments is queried right after acceptBooking. If the AFTER_COMMIT settle listener is @Async, the row may not exist yet. setUp inserts fixed user and player IDs in every @BeforeEach with no cleanup, so the second test hits duplicate keys unless the base class truncates. There is also no test for a booking requested with no pricing row that is then priced and accepted (the first finding).",
+      "file": "src/test/java/com/softropic/skillars/platform/booking/service/AgreedPriceLockIT.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "AgreedPriceLockIT",
+      "title": "AgreedPriceLockIT: possibly flaky (async settle, fixed IDs) and missing the key scenario",
+      "verification": "Check whether the BookingAcceptedEvent payment listener is @Async, and whether AbstractIntegrationTest cleans tables between tests."
+    },
+    {
+      "category": "logic",
+      "description": "It's undecided whether a proposed duplicate should carry original.getAgreedPrice() or the current price. The code takes the current price, so a coach who has raised prices proposes the 'same' session at a new price, and that's only visible if the parent checks. If the coach has no pricing row, it stores NULL, which inherits the fallback problem from the first finding. The diff adds no test for this path.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "duplicate (newBooking.setAgreedPrice)",
+      "title": "Duplicated booking re-locks the current price instead of keeping the original's agreed price, and has no test",
+      "verification": "Confirm the intended product rule for duplicated sessions."
+    },
+    {
+      "category": "logic",
+      "description": "The javadoc now says the order is booking_payments row \u2192 agreed_price \u2192 current price, but only the comment changes in this hunk. If the method body calls coachPricingRepository directly rather than resolveSessionPrice, legacy row-less refunds still use the current price and agreed_price is never consulted.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "full-refund amount method (javadoc at ~L298)",
+      "title": "Refund-amount javadoc claims an agreed_price step that the diff doesn't show being implemented",
+      "verification": "Read the method body below the javadoc and check that it uses resolveSessionPrice or getAgreedPrice."
+    }
+  ],
+  "input_rev": "e60141fc480a55e75e8a5e45bace201999da07f7",
+  "model": null
+}

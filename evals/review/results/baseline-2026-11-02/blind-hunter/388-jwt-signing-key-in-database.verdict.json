@@ -1,0 +1,100 @@
+{
+  "arm": "blind-hunter",
+  "case": "388-jwt-signing-key-in-database",
+  "judge_cost_usd": 0.0874174,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the password derived from the row's own busId and version (constants for the JWT key), which lets anyone with table access decrypt the key and forge tokens.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "fetchSecret never decrypts, so an undecryptable row passes the boot check that the comments claim catches it, and the failure moves to every request.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Only a javadoc rationale inconsistency, with no behavioural defect.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The guard accepts site-local and link-local addresses, so a production database on a private subnet passes the 'local-only' check.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative concern about profile configuration that the reported text does not show.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "Map.of is built before validation and throws NPE on a null version or busId, which bypasses the intended SecException.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "derivePassword's blank branch calls Map.of with null values, so it throws NPE instead of SecException.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "A Base64 decode failure escapes uncaught as IllegalArgumentException instead of SecException(DECR_ERROR).",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "The JWT path fetches by version without filtering on status, so a deactivated key is still used for signing and verification.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "Process-lifetime caching is the intended design (see the non-finding), and the dead-code note is minor.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Only a javadoc inaccuracy.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative: the consequence depends on unverified JWT-library behaviour and threading paths.",
+        "reported_id": "R12",
+        "verdict": "noise"
+      },
+      {
+        "note": "Minor performance observation, not a defect.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      },
+      {
+        "note": "secretMap never evicts, so a newer active secret or a later deactivation is ignored for any busId already cached.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "Speculative: depends on flush timing and migration contents that were not verified.",
+        "reported_id": "R15",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative DNS TOCTOU with no concrete trigger in this deployment.",
+        "reported_id": "R16",
+        "verdict": "noise"
+      },
+      {
+        "note": "A 'verify the filter' request with no evidence that clearing is actually missing.",
+        "reported_id": "R17",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

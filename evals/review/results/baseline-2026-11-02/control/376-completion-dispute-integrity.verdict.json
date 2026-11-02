@@ -1,0 +1,75 @@
+{
+  "arm": "control",
+  "case": "376-completion-dispute-integrity",
+  "judge_cost_usd": 0.0653814,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R2 notes raiseDispute rejects COMPLETED_PENDING_CONFIRMATION, but only for the sweeper auto-end path, not for quick-complete.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No report says quick-complete blocks the parent's NO_SHOW_COACH report.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "partial",
+        "note": "R1 finds the same start/end-then-LIVE wrap-up payout with no parent confirmation, but blames the missing upper bound on start rather than the missing minimum duration on end.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R2 notes confirmCompletion fails without a SessionCompletionData row, but misses that the transition is applied first and the result is a 404.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No report covers an excused-reason coach cancel after start avoiding a strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No report covers a parent late cancel that records no coach strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No report covers the one-open-dispute lockout or unlimited repeat disputes.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The concrete trigger is sound: a pack-booking dispute price read from the cut gross_amount under-credits or blocks a second dispute.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "A concrete READ COMMITTED interleaving lets each transaction miss the other's row, leaving the payout unfrozen next to an open dispute.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Storing the raw admin input instead of the credited amount concretely misrecords FULL_CREDIT and COACH_WARNING disputes.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

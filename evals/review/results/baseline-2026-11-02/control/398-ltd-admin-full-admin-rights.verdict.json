@@ -1,0 +1,48 @@
+{
+  "arm": "control",
+  "case": "398-ltd-admin-full-admin-rights",
+  "judge_cost_usd": 0.0581094,
+  "judge_model": null,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies HAS_ADMIN_ROLE admitting ROLE_LTD_ADMIN on every admin endpoint; R2\u2013R6 cover the finance, config, GDPR, user and dispute surfaces of the same root cause.",
+        "reported_ids": [
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R9 flags the HAS_ANY_ROLE guard on deleteUserInformation, which lets any authenticated role delete any user by login, and notes it has no callers.",
+        "reported_ids": [
+          "R9"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Non-transactional delete-then-save with an unvalidated body gives a concrete trigger: a PUT with a null metricName fails the save after the delete has committed, so the rule is lost.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Missing validation whose runtime consequences are left to a 'verify' step; the concrete overflow failure is already covered by R7.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "Latent issue on a method with no production caller, and its LTD_ADMIN concern is part of the role-tier problem already covered.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      }
+    ]
+  }
+}
