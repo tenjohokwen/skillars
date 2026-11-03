@@ -6,6 +6,7 @@ import {
   type RouteMatcher,
   type SettledRouteOptions,
 } from '../config/routing.js'
+import { activateTimeouts } from '../config/timeouts.js'
 import { IdAllocator } from '../data/IdAllocator.js'
 import {
   ContextSeeder,
@@ -54,6 +55,8 @@ export interface PitchsideTestFixtures {
   clock: Clock
   /** Auto: fails a quarantined test whose quarantine has expired. */
   quarantineGuard: void
+  /** Auto: exposes this test's resolved navigation/action timeouts to `settleTimeoutMs()`. */
+  timeoutBudget: void
 }
 
 export interface PitchsideWorkerFixtures {
@@ -257,6 +260,18 @@ export function createSuiteTest(env: SuiteEnv) {
           )
         }
         await use()
+      },
+      { auto: true },
+    ],
+
+    timeoutBudget: [
+      async ({ navigationTimeout, actionTimeout }, use) => {
+        activateTimeouts({ navigationTimeout, actionTimeout })
+        try {
+          await use()
+        } finally {
+          activateTimeouts(undefined)
+        }
       },
       { auto: true },
     ],

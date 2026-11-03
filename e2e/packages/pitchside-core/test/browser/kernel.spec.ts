@@ -1,4 +1,9 @@
-import { failFirst, type SeedContext } from '../../src/index.js'
+import {
+  DEFAULT_SETTLE_TIMEOUT_MS,
+  failFirst,
+  settleTimeoutMs,
+  type SeedContext,
+} from '../../src/index.js'
 import { expect, failNextPrepareContext, HomeScreen, LoginScreen, test, toy } from './toySuite.js'
 
 // Self-tests of the kernel against the toy app. Each one proves a fixture in a real browser.
@@ -184,6 +189,40 @@ test.describe('routing', () => {
       await expect(page.getByTestId('landing-title')).toHaveText('Landing 42')
     },
   )
+
+  test(
+    'with no timeout configured the settle budget is the 10 s default',
+    toy.scenario({ id: 'KRN-25', priority: 'P2', tags: ['@regression', '@guest', '@kernel'] }),
+    () => {
+      expect(settleTimeoutMs()).toBe(DEFAULT_SETTLE_TIMEOUT_MS)
+    },
+  )
+
+  test.describe('a project that sets navigationTimeout', () => {
+    test.use({ navigationTimeout: 700, actionTimeout: 5_000 })
+
+    test(
+      'settledRoute takes its budget from navigationTimeout',
+      toy.scenario({ id: 'KRN-26', priority: 'P1', tags: ['@regression', '@guest', '@kernel'] }),
+      async ({ gotoRoute, settledRoute }) => {
+        await gotoRoute('/chain')
+        await expect(settledRoute('/never')).rejects.toThrow(/Timed out after 700 ms/)
+      },
+    )
+  })
+
+  test.describe('a project that sets only actionTimeout', () => {
+    test.use({ actionTimeout: 900 })
+
+    test(
+      'settledRoute falls back to actionTimeout',
+      toy.scenario({ id: 'KRN-27', priority: 'P2', tags: ['@regression', '@guest', '@kernel'] }),
+      async ({ gotoRoute, settledRoute }) => {
+        await gotoRoute('/chain')
+        await expect(settledRoute('/never')).rejects.toThrow(/Timed out after 900 ms/)
+      },
+    )
+  })
 })
 
 test.describe('gates', () => {

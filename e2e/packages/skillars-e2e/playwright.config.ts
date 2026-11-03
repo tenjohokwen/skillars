@@ -20,6 +20,9 @@ export default defineConfig({
     testIdAttribute: 'data-testid',
     locale: E2E.locale,
     timezoneId: process.env.TZ || 'UTC',
+    // Also the budget for a route to settle (Screen.waitReady): post-login guards resolve the
+    // landing page through several API calls, which takes more than 10 s on a slow laptop.
+    navigationTimeout: 30_000,
   },
   projects: laneProjects({ use: { ...devices['Desktop Chrome'], channel } }),
 })

@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test'
 import { pollUntil } from '../util/poll.js'
+import { settleTimeoutMs } from './timeouts.js'
 
 /**
  * Maps app routes to browser URLs and back. Hash vs history routing lives here and nowhere else:
@@ -92,6 +93,7 @@ const toPredicate = (matcher: RouteMatcher): ((route: string) => boolean) => {
 export interface SettledRouteOptions {
   /** How long the route must stay unchanged to count as settled. Default 300 ms. */
   stableMs?: number
+  /** Defaults to the project's `navigationTimeout`, then `actionTimeout`, then 10 s. */
   timeoutMs?: number
 }
 
@@ -120,7 +122,7 @@ export async function waitForSettledRoute(
       return predicate(route) && Date.now() - since >= stableMs ? route : undefined
     },
     {
-      timeoutMs: options.timeoutMs ?? 10_000,
+      timeoutMs: options.timeoutMs ?? settleTimeoutMs(),
       intervalMs: 50,
       describe: () => `route to settle on ${String(matcher)} (last seen: ${candidate ?? 'none'})`,
     },
