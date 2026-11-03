@@ -3242,3 +3242,16 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Messaging calls never pass the `role` disambiguator.** `MessagingResource.resolveRole` accepts `?role=`, and the new `reportMessage`/`reportConversation` wrappers accept it, but no call on `MessagingPage.vue` (pre-existing list/send included) passes it, so a dual-role user can't act under their second role.
 - **Admin dispute detail polish.** `AdminDisputesPage.vue` renders `raisedByRole` and `bookingStatus` as raw enum values and hardcodes "€" for every amount.
 - **Coach-side dispute action is reachable only for COMPLETED bookings.** `BookingService.getCoachWeekSchedule` fetches only `CONFIRMED, UPCOMING, REQUESTED, IN_PROGRESS, COMPLETED_PENDING_CONFIRMATION, COMPLETED`, so `CoachCommandCenterPage`'s `DisputeAction` never renders for the CANCELLED*/NO_SHOW_* statuses `DisputeService.ELIGIBLE_STATUSES` allows (a coach cannot dispute a player no-show). Owner decision 2026-10-27: accept; parents cover every eligible status. Fix needs a coach-facing list of cancelled/no-show bookings, not a widened week schedule.
+
+## Deferred from: /pr-review of feature/pitchside-adapter (2026-11-03)
+
+Raised by the security reviewer (item V3) on the Pitchside UI-test adapter. Pre-existing backend behaviour, not
+introduced by that branch, which only disables rate limiting in its disposable E2E stack. Tracked as GitHub issue
+#410, which lists what was refuted (client-IP resolution behind the proxy) and what is already bounded (per-email
+resend bucket, single valid password-reset key, DB-backed login limiter).
+
+- PR1 [medium/security] `@RateLimited` buckets are per-JVM (`RateLimitingService` ConcurrentHashMap), so with N
+  instances every budget is ×N; and registration (`coach_register`/`parent_register`/`player_register`, 3/60 min) is
+  keyed by client IP only, with no per-email/per-phone cap, so an IP-rotating client can create accounts without
+  limit. Decide whether multi-instance prod is in scope (move buckets to Redis) and add a per-email registration
+  cap. [`RateLimitingService.java`, `RateLimitingAspect.java`; issue #410]

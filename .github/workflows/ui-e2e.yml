@@ -24,16 +24,23 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: ui-e2e-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
-
 jobs:
   e2e:
+    # A `labeled` event runs only when the label just added IS ui-e2e / ui-e2e-full — adding any other
+    # label to an opted-in PR must not start (or cancel) a 45-minute run. Pushes and reopens of an
+    # opted-in PR re-run it.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      contains(github.event.pull_request.labels.*.name, 'ui-e2e') ||
-      contains(github.event.pull_request.labels.*.name, 'ui-e2e-full')
+      (github.event.action == 'labeled' &&
+        (github.event.label.name == 'ui-e2e' || github.event.label.name == 'ui-e2e-full')) ||
+      (github.event.action != 'labeled' &&
+        (contains(github.event.pull_request.labels.*.name, 'ui-e2e') ||
+         contains(github.event.pull_request.labels.*.name, 'ui-e2e-full')))
+    # Job-level, not workflow-level: a skipped run (an unrelated label) never joins the group, so it
+    # can't cancel the run in progress. A new push still supersedes an older run of the same PR.
+    concurrency:
+      group: ui-e2e-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:

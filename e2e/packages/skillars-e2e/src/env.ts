@@ -7,6 +7,11 @@ import { optionalEnv } from 'pitchside-core'
 export const E2E = {
   baseUrl: optionalEnv('E2E_BASE_URL', 'http://localhost:9990'),
   mailpitUrl: optionalEnv('E2E_MAILPIT_URL', 'http://localhost:8025'),
+  /**
+   * Object storage as the BROWSER sees it: presigned upload/download URLs point here directly, not
+   * through the app (the stack's APP_STORAGE_ENDPOINT_URL; `storage` resolves via /etc/hosts).
+   */
+  storageUrl: optionalEnv('E2E_STORAGE_URL', 'http://storage:9500'),
   databaseUrl: optionalEnv(
     'E2E_DATABASE_URL',
     'postgres://postgres:e2e-postgres@localhost:55432/skillars',
