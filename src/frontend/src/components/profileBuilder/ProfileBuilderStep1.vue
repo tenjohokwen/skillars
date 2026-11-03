@@ -11,6 +11,7 @@
         (v) => v.length <= 120 || t('validation.maxLength', { max: 120 }),
       ]"
       class="q-mb-sm"
+      data-testid="builder-display-name"
     />
     <q-input
       v-model="form.bio"
@@ -20,8 +21,15 @@
       autogrow
       :rules="[(v) => !v || v.length <= 2000 || t('validation.maxLength', { max: 2000 })]"
       class="q-mb-sm"
+      data-testid="builder-bio"
     />
-    <q-banner v-if="showContactWarning" class="contact-warning q-mb-md" rounded dense>
+    <q-banner
+      v-if="showContactWarning"
+      class="contact-warning q-mb-md"
+      rounded
+      dense
+      data-testid="builder-contact-warning"
+    >
       <template #avatar>
         <q-icon name="warning" />
       </template>
@@ -31,10 +39,20 @@
     <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionLocation') }}</div>
     <div class="row q-col-gutter-md q-mb-sm">
       <div class="col-12 col-sm-6">
-        <q-input v-model="form.city" :label="t('auth.coach.step1City')" outlined />
+        <q-input
+          v-model="form.city"
+          :label="t('auth.coach.step1City')"
+          outlined
+          data-testid="builder-city"
+        />
       </div>
       <div class="col-12 col-sm-6">
-        <q-input v-model="form.district" :label="t('auth.coach.step1District')" outlined />
+        <q-input
+          v-model="form.district"
+          :label="t('auth.coach.step1District')"
+          outlined
+          data-testid="builder-district"
+        />
       </div>
     </div>
 
@@ -48,10 +66,13 @@
       use-chips
       :rules="[(v) => (v && v.length > 0) || t('validation.required')]"
       class="q-mb-md"
+      data-testid="builder-languages"
     />
 
-    <div class="text-label q-mb-sm q-mt-md">{{ t('auth.coach.step1SectionTimezone') }}</div>
-    <TimezoneSelect v-model="canonicalTimezone" />
+    <div class="text-label q-mb-sm q-mt-md">
+      {{ t('auth.coach.step1SectionTimezone') }}
+    </div>
+    <TimezoneSelect v-model="canonicalTimezone" data-testid="builder-timezone" />
 
     <div class="q-mt-md">
       <q-btn
@@ -61,6 +82,7 @@
         :loading="props.loading"
         :disable="!canonicalTimezone"
         unelevated
+        data-testid="builder-next"
       />
     </div>
   </div>

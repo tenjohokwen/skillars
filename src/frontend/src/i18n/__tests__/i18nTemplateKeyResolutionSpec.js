@@ -163,15 +163,15 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "tooltip text keyed by the same badge config entry's tooltipKey",
   },
   {
-    at: 'src/pages/coach/CoachProfileBuilderPage.vue:32',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:33',
     reason: "rail step label keyed by that step config entry's shortKey",
   },
   {
-    at: 'src/pages/coach/CoachProfileBuilderPage.vue:47',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:49',
     reason: "card title keyed by the current step config entry's titleKey",
   },
   {
-    at: 'src/pages/coach/CoachProfileBuilderPage.vue:112',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:120',
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {

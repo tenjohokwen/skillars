@@ -15,9 +15,10 @@
       emit-value
       map-options
       class="q-mb-sm"
+      data-testid="timezone-select"
     >
       <template #no-option>
-        <q-item>
+        <q-item data-testid="timezone-no-option">
           <q-item-section class="text-grey">
             {{
               store.timezonesFailed
@@ -32,7 +33,13 @@
     <!-- The load-failure state needs its own affordance. An empty option list reads as "your search
          matched nothing", so without this the coach sits at a disabled Next button with nothing to
          act on — the same dead end this component exists to remove, just reached a different way. -->
-    <q-banner v-if="store.timezonesFailed" class="timezone-hint q-mb-md" rounded dense>
+    <q-banner
+      v-if="store.timezonesFailed"
+      class="timezone-hint q-mb-md"
+      rounded
+      dense
+      data-testid="timezone-load-failed"
+    >
       <template #avatar>
         <q-icon name="error_outline" />
       </template>
@@ -45,7 +52,13 @@
     <!-- Shown only when the browser reported a zone this server does not know. That is precisely
          the tzdata-lag case that used to make Steps 1 and 4 uncompletable with a validation error
          naming the coach's own machine and no way to override. Now it is an explicit prompt. -->
-    <q-banner v-if="showUnknownZoneHint" class="timezone-hint q-mb-md" rounded dense>
+    <q-banner
+      v-if="showUnknownZoneHint"
+      class="timezone-hint q-mb-md"
+      rounded
+      dense
+      data-testid="timezone-browser-unknown"
+    >
       <template #avatar>
         <q-icon name="schedule" />
       </template>

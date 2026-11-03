@@ -3,11 +3,20 @@
     <div class="text-label q-mb-xs">{{ t('auth.coach.step4AvailabilityWindows') }}</div>
     <div class="text-meta q-mb-sm">{{ t('auth.coach.step4WindowHelper') }}</div>
 
-    <div v-if="!form.windows.length" class="profile-builder__empty-state q-mb-sm">
+    <div
+      v-if="!form.windows.length"
+      class="profile-builder__empty-state q-mb-sm"
+      data-testid="builder-window-empty"
+    >
       {{ t('auth.coach.step4WindowEmpty') }}
     </div>
 
-    <div v-for="(win, i) in form.windows" :key="i" class="profile-builder__entry-card q-mb-sm">
+    <div
+      v-for="(win, i) in form.windows"
+      :key="i"
+      class="profile-builder__entry-card q-mb-sm"
+      data-testid="builder-window-row"
+    >
       <div class="row q-col-gutter-sm items-center">
         <div class="col-12 col-sm-4">
           <q-select
@@ -20,6 +29,7 @@
             :label="t('auth.coach.step4Day')"
             outlined
             dense
+            data-testid="builder-window-day"
           />
         </div>
         <div class="col-5 col-sm-3">
@@ -29,6 +39,7 @@
             outlined
             dense
             type="time"
+            data-testid="builder-window-start"
           />
         </div>
         <div class="col-5 col-sm-3">
@@ -38,6 +49,7 @@
             outlined
             dense
             type="time"
+            data-testid="builder-window-end"
           />
         </div>
         <div class="col-2 flex items-center justify-end">
@@ -48,6 +60,7 @@
             round
             :aria-label="t('auth.coach.step4RemoveWindow')"
             @click="removeWindow(i)"
+            data-testid="builder-window-remove"
           />
         </div>
       </div>
@@ -61,6 +74,7 @@
       @click="addWindow"
       unelevated
       no-caps
+      data-testid="builder-add-window"
     />
 
     <div class="text-label q-mb-sm q-mt-lg">{{ t('auth.coach.step4SectionTimezone') }}</div>
@@ -80,16 +94,23 @@
          2026-08-25 @IanaTimezone tightening (a fixed offset like "+01:00") would have had that value
          stamped onto every window and 400'd on submit, again with no way to change it. -->
     <template v-if="needsManualTimezone">
-      <q-banner class="timezone-recovery q-mb-sm" rounded dense>
+      <q-banner
+        class="timezone-recovery q-mb-sm"
+        rounded
+        dense
+        data-testid="builder-timezone-recovery"
+      >
         <template #avatar>
           <q-icon name="error_outline" />
         </template>
         {{ t('auth.coach.step4TimezoneUnavailable') }}
       </q-banner>
-      <TimezoneSelect v-model="canonicalTimezone" />
+      <TimezoneSelect v-model="canonicalTimezone" data-testid="builder-timezone" />
     </template>
     <template v-else>
-      <div class="text-body q-mb-xs">{{ canonicalTimezone || '—' }}</div>
+      <div class="text-body q-mb-xs" data-testid="builder-timezone-readonly">
+        {{ canonicalTimezone || '—' }}
+      </div>
       <div class="text-meta q-mb-sm">{{ t('auth.coach.step4TimezoneReadonlyHint') }}</div>
     </template>
 
@@ -101,6 +122,7 @@
         :loading="loading"
         :disable="!canonicalTimezone"
         unelevated
+        data-testid="builder-next"
       />
     </div>
   </div>

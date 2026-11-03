@@ -20,6 +20,7 @@
                 'profile-builder__rail-step--reachable': step.n <= store.lastCompletedStep + 1,
               }"
               @click="goToStep(step.n)"
+              data-testid="builder-rail-step"
             >
               <div class="profile-builder__rail-dot">
                 <q-icon
@@ -41,12 +42,19 @@
           </template>
         </div>
 
-        <div class="text-meta q-mt-lg q-mb-xs">
+        <div class="text-meta q-mt-lg q-mb-xs" data-testid="builder-step-indicator">
           {{ t('auth.coach.stepOfTotal', { current: store.currentStep, total: steps.length }) }}
         </div>
-        <div class="text-card-title q-mb-md">{{ t(currentStep.titleKey) }}</div>
+        <div class="text-card-title q-mb-md" data-testid="builder-step-title">
+          {{ t(currentStep.titleKey) }}
+        </div>
 
-        <q-banner v-if="store.error" class="q-mb-md auth-banner auth-banner--error" rounded>
+        <q-banner
+          v-if="store.error"
+          class="q-mb-md auth-banner auth-banner--error"
+          rounded
+          data-testid="builder-error"
+        >
           {{ builderErrorMessage }}
         </q-banner>
 

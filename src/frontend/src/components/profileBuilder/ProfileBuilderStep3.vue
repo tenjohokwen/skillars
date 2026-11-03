@@ -9,6 +9,7 @@
       prefix="€"
       :rules="[(v) => (!!v && v > 0) || t('validation.required')]"
       class="q-mb-lg"
+      data-testid="builder-per-session-price"
     />
 
     <q-select
@@ -22,13 +23,18 @@
       outlined
       dense
       class="q-mb-sm"
+      data-testid="builder-session-duration"
     />
     <div class="text-meta q-mb-lg">{{ t('auth.coach.step3SessionDurationHelper') }}</div>
 
     <div class="text-label q-mb-xs">{{ t('auth.coach.step3SessionPacks') }}</div>
     <div class="text-meta q-mb-sm">{{ t('auth.coach.step3PackHelper') }}</div>
 
-    <div v-if="!form.sessionPacks.length" class="profile-builder__empty-state q-mb-sm">
+    <div
+      v-if="!form.sessionPacks.length"
+      class="profile-builder__empty-state q-mb-sm"
+      data-testid="builder-pack-empty"
+    >
       {{ t('auth.coach.step3PackEmpty') }}
     </div>
 
@@ -36,6 +42,7 @@
       v-for="(pack, i) in form.sessionPacks"
       :key="i"
       class="profile-builder__entry-card q-mb-sm"
+      data-testid="builder-pack-row"
     >
       <div class="row q-col-gutter-sm">
         <div class="col-12 col-sm-4">
@@ -45,6 +52,7 @@
             outlined
             type="number"
             dense
+            data-testid="builder-pack-sessions"
           />
         </div>
         <div class="col-12 col-sm-4">
@@ -55,10 +63,17 @@
             type="number"
             dense
             prefix="€"
+            data-testid="builder-pack-price"
           />
         </div>
         <div class="col-10 col-sm-3">
-          <q-input v-model="pack.label" :label="t('auth.coach.step3PackLabel')" outlined dense />
+          <q-input
+            v-model="pack.label"
+            :label="t('auth.coach.step3PackLabel')"
+            outlined
+            dense
+            data-testid="builder-pack-label"
+          />
         </div>
         <div class="col-2 col-sm-1 flex items-center justify-end">
           <q-btn
@@ -68,6 +83,7 @@
             round
             :aria-label="t('auth.coach.step3RemovePack')"
             @click="removePack(i)"
+            data-testid="builder-pack-remove"
           />
         </div>
       </div>
@@ -81,9 +97,16 @@
       @click="addPack"
       unelevated
       no-caps
+      data-testid="builder-add-pack"
     />
 
-    <div v-if="packError" class="text-negative text-caption q-mt-sm">{{ packError }}</div>
+    <div
+      v-if="packError"
+      class="text-negative text-caption q-mt-sm"
+      data-testid="builder-pack-error"
+    >
+      {{ packError }}
+    </div>
 
     <div class="q-mt-lg">
       <q-btn
@@ -92,6 +115,7 @@
         @click="submit"
         :loading="loading"
         unelevated
+        data-testid="builder-next"
       />
     </div>
   </div>

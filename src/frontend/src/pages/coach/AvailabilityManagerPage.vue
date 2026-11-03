@@ -5,9 +5,21 @@
         <div class="gradient-text text-section-title">{{ t('booking.availability.title') }}</div>
 
         <div class="availability-page__week-nav q-mt-sm">
-          <q-btn flat dense icon="chevron_left" @click="prevWeek" />
-          <span class="week-label">{{ weekLabel }}</span>
-          <q-btn flat dense icon="chevron_right" @click="nextWeek" />
+          <q-btn
+            flat
+            dense
+            icon="chevron_left"
+            @click="prevWeek"
+            data-testid="availability-prev-week"
+          />
+          <span class="week-label" data-testid="availability-week-label">{{ weekLabel }}</span>
+          <q-btn
+            flat
+            dense
+            icon="chevron_right"
+            @click="nextWeek"
+            data-testid="availability-next-week"
+          />
         </div>
       </div>
 
@@ -48,6 +60,7 @@
                 :options="dayOptions"
                 emit-value
                 map-options
+                data-testid="availability-window-day"
               />
             </div>
             <div class="col-12 col-sm-3">
@@ -57,6 +70,7 @@
                 dense
                 type="time"
                 :label="t('common.startTime')"
+                data-testid="availability-window-start"
               />
             </div>
             <div class="col-12 col-sm-3">
@@ -66,6 +80,7 @@
                 dense
                 type="time"
                 :label="t('common.endTime')"
+                data-testid="availability-window-end"
               />
             </div>
             <div class="col-12 col-sm-3 flex items-end q-gutter-xs">
@@ -75,15 +90,32 @@
                 :label="t('common.save')"
                 :loading="saving"
                 @click="onSaveWindow"
+                data-testid="availability-window-save"
               />
-              <q-btn v-if="editingWindow" flat :label="t('common.cancel')" @click="cancelEdit" />
+              <q-btn
+                v-if="editingWindow"
+                flat
+                :label="t('common.cancel')"
+                @click="cancelEdit"
+                data-testid="availability-window-cancel"
+              />
             </div>
           </div>
 
-          <q-banner v-if="windowSaved" rounded class="q-mt-sm bg-positive text-white">
+          <q-banner
+            v-if="windowSaved"
+            rounded
+            class="q-mt-sm bg-positive text-white"
+            data-testid="availability-window-saved"
+          >
             {{ t('booking.availability.windowAdded') }}
           </q-banner>
-          <q-banner v-if="saveError" rounded class="q-mt-sm bg-negative text-white">
+          <q-banner
+            v-if="saveError"
+            rounded
+            class="q-mt-sm bg-negative text-white"
+            data-testid="availability-window-error"
+          >
             {{ saveError }}
           </q-banner>
         </div>
@@ -100,6 +132,7 @@
                 dense
                 type="date"
                 :label="t('common.startDate')"
+                data-testid="availability-block-start-date"
               />
             </div>
             <div class="col-12 col-sm-3">
@@ -109,6 +142,7 @@
                 dense
                 type="time"
                 :label="t('common.startTime')"
+                data-testid="availability-block-start-time"
               />
             </div>
             <div class="col-12 col-sm-3">
@@ -118,6 +152,7 @@
                 dense
                 type="date"
                 :label="t('common.endDate')"
+                data-testid="availability-block-end-date"
               />
             </div>
             <div class="col-12 col-sm-3">
@@ -127,6 +162,7 @@
                 dense
                 type="time"
                 :label="t('common.endTime')"
+                data-testid="availability-block-end-time"
               />
             </div>
             <div class="col-12">
@@ -135,6 +171,7 @@
                 outlined
                 dense
                 :label="t('common.reason') + ' (' + t('common.optional') + ')'"
+                data-testid="availability-block-reason"
               />
             </div>
             <div class="col-12">
@@ -144,14 +181,25 @@
                 :label="t('booking.availability.addBlock')"
                 :loading="savingBlock"
                 @click="onSaveBlock"
+                data-testid="availability-block-save"
               />
             </div>
           </div>
 
-          <q-banner v-if="blockSaved" rounded class="q-mt-sm bg-positive text-white">
+          <q-banner
+            v-if="blockSaved"
+            rounded
+            class="q-mt-sm bg-positive text-white"
+            data-testid="availability-block-saved"
+          >
             {{ t('booking.availability.blockAdded') }}
           </q-banner>
-          <q-banner v-if="blockSaveError" rounded class="q-mt-sm bg-negative text-white">
+          <q-banner
+            v-if="blockSaveError"
+            rounded
+            class="q-mt-sm bg-negative text-white"
+            data-testid="availability-block-error"
+          >
             {{ blockSaveError }}
           </q-banner>
         </div>

@@ -3,7 +3,7 @@
     <div class="text-meta q-mb-md">{{ t('auth.coach.step5Helper') }}</div>
 
     <div class="row q-col-gutter-md items-start q-mb-md">
-      <div v-if="previewUrl" class="col-auto">
+      <div v-if="previewUrl" class="col-auto" data-testid="builder-photo-preview">
         <q-img :src="previewUrl" class="profile-builder__avatar-preview" />
       </div>
       <div class="col">
@@ -14,6 +14,7 @@
           accept=".jpg,.jpeg,.png"
           :max-file-size="5242880"
           @update:model-value="onFileSelected"
+          data-testid="builder-photo-file"
         >
           <template #prepend>
             <q-icon name="photo_camera" />
@@ -30,6 +31,7 @@
         :loading="loading"
         :disable="!selectedFile"
         unelevated
+        data-testid="builder-photo-upload"
       />
       <q-btn
         :label="t('auth.coach.step5SkipLabel')"
@@ -37,6 +39,7 @@
         @click="skip"
         :disable="loading"
         unelevated
+        data-testid="builder-photo-skip"
       />
     </div>
   </div>

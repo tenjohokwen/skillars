@@ -25,6 +25,7 @@
         class="pack-option q-mb-sm cursor-pointer"
         :class="{ 'pack-option--selected': selected === tier.packTierId }"
         @click="selected = tier.packTierId"
+        data-testid="pack-option"
       >
         <q-card-section>
           <div class="row items-center">
@@ -55,7 +56,7 @@
         </q-card-section>
       </q-card>
 
-      <div v-else class="text-body2 text-secondary q-py-md text-center">
+      <div v-else class="text-body2 text-secondary q-py-md text-center" data-testid="pack-none">
         {{ t('booking.packs.noTierAvailable') }}
       </div>
 

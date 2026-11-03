@@ -15,7 +15,13 @@
         <div v-for="slot in timeSlots" :key="slot" class="time-label">{{ slot }}</div>
       </div>
 
-      <div v-for="(day, dayIdx) in weekDays" :key="dayIdx" class="day-col" @click="onDayClick(day)">
+      <div
+        v-for="(day, dayIdx) in weekDays"
+        :key="dayIdx"
+        class="day-col"
+        @click="onDayClick(day)"
+        data-testid="calendar-day"
+      >
         <div v-for="slot in timeSlots" :key="slot" class="time-cell" :class="getCellClass()"></div>
 
         <!-- Availability window overlays -->
@@ -25,11 +31,18 @@
           class="window-overlay"
           :style="getWindowStyle(win)"
           @click.stop="onEditWindow(win)"
+          data-testid="calendar-window"
         >
           <span class="overlay-label"
             >{{ formatTime(win.startTime) }}–{{ formatTime(win.endTime) }}</span
           >
-          <button class="overlay-delete" @click.stop="$emit('delete-window', win.id)">✕</button>
+          <button
+            class="overlay-delete"
+            @click.stop="$emit('delete-window', win.id)"
+            data-testid="calendar-window-delete"
+          >
+            ✕
+          </button>
         </div>
 
         <!-- Block overlays -->
@@ -39,9 +52,16 @@
           class="block-overlay"
           :style="getBlockStyle(blk)"
           @click.stop
+          data-testid="calendar-block"
         >
           <span class="overlay-label">{{ $t('booking.availability.blocked') }}</span>
-          <button class="overlay-delete" @click.stop="$emit('delete-block', blk.id)">✕</button>
+          <button
+            class="overlay-delete"
+            @click.stop="$emit('delete-block', blk.id)"
+            data-testid="calendar-block-delete"
+          >
+            ✕
+          </button>
         </div>
       </div>
     </div>
