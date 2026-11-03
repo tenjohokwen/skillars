@@ -1,0 +1,79 @@
+{
+  "arm": "security",
+  "case": "350-pack-refund-rounding-remainder",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The diff confirms cancelDueToPause applies no notice-window check and sets refundAmount = resolveAmountPaid for any captured card-paid booking, but exploitability hinges on PackSessionService.pausePack (booking-list validation, pause lead time, frequency limits) and RefundEnqueueListener.onBookingCancelledDueToPause, neither of which is in the shown code \u2014 exactly the caveat the finding itself raises.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "In purchasePack's catch block, a successful compensating refund writes no record (recordReconciliation is called only on lookup failure or refund failure), so a client retry with the same attemptKey replays the cached-successful PaymentIntent via Stripe idempotency, the alreadyRecorded/winner lookups via findByStripePaymentIntentId find nothing, and createPurchase can record a pack against the already-refunded charge. Stripe idempotent replay returns the original success response unaffected by the refund, satisfying the verification caveat.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "confirmPurchase does keep attemptKey indefinitely after a network failure (catch only clears on `e?.response`), and Stripe's ~24h idempotency-key retention is accurate; but the double-charge consequence depends on backend code not shown \u2014 whether bookingStore.purchasePack's Idempotency-Key is forwarded verbatim to Stripe or deduped in a server-side store (the cited findByStripePaymentIntentId) with longer retention.",
+      "reported_id": "R6"
+    }
+  ],
+  "judge_cost_usd": 0.73854,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions perSessionShare rounding remainder or the unreconciled cents between refunds and payouts.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses redelivered cancellation events crediting a pack session refund twice; R4 concerns the opposite failure (lost restore).",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding identifies the catch block nulling attemptKey on any HTTP response; R2 and R6 both describe scenarios where the key is kept, not discarded.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] The diff confirms cancelDueToPause applies no notice-window check and sets refundAmount = resolveAmountPaid for any captured card-paid booking, but exploitability hinges on PackSessionService.pausePack (booking-list validation, pause lead time, frequency limits) and RefundEnqueueListener.onBookingCancelledDueToPause, neither of which is in the shown code \u2014 exactly the caveat the finding itself raises. | pass-1: Concrete trigger stated: parent-initiated pause refunds captured bookings in full with no notice-window check, letting a parent evade the 24h forfeiture policy.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] In purchasePack's catch block, a successful compensating refund writes no record (recordReconciliation is called only on lookup failure or refund failure), so a client retry with the same attemptKey replays the cached-successful PaymentIntent via Stripe idempotency, the alreadyRecorded/winner lookups via findByStripePaymentIntentId find nothing, and createPurchase can record a pack against the already-refunded charge. Stripe idempotent replay returns the original success response unaffected by the refund, satisfying the verification caveat. | pass-1: Concrete trigger: post-capture createPurchase failure with successful compensating refund plus lost response lets a same-key retry replay the refunded PaymentIntent and record a pack for returned money.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "The new per-call UUID behaviour is codified by the PR's own test, and the double-charge trigger depends on hypothetical keyless callers (stale bundles, direct API consumers) with no evidence they exist.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The silent-drop is acknowledged as deliberate in the code, and the trigger requires a hypothetical deletion path (erasure/admin cleanup) the reviewer could not identify.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Race is conditional on an unverified claim that the settle path does not lock the booking row; no concrete trigger established from the text alone.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] confirmPurchase does keep attemptKey indefinitely after a network failure (catch only clears on `e?.response`), and Stripe's ~24h idempotency-key retention is accurate; but the double-charge consequence depends on backend code not shown \u2014 whether bookingStore.purchasePack's Idempotency-Key is forwarded verbatim to Stripe or deduped in a server-side store (the cited findByStripePaymentIntentId) with longer retention. | pass-1: Concrete trigger: attemptKey kept past Stripe's ~24h idempotency-key retention means a next-day retry creates a new PaymentIntent, defeating the dedupe and double-charging if the first attempt committed.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

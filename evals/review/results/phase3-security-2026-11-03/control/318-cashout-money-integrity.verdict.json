@@ -1,0 +1,90 @@
+{
+  "arm": "control",
+  "case": "318-cashout-money-integrity",
+  "checks": [],
+  "judge_cost_usd": 0.305215,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 identifies the same non-transactional balance-check/debit race, the missing lock, and the uncalled SERIALIZABLE debitForCashOut, with the same overdraw consequence.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 states the exact double-fee defect (debit requested+fee, refund requested\u2212fee); R2 describes the other symptom of the same extra fee debit (wallet driven negative).",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R4 covers the fixed refund-\"+paymentIntentId key replaying/blocking later cash-outs including the pack-refund collision; R5 covers the missing refundable-amount check on lastPaymentIntentId.",
+        "reported_ids": [
+          "R4",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R6 states the same mechanism (all StripeExceptions including timeouts mapped to PaymentGatewayException, catch writes CASH_OUT_REVERSAL) and the same consequence (parent gets both card refund and restored credit); only the reversal-write atomicity detail is omitted.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions the frontend reading err.response.data.message versus the backend ErrorDto fields; R9 concerns the success toast, not error display.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding addresses commission/Stripe-fee estimation from gross \u00d7 live rates, inclusion of credit/pack/refunded bookings, or missing pack-sale revenue.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R8 states that sumTotalCashOuts counts every CASH_OUT_DEBIT and ignores CASH_OUT_REVERSAL rows, inflating the admin overview with cash-outs that never paid out.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "Nothing reported touches getCoachRevenueSummary or the estimated Stripe fee subtracted from the coach's net payout.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: debits auto-commit before paymentGateway.refund, so a crash or any non-PaymentGatewayException thrown by refund leaves the wallet debited with no refund and no reversal, and no pending state exists to recover from; this failure window is distinct from F1's race and F4's reversal-on-ambiguous-failure.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Toast showing the requested gross instead of net is a UX presentation nit; once the double-fee defect (F2/R1) is fixed the amounts are legitimately gross vs net, and the overdraw remark duplicates R2.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative cent-rounding edge case: Postgres numeric and toCents both round half-up so the claimed ledger/Stripe disagreement is not established by the reported text, and the finding itself hinges on an unverified deserialization assumption.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

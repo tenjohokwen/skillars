@@ -1,0 +1,45 @@
+{
+  "arm": "security",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "check call failed",
+      "reported_id": "R2"
+    }
+  ],
+  "judge_cost_usd": 0.438403,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding touches payInFull's deletion/re-enqueue of REASON_NOTHING_CHARGED pack rows or double allocation of pack shares.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the same defect: onBookingCancelledByParent enqueues a pack restore without an expiry check, restoring a session to an expired pack while sibling events route to wallet refunds.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] check call failed | pass-1: Concrete trigger stated: in-app dispute refund plus Stripe dispute lost on the same funding charge both call applyRefund before the reversal outbox drains, each capping against the unreduced effective net, so combined reversals exceed the coach's net.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The trigger's precondition (a CAPTURED booking_payments row with a null creditDebited/stripeCharged) is only inferred from null guards elsewhere, not shown to be producible, making the defect speculative.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

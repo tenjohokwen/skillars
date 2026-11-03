@@ -1,0 +1,138 @@
+{
+  "arm": "security",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "findings": [
+    {
+      "category": "security",
+      "description": "finishPasswordReset -> completePasswordReset only writes the new password hash and clears the reset key; nothing on this path calls RefreshTokenRepository.markAllUsedByUserId or UserRepository.invalidateSessionsForUser (grep shows those are only invoked by suspension, GDPR erasure, admin lock and refresh-reuse detection). A victim who resets their password after noticing a compromise \u2014 the canonical recovery action \u2014 leaves the attacker's stolen refresh token valid for its full REFRESH_TOKEN_TTL, so the attacker keeps minting fresh JWTs and the reset achieves nothing. The same gap applies to AccountManagementFacade.changeEmail / UserProfileService.updateUserEmail.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/PasswordResetService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "PasswordResetService.completePasswordReset / User.completePasswordReset",
+      "title": "Password reset completion does not revoke refresh tokens or live sessions",
+      "verification": "Confirm no event listener (e.g. on AccountChangeEvent or a password-change event) performs revocation out-of-band; I found none in the publisher consumers greppable from this tree."
+    },
+    {
+      "category": "security",
+      "description": "Password reset keys and activation keys are RandomStringUtils.randomNumeric(10) \u2014 a 10^10 keyspace, versus the 122-bit UUIDs the coach/parent/player flows use. completePasswordReset resolves the key with userRepository.findOneByResetKey(key) with no account binding, so any guessed key resets whichever account currently holds it (keys live 24h, and every pending reset enlarges the hit surface); the only brake on POST /v1/account/reset_password/finish is a per-IP, per-JVM in-memory bucket (5/10min), which a distributed attacker multiplies at will. A hit is full account takeover.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "RandomUtil.generateResetKey / generateActivationKey",
+      "title": "Reset and activation keys are 10-digit numeric codes, and the reset key is resolved globally by key alone",
+      "verification": "commons-lang3 is pinned to 3.21.0, where the deprecated RandomStringUtils statics delegate to a SecureRandom-backed instance \u2014 verify this; on any older runtime resolution (<3.16) the keys are additionally predictable (shared java.util.Random)."
+    },
+    {
+      "category": "security",
+      "description": "The activate endpoint is in PUBLIC_ENDPOINTS and the controller calls UserRegistrationService.activateUser(key) directly; neither carries @RateLimited and no other limiter covers the path. An attacker can submit activation-key guesses without bound against the 10-digit numeric keyspace (see RandomUtil finding), activating pending accounts without ever receiving the activation email \u2014 for example an account the attacker registered against someone else's email address, which then becomes a live, activated squat on that address.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountResource.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "AccountResource.activateAccount -> UserRegistrationService.activateUser",
+      "title": "POST /v1/account/activate has no rate limit at all",
+      "verification": "Confirm no servlet filter or gateway-level throttle covers /v1/account/activate; none exists in SecurityConfiguration or the AppEndpoints wiring."
+    },
+    {
+      "category": "security",
+      "description": "Every @RateLimited endpoint (registration, reset init/finish, resend-verification, resend-otp, change-email) and every direct tryConsume counter \u2014 including the 5\u201310 attempt budgets on the 6-digit phone OTPs in Coach/Parent/PlayerRegistrationService.verifyPhone \u2014 lives in a per-process ConcurrentHashMap. The app is deployed as several instances behind a reverse proxy, so each instance enforces its own independent budget: the proxy's load balancing alone multiplies every limit by the instance count, and a restart or redeploy zeroes all counters. The class Javadoc explicitly concedes it is not cluster-safe on the claim the deployment is single-instance, which contradicts the actual topology.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "RateLimitingService.tryConsume / buckets (ConcurrentHashMap of Bucket4j buckets)",
+      "title": "All @RateLimited buckets and OTP attempt counters are per-JVM in-memory in a multi-instance deployment",
+      "verification": "Confirm the production instance count; the comment cites docker-compose as single-instance while the stated deployment is multi-instance."
+    },
+    {
+      "category": "security",
+      "description": "The @RateLimited aspect keys every bucket solely on the caller's IP; there is no per-target-account dimension. An attacker with many IPs can POST /api/security/{parent,coach,player}/resend-verification for one victim email without bound: each call both sends another email (mail bombing the victim and burning the mail provider quota) and executes deleteByUserIdAndUsedFalse, invalidating the token the victim just received \u2014 a denial of service against the victim's own registration. The same per-IP-only keying applies to password-reset init and legacy registration's notify-user-exists mail.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "resendVerificationEmail (also CoachRegistrationService, PlayerRegistrationService, AccountManagementFacade.sendPasswordResetMail/registerAccount)",
+      "title": "Mail-sending endpoints are rate-limited per IP only, so one account can be attacked from many IPs",
+      "verification": "Check RegistrationOtpResendSupport for whether the per-user '*_resend_otp_user' bucket pattern is also applied to resend-verification; the three services show no per-email bucket."
+    },
+    {
+      "category": "security",
+      "description": "When a used refresh token is presented within 30s of its rotatedAt, refresh() looks up the user's newest unused token (any session's, not the rotation successor) and rotates it for the caller, issuing a fresh JWT and refresh cookie with no alarm. An attacker who stole the cookie can simply alternate refreshes with the victim \u2014 every collision lands inside the grace window, so the reuse-equals-theft revocation never fires and the attacker holds a parallel session indefinitely. It also lets a stale token from one device capture a different device's newest credential, silently hijacking that session's chain.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "AuthService.refresh (REFRESH_GRACE_WINDOW branch)",
+      "title": "Refresh-token reuse inside the 30s grace window hands out the account's newest live token, defeating theft detection",
+      "verification": "Confirm the SPA's refresh cadence; any client that refreshes more often than every 30s makes the perpetual-grace ping-pong trivially sustainable."
+    },
+    {
+      "category": "security",
+      "description": "Anyone can self-register a legacy ROLE_USER account via public POST /v1/account/register (UserRegistrationService.createUser never sets skillarsRole), activate it, and log in; login() and refresh() then put role \"ADMIN\" in both the LoginResponse and the non-HttpOnly skp profile cookie. The frontend router's admin routes gate on meta.roles ['ADMIN'] against authStore.role (hydrated from that cookie), so this user navigates the entire /admin SPA \u2014 users, GDPR, finance, config pages \u2014 blocked only by whatever each backend endpoint's @PreAuthorize happens to enforce. A ROLE_LTD_ADMIN whose user row has no skillarsRole is likewise presented the full-admin UI rather than a read-only one.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "AuthService.login / refresh \u2014 role fallback `user.getSkillarsRole() != null ? name : \"ADMIN\"`",
+      "title": "Users with null skillarsRole are labelled ADMIN in the login response and skp cookie, which the SPA's admin route gate trusts",
+      "verification": "Check whether admin accounts and ROLE_LTD_ADMIN accounts have skillarsRole null in production data, and audit the admin pages' API calls for any endpoint gated only on authentication."
+    },
+    {
+      "category": "security",
+      "description": "updateUserEmail sets both email and login to the caller-supplied new address after a password check, with no confirmation sent to the new address before the switch. An attacker holding a phished password can move the victim's login and all future password-reset mail to an attacker-controlled address in one call (the only recourse is the after-the-fact notification to the old address); a typo likewise strands the account on an address the user cannot read. Combined with the missing session revocation on this path, the account's recovery channel is silently replaced.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "UserProfileService.updateUserEmail (via AccountManagementFacade.changeEmail)",
+      "title": "Email change takes effect immediately on an unverified new address",
+      "verification": "Confirm there is no pending-email/confirm-link flow elsewhere (none is referenced by ProfileResource.updateEmail or the facade)."
+    },
+    {
+      "category": "security",
+      "description": "POST /v1/account/reset_password/init returns 202 only when email, loginId and dateOfBirth all match an eligible account, and otherwise throws OperationNotAllowedException whose context map echoes the submitted email, loginId and dob into the error response. Knowing a target's email, an attacker can iterate dates of birth (at most ~36,500 guesses for a century) against the per-IP, per-instance 3/15min bucket from a modest set of IPs and learn the exact birthdate of a parent, coach or adult player \u2014 personal data with safeguarding relevance \u2014 as well as confirming account existence.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.sendPasswordResetMail",
+      "title": "Password-reset init is a remote date-of-birth and account-existence oracle that echoes submitted PII",
+      "verification": "Confirm how ApiAdvice serialises OperationNotAllowedException's context map into the HTTP error body; the Map.of(email, loginId, dob) is passed in as response context."
+    },
+    {
+      "category": "security",
+      "description": "resendRegistrationLink runs passwordEncoder.matches against the stored hash for any account with a null activationDate, guarded only by the in-memory per-IP @RateLimited(3/30min) bucket \u2014 not by the carefully built DB-backed LoginAttempt limiter, and no failure is ever recorded against the account. An attacker can therefore brute-force or credential-stuff passwords of mid-registration accounts from many IPs without any lockout, with success distinguishable (200 vs error); the response timing additionally separates nonexistent/activated logins (no bcrypt executed) from unactivated ones (full bcrypt).",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.resendRegistrationLink / AccountResource.registerLinkResend",
+      "title": "/regislink is a password-verification oracle outside the DB-backed login rate limiter",
+      "verification": "Confirm the per-login distribution: all @RateLimited state is the in-memory RateLimitingService, so multi-IP and multi-instance both multiply the 3/30min budget."
+    },
+    {
+      "category": "security",
+      "description": "registerLinkResend(@NotNull String login, @NotNull String password) has no @RequestBody, so Spring binds both from request parameters \u2014 a client sending them in the query string puts a live password into proxy and access logs. The class also lacks @Validated, so the @NotNull constraints on these parameters are never enforced; a request omitting login reaches Map.of(\"login\", login) in the error path, which throws NullPointerException on a null value and surfaces as a 500.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountResource.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "AccountResource.registerLinkResend",
+      "title": "/regislink binds login and password as plain request parameters with unenforced @NotNull",
+      "verification": "Check whether the SPA or any client sends these as query parameters rather than form fields, and whether LoggingFilter or the proxy logs query strings."
+    },
+    {
+      "category": "security",
+      "description": "SecurityConfiguration permitAll()s everything in PUBLIC_MGMT_ENDPOINTS, which includes /manage/prometheus, while the rest of /manage/** requires ROLE_ADMIN. Any unauthenticated internet client can scrape the full Micrometer registry: per-endpoint request counts and latencies (revealing internal API surface and usage patterns, e.g. @Observed security.auth and http.account timers), JVM and datasource internals, and any business gauges registered \u2014 useful reconnaissance and a potential PII/volume leak.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "PUBLIC_MGMT_ENDPOINTS (\"/manage/prometheus\")",
+      "title": "Prometheus metrics endpoint is publicly accessible",
+      "verification": "Confirm the reverse proxy does not block /manage/* externally; the application itself serves it to anyone."
+    },
+    {
+      "category": "security",
+      "description": "When findOneByLogin finds no user, login() records the failure and throws immediately without running the ~100ms BCrypt comparison that an existing account incurs; the response-time difference cleanly separates registered from unregistered emails despite the identical 'Invalid credentials' body. The same skip exists in resendRegistrationLink's filter chain. An attacker can enumerate which emails hold accounts within the per-(email,IP) attempt budget.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Login response time reveals whether an account exists",
+      "verification": "Measure POST /api/auth/login latency for known-absent vs known-present logins; no dummy-hash comparison exists on the absent path."
+    }
+  ],
+  "input_rev": "fa62da9dc634130b1031b01e4ddc0cda668c2cb1",
+  "model": null
+}

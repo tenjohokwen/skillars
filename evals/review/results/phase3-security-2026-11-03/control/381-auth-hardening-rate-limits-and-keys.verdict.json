@@ -1,0 +1,126 @@
+{
+  "arm": "control",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "LoginRateLimiter.claim loops on tryAcquireIdentifierLock with Thread.sleep(50ms) up to CLAIM_WAIT (2s) inside a Propagation.MANDATORY transaction (checkLimited), so the caller's pooled connection stays bound to the thread for the whole wait; nothing releases or suspends it, so a same-key burst exceeding pool size parks every connection. (Caveat load test not runnable here \u2014 only this file provided \u2014 but the hold is structurally certain.)",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "CoachRegistrationService.registerCoach does call user.setLogin(req.email()) with no case normalization in this file, but the claimed consequence depends on CoachRegistrationRequest.email() (possible normalization in the record), User.setLogin, AuthService.login's lower-casing, and the user.login column type \u2014 none shown here.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "registerAccount does set login to the raw-case email and toUser (user.setLogin) copies it unchanged while lower-casing only email, but the user is persisted via UserRegistrationService.createUser, which may normalize the login, and the lower-cased findOneByLogin lookup in AuthService.login is not shown. Whether authentication actually fails depends on those two classes.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "registerPlayer wraps only `userRepository.save(user)` (not saveAndFlush) in its try/catch, and the in-file AC10 comment in verifyEmail confirms this codebase's @Tsid ids defer the INSERT to flush \u2014 so the unique-constraint violation surfaces at commit, outside the catch. The catch also maps only to security.emailInUse; there is no phoneInUse mapping anywhere in registerPlayer.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "Confirmed: the grace-window branch in AuthService.refresh resolves a replayed token via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId), the user's newest live token with no successor linkage, then rotates and marks it used \u2014 hijacking another device's token when that token is newer than the replayed token's successor, whose later refresh hits markAllUsedByUserId/invalidateSessionsForUser; the branch also issues a replayer a fresh session. Caveat: the finding's own repro ordering fails (A's successor A2 is newer than B1, so B is unaffected); the trigger requires B to log in after A's first refresh.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 1.4318199999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R10 identifies the per-(login,IP) key with no per-account cap and the IP-rotation brute-force consequence, same defect and place.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R7 states the activation key is randomNumeric(10) (~33 bits) and guessable, naming RandomUtil and noting the reset key shares the same space.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 explicitly notes POST /v1/account/activate has no @RateLimited, enabling unbounded online key guessing.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R9 is at verifyPhone and smells the OTP guess-budget weakness (fresh bucket per resend, inconsistent limits) but misses the core mechanism: in-memory per-JVM state and no DB-side invalidation of the OTP.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R8 describes the same bcrypt-skip timing oracle in AuthService.login enabling email enumeration.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "partial",
+        "note": "R6 targets sendPasswordResetMail and notes divergent responses reveal account existence, but via the dob-NPE paths rather than the success-vs-PWD_RESET_REJECTED distinction.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding addresses per-target throttling of resendVerificationEmail.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding mentions activate.security or the permit-all authorization path in SecurityConfiguration.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] LoginRateLimiter.claim loops on tryAcquireIdentifierLock with Thread.sleep(50ms) up to CLAIM_WAIT (2s) inside a Propagation.MANDATORY transaction (checkLimited), so the caller's pooled connection stays bound to the thread for the whole wait; nothing releases or suspends it, so a same-key burst exceeding pool size parks every connection. (Caveat load test not runnable here \u2014 only this file provided \u2014 but the hold is structurally certain.) | pass-1: Concrete trigger: parallel same-key logins make claim()'s 2s Thread.sleep retry loop hold checked-out connections, exhausting the Hikari pool.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] CoachRegistrationService.registerCoach does call user.setLogin(req.email()) with no case normalization in this file, but the claimed consequence depends on CoachRegistrationRequest.email() (possible normalization in the record), User.setLogin, AuthService.login's lower-casing, and the user.login column type \u2014 none shown here. | pass-1: Concrete trigger: registration services store login with original case while AuthService.login looks up lower-cased, locking out mixed-case registrants.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] registerAccount does set login to the raw-case email and toUser (user.setLogin) copies it unchanged while lower-casing only email, but the user is persisted via UserRegistrationService.createUser, which may normalize the login, and the lower-cased findOneByLogin lookup in AuthService.login is not shown. Whether authentication actually fails depends on those two classes. | pass-1: Same lockout defect but in the distinct legacy registerAccount/toUser path, which lower-cases email but not login.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] registerPlayer wraps only `userRepository.save(user)` (not saveAndFlush) in its try/catch, and the in-file AC10 comment in verifyEmail confirms this codebase's @Tsid ids defer the INSERT to flush \u2014 so the unique-constraint violation surfaces at commit, outside the catch. The catch also maps only to security.emailInUse; there is no phoneInUse mapping anywhere in registerPlayer. | pass-1: Concrete trigger: app-assigned IDs mean save() defers the INSERT, so unique-constraint violations surface at commit outside the try/catch, bypassing emailInUse/phoneInUse mapping.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] Confirmed: the grace-window branch in AuthService.refresh resolves a replayed token via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId), the user's newest live token with no successor linkage, then rotates and marks it used \u2014 hijacking another device's token when that token is newer than the replayed token's successor, whose later refresh hits markAllUsedByUserId/invalidateSessionsForUser; the branch also issues a replayer a fresh session. Caveat: the finding's own repro ordering fails (A's successor A2 is newer than B1, so B is unaffected); the trigger requires B to log in after A's first refresh. | pass-1: Concrete trigger: grace-window branch rotates the user's newest token rather than the presented token's successor, causing a reuse-detection logout of all sessions on the other device.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

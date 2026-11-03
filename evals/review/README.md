@@ -145,10 +145,15 @@ reviewer and are recorded in `results/<run-id>/run.json`.
 |---|---|---|---|
 | `control` | one plain review prompt, no layers | diff inlined, no tools | runs inside the exported tree with Read/Grep/Glob; scope list inlined |
 | `blind-hunter` | the Blind Hunter layer from `mto-code-review` | diff inlined, no tools | scoped files inlined, no tools |
+| `security` | the `.claude/agents/security-reviewer.md` agent | diff inlined, no tools | Read/Grep/Glob inside the tree; scope list inlined |
 
-`control` is the floor every later reviewer must beat. Specialised reviewers (phase 3)
-are added as further arms and kept only if they raise recall in their category without
-dropping overall precision below `control`.
+`control` is the floor every later reviewer must beat. Specialised reviewers are real
+Claude Code agents under `.claude/agents/`; an arm uses the agent file's body as its prompt
+(frontmatter stripped, input-mode fragment and input appended), so what is measured is
+exactly what runs in an interactive session. A specialised arm reports only its own kind
+of defect by design, so judge it on two numbers: recall in its category must rise over
+`control`, and its own precision must not fall below `control`'s. Compare arms only within
+one run (same cases, same judge version).
 
 ### Scoring
 

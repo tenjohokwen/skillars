@@ -1,0 +1,44 @@
+{
+  "arm": "security",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "checks": [],
+  "judge_cost_usd": 0.159955,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same four missing Thymeleaf bodies and the same TemplateInputException retry-until-deadline-expiry failure mode.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions PACK_PAUSED resolving to packPaused while the file is named sessionPackPaused.html.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "partial",
+        "note": "R3 flags the missing captured-payment guard and the CANCEL_COACH-from-ACCEPTED edge but deems ACCEPTED unreachable (latent-only risk) and omits the free pack-session restore in CancellationRefundService.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R2 names the same three paths using resolveSessionPrice (current coach price) instead of resolveAmountPaid (captured amount), with the same over/under-refund consequence.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

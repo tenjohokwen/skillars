@@ -1,0 +1,138 @@
+{
+  "arm": "security",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The listener resolves event.ownerId() via userRepository.findOneByLogin().or(findOneByEmail()), but the AccountSuspensionRequestedEvent published by ModerationOrchestrationService.suspendAccount carries Video.ownerId, which is a coach-profile UUID string (VideoResource.resolveCurrentOwnerId / initiateCoachUpload uses coachId.toString()) or a PlayerProfile id rendered as a string for player HOMEWORK uploads \u2014 never a login or email. When a user's video is flagged as CSAM, the lookup always comes back empty, the listener only logs 'CRITICAL: Cannot suspend account \u2014 user not found', and the offending account is never suspended and keeps full access to a platform where parents book coaching for children.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested",
+      "title": "CSAM account suspension never resolves the user: ownerId is a profile id, not a login/email",
+      "verification": "Confirm no caller ever constructs AccountSuspensionRequestedEvent with a login/email: Video.ownerId is set only in VideoService.initializeUpload from InitializeUploadRequest.ownerId, which VideoResource populates from coachId.toString() or String.valueOf(currentPlayerProfileId())."
+    },
+    {
+      "category": "security",
+      "description": "Even when a user is resolved, the CSAM suspension only sets verificationStatus = SUSPENDED: unlike AdminUserService.suspendUser it does not set locked, does not stamp securitySessionInvalidatedAt, and does not call refreshTokenRepository.markAllUsedByUserId. AuthService.refresh()'s ensureAccountIsLive checks only activated/locked, and the JWT re-auth path checks only Spring's enabled/accountNonLocked (Principal.instanceFrom maps activated/locked only), so a CSAM-suspended user keeps their live JWT and can rotate refresh tokens indefinitely. Even fresh login is blocked only incidentally, via the 'verificationStatus != BASIC_VERIFIED' check that is gated on the unrelated security.registration.phone-otp-required config toggle and skipped entirely when skillarsRole is null.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested / AuthService.ensureAccountIsLive",
+      "title": "SkillarsVerificationStatus.SUSPENDED is write-only: no session or refresh-token revocation and no enforcement on refresh/re-auth",
+      "verification": "Grep SkillarsVerificationStatus.SUSPENDED consumers: only AuthService.login (conditional) and the listener itself read it; JWTAuthorizationFilter's DB re-auth path (daoAuthProvider with AccountStatusUserDetailsChecker) never consults verificationStatus."
+    },
+    {
+      "category": "security",
+      "description": "changePassword re-encodes the password and updateUserEmail swaps email+login, but neither calls refreshTokenRepository.markAllUsedByUserId nor stamps securitySessionInvalidatedAt (both mechanisms exist and are used by AdminUserService.suspendUser and the refresh-reuse branches). A victim who discovers their account is compromised and changes their password does not evict the attacker: the attacker's JWT keeps self-extending and their refresh-token chain keeps rotating via POST /api/auth/refresh indefinitely.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "UserProfileService.changePassword / updateUserEmail",
+      "title": "Password change and email change do not revoke refresh tokens or live sessions",
+      "verification": "Confirm no AccountChangeEvent listener performs revocation on PASSWORD_CHANGED/EMAIL_CHANGED (the events feed notification/audit via AccountManagementFacade.sendMail)."
+    },
+    {
+      "category": "security",
+      "description": "POST /api/admin/users/{id}/reactivate and /{id}/unlock-login are guarded by HAS_ADMIN_ROLE, which is \"hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')\" \u2014 no full-admin-only constant exists in SecurityConstants. An LTD_ADMIN (spec: reads and moderation only) can lift a suspension a full admin placed on any non-admin account \u2014 including a safeguarding suspension \u2014 and can clear the failed-login rate limiter for any account. The service only blocks acting on privileged targets, not acting by the limited tier.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminUserResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AdminUserResource.reactivateUser / unlockLogin (SecurityConstants.HAS_ADMIN_ROLE)",
+      "title": "ROLE_LTD_ADMIN can reactivate suspended accounts and clear login rate limits (HAS_ADMIN_ROLE on state-changing enforcement endpoints)",
+      "verification": "Confirm the intended LTD_ADMIN scope: grep other admin resources for whether state-changing endpoints elsewhere distinguish ROLE_ADMIN from ROLE_LTD_ADMIN."
+    },
+    {
+      "category": "security",
+      "description": "The guard derives requiresParent from meta.role === 'PARENT' and requiresPlayer from meta.role === 'PLAYER' but has no branch for meta.role === 'COACH'. routes.js uses role: 'COACH' on 'coach/revenue' and 'coach/bookings/:bookingId/receipt' while every sibling coach route uses the enforced requiresCoach flag. Any authenticated parent or player can directly navigate to /coach/revenue or a coach receipt URL and the guard lets them through; protection then rests solely on the backend APIs those pages call.",
+      "file": "src/frontend/src/router/index.js",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "Router.beforeEach (requiresParent/requiresPlayer checks)",
+      "title": "Router guard never enforces meta.role 'COACH': /coach/revenue and coach receipt open to any authenticated role",
+      "verification": "Confirm the backend endpoints RevenueDashboardPage.vue and ReceiptView.vue call are COACH-gated; if any is HAS_ANY_ROLE the exposure is real data, not just an empty page."
+    },
+    {
+      "category": "security",
+      "description": "The DB-backed limiter counts attempts by SHA-256(email|ip), max 5 per 15-minute window. An attacker rotating source IPs gets 5 fresh guesses per IP per window against one account, with no account-wide ceiling: the per-user caps in LoginAttemptsService are wired only into the legacy /authenticate path via FraudAwareAuthenticationManager and are never consulted by AuthService.login. countBySubjectHashAndAttemptedAtAfter exists but only for the admin read-out, not enforcement.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "AuthService.login (identifier = sha256(email|ip))",
+      "title": "Login limiter keyed per (email, IP) with no account-wide cap: distributed brute force on /api/auth/login",
+      "verification": "Confirm no other filter rate-limits POST /api/auth/login (it is in AppEndpoints public list and the controller calls authService.login directly)."
+    },
+    {
+      "category": "security",
+      "description": "All four limiter caches (per-user, per-IP+user, per-client+user, blacklist) are in-memory Guava LoadingCaches. The app is deployed as several instances behind a reverse proxy, so an attacker whose requests spread across N instances gets N times every limit on the /authenticate login path, and a single instance restart silently erases the 30-day client blacklist written by captureFraudEvent. The class's own TODO acknowledges it is not multi-node ready, but it shipped as the only limiter on that path.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "LoginAttemptsService (attemptsByUserCache / blacklistedClients)",
+      "title": "LoginAttemptsService uses per-JVM Guava caches for attempt counts and the 30-day client blacklist in a multi-instance deployment",
+      "verification": "Confirm the /authenticate (JWTAuthenticationFilter) login path is still reachable in production profiles; Principal.java's comments describe it as 'still-live'."
+    },
+    {
+      "category": "security",
+      "description": "The @RateLimited aspect limits change_email (5/60), resend_registration (3/30) and video upload initiation through in-memory Bucket4j buckets held in a ConcurrentHashMap. Behind the multi-instance deployment each instance keeps its own buckets, so an abuser spraying requests across instances multiplies every mail/SMS-sending and upload quota, and restarts reset all counters.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "RateLimitingService.tryConsume (buckets map)",
+      "title": "RateLimitingService (Bucket4j in ConcurrentHashMap) is per-instance for mail-sending and upload-init limits",
+      "verification": "Check RateLimitingAspect for how the bucket key is built (per-user vs per-IP) and enumerate all @RateLimited call sites to size the blast radius."
+    },
+    {
+      "category": "security",
+      "description": "The /api/logout logout handler deletes JSESSION/JWT/B/USER/ADMIN cookies but not the rtkn refresh-token cookie or skp, and AjaxLogoutSuccessHandler only sets 200 \u2014 the refresh_tokens row stays unused and valid for its full TTL. The SPA now calls /api/auth/logout (which revokes via terminateSession), but /api/logout remains live, permitAll, and with CSRF disabled matches any HTTP method; any client or integration still using the documented legacy endpoint believes it logged out while leaving a live credential on the device.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/SecurityConfiguration.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "SecurityConfiguration.filterChain (http.logout customizer)",
+      "title": "Legacy Spring /api/logout clears cookies only and never revokes the refresh token",
+      "verification": "Confirm no remaining production caller of authApi.logout()/ /api/logout (only the unused auth.api.js wrapper was found) and whether external API consumers are documented to use it."
+    },
+    {
+      "category": "security",
+      "description": "When a used refresh token is presented within 30s of its rotation, refresh() silently reassigns to the newest unused successor token and completes a full rotation for the caller. An attacker who exfiltrates the victim's rtkn cookie and replays it within 30s of the victim's own refresh receives a brand-new valid session, and because every subsequent refresh (attacker's or victim's) leaves a fresh unused successor, alternating refreshes keep both chains alive indefinitely without ever reaching the markAllUsedByUserId theft response the mechanism exists to provide.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "AuthService.refresh (REFRESH_GRACE_WINDOW used-token branch)",
+      "title": "30-second refresh grace window converts a stolen token replay into a valid new session instead of triggering theft revocation",
+      "verification": "Confirm there is no cap on how many times the grace-window redirect may fire per user/token family."
+    },
+    {
+      "category": "security",
+      "description": "For a nonexistent login, login() throws BadCredentialsException without running passwordEncoder.matches, while a wrong password incurs a full bcrypt comparison (~tens of ms). The response-time difference lets an unauthenticated caller enumerate which emails have accounts on a platform serving families, despite the identical 'Invalid credentials' message. The sibling /authenticate path explicitly mitigates this with AuthenticationManagerSimulator; this path does not.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "AuthService.login (findOneByLogin orElseThrow)",
+      "title": "Login timing oracle: unknown email skips the bcrypt comparison",
+      "verification": "Measure the delta between unknown-user and wrong-password responses on /api/auth/login."
+    },
+    {
+      "category": "security",
+      "description": "ProfileResource.updateEmail's javadoc says a verification email is sent to the new address, but updateUserEmail swaps both email and login immediately on password match; the facade then sends a PROFILE_CHANGE notice, not a confirmation round-trip. A user (or an attacker who knows the password) can point the account at an unowned or mistyped address in one request, after which password resets and security notifications go to an address nobody verified.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "UserProfileService.updateUserEmail (via AccountManagementFacade.changeEmail)",
+      "title": "Email change takes effect without verifying ownership of the new address",
+      "verification": "Confirm the PROFILE_CHANGE mail in AccountManagementFacade.changeEmail is informational and that no pending-email/confirmation-token flow exists elsewhere."
+    },
+    {
+      "category": "security",
+      "description": "parent/create-player has meta { requiresAuth: true } with no role, while sibling parent routes carry role: 'PARENT'. Any authenticated coach or player can navigate directly to the create-child-profile page; the backend POST /api/security/players is HAS_PARENT_ROLE so the submission fails, but the sibling-guard inconsistency exposes the shadow-account creation UI to the wrong roles.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "route 'parent/create-player' (meta.requiresAuth only)",
+      "title": "/parent/create-player route lacks the PARENT role meta its siblings carry",
+      "verification": "Confirm CreatePlayerProfilePage.vue performs no parent-only reads on mount that would error-leak or mis-render for other roles."
+    }
+  ],
+  "input_rev": "651ed1effc048bc7e6fe04cf68c77464b22ed6f5",
+  "model": null
+}

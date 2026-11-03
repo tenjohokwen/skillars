@@ -1,0 +1,123 @@
+{
+  "arm": "security",
+  "case": "398-ltd-admin-full-admin-rights",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The whole resource, including POST /api/admin/payment/coaches/{coachId}/payouts/release-held, is guarded by SecurityConstants.HAS_ADMIN_ROLE, which admits ROLE_LTD_ADMIN. An LTD_ADMIN (a reads-and-moderation-only tier) can call release-held and re-enqueue real money transfers for a coach's HOLD payouts, and can pull the full platform finance overview and per-coach revenue. Financial actions must be full-admin only; SecurityConstants offers no full-admin expression, and only AdminSafeguardingResource defines its own local FULL_ADMIN_ONLY.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AdminFinanceResource (class-level @PreAuthorize, releaseHeldPayouts)",
+      "title": "LTD_ADMIN can release held coach payouts and read all financial data",
+      "verification": "Confirm CoachPayoutHoldRecoveryService.redriveHeld enqueues Stripe transfers; confirm no additional role check exists inside it (none was visible from the resource)."
+    },
+    {
+      "category": "security",
+      "description": "POST /api/admin/bookings/{id}/force-complete and /{id}/cancel use HAS_ADMIN_ROLE, which admits ROLE_LTD_ADMIN. An LTD_ADMIN can force-complete a booking (releasing the coach's payment for a session that may not have happened) or cancel any booking with a full refund of captured money. Both are financial state changes that the limited back-office tier must not be able to perform.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminBookingResource.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "forceComplete, cancel",
+      "title": "LTD_ADMIN can force-complete and cancel bookings, triggering payouts and refunds"
+    },
+    {
+      "category": "security",
+      "description": "POST /api/admin/disputes/{id}/resolve and /dismiss use HAS_ADMIN_ROLE, admitting ROLE_LTD_ADMIN. DisputeService.resolveDispute credits real money to the parent (FULL_CREDIT / PARTIAL_CREDIT), issues coach warnings, and on UPHOLD_COACH claws back an already-issued refund and reconciles the coach payout. An LTD_ADMIN can therefore move money between parents and coaches and dismiss disputes outright, a financial and adjudication power reserved for full admins.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminDisputeResource.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "resolveDispute, dismissDispute",
+      "title": "LTD_ADMIN can adjudicate disputes: issue credits, dismiss, and claw back refunds"
+    },
+    {
+      "category": "security",
+      "description": "Every enforcement endpoint uses HAS_ADMIN_ROLE, which admits ROLE_LTD_ADMIN. An LTD_ADMIN can POST /api/admin/coaches/{id}/reinstate to put a coach that a full admin suspended \u2014 potentially for a safeguarding reason \u2014 back in front of parents and children, can delete strikes from a coach's record, and can PATCH the marketplace verification tier to TRUSTED or FEATURED, the trust signal parents book on. Suspend with cancelUpcomingBookings also triggers mass full refunds, a financial side effect. These are enforcement state changes well beyond the limited tier's reads-and-moderation mandate, and child-safety-relevant.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminCoachEnforcementResource.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "reinstateCoach, deleteStrike, setVerificationTier, suspendCoach, issueManualStrike",
+      "title": "LTD_ADMIN can reinstate a suspended coach, delete strikes and set verification tier",
+      "verification": "Check whether AdminCoachEnforcementService applies any caller-role check internally (none is visible from the resource) and whether reinstate distinguishes safety suspensions from routine ones."
+    },
+    {
+      "category": "security",
+      "description": "PUT /api/config/values/{key} is guarded by HAS_ADMIN_ROLE, so a ROLE_LTD_ADMIN can change any stored platform config value (booking durations, review windows, any HAS_CODE_DEFAULT key) within its ConfigBounds. Config changes are explicitly a full-admin-only capability for the limited tier; the dev docs merely mirror the implemented (wide) guard. AdminSafeguardingResource shows the codebase's own convention for restricting to ROLE_ADMIN, which this resource does not use.",
+      "file": "src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java",
+      "id": "R5",
+      "severity": "high",
+      "symbol": "updateValue",
+      "title": "LTD_ADMIN can rewrite any platform configuration value"
+    },
+    {
+      "category": "security",
+      "description": "POST and PUT /v1/admin/alerts use class-level HAS_ADMIN_ROLE, admitting ROLE_LTD_ADMIN. An LTD_ADMIN can update the FRAUD_SPIKE_RATE or FAILURE_RATE rule with enabled=false, or raise its threshold to 1.0, silently switching off operational fraud/failure alerting for the whole platform. Alerting configuration is an operational security control, not a read or moderation action.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "create, update (class-level @PreAuthorize)",
+      "title": "LTD_ADMIN can create and rewrite alert rules, including disabling fraud alerting"
+    },
+    {
+      "category": "security",
+      "description": "DELETE /api/video/admin/videos/{videoId} uses HAS_ADMIN_ROLE, so a ROLE_LTD_ADMIN can irreversibly delete any coach's video. Setting access state (BLOCKED) is a legitimate moderation action for the limited tier, but outright deletion is destructive data loss that moderation does not require and that the limited tier should not have.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/AdminVideoResource.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "deleteVideo",
+      "title": "LTD_ADMIN can permanently delete coach videos",
+      "verification": "Confirm AdminVideoService.deleteVideo removes the stored object/rows rather than soft-deleting; if soft-delete with recovery, severity drops."
+    },
+    {
+      "category": "security",
+      "description": "All three state-changing endpoints use HAS_ADMIN_ROLE. A ROLE_LTD_ADMIN can reactivate an ordinary account that a full admin deliberately suspended (the service only blocks privileged targets and GDPR/safety holds, not full-admin-placed locks on normal users), and can suspend a coach, which cascades into cancelling upcoming bookings with full refunds \u2014 a financial side effect. The service comment at AdminUserService line 182 suggests LTD_ADMIN use of this console was partially anticipated, which is why this is medium rather than high.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminUserResource.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "suspendUser, reactivateUser, unlockLogin",
+      "title": "LTD_ADMIN can suspend, reactivate and login-unlock any non-admin account",
+      "verification": "Check the product definition of the limited tier's remit for account enforcement; if account suspend/reactivate is genuinely in LTD_ADMIN scope, the residual issue is the refund-cascading coach suspension."
+    },
+    {
+      "category": "security",
+      "description": "GET /api/admin/gdpr/requests uses HAS_ADMIN_ROLE, so a ROLE_LTD_ADMIN can enumerate which users (and which children, via player-scoped requests) have pending or completed erasure/export requests. GDPR surfaces are designated full-admin only; this is read-only, so the exposure is informational rather than state-changing.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminGdprResource.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "listRequests",
+      "title": "LTD_ADMIN can list GDPR requests, a full-admin-only surface"
+    },
+    {
+      "category": "security",
+      "description": "POST /v1/admin/ses/preflight is guarded by HAS_ADMIN_ROLE (admitting ROLE_LTD_ADMIN) and sends a real email through the production SES path to whatever recipientEmail the caller supplies, with no rate limit and a per-call random sendId that deliberately defeats the duplicate-send suppression. An LTD_ADMIN \u2014 or a scripted admin session \u2014 can use the platform's verified sending domain to spam arbitrary external addresses, burning SES reputation during exactly the cutover window the tool exists to protect. An ops cutover action is not a read or moderation task.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/SesCutoverPreflightResource.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "runPreflight",
+      "title": "SES preflight lets LTD_ADMIN send unthrottled real email to any address",
+      "verification": "Confirm no gateway-level rate limit applies to /v1/admin/** (the resource itself has none)."
+    },
+    {
+      "category": "security",
+      "description": "The method hard-deletes any user by login and its only guard is @PreAuthorize(SecurityConstants.HAS_ANY_ROLE), which admits ROLE_PLAYER, ROLE_PARENT, ROLE_COACH and ROLE_USER. Any authenticated player could delete an arbitrary account the moment any controller or module wires this method in. Grep found no production caller today, so there is currently no reachable trigger \u2014 this is a loaded latent defect, not an exploitable one.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "deleteUserInformation",
+      "title": "deleteUserInformation is guarded with HAS_ANY_ROLE, letting any authenticated user delete any account",
+      "verification": "Confirm no controller, listener or other module invokes deleteUserInformation (grep over src/main found only the definition); check test-only usage and whether a future admin console story plans to call it."
+    },
+    {
+      "category": "database",
+      "description": "update() calls alertRuleRepository.deleteById(id) and then save(updated) with no surrounding @Transactional, so each repository call commits in its own transaction. If the save fails (null metricName/threshold hitting a NOT NULL constraint, a DB hiccup), the delete has already committed: the alert rule is gone from the database, and because alertRuleCache.refresh() is only reached on success, the in-memory cache keeps serving the deleted rule until the next refresh \u2014 the operator sees the rule as live while it no longer exists. The request DTO also has no validation, so a malformed update body is a realistic trigger.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "update",
+      "title": "Alert rule update is non-atomic delete-then-save: a failed save permanently destroys the rule",
+      "verification": "Confirm AlertRule has NOT NULL constraints that an unvalidated request can violate, and that AlertRuleCache has no short-interval scheduled refresh that would mask the stale window."
+    }
+  ],
+  "input_rev": "4899534f12a1f87d89f49267522293609eb0a8d7",
+  "model": null
+}

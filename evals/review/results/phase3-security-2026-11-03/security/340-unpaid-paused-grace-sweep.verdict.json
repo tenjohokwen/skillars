@@ -1,0 +1,79 @@
+{
+  "arm": "security",
+  "case": "340-unpaid-paused-grace-sweep",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "restoreCoachPriceAndVoidDowngrade / restorePlayerPriceAndVoidDowngrade (reached from the newRank == currentRank branch of changeCoachTier/changePlayerTier) move the Stripe price back up via updateStripePrice with chargeNow=false and void the pending change without any check of what the last renewal invoice billed; the changeCoachTier javadoc itself confirms Stripe renews before the daily applyPendingChanges run, so the post-renewal window exists and the user keeps the higher local tier having paid the downgraded renewal price.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "assertCanSubscribe runs on an unlocked read and createPaidStripeSubscription uses a per-attempt key (\"sub-create-\" + UUID.randomUUID()), so concurrent subscribes each create and synchronously pay a Stripe subscription (error_if_incomplete per the class javadoc); the persist loser (isOtherLiveSubscription in persistCoachSubscription/persistPlayerSubscription) is cancelled via cancelStripeSubscriptionQuietly \u2192 cancelSubscriptionImmediately, and Stripe's immediate cancel never auto-refunds \u2014 no Refund/credit call exists anywhere in this file for the DUPLICATE path.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "The race window and deliberate revoke are confirmed in the shown code \u2014 GraceTarget.matches returns true on an unchanged non-null stripeSubscriptionId regardless of status (\"even if an invoice.paid raced in\"), and the Stripe cancel in cancelAtStripeForGrace runs after the phase-1 lock is released. But the described consequence (charged retry kept, no refund) depends on StripeClient.cancelSubscriptionImmediately's retrieve-then-cancel/refund behavior, which is not in the provided hunks.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "The race window is real: applyCoachChange/applyPlayerChange commit phase 1 (releasing the lock) before syncStripePriceForChange calls stripeClient.updateSubscriptionTier unconditionally, and phase 2's pendingCoachChange/stripeSubscriptionId filter only blocks the local apply, so a concurrent upgrade in the gap leaves Stripe at the downgrade price. But the claimed persistence of the drift depends on reconcileStripeSubscriptions(), which is referenced in reconcileMarketplaceTiers's javadoc as the \"Stripe \u2192 payment side\" yet whose body is not in the diff \u2014 if it compares Stripe item prices to stored tiers it would correct the drift, and that cannot be confirmed or refuted here.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "handleInvoicePaid guards only with isStaleEvent and RECOVERABLE_ON_PAYMENT, then sets ACTIVE and clears pastDueSince without checking billing_reason or Stripe's subscription status; Stripe emits invoice.paid per invoice (including non-latest invoices of an unpaid subscription, which don't reactivate it), and the staleness check passes since the payment event is newer than lastStripeEventAt.",
+      "reported_id": "R6"
+    }
+  ],
+  "judge_cost_usd": 4.60306,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 identifies the same defect: grace sweep filters PAST_DUE only, so UNPAID/PAUSED rows are never cancelled at Stripe (which keeps invoicing) and never closed locally, matching F1's mechanism and consequence.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] restoreCoachPriceAndVoidDowngrade / restorePlayerPriceAndVoidDowngrade (reached from the newRank == currentRank branch of changeCoachTier/changePlayerTier) move the Stripe price back up via updateStripePrice with chargeNow=false and void the pending change without any check of what the last renewal invoice billed; the changeCoachTier javadoc itself confirms Stripe renews before the daily applyPendingChanges run, so the post-renewal window exists and the user keeps the higher local tier having paid the downgraded renewal price. | pass-1: Concrete exploit: renew at pending-downgrade price, then re-select current tier so the restore path raises the Stripe price with proration none, keeping the higher tier for a period paid at the lower price.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] assertCanSubscribe runs on an unlocked read and createPaidStripeSubscription uses a per-attempt key (\"sub-create-\" + UUID.randomUUID()), so concurrent subscribes each create and synchronously pay a Stripe subscription (error_if_incomplete per the class javadoc); the persist loser (isOtherLiveSubscription in persistCoachSubscription/persistPlayerSubscription) is cancelled via cancelStripeSubscriptionQuietly \u2192 cancelSubscriptionImmediately, and Stripe's immediate cancel never auto-refunds \u2014 no Refund/credit call exists anywhere in this file for the DUPLICATE path. | pass-1: Concrete trigger: unlocked assertCanSubscribe plus per-attempt idempotency keys let two concurrent subscribes each charge synchronously, and the loser is cancelled with empty params, issuing no refund.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The race window and deliberate revoke are confirmed in the shown code \u2014 GraceTarget.matches returns true on an unchanged non-null stripeSubscriptionId regardless of status (\"even if an invoice.paid raced in\"), and the Stripe cancel in cancelAtStripeForGrace runs after the phase-1 lock is released. But the described consequence (charged retry kept, no refund) depends on StripeClient.cancelSubscriptionImmediately's retrieve-then-cancel/refund behavior, which is not in the provided hunks. | pass-1: Concrete race: a successful dunning retry just before the sweep is revoked anyway, the cleared stripeSubscriptionId orphans the late invoice.paid webhook, and the customer keeps the charge with no refund path.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The race window is real: applyCoachChange/applyPlayerChange commit phase 1 (releasing the lock) before syncStripePriceForChange calls stripeClient.updateSubscriptionTier unconditionally, and phase 2's pendingCoachChange/stripeSubscriptionId filter only blocks the local apply, so a concurrent upgrade in the gap leaves Stripe at the downgrade price. But the claimed persistence of the drift depends on reconcileStripeSubscriptions(), which is referenced in reconcileMarketplaceTiers's javadoc as the \"Stripe \u2192 payment side\" yet whose body is not in the diff \u2014 if it compares Stripe item prices to stored tiers it would correct the drift, and that cannot be confirmed or refuted here. | pass-1: Concrete race: a tier change between applicator phase 1 and its unconditional Stripe price call leaves Stripe billing a different price than the local tier, with no reconciliation comparing against actual Stripe prices.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] handleInvoicePaid guards only with isStaleEvent and RECOVERABLE_ON_PAYMENT, then sets ACTIVE and clears pastDueSince without checking billing_reason or Stripe's subscription status; Stripe emits invoice.paid per invoice (including non-latest invoices of an unpaid subscription, which don't reactivate it), and the staleness check passes since the payment event is newer than lastStripeEventAt. | pass-1: Concrete trigger: paying any single (older) invoice fires invoice.paid, which flips the row to ACTIVE and re-entitles without checking Stripe's actual subscription status.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "The orElse(true) fail-open is acknowledged as intentional for admin-provisioned coaches, and the harm depends on a hypothetical GDPR/deletion path the reviewer only asks to check for.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

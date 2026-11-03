@@ -1,0 +1,38 @@
+{
+  "arm": "security",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "BookingEmailListener enqueues emails for these four templates, but no matching Thymeleaf file exists in mails/ (only bookingCancelledCoachUnavailable.html and bookingCancelledDueToPause.html are present; there is no bookingCancelledByParent.html, bookingCancelledByCoach.html, coachNoShow.html or playerNoShow.html). EmailContentRenderer.render calls templateEngine.process(lowerCamelName) for every non-NONE template, which raises Thymeleaf TemplateInputException for a missing file; MailManager marks the envelope FAILED. Because TemplateInputException is not in MailManager.NON_REPAIRABLE_ERRORS, isRetryable returns true, so NotificationEmailOutboxHandler re-throws and the outbox re-drives the row repeatedly until the 24h deadline expires, then abandons it. Trigger: any coach cancels a booking, any parent cancels, or any coach/player no-show is recorded. Consequence: the counterparty (coach when parent cancels; parent when coach cancels or no-shows; coach when player no-shows) is never told the session was cancelled or that a no-show refund was issued, on a platform booking sessions for children, and each event leaves a poison outbox row retried for ~24h.",
+      "file": "src/main/resources/mails/",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "BOOKING_CANCELLED_BY_PARENT / BOOKING_CANCELLED_BY_COACH / COACH_NO_SHOW / PLAYER_NO_SHOW",
+      "title": "Cancellation and no-show notification emails never delivered \u2014 templates missing",
+      "verification": "Confirm no second ClassLoaderTemplateResolver serves mails/ with another suffix, and confirm the four .html files are genuinely absent at build time rather than generated."
+    },
+    {
+      "category": "logic",
+      "description": "These three paths set the refund amount from resolveSessionPrice(), which for a non-pack booking returns coachPricingRepository.findByCoachId(...).getPerSessionPrice() \u2014 the coach's current price. This amount is carried in BookingCancelledByParentEvent/BookingCancelledByCoachEvent/CoachNoShowEvent and paid out by RefundEnqueueListener.enqueueBookingRefund. The payment was captured at accept-time price and recorded in booking_payments (creditDebited + stripeCharged); cancelBookingAsAdmin deliberately reads that via resolveAmountPaid() and its Javadoc states the current price 'is wrong once the coach has re-priced,' but the parent/coach/no-show paths never use it. Trigger: a coach confirms a booking at price X, changes perSessionPrice to Y via CoachProfileService.saveStep3, then the booking is cancelled or reported as a coach no-show. Consequence: the parent is credited Y though only X was charged \u2014 over-refund (platform loss) when Y>X, under-refund (parent shorted) when Y<X. Applies to card/credit (non-pack) bookings; pack refunds use the pack's stored pricePerSession and are unaffected.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "cancelBookingAsParent / cancelBookingAsCoach / recordNoShowCoach (resolveSessionPrice)",
+      "title": "Cancellation/no-show refunds use the coach's current price, not the amount paid",
+      "verification": "Confirm BookingAcceptedEvent/PaymentLifecycleService charges the accept-time resolveSessionPrice and that booking_payments stores it, so a later perSessionPrice change diverges from the captured amount."
+    },
+    {
+      "category": "security",
+      "description": "RefundEnqueueListener.onBookingCancelledByCoach enqueues a full wallet refund for any non-pack coach cancellation (else-if sessionPackPurchaseId == null) with no check that payment was ever captured. Unlike the sibling paths \u2014 BookingCancelledByParentEvent carries refundEligible (gated on CONFIRMED/UPCOMING) and BookingCancelledByAdminEvent carries refundEligible/isWalletRefund \u2014 BookingCancelledByCoachEvent has no refund-eligible or payment-captured field at all, so the refund is prevented only by the current BookingStateMachine transition table. CANCEL_COACH is defined as legal from ACCEPTED (a pre-capture status) at BookingStateMachine line 32. Today ACCEPTED is only a transient in-transaction state (acceptAndInitiatePayment moves to PAYMENT_PENDING in the same transaction, and CANCEL_COACH is not legal from PAYMENT_PENDING), so it is not reachable as a persisted, cancellable row. If any future change persists ACCEPTED or adds a CANCEL_COACH edge from another pre-capture state, a coach cancellation would mint a wallet refund for money never charged.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "onBookingCancelledByCoach",
+      "title": "Coach-cancellation refund enqueue has no payment-captured guard",
+      "verification": "Confirm no path commits a booking in ACCEPTED (e.g. a batch or retry flow leaving it there) where a coach's cancel endpoint could then fire CANCEL_COACH before PAYMENT_PENDING is reached."
+    }
+  ],
+  "input_rev": "7a9508836b55c97e28b9bfb96fb985c16aff0573",
+  "model": null
+}

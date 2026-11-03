@@ -1,0 +1,67 @@
+{
+  "arm": "control",
+  "case": "388-jwt-signing-key-in-database",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "JwtSecretService.addSecretToThread fetches via secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME) with no status parameter, consistent with the claim, but the actual query (SecretService.fetchSecret / findOneByVersionAndBusId) is not in this file, so whether EntityStatus is ignored cannot be confirmed here; the operational-procedure caveat is likewise outside this code.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "SecretService.createSecret and fetchSecret call Map.of(..., VERSION, version, BUS_ID, busId) before validateVersion/validateBusId, and fetchLatestActiveSecretAsBytes wraps Map.of(..., BUS_ID, busId) in a HashMap before validateBusId; Map.of throws NPE on null values, so null inputs produce NPE instead of the BLANK_* SecException (StringUtils.isBlank would otherwise handle null). The Secret.derivePassword part is in a file not shown, but the SecretService claim is confirmed as written.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 0.298841,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect: Jasypt password is reverse(busId+version) with constant values, so anyone with DB read access can decrypt the HS512 key and forge JWTs including admin.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 states the same mechanism (fetchSecret never calls getSecretBytes so DECR_ERROR/BLANK_SECRET unreachable) and the same consequence (corrupt row logged skip_existing SUCCESS, boot proceeds, every request fails).",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] JwtSecretService.addSecretToThread fetches via secretService.fetchSecret(JWT_VERSION, JWT_BUS_NAME) with no status parameter, consistent with the claim, but the actual query (SecretService.fetchSecret / findOneByVersionAndBusId) is not in this file, so whether EntityStatus is ignored cannot be confirmed here; the operational-procedure caveat is likewise outside this code. | pass-1: Concrete trigger: key resolution uses findOneByVersionAndBusId ignoring EntityStatus, so marking the row INACTIVE (the status-based revocation the entity model supports) has no effect and the key keeps signing/verifying.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Reviewer itself confirms fetchLatestActiveSecretAsBytes has no callers in src/main, so the never-invalidated cache has no concrete trigger today; latent.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] SecretService.createSecret and fetchSecret call Map.of(..., VERSION, version, BUS_ID, busId) before validateVersion/validateBusId, and fetchLatestActiveSecretAsBytes wraps Map.of(..., BUS_ID, busId) in a HashMap before validateBusId; Map.of throws NPE on null values, so null inputs produce NPE instead of the BLANK_* SecException (StringUtils.isBlank would otherwise handle null). The Secret.derivePassword part is in a file not shown, but the SecretService claim is confirmed as written. | pass-1: Concrete trigger: Map.of rejects null values, so a null busId/version throws NPE before the intended BLANK_* SecException, bypassing callers' SecException handling \u2014 the validation guard is dead for nulls.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "Reviewer confirms JwtSecretProvider.getKey has no callers in src/main; empty-key risk depends entirely on hypothetical future callers, so no concrete trigger.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative performance claim (per-call PBE decrypt) with no demonstrated impact; reviewer's own verification defers to future profiling.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

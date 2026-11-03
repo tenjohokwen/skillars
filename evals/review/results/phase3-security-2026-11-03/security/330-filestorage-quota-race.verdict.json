@@ -1,0 +1,84 @@
+{
+  "arm": "security",
+  "case": "330-filestorage-quota-race",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "signUpload presigns PUT binding only bucket/key/contentType (no contentLength or conditional header), and persistConfirmed records head.contentLength() plus the client-declared checksum without storing head.eTag() or a version id, so nothing detects a re-PUT within uploadTtlSeconds after confirm; all later reads (signDownload, findActiveObject, assertOwnership) trust the stale FileStorageObject row. The caveat doesn't save it: the TTL must be >0 for the flow to work, and S3 versioning/object-lock still serve the newest PUT as current.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "In-file mechanics are real: signUpload persists nothing, quota uses sumSizeBytesByOwnerId (confirmed rows only), and confirmUpload's StorageValidationException/QuotaExceededException paths never deleteObject, orphaning the S3 object. But the finding's verification caveat \u2014 absence of an S3 lifecycle rule in infrastructure/terraform (and any upstream rate limit on /api/storage/sign/upload) \u2014 cannot be checked from this file, so \"never garbage-collected / unbounded cost\" is not settled.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "persistConfirmed stores request.checksum() and resolveOriginalFilename returns request.originalFilename() raw; validationChain.validate runs only in signUpload on the synthesized entity+\".\"+extension filename, and formatChecksum prefixes \"sha256:\" onto the uncompared string surfaced via findActiveObject. Caveat: the migration's column lengths and any Content-Disposition consumers are not in the provided file, so the unbounded-length and header-injection consequences remain unverified downstream.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "softDelete does throw AuthorizationException(MISSING_RIGHTS) for an existing active key with a non-matching createdBy, versus StorageObjectNotFoundException when no active row exists \u2014 the differential exception the finding describes is real. But the finding's verification step (that AuthorizationException maps to a 403, not 404, in the HTTP layer) requires the exception handler/@ControllerAdvice, which is not in the provided file.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "Confirmed in-file that softDelete authorizes on fso.getCreatedBy() vs currentUserLogin while signDownload/reconfirm/assertOwnership all use fso.getOwnerId() (set from securityUtil.requireCurrentBusinessId() in persistConfirmed). But the consequence depends on whether createdBy (set by an unshown AuditorAware; never assigned in this file) can diverge from the caller's login \u2014 e.g. via login/email change \u2014 which requires the AuditorAware, SecurityUtil, and FileStorageObject entity code not provided.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 1.71504,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 identifies the same unserialized read-then-insert quota check in confirmUpload with the same concurrent-overshoot consequence.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] signUpload presigns PUT binding only bucket/key/contentType (no contentLength or conditional header), and persistConfirmed records head.contentLength() plus the client-declared checksum without storing head.eTag() or a version id, so nothing detects a re-PUT within uploadTtlSeconds after confirm; all later reads (signDownload, findActiveObject, assertOwnership) trust the stale FileStorageObject row. The caveat doesn't save it: the TTL must be >0 for the flow to work, and S3 versioning/object-lock still serve the newest PUT as current. | pass-1: Concrete trigger: presigned PUT URL stays valid after confirm with no version pin or ETag check, allowing content replacement that bypasses size/type validation.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "Permissive default allow-list and metadata-only validation is a deliberate configuration/design choice, not a code defect with a concrete trigger.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] In-file mechanics are real: signUpload persists nothing, quota uses sumSizeBytesByOwnerId (confirmed rows only), and confirmUpload's StorageValidationException/QuotaExceededException paths never deleteObject, orphaning the S3 object. But the finding's verification caveat \u2014 absence of an S3 lifecycle rule in infrastructure/terraform (and any upstream rate limit on /api/storage/sign/upload) \u2014 cannot be checked from this file, so \"never garbage-collected / unbounded cost\" is not settled. | pass-1: Concrete trigger: sign+PUT without confirm leaves objects with no DB row, uncounted by quota and never garbage-collected, enabling unbounded bucket consumption.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] persistConfirmed stores request.checksum() and resolveOriginalFilename returns request.originalFilename() raw; validationChain.validate runs only in signUpload on the synthesized entity+\".\"+extension filename, and formatChecksum prefixes \"sha256:\" onto the uncompared string surfaced via findActiveObject. Caveat: the migration's column lengths and any Content-Disposition consumers are not in the provided file, so the unbounded-length and header-injection consequences remain unverified downstream. | pass-1: Concrete trigger: ValidationChain runs only at sign time on a synthesized filename, so confirm persists raw unbounded checksum/originalFilename strings.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] softDelete does throw AuthorizationException(MISSING_RIGHTS) for an existing active key with a non-matching createdBy, versus StorageObjectNotFoundException when no active row exists \u2014 the differential exception the finding describes is real. But the finding's verification step (that AuthorizationException maps to a 403, not 404, in the HTTP layer) requires the exception handler/@ControllerAdvice, which is not in the provided file. | pass-1: Concrete trigger: softDelete returns 403 for foreign keys vs 404 for missing ones, leaking key existence that signDownload deliberately hides.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] Confirmed in-file that softDelete authorizes on fso.getCreatedBy() vs currentUserLogin while signDownload/reconfirm/assertOwnership all use fso.getOwnerId() (set from securityUtil.requireCurrentBusinessId() in persistConfirmed). But the consequence depends on whether createdBy (set by an unshown AuditorAware; never assigned in this file) can diverge from the caller's login \u2014 e.g. via login/email change \u2014 which requires the AuditorAware, SecurityUtil, and FileStorageObject entity code not provided. | pass-1: Concrete code inconsistency: softDelete authorizes on createdBy audit login while all other paths use ownerId, breaking owner deletion if the identities diverge.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The report itself notes the quota exclusion of soft-deleted rows is by design per the code comment; the bounded retention-window cost is a design trade-off, not a defect.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

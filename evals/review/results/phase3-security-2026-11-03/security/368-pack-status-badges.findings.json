@@ -1,0 +1,48 @@
+{
+  "arm": "security",
+  "case": "368-pack-status-badges",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "When the Stripe charge captures but createPurchase throws with no concurrent winner, purchasePack issues a compensating refund (key \"refund-<intentId>\") and returns payment.lifecycleFailure. A client that retries with the same Idempotency-Key \u2014 the behaviour this endpoint's own contract invites \u2014 makes Stripe replay the original, already-refunded PaymentIntent; findByStripePaymentIntentId finds no row (the insert failed and the refund succeeded), so createPurchase now succeeds and records a pack with full remainingSessions funded by a charge the payer got back. Nothing corrects it: ChargeDisputeWebhookService.onChargeRefunded deliberately ignores refunds with the app's \"refund-\" idempotency-key prefix (line 213), and RefundReconciliationService only records refunds that FAILED. The parent keeps the refund and spends the pack; each completed session then generates a coach payout funded by no money.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Client retry after compensating refund grants a fully usable pack for a refunded charge",
+      "verification": "Reproduce: make createPurchase fail once (e.g. kill the DB connection between charge and insert), confirm the refund is issued, then replay the request with the identical Idempotency-Key and observe a 201 with a full pack. Also confirm no scheduled job cross-checks refunded intents against session_pack_purchases."
+    },
+    {
+      "category": "logic",
+      "description": "purchasePack is intentionally non-transactional, and getOrCreateStripeCustomer saves the request's paymentMethodId onto the stripe_customers row before paymentGateway.chargeAndCapture runs (StripePaymentGateway.charge reads the card from that row). If the new card is declined, the overwrite has already auto-committed: the payer's previously working saved card is gone, replaced by a card that never successfully charged. Every subsequent off-session charge that reads stripe_customers \u2014 booking accepts, batch charges, the next pack purchase without an explicit card \u2014 fails with the dead card, and GET /api/payment/payment-method shows it as the saved card. The subscription sync comment claims a declined card is never pushed onto subscriptions, but the local default-card row diverges regardless.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.getOrCreateStripeCustomer",
+      "title": "Saved default card is overwritten and committed before the charge, so a declined card replaces the working one",
+      "verification": "Trigger a pack purchase with a Stripe test card that declines (e.g. 4000000000000002) for a payer with an existing saved card, then check stripe_customers.stripe_payment_method_id and attempt a booking charge."
+    },
+    {
+      "category": "logic",
+      "description": "The backend computeStatus returns status \"PAUSED\" for a pack currently inside [pausedFrom, pausedUntil), but packBadgeColor and packBadgeLabel only match `pack.status === 'ACTIVE' && isPaused(pack)` (only reachable under client/server clock skew), 'EXPIRED' and 'EXHAUSTED'. A status of 'PAUSED' falls through to the default branch, so a currently paused pack shows the positive-coloured \"Active\" badge; the pause CTA and the \"already paused\" caption are also suppressed because both require status === 'ACTIVE'. A parent whose pack is mid-pause sees it badged Active, tries to book, and is rejected server-side with payment.packPaused.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "packBadgeColor / packBadgeLabel",
+      "title": "Parent dashboard renders a green \"Active\" badge for a pack the server reports as PAUSED",
+      "verification": "Load the dashboard with a pack whose pause window covers now (server returns status PAUSED) and observe the badge colour/label."
+    },
+    {
+      "category": "edge-case",
+      "description": "computeStatus never accounts for disputeFrozenAt or revokedAt: a dispute-frozen pack with remaining sessions reports ACTIVE to both the parent dashboard and the coach's sold-pack list, and a chargeback-revoked pack reports EXHAUSTED, indistinguishable from a fully used one. Concretely, a parent whose pack charge is under an open dispute still sees the Pause button (status ACTIVE, credits > 0, no pausedUntil) and pausePackTransactional has no isDisputeFrozen check, so the pause is accepted and extends expiresAt by the pause length while every spend is blocked; likewise CoachSoldPackDto.extendable stays true for revoked or frozen packs in the 14-day window and extendPack checks neither flag, so the coach is offered and allowed an Extend on a chargeback-revoked pack.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "SessionPackPaymentService.computeStatus / PackSessionService.pausePackTransactional / SessionPackPaymentService.extendPack",
+      "title": "Dispute-frozen and revoked packs are misreported and the freeze is not enforced on pause or extend",
+      "verification": "Freeze a pack via a charge.dispute.created webhook, then call POST /api/payment/session-packs/{id}/pause as the owner and observe the pause applying and expiresAt moving; list the coach's sold packs for a revoked purchase in the extension window and observe extendable=true."
+    }
+  ],
+  "input_rev": "b123c73de463e349f082c70b2a1861350e3eee83",
+  "model": null
+}

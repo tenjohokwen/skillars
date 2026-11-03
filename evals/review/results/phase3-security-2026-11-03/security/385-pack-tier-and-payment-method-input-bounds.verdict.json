@@ -1,0 +1,62 @@
+{
+  "arm": "security",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "savePaymentMethod (SessionPackPaymentResource.java, /save-payment-method handler) does store the client-supplied paymentMethodId with no ownership check in the controller, but the verdict hinges on unshown code: whether SubscriptionService.savePaymentMethodAndScheduleSync validates pm attachment to the caller's Stripe customer, and whether SessionPackPaymentService.getSavedPaymentMethod actually calls PaymentMethod.retrieve(id) with the platform key and echoes card details. Both service implementations are missing from the provided source.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "createSetupIntent, savePaymentMethod and purchaseSessionPack indeed carry no @RateLimited or other throttle in this file, but the finding's verification caveat (no filter/proxy-level limit in SecurityConfiguration or gateway config; RateLimitingAspect is annotation-driven only) depends on files not provided, so absence of any rate limit cannot be confirmed from this code alone.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "getOrCreateStripeCustomer saves the new paymentMethodId over the existing stripe_customers row before paymentGateway.chargeAndCapture, and since purchasePack is non-transactional that save commits immediately in its own default Spring Data transaction. On a failed charge the exception propagates with no restore \u2014 previousCard is only read in scheduleSubscriptionCardSync on the success path \u2014 so the dead card stays the saved default that later charges read (per the file's own comment \"the charge reads it from stripe_customers\").",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 0.85879,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 reports the same missing sessionCount/totalPrice bounds in CreateSessionPackTierRequest, the 0.00 pricePerSession hitting the DB CHECK, and the numeric(10,2) overflow.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 reports the same unvalidated paymentMethodId persisted and sent to Stripe instead of being rejected with 400; extra downstream detail does not change the defect.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] savePaymentMethod (SessionPackPaymentResource.java, /save-payment-method handler) does store the client-supplied paymentMethodId with no ownership check in the controller, but the verdict hinges on unshown code: whether SubscriptionService.savePaymentMethodAndScheduleSync validates pm attachment to the caller's Stripe customer, and whether SessionPackPaymentService.getSavedPaymentMethod actually calls PaymentMethod.retrieve(id) with the platform key and echoes card details. Both service implementations are missing from the provided source. | pass-1: Concrete trigger: saving another customer's pm_ id then GET /payment-method leaks brand/last4/expiry via account-level PaymentMethod.retrieve; not in the answer key.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] createSetupIntent, savePaymentMethod and purchaseSessionPack indeed carry no @RateLimited or other throttle in this file, but the finding's verification caveat (no filter/proxy-level limit in SecurityConfiguration or gateway config; RateLimitingAspect is annotation-driven only) depends on files not provided, so absence of any rate limit cannot be confirmed from this code alone. | pass-1: Concrete trigger: self-registered user loops unauthenticated-rate-unlimited setup-intent/purchase endpoints to validate stolen cards; @RateLimited exists but is unused here.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] getOrCreateStripeCustomer saves the new paymentMethodId over the existing stripe_customers row before paymentGateway.chargeAndCapture, and since purchasePack is non-transactional that save commits immediately in its own default Spring Data transaction. On a failed charge the exception propagates with no restore \u2014 previousCard is only read in scheduleSubscriptionCardSync on the success path \u2014 so the dead card stays the saved default that later charges read (per the file's own comment \"the charge reads it from stripe_customers\"). | pass-1: Concrete trigger: getOrCreateStripeCustomer commits the new paymentMethodId before chargeAndCapture, so a declined card permanently replaces the working default used by later off-session charges.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}
