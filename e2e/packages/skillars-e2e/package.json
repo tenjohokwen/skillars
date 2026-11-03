@@ -1,0 +1,29 @@
+{
+  "name": "skillars-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Skillars adapter for the Pitchside UI test framework: routes, auth, factories, screens and every spec.",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:e2e": "npm run test:e2e:parallel; parallel=$?; npm run test:e2e:serial; serial=$?; [ $parallel -eq 0 ] && [ $serial -eq 0 ]",
+    "test:e2e:parallel": "playwright test --project=parallel --pass-with-no-tests",
+    "test:e2e:serial": "playwright test --project=serial --no-deps --workers=1 --output=test-results/serial --pass-with-no-tests",
+    "stack:up": "docker compose -p skillars-e2e -f stack/docker-compose.e2e.yml up -d",
+    "stack:down": "docker compose -p skillars-e2e -f stack/docker-compose.e2e.yml down -v",
+    "stack:logs": "docker compose -p skillars-e2e -f stack/docker-compose.e2e.yml logs --no-color app"
+  },
+  "dependencies": {
+    "pg": "8.23.1",
+    "pitchside-core": "*"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.20.5",
+    "@types/pg": "8.23.1",
+    "typescript": "6.0.3"
+  }
+}

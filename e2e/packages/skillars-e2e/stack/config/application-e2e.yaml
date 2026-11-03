@@ -1,0 +1,29 @@
+# Spring profile `e2e`, mounted into the app container by docker-compose.e2e.yml and read through
+# SPRING_CONFIG_ADDITIONAL_LOCATION. It lives with the suite, not in src/main/resources, so the
+# production artifact carries no test configuration.
+
+app:
+  email:
+    # Mailpit, over plain SMTP. The provider list REPLACES the dev profile's (Spring binds lists
+    # wholesale), and the validator requires a non-blank username and password; Mailpit accepts any.
+    transport: smtp
+    smtp:
+      provider-configs:
+        - name: mailpit
+          host: mailpit
+          port: 1025
+          username: no-reply@e2e.example.com
+          password: e2e-any-password
+
+infrastructure:
+  gemini:
+    mode: developer
+    api-key: e2e-wiremock-key
+    api-base-url: http://wiremock:8080
+    timeout-seconds: 5
+
+# Registration/resend limits are per-JVM buckets keyed by IP: every CI worker shares one IP, so the
+# fourth registration of a run would 429. The @ratelimit scenarios run on a separate stack.
+rate:
+  limiting:
+    enabled: false

@@ -2,7 +2,9 @@ import type { PlaywrightTestConfig, Project } from '@playwright/test'
 
 /**
  * Tags whose tests share global state (a full database reset, runtime configuration) and must run
- * outside the parallel pool. CI runs the serial project in its own invocation with `--workers=1`.
+ * outside the parallel pool. `fullyParallel: false` only serialises tests within one file, so run
+ * the serial project in its OWN invocation: `--project=serial --no-deps --workers=1` (`--no-deps`,
+ * or Playwright re-runs the parallel project it depends on).
  */
 export const SERIAL_LANE_TAGS = ['@destructive', '@config'] as const
 const serialPattern = new RegExp(SERIAL_LANE_TAGS.map((tag) => `${tag}(?![a-z0-9-])`).join('|'))

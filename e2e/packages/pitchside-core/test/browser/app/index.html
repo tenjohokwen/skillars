@@ -64,6 +64,16 @@
           view.innerHTML =
             '<h1 data-testid="leaky-title">Leaky</h1><img alt="" src="https://tracker.example.invalid/pixel.png" />'
         },
+        // Loads a third-party script; the toy suite's prepareContext serves a local stub for it.
+        '/widget': () => {
+          view.innerHTML = '<h1>Widget</h1><p data-testid="widget-status">loading</p>'
+          const script = document.createElement('script')
+          script.src = 'https://widgets.example.invalid/widget.js'
+          script.onload = () =>
+            (document.querySelector('[data-testid=widget-status]').textContent =
+              window.toyWidget ?? 'missing')
+          document.body.appendChild(script)
+        },
         '/data': async () => {
           view.innerHTML = '<p data-testid="data-loading">Loading…</p>'
           const load = async () => {

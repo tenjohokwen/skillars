@@ -1,0 +1,15 @@
+{
+  "name": "Gemini moderation — default verdict SAFE",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/v1beta/models/[^/]+:generateContent"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "candidates": [{ "content": { "role": "model", "parts": [{ "text": "SAFE" }] } }]
+    }
+  }
+}

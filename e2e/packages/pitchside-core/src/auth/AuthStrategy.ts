@@ -18,8 +18,12 @@ export type CredentialsResolver = (role: string) => Credentials | Promise<Creden
 export interface AuthStrategy {
   /** Produce a reusable storage state for this role, using a fresh primed context. */
   establish(role: string, context: BrowserContext): Promise<StorageState>
-  /** Cookies the app needs before its first paint (e.g. a deterministic fingerprint). */
-  priming?(): Promise<Cookie[]>
+  /**
+   * Cookies the app needs before its first paint (e.g. a device fingerprint). Called with the role
+   * for a logged-in context — at login AND for every context that replays that role's session, so a
+   * per-persona value stays consistent — and with no role for an anonymous context.
+   */
+  priming?(role?: string): Promise<Cookie[]>
   logout(context: BrowserContext): Promise<void>
 }
 
@@ -38,7 +42,7 @@ export interface ApiSessionStrategyOptions {
   credentials: CredentialsResolver
   /** Request body for the login call. Default `{ username, password }`. */
   body?: (credentials: Credentials, role: string) => unknown
-  priming?: () => Promise<Cookie[]>
+  priming?: (role?: string) => Promise<Cookie[]>
 }
 
 const join = (base: string, path: string): string =>
@@ -52,8 +56,8 @@ const join = (base: string, path: string): string =>
 export class ApiSessionStrategy implements AuthStrategy {
   constructor(private readonly options: ApiSessionStrategyOptions) {}
 
-  async priming(): Promise<Cookie[]> {
-    return (await this.options.priming?.()) ?? []
+  async priming(role?: string): Promise<Cookie[]> {
+    return (await this.options.priming?.(role)) ?? []
   }
 
   async establish(role: string, context: BrowserContext): Promise<StorageState> {
@@ -95,15 +99,15 @@ export interface UiLoginStrategyOptions {
   /** Resolve once the post-login landing has settled. */
   settled: (page: Page, role: string) => Promise<void>
   logout?: (page: Page) => Promise<void>
-  priming?: () => Promise<Cookie[]>
+  priming?: (role?: string) => Promise<Cookie[]>
 }
 
 /** Drives the real login form. Slow; meant for the auth suite, where the form is the subject. */
 export class UiLoginStrategy implements AuthStrategy {
   constructor(private readonly options: UiLoginStrategyOptions) {}
 
-  async priming(): Promise<Cookie[]> {
-    return (await this.options.priming?.()) ?? []
+  async priming(role?: string): Promise<Cookie[]> {
+    return (await this.options.priming?.(role)) ?? []
   }
 
   async establish(role: string, context: BrowserContext): Promise<StorageState> {
@@ -130,7 +134,7 @@ export class UiLoginStrategy implements AuthStrategy {
 export interface CookieSessionStrategyOptions {
   /** Mint the session cookies for a role, e.g. from a test-only token endpoint or a signed value. */
   cookies: (role: string) => Promise<Cookie[]>
-  priming?: () => Promise<Cookie[]>
+  priming?: (role?: string) => Promise<Cookie[]>
 }
 
 /**
@@ -140,8 +144,8 @@ export interface CookieSessionStrategyOptions {
 export class CookieSessionStrategy implements AuthStrategy {
   constructor(private readonly options: CookieSessionStrategyOptions) {}
 
-  async priming(): Promise<Cookie[]> {
-    return (await this.options.priming?.()) ?? []
+  async priming(role?: string): Promise<Cookie[]> {
+    return (await this.options.priming?.(role)) ?? []
   }
 
   async establish(role: string, context: BrowserContext): Promise<StorageState> {
@@ -155,10 +159,13 @@ export class CookieSessionStrategy implements AuthStrategy {
 }
 
 /** Wrap a strategy with extra priming cookies (e.g. a fingerprint) without subclassing it. */
-export function withPriming(strategy: AuthStrategy, extra: () => Promise<Cookie[]>): AuthStrategy {
+export function withPriming(
+  strategy: AuthStrategy,
+  extra: (role?: string) => Promise<Cookie[]>,
+): AuthStrategy {
   return {
     establish: (role, context) => strategy.establish(role, context),
     logout: (context) => strategy.logout(context),
-    priming: async () => [...((await strategy.priming?.()) ?? []), ...(await extra())],
+    priming: async (role) => [...((await strategy.priming?.(role)) ?? []), ...(await extra(role))],
   }
 }

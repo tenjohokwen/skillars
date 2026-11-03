@@ -5,6 +5,7 @@ import {
   defineTaxonomy,
   hashRouting,
   laneProjects,
+  mergeSessionState,
   optionalEnv,
   requiredEnv,
   SessionStore,
@@ -125,5 +126,122 @@ describe('videoMode', () => {
     expect(videoMode(undefined)).toBe('retain-on-failure')
     expect(videoMode('off')).toBe('off')
     expect(() => videoMode('sometimes')).toThrow(/PITCHSIDE_VIDEO/)
+  })
+})
+
+describe('SessionStore priming and write-back', () => {
+  it('primes the login context with the role, so per-persona values stay consistent', async () => {
+    const primedFor: (string | undefined)[] = []
+    const { browser } = fakeBrowser()
+    const auth = new CookieSessionStrategy({
+      cookies: async () => [],
+      priming: async (role) => {
+        primedFor.push(role)
+        return [{ name: 'fp', value: `fp-${role}`, url: 'http://localhost:4321' }]
+      },
+    })
+    const state = await new SessionStore(browser, auth).state('coach')
+    expect(primedFor).toEqual(['coach'])
+    expect(state.cookies.map((c) => `${c.name}=${c.value}`)).toEqual(['fp=fp-coach'])
+  })
+
+  it('serves the refreshed session instead of re-establishing or replaying the original', async () => {
+    const { browser, contexts } = fakeBrowser()
+    const rtkn = { name: 'rtkn', value: 'original', domain: 'app.test', path: '/' }
+    const store = new SessionStore(
+      browser,
+      new CookieSessionStrategy({ cookies: async () => [rtkn] }),
+    )
+    const original = await store.state('coach', { userAgent: 'UA' })
+    expect(original.cookies.map((c) => c.value)).toEqual(['original'])
+    store.update('coach', { userAgent: 'UA' }, {
+      cookies: [{ ...rtkn, value: 'rotated' }],
+      origins: [],
+    } as unknown as typeof original)
+    const served = await store.state('coach', { userAgent: 'UA' })
+    expect(served.cookies.map((c) => c.value)).toEqual(['rotated'])
+    expect(contexts).toHaveLength(1)
+  })
+
+  it('ignores an update for a role that has no cached login', () => {
+    const { browser } = fakeBrowser()
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    store.update('coach', {}, { cookies: [], origins: [] })
+    expect(store.cachedRoles()).toEqual([])
+  })
+})
+
+describe('mergeSessionState', () => {
+  const cookie = (name: string, value: string, domain = 'app.test') =>
+    ({
+      name,
+      value,
+      domain,
+      path: '/',
+      expires: -1,
+      httpOnly: true,
+      secure: false,
+      sameSite: 'Lax',
+    }) as const
+  const baseline = {
+    cookies: [cookie('rtkn', 'r1'), cookie('potc', 'j1'), cookie('fcookie', 'fp')],
+    origins: [{ origin: 'http://app.test', localStorage: [{ name: 'lang', value: 'en' }] }],
+  }
+
+  it('refreshes the login cookies, drops removed ones, ignores new ones and keeps login localStorage', () => {
+    const current = {
+      cookies: [
+        cookie('rtkn', 'r2'),
+        cookie('fcookie', 'fp'),
+        cookie('pref', 'dark'),
+        cookie('rtkn', 'x', 'other.test'),
+      ],
+      origins: [{ origin: 'http://app.test', localStorage: [{ name: 'tour', value: 'done' }] }],
+    }
+    const merged = mergeSessionState(baseline, current)
+    expect(merged.cookies.map((c) => `${c.name}=${c.value}@${c.domain}`)).toEqual([
+      'rtkn=r2@app.test',
+      'fcookie=fp@app.test',
+    ])
+    expect(merged.origins).toBe(baseline.origins)
+  })
+})
+
+describe('SessionStore epoch', () => {
+  it('moves on a role invalidation, and on a global one for every role', () => {
+    const { browser } = fakeBrowser()
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    const coach = store.epoch('coach')
+    const parent = store.epoch('parent')
+    store.invalidate('coach')
+    expect(store.epoch('coach')).toBe(coach + 1)
+    expect(store.epoch('parent')).toBe(parent)
+    store.invalidate()
+    expect(store.epoch('parent')).toBe(parent + 1)
+  })
+})
+
+describe('SessionStore user-agent pinning', () => {
+  it('logs in with the caller user agent and caches per role and user agent', async () => {
+    const seen: unknown[] = []
+    const browser = {
+      newContext: vi.fn(async (options: { userAgent?: string }) => {
+        seen.push(options.userAgent)
+        return {
+          addCookies: async () => {},
+          storageState: async () => ({ cookies: [], origins: [] }),
+          close: async () => {},
+        } as unknown as BrowserContext
+      }),
+    } as unknown as Pick<Browser, 'newContext'>
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    await store.state('coach', { userAgent: 'UA-desktop' })
+    await store.state('coach', { userAgent: 'UA-desktop' })
+    await store.state('coach', { userAgent: 'UA-mobile' })
+    await store.state('coach')
+    expect(seen).toEqual(['UA-desktop', 'UA-mobile', undefined])
+    expect(store.cachedRoles()).toEqual(['coach'])
+    store.invalidate('coach')
+    expect(store.cachedRoles()).toEqual([])
   })
 })

@@ -39,7 +39,7 @@ describe('IdAllocator', () => {
 
 describe('UniqueNames', () => {
   it('produces unique, run- and worker-scoped emails', () => {
-    const names = new UniqueNames(2, { emailDomain: 'example.test', runId: 'Run 42!' })
+    const names = new UniqueNames(2, { emailDomain: 'example.test', runId: 'Run 42!', nonce: '' })
     expect(names.runId).toBe('run42')
     expect(names.email('Coach')).toBe('coach-rrun42-w2-1@example.test')
     expect(names.email('coach')).toBe('coach-rrun42-w2-2@example.test')
@@ -52,6 +52,16 @@ describe('UniqueNames', () => {
     expect(names.personName('Alex')).not.toBe(names.personName('Alex'))
   })
 
+  it('adds a per-instance nonce, so a second invocation with the same run id cannot repeat names', () => {
+    // Same run id, same worker index, both counters at 1: exactly the serial-lane case.
+    const parallelLane = new UniqueNames(0, { emailDomain: 'example.test', runId: '41598686987' })
+    const serialLane = new UniqueNames(0, { emailDomain: 'example.test', runId: '41598686987' })
+    expect(parallelLane.nonce).toMatch(/^[0-9a-f]{4}$/)
+    expect(parallelLane.email('coach')).not.toBe(serialLane.email('coach'))
+    const fixed = new UniqueNames(0, { emailDomain: 'example.test', runId: 'r', nonce: 'AB12' })
+    expect(fixed.token('coach')).toBe('coach-rrab12-w0-1')
+  })
+
   it('rejects a non-domain', () => {
     expect(() => new UniqueNames(0, { emailDomain: 'localhost' })).toThrow(/not a domain/)
   })
@@ -59,7 +69,7 @@ describe('UniqueNames', () => {
 
 const context = (sql?: SqlExecutor): SeedContext => ({
   ids: new IdAllocator(0, { base: 1000n }),
-  names: new UniqueNames(0, { emailDomain: 'example.test', runId: 't' }),
+  names: new UniqueNames(0, { emailDomain: 'example.test', runId: 't', nonce: '' }),
   clock: systemClock,
   sql,
 })

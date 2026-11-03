@@ -1,0 +1,54 @@
+/**
+ * The Skillars route map (vue-router, hash mode — routing itself is the kernel's `hashRouting`).
+ * Patterns mirror src/frontend/src/router/routes.js, including the `(\\d+)` id constraints, so
+ * `routePattern()` matches exactly what the router matches.
+ */
+export const R = {
+  root: '/',
+  login: '/login',
+  register: '/register',
+  forgotPassword: '/forgot-password',
+  coachRegister: '/coach-register',
+  coachVerifyEmail: '/coach/verify-email',
+  coachBuilder: '/coach/profile-builder',
+  commandCentre: '/coach/command-center',
+  availability: '/coach/availability',
+  bookingRequests: '/coach/booking-requests',
+  coachPlayers: '/coach/players',
+  packTiers: '/coach/session-pack-tiers',
+  revenue: '/coach/revenue',
+  reliability: '/coach/reliability',
+  coachSafeguarding: '/coach/safeguarding',
+  parentRegister: '/parent-register',
+  parentDashboard: '/parent/dashboard',
+  createPlayer: '/parent/create-player',
+  parentBookings: '/parent/bookings',
+  childHub: '/parent/players/:playerId(\\d+)/sessions',
+  childPacks: '/parent/players/:playerId(\\d+)/packs',
+  wallet: '/parent/credit-wallet',
+  retiredApprovals: '/parent/approvals',
+  purchasePack: '/parent/coaches/:coachId/purchase-sessions',
+  requestBooking: '/parent/coaches/:coachId/request-booking',
+  playerRegister: '/player-register',
+  playerHome: '/player/home',
+  playerBuilder: '/player/profile-builder',
+  lockerRoom: '/player/locker-room/:playerId(\\d+)',
+  playerDashboard: '/player/dashboard',
+  ageVerification: '/player/age-verification',
+  marketplace: '/marketplace',
+  coachProfile: '/coaches/:coachId',
+  messaging: '/messaging',
+  notifications: '/notifications',
+  profile: '/profile',
+  unsubscribe: '/unsubscribe',
+  adminHealth: '/admin/health-dashboard',
+  adminRequiresAdministrator: '/admin/requires-administrator',
+} as const
+
+/** Where each role lands after login (src/frontend/src/router/roleRoutes.js). */
+export const ROLE_HOME = {
+  coach: R.commandCentre,
+  parent: R.parentDashboard,
+  player: R.playerHome,
+  admin: R.adminHealth,
+} as const

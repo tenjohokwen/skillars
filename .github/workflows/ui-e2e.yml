@@ -1,0 +1,153 @@
+# Opt-in UI E2E (Playwright, e2e/packages/skillars-e2e) against a disposable stack built from this
+# commit. DELIBERATELY decoupled from the build gate, for the same reasons frontend-unit-tests.yml
+# is: not referenced by ci.yml or pr-build.yml, not a required status check, never invoked by
+# `mvn verify`. Unlike that workflow there is NO diff-based auto-trigger: a UI run builds the app
+# image and boots the whole stack, so it must be asked for.
+#
+# Triggers:
+#   - PR label `ui-e2e`        → @smoke
+#   - PR label `ui-e2e-full`   → everything except @quarantine
+#   - workflow_dispatch        → any --grep expression
+#
+# The kernel's own checks (lint, typecheck, unit, portability) live in pitchside-core.yml.
+name: UI E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      grep:
+        description: 'Playwright --grep expression'
+        default: '@smoke'
+      exclude:
+        description: >-
+          Playwright --grep-invert expression. The default drops tiers this stack cannot serve
+          (rate limiting is off; Stripe is stubbed) and quarantined tests.
+        default: '@quarantine|@ratelimit|@stripe-live'
+  pull_request:
+    types: [opened, labeled, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    # A `labeled` event runs only when the label just added IS ui-e2e / ui-e2e-full — adding any other
+    # label to an opted-in PR must not start (or cancel) a 45-minute run. Pushes and reopens of an
+    # opted-in PR re-run it.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.action == 'labeled' &&
+        (github.event.label.name == 'ui-e2e' || github.event.label.name == 'ui-e2e-full')) ||
+      (github.event.action != 'labeled' &&
+        (contains(github.event.pull_request.labels.*.name, 'ui-e2e') ||
+         contains(github.event.pull_request.labels.*.name, 'ui-e2e-full')))
+    # Job-level, not workflow-level: a skipped run (an unrelated label) never joins the group, so it
+    # can't cancel the run in progress. A new push still supersedes an older run of the same PR.
+    concurrency:
+      group: ui-e2e-${{ github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      APP_IMAGE: skillars-app:e2e-${{ github.run_id }}
+      COMPOSE: docker compose -p skillars-e2e -f e2e/packages/skillars-e2e/stack/docker-compose.e2e.yml
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Resolve the test selection
+        id: select
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_GREP: ${{ inputs.grep }}
+          DISPATCH_EXCLUDE: ${{ inputs.exclude }}
+          FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ui-e2e-full') }}
+        run: |
+          set -euo pipefail
+          # Never on this stack: @ratelimit needs limits ON (a separate stack), @stripe-live needs real
+          # Stripe (nightly), @quarantine is excluded from label runs by policy.
+          unservable='@quarantine|@ratelimit|@stripe-live'
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            echo "grep=${DISPATCH_GREP:-@smoke}" >> "$GITHUB_OUTPUT"
+            echo "invert=${DISPATCH_EXCLUDE:-$unservable}" >> "$GITHUB_OUTPUT"
+          elif [ "$FULL" = "true" ]; then
+            echo "grep=@" >> "$GITHUB_OUTPUT"
+            echo "invert=$unservable" >> "$GITHUB_OUTPUT"
+          else
+            echo "grep=@smoke" >> "$GITHUB_OUTPUT"
+            echo "invert=$unservable" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the app image from this commit
+        uses: ./.github/actions/docker-build
+        with:
+          load: 'true'
+          tags: ${{ env.APP_IMAGE }}
+          commit-sha: ${{ github.sha }}
+
+      - name: Boot the E2E stack
+        run: |
+          set -euo pipefail
+          # Presigned upload URLs name host `storage` (see the compose file).
+          echo "127.0.0.1 storage" | sudo tee -a /etc/hosts
+          $COMPOSE up -d --wait --wait-timeout 420
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install
+        working-directory: e2e
+        run: npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+
+      # Two invocations, because laneProjects' `serial` project (@destructive / @config: database
+      # resets, runtime config) shares global state: `fullyParallel: false` only serialises tests
+      # within a file, so the lane needs a run of its own with one worker. Each run keeps its own
+      # output and blob folders (Playwright empties them at start), and the serial run still goes
+      # ahead when the parallel one failed.
+      - name: Run Playwright — parallel lane
+        id: parallel
+        working-directory: e2e/packages/skillars-e2e
+        env:
+          E2E_RUN_ID: ${{ github.run_id }}
+          GREP: ${{ steps.select.outputs.grep }}
+          GREP_INVERT: ${{ steps.select.outputs.invert }}
+          PLAYWRIGHT_BLOB_OUTPUT_DIR: blob-report/parallel
+        run: >-
+          npx playwright test --project=parallel --output=test-results/parallel
+          --grep "$GREP" --grep-invert "$GREP_INVERT" --pass-with-no-tests
+
+      - name: Run Playwright — serial lane (one worker)
+        if: ${{ !cancelled() && steps.parallel.conclusion != 'skipped' }}
+        working-directory: e2e/packages/skillars-e2e
+        env:
+          E2E_RUN_ID: ${{ github.run_id }}
+          GREP: ${{ steps.select.outputs.grep }}
+          GREP_INVERT: ${{ steps.select.outputs.invert }}
+          PLAYWRIGHT_BLOB_OUTPUT_DIR: blob-report/serial
+        run: >-
+          npx playwright test --project=serial --no-deps --workers=1 --output=test-results/serial
+          --grep "$GREP" --grep-invert "$GREP_INVERT" --pass-with-no-tests
+
+      - name: Dump app logs
+        if: failure()
+        run: $COMPOSE logs --no-color app > app.log 2>&1 || true
+
+      - name: Upload report and failure evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ui-e2e-${{ github.run_id }}
+          path: |
+            e2e/packages/skillars-e2e/blob-report/
+            e2e/packages/skillars-e2e/test-results/
+            app.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Stop the stack
+        if: always()
+        run: $COMPOSE down -v || true

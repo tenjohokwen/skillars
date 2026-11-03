@@ -28,14 +28,30 @@ export const toy = defineSuite({
       logoutPath: '/logout',
       credentials: (role) => ({ username: role, password: 'secret' }),
     }),
-    async () => [{ name: 'fp', value: 'fixed-fingerprint', url: baseUrl }],
+    // A per-persona fingerprint, identical at login and on replay; guests get their own.
+    async (role) => [{ name: 'fp', value: role ? `fp-${role}` : 'fp-guest', url: baseUrl }],
   ),
   taxonomy: defineTaxonomy({ persona: ['@guest', '@member', '@admin'], domain: ['@kernel'] }),
   ids: { base: 5_000_000_000n },
   emailDomain: 'example.test',
   mail: new LogDirSink({ dir: MAIL_DIR }),
   a11yBaselineDir: join(here, 'a11y-baselines'),
+  prepareContext: async (context) => {
+    if (prepareShouldFail) {
+      prepareShouldFail = false
+      throw new Error('prepareContext failed on purpose (self-test)')
+    }
+    await context.route('https://widgets.example.invalid/**', (route) =>
+      route.fulfill({ contentType: 'text/javascript', body: "window.toyWidget = 'stubbed'" }),
+    )
+  },
 })
+
+let prepareShouldFail = false
+/** Makes the next prepareContext call throw — to exercise a half-built actor context. */
+export function failNextPrepareContext(): void {
+  prepareShouldFail = true
+}
 
 export const test = toy.test
 export const expect = toy.expect

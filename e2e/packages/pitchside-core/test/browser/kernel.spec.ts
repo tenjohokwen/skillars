@@ -1,5 +1,5 @@
 import { failFirst, type SeedContext } from '../../src/index.js'
-import { expect, HomeScreen, LoginScreen, test, toy } from './toySuite.js'
+import { expect, failNextPrepareContext, HomeScreen, LoginScreen, test, toy } from './toySuite.js'
 
 // Self-tests of the kernel against the toy app. Each one proves a fixture in a real browser.
 
@@ -21,7 +21,7 @@ test.describe('sessions and actors', () => {
       const { page } = await actor('member')
       const home = await new HomeScreen(page, suite).open()
       await expect(home.role()).toHaveText('member')
-      await expect(home.fingerprint()).toHaveText('fixed-fingerprint')
+      await expect(home.fingerprint()).toHaveText('fp-member')
     },
   )
 
@@ -53,6 +53,123 @@ test.describe('sessions and actors', () => {
       await login.password().fill('secret')
       await login.submit().click()
       await settledRoute('/home')
+    },
+  )
+})
+
+test.describe('session write-back', () => {
+  // Two tests, in order, in one worker: the first rotates the session token mid-test, the second
+  // must start from the rotated token. Replaying the original would trip the toy app's reuse
+  // detection, revoke the session and bounce the second test to the login page.
+  test.describe.configure({ mode: 'serial' })
+
+  test(
+    'an actor whose session token is rotated mid-test hands the rotated token on',
+    toy.scenario({ id: 'KRN-15', priority: 'P0', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor }) => {
+      const { page } = await actor('member')
+      const rotated = await page.request.post('/api/rotate')
+      expect(rotated.ok()).toBe(true)
+      expect((await page.request.get('/api/me')).ok()).toBe(true)
+    },
+  )
+
+  test(
+    'the next actor for that role starts from the rotated session, not the stale snapshot',
+    toy.scenario({ id: 'KRN-16', priority: 'P0', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      const home = await new HomeScreen(page, suite).open()
+      await expect(home.role()).toHaveText('member')
+    },
+  )
+})
+
+test.describe('session write-back edge cases', () => {
+  // Pairs of tests, in order, in one worker: the first leaves the cache in a tricky state, the second
+  // proves the next actor still gets a working session.
+  test.describe.configure({ mode: 'serial' })
+
+  test(
+    'a test that logs out and invalidates the role keeps its invalidation',
+    toy.scenario({ id: 'KRN-17', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, sessions }) => {
+      const { page } = await actor('member')
+      expect((await page.request.post('/api/logout')).ok()).toBe(true)
+      sessions.invalidate('member')
+    },
+  )
+
+  test(
+    'the next actor logs in afresh instead of replaying the logged-out snapshot',
+    toy.scenario({ id: 'KRN-18', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      await expect((await new HomeScreen(page, suite).open()).role()).toHaveText('member')
+    },
+  )
+
+  test(
+    'two actors for one role, one of which rotates the token',
+    toy.scenario({ id: 'KRN-19', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor }) => {
+      const first = await actor('member')
+      await actor('member')
+      expect((await first.page.request.post('/api/rotate')).ok()).toBe(true)
+    },
+  )
+
+  test(
+    'the next actor does not replay the stale token of the second context',
+    toy.scenario({ id: 'KRN-20', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      await expect((await new HomeScreen(page, suite).open()).role()).toHaveText('member')
+    },
+  )
+
+  test(
+    'an actor whose setup fails part-way rejects',
+    toy.scenario({ id: 'KRN-21', priority: 'P2', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor }) => {
+      failNextPrepareContext()
+      await expect(actor('member')).rejects.toThrow(/prepareContext failed on purpose/)
+    },
+  )
+
+  test(
+    'and its half-built context was closed, not leaked',
+    toy.scenario({ id: 'KRN-22', priority: 'P2', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ browser }) => {
+      expect(browser.contexts()).toHaveLength(0)
+    },
+  )
+})
+
+test.describe('session write-back carries only the session', () => {
+  test.describe.configure({ mode: 'serial' })
+
+  test(
+    'a test leaves client state behind: localStorage and a non-session cookie',
+    toy.scenario({ id: 'KRN-23', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      await new HomeScreen(page, suite).open()
+      await page.evaluate(() => {
+        localStorage.setItem('tour', 'done')
+        document.cookie = 'pref=dark; path=/'
+      })
+    },
+  )
+
+  test(
+    'the next actor for that role starts clean, and still logged in',
+    toy.scenario({ id: 'KRN-24', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page, context } = await actor('member')
+      await expect((await new HomeScreen(page, suite).open()).role()).toHaveText('member')
+      expect(await page.evaluate(() => localStorage.getItem('tour'))).toBeNull()
+      expect((await context.cookies()).map((c) => c.name)).not.toContain('pref')
     },
   )
 })
@@ -124,6 +241,19 @@ test.describe('gates', () => {
 })
 
 test.describe('network stubs', () => {
+  test(
+    'prepareContext stubs a third-party script on every context, ahead of the network gate',
+    toy.scenario({ id: 'KRN-14', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ gotoRoute, page, actor, suite, networkGate }) => {
+      await gotoRoute('/widget')
+      await expect(page.getByTestId('widget-status')).toHaveText('stubbed')
+      const member = await actor('member')
+      await member.page.goto(suite.routing.toUrl('/widget'))
+      await expect(member.page.getByTestId('widget-status')).toHaveText('stubbed')
+      expect(networkGate.violations()).toEqual([])
+    },
+  )
+
   test(
     'failFirst produces an error state that recovers on retry',
     toy.scenario({ id: 'KRN-10', priority: 'P1', tags: ['@regression', '@guest', '@kernel'] }),
