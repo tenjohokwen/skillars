@@ -1,0 +1,131 @@
+# Pitchside kernel checks — e2e/packages/pitchside-core, the project-agnostic half of the Playwright
+# UI test framework.
+#
+# DELIBERATELY decoupled from the build gate, like frontend-unit-tests.yml: not referenced by ci.yml
+# or pr-build.yml, not a required status check, never invoked by `mvn verify`, and nothing under e2e/
+# is read by the Docker image (.dockerignore). It fires on any pull request that touches e2e/** —
+# whatever the base branch, so PRs into the feature/pitchside integration branch (which pr-build.yml,
+# master-only, never sees) still get checked — and on manual dispatch. GitHub's `paths:` filter is
+# enough here precisely because this is not a required check: a skipped run can never block a merge.
+#
+# Three jobs:
+#   checks      — prettier, eslint (incl. the import boundary and the waitForTimeout ban), typecheck,
+#                 build, unit tests.
+#   portability — the acceptance test for "portable": copy the kernel ALONE out of the workspace, with
+#                 every app package absent, and it must still install, build and pass its unit tests.
+#   browser     — the kernel's self-tests against a dependency-free toy app in real Chromium.
+#
+# npm: setup-node 22.16.0 ships npm 10, whose resolver crashes ("reading 'edgesOut'") when it has to
+# BUILD a fresh tree containing vitest's optional peer set. `npm ci` against the committed lockfile is
+# fine on npm 10; the lockfile-less portability install uses npm 11 explicitly.
+name: Pitchside Core
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'e2e/**'
+      - '.github/workflows/pitchside-core.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pitchside-core-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: ESLint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+
+      - name: Typecheck
+        if: ${{ !cancelled() }}
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Unit tests
+        run: npm test
+
+  portability:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.16.0'
+
+      - name: Build and test the kernel with every app package deleted
+        run: |
+          set -euo pipefail
+          alone="$RUNNER_TEMP/pitchside-core-alone"
+          mkdir -p "$alone"
+          # Only the kernel directory: no workspace root, no lockfile, no sibling packages.
+          tar -C e2e/packages/pitchside-core --exclude=node_modules --exclude=dist -cf - . | tar -C "$alone" -xf -
+          cd "$alone"
+          npx --yes npm@11.6.2 install --no-audit --no-fund --no-package-lock
+          npm run build
+          npm test
+
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.16.0'
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Kernel self-tests
+        run: npm run test:browser -w pitchside-core
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pitchside-core-browser-${{ github.run_id }}
+          path: e2e/packages/pitchside-core/test-results/
+          retention-days: 14

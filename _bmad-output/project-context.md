@@ -166,6 +166,21 @@ Before committing any class to `infrastructure.*`, verify all of the following:
 
 If any check fails, the class belongs in a platform module.
 
+### 6. UI Test Framework (`e2e/`) — the same boundary, outside the app
+
+The Playwright UI test framework (Pitchside) applies the `infrastructure` / `platform` rule to browser tests:
+**`e2e/packages/pitchside-core` is to `e2e/packages/skillars-e2e` what `infrastructure` is to `platform`.**
+
+- **`pitchside-core`** is the business-agnostic kernel: fixtures, auth strategies, mail sinks, the seeding contract, gates, tag taxonomy. It must never import from, or name, an application (no Skillars routes, cookies, roles or domain terms).
+- **`skillars-e2e`** holds everything Skillars-specific: the hash-route map, `skp` login, factories, screen objects, and every spec.
+- **Dependency flow:** `skillars-e2e` depends on `pitchside-core`, never the reverse.
+- **Enforced, not just documented:**
+  - an ESLint `no-restricted-imports` rule rejects any `*-e2e` import in the kernel;
+  - `test/unit/portability.test.ts` fails on app names and on foreign imports in `src/`;
+  - the `portability` job in `.github/workflows/pitchside-core.yml` builds and tests the kernel copied out alone.
+- **Location:** it lives at the repository root under `e2e/`, deliberately **not** under `src/main/java/.../infrastructure`. It is TypeScript test tooling that drives the running app from outside: it must not ship in the Docker image (`.dockerignore` excludes `e2e/`) or sit inside Maven's Java source roots. It also must stay extractable for reuse in other projects.
+- **Placement test:** before adding code to the kernel, ask the same question as for `infrastructure`: "Could a completely different application use this as-is?" If not, it belongs in `skillars-e2e`.
+
 ---
 
 ## Usage Guidelines
@@ -182,5 +197,5 @@ If any check fails, the class belongs in a platform module.
 - Review quarterly for outdated rules.
 - Remove rules that become obvious over time.
 
-_Last Updated: 2026-09-09_
+_Last Updated: 2026-11-03_
 
