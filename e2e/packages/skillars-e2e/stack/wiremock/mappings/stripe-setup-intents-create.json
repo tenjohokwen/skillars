@@ -1,0 +1,19 @@
+{
+  "name": "Stripe — create SetupIntent (deterministic tier)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/setup_intents"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "id": "seti_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}",
+      "object": "setup_intent",
+      "client_secret": "seti_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}_secret_e2e",
+      "status": "requires_payment_method",
+      "livemode": false
+    }
+  }
+}

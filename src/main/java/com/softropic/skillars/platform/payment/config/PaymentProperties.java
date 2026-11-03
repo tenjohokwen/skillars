@@ -37,4 +37,11 @@ public class PaymentProperties {
     private int connectTimeoutMs = 10_000;
     private int readTimeoutMs = 30_000;
     private int maxNetworkRetries = 2;
+    /**
+     * Where the Stripe SDK sends its calls, instead of api.stripe.com. Read ONLY under the {@code e2e} profile,
+     * by {@link StripeE2eApiBaseConfig}, which points the SDK at the UI suite's WireMock. Everywhere else it is
+     * ignored, and the SDK keeps its built-in Stripe hosts. ({@code application-test.yaml} binds it to the
+     * integration tests' WireMock too, but nothing reads it there.)
+     */
+    private String baseUrl = "";
 }
