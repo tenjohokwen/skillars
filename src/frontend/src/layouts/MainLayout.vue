@@ -76,6 +76,7 @@
             :label="authStore.displayName"
             icon="person"
             class="header-btn"
+            data-testid="user-menu-btn"
           >
             <q-list class="dropdown-list">
               <q-item clickable v-close-popup to="/profile" class="dropdown-item">
@@ -87,7 +88,13 @@
                 </q-item-section>
               </q-item>
               <q-separator style="background: var(--border-soft)" />
-              <q-item clickable v-close-popup @click="handleLogout" class="dropdown-item">
+              <q-item
+                clickable
+                v-close-popup
+                @click="handleLogout"
+                class="dropdown-item"
+                data-testid="user-menu-logout"
+              >
                 <q-item-section avatar>
                   <q-icon name="logout" style="color: var(--accent-danger)" />
                 </q-item-section>
@@ -593,7 +600,12 @@
 
       <!-- Drawer footer -->
       <div class="drawer-footer">
-        <q-item clickable class="nav-item logout-item" @click="handleLogout">
+        <q-item
+          clickable
+          class="nav-item logout-item"
+          @click="handleLogout"
+          data-testid="nav-logout"
+        >
           <q-item-section avatar>
             <q-icon name="logout" class="nav-icon--danger" />
           </q-item-section>
