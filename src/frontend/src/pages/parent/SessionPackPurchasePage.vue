@@ -2,7 +2,7 @@
   <q-page class="q-pa-md">
     <div class="row items-center q-mb-md">
       <q-btn flat round icon="arrow_back" @click="router.back()" />
-      <div class="text-h6 q-ml-sm">
+      <div class="text-h6 q-ml-sm" data-testid="purchase-title">
         {{ t('booking.packs.purchaseTitle', { coachName: coachName }) }}
       </div>
     </div>
@@ -60,14 +60,29 @@
         {{ t('booking.packs.noTierAvailable') }}
       </div>
 
-      <q-banner v-if="purchaseError" class="bg-negative text-white q-mb-md">
+      <q-banner
+        v-if="purchaseError"
+        class="bg-negative text-white q-mb-md"
+        data-testid="purchase-error"
+      >
         {{ purchaseError }}
       </q-banner>
 
-      <q-banner v-if="!hasCard" rounded class="q-mb-md" style="background: var(--surface-warning)">
+      <q-banner
+        v-if="!hasCard"
+        rounded
+        class="q-mb-md"
+        style="background: var(--surface-warning)"
+        data-testid="purchase-add-card-banner"
+      >
         {{ t('payment.card.addCardPrompt') }}
         <template #action>
-          <q-btn flat :label="t('payment.card.addCardCta')" @click="addCardDialog = true" />
+          <q-btn
+            flat
+            :label="t('payment.card.addCardCta')"
+            @click="addCardDialog = true"
+            data-testid="purchase-add-card-btn"
+          />
         </template>
       </q-banner>
 
@@ -79,11 +94,12 @@
         :disable="!selected || !hasCard"
         :loading="purchasing"
         @click="confirmPurchase"
+        data-testid="purchase-confirm"
       />
     </template>
 
     <q-dialog v-model="addCardDialog">
-      <q-card class="glass-card" style="min-width: 340px">
+      <q-card class="glass-card" style="min-width: 340px" data-testid="purchase-card-dialog">
         <q-card-section>
           <div class="text-h6">{{ t('payment.card.title') }}</div>
         </q-card-section>

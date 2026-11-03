@@ -13,7 +13,12 @@
     </div>
 
     <!-- 404 / error state -->
-    <div v-else-if="notFound" class="flex flex-center column q-gutter-md" style="min-height: 60vh">
+    <div
+      v-else-if="notFound"
+      class="flex flex-center column q-gutter-md"
+      style="min-height: 60vh"
+      data-testid="coach-profile-not-found"
+    >
       <q-icon name="person_off" size="64px" style="color: var(--text-secondary)" />
       <div class="text-h6" style="color: var(--text-primary)">
         {{ t('marketplace.coachNotFound') }}
@@ -37,7 +42,11 @@
             <q-icon v-else name="person" size="48px" style="color: var(--text-secondary)" />
           </q-avatar>
           <div class="col">
-            <div class="text-h5 text-weight-bold" style="color: var(--text-primary)">
+            <div
+              class="text-h5 text-weight-bold"
+              style="color: var(--text-primary)"
+              data-testid="coach-profile-name"
+            >
               {{ profile.displayName }}
             </div>
             <div class="row items-center q-gutter-sm q-mt-xs">
@@ -86,7 +95,11 @@
             size="18px"
             color="amber"
           />
-          <span class="text-body2" style="color: var(--text-secondary)">
+          <span
+            class="text-body2"
+            style="color: var(--text-secondary)"
+            data-testid="coach-profile-rating"
+          >
             {{
               profile.reviewCount > 0
                 ? `${profile.averageRating.toFixed(1)} (${profile.reviewCount})`
@@ -233,7 +246,7 @@
         </div>
 
         <!-- Bio -->
-        <div v-if="profile.bio" class="glass-card q-pa-md q-mb-md">
+        <div v-if="profile.bio" class="glass-card q-pa-md q-mb-md" data-testid="coach-profile-bio">
           <div class="text-body1" style="color: var(--text-primary); white-space: pre-wrap">
             {{ profile.bio }}
           </div>
@@ -241,7 +254,11 @@
 
         <!-- Info chips -->
         <div class="glass-card q-pa-md q-mb-md">
-          <div v-if="profile.languages?.length" class="q-mb-sm">
+          <div
+            v-if="profile.languages?.length"
+            class="q-mb-sm"
+            data-testid="coach-profile-languages"
+          >
             <q-chip
               v-for="lang in profile.languages"
               :key="lang"
@@ -253,16 +270,25 @@
               {{ lang }}
             </q-chip>
           </div>
-          <div v-if="profile.city" class="text-body2 q-mb-sm" style="color: var(--text-secondary)">
+          <div
+            v-if="profile.city"
+            class="text-body2 q-mb-sm"
+            style="color: var(--text-secondary)"
+            data-testid="coach-profile-location"
+          >
             <q-icon name="location_on" size="16px" class="q-mr-xs" />
             {{ profile.city }}<template v-if="profile.district">, {{ profile.district }}</template>
           </div>
-          <div v-if="profile.specialties?.length" class="q-mb-sm">
+          <div
+            v-if="profile.specialties?.length"
+            class="q-mb-sm"
+            data-testid="coach-profile-specialties"
+          >
             <q-chip v-for="s in profile.specialties" :key="s" dense size="sm" class="info-chip">
               {{ s }}
             </q-chip>
           </div>
-          <div v-if="profile.ageGroupsCoached?.length">
+          <div v-if="profile.ageGroupsCoached?.length" data-testid="coach-profile-age-groups">
             <q-chip
               v-for="ag in profile.ageGroupsCoached"
               :key="ag"
@@ -307,6 +333,7 @@
             v-if="profile.perSessionPrice"
             class="text-h4 text-weight-bold q-mb-md"
             style="color: var(--text-primary)"
+            data-testid="coach-profile-price"
           >
             {{ formatCurrency(profile.perSessionPrice, profile.currency) }}
             <span class="text-caption text-weight-regular" style="color: var(--text-secondary)">
@@ -320,6 +347,7 @@
             :per-session-price="profile.perSessionPrice"
             :currency="profile.currency"
             class="q-mb-md"
+            data-testid="coach-profile-packs"
           />
 
           <!-- Credit tracker — shown to a parent who holds (or held) an active pack with this coach.
@@ -331,6 +359,7 @@
             :session-count="activePackSessionCount"
             class="q-mb-md"
             @buy-sessions="handleBuySessions"
+            data-testid="coach-profile-credits"
           />
 
           <!-- A coach's shared-slot link (?slot=…, see CoachCommandCenterPage generateSlotLink) -->

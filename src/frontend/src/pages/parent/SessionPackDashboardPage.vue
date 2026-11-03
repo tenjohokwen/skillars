@@ -7,7 +7,7 @@
     </div>
 
     <template v-else-if="bookingStore.sessionPacks.length === 0">
-      <div class="empty-state text-center q-py-xl">
+      <div class="empty-state text-center q-py-xl" data-testid="packs-empty">
         <q-icon name="sports_soccer" size="56px" color="grey-5" class="q-mb-md" />
         <div class="text-body1 text-grey q-mb-md">{{ t('booking.packs.emptyState') }}</div>
         <q-btn
@@ -26,15 +26,18 @@
         flat
         bordered
         class="pack-card q-mb-sm"
+        data-testid="pack-card"
       >
         <q-card-section>
           <div class="row items-start">
             <div class="col">
-              <div class="text-weight-medium">{{ coachNames[pack.coachId] ?? pack.coachId }}</div>
-              <div class="text-caption text-grey q-mt-xs">
+              <div class="text-weight-medium" data-testid="pack-coach-name">
+                {{ coachNames[pack.coachId] ?? pack.coachId }}
+              </div>
+              <div class="text-caption text-grey q-mt-xs" data-testid="pack-bundle">
                 {{ t('booking.packs.sessionsBundle', { count: pack.sessionCount }) }}
               </div>
-              <div class="text-caption q-mt-xs">
+              <div class="text-caption q-mt-xs" data-testid="pack-credits">
                 {{
                   t('booking.packs.creditsRemainingLabel', {
                     remaining: pack.creditsRemaining,
