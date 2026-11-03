@@ -294,18 +294,21 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * read, so it cannot invent one, and refusing every such token would sign out every live session the
      * moment this deploys.
      *
-     * <p><strong>That exposure is UNBOUNDED, not bounded by the chain's TTL</strong> — an earlier draft of
-     * this javadoc said otherwise and was wrong. A claimless token never acquires a claim: this branch
-     * passes the {@code null} straight back into {@code renewLoginToken}, and {@code extendTtlOfToken}
-     * omits what it cannot read, while both re-mint {@code exp}, {@code dbRToken} and
-     * {@code SESSION_ISSUED_AT}. Nothing else on either path consults {@code refresh_tokens}
-     * (skillars-deferred-144 AC8 removed the per-request lookup). So a holder who makes one request every
-     * {@code JWT_TTL} keeps that session alive indefinitely, long after its chain is revoked, expired and
-     * swept. A stolen PRE-deploy {@code potc} is therefore a permanent session until the fail-closed flip
-     * happens, and that flip cannot be scheduled by "wait one REFRESH_TOKEN_TTL" either — it needs a
-     * deliberate trigger, which is filed as an owner decision in {@code deferred-work.md}.
+     * <p><strong>A claimless token sent WITH its own {@code rtkn} cookie is repaired, not skipped.</strong>
+     * {@link #resolveRefreshSessionId} re-derives the chain id from that cookie and the resolved value is
+     * what reaches {@code renewLoginToken}, so the claim is restored for the rest of the session. That is
+     * what covers a token a rolling deploy stripped.
      *
-     * <p>A post-deploy token always carries the claim, so the ordinary stolen-cookie case IS covered.
+     * <p><strong>A claimless token sent WITHOUT it is unbounded</strong> — not bounded by the chain's TTL,
+     * as a draft of this javadoc once claimed. There is nothing to derive from, so the check is skipped;
+     * {@code extendTtlOfToken} omits what it cannot read and re-mints {@code exp}, {@code dbRToken} and
+     * {@code SESSION_ISSUED_AT}, and nothing else on either path consults {@code refresh_tokens}
+     * (skillars-deferred-144 AC8 removed the per-request lookup). So a holder who makes one request every
+     * {@code JWT_TTL} keeps that session alive indefinitely, past logout, past the chain's expiry and past
+     * the sweep. That is precisely the shape of a thief who copied a {@code potc} and nothing else, and
+     * omitting a cookie costs them nothing — so the repair narrows this gap but does not close it. The
+     * fail-closed flip is an owner decision in {@code deferred-work.md}, and it cannot be scheduled by
+     * "wait one REFRESH_TOKEN_TTL".
      *
      * <p>Throws the same exception and error code as its account-wide sibling: the client cannot act
      * differently on "your session ended" versus "your account's sessions ended", and the SPA already

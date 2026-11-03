@@ -1,6 +1,5 @@
 package com.softropic.skillars.platform.security.service;
 
-import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.security.repo.LoginAttemptRepository;
 import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 
@@ -61,7 +60,7 @@ public class AuthCleanupService {
                    lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     public void purgeExpiredRefreshTokens() {
         try {
-            refreshTokenRepository.deleteExpiredTokens(Instant.now(ClockProvider.getClock()));
+            refreshTokenRepository.deleteExpiredTokens();
             log.debug("Purged expired refresh tokens");
         } catch (PessimisticLockingFailureException e) {
             // 40P01 (deadlock victim) and 55P03 (lock not available) both land here. The writer that can

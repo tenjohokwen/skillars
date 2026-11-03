@@ -314,6 +314,19 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * {@code Sort} and takes every row lock in {@code id} order before the delete proceeds. Native,
      * because JPQL has no way to express either the ordering or {@code FOR UPDATE} in a bulk delete.
      *
+     * <p><strong>The cutoff is the DATABASE's clock, deliberately.</strong> An earlier version of this
+     * method took an {@code Instant} parameter so the caller could pass
+     * {@code Instant.now(ClockProvider.getClock())}, for consistency with every other expiry comparison in
+     * the auth code. That was wrong for a sweep: the cutoff decides what gets DELETED, and on a
+     * multi-instance deployment whichever node wins the {@code @SchedulerLock} would impose its own clock,
+     * so a node running fast would delete rows the database still considers live. Since
+     * skillars-deferred-167 AC4 that is no longer invisible — a deleted row makes
+     * {@link #existsLiveBySessionId} false and refuses the owner's standing JWT on its next DB-reauth
+     * cycle, so clock skew would read as a mass logout. {@code now()} is single-sourced and immune to it.
+     * The liveness check keeps the application clock on purpose: it must agree with
+     * {@code AuthService.decideAndRotate} about whether a row is live, and being a few seconds out there
+     * costs one early or late refusal rather than a deletion.
+     *
      * <p><strong>What this does NOT fix:</strong> {@link #markAllUsedByUserId(Long)} and
      * {@link #markAllRevokedByUserId(Long, Instant)} are still unordered bulk {@code UPDATE}s over one
      * user's rows, so they can still deadlock against this sweep. That shape predates deferred-167 and is
@@ -333,7 +346,7 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Modifying
     @Transactional
     @Query(value = "DELETE FROM main.refresh_tokens WHERE id IN ("
-        + "SELECT id FROM main.refresh_tokens WHERE expires_at < :now ORDER BY id FOR UPDATE)",
+        + "SELECT id FROM main.refresh_tokens WHERE expires_at < now() ORDER BY id FOR UPDATE)",
         nativeQuery = true)
-    void deleteExpiredTokens(@Param("now") Instant now);
+    void deleteExpiredTokens();
 }

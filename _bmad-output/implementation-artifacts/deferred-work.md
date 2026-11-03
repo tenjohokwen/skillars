@@ -32,12 +32,14 @@ the alternatives and stay queued behind it.
   fail-open to fail-closed on a missing session claim — and the trigger cannot be "wait 7 days", which is
   what this entry first said. skillars-deferred-167 AC5 skips the check for a JWT with no `rtsid` claim,
   because failing closed at deploy would sign out every live session and neither mint path can invent the
-  claim. **Both reviewer arms then showed the exposure is unbounded:** a claimless token never acquires a
-  claim (the DB-reauth branch passes the missing value back, the TTL-only path omits what it cannot read)
-  and nothing else on either path consults `refresh_tokens`, so a holder making one request every
-  `JWT_TTL` keeps that session alive indefinitely — past revocation, expiry and the sweep. A `potc` stolen
-  before the rollout is therefore a permanent session, and the 7-day reasoning this entry originally
-  carried was wrong.
+  claim. **Both reviewer arms then showed the exposure is unbounded**, and a later round narrowed it without
+  closing it. As first written this entry said a claimless token never acquires a claim; that is now only
+  true of one presented WITHOUT its `rtkn` cookie. With the cookie the filter re-derives the chain id and
+  the claim is restored for the rest of that session — the repair that covers a rolling deploy stripping
+  it. Without the cookie there is nothing to derive from, the check is skipped, and a holder making one
+  request every `JWT_TTL` keeps the session alive indefinitely, past logout, expiry and the sweep.
+  **Omitting a cookie costs an attacker nothing**, so a `potc` copied before the rollout and replayed on
+  its own is still a permanent session, and the 7-day reasoning this entry originally carried was wrong.
   **Options.** (a) Flip on a chosen date and accept that any remaining claimless holders are signed out
   then — one-off, bounded, and the only option that actually closes it. (b) Ship a forced re-login
   (invalidate every session once) and flip immediately after, which closes it without a surprise logout
@@ -45,6 +47,29 @@ the alternatives and stay queued behind it.
   cookie when the row carries one, with an ownership check against the authorized principal — narrows the
   population but cannot help a holder who has only the `potc`, which is precisely the thief. **Recommend
   (a)**, with the date announced; (c) adds a query and a new failure mode for partial coverage.
+
+- **[skillars-deferred-167, OWNER DECISION NEEDED, high/security]** The AC7 downgrade also destroys the
+  victim's only remediation, which neither the story nor the AC7 decision anticipated. Both reviewer arms
+  raised it independently in round 3 of that story's PR review.
+  The shape: an attacker who steals an `rtkn` and rotates it first leaves the victim holding a `used` row
+  in front of the attacker's live chain. The victim's next refresh past the 30 s window now answers 401
+  with no writes — and calls `clearAuthCookies`, which **deletes the victim's `rtkn`**. That cookie was the
+  only value `SecurityUtil.terminateSession` could hash to start a chain walk, and that walk was the one
+  remaining thing that would have reached the attacker's successor and revoked it. So after that 401 the
+  victim's Logout revokes nothing, a fresh login starts an unrelated chain, and the attacker's chain keeps
+  rotating (each rotation writes a fresh `expires_at`, so it never expires). AC4 cannot help: attacker and
+  victim share the same `session_id` and the chain is live. Before this story the victim's own refresh
+  remediated automatically, because it escalated to revoke-all. What remains is a `warn` line and the
+  `security.refresh.stale_live_chain` counter; the only user-reachable fix is a password change.
+  **Options.** (a) Stop clearing the cookies on this branch — one line. The victim keeps a `used` cookie
+  that cannot be traded in for anything, but Logout can still walk the chain and kill the attacker. Cost:
+  a client that believes it is still signed in (its JWT does keep working, since the chain is live).
+  (b) Have the branch revoke the chain from the presented row forward, which kills the attacker and the
+  victim's own live end — correct for theft, and for a benign double-refresh it is the forced re-login AC7
+  set out to avoid, though scoped to one chain rather than the whole account. (c) Keep AC7 as shipped and
+  accept that this theft shape is unremediable short of a password change. **Recommend (b)**: it keeps
+  AC7's blast radius inside one chain, which was the point, while restoring a revocation the victim's own
+  client triggers. Not changed in the story because AC7's text specifies `401 + clearAuthCookies`.
 
 - **[skillars-deferred-167, OWNER DECISION NEEDED, medium/logic]** The chain cap introduced by that story
   logs every continuously active WEB user out 7 days after login, and does not cap API clients at all.

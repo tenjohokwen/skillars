@@ -530,13 +530,18 @@ class JWTAuthorizationFilterTest {
         when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
         when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
         when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(chainId);
-        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), any())).thenReturn(false);
+        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), eq(1L))).thenReturn(false);
 
         filter.doFilterInternal(request, response, filterChain);
 
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(filterChain, never()).doFilter(request, response);
         verify(loginTokenManager, never()).renewLoginToken(any(), any(), any());
+        // The user id is pinned, not any(): scoping the liveness query to the authorized principal is the
+        // only thing stopping a potc from one account being paired with another account's live chain, and
+        // an any() stub would keep passing if a future change passed null (which fails OPEN) or the wrong
+        // id. businessId is "1" on the principal this test authorizes.
+        verify(securityUtil).hasLiveRefreshTokenForSession(chainId, 1L);
     }
 
     @Test
@@ -559,7 +564,7 @@ class JWTAuthorizationFilterTest {
         when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
         when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
         when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(chainId);
-        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), any())).thenReturn(true);
+        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), eq(1L))).thenReturn(true);
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -567,6 +572,7 @@ class JWTAuthorizationFilterTest {
         // Carrying the id into renewLoginToken is what keeps the claim alive across a DB re-auth: that
         // method rebuilds its claim map from scratch, so an unpassed claim is silently dropped.
         verify(loginTokenManager).renewLoginToken(response, authorizedPrincipal, chainId);
+        verify(securityUtil).hasLiveRefreshTokenForSession(chainId, 1L);
     }
 
     @Test
@@ -596,7 +602,7 @@ class JWTAuthorizationFilterTest {
         // "nothing live" and reject every pre-story session. The filter does try to REPAIR the claim from
         // the request's rtkn cookie first (round 2: a rolling deploy can strip it), and the unstubbed
         // mock returns null for that, which is the same no-claim state.
-        verify(securityUtil).refreshSessionIdForRequest(eq(request), any());
+        verify(securityUtil).refreshSessionIdForRequest(request, 1L);
         verify(securityUtil, never()).hasLiveRefreshTokenForSession(any(), any());
     }
 

@@ -225,7 +225,10 @@ defects introduced by the previous round's own fix.
         `SecurityUtilTest` 8/8, `AuthCleanupServiceTest` 6/6, `MigrationConventionLintTest` 30/30,
         `NativeModifyingVersionAuditTest` 2/2, `IntegrationTestConventionTest` 6/6
 - [x] Task 9: docs (AC11) — `check-docs: OK, 26 pages`
-- [ ] Task 10: `/pr-review` to a clean round (AC12)
+- [~] Task 10: `/pr-review` (AC12) — three rounds run, 26 findings; **not a clean round**: four owner
+      decisions remain, one of which (the AC7 remediation loss) is a code change, so a fourth round is
+      pointless until it is settled. Records: `.pr-review/826ac6cf...md`, `.pr-review/f5380b7a...md`,
+      `.pr-review/d45d11d3...md`
 
 ## Dev Notes
 
@@ -566,6 +569,26 @@ stays and is still asserted.
 - `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
 
 ### Change Log
+
+- 2026-11-03 — three `/pr-review` rounds applied (records in `.pr-review/`). 26 findings. Every round found
+  at least one defect the previous round introduced or left behind, which is why AC12 asks for rounds
+  rather than a round:
+  - Round 1 (7): the documented 7-day bound on AC5's fail-open does not exist (both arms) and was wrong in
+    four places; every rotation resets `expires_at`, so neither AC10's cap nor AC7's "up to 7 days" held;
+    the `StaleChain` branch fires for any age and any depth up to the hop bound; AC7's mandated metric was
+    never shipped. Fixed. Round 1 left `resolveGraceSuccessor`'s contract contradicting its own code.
+  - Round 2 (12): a rolling deploy (or rollback) permanently strips the `rtsid` claim from a POST-deploy
+    token, which **reversed the story review's decision to drop claim re-derivation** — that review was
+    right that a pre-V225 row has nothing to derive, but a post-deploy token losing a claim it already had
+    is a different case, and re-derivation is the only repair. Also scoped the liveness query to the
+    authorized user, and fixed round 1's stale contract. Round 2's own fix then left
+    `assertSessionChainStillLive`'s javadoc asserting the opposite, and moved the sweep's cutoff to an
+    app-node clock.
+  - Round 3 (7): both arms independently found that the AC7 401 clears the victim's `rtkn`, which was the
+    only value `terminateSession` could walk from — so Logout can no longer revoke a thief's chain. Filed
+    as a high-severity owner decision rather than changed, because AC7's text specifies that call. Fixed
+    round 2's two regressions (the javadoc, the sweep clock) and pinned the user id the cross-account
+    scoping depends on, which no test had constrained.
 
 - 2026-11-03 — revised after `/mto-story-review` against HEAD b3b0d647 (report:
   `_bmad-output/implementation-artifacts/story-review.md`). Applied: AC7 now states and instruments the

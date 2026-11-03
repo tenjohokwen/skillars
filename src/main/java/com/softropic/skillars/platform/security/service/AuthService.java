@@ -644,6 +644,20 @@ public class AuthService {
      *       chain nobody rotates.</li>
      * </ul>
      * A replay against a chain with NOTHING live at its end is still {@link Reuse} and still escalates.
+     *
+     * <p><strong>And the 401 takes the victim's remediation with it.</strong> This branch calls
+     * {@code clearAuthCookies}, which deletes the {@code rtkn} cookie. That cookie was the only value
+     * {@code SecurityUtil.terminateSession} could have hashed to start a chain walk, and the walk is what
+     * would have reached the attacker's live successor and revoked it. After this 401 the victim's Logout
+     * button therefore revokes nothing, and a fresh login starts an unrelated chain, so the foothold
+     * outlives every action the user can take short of a password change (which still revokes account-wide).
+     * Before this story the victim's own refresh remediated automatically, because it escalated.
+     *
+     * <p>Not changed here, deliberately: AC7 specifies {@code 401 + clearAuthCookies}, and whether to keep
+     * clearing is part of the AC7 decision already filed in {@code deferred-work.md} — leaving the cookie
+     * standing would preserve the Logout path at the cost of a client that believes it is still signed in.
+     * Both reviewer arms raised this independently; do not "tidy up" the cookie clearing without reading
+     * that entry.
      */
     private record StaleChain(Long ownerId, String presentedHash) implements RefreshOutcome { }
 

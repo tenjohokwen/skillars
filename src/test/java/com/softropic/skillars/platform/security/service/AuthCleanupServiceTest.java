@@ -48,15 +48,13 @@ class AuthCleanupServiceTest {
 
     @Test
     void purgeExpiredRefreshTokens_delegatesToRepository() {
-        Instant before = Instant.now();
-
         service.purgeExpiredRefreshTokens();
 
-        // skillars-deferred-167 AC9: the cutoff is now passed in rather than left to the database's
-        // CURRENT_TIMESTAMP, so that every expiry comparison in the auth code reads the same clock.
-        ArgumentCaptor<Instant> nowCaptor = ArgumentCaptor.forClass(Instant.class);
-        verify(refreshTokenRepository).deleteExpiredTokens(nowCaptor.capture());
-        assertThat(nowCaptor.getValue()).isBetween(before, Instant.now());
+        // skillars-deferred-167 round 3: no cutoff argument, deliberately. The sweep's predicate is the
+        // DATABASE's now(), because whichever instance wins the ShedLock would otherwise impose its own
+        // clock on what gets deleted — and since AC4 a wrongly deleted row refuses the owner's standing
+        // JWT, so skew would read as a mass logout.
+        verify(refreshTokenRepository).deleteExpiredTokens();
     }
 
     /**
@@ -69,7 +67,7 @@ class AuthCleanupServiceTest {
     @Test
     void purgeExpiredRefreshTokens_lostDeadlock_isContainedSoTheNextRunRetries() {
         doThrow(new DeadlockLoserDataAccessException("40P01", null))
-            .when(refreshTokenRepository).deleteExpiredTokens(any());
+            .when(refreshTokenRepository).deleteExpiredTokens();
 
         assertThatCode(() -> service.purgeExpiredRefreshTokens())
             .as("a deadlocked sweep must not escape the @Scheduled method")
