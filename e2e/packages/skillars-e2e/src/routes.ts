@@ -8,8 +8,11 @@ export const R = {
   login: '/login',
   register: '/register',
   forgotPassword: '/forgot-password',
+  resetPassword: '/reset-password',
   coachRegister: '/coach-register',
+  coachEmailPending: '/coach/email-pending',
   coachVerifyEmail: '/coach/verify-email',
+  coachVerifyPhone: '/coach/verify-phone',
   coachBuilder: '/coach/profile-builder',
   commandCentre: '/coach/command-center',
   availability: '/coach/availability',
@@ -20,6 +23,9 @@ export const R = {
   reliability: '/coach/reliability',
   coachSafeguarding: '/coach/safeguarding',
   parentRegister: '/parent-register',
+  parentEmailPending: '/parent/email-pending',
+  parentVerifyEmail: '/parent/verify-email',
+  parentVerifyPhone: '/parent/verify-phone',
   parentDashboard: '/parent/dashboard',
   createPlayer: '/parent/create-player',
   parentBookings: '/parent/bookings',
@@ -30,6 +36,9 @@ export const R = {
   purchasePack: '/parent/coaches/:coachId/purchase-sessions',
   requestBooking: '/parent/coaches/:coachId/request-booking',
   playerRegister: '/player-register',
+  playerEmailPending: '/player/email-pending',
+  playerVerifyEmail: '/player/verify-email',
+  playerVerifyPhone: '/player/verify-phone',
   playerHome: '/player/home',
   playerBuilder: '/player/profile-builder',
   lockerRoom: '/player/locker-room/:playerId(\\d+)',
@@ -51,4 +60,26 @@ export const ROLE_HOME = {
   parent: R.parentDashboard,
   player: R.playerHome,
   admin: R.adminHealth,
+} as const
+
+/** The per-role registration chain. The three variants of each step share their test ids. */
+export const REGISTRATION = {
+  coach: {
+    register: R.coachRegister,
+    emailPending: R.coachEmailPending,
+    verifyEmail: R.coachVerifyEmail,
+    verifyPhone: R.coachVerifyPhone,
+  },
+  parent: {
+    register: R.parentRegister,
+    emailPending: R.parentEmailPending,
+    verifyEmail: R.parentVerifyEmail,
+    verifyPhone: R.parentVerifyPhone,
+  },
+  player: {
+    register: R.playerRegister,
+    emailPending: R.playerEmailPending,
+    verifyEmail: R.playerVerifyEmail,
+    verifyPhone: R.playerVerifyPhone,
+  },
 } as const

@@ -6,10 +6,12 @@
       </div>
 
       <div class="glass-card--static auth-card">
-        <div class="text-section-title q-mb-xs">{{ t('auth.parent.phoneVerifyTitle') }}</div>
+        <div class="text-section-title q-mb-xs" data-testid="phone-verify-title">
+          {{ t('auth.parent.phoneVerifyTitle') }}
+        </div>
         <div class="text-meta q-mb-lg">{{ t('auth.parent.phoneVerifySubtitle') }}</div>
 
-        <div class="otp-row q-mb-lg">
+        <div class="otp-row q-mb-lg" data-testid="phone-verify-otp">
           <q-input
             v-for="(_, index) in digits"
             :key="index"
@@ -27,14 +29,24 @@
             @update:model-value="onDigitInput(index)"
             @keydown="onKeyDown(index, $event)"
             @paste="onPaste"
+            data-testid="phone-verify-otp-digit"
           />
         </div>
 
-        <div v-if="isSubmitting" class="flex flex-center q-mb-md">
+        <div
+          v-if="isSubmitting"
+          class="flex flex-center q-mb-md"
+          data-testid="phone-verify-submitting"
+        >
           <q-spinner-dots size="32px" style="color: var(--accent-primary)" />
         </div>
 
-        <q-banner v-if="hasError" class="auth-banner auth-banner--error q-mb-md" rounded>
+        <q-banner
+          v-if="hasError"
+          class="auth-banner auth-banner--error q-mb-md"
+          rounded
+          data-testid="phone-verify-error"
+        >
           {{ errorMessage }}
           <template v-if="helpCode">
             <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -55,8 +67,9 @@
             :disable="resendCooldown > 0 || isResending"
             :loading="isResending"
             @click="handleResendOtp"
+            data-testid="phone-verify-resend-btn"
           />
-          <router-link to="/login" class="auth-link">
+          <router-link to="/login" class="auth-link" data-testid="phone-verify-login-link">
             &larr; {{ t('auth.parent.signInInstead') }}
           </router-link>
         </div>

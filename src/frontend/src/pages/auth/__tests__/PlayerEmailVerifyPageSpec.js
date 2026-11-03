@@ -45,8 +45,10 @@ describe('PlayerEmailVerifyPage.vue — nextStep branching (skillars-deferred-13
   })
 
   it('nextStep "verify-phone" stores the handle and navigates to /player/verify-phone', async () => {
+    // Resolves the body, as the `api` instance's response interceptor does.
     playerRegistrationApi.verifyEmail.mockResolvedValue({
-      data: { nextStep: 'verify-phone', verificationToken: 'handle-abc' },
+      nextStep: 'verify-phone',
+      verificationToken: 'handle-abc',
     })
 
     const { router } = await mountPage()
@@ -57,7 +59,8 @@ describe('PlayerEmailVerifyPage.vue — nextStep branching (skillars-deferred-13
 
   it('nextStep "login" (phone OTP not required) skips sessionStorage and goes to /login?verified=true', async () => {
     playerRegistrationApi.verifyEmail.mockResolvedValue({
-      data: { nextStep: 'login', verificationToken: null },
+      nextStep: 'login',
+      verificationToken: null,
     })
 
     const { router } = await mountPage()

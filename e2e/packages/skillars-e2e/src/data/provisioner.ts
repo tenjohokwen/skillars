@@ -65,7 +65,7 @@ export function guestFingerprint(): string {
   return `e2e-guest-${randomBytes(8).toString('hex')}`
 }
 
-const VERIFY_TOKEN = /token=([0-9a-f-]{36})/
+export const VERIFY_TOKEN = /token=([0-9a-f-]{36})/
 
 /** Phones the stack itself seeds (docker-compose.e2e.yml); generated numbers must never take one. */
 const RESERVED_PHONES = new Set([process.env.E2E_ADMIN_PHONE ?? '+15550000001'])
@@ -106,6 +106,27 @@ export class Provisioner {
 
   async dispose(): Promise<void> {
     await this.anonymous.dispose()
+  }
+
+  /**
+   * Unique, valid registration details for a spec that registers through the UI itself: a fresh
+   * email, a phone from the same per-worker sequence the API path uses, and the stack's password.
+   */
+  identity(kind: AccountKind): {
+    email: string
+    phone: string
+    password: string
+    firstName: string
+    lastName: string
+  } {
+    const [, lastName = 'Tester'] = this.names.personName('x').split(' ')
+    return {
+      email: this.names.email(`u${kind}`),
+      phone: this.nextPhone(),
+      password: E2E.accountPassword,
+      firstName: `${kind.charAt(0).toUpperCase()}${kind.slice(1)}`,
+      lastName,
+    }
   }
 
   /** Register and verify by email. The phone-OTP step is off by default (seeded config). */

@@ -2,10 +2,17 @@
   <q-page class="auth-page">
     <div class="auth-card-container fade-in">
       <div class="glass-card--static auth-card">
-        <div class="text-section-title q-mb-xs">{{ t('auth.player.profileBuilderTitle') }}</div>
+        <div class="text-section-title q-mb-xs" data-testid="player-builder-title">
+          {{ t('auth.player.profileBuilderTitle') }}
+        </div>
         <div class="text-meta q-mb-lg">{{ t('auth.player.profileBuilderBody') }}</div>
 
-        <q-banner v-if="hasError" class="q-mb-md auth-banner auth-banner--error" rounded>
+        <q-banner
+          v-if="hasError"
+          class="q-mb-md auth-banner auth-banner--error"
+          rounded
+          data-testid="player-builder-error"
+        >
           {{ errorMessage }}
         </q-banner>
 
@@ -18,6 +25,7 @@
             emit-value
             map-options
             :rules="[required]"
+            data-testid="player-builder-position-select"
           />
 
           <q-btn
@@ -28,6 +36,7 @@
             :disable="!position || isSubmitting"
             unelevated
             size="md"
+            data-testid="player-builder-submit-btn"
           />
         </q-form>
       </div>

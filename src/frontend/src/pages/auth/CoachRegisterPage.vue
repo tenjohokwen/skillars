@@ -7,19 +7,25 @@
       </div>
 
       <div class="glass-card--static auth-card">
-        <div class="text-section-title q-mb-xs">{{ t('auth.coach.registerTitle') }}</div>
+        <div class="text-section-title q-mb-xs" data-testid="register-title">
+          {{ t('auth.coach.registerTitle') }}
+        </div>
 
         <q-banner
           v-if="hasError && !hasFieldErrors"
           class="q-mb-md auth-banner auth-banner--error"
           rounded
+          data-testid="register-error"
         >
           {{ emailInUse ? t('auth.coach.emailInUse') : errorMessage }}
           <template v-if="emailInUse">
             <span>&nbsp;</span>
-            <router-link to="/login" class="auth-link">{{
-              t('auth.coach.signInInstead')
-            }}</router-link>
+            <router-link
+              to="/login"
+              class="auth-link"
+              data-testid="register-email-in-use-login-link"
+              >{{ t('auth.coach.signInInstead') }}</router-link
+            >
           </template>
           <template v-else-if="helpCode">
             <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -38,8 +44,15 @@
                   :rules="[required, maxLen50]"
                   :error="hasFieldError('firstName')"
                   :error-message="getFieldError('firstName')"
+                  data-testid="register-first-name-input"
                 />
-                <q-banner v-if="firstNameHasContact" class="contact-warning q-mt-xs" rounded dense>
+                <q-banner
+                  v-if="firstNameHasContact"
+                  class="contact-warning q-mt-xs"
+                  rounded
+                  dense
+                  data-testid="register-first-name-contact-warning"
+                >
                   {{ t('auth.coach.contactDetailWarning') }}
                 </q-banner>
               </div>
@@ -55,8 +68,15 @@
                   :rules="[required, maxLen50]"
                   :error="hasFieldError('lastName')"
                   :error-message="getFieldError('lastName')"
+                  data-testid="register-last-name-input"
                 />
-                <q-banner v-if="lastNameHasContact" class="contact-warning q-mt-xs" rounded dense>
+                <q-banner
+                  v-if="lastNameHasContact"
+                  class="contact-warning q-mt-xs"
+                  rounded
+                  dense
+                  data-testid="register-last-name-contact-warning"
+                >
                   {{ t('auth.coach.contactDetailWarning') }}
                 </q-banner>
               </div>
@@ -72,6 +92,7 @@
                 :rules="[required, validEmail]"
                 :error="hasFieldError('email')"
                 :error-message="getFieldError('email')"
+                data-testid="register-email-input"
               />
             </div>
 
@@ -85,6 +106,7 @@
                 :rules="[required]"
                 :error="hasFieldError('phone')"
                 :error-message="getFieldError('phone')"
+                data-testid="register-phone-input"
               />
             </div>
 
@@ -98,6 +120,7 @@
                 :rules="[required, minLen8]"
                 :error="hasFieldError('password')"
                 :error-message="getFieldError('password')"
+                data-testid="register-password-input"
               >
                 <template #append>
                   <q-icon
@@ -112,11 +135,17 @@
           </div>
 
           <div class="q-mt-md q-gutter-y-sm">
-            <q-checkbox v-model="tosAccepted" :label="t('auth.coach.tosLabel')" color="primary" />
+            <q-checkbox
+              v-model="tosAccepted"
+              :label="t('auth.coach.tosLabel')"
+              color="primary"
+              data-testid="register-tos-checkbox"
+            />
             <q-checkbox
               v-model="privacyAccepted"
               :label="t('auth.coach.privacyLabel')"
               color="primary"
+              data-testid="register-privacy-checkbox"
             />
           </div>
 
@@ -128,11 +157,12 @@
             :disable="!tosAccepted || !privacyAccepted || isSubmitting"
             unelevated
             size="md"
+            data-testid="register-submit-btn"
           />
 
           <div class="text-center q-mt-md">
             <span class="text-meta">{{ t('auth.haveAccount') }}</span>
-            <router-link to="/login" class="auth-link q-ml-xs">
+            <router-link to="/login" class="auth-link q-ml-xs" data-testid="register-login-link">
               {{ t('auth.login') }}
             </router-link>
           </div>

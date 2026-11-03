@@ -16,6 +16,7 @@
           v-if="route.query.expired === 'true'"
           class="q-mb-md auth-banner auth-banner--warning"
           rounded
+          data-testid="login-expired-banner"
         >
           {{ t('session.expired') }}
         </q-banner>
@@ -25,17 +26,28 @@
           v-if="route.query.verified === 'true'"
           class="q-mb-md auth-banner auth-banner--success"
           rounded
+          data-testid="login-verified-banner"
         >
           {{ t('auth.emailVerifiedPleaseLogin') }}
         </q-banner>
 
         <!-- Account not verified banner -->
-        <q-banner v-if="accountNotVerified" class="q-mb-md auth-banner auth-banner--error" rounded>
+        <q-banner
+          v-if="accountNotVerified"
+          class="q-mb-md auth-banner auth-banner--error"
+          rounded
+          data-testid="login-not-verified-banner"
+        >
           {{ t('auth.accountNotVerified') }}
         </q-banner>
 
         <!-- Rate limit banner -->
-        <q-banner v-if="rateLimited" class="q-mb-md auth-banner auth-banner--error" rounded>
+        <q-banner
+          v-if="rateLimited"
+          class="q-mb-md auth-banner auth-banner--error"
+          rounded
+          data-testid="login-locked-banner"
+        >
           {{ t('auth.accountLocked') }}
         </q-banner>
 
@@ -49,6 +61,7 @@
             :rules="[required, validEmail]"
             :error="hasFieldError('id')"
             :error-message="getFieldError('id')"
+            data-testid="login-email-input"
           />
 
           <q-input
@@ -60,6 +73,7 @@
             :rules="[required]"
             :error="hasFieldError('password')"
             :error-message="getFieldError('password')"
+            data-testid="login-password-input"
           >
             <template #append>
               <q-icon
@@ -67,6 +81,7 @@
                 class="cursor-pointer"
                 style="color: var(--text-muted)"
                 @click="isPwd = !isPwd"
+                data-testid="login-password-toggle"
               />
             </template>
           </q-input>
@@ -75,6 +90,7 @@
             v-if="hasError && !isValidationError"
             class="auth-banner auth-banner--error"
             rounded
+            data-testid="login-error"
           >
             {{ errorMessage }}
             <template v-if="helpCode">
@@ -90,11 +106,16 @@
             :label="t('auth.login')"
             unelevated
             size="md"
+            data-testid="login-submit-btn"
           />
         </q-form>
 
         <div class="text-center q-mt-md">
-          <router-link to="/forgot-password" class="auth-link">
+          <router-link
+            to="/forgot-password"
+            class="auth-link"
+            data-testid="login-forgot-password-link"
+          >
             {{ t('auth.forgotPassword') }}
           </router-link>
         </div>
@@ -105,15 +126,27 @@
 
         <div class="text-center">
           <div class="text-meta q-mb-xs">{{ t('auth.noAccount') }}</div>
-          <router-link to="/coach-register" class="auth-link">
+          <router-link
+            to="/coach-register"
+            class="auth-link"
+            data-testid="login-register-coach-link"
+          >
             {{ t('auth.registerAsCoach') }}
           </router-link>
           <span class="text-meta q-mx-xs">&middot;</span>
-          <router-link to="/parent-register" class="auth-link">
+          <router-link
+            to="/parent-register"
+            class="auth-link"
+            data-testid="login-register-parent-link"
+          >
             {{ t('auth.registerAsParent') }}
           </router-link>
           <span class="text-meta q-mx-xs">&middot;</span>
-          <router-link to="/player-register" class="auth-link">
+          <router-link
+            to="/player-register"
+            class="auth-link"
+            data-testid="login-register-player-link"
+          >
             {{ t('auth.registerAsPlayer') }}
           </router-link>
         </div>

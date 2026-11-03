@@ -6,12 +6,15 @@
       </div>
 
       <div class="glass-card--static auth-card">
-        <div class="text-section-title q-mb-xs">{{ t('player.createTitle') }}</div>
+        <div class="text-section-title q-mb-xs" data-testid="create-player-title">
+          {{ t('player.createTitle') }}
+        </div>
 
         <q-banner
           v-if="hasError && !hasFieldErrors"
           class="auth-banner auth-banner--error q-mb-md"
           rounded
+          data-testid="create-player-error"
         >
           {{ errorMessage }}
           <template v-if="helpCode">
@@ -30,6 +33,7 @@
                 :rules="[required, maxLen100]"
                 :error="hasFieldError('name')"
                 :error-message="getFieldError('name')"
+                data-testid="create-player-name-input"
               />
             </div>
 
@@ -43,6 +47,7 @@
                 :rules="[required, pastDate]"
                 :error="hasFieldError('dateOfBirth')"
                 :error-message="getFieldError('dateOfBirth')"
+                data-testid="create-player-dob-input"
               />
             </div>
 
@@ -58,19 +63,26 @@
                 :rules="[required]"
                 :error="hasFieldError('position')"
                 :error-message="getFieldError('position')"
+                data-testid="create-player-position-select"
               />
             </div>
 
             <div v-if="form.dateOfBirth" class="col-12">
               <div class="age-tier-preview text-meta">
-                {{ t('player.ageTierLabel') }}: <strong>{{ ageTierPreview }}</strong>
+                {{ t('player.ageTierLabel') }}:
+                <strong data-testid="create-player-age-tier">{{ ageTierPreview }}</strong>
               </div>
             </div>
           </div>
 
-          <div v-if="isMinorDob" class="q-mt-lg">
+          <div v-if="isMinorDob" class="q-mt-lg" data-testid="create-player-consent">
             <div class="text-section-title q-mb-sm">{{ t('player.consentTitle') }}</div>
-            <div ref="policyBoxRef" class="policy-scroll-box q-mb-sm" @scroll="onConsentScroll">
+            <div
+              ref="policyBoxRef"
+              class="policy-scroll-box q-mb-sm"
+              @scroll="onConsentScroll"
+              data-testid="create-player-consent-scroll-box"
+            >
               <p>{{ t('player.consentBody') }}</p>
             </div>
             <q-checkbox
@@ -78,6 +90,7 @@
               :disable="!consentScrolled"
               :label="t('player.consentLabel')"
               color="primary"
+              data-testid="create-player-consent-checkbox"
             />
             <input type="hidden" :value="consentPolicyVersion" />
           </div>
@@ -90,6 +103,7 @@
             :disable="isSubmitting || (isMinorDob && !form.parentConsent)"
             unelevated
             size="md"
+            data-testid="create-player-submit-btn"
           />
         </q-form>
       </div>

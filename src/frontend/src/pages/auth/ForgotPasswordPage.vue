@@ -16,7 +16,7 @@
 
         <!-- Success state -->
         <template v-if="isSuccess">
-          <div class="success-block">
+          <div class="success-block" data-testid="forgot-password-success">
             <q-icon
               name="mark_email_read"
               size="40px"
@@ -26,7 +26,11 @@
             <div class="text-card-title q-mb-sm">{{ $t('auth.recoveryEmailSent') }}</div>
             <div class="text-meta">{{ t('success.emailSent') }}</div>
           </div>
-          <router-link to="/login" class="auth-link block-link">
+          <router-link
+            to="/login"
+            class="auth-link block-link"
+            data-testid="forgot-password-success-login-link"
+          >
             &larr; {{ t('common.back') }} {{ t('auth.login') }}
           </router-link>
         </template>
@@ -43,6 +47,7 @@
               :rules="[required, validEmail]"
               :error="hasFieldError('email')"
               :error-message="getFieldError('email')"
+              data-testid="forgot-password-email-input"
             />
 
             <q-input
@@ -54,12 +59,14 @@
               :rules="[required]"
               :error="hasFieldError('dob')"
               :error-message="getFieldError('dob')"
+              data-testid="forgot-password-dob-input"
             />
 
             <q-banner
               v-if="hasError && !isValidationError"
               class="auth-banner auth-banner--error"
               rounded
+              data-testid="forgot-password-error"
             >
               {{ errorMessage }}
               <template v-if="helpCode">
@@ -75,11 +82,12 @@
               :label="t('common.submit')"
               unelevated
               size="md"
+              data-testid="forgot-password-submit-btn"
             />
           </q-form>
 
           <div class="text-center q-mt-md">
-            <router-link to="/login" class="auth-link">
+            <router-link to="/login" class="auth-link" data-testid="forgot-password-login-link">
               &larr; {{ t('common.back') }} {{ t('auth.login') }}
             </router-link>
           </div>
