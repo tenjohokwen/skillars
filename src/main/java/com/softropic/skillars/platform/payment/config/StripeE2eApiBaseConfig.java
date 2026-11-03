@@ -19,13 +19,27 @@ import java.util.Set;
  * wallet flows run against canned Stripe responses, with no network access and no real test-mode account.
  * <p>
  * {@code StripeClient} and the OAuth calls in {@code StripeOnboardingService} all use the SDK's static
- * configuration, so overriding the four static bases covers them all: the API, Connect OAuth, file uploads and
- * meter events.
+ * configuration, so overriding the four static bases (API, Connect, file uploads, meter events) covers every
+ * server-side Stripe call.
  * <p>
- * Fails closed. Startup is refused if the base URL is missing or not an absolute http(s) URL, because the e2e
- * profile must never quietly fall through to the real Stripe API. It is also refused if a deployed profile
- * ({@code prod}, {@code uat}) is active as well, so a stray {@code e2e} in SPRING_PROFILES_ACTIVE can't redirect
- * real payments.
+ * One side effect is in the browser, not the backend. {@code OAuth.authorizeUrl} builds the Connect onboarding
+ * link from the Connect base, so under this profile the coach is sent to {@code <base-url>/oauth/authorize}. A
+ * browser outside the Docker network can't resolve the stack's {@code wiremock} host. A spec that follows that
+ * redirect must intercept it, as the plan's PAY-12 already asserts only that the redirect starts. Leaving the
+ * Connect base alone wouldn't help: the link would point at connect.stripe.com, which the suite's network gate
+ * blocks anyway, and the {@code OAuth.token} exchange would then reach the real Stripe.
+ * <p>
+ * Startup is refused if the base URL is missing or not an absolute http(s) URL, so the e2e profile can never
+ * quietly fall through to the real Stripe API.
+ * <p>
+ * It is also refused alongside {@code prod} or {@code uat}. That check is a deny-list, so it can't stop a future
+ * deployed profile with another name. Two things limit the damage there:
+ * <ul>
+ *   <li>{@link PaymentConfig} refuses a live key under any profile except {@code prod}, so the only key this
+ *   redirect can ever carry is a test-mode one;</li>
+ *   <li>the redirect needs both {@code e2e} and an explicit {@code app.payment.stripe.base-url}. No deployed
+ *   configuration sets either: the URL lives only in the suite's mounted overlay.</li>
+ * </ul>
  *
  * @see PaymentConfig for the API key, timeouts and live-key guard, which still apply here
  */

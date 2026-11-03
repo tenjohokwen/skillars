@@ -72,4 +72,7 @@ if that URL is missing, or if `prod` or `uat` is active as well.
   WireMock reads mappings when it starts, so restart the `wiremock` container after adding one.
 - A Stripe call with no stub gets a 400 `invalid_request_error`, code `e2e_unstubbed`, whose message
   names the method and path. Look for it in the app log when a payment spec fails unexpectedly.
+- Coach Connect onboarding: the authorize link the backend returns also points at the stub host
+  (`http://wiremock:8080/oauth/authorize`), which the browser can't resolve. Intercept it with
+  `page.route` instead of following it.
 - `PAY-90` (smoke) checks the wiring: a card-setup request has to come back with the stub's client secret.
