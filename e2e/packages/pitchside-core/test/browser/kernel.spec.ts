@@ -125,6 +125,19 @@ test.describe('gates', () => {
 
 test.describe('network stubs', () => {
   test(
+    'prepareContext stubs a third-party script on every context, ahead of the network gate',
+    toy.scenario({ id: 'KRN-14', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ gotoRoute, page, actor, suite, networkGate }) => {
+      await gotoRoute('/widget')
+      await expect(page.getByTestId('widget-status')).toHaveText('stubbed')
+      const member = await actor('member')
+      await member.page.goto(suite.routing.toUrl('/widget'))
+      await expect(member.page.getByTestId('widget-status')).toHaveText('stubbed')
+      expect(networkGate.violations()).toEqual([])
+    },
+  )
+
+  test(
     'failFirst produces an error state that recovers on retry',
     toy.scenario({ id: 'KRN-10', priority: 'P1', tags: ['@regression', '@guest', '@kernel'] }),
     async ({ page, gotoRoute }) => {

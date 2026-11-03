@@ -1,3 +1,4 @@
+import type { BrowserContext } from '@playwright/test'
 import type { AuthStrategy } from '../auth/AuthStrategy.js'
 import type { IdAllocatorOptions } from '../data/IdAllocator.js'
 import type { SeedContext, Seeder, SqlExecutor } from '../data/Seeder.js'
@@ -40,6 +41,12 @@ export interface SuiteEnv {
   readonly networkGate?: GateMode
   /** Third-party URLs the app may reach. First-party origins are always allowed. */
   readonly thirdPartyAllowList?: readonly RegExp[]
+  /**
+   * Runs on every browser context the suite opens (the default page's and each actor's), after the
+   * gates are installed. Routes registered here take precedence over the network gate, so this is
+   * where an app serves local stubs for third-party scripts it loads (a payment SDK, a widget).
+   */
+  readonly prepareContext?: (context: BrowserContext) => Promise<void>
   /** Directory of per-screen axe baselines; enables the a11y fixture. */
   readonly a11yBaselineDir?: string
   readonly visual?: VisualPolicy

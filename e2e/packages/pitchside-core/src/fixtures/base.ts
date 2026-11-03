@@ -75,6 +75,9 @@ async function primeAndGuard(
   const priming = (await suite.auth.priming?.()) ?? []
   if (priming.length > 0) await context.addCookies(priming)
   await networkGate.install(context)
+  // After the gate: Playwright matches the most recently registered route first, so app stubs
+  // registered here serve their hosts before the gate can block them.
+  await suite.prepareContext?.(context)
   for (const page of context.pages()) consoleGate.attach(page)
   context.on('page', (page) => consoleGate.attach(page))
 }
@@ -129,17 +132,30 @@ export function createSuiteTest(env: SuiteEnv) {
     },
 
     actor: async (
-      { browser, sessions, suite, consoleGate, networkGate, viewport, locale, timezoneId, baseURL },
+      {
+        browser,
+        sessions,
+        suite,
+        consoleGate,
+        networkGate,
+        viewport,
+        locale,
+        timezoneId,
+        baseURL,
+        userAgent,
+      },
       use,
     ) => {
       const opened: BrowserContext[] = []
       await use(async (role: string) => {
+        // Same user agent for login and replay: fingerprint-pinned sessions reject a mismatch.
         const context = await browser.newContext({
-          storageState: await sessions.state(role),
+          storageState: await sessions.state(role, { userAgent, locale }),
           viewport,
           locale,
           timezoneId,
           baseURL,
+          userAgent,
         })
         opened.push(context)
         await primeAndGuard(context, suite, consoleGate, networkGate)

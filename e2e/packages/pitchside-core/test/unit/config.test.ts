@@ -127,3 +127,28 @@ describe('videoMode', () => {
     expect(() => videoMode('sometimes')).toThrow(/PITCHSIDE_VIDEO/)
   })
 })
+
+describe('SessionStore user-agent pinning', () => {
+  it('logs in with the caller user agent and caches per role and user agent', async () => {
+    const seen: unknown[] = []
+    const browser = {
+      newContext: vi.fn(async (options: { userAgent?: string }) => {
+        seen.push(options.userAgent)
+        return {
+          addCookies: async () => {},
+          storageState: async () => ({ cookies: [], origins: [] }),
+          close: async () => {},
+        } as unknown as BrowserContext
+      }),
+    } as unknown as Pick<Browser, 'newContext'>
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    await store.state('coach', { userAgent: 'UA-desktop' })
+    await store.state('coach', { userAgent: 'UA-desktop' })
+    await store.state('coach', { userAgent: 'UA-mobile' })
+    await store.state('coach')
+    expect(seen).toEqual(['UA-desktop', 'UA-mobile', undefined])
+    expect(store.cachedRoles()).toEqual(['coach'])
+    store.invalidate('coach')
+    expect(store.cachedRoles()).toEqual([])
+  })
+})

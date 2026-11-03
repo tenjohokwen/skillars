@@ -35,6 +35,11 @@ export const toy = defineSuite({
   emailDomain: 'example.test',
   mail: new LogDirSink({ dir: MAIL_DIR }),
   a11yBaselineDir: join(here, 'a11y-baselines'),
+  prepareContext: async (context) => {
+    await context.route('https://widgets.example.invalid/**', (route) =>
+      route.fulfill({ contentType: 'text/javascript', body: "window.toyWidget = 'stubbed'" }),
+    )
+  },
 })
 
 export const test = toy.test

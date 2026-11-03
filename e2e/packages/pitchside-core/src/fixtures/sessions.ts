@@ -1,9 +1,17 @@
 import type { Browser, BrowserContextOptions } from '@playwright/test'
 import type { AuthStrategy, StorageState } from '../auth/AuthStrategy.js'
 
+/** What the login context must share with the contexts that replay its session. */
+export type SessionContextOptions = Pick<BrowserContextOptions, 'userAgent' | 'locale'>
+
 /**
  * Worker-scoped cache of one storage state per role. The first request for a role logs in through
  * the auth strategy in a throwaway primed context; every later request reuses the snapshot.
+ *
+ * The login context must look like the contexts that will replay the session: apps that pin a
+ * session to a fingerprint (User-Agent hash, client id) reject a session minted under a different
+ * User-Agent. So the cache is keyed by role AND user agent, and the login context gets the same
+ * `userAgent` / `locale` the caller will use.
  */
 export class SessionStore {
   private readonly cache = new Map<string, Promise<StorageState>>()
@@ -14,13 +22,14 @@ export class SessionStore {
     private readonly contextOptions: BrowserContextOptions = {},
   ) {}
 
-  state(role: string): Promise<StorageState> {
-    let pending = this.cache.get(role)
+  state(role: string, options: SessionContextOptions = {}): Promise<StorageState> {
+    const key = cacheKey(role, options)
+    let pending = this.cache.get(key)
     if (!pending) {
-      pending = this.establish(role)
-      this.cache.set(role, pending)
+      pending = this.establish(role, options)
+      this.cache.set(key, pending)
       // A failed login must not poison the cache for the rest of the worker.
-      pending.catch(() => this.cache.delete(role))
+      pending.catch(() => this.cache.delete(key))
     }
     return pending
   }
@@ -30,16 +39,22 @@ export class SessionStore {
    * the next test must log in again rather than reuse a dead refresh token.
    */
   invalidate(role?: string): void {
-    if (role === undefined) this.cache.clear()
-    else this.cache.delete(role)
+    if (role === undefined) {
+      this.cache.clear()
+      return
+    }
+    for (const key of [...this.cache.keys()]) if (roleOf(key) === role) this.cache.delete(key)
   }
 
   cachedRoles(): string[] {
-    return [...this.cache.keys()]
+    return [...new Set([...this.cache.keys()].map(roleOf))]
   }
 
-  private async establish(role: string): Promise<StorageState> {
-    const context = await this.browser.newContext(this.contextOptions)
+  private async establish(role: string, options: SessionContextOptions): Promise<StorageState> {
+    const context = await this.browser.newContext({
+      ...this.contextOptions,
+      ...definedOnly(options),
+    })
     try {
       const priming = (await this.auth.priming?.()) ?? []
       if (priming.length > 0) await context.addCookies(priming)
@@ -49,3 +64,10 @@ export class SessionStore {
     }
   }
 }
+
+const SEPARATOR = '\u0000'
+const cacheKey = (role: string, options: SessionContextOptions): string =>
+  [role, options.userAgent ?? '', options.locale ?? ''].join(SEPARATOR)
+const roleOf = (key: string): string => key.split(SEPARATOR)[0] ?? key
+const definedOnly = (options: SessionContextOptions): SessionContextOptions =>
+  Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined))
