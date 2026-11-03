@@ -296,12 +296,12 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:660',
+    at: 'src/pages/parent/ParentBookingsPage.vue:673',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:700',
+    at: 'src/pages/parent/ParentBookingsPage.vue:713',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },

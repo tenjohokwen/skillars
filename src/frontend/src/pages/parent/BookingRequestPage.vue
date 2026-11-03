@@ -2,7 +2,7 @@
   <q-page class="q-pa-md">
     <div class="row items-center q-mb-md">
       <q-btn flat round icon="arrow_back" @click="router.back()" />
-      <div class="text-h6 q-ml-sm">
+      <div class="text-h6 q-ml-sm" data-testid="booking-request-title">
         {{ t('booking.requests.requestTitle', { coachName: coachName }) }}
       </div>
       <q-space />
@@ -12,6 +12,7 @@
         size="sm"
         :label="batchMode ? t('booking.batch.exitBatchMode') : t('booking.batch.enterBatchMode')"
         @click="toggleBatchMode"
+        data-testid="booking-batch-toggle"
       />
     </div>
 
@@ -76,7 +77,7 @@
             <!-- A slot the parent has already requested/booked. Rendered rather than omitted:
                  the backend correctly carves it out of computedSlots, so before this it simply
                  vanished from the calendar with no explanation (deferred-18 D3). -->
-            <q-item v-if="row.type === 'own'" disable>
+            <q-item v-if="row.type === 'own'" disable data-testid="booking-slot-own">
               <q-item-section>
                 <q-item-label>{{ formatSlot(row.start) }}</q-item-label>
                 <q-item-label caption>{{ formatSlot(row.end) }}</q-item-label>
@@ -102,6 +103,7 @@
               "
               active-class="bg-primary text-white"
               @click="batchMode ? toggleSlotInBasket(row.slot) : selectSlot(row.slot)"
+              data-testid="booking-slot"
             >
               <q-item-section>
                 <q-item-label>{{ formatSlot(row.slot.startDatetime) }}</q-item-label>
@@ -119,7 +121,11 @@
           </template>
         </q-list>
 
-        <div v-else class="text-body2 text-secondary q-py-md text-center">
+        <div
+          v-else
+          class="text-body2 text-secondary q-py-md text-center"
+          data-testid="booking-no-slots"
+        >
           {{ t('booking.availability.noSlotsAvailable') }}
         </div>
       </q-card-section>
@@ -153,7 +159,12 @@
       <q-card v-if="activePacksForCoach.length > 0" flat bordered class="q-mb-md">
         <q-card-section>
           <div class="text-subtitle1 q-mb-sm">{{ t('booking.requests.selectPack') }}</div>
-          <q-option-group v-model="selectedPackId" :options="packOptions" color="primary" />
+          <q-option-group
+            v-model="selectedPackId"
+            :options="packOptions"
+            color="primary"
+            data-testid="booking-pack-select"
+          />
         </q-card-section>
       </q-card>
 
@@ -183,6 +194,7 @@
         outlined
         class="q-mb-md"
         maxlength="500"
+        data-testid="booking-notes"
       />
 
       <q-btn
@@ -193,6 +205,7 @@
         :loading="submitting"
         :disable="!canSubmit"
         @click="submit"
+        data-testid="booking-submit"
       />
     </template>
 

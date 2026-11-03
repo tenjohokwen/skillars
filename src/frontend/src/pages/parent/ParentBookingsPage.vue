@@ -21,7 +21,11 @@
       style="min-height: 40vh"
     >
       <q-icon name="calendar_today" size="64px" style="color: var(--text-secondary)" />
-      <div class="text-body1" style="color: var(--text-secondary)">
+      <div
+        class="text-body1"
+        style="color: var(--text-secondary)"
+        data-testid="parent-bookings-empty"
+      >
         {{ t('booking.requests.emptyState') }}
       </div>
       <q-btn
@@ -33,13 +37,20 @@
     </div>
 
     <q-list v-else bordered separator>
-      <q-item v-for="booking in bookingStore.parentBookings" :key="booking.id" class="q-py-md">
+      <q-item
+        v-for="booking in bookingStore.parentBookings"
+        :key="booking.id"
+        class="q-py-md"
+        data-testid="parent-booking"
+      >
         <q-item-section>
-          <q-item-label class="text-weight-bold">{{ booking.coachDisplayName }}</q-item-label>
+          <q-item-label class="text-weight-bold" data-testid="parent-booking-coach">{{
+            booking.coachDisplayName
+          }}</q-item-label>
           <q-item-label caption
             >{{ t('player.nameLabel', 'Player') }}: {{ booking.playerName }}</q-item-label
           >
-          <q-item-label caption>{{
+          <q-item-label caption data-testid="parent-booking-time">{{
             showInMyTime[booking.id]
               ? formatDateTime(booking.requestedStartTime, browserTimezone)
               : formatDateTime(booking.requestedStartTime, booking.canonicalTimezone)
@@ -54,6 +65,7 @@
                 : t('booking.timezone.showInMyTime')
             "
             @click="toggleTimezone(booking.id)"
+            data-testid="parent-booking-tz-toggle"
           />
           <!-- Pending reschedule indicator -->
           <div
@@ -277,6 +289,7 @@
             :status="booking.status"
             :booking-id="booking.id"
             :proposed-by-coach="booking.proposedByCoach === true"
+            data-testid="parent-booking-status"
           />
           <!-- Confirm Completion button — parent-or-self-booking-player (skillars-deferred-69 AC4:
                widened from parent-only; BookingCompletionService.confirmCompletion's ownership check
