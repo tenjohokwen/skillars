@@ -8,7 +8,7 @@ Writes evals/review/results/<run-id>/<arm>/<case>.findings.json (committed) and
 evals/review/results/<run-id>/<arm>/raw/<case>.json (git-ignored session metadata).
 
 Arms:
-  control       one plain prompt. Diff cases: the diff is inlined, no tools. Snapshot cases:
+  control       the .claude/agents/general-reviewer.md agent (one plain prompt). Diff cases: the diff is inlined, no tools. Snapshot cases:
                 the reviewer runs inside the exported tree with Read/Grep/Glob and the scope
                 list inlined.
   blind-hunter  the Blind Hunter layer prompt from the mto-code-review skill. Always
@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import *  # noqa
 
 ARMS = {
-    "control":      {"prompt": "reviewer-control.md",      "snapshot_mode": "tools"},
+    "control":      {"agent": "general-reviewer",          "snapshot_mode": "tools"},
     "blind-hunter": {"prompt": "reviewer-blind-hunter.md", "snapshot_mode": "inline"},
     # Specialised reviewers are real Claude Code agents under .claude/agents/; the arm uses
     # the agent file's body as its prompt so what is measured is what runs in a session.
