@@ -40,7 +40,13 @@ def arm_template(arm):
     # before it lands.
     candidates = [os.path.join(EVALS, "agents", f"{spec['agent']}.md"),
                   os.path.join(ROOT, ".claude", "agents", f"{spec['agent']}.md")]
-    path = next(c for c in candidates if os.path.exists(c))
+    path = next((c for c in candidates if os.path.exists(c)), None)
+    if path is None:
+        raise FileNotFoundError(f"agent file for arm '{arm}' not found; looked at: {', '.join(candidates)}")
+    stale = os.path.join(EVALS, "prompts", "reviewer-control.md")
+    if arm == "control" and os.path.exists(stale):
+        log(f"WARNING: {stale} is no longer read; the control arm is {path}. Move the edit to "
+            f"{candidates[0]} or delete the stale file.")
     with open(path) as fh:
         body = fh.read()
     if body.startswith("---"):

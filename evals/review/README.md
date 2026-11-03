@@ -140,7 +140,10 @@ Rules for `expected_findings`:
 3. **Change a reviewer only with an eval run.** The agents' bodies are the arms the runner
    measures, so a prompt edit is a reviewer change: run the arm over the promoted cases,
    judge, build the scorecard, and compare with the previous run in `results/` before
-   merging the edit. The acceptance rule is in "Arms" below.
+   merging the edit. To measure an edit before it lands, point `SKILLARS_REVIEW_EVALS_DIR`
+   at a staging copy that carries the edited agent as `agents/<name>.md`; the runner reads
+   that before the committed `.claude/agents/<name>.md`. The acceptance rule is in "Arms"
+   below.
 4. **Grow the dataset from real bugs.** A merged fix PR that closes a defect an earlier PR
    shipped is a new case (see "Adding a case"). A reviewer finding the judge calls `real`
    and a human confirms is a new `pending` case or an added expected finding, and the
