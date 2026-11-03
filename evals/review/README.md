@@ -123,6 +123,34 @@ Rules for `expected_findings`:
 - Do not leak the fix. "Missing idempotency key" is a finding; "should add
   `Idempotency-Key` header like PR #359 did" is the answer sheet.
 
+## How this fits the dev lifecycle
+
+1. **Before a PR, run `/pr-review`** on the branch (skill in `.claude/skills/pr-review/`). It
+   fans out the measured reviewer agents (`.claude/agents/general-reviewer.md` and
+   `security-reviewer.md`) over the branch diff as parallel subagents, merges and filters
+   their findings with the rules the evals established, writes `.pr-review/<HEAD sha>.md`
+   (git-ignored) and presents what to fix. Re-run after every new commit; the record is
+   keyed to the commit.
+2. **`gh pr create` is gated** by `.claude/hooks/require-pr-review.sh` (wired in
+   `.claude/settings.json`): no record for HEAD, no PR. A branch whose changed files are
+   all on the CI classifier's non-code allowlist passes automatically (decided from git, not
+   from the command text); starting the command with `PR_REVIEW_SKIP=1` skips deliberately
+   and visibly. The hook fails closed when it cannot parse the command or resolve HEAD, and
+   matches only a real invocation at a command boundary, not the phrase inside text.
+3. **Change a reviewer only with an eval run.** The agents' bodies are the arms the runner
+   measures, so a prompt edit is a reviewer change: run the arm over the promoted cases,
+   judge, build the scorecard, and compare with the previous run in `results/` before
+   merging the edit. To measure an edit before it lands, point `SKILLARS_REVIEW_EVALS_DIR`
+   at a staging copy that carries the edited agent as `agents/<name>.md`; the runner reads
+   that before the committed `.claude/agents/<name>.md`. The acceptance rule is in "Arms"
+   below.
+4. **Grow the dataset from real bugs.** A merged fix PR that closes a defect an earlier PR
+   shipped is a new case (see "Adding a case"). A reviewer finding the judge calls `real`
+   and a human confirms is a new `pending` case or an added expected finding, and the
+   fix PR later flips `pending` to its number.
+
+None of this runs in CI. Everything is the developer's own Claude Code login.
+
 ## Running a baseline
 
 ```
