@@ -28,6 +28,14 @@ RS09 compounds it (the parent's saved default card is overwritten before the cha
 context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + RS04 (the small logic pair) were
 the alternatives and stay queued behind it.
 
+- **[skillars-deferred-167 follow-up, filed 2026-11-03, medium/security]** Flip the per-session JWT check
+  from fail-open to fail-closed on a missing session claim. skillars-deferred-167 AC5 skips the check for a
+  JWT with no claim, because failing closed at deploy would sign out every live session and
+  `extendTtlOfToken` cannot invent the claim. The flip is safe only once no pre-deploy JWT can still be
+  presented, which takes at least one `REFRESH_TOKEN_TTL` (7 days) after that story deploys — the chain, and
+  therefore the JWT's ability to keep sliding, cannot outlive that. Until then a stolen PRE-deploy `potc`
+  is the one credential the story cannot kill. Cheap when it comes: invert one branch and update the javadoc
+  that AC5 requires to state the limit.
 - **[skillars-deferred-166 -> skillars-deferred-167, OWNER DECIDED 2026-11-03, medium/security]** A replay of a revoked refresh token
   no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
   JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such
@@ -73,6 +81,12 @@ the alternatives and stay queued behind it.
   active, and replay of a long-dead token still reads as theft, so the time bound is kept rather than
   dropped. The one-hop-regardless option was rejected for having no time bound at all. The IT gap this
   entry names (the two-device test never re-checks after the window closes) is part of that story.
+  **AMENDED 2026-11-03, same day, during skillars-deferred-167's story creation and review: the live-end
+  measurement above was found NOT to fix the reported case** (the live end's createdAt is rotatedAt plus rotation
+  latency, so the window expires at the same moment under either rule). The owner re-decided: keep the window and
+  the rotation, and stop answering an intact-live-chain-outside-the-window with account-wide revocation (401 +
+  cookies, no writes). Known cost, found in the story review: that case was the canonical theft signal for a stolen
+  refresh token rotated by the attacker first; it is now a warn log and a metric only.
 - **[skillars-deferred-166, low/database]** The self-referential FK and the new multi-row walks give
   `AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have. Both
   `AuthService.resolveGraceSuccessor` and `RefreshTokenRevocationService.revokeChainByTokenHash` take

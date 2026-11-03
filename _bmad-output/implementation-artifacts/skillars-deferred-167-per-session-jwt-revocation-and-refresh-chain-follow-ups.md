@@ -2,21 +2,24 @@
 
 Status: ready-for-dev
 
-<!-- CREATED 2026-11-03 (/bmad-create-story). Owner-requested bundle of five items filed by the reviewer
-arms on PR #413 (skillars-deferred-166, merged as f0ad7706) and decided by the owner on 2026-11-03; each
+<!-- CREATED 2026-11-03 (/bmad-create-story), then REVISED the same day after /mto-story-review (findings
+H1, H2, H3, M2, M4, the clock hook and the AC8 overclaim all applied; see the Change Log). Owner-requested
+bundle of five items raised on PR #413 (skillars-deferred-166, merged as f0ad7706) — four by the reviewer
+arms, the V224 VALIDATE follow-up by that story's own author — and decided by the owner on 2026-11-03; each
 decision is recorded as an "OWNER DECIDED 2026-11-03" annotation in deferred-work.md, with the rejected
 alternatives and the reasons. Do not re-litigate those. One story and one migration slot because all five
 touch main.refresh_tokens or its callers, and parallel PRs on this table collide (see the merge-hotspots
 note in deferred-work.md).
 
 TWO DESIGN POINTS WERE CORRECTED DURING STORY CREATION, after reading the code rather than the filed
-notes. Both are flagged in Dev Notes under "Corrections to the filed items" and the owner confirmed the
-first:
+notes. Both are flagged in Dev Notes under "Corrections to the filed items"; the owner confirmed the first
+and the ledger entry carries an AMENDED note recording it:
  - AC7's rule is NOT "measure the window from the chain's live end". That does not fix the reported case:
-   when the client is exactly one hop behind, the live end's createdAt IS the presented row's rotatedAt,
-   so the window fails at the same instant either way. The owner re-decided: keep the window and the
-   rotation untouched, and stop answering an intact-live-chain-outside-the-window with ACCOUNT-WIDE
-   revocation.
+   when the client is exactly one hop behind, the live end's createdAt is the presented row's rotatedAt plus
+   rotation latency, so the window fails at effectively the same moment either way. The owner re-decided:
+   keep the window and the rotation untouched, and stop answering an intact-live-chain-outside-the-window
+   with ACCOUNT-WIDE revocation. AC7 records what that costs: the case it downgrades was the canonical
+   theft signal, so it is now a warn log and a metric only.
  - AC3's claim cannot be called SESSION_ID: that name is taken by the browser session id and is compared
    by isTokenFixed. -->
 
@@ -35,24 +38,46 @@ btree index on it; and runs `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT
 fk_refresh_tokens_replaced_by`. It opens with `SET LOCAL lock_timeout = '5s'`, carries a
 `-- migration-lint: allow-blocking-index` marker with a row-count/build-time reason immediately above the
 `CREATE INDEX`, and `COMMENT ON COLUMN` for the new column. `MigrationConventionLintTest` stays green.
+The header must state the one convention this bends: Flyway runs the migration in a single transaction, so
+`ADD COLUMN`'s `ACCESS EXCLUSIVE` lock is held across the `CREATE INDEX` **and** the `VALIDATE` scan, which
+defeats rule 3's stated reason for validating in a later migration (that `VALIDATE` alone takes only
+`SHARE UPDATE EXCLUSIVE`, so writes continue). Acceptable here — the table is small by construction and
+prod is not live — but the linter does not look for this, so the reason has to be written down.
 
 **AC2 — the chain carries a session id.** `AuthService.login` mints a fresh `session_id` for the token row
-it creates. `AuthService.decideAndRotate` copies the **predecessor's** `session_id` onto the successor it
-persists — never a new one — so one id spans a whole rotation chain. A row whose `session_id` is null (every
-row written before V225) is treated as "unknown", never as a match.
+it creates. `AuthService.decideAndRotate` copies the **rotated row's** `session_id` onto the successor it
+persists, so one id spans a whole rotation chain. "Rotated row" is deliberate, not "presented row": on a
+grace redirect the row that gets rotated is the chain's live end (`token`, after
+`token = resolution.successor()`), not `presented`.
+**When the rotated row's `session_id` is null, mint a fresh one for the successor** rather than copying the
+null. Rows written before V225 have no id and AC1 adds no backfill, so copying would keep a pre-V225 chain
+null through every rotation and a continuously refreshing client would never acquire one. A null
+`session_id` is "unknown" and must never match a query — pass the claim only when it is non-null, never as
+a `session_id = NULL` predicate, which matches no row and would turn AC5's skip into a rejection.
 
 **AC3 — the JWT carries it.** A new claim, name **not** `sessionId` (that is taken; see Dev Notes), is
 written by `TokenCreatorImpl.toClaims` from a value the caller supplies, and is:
  - set at login and at refresh rotation from the row's `session_id`;
  - **explicitly carried over** by `JwtManagerImpl.extendTtlOfToken`, the way `SESSION_ISSUED_AT` is — that
    method rebuilds the claim map from scratch, so an unforwarded claim is silently dropped;
- - set on the DB-reauth branch (`renewLoginToken`) from the request's `rtkn` cookie when the incoming JWT
-   has no such claim, which is what lets sessions minted before this story acquire one.
+ - set on the DB-reauth branch (`renewLoginToken`) from the just-authorized session, carrying over the
+   incoming JWT's claim unchanged.
 `ClaimsExtractorImpl` gains a reader that tolerates `Integer`/`Long`/`String` the way
-`extractSessionIssuedAt` does, and returns null for an absent claim. When the DB-reauth branch has no
-`rtkn` cookie to derive from either — a client holding only `potc` — the claim stays absent and AC5
-applies; that is the one case this story cannot close, and it is exactly the attacker AC4 targets, so say
-so in the javadoc rather than implying full coverage.
+`extractSessionIssuedAt` does, and returns null for an absent claim.
+
+**Do NOT derive the claim from the request's `rtkn` cookie.** An earlier draft of this AC did, "so sessions
+minted before this story acquire one". That is dead code: a pre-V225 row's `session_id` is null, so the
+derivation yields null for exactly the population it was meant to serve. AC2's fresh-id-on-null rule is
+what actually closes that gap, on the next rotation. Dropping the derivation also keeps AC4's "exactly one
+query" true, keeps `JwtManagerImpl`/`LoginTokenManager` free of a repository (the filter javadoc at
+`JWTAuthorizationFilter.java:83` states that `renewLoginToken` touches no repository), and avoids pairing a
+`potc` from one session with an `rtkn` from another — the derived row's `userId` was never checked against
+the principal.
+
+The JWT that genuinely cannot be covered is a **pre-deploy** `potc`: it carries no claim, `extendTtlOfToken`
+cannot invent one, and AC5 skips it. A post-deploy `potc` always carries the claim, so a thief holding only
+that cookie **is** covered. Say exactly this in the javadoc; do not write that "a client holding only
+`potc`" is uncovered, which is the opposite of the truth after deploy.
 
 **AC4 — the filter rejects a dead chain.** `JWTAuthorizationFilter`'s DB-reauth branch, beside the existing
 `assertSessionNotRevoked`, refuses a JWT whose claimed session has **no live refresh token** — no row with
@@ -64,7 +89,9 @@ on that branch: the sliding-TTL fast path stays DB-free, which is the property
 **AC5 — a missing claim fails OPEN, and that is deliberate.** A JWT with no session claim skips AC4's check.
 Failing closed would sign out every live session on deploy, and `extendTtlOfToken` cannot invent the claim.
 The javadoc states the limit precisely (the pattern `isBeforeSessionEpoch` now follows), and a follow-up to
-flip it to fail-closed one release later is filed in `deferred-work.md` by this story.
+flip it to fail-closed is filed in `deferred-work.md` by this story. That flip cannot ship until every
+pre-deploy JWT is gone, which takes at least one `REFRESH_TOKEN_TTL` (7 days) after this story deploys —
+not "one release later" unless a release is that far out.
 
 **AC6 — logout kills the JWT.** An IT proves the end-to-end property: log in, keep the `potc` cookie, log
 out, and the JWT is refused on the next DB-reauth cycle while a second device's session keeps working. The
@@ -76,26 +103,68 @@ window** (new), and no live chain at all (genuine reuse, unchanged). The middle 
 `401 + clearAuthCookies` and **no writes at all** — not `markAllUsedByUserId` +
 `invalidateSessionsForUser`. It deliberately does not revoke the chain either: the live end may be a
 legitimate sibling tab, and the presented row is already `used`, so it cannot be traded in regardless.
-An IT waits out the 30 s window (via the injectable clock, not a sleep) and asserts the other device
-survives and the account epoch is untouched.
+An IT drives the token past the 30 s window (see Dev Notes — **not** via `ClockProvider`) and asserts the
+other device survives and the account epoch is untouched.
+
+**What this gives up, which must be stated and instrumented, not glossed.** That branch was the canonical
+theft signal: when an attacker steals an `rtkn` and rotates it first, the victim's later replay of the now
+stale cookie is exactly "used token, live chain, outside the window", and today it runs
+`markAllUsedByUserId` + `invalidateSessionsForUser`, which kills the attacker's session too. After this AC
+the victim gets a 401, and the attacker's chain stays live for up to `REFRESH_TOKEN_TTL` (7 days) with no
+audit row, no epoch bump and no alert. What is still detected: a replay when the chain has **no** live end.
+So: log that case at `warn` with the user id and the presented hash, and count it as a metric, so the loss
+is observable even though nothing is written. Today's blast radius is limited because the SPA never calls
+`POST /api/auth/refresh` (V224's header records this), so only API and mobile clients can reach it —
+but say so in `docs/session-refresh-mechanism.md` rather than leaving the trade-off implicit.
 
 **AC8 — the revoke-all ordering.** In `AdminUserService.suspendUser`, `AgeVerificationService.blockAccount`
-and `AccountSuspensionEventListener.suspend`, the bulk revoke runs **before** the epoch stamp, closing the
-two-statement window in which a concurrently committed successor carries a `created_at` after the epoch and
-passes `isBeforeSessionEpoch`. The order is free: the revoke is `REQUIRES_NEW` on `refresh_tokens`, the
-stamp is `MANDATORY` on the user row. `AdminUserService.reactivateUser` additionally revokes the account's
-refresh tokens, so a suspend-then-reactivate cannot restore the session the suspension ended.
-`AuthService.isBeforeSessionEpoch`'s javadoc is updated: it currently names these three callers as the
-documented limit, and that paragraph becomes wrong once this AC lands.
+and `AccountSuspensionEventListener.suspend`, the bulk revoke runs **before** the epoch stamp, so a
+successor that survives the revoke was inserted before it committed and therefore carries a `created_at`
+earlier than an epoch computed afterwards — which `isBeforeSessionEpoch` then refuses. The order is free:
+the revoke is `REQUIRES_NEW` on `refresh_tokens`, the stamp is `MANDATORY` on the user row, so they commit
+independently and touch different rows (no self-deadlock).
+
+**Do not claim the window is closed.** Two residuals remain and the rewritten javadoc must name them:
+`decideAndRotate` reads the user with a plain `findById` (`AuthService.java:322`), so it does not block on
+the suspending transaction's row lock and can still read a null epoch until that transaction commits; and
+the `created_at`-vs-epoch comparison assumes comparable clocks, which two app nodes with skew can invert.
+This is the same residual shape `changePassword` already has. `AuthService.isBeforeSessionEpoch`'s javadoc
+currently names these three callers as its documented limit; that paragraph must be rewritten, and must not
+be replaced with an overclaim.
+
+**The `reactivateUser` half is conditional on proving it catches anything.** Suspend already runs
+`markAllUsedByUserId` and stamps a monotonic epoch that nothing ever clears, so every pre-suspension token
+and JWT stays refused after `unlock()`. Once the statements are swapped, the only row a revoke-on-reactivate
+could still catch is a race successor that the epoch already refuses. So: first write the IT
+(suspend → concurrent refresh → reactivate → assert what the stale credential can do). If it shows nothing
+survives, **drop the reactivate change** and record that in the Completion Notes instead of adding a write
+nobody needs. `AdminUserManagementIT.reactivate_unlocksAccount_andLoginWorksAgain` (`:287`) never logs in
+before suspending, so it does not settle this either way.
 
 **AC9 — the sweep cannot deadlock the chain walks.** `RefreshTokenRepository.deleteExpiredTokens` acquires
 in ascending `id` order (JPQL bulk `DELETE` cannot carry `ORDER BY`, so this becomes a native delete over an
 ordered, locked subselect), which removes the lock cycle against the chain walks' ascending-id order. And
 `AuthCleanupService.purgeExpiredRefreshTokens` no longer lets a lost deadlock escape the `@Scheduled`
-method: it is logged at `warn` and the next hourly run retries. `@SchedulerLock` semantics and the
-annotation order asserted by `SchedulerLockTransactionOrderingIT` are preserved, and
-`NativeModifyingVersionAuditTest` stays green (see Dev Notes — a native modifying query on a versioned
-entity is audited).
+method: it is logged at `warn` and the next hourly run retries.
+
+**The catch cannot sit inside the current method.** `purgeExpiredRefreshTokens` is `@Transactional`
+(`AuthCleanupService.java:38-45`) and `deleteExpiredTokens` is itself `@Modifying @Transactional`
+(`RefreshTokenRepository.java:233-236`), so it joins that same transaction. A deadlock thrown through the
+participating proxy marks the transaction rollback-only, and a `try/catch` in the method body then still
+ends in `UnexpectedRollbackException` from the outer commit — it changes the exception, not the escape.
+Postgres has also already aborted that transaction (40P01), so nothing further can run in it. The guard
+must therefore be **outside** the transaction: either drop `@Transactional` from the scheduled method and
+wrap the delete in a `TransactionTemplate` inside the try, or keep a non-transactional scheduled method
+that delegates to a transactional one. `@SchedulerLock` must stay outermost —
+`SchedulerLockTransactionOrderingIT:169` asserts exactly that.
+
+Two limits to record rather than silently imply: this fixes the cycle against the **chain walks** only;
+`markAllUsedByUserId` and `markAllRevokedByUserId` are still unordered bulk `UPDATE`s and can still deadlock
+against the ordered sweep (the comment at `AuthService.java:225-229` already names them as a deadlock
+source). And the ordered delete needs a real test against populated rows, including the
+`ON DELETE SET NULL` referential action — nothing exercises that path today
+(`AuthCleanupServiceTest` only verifies delegation and the lock attributes).
+`NativeModifyingVersionAuditTest` skips statements beginning with `DELETE`, so a native delete passes it.
 
 **AC10 — the 7-day cap is now real, and tested.** AC4 makes the refresh chain's life an absolute bound on
 the session: an active JWT whose chain has fully expired or been swept is refused on the next cycle, where
@@ -103,7 +172,7 @@ today it slides indefinitely as long as the user keeps clicking. This is a behav
 it gets its own test plus a line in the docs.
 
 **AC11 — docs.** `docs/session-refresh-mechanism.md` (the claim, the new check, the 7-day cap, the
-fail-open limit), `docs/security-api-endpoints.md` where it describes logout's reach,
+fail-open limit for pre-deploy JWTs, and AC7's lost theft signal), `docs/security-api-endpoints.md` where it describes logout's reach,
 `docs/dev-docs/security/index.html` plus a rebuilt `search-index.js`, and
 `docs/deployment/provisioning-checklist.md` for V225.
 
@@ -122,16 +191,21 @@ defects introduced by the previous round's own fix.
   - [ ] `deleteExpiredTokens` → native, ordered, locked subselect
 - [ ] Task 3: mint and carry the claim (AC2, AC3)
   - [ ] `SecurityConstants`: the new claim name; `toClaims` parameter; `ClaimsExtractorImpl` reader
-  - [ ] `login` mints the id; `decideAndRotate` copies the predecessor's
-  - [ ] `extendTtlOfToken` carries it over; `renewLoginToken` derives it from the `rtkn` cookie when absent
+  - [ ] `LoginTokenManager`/`JwtManagerImpl` signatures; the `Rotated` record; the two test call sites
+  - [ ] `login` mints the id; `decideAndRotate` copies the rotated row's, minting a fresh one when it is null
+  - [ ] `extendTtlOfToken` carries it over (no `rtkn` derivation — see AC3)
 - [ ] Task 4: the filter check (AC4, AC5, AC6, AC10)
   - [ ] The chain-liveness refusal beside `assertSessionNotRevoked`, with a precise javadoc
 - [ ] Task 5: the grace-window outcome (AC7)
   - [ ] Third outcome from `resolveGraceSuccessor`; map it to 401 + cookies, no writes
+  - [ ] `warn` log + metric for the case that is no longer theft-detected
 - [ ] Task 6: the revoke-all ordering (AC8)
-  - [ ] Swap the two statements in the three callers; revoke on `reactivateUser`
-  - [ ] Correct `isBeforeSessionEpoch`'s javadoc
+  - [ ] Swap the two statements in the three callers
+  - [ ] IT first to decide whether `reactivateUser` needs a revoke at all; drop it if nothing survives
+  - [ ] Rewrite `isBeforeSessionEpoch`'s javadoc naming the two residuals, without overclaiming
 - [ ] Task 7: the sweep guard (AC9)
+  - [ ] Move the transaction so the catch is outside it; keep `@SchedulerLock` outermost
+  - [ ] Test the ordered delete against populated rows, including `ON DELETE SET NULL`
 - [ ] Task 8: tests (AC6, AC7, AC9, AC10 and regression)
 - [ ] Task 9: docs (AC11)
 - [ ] Task 10: `/pr-review` to a clean round (AC12)
@@ -143,8 +217,11 @@ defects introduced by the previous round's own fix.
 **1. The grace-window rule in `deferred-work.md` would not have fixed the bug.** The entry proposed
 measuring the 30 s "relative to the chain's live end rather than the presented row's `rotatedAt`". But in
 the reported scenario the client is exactly **one hop behind**, and the live end was created by the rotation
-of the presented row — the two timestamps are the same instant, so the window expires at the same moment
-under either rule. It only helps when some other client keeps rotating the chain forward. The root cause is
+of the presented row: `now` is captured at the top of `decideAndRotate` (`AuthService.java:308`, before the
+lock wait) and written as `rotatedAt`, while the successor's `createdAt` is set by `@PrePersist` at
+`saveAndFlush` (`RefreshToken.java:42-47`). So `createdAt = rotatedAt + rotation latency` — milliseconds
+normally, seconds under lock contention — not a different clock reading in any useful sense. The window
+therefore expires at effectively the same moment under either rule. It only helps when some other client keeps rotating the chain forward. The root cause is
 divergence, not the clock: both responses carry `Set-Cookie: rtkn`, the jar keeps whichever arrived last,
 and when that is the winner's the client is left permanently one hop behind. The owner re-decided on
 2026-11-03: keep the window and the rotation exactly as they are, and remove the account-wide blast radius
@@ -197,7 +274,7 @@ String seed)` at `TokenCreatorImpl.java:46`, then `generateTokenFromClaims` at `
 the two branches. The DB branch (`:206-222`) does `daoAuthProvider.authorize(...)`, then
 `assertSessionNotRevoked(req, authorizedPrincipal)` (`:218`, defined `:259`), then `renewLoginToken`
 (`:221`). The fast path (`:223-248`) does `checkAuthorities` + `extendTtlOfToken` and **no DB work by
-design** — the comment at `:228-246` records that `skillars-deferred-144 AC8` deliberately removed a
+design** — the comment at `:224-241` records that `skillars-deferred-144 AC8` deliberately removed a
 per-request `refresh_tokens` query from it and that bounding exposure to `DB_REFRESH_TOKEN_INTERVAL` is the
 accepted contract, the same bound a LOCKED account already relies on. Do not add a query to the fast path.
 
@@ -219,9 +296,9 @@ the row is still managed (`User.authorities` is LAZY and `open-in-view` is false
 
 `resolveGraceSuccessor` (`:450`) walks `replacedById` up to `MAX_GRACE_HOPS = 8`, checks each successor
 belongs to the same account, returns `revokedChain()` on a revoked hop, stops at the first unused row, and
-**only then** tests the window at `:485` (`presented.getRotatedAt() + REFRESH_GRACE_WINDOW`). AC7 adds a
+**only then** tests the window at `:487-488` (`presented.getRotatedAt() + REFRESH_GRACE_WINDOW`). AC7 adds a
 third outcome to the `GraceResolution` record (`:495`) for "liveEnd found, window failed" and threads it
-through `decideAndRotate`'s `used` branch (`:332-344`) to a new `RefreshOutcome`. Do not reuse `Revoked`:
+through `decideAndRotate`'s `used` branch (`:333-345`) to a new `RefreshOutcome`. Do not reuse `Revoked`:
 its message and semantics ("session has ended") are wrong here, and its branch is asserted by
 `refresh_withATokenRevokedByLogout_returns401AndLeavesOtherSessionsAlive` (`AuthResourceIT:927`).
 
@@ -257,10 +334,24 @@ needs no version bump, but the audit may need the new query acknowledged rather 
 referential-action search per deleted row, and that path is **currently untested** against a populated
 `replaced_by_id`.
 
+### The plumbing a new claim actually touches
+
+Wider than "add a constant and a put", and every one of these is a compile break if missed:
+- `LoginTokenManager.createLoginToken(res, principal)` and `renewLoginToken(res, principal)`
+  (`LoginTokenManager.java:19` and `:29`) have no parameter for a session id. Both signatures change, and
+  so do the `JwtManagerImpl` implementations at `:41` and `:54`.
+- `TokenCreator.toClaims` gains a parameter; its call sites are `JwtManagerImpl:45`, `:58` and `:79`.
+- `AuthService.refresh` calls `createLoginToken(res, rotated.principal())` at `:253`, and the `Rotated`
+  record (`:509`) carries no session id — it has to, since the row is detached by then. `login` passes it
+  from the row it just created at `:146`.
+- `JWTAuthorizationFilterTest:471` and `:503` verify the exact `renewLoginToken(response, principal)`
+  argument list, and `JwtManagerImplTest` calls these methods directly. Both need updating.
+
 ### What AC4 costs, and how its refusal reaches the client
 
 - One query per authenticated user per `DB_REFRESH_TOKEN_INTERVAL` (5 min), not per request, and it is an
-  index lookup on `session_id` returning a boolean. Write it as a scalar existence query
+  index lookup on `session_id` returning a boolean. Exactly one: this is why AC3 forbids deriving the claim
+  from the `rtkn` cookie, which would have added a `findByTokenHash` on the same branch. Write it as a scalar existence query
   (`existsBySessionIdAnd...`), never as a fetch of the row: the persistence-context trap in the hard
   constraints below is what a fetch here would reintroduce.
 - It throws the same `AuthorizationException(..., SecurityError.ACCOUNT_NOT_LOGIN_ABLE)` that
@@ -299,11 +390,17 @@ referential-action search per deleted row, and that path is **currently untested
   `refresh_staleCookieInGraceWindow_redirectsToItsOwnSuccessorAndLeavesTheOtherDeviceAlone` (`:888`) and
   `refresh_accountLockedAndStaleCookieReplayedInGraceWindow_revokesTheSuccessorToken` (`:766`). Neither
   re-checks after the window closes — that gap is AC7's new test.
-- Advancing time: the codebase injects the clock through `ClockProvider`, which both `AuthService` and the
-  JWT paths read. Use it for AC7's out-of-window case and for AC6/AC10's forced DB-reauth cycle; do not
-  `Thread.sleep` 30 s and do not wait 5 real minutes. Confirm how existing tests pin `ClockProvider` before
-  writing these — if no IT-level hook exists, mutate `rotated_at` / `db_refresh_token` state via
-  `commitWrite` instead, and say so in the Completion Notes.
+- **Advancing time: `ClockProvider` will NOT work from an HTTP integration test.** It is a `ThreadLocal`
+  (`ClockProvider.java:7`) and the embedded server handles the request on its own worker thread, so a clock
+  set on the test thread never reaches `AuthService` or `JwtManagerImpl`. `AuthResourceIT:391-401` states
+  this explicitly, and the class uses `TestClockProvider` only to mint a JWT **on the test thread**. So:
+  - AC7's out-of-window case: push the row's `rotated_at` into the past with `commitWrite`.
+  - AC10's expired chain: push `expires_at` into the past with `commitWrite`.
+  - AC6/AC10's forced DB-reauth cycle: hand-build a JWT whose `dbRToken` claim is already past and sign it
+    with `tokenCreator.generateTokenFromClaims`, the pattern at `AuthResourceIT:402-415` (note the comment
+    there: build the claims map by hand, because `toClaims` reads `RequestMetadataProvider.getClientInfo()`,
+    which is populated only inside a live HTTP request).
+  Do not `Thread.sleep` 30 s and do not wait 5 real minutes.
 - `AuthCleanupServiceTest` is a Mockito unit test that only verifies delegation and the `@SchedulerLock`
   attributes; AC9's ordering and the swallowed-deadlock guard need real coverage, not another `verify`.
 - `AdminUserServiceTest` has **no** test for `suspendUser` (only two `reactivateUser` tests);
@@ -317,7 +414,9 @@ referential-action search per deleted row, and that path is **currently untested
   only `NO_WAIT` (0) and `SKIP_LOCKED` (-2). A 5 s hint was added and removed on #413 after both reviewer
   arms caught it. Do not reintroduce one; `findByTokenHashForUpdate`/`findByIdForUpdate` wait deliberately.
 - A `REQUIRES_NEW` revoke **self-deadlocks** (55P03 → 409) if the calling transaction already wrote the
-  same row. #413 hung an IT phase for 19 minutes on exactly this.
+  same row. #413 hung an IT phase for 19 minutes on exactly this — there the walk
+  held `PESSIMISTIC_WRITE` locks on the rows a `REQUIRES_NEW` bulk `UPDATE` then needed, so a lock held
+  over the rows is enough; the caller need not have written them.
 - A locked read returns an **already-managed** instance without refreshing it, so an unlocked pre-check
   that loads the entity makes the later locked read stale and the save fails its version check — the lock
   then protects nothing. Use a scalar existence query for pre-checks (the `existsByTokenHashAndRevokedAtIsNotNull`
@@ -338,9 +437,10 @@ no new endpoint, so no new `@PreAuthorize` surface. `SecurityConstants` sits in 
 business-agnostic — a claim name is a transport constant, consistent with `SESSION_ISSUED_AT` living there.
 
 `V225` is a known parallel-PR collision point: if another branch merges a `V225` first, this migration is
-renamed, not rebased around. The same applies to `docs/dev-docs/assets/search-index.js` and
-`docs/deployment/provisioning-checklist.md`, which conflict on almost every parallel docs change — rebuild
-and re-apply rather than resolving them by hand.
+renamed, not rebased around — the precedent is in git, not in the ledger (`0621d23f` renumbered V216→V217,
+`dce987cb` V203→V207, `67d7f945` V202→V206). The same applies to
+`docs/deployment/provisioning-checklist.md`, and to `docs/dev-docs/assets/search-index.js`, which
+`docs/dev-docs/README.md:13` records as generated — rebuild it rather than resolving a conflict in it.
 
 ### References
 
@@ -364,6 +464,20 @@ and re-apply rather than resolving them by hand.
 
 ### Change Log
 
-- 2026-11-03 — created (/bmad-create-story) from five owner-decided items filed on PR #413. Two filed
+- 2026-11-03 — revised after `/mto-story-review` against HEAD b3b0d647 (report:
+  `_bmad-output/implementation-artifacts/story-review.md`). Applied: AC7 now states and instruments the
+  theft signal it gives up (the review showed the chosen option does weaken detection, which the option
+  text had denied); AC3 drops the `rtkn`-cookie derivation as dead code and AC2 mints a fresh id when the
+  rotated row's is null, so a pre-V225 chain cannot stay null forever; AC9's guard moves outside the
+  transaction, because a participating `@Transactional` repository call makes it rollback-only and a
+  body-level catch still throws `UnexpectedRollbackException`; the test notes drop `ClockProvider`, which
+  cannot reach the server's worker thread; AC8 stops claiming the window is closed and makes the
+  `reactivateUser` revoke conditional on an IT proving it catches anything; AC1 records that Flyway's
+  single transaction holds `ACCESS EXCLUSIVE` across the index build and the validation scan; added the
+  claim-plumbing section the task list had understated. Citation drift fixed (`:224-241`, `:487-488`,
+  `:333-345`), the "same instant" claim corrected to `rotatedAt` plus rotation latency, and the
+  merge-hotspot citation repointed from the ledger (where no such note exists) to the renumber commits and
+  `docs/dev-docs/README.md`.
+- 2026-11-03 — created (/bmad-create-story) from five owner-decided items raised on PR #413. Two filed
   design points corrected against the code during creation: the grace-window rule (the live-end measurement
   does not fix the reported case) and the claim name (`sessionId` is taken by client-fixation detection).
