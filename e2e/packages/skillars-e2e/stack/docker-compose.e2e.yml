@@ -14,6 +14,10 @@
 #
 # Nothing here persists: postgres and storage run on tmpfs, so every `up` starts from an empty,
 # freshly migrated database.
+#
+# Every published port binds 127.0.0.1 only. The credentials below are committed test values (a
+# superuser database login, the bootstrap admin's password), so the stack must never be reachable
+# from the network a developer's laptop happens to be on.
 services:
   app:
     image: ${APP_IMAGE:-skillars:local}
@@ -51,8 +55,8 @@ services:
     volumes:
       - ./config:/e2e-config:ro
     ports:
-      - '9990:9990'
-      - '8367:8367'
+      - '127.0.0.1:9990:9990'
+      - '127.0.0.1:8367:8367'
     healthcheck:
       test: ['CMD-SHELL', 'wget -qO- http://localhost:8367/manage/health/smoke || exit 1']
       interval: 5s
@@ -81,7 +85,7 @@ services:
       - /var/lib/postgresql/data
     ports:
       # Published so the suite's SQL seeding (only where no API exists) can reach it.
-      - '55432:5432'
+      - '127.0.0.1:55432:5432'
     healthcheck:
       test: ['CMD', 'pg_isready', '-U', 'postgres', '-d', 'skillars']
       interval: 2s
@@ -110,7 +114,7 @@ services:
     ports:
       # Presigned upload URLs name host `storage`: browsers need `127.0.0.1 storage` in /etc/hosts
       # (CI adds it), exactly as for local dev.
-      - '9500:9500'
+      - '127.0.0.1:9500:9500'
     healthcheck:
       test: ['CMD-SHELL', 'nc -z localhost 9500']
       interval: 2s
@@ -145,7 +149,7 @@ services:
       - MP_SMTP_AUTH_ALLOW_INSECURE=1
       - MP_MAX_MESSAGES=5000
     ports:
-      - '8025:8025'
+      - '127.0.0.1:8025:8025'
 
   # Stands in for Gemini (moderation verdicts) and, later, Bunny and Stripe.
   wiremock:
@@ -154,4 +158,4 @@ services:
     volumes:
       - ./wiremock:/home/wiremock:ro
     ports:
-      - '8089:8080'
+      - '127.0.0.1:8089:8080'

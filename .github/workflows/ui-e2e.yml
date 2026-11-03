@@ -18,6 +18,11 @@ on:
       grep:
         description: 'Playwright --grep expression'
         default: '@smoke'
+      exclude:
+        description: >-
+          Playwright --grep-invert expression. The default drops tiers this stack cannot serve
+          (rate limiting is off; Stripe is stubbed) and quarantined tests.
+        default: '@quarantine|@ratelimit|@stripe-live'
   pull_request:
     types: [opened, labeled, synchronize, reopened]
 
@@ -55,18 +60,22 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           DISPATCH_GREP: ${{ inputs.grep }}
+          DISPATCH_EXCLUDE: ${{ inputs.exclude }}
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ui-e2e-full') }}
         run: |
           set -euo pipefail
+          # Never on this stack: @ratelimit needs limits ON (a separate stack), @stripe-live needs real
+          # Stripe (nightly), @quarantine is excluded from label runs by policy.
+          unservable='@quarantine|@ratelimit|@stripe-live'
           if [ "$EVENT" = "workflow_dispatch" ]; then
             echo "grep=${DISPATCH_GREP:-@smoke}" >> "$GITHUB_OUTPUT"
-            echo "invert=@quarantine" >> "$GITHUB_OUTPUT"
+            echo "invert=${DISPATCH_EXCLUDE:-$unservable}" >> "$GITHUB_OUTPUT"
           elif [ "$FULL" = "true" ]; then
             echo "grep=@" >> "$GITHUB_OUTPUT"
-            echo "invert=@quarantine" >> "$GITHUB_OUTPUT"
+            echo "invert=$unservable" >> "$GITHUB_OUTPUT"
           else
             echo "grep=@smoke" >> "$GITHUB_OUTPUT"
-            echo "invert=@quarantine" >> "$GITHUB_OUTPUT"
+            echo "invert=$unservable" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build the app image from this commit
@@ -94,13 +103,34 @@ jobs:
         working-directory: e2e
         run: npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
 
-      - name: Run Playwright
+      # Two invocations, because laneProjects' `serial` project (@destructive / @config: database
+      # resets, runtime config) shares global state: `fullyParallel: false` only serialises tests
+      # within a file, so the lane needs a run of its own with one worker. Each run keeps its own
+      # output and blob folders (Playwright empties them at start), and the serial run still goes
+      # ahead when the parallel one failed.
+      - name: Run Playwright — parallel lane
+        id: parallel
         working-directory: e2e/packages/skillars-e2e
         env:
           E2E_RUN_ID: ${{ github.run_id }}
           GREP: ${{ steps.select.outputs.grep }}
           GREP_INVERT: ${{ steps.select.outputs.invert }}
-        run: npx playwright test --grep "$GREP" --grep-invert "$GREP_INVERT"
+          PLAYWRIGHT_BLOB_OUTPUT_DIR: blob-report/parallel
+        run: >-
+          npx playwright test --project=parallel --output=test-results/parallel
+          --grep "$GREP" --grep-invert "$GREP_INVERT" --pass-with-no-tests
+
+      - name: Run Playwright — serial lane (one worker)
+        if: ${{ !cancelled() && steps.parallel.conclusion != 'skipped' }}
+        working-directory: e2e/packages/skillars-e2e
+        env:
+          E2E_RUN_ID: ${{ github.run_id }}
+          GREP: ${{ steps.select.outputs.grep }}
+          GREP_INVERT: ${{ steps.select.outputs.invert }}
+          PLAYWRIGHT_BLOB_OUTPUT_DIR: blob-report/serial
+        run: >-
+          npx playwright test --project=serial --no-deps --workers=1 --output=test-results/serial
+          --grep "$GREP" --grep-invert "$GREP_INVERT" --pass-with-no-tests
 
       - name: Dump app logs
         if: failure()
