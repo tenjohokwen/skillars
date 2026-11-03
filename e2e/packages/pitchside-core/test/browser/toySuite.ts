@@ -37,11 +37,21 @@ export const toy = defineSuite({
   mail: new LogDirSink({ dir: MAIL_DIR }),
   a11yBaselineDir: join(here, 'a11y-baselines'),
   prepareContext: async (context) => {
+    if (prepareShouldFail) {
+      prepareShouldFail = false
+      throw new Error('prepareContext failed on purpose (self-test)')
+    }
     await context.route('https://widgets.example.invalid/**', (route) =>
       route.fulfill({ contentType: 'text/javascript', body: "window.toyWidget = 'stubbed'" }),
     )
   },
 })
+
+let prepareShouldFail = false
+/** Makes the next prepareContext call throw — to exercise a half-built actor context. */
+export function failNextPrepareContext(): void {
+  prepareShouldFail = true
+}
 
 export const test = toy.test
 export const expect = toy.expect

@@ -159,6 +159,20 @@ describe('SessionStore priming and write-back', () => {
   })
 })
 
+describe('SessionStore epoch', () => {
+  it('moves on a role invalidation, and on a global one for every role', () => {
+    const { browser } = fakeBrowser()
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    const coach = store.epoch('coach')
+    const parent = store.epoch('parent')
+    store.invalidate('coach')
+    expect(store.epoch('coach')).toBe(coach + 1)
+    expect(store.epoch('parent')).toBe(parent)
+    store.invalidate()
+    expect(store.epoch('parent')).toBe(parent + 1)
+  })
+})
+
 describe('SessionStore user-agent pinning', () => {
   it('logs in with the caller user agent and caches per role and user agent', async () => {
     const seen: unknown[] = []

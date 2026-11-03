@@ -23,7 +23,7 @@ import type { MailSink } from '../mail/MailSink.js'
 import { NetworkGate } from '../net/intercept.js'
 import { ANNOTATION, isQuarantineExpired } from '../tags/scenario.js'
 import { systemClock, type Clock } from '../time/Clock.js'
-import { SessionStore } from './sessions.js'
+import { SessionStore, type SessionContextOptions } from './sessions.js'
 
 export interface Actor {
   role: string
@@ -81,6 +81,46 @@ async function primeAndGuard(
   await suite.prepareContext?.(context)
   for (const page of context.pages()) consoleGate.attach(page)
   context.on('page', (page) => consoleGate.attach(page))
+}
+
+interface OpenedActor {
+  role: string
+  context: BrowserContext
+  /** The role's invalidation epoch when this actor was created. */
+  epoch: number
+  /** False if setup failed part-way: such a context is closed but never written back. */
+  ready: boolean
+}
+
+/**
+ * Hands each role's session on to the next test, before the contexts close. If the app rotated its
+ * refresh token during the test, the next test must start from the rotated one, never replay the
+ * original (reuse detection treats that as theft). Three cases never write back:
+ * - the test invalidated the role (logout, password reset): its explicit invalidate stands;
+ * - two or more contexts used the role in one test: which one holds the current token is unknowable,
+ *   so the role is invalidated and the next test logs in afresh;
+ * - setup failed part-way: there is no session worth keeping.
+ */
+async function writeBackSessions(
+  opened: readonly OpenedActor[],
+  sessions: SessionStore,
+  options: SessionContextOptions,
+): Promise<void> {
+  const byRole = new Map<string, OpenedActor[]>()
+  for (const entry of opened) byRole.set(entry.role, [...(byRole.get(entry.role) ?? []), entry])
+  for (const [role, entries] of byRole) {
+    if (entries.length > 1) {
+      sessions.invalidate(role)
+      continue
+    }
+    const [only] = entries
+    if (!only?.ready || sessions.epoch(role) !== only.epoch) continue
+    try {
+      sessions.update(role, options, await only.context.storageState())
+    } catch {
+      sessions.invalidate(role)
+    }
+  }
 }
 
 /**
@@ -147,10 +187,11 @@ export function createSuiteTest(env: SuiteEnv) {
       },
       use,
     ) => {
-      const opened: Actor[] = []
+      // Same user agent for login and replay: fingerprint-pinned sessions reject a mismatch.
+      const sessionOptions = { userAgent, locale }
+      const opened: OpenedActor[] = []
       await use(async (role: string) => {
-        // Same user agent for login and replay: fingerprint-pinned sessions reject a mismatch.
-        const sessionOptions = { userAgent, locale }
+        const epoch = sessions.epoch(role)
         const context = await browser.newContext({
           storageState: await sessions.state(role, sessionOptions),
           viewport,
@@ -159,21 +200,16 @@ export function createSuiteTest(env: SuiteEnv) {
           baseURL,
           userAgent,
         })
+        // Tracked for teardown BEFORE any setup that can fail, so a half-built context is closed.
+        const entry: OpenedActor = { role, context, epoch, ready: false }
+        opened.push(entry)
         await primeAndGuard(context, suite, consoleGate, networkGate, role)
-        const actor = { role, context, page: await context.newPage() }
-        opened.push(actor)
-        return actor
+        const page = await context.newPage()
+        entry.ready = true
+        return { role, context, page }
       })
-      for (const { role, context } of opened) {
-        // Write the session back before closing: if the app rotated its refresh token during this
-        // test, the next test must start from the rotated one, never replay the original.
-        try {
-          sessions.update(role, { userAgent, locale }, await context.storageState())
-        } catch {
-          sessions.invalidate(role)
-        }
-        await context.close()
-      }
+      await writeBackSessions(opened, sessions, sessionOptions)
+      for (const { context } of opened) await context.close().catch(() => undefined)
     },
 
     gotoRoute: async ({ page, suite }, use) => {

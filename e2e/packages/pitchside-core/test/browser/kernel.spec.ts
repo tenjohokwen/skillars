@@ -1,5 +1,5 @@
 import { failFirst, type SeedContext } from '../../src/index.js'
-import { expect, HomeScreen, LoginScreen, test, toy } from './toySuite.js'
+import { expect, failNextPrepareContext, HomeScreen, LoginScreen, test, toy } from './toySuite.js'
 
 // Self-tests of the kernel against the toy app. Each one proves a fixture in a real browser.
 
@@ -81,6 +81,67 @@ test.describe('session write-back', () => {
       const { page } = await actor('member')
       const home = await new HomeScreen(page, suite).open()
       await expect(home.role()).toHaveText('member')
+    },
+  )
+})
+
+test.describe('session write-back edge cases', () => {
+  // Pairs of tests, in order, in one worker: the first leaves the cache in a tricky state, the second
+  // proves the next actor still gets a working session.
+  test.describe.configure({ mode: 'serial' })
+
+  test(
+    'a test that logs out and invalidates the role keeps its invalidation',
+    toy.scenario({ id: 'KRN-17', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, sessions }) => {
+      const { page } = await actor('member')
+      expect((await page.request.post('/api/logout')).ok()).toBe(true)
+      sessions.invalidate('member')
+    },
+  )
+
+  test(
+    'the next actor logs in afresh instead of replaying the logged-out snapshot',
+    toy.scenario({ id: 'KRN-18', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      await expect((await new HomeScreen(page, suite).open()).role()).toHaveText('member')
+    },
+  )
+
+  test(
+    'two actors for one role, one of which rotates the token',
+    toy.scenario({ id: 'KRN-19', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor }) => {
+      const first = await actor('member')
+      await actor('member')
+      expect((await first.page.request.post('/api/rotate')).ok()).toBe(true)
+    },
+  )
+
+  test(
+    'the next actor does not replay the stale token of the second context',
+    toy.scenario({ id: 'KRN-20', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      await expect((await new HomeScreen(page, suite).open()).role()).toHaveText('member')
+    },
+  )
+
+  test(
+    'an actor whose setup fails part-way rejects',
+    toy.scenario({ id: 'KRN-21', priority: 'P2', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor }) => {
+      failNextPrepareContext()
+      await expect(actor('member')).rejects.toThrow(/prepareContext failed on purpose/)
+    },
+  )
+
+  test(
+    'and its half-built context was closed, not leaked',
+    toy.scenario({ id: 'KRN-22', priority: 'P2', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ browser }) => {
+      expect(browser.contexts()).toHaveLength(0)
     },
   )
 })

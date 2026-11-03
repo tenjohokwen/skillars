@@ -15,6 +15,8 @@ export type SessionContextOptions = Pick<BrowserContextOptions, 'userAgent' | 'l
  */
 export class SessionStore {
   private readonly cache = new Map<string, Promise<StorageState>>()
+  private readonly invalidations = new Map<string, number>()
+  private globalInvalidations = 0
 
   constructor(
     private readonly browser: Pick<Browser, 'newContext'>,
@@ -40,10 +42,20 @@ export class SessionStore {
    */
   invalidate(role?: string): void {
     if (role === undefined) {
+      this.globalInvalidations += 1
       this.cache.clear()
       return
     }
+    this.invalidations.set(role, (this.invalidations.get(role) ?? 0) + 1)
     for (const key of [...this.cache.keys()]) if (roleOf(key) === role) this.cache.delete(key)
+  }
+
+  /**
+   * A counter that moves whenever `role` is invalidated (or everything is). Callers compare epochs to
+   * tell whether an invalidation happened since they took a session — and must not write back.
+   */
+  epoch(role: string): number {
+    return this.globalInvalidations + (this.invalidations.get(role) ?? 0)
   }
 
   /**
