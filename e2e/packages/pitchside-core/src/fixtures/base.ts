@@ -189,6 +189,7 @@ export function createSuiteTest(env: SuiteEnv) {
         userAgent,
       },
       use,
+      testInfo,
     ) => {
       // Same user agent for login and replay: fingerprint-pinned sessions reject a mismatch.
       const sessionOptions = { userAgent, locale }
@@ -213,6 +214,13 @@ export function createSuiteTest(env: SuiteEnv) {
       })
       await writeBackSessions(opened, sessions, sessionOptions)
       for (const { context } of opened) await context.close().catch(() => undefined)
+      // Actors share the test's gates. A two-persona test may never touch the default page, whose
+      // context fixture is the other place the gates are asserted, so assert them here too (same
+      // rule: only when the test body itself passed; each gate reports at most once).
+      if (opened.length > 0 && testInfo.status === 'passed') {
+        consoleGate.assertClean()
+        networkGate.assertClean()
+      }
     },
 
     gotoRoute: async ({ page, suite }, use) => {

@@ -49,8 +49,16 @@ describe('ConsoleGate', () => {
 
     expect(gate.violations().map((v) => v.kind)).toEqual(['console.error', 'pageerror'])
     expect(gate.violations()[0]?.location).toBe('http://app.test/app.js:10:2')
-    expect(() => gate.assertClean()).toThrow(GateViolationError)
-    expect(() => gate.assertClean()).toThrow(/averageRating/)
+    let thrown: unknown
+    try {
+      gate.assertClean()
+    } catch (error) {
+      thrown = error
+    }
+    expect(thrown).toBeInstanceOf(GateViolationError)
+    expect(String((thrown as Error).message)).toMatch(/averageRating/)
+    // Reported once: the default page's context and each actor's teardown all assert.
+    expect(() => gate.assertClean()).not.toThrow()
   })
 
   it("skips the browser's own resource-load errors unless asked to keep them", () => {

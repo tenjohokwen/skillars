@@ -238,6 +238,31 @@ test.describe('gates', () => {
     },
   )
 
+  // A two-persona test may never touch the default page. Its actors' gates must still be enforced:
+  // these used to pass silently, because only the default page's context asserted the gates.
+  test(
+    'the console gate fails an actor-only test whose page logs an error',
+    toy.scenario({ id: 'KRN-28', priority: 'P0', tags: ['@smoke', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      test.fail(true, 'expected: an actor context must be held to the console gate too')
+      const member = await actor('member')
+      await member.page.goto(suite.routing.toUrl('/broken'))
+      await expect(member.page.getByTestId('broken-title')).toBeVisible()
+    },
+  )
+
+  test(
+    'the network gate fails an actor-only test whose page reaches a host outside the allow-list',
+    toy.scenario({ id: 'KRN-29', priority: 'P0', tags: ['@smoke', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      test.fail(true, 'expected: an actor context must be held to the network gate too')
+      const member = await actor('member')
+      await member.page.goto(suite.routing.toUrl('/leaky'))
+      await expect(member.page.getByTestId('leaky-title')).toBeVisible()
+      await member.page.waitForLoadState('networkidle')
+    },
+  )
+
   test.describe('in warn mode', () => {
     test.use({ consoleGateMode: 'warn', networkGateMode: 'warn' })
 
