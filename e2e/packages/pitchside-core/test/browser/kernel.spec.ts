@@ -146,6 +146,34 @@ test.describe('session write-back edge cases', () => {
   )
 })
 
+test.describe('session write-back carries only the session', () => {
+  test.describe.configure({ mode: 'serial' })
+
+  test(
+    'a test leaves client state behind: localStorage and a non-session cookie',
+    toy.scenario({ id: 'KRN-23', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      await new HomeScreen(page, suite).open()
+      await page.evaluate(() => {
+        localStorage.setItem('tour', 'done')
+        document.cookie = 'pref=dark; path=/'
+      })
+    },
+  )
+
+  test(
+    'the next actor for that role starts clean, and still logged in',
+    toy.scenario({ id: 'KRN-24', priority: 'P1', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page, context } = await actor('member')
+      await expect((await new HomeScreen(page, suite).open()).role()).toHaveText('member')
+      expect(await page.evaluate(() => localStorage.getItem('tour'))).toBeNull()
+      expect((await context.cookies()).map((c) => c.name)).not.toContain('pref')
+    },
+  )
+})
+
 test.describe('routing', () => {
   test(
     'settledRoute waits through intermediate redirects',

@@ -5,6 +5,7 @@ import {
   defineTaxonomy,
   hashRouting,
   laneProjects,
+  mergeSessionState,
   optionalEnv,
   requiredEnv,
   SessionStore,
@@ -144,18 +145,65 @@ describe('SessionStore priming and write-back', () => {
     expect(state.cookies.map((c) => `${c.name}=${c.value}`)).toEqual(['fp=fp-coach'])
   })
 
-  it('serves the written-back snapshot instead of re-establishing or replaying the original', async () => {
+  it('serves the refreshed session instead of re-establishing or replaying the original', async () => {
     const { browser, contexts } = fakeBrowser()
-    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    const rtkn = { name: 'rtkn', value: 'original', domain: 'app.test', path: '/' }
+    const store = new SessionStore(
+      browser,
+      new CookieSessionStrategy({ cookies: async () => [rtkn] }),
+    )
     const original = await store.state('coach', { userAgent: 'UA' })
-    expect(original.cookies).toEqual([])
-    const rotated = {
-      cookies: [{ name: 'rtkn', value: 'rotated' }],
+    expect(original.cookies.map((c) => c.value)).toEqual(['original'])
+    store.update('coach', { userAgent: 'UA' }, {
+      cookies: [{ ...rtkn, value: 'rotated' }],
       origins: [],
-    } as unknown as typeof original
-    store.update('coach', { userAgent: 'UA' }, rotated)
-    expect(await store.state('coach', { userAgent: 'UA' })).toBe(rotated)
+    } as unknown as typeof original)
+    const served = await store.state('coach', { userAgent: 'UA' })
+    expect(served.cookies.map((c) => c.value)).toEqual(['rotated'])
     expect(contexts).toHaveLength(1)
+  })
+
+  it('ignores an update for a role that has no cached login', () => {
+    const { browser } = fakeBrowser()
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    store.update('coach', {}, { cookies: [], origins: [] })
+    expect(store.cachedRoles()).toEqual([])
+  })
+})
+
+describe('mergeSessionState', () => {
+  const cookie = (name: string, value: string, domain = 'app.test') =>
+    ({
+      name,
+      value,
+      domain,
+      path: '/',
+      expires: -1,
+      httpOnly: true,
+      secure: false,
+      sameSite: 'Lax',
+    }) as const
+  const baseline = {
+    cookies: [cookie('rtkn', 'r1'), cookie('potc', 'j1'), cookie('fcookie', 'fp')],
+    origins: [{ origin: 'http://app.test', localStorage: [{ name: 'lang', value: 'en' }] }],
+  }
+
+  it('refreshes the login cookies, drops removed ones, ignores new ones and keeps login localStorage', () => {
+    const current = {
+      cookies: [
+        cookie('rtkn', 'r2'),
+        cookie('fcookie', 'fp'),
+        cookie('pref', 'dark'),
+        cookie('rtkn', 'x', 'other.test'),
+      ],
+      origins: [{ origin: 'http://app.test', localStorage: [{ name: 'tour', value: 'done' }] }],
+    }
+    const merged = mergeSessionState(baseline, current)
+    expect(merged.cookies.map((c) => `${c.name}=${c.value}@${c.domain}`)).toEqual([
+      'rtkn=r2@app.test',
+      'fcookie=fp@app.test',
+    ])
+    expect(merged.origins).toBe(baseline.origins)
   })
 })
 

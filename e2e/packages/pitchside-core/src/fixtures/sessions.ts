@@ -15,6 +15,8 @@ export type SessionContextOptions = Pick<BrowserContextOptions, 'userAgent' | 'l
  */
 export class SessionStore {
   private readonly cache = new Map<string, Promise<StorageState>>()
+  /** The state right after login, per cache key — what `update` is allowed to refresh. */
+  private readonly baselines = new Map<string, StorageState>()
   private readonly invalidations = new Map<string, number>()
   private globalInvalidations = 0
 
@@ -28,7 +30,10 @@ export class SessionStore {
     const key = cacheKey(role, options)
     let pending = this.cache.get(key)
     if (!pending) {
-      pending = this.establish(role, options)
+      pending = this.establish(role, options).then((state) => {
+        this.baselines.set(key, state)
+        return state
+      })
       this.cache.set(key, pending)
       // A failed login must not poison the cache for the rest of the worker.
       pending.catch(() => this.cache.delete(key))
@@ -44,10 +49,13 @@ export class SessionStore {
     if (role === undefined) {
       this.globalInvalidations += 1
       this.cache.clear()
+      this.baselines.clear()
       return
     }
     this.invalidations.set(role, (this.invalidations.get(role) ?? 0) + 1)
     for (const key of [...this.cache.keys()]) if (roleOf(key) === role) this.cache.delete(key)
+    for (const key of [...this.baselines.keys()])
+      if (roleOf(key) === role) this.baselines.delete(key)
   }
 
   /**
@@ -59,12 +67,20 @@ export class SessionStore {
   }
 
   /**
-   * Replace a role's cached session with a newer snapshot — call it when a context that used the
-   * session closes. Apps rotate refresh tokens on use; replaying the ORIGINAL snapshot after a
-   * rotation looks like token theft to reuse detection, which revokes every session of that user.
+   * Refresh a role's cached session from a context that used it — call it when that context closes.
+   * Apps rotate refresh tokens on use; replaying the ORIGINAL snapshot after a rotation looks like
+   * token theft to reuse detection, which revokes every session of that user.
+   *
+   * Only the session itself is carried over: the cookies the login snapshot contained, with their
+   * current values (or removed, if the server cleared them). Cookies the test created and every
+   * origin's localStorage come from the login snapshot, so one test's client state never leaks into
+   * the next. Ignored if the role has no cached login (e.g. it was invalidated meanwhile).
    */
-  update(role: string, options: SessionContextOptions, state: StorageState): void {
-    this.cache.set(cacheKey(role, options), Promise.resolve(state))
+  update(role: string, options: SessionContextOptions, current: StorageState): void {
+    const key = cacheKey(role, options)
+    const baseline = this.baselines.get(key)
+    if (!baseline || !this.cache.has(key)) return
+    this.cache.set(key, Promise.resolve(mergeSessionState(baseline, current)))
   }
 
   cachedRoles(): string[] {
@@ -92,3 +108,21 @@ const cacheKey = (role: string, options: SessionContextOptions): string =>
 const roleOf = (key: string): string => key.split(SEPARATOR)[0] ?? key
 const definedOnly = (options: SessionContextOptions): SessionContextOptions =>
   Object.fromEntries(Object.entries(options).filter(([, value]) => value !== undefined))
+
+type SessionCookie = StorageState['cookies'][number]
+const cookieId = (cookie: Pick<SessionCookie, 'name' | 'domain' | 'path'>): string =>
+  [cookie.name, cookie.domain, cookie.path].join(SEPARATOR)
+
+/**
+ * The login snapshot with its own cookies brought up to date from `current`: a cookie present in
+ * both takes the current value and attributes; one the server removed is dropped; cookies only in
+ * `current` (set by the test) are ignored; origins (localStorage) stay as they were at login.
+ */
+export function mergeSessionState(baseline: StorageState, current: StorageState): StorageState {
+  const now = new Map(current.cookies.map((cookie) => [cookieId(cookie), cookie]))
+  const cookies = baseline.cookies.flatMap((cookie) => {
+    const updated = now.get(cookieId(cookie))
+    return updated ? [updated] : []
+  })
+  return { cookies, origins: baseline.origins }
+}
