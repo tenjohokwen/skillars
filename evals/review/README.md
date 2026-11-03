@@ -110,8 +110,15 @@ notes: anything a future curator should know
 
 **Open-bug cases.** A defect found by a reviewer and confirmed by a human before any fix
 exists (see `results/*/real-sample.md`) is still a case: set `fix_pr: pending`, omit
-`fix_merge`, and pin `input_rev:` to the commit the reviewer saw. When the fix merges,
-replace `pending` with the PR number, add `fix_merge`, drop `input_rev`.
+`fix_merge`, and pin `input_rev:` to the commit the reviewer saw.
+
+Closing one takes two steps, because a squash merge's sha does not exist until it happens:
+
+1. **In the fix PR**, set `fix_pr` to the PR number, keep `input_rev`, and promote the file
+   to `cases/` without the `pending-` prefix (the `id` must equal the filename). The
+   validator accepts a numeric `fix_pr` with a pinned `input_rev` and no `fix_merge` as
+   "fix PR open, not merged".
+2. **After the squash merge**, add `fix_merge: <squash sha>` and drop `input_rev`.
 
 Rules for `expected_findings`:
 

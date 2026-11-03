@@ -31,7 +31,7 @@ These are the endpoints the Vue SPA uses (`src/frontend/src/api/auth.api.js`, `b
 |--------|------|------|---------|
 | POST | `/api/auth/login` | public | Email + password login. Sets `potc`, `rtkn`, `skp`. |
 | POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. |
-| POST | `/api/auth/logout` | public | Revokes this session's refresh token, clears all auth cookies. `204`. |
+| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies. `204`. |
 | POST | `/refresh` | any authenticated role | Extends the TTL of an already-valid JWT session. Empty `200`. |
 
 ### `POST /api/auth/login`
@@ -60,16 +60,32 @@ Response `200` (`LoginResponse`):
 
 ### `POST /api/auth/refresh`
 
-Reads the `rtkn` cookie. On success the presented token is marked used, a new one is issued, and the
-response is the same `LoginResponse` as login. A token that was already used outside the 30-second
-multi-tab grace window is treated as theft: every refresh token of the account is revoked, and every
-standing JWT is invalidated through `user.security_session_invalidated_at`. A locked, deactivated or
-suspended account is refused with `401` and the presented token is revoked.
+Reads the `rtkn` cookie. On success the presented token is marked used, a new one is issued, the
+presented row records which successor it became (`replaced_by_id`), and the response is the same
+`LoginResponse` as login.
+
+Within the 30-second multi-tab grace window, a token presented after it was rotated is redirected to
+**its own successor** and that successor is rotated instead. Outside the window — or with no
+successor link to follow — it is treated as theft: every refresh token of the account is revoked and
+every standing JWT is invalidated through `user.security_session_invalidated_at`.
+
+Three refusals end only the one session, with `401` and cookie deletion headers, and do **not**
+revoke the account:
+
+- the token's session was already ended (it carries `revoked_at`): a stale tab retrying after Logout
+  must not sign the user out of their other devices;
+- the token predates `user.security_session_invalidated_at` (a revoke-all already happened);
+- the account is locked, deactivated or suspended.
+
+Each of those revokes the presented token's whole rotation chain.
 
 ### `POST /api/auth/logout`
 
-Revokes the refresh token in the `rtkn` cookie (a `REQUIRES_NEW` write, so it is durable) and clears
-the auth cookies. Returns `204`.
+Revokes the refresh token in the `rtkn` cookie **and every token it was rotated into**, in a
+`REQUIRES_NEW` write so it is durable, then clears the auth cookies. Returns `204`. Revoking the
+chain is what makes Logout end a session that was refreshed a moment earlier: a single-row revoke
+could not touch the already-rotated row, so its successor used to stay live for the rest of its
+7-day TTL (skillars-deferred-166).
 
 ### Login rate limit
 
@@ -196,4 +212,7 @@ Server-side behaviour that clients observe as `401`s:
   refresh token. Login and refresh are refused with `security.accLocked`. The admin console's
   "reactivate" refuses such an account with `409 admin.users.safetyHold`.
 - **Refresh-token reuse** (theft detection, see `/api/auth/refresh`) revokes every session.
-- **Logout** (`/api/auth/logout` or `/api/logout`) revokes the current session's refresh token.
+- **Logout** (`/api/auth/logout` or `/api/logout`) revokes the current session's refresh token and
+  every token it was rotated into. Other devices' sessions are untouched.
+- **Password change and password reset** revoke every refresh token and bump
+  `user.security_session_invalidated_at`, so every other session is ended.

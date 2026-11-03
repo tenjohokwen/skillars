@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
 import com.softropic.skillars.platform.security.infrastructure.jwt.TokenCreator;
+import com.softropic.skillars.platform.security.service.RefreshTokenRevocationService;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
 import org.junit.jupiter.api.AfterEach;
@@ -109,6 +110,13 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private TokenCreator tokenCreator;
+
+    // skillars-deferred-166: the chain revoke is what every logout path now depends on, so its durability
+    // is asserted directly rather than only through HTTP. A plain @Autowired does not fork a Spring
+    // context (the cache key is built from annotations and mock definitions), so this is safe under the
+    // AC3 context ceiling that IntegrationTestConventionTest guards.
+    @Autowired
+    private RefreshTokenRevocationService refreshTokenRevocationService;
 
     @Autowired
     private ApplicationEventPublisher eventPublisher;
@@ -441,9 +449,16 @@ class AuthResourceIT extends AbstractIntegrationTest {
     }
 
 
-    //TODO the system should have a single JWT refresh mechanism. The new one just duplicates an already existing one
-   /* @Test
+    @Test
     void refresh_alreadyUsedToken_revokesAllAndReturns401() {
+        // Revived by skillars-deferred-166. The TODO that parked it ("the system should have a single JWT
+        // refresh mechanism; the new one just duplicates an already existing one") is about the SPA, which
+        // keeps its session alive through GET /refresh and does not call this endpoint at all
+        // (src/frontend/src/api/auth.api.js). It says nothing about the endpoint's own contract, which this
+        // IT exercises directly and which RS01/RS02 just changed — so the theft branch needs its guard
+        // back. The forced `used = true` below leaves rotatedAt null on the successor, so the grace window
+        // finds no live successor to redirect to and this is genuine reuse.
+
         ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT,
             HttpMethod.POST,
@@ -462,12 +477,14 @@ class AuthResourceIT extends AbstractIntegrationTest {
             Map.class
         );
 
-        // Exhaust the successor so the grace-window path finds no active token,
-        // forcing the "revoke all + 401" branch rather than silently redirecting.
-        jdbcTemplate.update(
-            "UPDATE main.refresh_tokens SET used = true WHERE user_id = ? AND used = false",
-            COACH_USER_ID
-        );
+        // Exhaust the successor so the grace-window path finds no live token to redirect to, forcing the
+        // "revoke all + 401" branch. Through commitWrite, not a bare jdbcTemplate.update: Hikari runs with
+        // auto-commit = false, so a bare write outside a transaction reports its row count and is then
+        // rolled back when the connection is released — invisible to the server under test. That is why
+        // this test failed on revival: the successor stayed live, so the replay was legitimately redirected
+        // to it and returned 200. Exactly the defect skillars-deferred-144 AC5 found in the sibling tests.
+        commitWrite("UPDATE main.refresh_tokens SET used = true WHERE user_id = ? AND used = false",
+            COACH_USER_ID);
 
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + REFRESH_ENDPOINT,
@@ -480,11 +497,12 @@ class AuthResourceIT extends AbstractIntegrationTest {
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED));
 
-        long usedCount = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM main.refresh_tokens WHERE used = false AND user_id = ?",
-            Long.class, COACH_USER_ID);
-        assertThat(usedCount).isZero();
-    }*/
+        assertThat(liveTokenCountFor(COACH_USER_ID)).isZero();
+        assertThat(sessionEpochOf(COACH_USER_ID))
+            .as("skillars-deferred-149 AC3: theft detection also bumps the account's session epoch, so a "
+                + "standing JWT cannot keep self-extending through the filter's no-DB-hit fast path")
+            .isNotNull();
+    }
 
     @Test
     void refresh_expiredToken_returns401() {
@@ -746,12 +764,17 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Test
     void refresh_accountLockedAndStaleCookieReplayedInGraceWindow_revokesTheSuccessorToken() {
-        // Code review [Patch] 2026-10-05. refresh()'s multi-tab grace-window branch REASSIGNS the
-        // local `token` to a live SUCCESSOR row (AuthService.java:158-165) and falls through to the
-        // liveness check. terminateSession derives the row to revoke from the raw rtkn cookie on
-        // THIS request — the stale, already-used original — so the successor, which is the
-        // account's actual live credential, would survive the denial unless the resolved token is
-        // revoked explicitly.
+        // Code review [Patch] 2026-10-05, rewritten by skillars-deferred-166. refresh()'s multi-tab
+        // grace-window branch resolves the presented stale row to its SUCCESSOR and falls through to the
+        // liveness check, so the successor — the account's actual live credential — must not survive the
+        // denial. The original fix was an explicit markUsedByTokenHash on the resolved row, because
+        // terminateSession could only reach the row the rtkn cookie hashes to (the stale original).
+        // terminateSession now revokes the whole chain reachable from that cookie, so it reaches the
+        // successor on its own and the explicit call is gone.
+        //
+        // AC4 additions: assert revoked_at (not just `used`, which rotation also sets), and prove the
+        // revocation is scoped to THIS chain by giving the same user a second live session that must
+        // survive untouched.
         ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
             baseUrl() + LOGIN_ENDPOINT,
             HttpMethod.POST,
@@ -798,6 +821,13 @@ class AuthResourceIT extends AbstractIntegrationTest {
             .as("the successor token the grace-window branch resolved to must be revoked too, "
                 + "not just the stale cookie value this request happened to carry")
             .isTrue();
+        assertThat(revokedAtOf(sha256Hex(successor)))
+            .as("the successor must be REVOKED, not merely marked used — `used` alone cannot tell a "
+                + "denied session from a rotated one, which is what let RS01 hide")
+            .isNotNull();
+        assertThat(revokedAtOf(sha256Hex(original)))
+            .as("the presented row is revoked as well: the walk starts there")
+            .isNotNull();
 
         long activeTokens = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM main.refresh_tokens WHERE used = false AND user_id = ?",
@@ -805,6 +835,388 @@ class AuthResourceIT extends AbstractIntegrationTest {
         assertThat(activeTokens)
             .as("a locked account must be left with no live refresh credential")
             .isZero();
+    }
+
+    // --- skillars-deferred-166: logout revokes the chain (RS01); the grace window follows the
+    // --- token's own successor (RS02) -----------------------------------------------------------
+
+    @Test
+    void logout_afterTheTokenWasRotated_revokesTheWholeChain() {
+        // AC1 / ledger RS01. Before this story, logout revoked the presented row only while it was still
+        // unused (markUsedByTokenHash's `AND used = false`), so a refresh a moment earlier left the row
+        // already used, the UPDATE matched nothing, and the successor that refresh had just minted stayed
+        // live for the rest of its 7-day TTL: clicking Logout did not end the session.
+        String original = loginAndGetRtkn(COACH_EMAIL);
+
+        ResponseEntity<Map> firstRefresh = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(original), Map.class);
+        String successor = extractCookieValue(firstRefresh, "rtkn");
+        assertThat(successor).isNotNull().isNotEqualTo(original);
+        assertThat(usedFlagOf(sha256Hex(successor))).isFalse();
+
+        // Log out carrying the STALE cookie, exactly as a tab that refreshed in another window would.
+        ResponseEntity<Void> logoutResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(original), Void.class);
+        assertThat(logoutResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        assertThat(revokedAtOf(sha256Hex(original))).as("the presented row").isNotNull();
+        assertThat(revokedAtOf(sha256Hex(successor)))
+            .as("the successor minted by the rotation — the token that used to survive logout")
+            .isNotNull();
+        assertThat(liveTokenCountFor(COACH_USER_ID)).isZero();
+
+        // The deletion headers AC1 asks for, distinguished from a real value: clearAuthCookies always
+        // emits `rtkn=; Max-Age=0`, so "no Set-Cookie at all" would be the wrong assertion.
+        assertThat(logoutResponse.getHeaders().get("Set-Cookie"))
+            .anyMatch(c -> c.startsWith("rtkn=") && c.contains("Max-Age=0"))
+            .anyMatch(c -> c.startsWith("skp=") && c.contains("Max-Age=0"));
+
+        // And the successor is genuinely dead at the endpoint, not just in the table.
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(successor), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                assertThat(rtknValuesIn(ex.getResponseHeaders()))
+                    .as("a rejected refresh may only emit a deletion header, never a usable rtkn")
+                    .isEmpty();
+            });
+    }
+
+    @Test
+    void refresh_staleCookieInGraceWindow_redirectsToItsOwnSuccessorAndLeavesTheOtherDeviceAlone() {
+        // AC2 / ledger RS02. The grace window used to resolve a stale token via "the newest live token for
+        // this user", i.e. across every device. With two sessions that is routinely the OTHER device's
+        // token: it was handed to this request and rotated, so the other device's cookie became a used
+        // token and its next refresh tripped theft detection and logged the user out everywhere.
+        String deviceA = loginAndGetRtkn(COACH_EMAIL);
+        String deviceB = loginAndGetRtkn(COACH_EMAIL);
+        assertThat(deviceB).isNotEqualTo(deviceA);
+
+        // A refreshes: A0 -> A1.
+        ResponseEntity<Map> aRefresh = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(deviceA), Map.class);
+        String deviceA1 = extractCookieValue(aRefresh, "rtkn");
+        assertThat(deviceA1).isNotNull();
+
+        // A stale request still carrying A0 arrives inside the 30 s window.
+        ResponseEntity<Map> staleReplay = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(deviceA), Map.class);
+        assertThat(staleReplay.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String deviceA2 = extractCookieValue(staleReplay, "rtkn");
+        assertThat(deviceA2).isNotNull().isNotIn(deviceA, deviceA1, deviceB);
+
+        // It consumed A's own successor, not B's session.
+        assertThat(usedFlagOf(sha256Hex(deviceA1)))
+            .as("the redirect must consume the presented token's OWN successor")
+            .isTrue();
+        assertThat(usedFlagOf(sha256Hex(deviceB)))
+            .as("device B's token must be untouched — this is the RS02 regression")
+            .isFalse();
+
+        // And B still works afterwards, which is the user-visible half of RS02: before the fix B's next
+        // refresh hit the theft branch and revoked every session on the account.
+        ResponseEntity<Map> bRefresh = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(deviceB), Map.class);
+        assertThat(bRefresh.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(extractCookieValue(bRefresh, "rtkn")).isNotNull();
+    }
+
+    @Test
+    void refresh_withATokenRevokedByLogout_returns401AndLeavesOtherSessionsAlive() {
+        // AC3. A stale tab replaying a logged-out cookie is not theft, and must not escalate to
+        // account-wide revocation: before this story a revoked token with no rotatedAt fell into the reuse
+        // branch, so one tab's late retry signed the user out of every other device and bumped the
+        // account's session epoch.
+        String deviceA = loginAndGetRtkn(COACH_EMAIL);
+        String deviceB = loginAndGetRtkn(COACH_EMAIL);
+
+        httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(deviceA), Void.class);
+        assertThat(revokedAtOf(sha256Hex(deviceA))).isNotNull();
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(deviceA), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                assertThat(rtknValuesIn(ex.getResponseHeaders())).isEmpty();
+            });
+
+        assertThat(usedFlagOf(sha256Hex(deviceB)))
+            .as("the other device's session must survive a replay of a logged-out token")
+            .isFalse();
+        assertThat(sessionEpochOf(COACH_USER_ID))
+            .as("no account-wide revocation: the session epoch must not be bumped")
+            .isNull();
+    }
+
+    @Test
+    void refresh_withATokenOlderThanTheAccountSessionEpoch_returns401() {
+        // AC6. markAllUsedByUserId (password change / reset / suspension) is a bulk UPDATE whose snapshot
+        // cannot include a successor row a concurrent refresh commits after the statement starts, so a
+        // revoke-all could leave one live token behind. Comparing the token's age against
+        // security_session_invalidated_at (V158) refuses it on first use regardless of what the bulk
+        // update saw — the same guard V158 gave JWTs.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+
+        // The token predates a revocation that happened a minute ago.
+        commitWrite("UPDATE main.refresh_tokens SET created_at = now() - interval '1 hour' "
+            + "WHERE token_hash = ?", sha256Hex(rtkn));
+        commitWrite("UPDATE main.\"user\" SET security_session_invalidated_at = now() - interval '1 minute' "
+            + "WHERE id = ?", COACH_USER_ID);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+                assertThat(rtknValuesIn(ex.getResponseHeaders())).isEmpty();
+            });
+
+        // This one session is ended; the epoch is NOT re-bumped (no second account-wide revocation).
+        assertThat(revokedAtOf(sha256Hex(rtkn))).isNotNull();
+    }
+
+    @Test
+    void refresh_tokenMintedAfterTheSessionEpoch_stillWorks() {
+        // The other half of AC6: the epoch must not lock a legitimate re-login out of its own session.
+        commitWrite("UPDATE main.\"user\" SET security_session_invalidated_at = now() - interval '1 hour' "
+            + "WHERE id = ?", COACH_USER_ID);
+
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+        ResponseEntity<Map> refreshed = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
+
+        assertThat(refreshed.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(extractCookieValue(refreshed, "rtkn")).isNotNull();
+    }
+
+    @Test
+    void refresh_twoConcurrentRefreshesOfTheSameToken_neverTripTheftDetection() throws Exception {
+        // AC7. Two tabs POST /refresh with the same cookie at the same instant. The presented row is now
+        // locked PESSIMISTIC_WRITE, so they serialise: the winner rotates, and the loser reads committed
+        // state (used, a fresh rotatedAt, a written replaced_by_id) and takes the grace redirect to the
+        // real successor. The property that matters is that a legitimate multi-tab race is never read as
+        // theft — and that nothing 500s on the lock.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+
+        // Its own JDK-connection RestTemplate, for the reason the login-burst test above documents: a
+        // parallel burst through the shared pooled client can starve it for later tests.
+        RestTemplate client = new RestTemplateBuilder()
+            .requestFactory(SimpleClientHttpRequestFactory.class)
+            .build();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<HttpStatusCode>> results = new ArrayList<>();
+            for (int i = 0; i < 2; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return client.exchange(baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST,
+                            new HttpEntity<>(null, cookieHeaders(rtkn)), Map.class).getStatusCode();
+                    } catch (HttpClientErrorException e) {
+                        return e.getStatusCode();
+                    }
+                }));
+            }
+            start.countDown();
+            List<HttpStatusCode> statuses = new ArrayList<>();
+            for (Future<HttpStatusCode> f : results) {
+                statuses.add(f.get(60, TimeUnit.SECONDS));
+            }
+
+            assertThat(statuses)
+                .as("a concurrent refresh resolves to 200 (rotated, or redirected to the successor) or "
+                    + "401 (the optimistic-lock backstop) — never a 5xx from the row lock")
+                .allMatch(st -> st.equals(HttpStatus.OK) || st.equals(HttpStatus.UNAUTHORIZED));
+            assertThat(liveTokenCountFor(COACH_USER_ID))
+                .as("theft detection would have revoked every token for the user, leaving none live")
+                .isEqualTo(1);
+            assertThat(sessionEpochOf(COACH_USER_ID))
+                .as("a multi-tab race must not bump the account's revocation epoch")
+                .isNull();
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void refresh_threeConcurrentRefreshesOfTheSameToken_neverTripTheftDetection() throws Exception {
+        // The regression guard for the chain-depth bound. resolveGraceSuccessor's first version stopped
+        // after two hops, so a third client refreshing the same cookie inside one 30 s window walked
+        // T0 -> T1(used) -> T2(used), ran out of hops, and was answered as theft: every refresh token for
+        // the account revoked and the JWT session epoch bumped. The query it replaced found the live token
+        // however deep the chain went, so stopping early was a regression, and AC7's two-thread test could
+        // not see it.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+
+        RestTemplate client = new RestTemplateBuilder()
+            .requestFactory(SimpleClientHttpRequestFactory.class)
+            .build();
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<HttpStatusCode>> results = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return client.exchange(baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST,
+                            new HttpEntity<>(null, cookieHeaders(rtkn)), Map.class).getStatusCode();
+                    } catch (HttpClientErrorException e) {
+                        return e.getStatusCode();
+                    }
+                }));
+            }
+            start.countDown();
+            List<HttpStatusCode> statuses = new ArrayList<>();
+            for (Future<HttpStatusCode> f : results) {
+                statuses.add(f.get(60, TimeUnit.SECONDS));
+            }
+
+            assertThat(statuses).allMatch(st -> st.equals(HttpStatus.OK) || st.equals(HttpStatus.UNAUTHORIZED));
+            assertThat(sessionEpochOf(COACH_USER_ID))
+                .as("three tabs refreshing one cookie is a race, not theft: the account's revocation epoch "
+                    + "must not be bumped")
+                .isNull();
+            assertThat(liveTokenCountFor(COACH_USER_ID))
+                .as("theft revocation would leave zero live tokens; a handled race leaves exactly one")
+                .isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void logout_withAChainLongerThanTheHopBound_leavesNothingTradeable() {
+        // The hop bound used to fail OPEN: the walk logged a warning and returned, leaving the rows beyond
+        // it `used = false, revoked_at = null` — ordinary live tokens that refresh would keep rotating, so
+        // the logged-out session continued indefinitely. That is ledger RS01 again, reached through the
+        // bound. It now falls back to revoking every token for the account.
+        String head = loginAndGetRtkn(COACH_EMAIL);
+
+        // Ten rotations, so the chain from `head` is longer than MAX_CHAIN_HOPS (8).
+        String cursor = head;
+        for (int i = 0; i < 10; i++) {
+            ResponseEntity<Map> rotated = httpTestClient.makeHttpRequest(
+                baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(cursor), Map.class);
+            assertThat(rotated.getStatusCode()).isEqualTo(HttpStatus.OK);
+            cursor = extractCookieValue(rotated, "rtkn");
+            assertThat(cursor).isNotNull();
+        }
+        final String tail = cursor;
+        assertThat(usedFlagOf(sha256Hex(tail))).isFalse();
+
+        ResponseEntity<Void> logoutResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(head), Void.class);
+        assertThat(logoutResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        assertThat(liveTokenCountFor(COACH_USER_ID))
+            .as("no token may remain tradeable after the logout, bound or no bound")
+            .isZero();
+        assertThat(revokedAtOf(sha256Hex(tail)))
+            .as("the fallback must STAMP revoked_at, not just `used`: a row left used-but-not-revoked reads "
+                + "as 'rotated, successor unknown', so the next refresh escalates to a second account-wide "
+                + "revocation instead of the plain 401 an ended session gets")
+            .isNotNull();
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(tail), Map.class))
+            .as("the tail beyond the hop bound must not be rotatable")
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                .as("and it is an ended session, not theft")
+                .doesNotContain("reuse"));
+        assertThat(sessionEpochOf(COACH_USER_ID))
+            .as("so no second account-wide revocation is triggered by replaying the tail")
+            .isNull();
+    }
+
+    @Test
+    void revokeChainByTokenHash_commitsEvenWhenTheCallingTransactionRollsBack() {
+        // The property every logout path now rests on, tested in isolation from HTTP. AuthService.refresh's
+        // denial paths revoke and then throw, which rolls their own transaction back; the revoke survives
+        // only because this service is REQUIRES_NEW. The sibling test below asserts the same thing for
+        // markUsedByTokenHash, which since skillars-deferred-166 has no production caller — so without
+        // this test the durability of the revoke that actually runs would be unasserted, and a future
+        // change to the service's propagation would break every denial silently.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+        ResponseEntity<Map> firstRefresh = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
+        String successor = extractCookieValue(firstRefresh, "rtkn");
+        assertThat(successor).isNotNull();
+
+        transactionTemplate.execute(status -> {
+            refreshTokenRevocationService.revokeChainByTokenHash(sha256Hex(rtkn));
+            status.setRollbackOnly();
+            return null;
+        });
+
+        assertThat(revokedAtOf(sha256Hex(rtkn)))
+            .as("the presented row stays revoked after the caller's transaction rolled back")
+            .isNotNull();
+        assertThat(revokedAtOf(sha256Hex(successor)))
+            .as("and so does the successor the walk reached")
+            .isNotNull();
+        assertThat(liveTokenCountFor(COACH_USER_ID)).isZero();
+    }
+
+    @Test
+    void logoutAndRefreshRacingOnTheSameToken_leaveNoLiveTokenInThatChain() throws Exception {
+        // AC5 / ledger RS01, the race the item is really about. Whichever order the two land in, the chain
+        // must end up dead: refresh-then-logout means the walk follows replaced_by_id to the successor;
+        // logout-then-refresh means refresh sees revoked_at and refuses without minting anything. Before
+        // this story the first order left the successor live for its full TTL.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+
+        RestTemplate client = new RestTemplateBuilder()
+            .requestFactory(SimpleClientHttpRequestFactory.class)
+            .build();
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            Future<String> refreshTask = pool.submit(() -> {
+                start.await();
+                try {
+                    return extractCookieValue(client.exchange(baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST,
+                        new HttpEntity<>(null, cookieHeaders(rtkn)), Map.class), "rtkn");
+                } catch (HttpClientErrorException e) {
+                    return null;
+                }
+            });
+            Future<HttpStatusCode> logoutTask = pool.submit(() -> {
+                start.await();
+                try {
+                    return client.exchange(baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST,
+                        new HttpEntity<>(null, cookieHeaders(rtkn)), Void.class).getStatusCode();
+                } catch (HttpClientErrorException e) {
+                    return e.getStatusCode();
+                }
+            });
+            start.countDown();
+
+            String mintedByRefresh = refreshTask.get(60, TimeUnit.SECONDS);
+            assertThat(logoutTask.get(60, TimeUnit.SECONDS)).isEqualTo(HttpStatus.NO_CONTENT);
+
+            assertThat(liveTokenCountFor(COACH_USER_ID))
+                .as("no live refresh credential may outlive the logout, in either order")
+                .isZero();
+
+            // And if refresh did win the race, the token it handed out is genuinely rejected now.
+            if (mintedByRefresh != null) {
+                assertThat(revokedAtOf(sha256Hex(mintedByRefresh))).isNotNull();
+                assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                    baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null,
+                    cookieHeaders(mintedByRefresh), Map.class))
+                    .isInstanceOf(HttpClientErrorException.class);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test
@@ -1059,6 +1471,57 @@ class AuthResourceIT extends AbstractIntegrationTest {
      */
     private void commitWrite(String sql, Object... args) {
         transactionTemplate.execute(status -> jdbcTemplate.update(sql, args));
+    }
+
+    /** skillars-deferred-166: the {@code revoked_at} stamp, which tells a denied session from a rotated one. */
+    private Instant revokedAtOf(String tokenHash) {
+        Timestamp stamp = jdbcTemplate.queryForObject(
+            "SELECT revoked_at FROM main.refresh_tokens WHERE token_hash = ?", Timestamp.class, tokenHash);
+        return stamp == null ? null : stamp.toInstant();
+    }
+
+    /** Rows that can still be traded in for a session: unused and not revoked. */
+    private long liveTokenCountFor(long userId) {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.refresh_tokens WHERE used = false AND revoked_at IS NULL "
+                + "AND user_id = ?", Long.class, userId);
+    }
+
+    /** The account-wide revocation epoch (V158); null unless a revoke-all has run. */
+    private Instant sessionEpochOf(long userId) {
+        Timestamp stamp = jdbcTemplate.queryForObject(
+            "SELECT security_session_invalidated_at FROM main.\"user\" WHERE id = ?",
+            Timestamp.class, userId);
+        return stamp == null ? null : stamp.toInstant();
+    }
+
+    /** Logs in and returns the issued {@code rtkn}; one call per simulated device. */
+    private String loginAndGetRtkn(String email) {
+        ResponseEntity<Map> loginResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", email, "password", TEST_PASSWORD), clientHeaders(), Map.class);
+        assertThat(loginResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        String rtkn = extractCookieValue(loginResponse, "rtkn");
+        assertThat(rtkn).isNotNull();
+        return rtkn;
+    }
+
+    /**
+     * The NON-EMPTY {@code rtkn} values in a response, i.e. usable credentials. Deletion headers
+     * ({@code rtkn=; Max-Age=0}) are excluded, which is the distinction AC1/AC3/AC5 turn on:
+     * {@code clearAuthCookies} emits a deletion header on every teardown, so "no Set-Cookie for rtkn"
+     * would be the wrong assertion and "some Set-Cookie for rtkn" the wrong one too.
+     */
+    private List<String> rtknValuesIn(HttpHeaders headers) {
+        List<String> setCookies = headers == null ? null : headers.get("Set-Cookie");
+        if (setCookies == null) {
+            return List.of();
+        }
+        return setCookies.stream()
+            .filter(c -> c.startsWith(SecurityConstants.REFRESH_TOKEN_COOKIE + "="))
+            .map(c -> c.split(";")[0].substring(SecurityConstants.REFRESH_TOKEN_COOKIE.length() + 1))
+            .filter(v -> !v.isBlank())
+            .toList();
     }
 
     /** Reads the {@code used} flag straight out of the database for the given token hash. */

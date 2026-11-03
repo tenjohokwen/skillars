@@ -16,8 +16,100 @@ and at HEAD (`open` = still present at HEAD on 2026-11-03). Severity/category ar
 eval case (`evals/review/cases/_drafts/pending-*.yaml` or an added expected finding), so a fix PR should flip that
 case from `fix_pr: pending` to the PR number. Not a story yet: bundle per the usual ledger-mining rules.
 
-- RS01 [high/concurrency] Logout does not revoke the live refresh token when the presented token was already rotated. logout only marks the token from the request cookie, and only if it is not already used (.filter(t -> !t.isUsed())). Owner: HEAD terminateSession still skips used tokens (markUsedByTokenHash requires used=false); no successor link. [`AuthService.java` `AuthService.logout`; input rev `9923ffb02479`; sample S01]
-- RS02 [high/logic] Refresh grace window consumes the user's newest live token from any device, not this token's successor. In the grace branch the code calls `findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId, now)`, which returns the newest live token for the user across all sessions, then rotates it. Owner: same lookup at HEAD; duplicate of S15 — one draft case. [`AuthService.java` `refresh` (also S15: AuthService.java); input rev `651ed1effc04`; sample S03]
+RS01 and RS02 (the two auth items) were implemented by **skillars-deferred-166** and deleted from this
+list per this file's "deleted outright once implemented" rule; their eval cases moved to
+`evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
+not renumber, so the list below starts at RS03.
+
+- **[skillars-deferred-166, OWNER DECISION NEEDED, medium/security]** A replay of a revoked refresh token
+  no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
+  JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such
+  a replay was "used with no recent rotation", took the theft branch, and called
+  `invalidateSessionsForUser`; `AuthService.refresh`'s new REVOKED outcome answers 401 and deliberately
+  runs no account-wide revocation (that story's AC3, so a stale tab retrying after Logout cannot sign the
+  user out of their other devices). Consequence: anyone holding a copy of that session's JWT cookie — an
+  exfiltrated cookie, a shared machine, or an attacker who stole the `rtkn`, refreshed once and then called
+  logout specifically to suppress detection — keeps passing the JWT filter's re-auth, because
+  `SecurityUtil.terminateSession` has never stamped the epoch and nothing else does now. Note the baseline:
+  logout never killed standing JWTs; the victim's replay was the only thing that did.
+  **Options.** (a) Keep AC3 and accept the detection loss, which is the current state. (b) Bump the epoch
+  on REVOKED, which restores the control but logs the user out of every device (the harm AC3 was written to
+  prevent, since the epoch check then refuses the other devices' older tokens). (c) Have logout stamp the
+  epoch for its own session only, which needs a per-session epoch the schema does not have. **Recommend
+  (a) plus a short JWT TTL review**, and treat (c) as the real fix if JWT-after-logout matters: it is the
+  only option that does not trade one of the two properties away. Not decided in that story because it
+  contradicts an approved AC.
+- **[skillars-deferred-166, pre-existing, medium/logic]** After a grace-window redirect, one client is left
+  holding a token that becomes account-wide theft 30 s later. Two concurrent refreshes of one cookie from
+  the same browser (a double submit, an axios retry) serialise on the row lock: the winner is issued A1, the
+  loser is redirected and rotates A1 into A2. Both responses carry `Set-Cookie: rtkn`, so the jar keeps
+  whichever arrived last; if that is the winner's, the client now holds A1, which is `used` with
+  `replaced_by_id -> A2`. A refresh more than `REFRESH_GRACE_WINDOW` (30 s) later fails the window test even
+  though the chain is intact and live, so it is answered as reuse: `markAllUsedByUserId` plus
+  `invalidateSessionsForUser`, signing the user out of every device over a benign race. Pre-existing — the
+  old newest-live grace branch behaved the same way — but it lives in the method deferred-166 rewrote, and
+  that story's two-device IT only checks the other device immediately after the redirect, never after the
+  window closes. **Options:** allow a redirect for a chain that is intact and exactly one hop behind
+  regardless of the window (weakens theft detection for a token one hop stale); make the window relative to
+  the chain's live end rather than the presented row's `rotatedAt`; or leave it and accept that a client
+  which keeps a superseded cookie is logged out everywhere once. Needs a policy call, not a patch.
+- **[skillars-deferred-166, low/database]** The self-referential FK and the new multi-row walks give
+  `AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have. Both
+  `AuthService.resolveGraceSuccessor` and `RefreshTokenRevocationService.revokeChainByTokenHash` take
+  `PESSIMISTIC_WRITE` locks on several rows of `refresh_tokens` in chain order and hold them for the whole
+  transaction, while `deleteExpiredTokens` is a bulk `DELETE` locking the same rows in physical scan order.
+  A chain whose rows are all expired (an expired `rtkn` presented, or a logout with a long-swept chain) can
+  cycle: the walk holds the predecessor and waits for a successor the `DELETE` already holds. Postgres kills
+  one side, and if that is the sweep, the `@Scheduled` method throws with no try/catch and skips an hour of
+  cleanup. Before deferred-166 logout took one single-row lock, which can wait but cannot cycle. **Options:**
+  make the delete acquire in ascending `id` order (chain order is ascending id in practice, since a
+  successor is always created later, so aligning the two removes the cycle), or wrap the scheduled sweep so
+  a lost deadlock is logged and retried next hour instead of propagating. Remote — it needs an expired chain
+  being walked during the hourly sweep — but cheap to close.
+- **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
+  `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
+  on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as
+  `CoachProfileRepository`, `PlayerProfileRepository` and `VideoRepository` all record), and a 5 s hint was
+  tried and removed as misleading. `NO_WAIT` is wrong for these two call sites — each is a whole
+  transaction, and failing fast would let a contended logout skip its revoke. So concurrent replays of one
+  `rtkn` against `POST /api/auth/refresh` and `/api/auth/logout` (both `permitAll`, unrate-limited) queue on
+  the row, each holding a servlet thread and a pooled connection until the holder finishes. Unchanged by
+  that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
+  practice because every holder is a short transaction. A real fix is a session `lock_timeout` on
+  application connections, or rate-limiting those two endpoints.
+- **[skillars-deferred-166 follow-up]** V224 added `main.refresh_tokens.replaced_by_id` with its
+  self-referential FK as `NOT VALID` (migration-conventions rule 3: the table grows). The
+  `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT fk_refresh_tokens_replaced_by` still has to ship
+  in a later migration. Cheap and non-blocking (a `SHARE UPDATE EXCLUSIVE` scan); until then Postgres
+  does not enforce the link for rows written before the constraint, which only matters if something
+  writes `replaced_by_id` outside `AuthService.refresh` — nothing does today. Same shape as the other
+  outstanding `NOT VALID` constraints in this file; bundle it with the next one.
+- **[skillars-deferred-166 residual, medium]** Three revoke-all callers stamp
+  `security_session_invalidated_at` BEFORE `markAllUsedByUserId`, not after: `AdminUserService.suspendUser`,
+  `AgeVerificationService` and `AccountSuspensionEventListener.suspend`. A refresh that commits a successor
+  between those two statements produces a token whose `created_at` is after the epoch, so
+  `AuthService.refresh`'s epoch check (deferred-166 AC6) passes it, and the bulk UPDATE's snapshot never saw
+  it either. While the account stays suspended `locked = true` keeps it out via `ensureAccountIsLive`, but
+  `AdminUserService.reactivateUser` clears `locked` without revoking tokens or re-stamping the epoch, so a
+  suspend-then-reactivate can restore the very session the suspension was meant to kill, for the rest of its
+  7-day TTL. The window is two statements inside one transaction, so this is narrow, and the reactivate half
+  is pre-existing. Fix: swap the two statements in those three callers (the revoke is REQUIRES_NEW on
+  `refresh_tokens`, the stamp is MANDATORY on the user row, so the order is free), and/or revoke on
+  reactivate. Found by the security reviewer on deferred-166's own PR; left out of that story because it
+  touches three services outside its scope, and `AuthService.isBeforeSessionEpoch`'s javadoc now states the
+  limit precisely rather than overclaiming.
+- **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
+  `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
+  suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than
+  "revoked". A replay of one therefore reaches the reuse branch and runs a second account-wide
+  revocation instead of the plain 401 a revoked token now gets. Mostly masked already: every revoke-all
+  caller except `GdprErasureService` also bumps `security_session_invalidated_at`, and
+  `AuthService.refresh`'s epoch check (that story's AC6) answers those with a 401 before the reuse
+  branch is reached; `GdprErasureService` locks the account, which the liveness gate catches. Fixing it
+  properly means adding `revoked_at = :now` to that bulk `UPDATE`, which changes a method with six
+  callers — deliberately out of scope there, recorded so the next person to touch it knows why the two
+  columns are not symmetric.
+
 - RS03 [medium/logic] Email change sets login to the raw new email (no lowercasing, no uniqueness check). u.setLogin(newEmail) stores the value exactly as submitted. Owner: HEAD updateUserEmail unchanged. [`UserProfileService.java` `UserProfileService.updateUserEmail` (also S16: AccountManagementFacade.java); input rev `651ed1effc04`; sample S04]
 - RS04 [medium/logic] findIdsByLanguage lowercases only the input, not the stored array elements. `lower(:lang) = ANY(languages)` matches only if stored values are already lowercase. Owner: frontend stores 'English' etc., so the filter never matches for anyone. [`CoachProfileRepository.java` `findIdsByLanguage`; input rev `deefa90f6d10`; sample S05]
 - RS05 [medium/concurrency] customer.subscription.updated arriving before persistCoachSubscription is recorded as processed and permanently dropped. In the window between the Stripe create call and the local persist, no row has that stripeSubscriptionId yet. Owner: reconcile sweep skips matched rows, so the dropped transition is never healed. [`StripeWebhookService.java` `handleSubscriptionUpdated`; input rev `cb23925514e5`; sample S06]

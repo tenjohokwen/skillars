@@ -1,6 +1,6 @@
-id: pending-refresh-grace-window-account-wide
+id: refresh-grace-window-account-wide
 kind: pre-fix-snapshot
-fix_pr: pending
+fix_pr: 413
 input_rev: fa62da9dc634
 confidence: high
 scope:
@@ -32,6 +32,8 @@ expected_findings:
         symbol: findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc
 source: results/baseline-2026-11-02/real-sample.md S03 and S15, owner-verified 2026-11-03
 notes: >
-  Open bug, no fix PR yet. S03 saw it at 651ed1effc04 (319 input) and S15 at fa62da9dc634 (381 input);
+  Fixed by PR #413 (skillars-deferred-166); `fix_merge` is added in a follow-up commit once the squash
+  sha exists, and `input_rev` is dropped then. Until that lands, validate.py reads a numeric fix_pr with
+  a pinned input_rev and no fix_merge as "fix PR open, not merged". S03 saw it at 651ed1effc04 (319 input) and S15 at fa62da9dc634 (381 input);
   the refresh method and the lookup are identical at both, so the case is pinned to the later one.
   Both sample items name the same anchor (AuthService.refresh).

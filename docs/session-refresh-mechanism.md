@@ -117,11 +117,30 @@ button in the warning dialog.
   `AuthService#refresh`.
 - The client presents its `rtkn` refresh-token cookie; the backend validates it,
   marks it used, issues a **new access token + new refresh token pair**, and rewrites
-  `rtkn` and `skp`. Includes multi-tab race handling (a short grace window) and
-  token-reuse detection (revoke-all).
-- Response body is a `LoginResponse` (`{ userId, role, displayName }`).
-- Frontend call: `authApi.skillarsRefresh()` in `src/api/auth.api.js` →
-  `api.post('/api/auth/refresh')`.
+  `rtkn` and `skp`. The presented row records the successor it was rotated into
+  (`refresh_tokens.replaced_by_id`, V224).
+- **Multi-tab grace window (30 s).** A token presented after it was rotated is redirected to
+  **its own successor**, followed through `replaced_by_id`, and that successor is rotated instead.
+  Before skillars-deferred-166 the redirect went to "the newest live token for this user", which on
+  a second device was that device's session: the stale request consumed it, and the other device's
+  next refresh then tripped theft detection and logged the account out everywhere.
+- **Token reuse (theft) → revoke-all.** A used token that is not a live chain's recent rotation
+  revokes every refresh token of the account and bumps `user.security_session_invalidated_at`.
+- **A token whose session was ended** (logout, forced logout, an earlier denial — i.e. one carrying
+  `revoked_at`) is refused with `401` and cookie deletion headers, and deliberately does **not**
+  trigger revoke-all: a stale tab retrying after Logout must not sign the user out of their other
+  devices.
+- **Session epoch.** A token minted before `user.security_session_invalidated_at` is refused, which
+  closes the window where a revoke-all's bulk `UPDATE` could miss a successor a concurrent refresh
+  was committing.
+- Every decision is taken inside one short transaction holding a `PESSIMISTIC_WRITE` lock on the
+  presented row, and every revocation runs after it, in its own transaction. That ordering is what
+  makes a concurrent logout and refresh safe in both directions; holding the lock across a
+  `REQUIRES_NEW` revoke self-deadlocks (SQLState 55P03, surfacing as a 409).
+- Response body is a `LoginResponse` (`{ userId, role, displayName, limitedAdmin }`).
+- **No frontend caller.** The SPA does not call this endpoint: `src/api/auth.api.js` dropped its
+  helper, and routine keep-alive goes through `GET /refresh` (see above), which re-mints the JWT and
+  never touches `refresh_tokens`. This endpoint is reached by API clients and tests.
 
 Use this for login flows and explicit re-authentication, not for routine keep-alive.
 
@@ -250,7 +269,7 @@ relying on magnitude.
 | `src/App.vue` | Starts session monitoring on mount if a `user` cookie is present; listens for the `session:expired` event. |
 | `src/stores/auth.store.js` | Pinia store for identity (`userId`, `role`, `displayName`); `hydrateFromCookie()` reads `skp`. |
 | `src/api/session.api.js` | `sessionApi.refresh()` → `GET /refresh`. |
-| `src/api/auth.api.js` | `authApi.skillarsRefresh()` → `POST /api/auth/refresh`. Note there are **two** logout helpers: `authApi.logout()` → `POST /api/logout` and `authApi.skillarsLogout()` → `POST /api/auth/logout`. Since Story 1.7b **neither is called directly by `useSession.handleLogout()`** — it goes through `authStore.logout()`, which calls `authApi.skillarsLogout()` (`POST /api/auth/logout`). `authApi.logout()` now has no caller on this path. |
+| `src/api/auth.api.js` | No refresh helper: `authApi.skillarsRefresh()` was removed, and nothing in the SPA calls `POST /api/auth/refresh` (see that endpoint's section). Note there are **two** logout helpers: `authApi.logout()` → `POST /api/logout` and `authApi.skillarsLogout()` → `POST /api/auth/logout`. Since Story 1.7b **neither is called directly by `useSession.handleLogout()`** — it goes through `authStore.logout()`, which calls `authApi.skillarsLogout()` (`POST /api/auth/logout`). `authApi.logout()` now has no caller on this path. |
 
 ### `plugins/sessionManager.js` (the monitor)
 
@@ -480,7 +499,8 @@ the interceptor tears down and redirects to `/login`. Independently, the monitor
 | `platform.security.infrastructure.jwt.filter.JWTAuthorizationFilter` | On every authed request: re-issues the JWT with a fresh 15 min TTL and rewrites `potc` / `user` / `rint` (the last now = the new absolute expiry). Fast path = `checkAuthorities` + `extendTtlOfToken` (plus a `refresh_tokens` revocation lookup when `rtkn` is present); every ~5 min (or on revocation) it instead runs a full `daoAuthProvider.authorize` DB re-auth. On an auth failure it writes an `ErrorDto` 401 body (`writeUnauthorized`). This is where "sliding window" happens. |
 | `platform.security.infrastructure.filter.SessionRefreshFilter` | Terminal handler for `/refresh` (matcher binds no HTTP verb — any method short-circuits here; frontend uses `GET`); returns an empty `200`. Does not refresh anything itself. |
 | `platform.security.api.AuthResource` | `POST /api/auth/login` \| `/refresh` \| `/logout`. `/refresh` here = full token rotation, returns `LoginResponse`. |
-| `platform.security.service.AuthService` | Refresh-token persistence/rotation, `skp` cookie, reuse detection, multi-tab grace window. |
+| `platform.security.service.AuthService` | Refresh-token persistence/rotation, `skp` cookie, reuse detection, successor-only multi-tab grace window, session-epoch check. Decides under a row lock in one short transaction and revokes afterwards (skillars-deferred-166). |
+| `platform.security.service.RefreshTokenRevocationService` | Ends a session by revoking the presented token **and every successor it was rotated into** (`replaced_by_id`), in a `REQUIRES_NEW` transaction. What `SecurityUtil.terminateSession` calls, so logout, forced logout and the refresh denials all end the whole chain rather than one row. |
 | `platform.security.infrastructure.jwt.JwtManagerImpl` | Builds and sets all JWT-related cookies (`createLoginCookies`), including `rint` = the JWT's absolute expiry epoch ms (computed once in `createAndSetJwt`, `maxAge = JWT_TTL + 60s`). |
 | `platform.security.config.SecurityConfiguration` | Filter-chain wiring; `SessionRefreshFilter` is added right after `JWTAuthorizationFilter`. |
 | `infrastructure.security.SecurityConstants` | `JWT_TTL`, `DB_REFRESH_TOKEN_INTERVAL`, `REFRESH_TOKEN_TTL`, all cookie-name constants. |

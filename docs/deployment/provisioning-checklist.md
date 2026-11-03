@@ -157,7 +157,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221 and V223 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223 and V224 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
@@ -674,6 +674,26 @@ blocked from the moment it was scheduled; from V210 on, a new pause is only in f
 SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
+
+**V224: refresh-token successor link and revocation stamp** (`V224__refresh_token_successor_link_and_revoked_at.sql`,
+skillars-deferred-166). Additive only: `main.refresh_tokens` gains `replaced_by_id` (the successor a rotation
+created) and `revoked_at` (the session was deliberately ended), both nullable, plus a partial index on
+`replaced_by_id` and a self-referential FK added **`NOT VALID`**. Nothing to configure, no backfill, no
+downtime step.
+
+- [ ] **Outstanding: `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT fk_refresh_tokens_replaced_by`.**
+      Deliberately deferred by that story (rule 3: the table grows, so the FK ships `NOT VALID` and validates
+      later). Cheap and online (a `SHARE UPDATE EXCLUSIVE` scan). Until it runs, PostgreSQL does not enforce
+      the link for rows written before the constraint; only `AuthService.refresh` writes the column today, so
+      the practical risk is nil, but it must not be forgotten — it is also tracked in `deferred-work.md`.
+- [ ] **Behaviour change to announce, not configure.** Logout now revokes the presented refresh token *and
+      every token it was rotated into*, and a replay of a logged-out token answers `401` without revoking the
+      account's other sessions. A token minted before `user.security_session_invalidated_at` is refused. See
+      `docs/security-api-endpoints.md` and `docs/session-refresh-mechanism.md`.
+- [ ] **Rolling-deploy window (accepted, 30 s per token).** Tokens rotated by an instance running the old code
+      have no `replaced_by_id`, so a replay of one inside the 30 s grace window is treated as reuse and revokes
+      that account's sessions. Bounded and self-clearing once every instance is on the new code; the SPA does
+      not call `POST /api/auth/refresh` at all, so the exposure is API clients only.
 
 **V223: optional coach safeguarding check** (`V223__coach_safeguarding_check.sql`). Two new empty tables,
 `marketplace.coach_safeguarding_requests` and `marketplace.coach_safeguarding_checks` (both FK to
