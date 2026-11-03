@@ -50,19 +50,19 @@ describe('DrillDetailPanel.vue — manage own drill (feat/coach-workflow-gaps D1
   it('shows Edit/Delete for a PRIVATE drill in the library, emitting edit with the drill', async () => {
     const { wrapper } = mountPanel({ drill: PRIVATE_DRILL })
     await flushPromises()
-    await wrapper.find('[data-test="drill-edit"]').trigger('click')
+    await wrapper.find('[data-testid="drill-edit"]').trigger('click')
     expect(wrapper.emitted('edit')[0][0]).toEqual(PRIVATE_DRILL)
-    expect(wrapper.find('[data-test="drill-delete"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="drill-delete"]').exists()).toBe(true)
   })
 
   it('hides Edit/Delete for PLATFORM drills and inside the session builder', async () => {
     const { wrapper } = mountPanel({ drill: PLATFORM_DRILL })
     await flushPromises()
-    expect(wrapper.find('[data-test="drill-edit"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="drill-edit"]').exists()).toBe(false)
 
     const { wrapper: builder } = mountPanel({ drill: PRIVATE_DRILL, context: 'session-builder' })
     await flushPromises()
-    expect(builder.find('[data-test="drill-edit"]').exists()).toBe(false)
+    expect(builder.find('[data-testid="drill-edit"]').exists()).toBe(false)
   })
 
   it('Delete confirms first, then calls deleteDrill and emits deleted', async () => {
@@ -72,7 +72,7 @@ describe('DrillDetailPanel.vue — manage own drill (feat/coach-workflow-gaps D1
     store.deleteDrill.mockResolvedValue()
     await flushPromises()
 
-    await wrapper.find('[data-test="drill-delete"]').trigger('click')
+    await wrapper.find('[data-testid="drill-delete"]').trigger('click')
     expect(store.deleteDrill).not.toHaveBeenCalled()
     await onOk()
     await flushPromises()

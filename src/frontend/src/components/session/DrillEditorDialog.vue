@@ -18,7 +18,7 @@
           maxlength="200"
           :error="!!nameError"
           :error-message="nameError"
-          data-test="drill-name"
+          data-testid="drill-name"
         />
         <q-input
           v-model="form.description"
@@ -131,7 +131,7 @@
           :label="t('common.save')"
           :loading="saving"
           :disable="!canSave"
-          data-test="drill-save"
+          data-testid="drill-save"
           @click="save"
         />
       </q-card-actions>

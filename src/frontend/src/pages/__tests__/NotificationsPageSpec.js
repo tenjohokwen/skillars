@@ -74,7 +74,7 @@ describe('NotificationsPage.vue', () => {
   it('shows the empty state', async () => {
     const { wrapper } = await mountPage({ content: [], totalPages: 0 })
 
-    expect(wrapper.find('[data-test="page-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="page-empty"]').exists()).toBe(true)
   })
 
   it('requests the selected page (1-based UI → 0-based API)', async () => {
@@ -90,7 +90,7 @@ describe('NotificationsPage.vue', () => {
   it('mark-all-read clears every unread item', async () => {
     const { wrapper } = await mountPage({ content: [n('a'), n('b')], totalPages: 1 })
 
-    await wrapper.find('[data-test="page-mark-all"]').trigger('click')
+    await wrapper.find('[data-testid="page-mark-all"]').trigger('click')
     await flushPromises()
 
     expect(notificationApi.markAllRead).toHaveBeenCalled()

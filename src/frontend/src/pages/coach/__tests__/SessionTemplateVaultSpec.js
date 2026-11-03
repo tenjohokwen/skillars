@@ -86,7 +86,7 @@ describe('SessionTemplateVault.vue — deploy picker (feat/coach-workflow-gaps A
     await flushPromises()
 
     expect(store.fetchDeployableBookings).toHaveBeenCalled()
-    expect(wrapper.find('[data-test="deploy-booking-select"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="deploy-booking-select"]').exists()).toBe(true)
     expect(wrapper.text()).not.toContain('session.templates.deployBookingIdLabel')
     // Option label carries the player's name for the coach to recognise the session.
     expect(wrapper.vm.bookingOptions[0]).toMatchObject({ value: BOOKING.bookingId })
@@ -97,7 +97,7 @@ describe('SessionTemplateVault.vue — deploy picker (feat/coach-workflow-gaps A
     const wrapper = await mountWith([])
     wrapper.vm.startDeploy(TEMPLATE)
     await flushPromises()
-    expect(wrapper.find('[data-test="no-deployable-bookings"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="no-deployable-bookings"]').exists()).toBe(true)
   })
 
   it('deploys the chosen booking and maps the backend error key, not the helpCode', async () => {

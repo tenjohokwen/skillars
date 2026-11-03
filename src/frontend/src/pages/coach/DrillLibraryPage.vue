@@ -9,7 +9,7 @@
         icon="add"
         no-caps
         :label="t('session.drillEditor.newDrill')"
-        data-test="new-drill"
+        data-testid="new-drill"
         @click="openCreate"
       />
     </div>

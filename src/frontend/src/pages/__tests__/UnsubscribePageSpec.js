@@ -36,35 +36,35 @@ describe('UnsubscribePage.vue', () => {
     const wrapper = await mountAt('/unsubscribe?token=v1.a.b')
 
     expect(notificationApi.unsubscribe).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-test="unsub-confirm"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="unsub-confirm"]').exists()).toBe(true)
   })
 
   it('posts the token on confirm and shows the success state', async () => {
     notificationApi.unsubscribe.mockResolvedValue({ category: 'REMINDER' })
     const wrapper = await mountAt('/unsubscribe?token=v1.a.b')
 
-    await wrapper.find('[data-test="unsub-confirm"]').trigger('click')
+    await wrapper.find('[data-testid="unsub-confirm"]').trigger('click')
     await flushPromises()
 
     expect(notificationApi.unsubscribe).toHaveBeenCalledWith('v1.a.b')
-    expect(wrapper.find('[data-test="unsub-done"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="unsub-done"]').exists()).toBe(true)
   })
 
   it('shows an error for a rejected token and lets the user retry', async () => {
     notificationApi.unsubscribe.mockRejectedValue({ response: { status: 400 } })
     const wrapper = await mountAt('/unsubscribe?token=tampered')
 
-    await wrapper.find('[data-test="unsub-confirm"]').trigger('click')
+    await wrapper.find('[data-testid="unsub-confirm"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="unsub-error"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="unsub-confirm"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="unsub-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="unsub-confirm"]').exists()).toBe(true)
   })
 
   it('explains a link with no token and offers no button', async () => {
     const wrapper = await mountAt('/unsubscribe')
 
-    expect(wrapper.find('[data-test="unsub-missing"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="unsub-confirm"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="unsub-missing"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="unsub-confirm"]').exists()).toBe(false)
   })
 })

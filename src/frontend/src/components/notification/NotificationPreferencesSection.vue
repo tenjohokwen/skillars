@@ -1,5 +1,5 @@
 <template>
-  <div class="glass-card profile-section" data-test="notification-preferences">
+  <div class="glass-card profile-section" data-testid="notification-preferences">
     <div class="text-label q-mb-sm">{{ t('notifications.preferences.title') }}</div>
     <div class="text-meta q-mb-lg">{{ t('notifications.preferences.description') }}</div>
 
@@ -16,7 +16,7 @@
         :model-value="pref.emailEnabled"
         :disable="saving === pref.category"
         :aria-label="labelFor(pref.category).label"
-        :data-test="`pref-toggle-${pref.category}`"
+        :data-testid="`pref-toggle-${pref.category}`"
         @update:model-value="(v) => toggle(pref, v)"
       />
     </div>

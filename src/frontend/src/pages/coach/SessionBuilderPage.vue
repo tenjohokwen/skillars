@@ -32,7 +32,7 @@
           icon="content_copy"
           :label="t('session.templates.useTemplate')"
           class="q-mr-xs"
-          data-test="use-template"
+          data-testid="use-template"
           @click="openUseTemplate"
         />
         <q-btn

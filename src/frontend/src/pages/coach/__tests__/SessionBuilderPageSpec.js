@@ -192,14 +192,14 @@ describe('SessionBuilderPage.vue — Use template (feat/coach-workflow-gaps A19)
   it('offers "Use template" only while the booking has no plan', async () => {
     const { wrapper } = await mountPage({ shallow: false })
     await flushPromises()
-    expect(wrapper.find('[data-test="use-template"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="use-template"]').exists()).toBe(true)
 
     const { wrapper: planned } = await mountPage({
       initialState: { sessionBuilder: { sessionId: 'session-1' } },
       shallow: false,
     })
     await flushPromises()
-    expect(planned.find('[data-test="use-template"]').exists()).toBe(false)
+    expect(planned.find('[data-testid="use-template"]').exists()).toBe(false)
   })
 
   it('deploys the chosen template onto the current booking and reloads the plan', async () => {

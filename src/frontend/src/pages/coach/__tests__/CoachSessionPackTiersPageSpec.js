@@ -97,14 +97,14 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
   // fix/pack-expiry-size-tiers: the coach sees how long a pack bought from the current offer lasts.
   it('shows the active offer validity days when the backend sends them', () => {
     const wrapper = mountPage([{ ...ACTIVE_TIER, validityDays: 365 }])
-    const validity = wrapper.find('[data-test="tier-validity"]')
+    const validity = wrapper.find('[data-testid="tier-validity"]')
     expect(validity.exists()).toBe(true)
     expect(validity.text()).toBe('booking.packs.validFor')
   })
 
   it('omits the validity line when the tier carries no validityDays', () => {
     const wrapper = mountPage([ACTIVE_TIER])
-    expect(wrapper.find('[data-test="tier-validity"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="tier-validity"]').exists()).toBe(false)
   })
 
   it('has no withdraw control when there is no active tier', () => {
@@ -269,15 +269,15 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
 
   it('lists sold packs with player, buyer and an expiring-soon flag; Extend only on extendable rows', () => {
     const wrapper = mountWithSold([SOLD_EXTENDABLE, SOLD_NOT_EXTENDABLE])
-    const rows = wrapper.findAll('[data-test="sold-pack"]')
+    const rows = wrapper.findAll('[data-testid="sold-pack"]')
     expect(rows).toHaveLength(2)
     expect(rows[0].text()).toContain('Mia')
     expect(rows[0].text()).toContain('payment.myTiers.boughtBy')
     expect(rows[0].text()).toContain('payment.myTiers.expiringSoon')
-    expect(rows[0].find('[data-test="extend-pack"]').exists()).toBe(true)
+    expect(rows[0].find('[data-testid="extend-pack"]').exists()).toBe(true)
     // buyer == player (self-purchase): no redundant "bought by" line
     expect(rows[1].text()).not.toContain('payment.myTiers.boughtBy')
-    expect(rows[1].find('[data-test="extend-pack"]').exists()).toBe(false)
+    expect(rows[1].find('[data-testid="extend-pack"]').exists()).toBe(false)
   })
 
   // fix/pack-status-badges: a pack frozen by an open card dispute and a withdrawn (revoked) pack get their own
@@ -309,19 +309,19 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     ],
   ])('a %s pack (%s) shows its badge and reason', (status, revokedReason, badge, note) => {
     const wrapper = mountWithSold([{ ...SOLD_EXTENDABLE, status, revokedReason }])
-    const row = wrapper.find('[data-test="sold-pack"]')
-    expect(row.find('[data-test="sold-pack-status"]').text()).toBe(badge)
-    expect(row.find('[data-test="sold-pack-status-note"]').text()).toBe(note)
-    expect(row.find('[data-test="extend-pack"]').exists()).toBe(status !== 'REVOKED')
+    const row = wrapper.find('[data-testid="sold-pack"]')
+    expect(row.find('[data-testid="sold-pack-status"]').text()).toBe(badge)
+    expect(row.find('[data-testid="sold-pack-status-note"]').text()).toBe(note)
+    expect(row.find('[data-testid="extend-pack"]').exists()).toBe(status !== 'REVOKED')
   })
 
   it('an active pack shows the Active badge and no status note', () => {
     const wrapper = mountWithSold([SOLD_EXTENDABLE])
-    const row = wrapper.find('[data-test="sold-pack"]')
-    expect(row.find('[data-test="sold-pack-status"]').text()).toBe(
+    const row = wrapper.find('[data-testid="sold-pack"]')
+    expect(row.find('[data-testid="sold-pack-status"]').text()).toBe(
       'payment.myTiers.packStatus.ACTIVE',
     )
-    expect(row.find('[data-test="sold-pack-status-note"]').exists()).toBe(false)
+    expect(row.find('[data-testid="sold-pack-status-note"]').exists()).toBe(false)
   })
 
   it('Extend calls the existing extend endpoint for that row and re-reads the list', async () => {
@@ -330,7 +330,7 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     store.extendSessionPack.mockResolvedValue()
     store.fetchSoldPacks.mockClear()
 
-    await wrapper.find('[data-test="extend-pack"]').trigger('click')
+    await wrapper.find('[data-testid="extend-pack"]').trigger('click')
     await flushPromises()
 
     expect(store.extendSessionPack).toHaveBeenCalledWith('p-1')
@@ -342,7 +342,7 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     const store = storeOf(wrapper)
     store.extendSessionPack.mockRejectedValue(new Error('409'))
 
-    await wrapper.find('[data-test="extend-pack"]').trigger('click')
+    await wrapper.find('[data-testid="extend-pack"]').trigger('click')
     await flushPromises()
 
     expect(store.extendSessionPack).toHaveBeenCalledWith('p-1')

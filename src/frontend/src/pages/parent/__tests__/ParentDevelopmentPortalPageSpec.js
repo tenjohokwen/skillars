@@ -220,7 +220,7 @@ describe('ParentDevelopmentPortalPage.vue — session pack status badges', () =>
         ],
       },
     })
-    const badges = wrapper.findAll('[data-test="pack-status-badge"]').map((b) => b.text())
+    const badges = wrapper.findAll('[data-testid="pack-status-badge"]').map((b) => b.text())
     expect(badges).toEqual([
       'booking.packs.pausedStatus',
       'booking.packs.frozenStatus',

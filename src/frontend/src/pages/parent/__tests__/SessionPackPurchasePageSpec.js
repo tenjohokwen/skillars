@@ -114,7 +114,7 @@ describe('SessionPackPurchasePage.vue — pack validity', () => {
   it('shows the validity days for the offered tier', async () => {
     const wrapper = await mountWithTier({ ...baseTier, validityDays: 180 })
 
-    const validity = wrapper.find('[data-test="pack-validity"]')
+    const validity = wrapper.find('[data-testid="pack-validity"]')
     expect(validity.exists()).toBe(true)
     expect(validity.text()).toBe('booking.packs.validFor')
   })
@@ -122,6 +122,6 @@ describe('SessionPackPurchasePage.vue — pack validity', () => {
   it('hides the validity line when the backend does not send it', async () => {
     const wrapper = await mountWithTier({ ...baseTier })
 
-    expect(wrapper.find('[data-test="pack-validity"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="pack-validity"]').exists()).toBe(false)
   })
 })

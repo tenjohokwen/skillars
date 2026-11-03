@@ -41,7 +41,7 @@
               <div
                 v-if="tier.validityDays"
                 class="text-caption text-grey"
-                data-test="pack-validity"
+                data-testid="pack-validity"
               >
                 {{ t('booking.packs.validFor', { days: tier.validityDays }) }}
               </div>

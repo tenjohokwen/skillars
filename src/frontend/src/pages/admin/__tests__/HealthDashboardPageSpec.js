@@ -39,7 +39,7 @@ describe('HealthDashboardPage warnings', () => {
         },
       },
     })
-    expect(wrapper.findAll('[data-test="health-warning"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="health-warning"]')).toHaveLength(1)
     expect(wrapper.find('.status-pill--warning').exists()).toBe(true)
   })
 
@@ -48,6 +48,6 @@ describe('HealthDashboardPage warnings', () => {
       status: 'UP',
       components: { geminiCompliance: { status: 'UP', details: { mode: 'vertex' } } },
     })
-    expect(wrapper.find('[data-test="health-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="health-warning"]').exists()).toBe(false)
   })
 })

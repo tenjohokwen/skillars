@@ -135,7 +135,7 @@ describe('PaymentMethodCard.vue (deferred-108 AC1)', () => {
     )
     await flushPromises()
 
-    expect(wrapper.find('[data-test="subscription-note"]').exists()).toBe(shown)
+    expect(wrapper.find('[data-testid="subscription-note"]').exists()).toBe(shown)
   })
 
   it('renders the add-card form when savedPaymentMethod.hasCard is false', async () => {

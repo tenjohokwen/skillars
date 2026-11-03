@@ -37,8 +37,8 @@ describe('NotificationPreferencesSection.vue', () => {
       { category: 'DEVELOPMENT', emailEnabled: false },
     ])
 
-    expect(wrapper.find('[data-test="pref-toggle-REMINDER"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="pref-toggle-DEVELOPMENT"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pref-toggle-REMINDER"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pref-toggle-DEVELOPMENT"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('notifications.preferences.transactionalNote')
   })
 
@@ -73,6 +73,6 @@ describe('NotificationPreferencesSection.vue', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('notifications.preferences.loadError')
-    expect(wrapper.find('[data-test^="pref-toggle-"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid^="pref-toggle-"]').exists()).toBe(false)
   })
 })

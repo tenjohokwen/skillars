@@ -52,28 +52,28 @@
               <div
                 v-if="pack.status === 'REVOKED'"
                 class="text-caption q-mt-xs text-grey-8"
-                data-test="pack-revoked-reason"
+                data-testid="pack-revoked-reason"
               >
                 {{ packRevokedReasonText(pack, t) }}
               </div>
               <div
                 v-if="pack.status === 'FROZEN'"
                 class="text-caption q-mt-xs text-deep-orange"
-                data-test="pack-frozen-notice"
+                data-testid="pack-frozen-notice"
               >
                 {{ t('booking.packs.frozenNotice') }}
               </div>
               <div
                 v-if="pack.status === 'PAUSED'"
                 class="text-caption q-mt-xs text-warning"
-                data-test="pack-paused-until"
+                data-testid="pack-paused-until"
               >
                 {{ t('booking.packs.pausedUntilLabel', { date: formatDate(pack.pausedUntil) }) }}
               </div>
               <div
                 v-else-if="isUsableOrFrozen(pack) && isPauseScheduled(pack)"
                 class="text-caption q-mt-xs text-warning"
-                data-test="pack-pause-scheduled"
+                data-testid="pack-pause-scheduled"
               >
                 {{
                   t('booking.packs.pauseScheduledLabel', {
@@ -89,7 +89,7 @@
                 size="sm"
                 color="primary"
                 class="q-mt-xs q-px-none"
-                data-test="pack-pause-cta"
+                data-testid="pack-pause-cta"
                 :label="t('booking.packs.pauseCta')"
                 @click="openPauseDialog(pack)"
               />
@@ -105,7 +105,7 @@
             <q-badge
               :color="packBadgeColor(pack)"
               :label="packBadgeLabel(pack, t)"
-              data-test="pack-status-badge"
+              data-testid="pack-status-badge"
             />
           </div>
         </q-card-section>

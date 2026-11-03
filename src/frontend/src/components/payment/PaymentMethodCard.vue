@@ -45,7 +45,7 @@
         <div v-if="!savedCard?.hasCard" class="text-body2 q-mb-sm">
           {{ t('payment.card.addCardPrompt') }}
         </div>
-        <div v-if="subscriptionNote" class="text-caption q-mb-sm" data-test="subscription-note">
+        <div v-if="subscriptionNote" class="text-caption q-mb-sm" data-testid="subscription-note">
           {{ t('payment.card.subscriptionNote') }}
         </div>
         <div ref="cardElementRef" class="card-element q-pa-sm q-mb-sm"></div>

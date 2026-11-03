@@ -6,14 +6,14 @@
     icon="notifications"
     class="header-btn"
     :aria-label="t('notifications.bellLabel')"
-    data-test="notification-bell"
+    data-testid="notification-bell"
   >
     <q-badge
       v-if="store.unreadCount > 0"
       floating
       rounded
       color="red"
-      data-test="notification-badge"
+      data-testid="notification-badge"
     >
       {{ badgeLabel }}
     </q-badge>
@@ -27,7 +27,7 @@
           no-caps
           size="sm"
           :label="t('notifications.markAllRead')"
-          data-test="bell-mark-all"
+          data-testid="bell-mark-all"
           @click="store.markAllRead()"
         />
       </div>
@@ -36,7 +36,7 @@
           <q-item-section class="text-meta">{{ t('common.loading') }}</q-item-section>
         </q-item>
         <q-item v-else-if="!store.recent.length">
-          <q-item-section class="text-meta" data-test="bell-empty">
+          <q-item-section class="text-meta" data-testid="bell-empty">
             {{ t('notifications.empty') }}
           </q-item-section>
         </q-item>
@@ -49,7 +49,7 @@
         />
       </q-list>
       <q-separator />
-      <q-item v-close-popup clickable to="/notifications" data-test="bell-view-all">
+      <q-item v-close-popup clickable to="/notifications" data-testid="bell-view-all">
         <q-item-section class="text-center">{{ t('notifications.viewAll') }}</q-item-section>
       </q-item>
     </q-menu>

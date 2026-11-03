@@ -26,7 +26,7 @@
         <router-link
           :to="{ name: 'parent-credit-wallet' }"
           class="glass-card soft-hover player-dashboard__tile"
-          data-test="wallet-tile"
+          data-testid="wallet-tile"
         >
           <q-icon name="account_balance_wallet" size="24px" style="color: var(--accent-primary)" />
           <div class="text-card-title q-mt-sm">{{ t('player.dashboard.creditWalletTitle') }}</div>
@@ -59,7 +59,7 @@
           v-if="ageTileVisible"
           :to="{ name: 'player-age-verification' }"
           class="glass-card soft-hover player-dashboard__tile"
-          data-test="age-verification-tile"
+          data-testid="age-verification-tile"
         >
           <q-icon
             :name="ageStatus.state === 'VERIFIED' ? 'verified' : 'badge'"

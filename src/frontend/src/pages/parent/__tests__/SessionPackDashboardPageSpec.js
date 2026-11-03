@@ -68,8 +68,8 @@ async function mountPage(packs) {
   return wrapper
 }
 
-const has = (wrapper, test) => wrapper.find(`[data-test="${test}"]`).exists()
-const badge = (wrapper) => wrapper.find('[data-test="pack-status-badge"]')
+const has = (wrapper, test) => wrapper.find(`[data-testid="${test}"]`).exists()
+const badge = (wrapper) => wrapper.find('[data-testid="pack-status-badge"]')
 
 describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-badges)', () => {
   afterEach(() => {
@@ -94,7 +94,7 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     ])
     expect(badge(wrapper).text()).toBe('booking.packs.pausedStatus')
     expect(badge(wrapper).classes()).toContain('bg-warning')
-    expect(wrapper.find('[data-test="pack-paused-until"]').text()).toBe(
+    expect(wrapper.find('[data-testid="pack-paused-until"]').text()).toBe(
       'booking.packs.pausedUntilLabel',
     )
     expect(has(wrapper, 'pack-pause-cta')).toBe(false)
@@ -111,7 +111,7 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
       { ...BASE, status: 'ACTIVE', pausedFrom: inDays(3), pausedUntil: inDays(13) },
     ])
     expect(badge(wrapper).text()).toBe('booking.packs.activeStatus')
-    expect(wrapper.find('[data-test="pack-pause-scheduled"]').text()).toBe(
+    expect(wrapper.find('[data-testid="pack-pause-scheduled"]').text()).toBe(
       'booking.packs.pauseScheduledLabel',
     )
     expect(has(wrapper, 'pack-paused-until')).toBe(false)
@@ -123,7 +123,7 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     const wrapper = await mountPage([{ ...BASE, status: 'FROZEN' }])
     expect(badge(wrapper).text()).toBe('booking.packs.frozenStatus')
     expect(badge(wrapper).classes()).toContain('bg-deep-orange')
-    expect(wrapper.find('[data-test="pack-frozen-notice"]').text()).toBe(
+    expect(wrapper.find('[data-testid="pack-frozen-notice"]').text()).toBe(
       'booking.packs.frozenNotice',
     )
     expect(has(wrapper, 'pack-pause-cta')).toBe(false)
@@ -141,7 +141,7 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
         { ...BASE, status: 'REVOKED', revokedReason: reason, creditsRemaining: 0 },
       ])
       expect(badge(wrapper).text()).toBe('booking.packs.revokedStatus')
-      expect(wrapper.find('[data-test="pack-revoked-reason"]').text()).toBe(text)
+      expect(wrapper.find('[data-testid="pack-revoked-reason"]').text()).toBe(text)
       expect(wrapper.text()).not.toContain('booking.packs.expiresLabel')
       expect(wrapper.text()).not.toContain('booking.packs.exhaustedLabel')
       expect(has(wrapper, 'pack-pause-cta')).toBe(false)

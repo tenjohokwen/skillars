@@ -126,7 +126,7 @@ describe('PlayerSubscriptionPage.vue — payment issue banner', () => {
       playerSubscription: { tier: 'PRO', status, cancelAtPeriodEnd: false },
     })
 
-    expect(wrapper.find('[data-test="payment-issue-banner"]').exists()).toBe(shown)
+    expect(wrapper.find('[data-testid="payment-issue-banner"]').exists()).toBe(shown)
   })
 })
 
@@ -153,13 +153,13 @@ describe('PlayerSubscriptionPage.vue — banner after saving a card', () => {
       playerTiers: tiers,
       playerSubscription: { tier: 'PRO', status: 'PAST_DUE', cancelAtPeriodEnd: false },
     })
-    expect(wrapper.find('[data-test="payment-retry-pending"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="payment-retry-pending"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('subscription.paymentIssue')
 
     wrapper.findComponent({ name: 'PaymentMethodCard' }).vm.$emit('saved')
     await flushPromises()
 
-    expect(wrapper.find('[data-test="payment-retry-pending"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="payment-retry-pending"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('subscription.paymentRetrying')
   })
 

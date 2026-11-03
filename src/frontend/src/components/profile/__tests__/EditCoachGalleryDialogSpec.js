@@ -66,7 +66,7 @@ describe('EditCoachGalleryDialog.vue (feat/coach-workflow-gaps D9)', () => {
     getCoachGallery.mockResolvedValue([item(0), item(1)])
     const wrapper = await mountDialog()
     expect(getCoachGallery).toHaveBeenCalledTimes(1)
-    expect(wrapper.findAll('[data-test="gallery-item"]')).toHaveLength(2)
+    expect(wrapper.findAll('[data-testid="gallery-item"]')).toHaveLength(2)
   })
 
   it('uploads through sign → PUT → confirm with the coach_gallery entity, then links the key', async () => {
@@ -91,14 +91,14 @@ describe('EditCoachGalleryDialog.vue (feat/coach-workflow-gaps D9)', () => {
       expect.objectContaining({ method: 'PUT' }),
     )
     expect(addCoachGalleryImage).toHaveBeenCalledWith('coach_gallery/42/2026/10/a.jpg')
-    expect(wrapper.findAll('[data-test="gallery-item"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="gallery-item"]')).toHaveLength(1)
     expect(wrapper.emitted('updated')).toBeTruthy()
   })
 
   it('hides the upload control once the gallery holds 6 images', async () => {
     getCoachGallery.mockResolvedValue([0, 1, 2, 3, 4, 5].map(item))
     const wrapper = await mountDialog()
-    expect(wrapper.find('[data-test="gallery-upload"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="gallery-upload"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('profile.coachGalleryFull')
   })
 
@@ -126,10 +126,10 @@ describe('EditCoachGalleryDialog.vue (feat/coach-workflow-gaps D9)', () => {
     deleteCoachGalleryItem.mockResolvedValue()
     const wrapper = await mountDialog()
 
-    await wrapper.findAll('[data-test="gallery-delete"]')[0].trigger('click')
+    await wrapper.findAll('[data-testid="gallery-delete"]')[0].trigger('click')
     await flushPromises()
 
     expect(deleteCoachGalleryItem).toHaveBeenCalledWith('m-0')
-    expect(wrapper.findAll('[data-test="gallery-item"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="gallery-item"]')).toHaveLength(1)
   })
 })

@@ -183,7 +183,7 @@ describe('PlayerDashboardPage.vue — wallet tile (feat/coach-workflow-gaps A23)
     mounted.push(wrapper)
     await flushPromises()
 
-    const tile = wrapper.find('[data-test="wallet-tile"]')
+    const tile = wrapper.find('[data-testid="wallet-tile"]')
     expect(tile.exists()).toBe(true)
     expect(JSON.parse(tile.attributes('data-to'))).toEqual({ name: 'parent-credit-wallet' })
   })
