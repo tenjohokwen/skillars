@@ -64,10 +64,12 @@ public class AuthCleanupService {
             refreshTokenRepository.deleteExpiredTokens(Instant.now(ClockProvider.getClock()));
             log.debug("Purged expired refresh tokens");
         } catch (PessimisticLockingFailureException e) {
-            // 40P01 (deadlock victim) and 55P03 (lock not available) both land here. The only writer that
-            // can still cycle with this sweep is a bulk revoke-all over one user's rows
-            // (markAllUsedByUserId / markAllRevokedByUserId), which is unordered by nature; the chain
-            // walks cannot, because deleteExpiredTokens now locks in ascending id order like they do.
+            // 40P01 (deadlock victim) and 55P03 (lock not available) both land here. The writer that can
+            // still cycle with this sweep is a bulk revoke-all over one user's rows (markAllUsedByUserId /
+            // markAllRevokedByUserId), which is unordered by nature. The chain walks are ordered the same
+            // way this sweep now is, so they should not — but see deleteExpiredTokens' javadoc for the one
+            // residual (the ON DELETE SET NULL action can touch an unexpired predecessor outside the
+            // ordered set), which is unreachable in production rather than impossible by construction.
             log.warn("Expired-refresh-token sweep lost a lock contest and skipped this run; "
                 + "the next hourly run retries the same rows", e);
         }

@@ -28,14 +28,58 @@ RS09 compounds it (the parent's saved default card is overwritten before the cha
 context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + RS04 (the small logic pair) were
 the alternatives and stay queued behind it.
 
-- **[skillars-deferred-167 follow-up, filed 2026-11-03, medium/security]** Flip the per-session JWT check
-  from fail-open to fail-closed on a missing session claim. skillars-deferred-167 AC5 skips the check for a
-  JWT with no claim, because failing closed at deploy would sign out every live session and
-  `extendTtlOfToken` cannot invent the claim. The flip is safe only once no pre-deploy JWT can still be
-  presented, which takes at least one `REFRESH_TOKEN_TTL` (7 days) after that story deploys — the chain, and
-  therefore the JWT's ability to keep sliding, cannot outlive that. Until then a stolen PRE-deploy `potc`
-  is the one credential the story cannot kill. Cheap when it comes: invert one branch and update the javadoc
-  that AC5 requires to state the limit.
+- **[skillars-deferred-167, OWNER DECISION NEEDED, medium/security]** Flip the per-session JWT check from
+  fail-open to fail-closed on a missing session claim — and the trigger cannot be "wait 7 days", which is
+  what this entry first said. skillars-deferred-167 AC5 skips the check for a JWT with no `rtsid` claim,
+  because failing closed at deploy would sign out every live session and neither mint path can invent the
+  claim. **Both reviewer arms then showed the exposure is unbounded:** a claimless token never acquires a
+  claim (the DB-reauth branch passes the missing value back, the TTL-only path omits what it cannot read)
+  and nothing else on either path consults `refresh_tokens`, so a holder making one request every
+  `JWT_TTL` keeps that session alive indefinitely — past revocation, expiry and the sweep. A `potc` stolen
+  before the rollout is therefore a permanent session, and the 7-day reasoning this entry originally
+  carried was wrong.
+  **Options.** (a) Flip on a chosen date and accept that any remaining claimless holders are signed out
+  then — one-off, bounded, and the only option that actually closes it. (b) Ship a forced re-login
+  (invalidate every session once) and flip immediately after, which closes it without a surprise logout
+  later but costs every user one login now. (c) Derive the claim on the DB-reauth branch from the `rtkn`
+  cookie when the row carries one, with an ownership check against the authorized principal — narrows the
+  population but cannot help a holder who has only the `potc`, which is precisely the thief. **Recommend
+  (a)**, with the date announced; (c) adds a query and a new failure mode for partial coverage.
+
+- **[skillars-deferred-167, OWNER DECISION NEEDED, medium/logic]** The chain cap introduced by that story
+  logs every continuously active WEB user out 7 days after login, and does not cap API clients at all.
+  The SPA has no caller for `POST /api/auth/refresh` (`src/frontend/src/api/auth.api.js` records that the
+  helper was removed), so an SPA session's chain is the single row created at login. Seven days later it
+  expires, `existsLiveBySessionId` answers false, and the standing JWT is refused on the next DB-reauth
+  cycle — a hard logout, possibly mid-form, with no client-side way to extend and no warning (the existing
+  countdown dialog covers the 15-minute JWT, not this). A client that *does* rotate is never capped,
+  because each rotation writes a fresh `expires_at`. So the cap binds exactly the population the story did
+  not have in mind and misses the one it did. AC10 declared the cap intended, but on the understanding
+  that it affected long-lived API clients.
+  **Options.** (a) Let the SPA refresh — restore a `POST /api/auth/refresh` caller (ideally on the existing
+  countdown, which already knows when the JWT is near expiry), so a web session rotates and is never
+  capped. (b) Treat an unrotated chain as live for as long as its JWT keeps sliding, i.e. only apply the
+  cap to chains that have rotated at least once — keeps the logout-kill, drops the cap. (c) Accept the
+  7-day logout and tell users, which needs at least a warning state in the SPA. **Recommend (a)**: it makes
+  the chain do what the design assumed it already did, and the cap then means what AC10 said it meant.
+
+- **[skillars-deferred-167 residual, low/performance]** The `StaleChain` outcome writes nothing, so the
+  presented token stays replayable, and each replay takes `findByTokenHashForUpdate` plus up to
+  `MAX_GRACE_HOPS` (8) `findByIdForUpdate` `PESSIMISTIC_WRITE` reads over a chain that is **still live** —
+  locks that wait without a bound, on an endpoint with no rate limiter. Before that story the first such
+  request marked the whole chain `used`, so repeats could not contend with an active session; now a client
+  holding one superseded cookie can repeatedly serialise the victim's real refresh and logout on the same
+  rows. Worsens, rather than creates, the unrate-limited-`/api/auth/refresh` residual already filed by
+  deferred-166. The fix is the same one that entry names: rate-limit that endpoint, or a session
+  `lock_timeout` on application connections.
+
+- **[skillars-deferred-167 residual, low/performance]** `extendTtlOfToken` now performs a FOURTH full JWT
+  parse and HMAC verification per authenticated request (`extractPrincipal`, `extractDbRefreshToken`,
+  `extractSessionIssuedAt`, and now `extractRefreshSessionId`), on the path the code repeatedly documents
+  as the cheap, DB-free one taken by every request. It follows the existing `SESSION_ISSUED_AT` shape
+  rather than inventing a one-off, which is why it shipped this way. Parsing once and threading the claims
+  through fixes all four together and would reshape `ClaimsExtractor`'s API — deliberately not done inside
+  a security story.
 - **[skillars-deferred-166 -> skillars-deferred-167, OWNER DECIDED 2026-11-03, medium/security]** A replay of a revoked refresh token
   no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
   JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such

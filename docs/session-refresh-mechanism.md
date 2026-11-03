@@ -174,16 +174,26 @@ cookie therefore kept working for as long as its holder kept making requests.
   query, on that branch only — the TTL-only path stays database-free by design, so exposure is
   bounded by `DB_REFRESH_TOKEN_INTERVAL` (5 min), the same bound a locked account has always had.
 - **Fail-open on a missing claim, deliberately.** A JWT minted before this story carries no `rtsid`,
-  the TTL-only path cannot invent one, and refusing all of them would sign out every live session the
-  moment the story deploys. Those tokens are unchecked for the rest of their lives (bounded by the
-  chain's 7-day TTL), so a stolen **pre-deploy** `potc` is the one credential this does not kill. The
-  flip to fail-closed is filed in `deferred-work.md` and cannot ship until no such token can be
-  presented. A post-deploy token always carries the claim.
-- **The refresh TTL is now an absolute session cap.** An access token used to slide indefinitely as
-  long as the user kept clicking, even after its refresh chain had expired and been swept. It no
-  longer does: once the chain has no live row, the session ends within one DB-reauth cycle. This is
-  intended, and it is a behaviour change for a continuously active client, which is now cut off 7
-  days after login rather than never.
+  neither mint path can invent one, and refusing all of them would sign out every live session the
+  moment the story deploys. A post-deploy token always carries the claim.
+  **That exposure has no time bound.** A claimless token never acquires a claim — the DB-reauth path
+  passes the missing value straight back and the TTL-only path omits what it cannot read, while both
+  re-mint `exp`, `dbRToken` and `sessIat` — and nothing else on either path consults `refresh_tokens`.
+  So a holder who makes one request every 15 minutes keeps that session alive indefinitely, long after
+  its chain is revoked, expired and swept. A stolen **pre-deploy** `potc` is therefore a permanent
+  session until the flip to fail-closed, and that flip cannot be scheduled by "wait 7 days" either; it
+  needs a deliberate trigger, filed as an owner decision in `deferred-work.md`.
+- **The refresh chain is now a session cap — and it binds the SPA, not API clients.** Once a chain has
+  no live row, the session ends within one DB-reauth cycle, where an access token used to slide
+  indefinitely as long as the user kept clicking. Who that actually affects is the opposite of what it
+  first looks like:
+  - **The SPA is capped at 7 days.** It has no caller for `POST /api/auth/refresh`, so its chain is the
+    single row created at login; 7 days later that row expires and the standing JWT is refused on the
+    next DB-reauth cycle. Every continuously active web user is logged out at that mark, with no
+    client-side way to extend and no warning dialog (the existing one covers the 15-minute JWT, not
+    this). **This is an owner decision filed in `deferred-work.md`, not a settled behaviour.**
+  - **A rotating client is not capped at all.** Every rotation writes a fresh `expires_at`, so a client
+    that refreshes at least once a week keeps its chain alive forever and the check never fires for it.
 - **No frontend caller.** The SPA does not call this endpoint: `src/api/auth.api.js` dropped its
   helper, and routine keep-alive goes through `GET /refresh` (see above), which re-mints the JWT and
   never touches `refresh_tokens`. This endpoint is reached by API clients and tests.

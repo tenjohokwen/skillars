@@ -15,6 +15,8 @@ import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -78,6 +80,12 @@ public class AuthService {
      * Spring's proxy does not intercept self-invocation. Precedent: {@code MessagingService}.
      */
     private final TransactionTemplate transactionTemplate;
+
+    /**
+     * skillars-deferred-167 AC7: counts the refresh attempts that are no longer treated as theft, which is
+     * the only numeric trace left of a signal that used to revoke an account. See {@link StaleChain}.
+     */
+    private final MeterRegistry meterRegistry;
 
     /** Lazily encoded with the live encoder so its cost factor always matches real users' hashes. */
     private volatile String dummyPasswordHash;
@@ -288,6 +296,7 @@ public class AuthService {
             log.warn("Refresh presented a token whose chain is still live but was rotated outside the "
                     + "{}s grace window; answering 401 without account-wide revocation. user={} tokenHash={}",
                 REFRESH_GRACE_WINDOW.toSeconds(), stale.ownerId(), stale.presentedHash());
+            meterRegistry.counter("security.refresh.stale_live_chain").increment();
             securityUtil.clearAuthCookies(res);
             throw new BadCredentialsException("Refresh token is stale — please sign in again");
         }
@@ -601,14 +610,29 @@ public class AuthService {
      * cannot be traded in by anyone, including whoever presented it. There is nothing to revoke that would
      * make the account safer.
      *
-     * <p><strong>What this gives up, deliberately.</strong> This branch was also the one place a stolen
-     * refresh token showed itself: an attacker who steals an {@code rtkn} and rotates it first leaves the
-     * victim holding exactly this shape, and the old behaviour revoked the whole account, which killed the
-     * attacker's session along with everyone else's. That signal is gone — the attacker's chain now
-     * survives for the rest of its TTL — so this case is logged at {@code warn} to keep it observable even
-     * though no state changes. A replay against a chain with NOTHING live at its end is still
-     * {@link Reuse} and still escalates. In practice the exposure is narrow today: the SPA never calls
-     * {@code POST /api/auth/refresh} at all, so only API and mobile clients can reach this path.
+     * <p><strong>What this gives up, deliberately — and it is more than the benign case above.</strong>
+     * This branch was also the one place a stolen refresh token showed itself: an attacker who steals an
+     * {@code rtkn} and rotates it first leaves the victim holding exactly this shape, and the old
+     * behaviour revoked the whole account, which killed the attacker's session along with everyone
+     * else's. That signal is gone, so the case is counted
+     * ({@code security.refresh.stale_live_chain}) and logged at {@code warn} to stay observable even
+     * though no state changes.
+     *
+     * <p>Three limits of this branch that its name does not convey, each verified rather than assumed:
+     * <ul>
+     *   <li><strong>Any age, not just a recent race.</strong> The window test is the last thing
+     *       {@link #resolveGraceSuccessor} evaluates, so a replay of a week-old credential against a live
+     *       chain lands here too, not only a double-submit from seconds ago.</li>
+     *   <li><strong>Any depth up to {@link #MAX_GRACE_HOPS}.</strong> The presented row may sit up to 8
+     *       rotations behind the live end. Beyond the bound the walk finds no live end and the outcome is
+     *       {@link Reuse} again, so the theft response depends on how deep the chain happens to be — an
+     *       artefact of bounding the walk, not a deliberate policy.</li>
+     *   <li><strong>The attacker's chain is not bounded by {@code REFRESH_TOKEN_TTL}.</strong> Every
+     *       rotation writes a fresh {@code expiresAt}, so a chain that keeps being rotated never expires.
+     *       An earlier draft of this javadoc said "the rest of its 7-day TTL", which is only true of a
+     *       chain nobody rotates.</li>
+     * </ul>
+     * A replay against a chain with NOTHING live at its end is still {@link Reuse} and still escalates.
      */
     private record StaleChain(Long ownerId, String presentedHash) implements RefreshOutcome { }
 

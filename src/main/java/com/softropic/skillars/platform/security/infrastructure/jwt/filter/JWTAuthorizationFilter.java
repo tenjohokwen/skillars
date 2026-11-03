@@ -292,11 +292,20 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * <p><strong>Fails OPEN on a missing claim, deliberately (AC5).</strong> A {@code null} id means the
      * JWT was minted before this story: {@code extendTtlOfToken} rebuilds its claim map from what it can
      * read, so it cannot invent one, and refusing every such token would sign out every live session the
-     * moment this deploys. Those JWTs are therefore unchecked for the rest of their lives, which is
-     * bounded by their chain's 7-day TTL; a stolen PRE-deploy {@code potc} is the one credential this
-     * check cannot kill. The flip to fail-closed is filed in {@code deferred-work.md} and cannot ship
-     * until no such token can still be presented. A post-deploy token always carries the claim, so the
-     * ordinary stolen-cookie case IS covered.
+     * moment this deploys.
+     *
+     * <p><strong>That exposure is UNBOUNDED, not bounded by the chain's TTL</strong> — an earlier draft of
+     * this javadoc said otherwise and was wrong. A claimless token never acquires a claim: this branch
+     * passes the {@code null} straight back into {@code renewLoginToken}, and {@code extendTtlOfToken}
+     * omits what it cannot read, while both re-mint {@code exp}, {@code dbRToken} and
+     * {@code SESSION_ISSUED_AT}. Nothing else on either path consults {@code refresh_tokens}
+     * (skillars-deferred-144 AC8 removed the per-request lookup). So a holder who makes one request every
+     * {@code JWT_TTL} keeps that session alive indefinitely, long after its chain is revoked, expired and
+     * swept. A stolen PRE-deploy {@code potc} is therefore a permanent session until the fail-closed flip
+     * happens, and that flip cannot be scheduled by "wait one REFRESH_TOKEN_TTL" either — it needs a
+     * deliberate trigger, which is filed as an owner decision in {@code deferred-work.md}.
+     *
+     * <p>A post-deploy token always carries the claim, so the ordinary stolen-cookie case IS covered.
      *
      * <p>Throws the same exception and error code as its account-wide sibling: the client cannot act
      * differently on "your session ended" versus "your account's sessions ended", and the SPA already

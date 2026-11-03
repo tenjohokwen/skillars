@@ -279,6 +279,17 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * {@link #markAllRevokedByUserId(Long, Instant)} are still unordered bulk {@code UPDATE}s over one
      * user's rows, so they can still deadlock against this sweep. That shape predates deferred-167 and is
      * documented as a deadlock source on {@code AuthService.refresh}, which converts it to a 401.
+     *
+     * <p><strong>And one hole in the ordering itself, latent rather than reachable.</strong> V224's FK is
+     * {@code ON DELETE SET NULL}, so deleting a row makes PostgreSQL update its PREDECESSOR's
+     * {@code replaced_by_id} — a lower-id row that is not in this statement's locked, ordered set when it
+     * is not itself expired. That would be a lower-id lock taken while holding higher-id locks, the very
+     * cycle shape this ordering removes. It is unreachable in production: {@code expires_at} is only ever
+     * written as {@code now + REFRESH_TOKEN_TTL}, at login and at each rotation, and a predecessor is
+     * always created before its successor, so a predecessor always expires FIRST and is already in the
+     * set. Only a test that rewrites {@code expires_at} directly can construct the inverse — which
+     * {@code AuthResourceIT.expiredTokenSweep_deletesInIdOrder_andNullsThePredecessorsSuccessorLink} does
+     * deliberately, to cover the referential action. Do not restate the ordering guarantee as absolute.
      */
     @Modifying
     @Transactional

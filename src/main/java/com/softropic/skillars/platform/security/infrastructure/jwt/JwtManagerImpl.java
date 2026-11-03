@@ -98,6 +98,14 @@ public class JwtManagerImpl implements LoginTokenManager {
                 // (OPF_SEED is the standing proof: nothing sets it and nothing noticed). Losing this one
                 // would silently turn every fast-path extension into a JWT that skips the chain-liveness
                 // check for the rest of its life.
+                //
+                // Cost, acknowledged rather than hidden: extractRefreshSessionId re-reads the potc cookie
+                // and re-parses + re-verifies the JWT, so this is a FOURTH full HMAC verification on a
+                // request that already does three (extractPrincipal, extractDbRefreshToken,
+                // extractSessionIssuedAt). It mirrors how SESSION_ISSUED_AT is already read, which is why
+                // it was written this way rather than inventing a one-off. Parsing once and threading the
+                // claims through would fix all four together and is filed as a follow-up; doing it here
+                // would mean reshaping ClaimsExtractor's API inside a security story.
                 putRefreshSessionId(claims, claimsExtractor.extractRefreshSessionId(req));
                 createAndSetJwt(res, claims);
             } else {

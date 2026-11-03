@@ -697,15 +697,20 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       The JWT carries the chain id as an `rtsid` claim, and the authorisation filter refuses a JWT whose
       chain has no live refresh token left — within `DB_REFRESH_TOKEN_INTERVAL` (5 min) of the logout.
       Previously a copied `potc` cookie kept working for as long as its holder kept making requests.
-- [ ] **The 7-day refresh TTL is now an absolute session cap.** An access token used to slide indefinitely
-      while the user kept clicking, even after its refresh chain expired and was swept. A continuously
-      active client is now signed out 7 days after login. Intended; announce it to anyone running a
-      long-lived API or mobile client.
-- [ ] **Accepted gap, self-clearing: JWTs minted before this deploy are not checked.** They carry no
-      `rtsid` claim and the filter deliberately fails open for them, because failing closed would sign every
-      live session out at deploy. So a `potc` stolen *before* the rollout survives its logout. It clears
-      within one `REFRESH_TOKEN_TTL` (7 days) as chains turn over; the flip to fail-closed is tracked in
-      `deferred-work.md` and must not ship before then.
+- [ ] **BLOCKER BEFORE PROD: the chain cap logs every active web user out at 7 days.** The SPA has no
+      caller for `POST /api/auth/refresh`, so its chain is the one row created at login. Seven days later
+      that row expires and the standing JWT is refused on the next DB-reauth cycle — a forced logout for
+      every continuously active web user, possibly mid-form, with no client-side way to extend and no
+      warning (the existing dialog covers the 15-minute JWT, not this). Conversely a client that *does*
+      rotate is never capped, because each rotation writes a fresh `expires_at`. Filed as an owner decision
+      in `deferred-work.md`; do not ship to a live PROD without settling it.
+- [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
+      carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
+      sign every live session out at deploy. Such a token never acquires a claim, so a holder who keeps
+      making requests keeps that session alive indefinitely — a `potc` stolen *before* the rollout is a
+      permanent session. Waiting 7 days does not close it. The flip to fail-closed needs a deliberate
+      trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
+      flip); tracked as an owner decision in `deferred-work.md`.
 - [ ] **Accepted detection loss.** A used refresh token presented against a chain that is still live, more
       than 30 s after its rotation, now answers `401` and writes nothing, where it used to revoke the whole
       account. That branch was also the signal for a refresh token stolen and rotated by an attacker, so
