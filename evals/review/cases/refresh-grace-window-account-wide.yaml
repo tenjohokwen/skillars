@@ -1,7 +1,7 @@
 id: refresh-grace-window-account-wide
 kind: pre-fix-snapshot
 fix_pr: 413
-input_rev: fa62da9dc634
+fix_merge: f0ad7706
 confidence: high
 scope:
   - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
