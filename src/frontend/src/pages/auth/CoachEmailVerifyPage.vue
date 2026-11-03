@@ -6,14 +6,20 @@
       </div>
 
       <div class="glass-card--static auth-card">
-        <div v-if="isVerifying" class="flex flex-center q-pa-xl">
+        <div v-if="isVerifying" class="flex flex-center q-pa-xl" data-testid="email-verify-pending">
           <q-spinner-dots size="48px" style="color: var(--accent-primary)" />
         </div>
 
         <template v-else-if="hasError">
-          <div class="text-section-title q-mb-xs">{{ t('error.verificationFailed') }}</div>
+          <div class="text-section-title q-mb-xs" data-testid="email-verify-error-title">
+            {{ t('error.verificationFailed') }}
+          </div>
 
-          <q-banner class="auth-banner auth-banner--error q-mb-md" rounded>
+          <q-banner
+            class="auth-banner auth-banner--error q-mb-md"
+            rounded
+            data-testid="email-verify-error"
+          >
             {{ errorMessage }}
             <template v-if="helpCode">
               <br /><small>{{ t('error.helpCode') }}: {{ helpCode }}</small>
@@ -27,13 +33,18 @@
               :label="t('auth.coach.resendEmail')"
               style="color: var(--accent-primary)"
               @click="handleResendFromVerify"
+              data-testid="email-verify-resend-btn"
             />
           </div>
         </template>
 
         <template v-else>
           <div class="flex flex-center q-pa-xl">
-            <q-spinner-dots size="48px" style="color: var(--accent-success)" />
+            <q-spinner-dots
+              size="48px"
+              style="color: var(--accent-success)"
+              data-testid="email-verify-success"
+            />
           </div>
         </template>
       </div>

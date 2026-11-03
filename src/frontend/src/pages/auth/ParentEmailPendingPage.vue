@@ -6,23 +6,43 @@
       </div>
 
       <div class="glass-card--static auth-card">
-        <div class="text-section-title q-mb-xs">{{ t('auth.parent.emailPendingTitle') }}</div>
-        <div class="text-meta q-mb-lg">
+        <div class="text-section-title q-mb-xs" data-testid="email-pending-title">
+          {{ t('auth.parent.emailPendingTitle') }}
+        </div>
+        <div class="text-meta q-mb-lg" data-testid="email-pending-body">
           {{ t('auth.parent.emailPendingBody', { email: pendingEmail }) }}
         </div>
 
-        <q-banner v-if="!pendingEmail" class="auth-banner auth-banner--error q-mb-md" rounded>
+        <q-banner
+          v-if="!pendingEmail"
+          class="auth-banner auth-banner--error q-mb-md"
+          rounded
+          data-testid="email-pending-missing-banner"
+        >
           {{ t('error.generic') }}
-          <router-link to="/parent-register" class="auth-link q-ml-xs">{{
-            t('auth.parent.registerTitle')
-          }}</router-link>
+          <router-link
+            to="/parent-register"
+            class="auth-link q-ml-xs"
+            data-testid="email-pending-register-link"
+            >{{ t('auth.parent.registerTitle') }}</router-link
+          >
         </q-banner>
 
-        <q-banner v-if="hasError" class="auth-banner auth-banner--error q-mb-md" rounded>
+        <q-banner
+          v-if="hasError"
+          class="auth-banner auth-banner--error q-mb-md"
+          rounded
+          data-testid="email-pending-error"
+        >
           {{ errorMessage }}
         </q-banner>
 
-        <q-banner v-if="resendSuccess" class="auth-banner auth-banner--success q-mb-md" rounded>
+        <q-banner
+          v-if="resendSuccess"
+          class="auth-banner auth-banner--success q-mb-md"
+          rounded
+          data-testid="email-pending-resend-success"
+        >
           {{ t('auth.parent.resendEmail') }} ✓
         </q-banner>
 
@@ -38,11 +58,12 @@
             :disable="resendCooldown > 0 || isResending || !pendingEmail"
             style="color: var(--accent-primary)"
             @click="handleResend"
+            data-testid="email-pending-resend-btn"
           />
         </div>
 
         <div class="text-center q-mt-md">
-          <router-link to="/login" class="auth-link">
+          <router-link to="/login" class="auth-link" data-testid="email-pending-login-link">
             &larr; {{ t('auth.parent.signInInstead') }}
           </router-link>
         </div>

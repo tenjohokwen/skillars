@@ -11,7 +11,11 @@
         <div class="text-meta q-mb-lg">{{ $t('auth.resetBody') }}</div>
 
         <!-- Invalid key -->
-        <div v-if="!resetKey" class="auth-banner auth-banner--error q-pa-md q-mb-md">
+        <div
+          v-if="!resetKey"
+          class="auth-banner auth-banner--error q-pa-md q-mb-md"
+          data-testid="reset-password-key-missing"
+        >
           {{ $t('auth.resetKeyMissing') }}
         </div>
 
@@ -25,6 +29,7 @@
             :rules="[required, minLen5, maxLen50]"
             :error="hasFieldError('password')"
             :error-message="getFieldError('password')"
+            data-testid="reset-password-password-input"
           >
             <template #append>
               <q-icon
@@ -45,6 +50,7 @@
             :rules="[required, passwordMatch]"
             :error="hasFieldError('confirmPassword')"
             :error-message="getFieldError('confirmPassword')"
+            data-testid="reset-password-confirm-input"
           >
             <template #append>
               <q-icon
@@ -60,6 +66,7 @@
             v-if="hasError && !isValidationError"
             class="auth-banner auth-banner--error"
             rounded
+            data-testid="reset-password-error"
           >
             {{ errorMessage }}
             <template v-if="helpCode">
@@ -75,11 +82,12 @@
             :label="t('auth.resetPassword')"
             unelevated
             size="md"
+            data-testid="reset-password-submit-btn"
           />
         </q-form>
 
         <div class="text-center q-mt-md">
-          <router-link to="/login" class="auth-link">
+          <router-link to="/login" class="auth-link" data-testid="reset-password-login-link">
             &larr; {{ t('common.back') }} {{ t('auth.login') }}
           </router-link>
         </div>

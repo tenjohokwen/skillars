@@ -6,20 +6,37 @@
       </div>
 
       <div class="glass-card--static auth-card">
-        <div class="text-section-title q-mb-xs">{{ t('auth.player.emailPendingTitle') }}</div>
-        <div class="text-meta q-mb-lg">
+        <div class="text-section-title q-mb-xs" data-testid="email-pending-title">
+          {{ t('auth.player.emailPendingTitle') }}
+        </div>
+        <div class="text-meta q-mb-lg" data-testid="email-pending-body">
           {{ t('auth.player.emailPendingBody', { email: pendingEmail }) }}
         </div>
 
-        <q-banner v-if="!pendingEmail" class="auth-banner auth-banner--error q-mb-md" rounded>
+        <q-banner
+          v-if="!pendingEmail"
+          class="auth-banner auth-banner--error q-mb-md"
+          rounded
+          data-testid="email-pending-missing-banner"
+        >
           {{ t('error.generic') }}
         </q-banner>
 
-        <q-banner v-if="hasError" class="auth-banner auth-banner--error q-mb-md" rounded>
+        <q-banner
+          v-if="hasError"
+          class="auth-banner auth-banner--error q-mb-md"
+          rounded
+          data-testid="email-pending-error"
+        >
           {{ errorMessage }}
         </q-banner>
 
-        <q-banner v-if="resendSuccess" class="auth-banner auth-banner--success q-mb-md" rounded>
+        <q-banner
+          v-if="resendSuccess"
+          class="auth-banner auth-banner--success q-mb-md"
+          rounded
+          data-testid="email-pending-resend-success"
+        >
           {{ t('auth.player.resendEmail') }} ✓
         </q-banner>
 
@@ -35,11 +52,12 @@
             :disable="resendCooldown > 0 || isResending || !pendingEmail"
             style="color: var(--accent-primary)"
             @click="handleResend"
+            data-testid="email-pending-resend-btn"
           />
         </div>
 
         <div class="text-center q-mt-md">
-          <router-link to="/login" class="auth-link">
+          <router-link to="/login" class="auth-link" data-testid="email-pending-login-link">
             &larr; {{ t('auth.player.signInInstead') }}
           </router-link>
         </div>
