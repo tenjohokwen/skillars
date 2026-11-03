@@ -1,0 +1,27 @@
+{
+  "name": "Stripe — create and confirm a PaymentIntent (deterministic tier): succeeds",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/payment_intents"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "id": "pi_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}",
+      "object": "payment_intent",
+      "status": "succeeded",
+      "livemode": false,
+      "latest_charge": {
+        "id": "ch_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}",
+        "object": "charge",
+        "status": "succeeded",
+        "payment_method_details": {
+          "type": "card",
+          "card": { "brand": "visa", "last4": "4242", "fingerprint": "{{formData request.body 'form' urlDecode=true}}fp_{{form.payment_method}}" }
+        }
+      }
+    }
+  }
+}

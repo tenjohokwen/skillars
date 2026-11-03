@@ -145,11 +145,3 @@ export class PackTiersScreen extends Screen {
   formCountError = () => this.tid('tier-form-count-error')
   formPriceError = () => this.tid('tier-form-price-error')
 }
-
-/** The parent's pack purchase page (only the ids ONB-06 needs; the rest is wave W3). */
-export class PackPurchaseScreen extends Screen {
-  readonly route = R.purchasePack
-  readonly readyTestId = 'pack-option'
-  packOption = () => this.tid('pack-option')
-  noPack = () => this.tid('pack-none')
-}
