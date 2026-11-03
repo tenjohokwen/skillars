@@ -10,21 +10,34 @@
       use-chips
       :rules="[(v) => (v && v.length > 0) || t('validation.required')]"
       class="q-mb-md"
+      data-testid="builder-specialties"
     />
     <div class="text-label q-mb-sm">{{ t('auth.coach.step2AgeGroups') }}</div>
     <div class="profile-builder__age-groups q-mb-lg">
-      <q-checkbox v-model="form.ageGroups" val="U10" :label="t('auth.coach.ageGroupU10')" />
+      <q-checkbox
+        v-model="form.ageGroups"
+        val="U10"
+        :label="t('auth.coach.ageGroupU10')"
+        data-testid="builder-age-u10"
+      />
       <q-checkbox
         v-model="form.ageGroups"
         val="AGE_10_12"
         :label="t('auth.coach.ageGroup10to12')"
+        data-testid="builder-age-10-12"
       />
       <q-checkbox
         v-model="form.ageGroups"
         val="AGE_13_17"
         :label="t('auth.coach.ageGroup13to17')"
+        data-testid="builder-age-13-17"
       />
-      <q-checkbox v-model="form.ageGroups" val="ADULT" :label="t('auth.coach.ageGroupAdult')" />
+      <q-checkbox
+        v-model="form.ageGroups"
+        val="ADULT"
+        :label="t('auth.coach.ageGroupAdult')"
+        data-testid="builder-age-adult"
+      />
     </div>
     <q-btn
       :label="t('common.next')"
@@ -32,6 +45,7 @@
       @click="submit"
       :loading="loading"
       unelevated
+      data-testid="builder-next"
     />
   </div>
 </template>

@@ -10,7 +10,11 @@
       <!-- skillars-deferred-151 review Patch: a swallowed tier-fetch failure must not silently
            read as "no active offer" — that would suppress the replace-confirmation (v-if="activeTier")
            on a coach who actually has a live offer, letting them replace it with zero warning. -->
-      <div v-else-if="paymentStore.error.sessionPackTiers" class="q-py-xl q-gutter-sm">
+      <div
+        v-else-if="paymentStore.error.sessionPackTiers"
+        class="q-py-xl q-gutter-sm"
+        data-testid="tier-fetch-error"
+      >
         <div class="text-body2 text-negative">{{ t('payment.myTiers.fetchError') }}</div>
         <q-btn
           flat
@@ -25,8 +29,10 @@
         <!-- Current offer -->
         <div class="q-mb-lg">
           <div class="text-subtitle1 q-mb-sm">{{ t('payment.myTiers.currentOffer') }}</div>
-          <div v-if="activeTier" class="glass-card q-pa-md tier-card">
-            <div class="text-body1 text-weight-bold">{{ activeTier.label }}</div>
+          <div v-if="activeTier" class="glass-card q-pa-md tier-card" data-testid="tier-active">
+            <div class="text-body1 text-weight-bold" data-testid="tier-active-label">
+              {{ activeTier.label }}
+            </div>
             <div class="text-body2" style="color: var(--text-secondary)">
               {{
                 t('payment.sessionPack.tierLabel', {
@@ -45,7 +51,12 @@
               {{ t('booking.packs.validFor', { days: activeTier.validityDays }) }}
             </div>
           </div>
-          <div v-else class="text-body2" style="color: var(--text-secondary)">
+          <div
+            v-else
+            class="text-body2"
+            style="color: var(--text-secondary)"
+            data-testid="tier-none"
+          >
             {{ t('payment.myTiers.noActiveOffer') }}
           </div>
           <div class="q-mt-md row q-gutter-sm items-center">
@@ -56,6 +67,7 @@
                 activeTier ? t('payment.myTiers.replaceOffer') : t('payment.myTiers.createNew')
               "
               @click="openCreateForm"
+              data-testid="tier-create"
             />
             <q-btn
               v-if="activeTier"
@@ -64,6 +76,7 @@
               color="negative"
               :label="t('payment.myTiers.withdrawOffer')"
               @click="openWithdrawConfirm"
+              data-testid="tier-withdraw"
             />
           </div>
         </div>
@@ -72,7 +85,12 @@
         <div v-if="history.length" class="q-mb-lg">
           <div class="text-subtitle1 q-mb-sm">{{ t('payment.myTiers.history') }}</div>
           <q-list separator>
-            <q-item v-for="tier in history" :key="tier.packTierId" class="history-item">
+            <q-item
+              v-for="tier in history"
+              :key="tier.packTierId"
+              class="history-item"
+              data-testid="tier-history-item"
+            >
               <q-item-section>
                 <q-item-label>{{ tier.label }}</q-item-label>
                 <q-item-label caption>
@@ -193,7 +211,7 @@
 
     <!-- Replace/create confirmation dialog -->
     <q-dialog v-model="createDialogOpen">
-      <q-card style="min-width: 320px; max-width: 480px; width: 100%">
+      <q-card data-testid="tier-form" style="min-width: 320px; max-width: 480px; width: 100%">
         <q-card-section>
           <div class="text-h6">
             {{
@@ -212,6 +230,7 @@
             :label="t('payment.myTiers.labelField')"
             maxlength="200"
             class="q-mb-sm"
+            data-testid="tier-form-label"
           />
           <q-input
             v-model.number="createSessionCount"
@@ -222,6 +241,7 @@
             min="1"
             step="1"
             class="q-mb-sm"
+            data-testid="tier-form-sessions"
           />
           <q-input
             v-model.number="createTotalPrice"
@@ -231,18 +251,31 @@
             :label="t('payment.myTiers.totalPriceField')"
             min="0.01"
             step="0.01"
+            data-testid="tier-form-price"
           />
           <!-- skillars-deferred-151 review Patch: canSubmitCreate's own price-floor check already
                disables the submit button whenever this would show, so payment.myTiers.priceFloorError
                could never render as submitCreate's own early-return guard — show it live instead, as
                the coach types, so the message is actually reachable. -->
-          <div v-if="sessionCountInvalid" class="text-negative text-caption q-mt-sm">
+          <div
+            v-if="sessionCountInvalid"
+            class="text-negative text-caption q-mt-sm"
+            data-testid="tier-form-count-error"
+          >
             {{ t('payment.myTiers.sessionCountWholeError') }}
           </div>
-          <div v-else-if="priceFloorInvalid" class="text-negative text-caption q-mt-sm">
+          <div
+            v-else-if="priceFloorInvalid"
+            class="text-negative text-caption q-mt-sm"
+            data-testid="tier-form-price-error"
+          >
             {{ t('payment.myTiers.priceFloorError') }}
           </div>
-          <div v-if="createError" class="text-negative text-caption q-mt-sm">
+          <div
+            v-if="createError"
+            class="text-negative text-caption q-mt-sm"
+            data-testid="tier-form-error"
+          >
             {{ createError }}
           </div>
         </q-card-section>
@@ -255,6 +288,7 @@
             :disable="!canSubmitCreate"
             :loading="paymentStore.loading.createSessionPackTier"
             @click="submitCreate"
+            data-testid="tier-form-submit"
           />
         </q-card-actions>
       </q-card>
@@ -262,14 +296,21 @@
 
     <!-- Withdraw confirmation dialog -->
     <q-dialog v-model="withdrawDialogOpen">
-      <q-card style="min-width: 320px; max-width: 480px; width: 100%">
+      <q-card
+        data-testid="tier-withdraw-dialog"
+        style="min-width: 320px; max-width: 480px; width: 100%"
+      >
         <q-card-section>
           <div class="text-h6">{{ t('payment.myTiers.withdrawConfirmTitle') }}</div>
         </q-card-section>
         <q-card-section class="text-body2">
           {{ t('payment.myTiers.withdrawConfirmBody') }}
         </q-card-section>
-        <div v-if="withdrawError" class="text-negative text-caption q-px-md q-pb-sm">
+        <div
+          v-if="withdrawError"
+          class="text-negative text-caption q-px-md q-pb-sm"
+          data-testid="tier-withdraw-error"
+        >
           {{ withdrawError }}
         </div>
         <q-card-actions align="right">
@@ -280,6 +321,7 @@
             :label="t('payment.myTiers.withdrawOffer')"
             :loading="paymentStore.loading.deactivateSessionPackTier"
             @click="submitWithdraw"
+            data-testid="tier-withdraw-confirm"
           />
         </q-card-actions>
       </q-card>
