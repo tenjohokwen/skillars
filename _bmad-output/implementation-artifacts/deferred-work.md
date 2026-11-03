@@ -21,7 +21,14 @@ list per this file's "deleted outright once implemented" rule; their eval cases 
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
 not renumber, so the list below starts at RS03.
 
-- **[skillars-deferred-166, OWNER DECISION NEEDED, medium/security]** A replay of a revoked refresh token
+**OWNER DECIDED 2026-11-03: the next bundle after skillars-deferred-167 is the payments/Stripe cluster** —
+RS05, RS06, RS07 and RS09, optionally RS08. Chosen because RS06 is the only high-severity money item (throwing
+away the idempotency key on any server response lets a retry double-charge after the server's own failure) and
+RS09 compounds it (the parent's saved default card is overwritten before the charge). One domain, so one story's
+context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + RS04 (the small logic pair) were
+the alternatives and stay queued behind it.
+
+- **[skillars-deferred-166 -> skillars-deferred-167, OWNER DECIDED 2026-11-03, medium/security]** A replay of a revoked refresh token
   no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
   JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such
   a replay was "used with no recent rotation", took the theft branch, and called
@@ -35,10 +42,18 @@ not renumber, so the list below starts at RS03.
   **Options.** (a) Keep AC3 and accept the detection loss, which is the current state. (b) Bump the epoch
   on REVOKED, which restores the control but logs the user out of every device (the harm AC3 was written to
   prevent, since the epoch check then refuses the other devices' older tokens). (c) Have logout stamp the
-  epoch for its own session only, which needs a per-session epoch the schema does not have. **Recommend
-  (a) plus a short JWT TTL review**, and treat (c) as the real fix if JWT-after-logout matters: it is the
-  only option that does not trade one of the two properties away. Not decided in that story because it
-  contradicts an approved AC.
+  epoch for its own session only, which needs a per-session epoch the schema does not have.
+  **OWNER DECIDED 2026-11-03: (c), scheduled as skillars-deferred-167.** The deciding facts, re-verified
+  against HEAD rather than taken from the filed note: `JWT_TTL` is 15 min but **sliding**
+  (`extendTtlOfToken` renews it on every request with no DB work), so shortening it bounds nobody who is
+  actively using a stolen cookie — the (a)-plus-TTL-review recommendation this entry originally carried was
+  wrong on that point. Conversely `assertSessionNotRevoked` already runs on the filter's DB-reauth branch
+  every `DB_REFRESH_TOKEN_INTERVAL` (5 min), so the enforcement machinery exists and is cheap; after
+  deferred-166 nothing triggers it. (b) was rejected because the epoch is account-wide: a backgrounded tab
+  retrying a revoked token would sign the user out of every device, the exact harm AC3 was written to
+  prevent, on benign behaviour. Chosen shape for (c): the rotation chain carries a session id, the JWT
+  carries it as a claim, and the re-auth branch rejects a JWT whose chain has no live token — per-session
+  granularity, reusing `revoked_at` and `replaced_by_id` as deferred-166 built them.
 - **[skillars-deferred-166, pre-existing, medium/logic]** After a grace-window redirect, one client is left
   holding a token that becomes account-wide theft 30 s later. Two concurrent refreshes of one cookie from
   the same browser (a double submit, an axios retry) serialise on the row lock: the winner is issued A1, the
@@ -52,7 +67,12 @@ not renumber, so the list below starts at RS03.
   window closes. **Options:** allow a redirect for a chain that is intact and exactly one hop behind
   regardless of the window (weakens theft detection for a token one hop stale); make the window relative to
   the chain's live end rather than the presented row's `rotatedAt`; or leave it and accept that a client
-  which keeps a superseded cookie is logged out everywhere once. Needs a policy call, not a patch.
+  which keeps a superseded cookie is logged out everywhere once.
+  **OWNER DECIDED 2026-11-03: measure the window from the chain's live end, scheduled as
+  skillars-deferred-167.** A client one hop behind an intact chain then keeps working while the session is
+  active, and replay of a long-dead token still reads as theft, so the time bound is kept rather than
+  dropped. The one-hop-regardless option was rejected for having no time bound at all. The IT gap this
+  entry names (the two-device test never re-checks after the window closes) is part of that story.
 - **[skillars-deferred-166, low/database]** The self-referential FK and the new multi-row walks give
   `AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have. Both
   `AuthService.resolveGraceSuccessor` and `RefreshTokenRevocationService.revokeChainByTokenHash` take
@@ -66,6 +86,8 @@ not renumber, so the list below starts at RS03.
   successor is always created later, so aligning the two removes the cycle), or wrap the scheduled sweep so
   a lost deadlock is logged and retried next hour instead of propagating. Remote — it needs an expired chain
   being walked during the hourly sweep — but cheap to close.
+  **OWNER DECIDED 2026-11-03: do both, scheduled as skillars-deferred-167** (ascending-id delete order
+  removes the cycle; the guard keeps one lost deadlock from costing an hour of cleanup).
 - **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
   `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
   on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as
@@ -84,6 +106,8 @@ not renumber, so the list below starts at RS03.
   does not enforce the link for rows written before the constraint, which only matters if something
   writes `replaced_by_id` outside `AuthService.refresh` — nothing does today. Same shape as the other
   outstanding `NOT VALID` constraints in this file; bundle it with the next one.
+  **OWNER DECIDED 2026-11-03: ships in skillars-deferred-167**, which already adds a `refresh_tokens`
+  migration, so the VALIDATE rides that migration instead of waiting for an unrelated one.
 - **[skillars-deferred-166 residual, medium]** Three revoke-all callers stamp
   `security_session_invalidated_at` BEFORE `markAllUsedByUserId`, not after: `AdminUserService.suspendUser`,
   `AgeVerificationService` and `AccountSuspensionEventListener.suspend`. A refresh that commits a successor
@@ -98,6 +122,9 @@ not renumber, so the list below starts at RS03.
   reactivate. Found by the security reviewer on deferred-166's own PR; left out of that story because it
   touches three services outside its scope, and `AuthService.isBeforeSessionEpoch`'s javadoc now states the
   limit precisely rather than overclaiming.
+  **OWNER DECIDED 2026-11-03: fix both halves in skillars-deferred-167** (swap the two statements in the
+  three callers, and revoke on `reactivateUser`). Scoped in deliberately despite touching three services:
+  the suspend-then-reactivate half is an authorisation hole, not a latent risk.
 - **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
   `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
   suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than
