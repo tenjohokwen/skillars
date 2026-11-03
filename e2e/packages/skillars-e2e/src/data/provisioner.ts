@@ -313,8 +313,13 @@ export class Provisioner {
    * confirms a SetupIntent. The payment method id is unique per call; the stack's WireMock answers
    * every `pm_e2e_*` lookup as a Visa ending 4242 (stack/wiremock/mappings/stripe-*.json).
    */
-  async saveCard(account: Pick<Account, 'email' | 'password'>): Promise<string> {
-    const paymentMethodId = `pm_e2e_${this.names.token('pm').replace(/-/g, '_')}`
+  async saveCard(
+    account: Pick<Account, 'email' | 'password'>,
+    options: { declines?: boolean } = {},
+  ): Promise<string> {
+    // pm_e2e_declined_* cards are refused at charge time (stripe-payment-intents-declined.json).
+    const prefix = options.declines ? 'pm_e2e_declined_' : 'pm_e2e_'
+    const paymentMethodId = `${prefix}${this.names.token('pm').replace(/-/g, '_')}`
     const session = await this.login(account)
     try {
       await session.api.post('/payment/save-payment-method', {

@@ -1,6 +1,7 @@
 import { Screen } from 'pitchside-core'
 import type { Locator } from '@playwright/test'
 import { R } from '../routes.js'
+import { ListScreen } from './ListScreen.js'
 
 // Discovery and pack purchase (test-id wave W3). The coach public profile lives in index.ts.
 
@@ -39,10 +40,11 @@ export class PackPurchaseScreen extends Screen {
   error = () => this.tid('purchase-error')
 }
 
-export class PacksDashboardScreen extends Screen {
+export class PacksDashboardScreen extends ListScreen {
   readonly route = R.childPacks
   readonly readyTestId = 'pack-card'
   cards = () => this.tid('pack-card')
+  protected rows = () => this.cards()
   /** The pack held with the coach whose display name is `coachName`. */
   card = (coachName: string): Locator =>
     this.cards().filter({
