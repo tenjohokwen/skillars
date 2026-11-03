@@ -185,9 +185,12 @@ cookie therefore kept working for as long as its holder kept making requests.
   therefore re-derives the chain id from the request's own `rtkn` cookie whenever the claim is absent,
   scoped to the authorised user, which puts it back on the next DB-reauth cycle. The same repair covers a
   rollback, and it shrinks the pre-deploy gap for any session whose chain has rotated since.
-  **That exposure has no time bound.** A claimless token never acquires a claim — the DB-reauth path
-  passes the missing value straight back and the TTL-only path omits what it cannot read, while both
+  **That exposure has no time bound, for a token presented WITHOUT its `rtkn` cookie.** With the cookie
+  the claim is repaired, as described above. Without it there is nothing to derive from: the DB-reauth
+  path passes the missing value straight back and the TTL-only path omits what it cannot read, while both
   re-mint `exp`, `dbRToken` and `sessIat` — and nothing else on either path consults `refresh_tokens`.
+  Omitting a cookie costs an attacker nothing, which is why the repair narrows this gap without closing
+  it.
   So a holder who makes one request every 15 minutes keeps that session alive indefinitely, long after
   its chain is revoked, expired and swept. A stolen **pre-deploy** `potc` is therefore a permanent
   session until the flip to fail-closed, and that flip cannot be scheduled by "wait 7 days" either; it

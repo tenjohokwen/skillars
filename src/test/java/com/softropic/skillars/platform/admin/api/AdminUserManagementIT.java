@@ -308,8 +308,18 @@ class AdminUserManagementIT extends AbstractIntegrationTest {
      * suspension: it revokes every refresh token, and it stamps {@code security_session_invalidated_at},
      * which is a MONOTONIC marker that nothing — including {@code reactivateUser} and including a later
      * login — ever clears. So a pre-suspension refresh token stays refused by
-     * {@code AuthService.isBeforeSessionEpoch} after the account is unlocked, and a pre-suspension JWT
-     * stays refused by the filter's {@code assertSessionNotRevoked}, both permanently.
+     * {@code AuthService.isBeforeSessionEpoch} after the account is unlocked.
+     *
+     * <p><strong>What this test does NOT cover</strong>, stated because the decision to drop the revoke
+     * cites it: it replays a refresh token, never a JWT, so the claim that a pre-suspension JWT stays
+     * refused by the filter's {@code assertSessionNotRevoked} is reasoning rather than something asserted
+     * here. And it does not construct the one row the revoke was actually for — a successor committed
+     * inside {@code markAllUsedByUserId}'s window, which survives the bulk revoke as
+     * {@code used = false, revoked_at IS NULL}. Reaching that needs a latch-coordinated refresh racing the
+     * suspension (the {@code CountDownLatch} pattern {@code AuthResourceIT} uses). The epoch check should
+     * still refuse such a row, because AC8's reorder means it was inserted before the epoch was stamped —
+     * but that is the argument, not a passing assertion, and it is why the javadoc on
+     * {@code AdminUserService.suspendUser}'s idempotent branch matters.
      *
      * <p>That is why AC8 ships the statement REORDER (which closes the window where a racing refresh's
      * successor could outlive the revoke) but deliberately does NOT add a revoke to

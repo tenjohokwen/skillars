@@ -17,8 +17,6 @@ public interface LoginTokenManager {
      * Create the token that will be used to identify the user
      * @param res Provides means of sending the created token to the client
      * @param principal holds the user data
-     */
-    /**
      * @param refreshSessionId skillars-deferred-167 (AC3): the id of the refresh-token rotation chain
      *     this JWT belongs to, written into the token as {@code SecurityConstants.RTKN_SESSION} so
      *     {@code JWTAuthorizationFilter} can later refuse a JWT whose chain has no live row. May be
@@ -33,11 +31,10 @@ public interface LoginTokenManager {
      * The old token can be discarded for example if the db refresh interval has expired
      * @param res Provides means of sending the refreshed token to the client
      * @param principal holds the user data that is used to create the token
-     */
-    /**
-     * @param refreshSessionId as on {@link #createLoginToken} — on this path it is the claim carried over
-     *     from the JWT being renewed, not a freshly minted id: a DB re-auth re-verifies the account, but
-     *     it does not create a new refresh-token chain.
+     * @param refreshSessionId as on
+     *     {@link #createLoginToken(HttpServletResponse, Principal, UUID) createLoginToken} — on this path
+     *     it is the claim carried over from the JWT being renewed, not a freshly minted id: a DB re-auth
+     *     re-verifies the account, but it does not create a new refresh-token chain.
      */
     void renewLoginToken(HttpServletResponse res, Principal principal, UUID refreshSessionId);
 

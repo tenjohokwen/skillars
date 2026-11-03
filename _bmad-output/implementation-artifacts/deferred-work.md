@@ -171,14 +171,9 @@ the alternatives and stay queued behind it.
   (`decideAndRotate` creates the successor with both null), so it exempted every chain and the cap applied
   to nothing. Keying on sibling rows instead fails too, because the hourly sweep deletes the expired
   predecessors that would be the evidence.
-  **Shipped: a sliding deadline.** When the filter's DB-reauth branch finds the chain live and its
-  deadline within one day, `slideExpiryForActiveSession` pushes it out by a full `REFRESH_TOKEN_TTL`. So
-  the TTL becomes an IDLE bound — which is what it reads as everywhere else — rather than an absolute one:
-  an actively used session is never ended by a deadline written when it began, while a session left idle
-  past its deadline still ends and is still swept, so abandoned chains are not kept alive. The write is
-  conditional in the query (live, unused, unrevoked, not already expired), runs at most once per 5-minute
-  DB-reauth cycle and in practice about once a day per session, and is `REQUIRES_NEW` so a later revoke or
-  denial cannot roll it back. `revoked_at IS NULL` stays unconditional: only the expiry bound slides.
+  **Neither form shipped.** The exemption was dead on arrival (above); the slide was withdrawn in
+  round 5 because it broke logout — see the three withdrawn attempts recorded on this item. The 7-day
+  cap is the shipped behaviour and this follow-up story is the fix.
 
 - **[skillars-deferred-167 residual, low/logic]** A benign stale cookie more than `MAX_GRACE_HOPS` (8)
   rotations behind an intact, live chain still gets the whole account revoked. The walk gives up after 8

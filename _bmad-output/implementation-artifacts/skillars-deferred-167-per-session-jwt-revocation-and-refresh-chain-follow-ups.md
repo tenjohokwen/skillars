@@ -498,14 +498,24 @@ claim itself. That is exactly how `SESSION_ISSUED_AT` — the only other claim n
 wrapper and the tests that pin them untouched. The AC's actual requirement (the claim is written from a
 value the caller supplies, carried over by `extendTtlOfToken`, and set on the DB-reauth path) is met.
 
-**AC8's `reactivateUser` half was dropped, as AC8 instructed, because the test showed it catches nothing.**
+**AC8's `reactivateUser` half was dropped, as AC8 instructed, because the test showed it catches nothing
+— with one qualification round 6 added to the reasoning.**
 `AdminUserManagementIT.reactivate_cannotRestoreASessionTheSuspensionEnded` is the test that decided it:
-`suspendUser` both revokes every refresh token and stamps `security_session_invalidated_at`, which is
-monotonic and never cleared — not by `reactivateUser`, not by a later login. So a pre-suspension refresh
-token stays refused by `isBeforeSessionEpoch` and a pre-suspension JWT by `assertSessionNotRevoked`,
-permanently. A revoke on reactivate would be a write that cannot change an outcome. The statement
-**reorder** did ship, since that closes a real window. The test is written so that if this reasoning ever
-breaks, it fails rather than quietly passing.
+when `suspendUser` acts, it both revokes every refresh token and stamps `security_session_invalidated_at`,
+which is monotonic and never cleared — not by `reactivateUser`, not by a later login. So a pre-suspension
+refresh token stays refused by `isBeforeSessionEpoch` and a pre-suspension JWT by `assertSessionNotRevoked`,
+permanently, and a revoke on reactivate would be a write that cannot change an outcome. The statement
+**reorder** did ship, since that closes a real window.
+
+**The qualification:** "suspend always revokes and stamps" is not true of `suspendUser`'s idempotent
+branch. If `user.isLocked()` is already true it suspends the coach profile and returns `false` without
+revoking or stamping, so for an account locked by some path that does not itself stamp the epoch, a later
+`reactivateUser` would restore a live chain and `existsLiveBySessionId` would approve the standing JWT.
+Latent rather than reachable today: the only path that sets `locked` without stamping is
+`UserAdminService.lockUserAccount`, which has no production caller (grep: `UserServiceIT` only), and
+GDPR-erased accounts are refused reactivation outright. Recorded rather than fixed because adding a
+compensating write here would be guessing at a caller that does not exist — but if one is ever added, this
+is the reasoning that stops being true, and the revoke-on-reactivate becomes necessary.
 
 **AC4's check went on `SecurityUtil`, not into the filter's constructor.** The filter already depends on
 `SecurityUtil`, which already delegates chain work to `RefreshTokenRevocationService`; adding a repository
@@ -556,9 +566,9 @@ stays and is still asserted.
 - `src/test/java/com/softropic/skillars/platform/security/service/AuthCleanupServiceTest.java` (modified)
 - `src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java` (modified)
 
-**Frontend** (added by the owner's AC10 decision, 2026-11-03)
-- `src/frontend/src/api/auth.api.js` (modified — `rotateRefreshToken`)
-- `src/frontend/src/plugins/sessionManager.js` (modified — rotation on the session-extension path)
+**Frontend**
+- none. A rotation call was added to `auth.api.js` and `sessionManager.js` under the owner's first AC10
+  decision and then fully reverted; both files are identical to master.
 
 **Docs**
 - `docs/session-refresh-mechanism.md` (modified)
@@ -583,17 +593,14 @@ stays and is still asserted.
     thief's live successor by any means short of a password change. The account-wide revocation AC7 removed
     stays removed, which was always the distinction that mattered. **This supersedes AC7's written text
     (`401 + clearAuthCookies`)**; the AC itself is left as approved because this workflow may not edit it.
-  - **AC10's cap turned into an idle timeout (owner option a).** `authApi.rotateRefreshToken()` is called
-    from `sessionManager.refreshSession()`, the SPA's existing "keep me signed in" path, so a web session's
-    chain rotates when the user extends it. Before this the SPA had no caller for `POST /api/auth/refresh`
-    at all, so its chain was the single row created at login and a continuously active user was
-    hard-logged-out exactly 7 days later, mid-task. Verified three things first, because a best-effort auth
-    call is where this would go wrong: a 401 there returns `security.badCreds`, which the axios interceptor
-    does NOT treat as a session teardown; nothing consumes the `BadCredentialsEvent` it publishes; and the
-    login rate limiter is only called from `login()`. So a failed rotation can neither log the user out nor
-    count toward a lockout. It runs after `GET /refresh`'s own advance-check, leaving the deferred-109
-    AC2.2 contract untouched, and its failure is logged rather than surfaced as "we couldn't extend your
-    session" — the access token has already been extended by that point.
+  - **AC10's cap: three attempts, all withdrawn, cap ships.** Option (a) (SPA rotation from
+    `sessionManager.refreshSession()`) was applied and reverted — its only trigger is the idle-warning
+    dialog, which a polling tab never reaches, and a failed rotation returns cookie-deletion headers so it
+    could sign the user out. Option (b) was then tried as an expiry exemption for unrotated rows (dead on
+    arrival: a rotated chain's live end is itself unrotated, so it exempted everything) and as a sliding
+    deadline (withdrawn in round 5: the row outlived the `rtkn` cookie that `terminateSession` needs, so
+    logout silently revoked nothing). The owner's final decision is to ship with the cap and fix it in its
+    own story. **The frontend is unchanged from master.**
   - **Fail-closed flip decided (owner option a: an announced date) and deliberately NOT implemented.** The
     date is an operational choice and shipping it blind would sign the remaining claimless holders out at
     an unannounced moment. The ledger entry names exactly what the implementer changes.

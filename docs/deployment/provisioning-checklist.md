@@ -688,6 +688,11 @@ downtime step.
       every token it was rotated into*, and a replay of a logged-out token answers `401` without revoking the
       account's other sessions. A token minted before `user.security_session_invalidated_at` is refused. See
       `docs/security-api-endpoints.md` and `docs/session-refresh-mechanism.md`.
+- [ ] **Rolling-deploy window (accepted, 30 s per token).** Tokens rotated by an instance running the old code
+      have no `replaced_by_id`, so a replay of one inside the 30 s grace window is treated as reuse and revokes
+      that account's sessions. Bounded and self-clearing once every instance is on the new code; the SPA does
+      not call `POST /api/auth/refresh` at all, so the exposure is API clients only.
+
 **V225: refresh-token chain id, and V224's outstanding FK validation**
 (`V225__refresh_token_session_id_and_validate_successor_fk.sql`, skillars-deferred-167). Additive only:
 `main.refresh_tokens` gains `session_id` (uuid, nullable, no backfill) plus a btree index on it, and the
@@ -721,10 +726,6 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       `"Refresh presented a token whose chain is still live"` and the
       `security.refresh.stale_live_chain` counter.
 
-- [ ] **Rolling-deploy window (accepted, 30 s per token).** Tokens rotated by an instance running the old code
-      have no `replaced_by_id`, so a replay of one inside the 30 s grace window is treated as reuse and revokes
-      that account's sessions. Bounded and self-clearing once every instance is on the new code; the SPA does
-      not call `POST /api/auth/refresh` at all, so the exposure is API clients only.
 
 **V223: optional coach safeguarding check** (`V223__coach_safeguarding_check.sql`). Two new empty tables,
 `marketplace.coach_safeguarding_requests` and `marketplace.coach_safeguarding_checks` (both FK to

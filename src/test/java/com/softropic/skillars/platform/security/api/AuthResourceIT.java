@@ -1587,9 +1587,11 @@ class AuthResourceIT extends AbstractIntegrationTest {
      * revoked every token on the account and bumped the session epoch — a logout from every device, caused
      * by a double-submitted request.
      *
-     * <p>Now it is one 401 for that client and nothing else. The window and the rotation are unchanged;
-     * only the blast radius is. The second device is the assertion that matters: before this story it was
-     * collateral damage.
+     * <p>Now it is one 401 and a revoke of THAT CHAIN — the window and the rotation are unchanged, only the
+     * blast radius is. The chain revoke is the owner's amendment to AC7: writing nothing here (the original
+     * shape) left a victim whose token had been stolen and rotated unable to reach the thief's live
+     * successor, because this same branch clears the {@code rtkn} cookie that logout would have walked
+     * from. The second device is the assertion that matters: before this story it was collateral damage.
      */
     @Test
     void refresh_staleTokenOnALiveChainOutsideTheWindow_revokesThatChainOnly() {
