@@ -1,6 +1,6 @@
 # Story skillars-deferred-167: per-session JWT revocation and the refresh-chain follow-ups
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-03 (/bmad-create-story), then REVISED the same day after /mto-story-review (findings
 H1, H2, H3, M2, M4, the clock hook and the AC8 overclaim all applied; see the Change Log). Owner-requested
@@ -225,14 +225,25 @@ defects introduced by the previous round's own fix.
         `SecurityUtilTest` 8/8, `AuthCleanupServiceTest` 6/6, `MigrationConventionLintTest` 30/30,
         `NativeModifyingVersionAuditTest` 2/2, `IntegrationTestConventionTest` 6/6
 - [x] Task 9: docs (AC11) — `check-docs: OK, 26 pages`
-- [~] Task 10: `/pr-review` (AC12) — **seven rounds run so far; not yet a clean round.** Rounds 1-5 found
-      behaviour defects, rounds 6-7 found only stale claims, which is the signal the code has settled and
-      the documentation load is where the remaining risk sits. Every round found at least one defect the
-      previous round introduced or left behind. Records in `.pr-review/`, one per reviewed commit:
-      `826ac6cf` (1), `f5380b7a` (2), `d45d11d3` (3), `b3b7083b` (4), `c5e609bb` (5), `1eab3dc5` (6),
-      `6920654e` (7) — the last three were written only when round 7 pointed out the story claimed records
-      that did not exist, found by listing `.pr-review/` rather than trusting the claim. The owner's four decisions are settled and applied; AC12 closes when a round comes
-      back with nothing actionable.
+- [x] Task 10: `/pr-review` (AC12) — **seven rounds run; closed on the owner's call, NOT on a clean
+      round.** Rounds 1-5 found behaviour defects; rounds 6-7 found only stale claims, which is the signal
+      that the code had settled and the documentation load was where the remaining risk sat. Round 7's
+      three substantive findings were two load-bearing javadoc errors and one test guard an earlier round
+      had dropped — no behaviour change. Records in `.pr-review/`, one per reviewed commit: `826ac6cf` (1),
+      `f5380b7a` (2), `d45d11d3` (3), `b3b7083b` (4), `c5e609bb` (5), `1eab3dc5` (6), `6920654e` (7) — the
+      last three were written only when round 7 pointed out that the story claimed records that did not
+      exist, found by listing `.pr-review/` rather than trusting the claim.
+  - [x] **AC12's "clean round" was not reached, and this task is closed anyway.** Owner decision
+        2026-11-04: stop the loop at seven rounds, record that the last round found only documentation
+        drift, and let CI be the remaining gate. The reasoning on both sides is recorded rather than
+        smoothed over — six of seven rounds found something the previous round left behind, so convergence
+        was never demonstrated; against that, the code had not changed behaviourally since round 5 and the
+        review spend on one story was already large. A future round on this branch is cheap to run if the
+        PR surfaces anything.
+  - [x] HEAD record written for the final commit, which the `gh pr create` hook requires. It is a
+        **no-arms record**: no reviewer subagent ran at that SHA, because the reviewed code diff there is
+        byte-identical to `18a899e4` (the final commit adds only story-artifact and sprint-status text).
+        The record says so in those words rather than implying a round took place.
 
 ## Dev Notes
 
@@ -540,6 +551,17 @@ about the same row.
 `assertNotTransactional` (the existing helper, already used for two other schedulers). `@SchedulerLock`
 stays and is still asserted.
 
+**One suite was not run locally at the final commit: `SchedulerLockTransactionOrderingIT`.** Its last
+full green run was at `1eab3dc5` (5 tests). Round 7 then added a sixth,
+`authCleanupServicePurgeOldLoginAttempts_shedLockAdvisorIsOutsideTheTransactionAdvisor`, to restore the
+REQUIRED-propagation advisor-ordering guard that AC9 had removed along with the sweep's `@Transactional`.
+That test compiles and its premise was verified statically — `purgeOldLoginAttempts` does carry
+`@Scheduled` + `@Transactional` + `@SchedulerLock`, the stacked shape the assertion needs — but the
+advisor-ordering assertion itself only exercises against the live Spring proxy, and the run that would
+have exercised it was killed by host memory pressure rather than by a failure. CI runs the full failsafe
+suite on the PR, so it is covered there; it is recorded here as unverified locally rather than implied to
+have passed.
+
 ### File List
 
 **Migration**
@@ -587,6 +609,16 @@ stays and is still asserted.
 - `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
 
 ### Change Log
+
+- 2026-11-04 — **AC12 closed by owner decision at seven rounds, not by a clean round, and the story moves
+  to `review`.** Round 7 (record `6920654e`) found eleven items, of which the three substantive ones were
+  two load-bearing javadoc errors and a test guard an earlier round had dropped; all were fixed and
+  committed as `18a899e4`. The owner elected to open the PR there rather than run round 8. What that trades
+  away is stated plainly: six of the seven rounds found something the previous round left behind, so the
+  loop was stopped while still finding things, and the honest reading of round 7 is "only documentation
+  drift", not "converged". What it buys is the end of a review spend that had grown large on one story,
+  against a code surface unchanged in behaviour since round 5. The HEAD record the `gh pr create` hook
+  requires is a no-arms record, labelled as such.
 
 - 2026-11-03 — owner ruled on all four open decisions; all four applied or recorded.
   - **AC7 amended (owner option b).** The stale-but-live branch now calls
