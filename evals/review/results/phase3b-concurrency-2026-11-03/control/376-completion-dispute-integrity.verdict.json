@@ -1,0 +1,84 @@
+{
+  "arm": "control",
+  "case": "376-completion-dispute-integrity",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "raiseDispute indeed takes no lock and no re-check (plain bookingRepository.findById, LIVE_STATUSES eligible for payer side, only trailing freezeForDispute), matching the trigger; but whether the interleaving escapes depends on CoachPayoutAdjustmentService.freezeForDispute and CoachPayoutOutboxSupport.enqueuePayout (possible booking-row/advisory lock or failure on missing payout row) plus isolation config, none of which is in this file, and the prescribed interleaved integration test cannot be run here.",
+      "reported_id": "R4"
+    }
+  ],
+  "judge_cost_usd": 0.887605,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 identifies the same defect \u2014 raiseDispute rejects COMPLETED_PENDING_CONFIRMATION (in neither ELIGIBLE_STATUSES nor LIVE_STATUSES) so the family cannot dispute before the sweeper pays the coach \u2014 albeit via the sweeper auto-end entry path rather than quick-complete.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions recordNoShowCoach or the NO_SHOW_COACH transition being limited to UPCOMING.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 describes the same defect: coach can start/end a session that never really ran and the LIVE wrap-up completes and enqueues payout with no parent confirmation window.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "partial",
+        "note": "R2 notes confirmCompletion fails when no SessionCompletionData exists, but omits that the state transition is applied first and the rollback-dependent 404 for a legitimate parent action.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers coach cancellation reason classification or excused reasons avoiding a no-show strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers parent late cancel after start producing a refund without a coach strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding covers the one-open-dispute-per-booking lockout or uncapped repeat disputes.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger stated: paidForSession reads cut gross_amount after a prior dispute credit, so remainingRefundable returns 0 and later legitimate credits are blocked or mis-sized; not in the answer key.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] raiseDispute indeed takes no lock and no re-check (plain bookingRepository.findById, LIVE_STATUSES eligible for payer side, only trailing freezeForDispute), matching the trigger; but whether the interleaving escapes depends on CoachPayoutAdjustmentService.freezeForDispute and CoachPayoutOutboxSupport.enqueuePayout (possible booking-row/advisory lock or failure on missing payout row) plus isolation config, none of which is in this file, and the prescribed interleaved integration test cannot be run here. | pass-1: Concrete READ COMMITTED interleaving stated between raiseDispute's freezeForDispute and enqueuePayout's existsOpenDisputeForBooking, yielding an unfrozen payout beside an open dispute; not in the answer key.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Concrete defect: resolveDispute stores the admin's raw creditAmount (null for FULL_CREDIT) instead of the actually credited amount, corrupting the audit view; not in the answer key.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

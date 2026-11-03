@@ -1,0 +1,38 @@
+{
+  "arm": "concurrency",
+  "case": "330-filestorage-quota-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "confirmUpload reads sumSizeBytesByOwnerId at line 179, enforces the quota at line 180, then inserts the FileStorageObject in a separate transactionTemplate.execute at line 186. No owner-level lock, advisory lock, or constraint serializes these steps, and under READ COMMITTED an aggregate SUM does not conflict with a concurrent insert. If two confirms for the same owner both read usage U where U plus each file's size individually fits, both inserts commit and the owner ends over quota. This is the enforcement point (the comment at line 174 says sign-time checks only saw the declared size), and the identical sign-time check at line 107 shares the shape but is advisory.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload / persistConfirmed",
+      "title": "Quota check in confirmUpload is read-then-insert with no lock; concurrent confirms overshoot the owner's quota",
+      "verification": "Confirm no advisory/owner lock is taken anywhere on the confirm path (grep for pg_advisory and FOR UPDATE in the filestorage package found none) and that no DB trigger or constraint enforces the per-owner byte cap."
+    },
+    {
+      "category": "concurrency",
+      "description": "signUpload issues a presigned PUT valid for uploadTtlSeconds (lines 114-121); confirmUpload validates the object via headObject at line 158 (content type, size, max-size, quota) and persists the HEAD-reported metadata at line 186. The URL remains valid after confirm and S3 PUT overwrites, so a second PUT with the same URL \u2014 after confirm, or between the HEAD and the insert \u2014 replaces the object while the committed row still records the first upload's sizeBytes and contentType. The max-size check (line 176) and quota accounting are evaluated against the stale small size, and consumers of findActiveObject/assertOwnership trust metadata that no longer matches the stored bytes.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Presigned PUT URL outlives the HEAD validation, so the object can be replaced after confirm and the recorded size/type/quota become wrong",
+      "verification": "Check storageProperties.getUploadTtlSeconds() and confirm S3 bucket has no object-lock/versioning or ETag/If-Match condition that would reject a second PUT on the same key after confirm."
+    },
+    {
+      "category": "concurrency",
+      "description": "The FileStorageObject insert commits when transactionTemplate.execute returns at line 186, but the StorageObjectConfirmedEvent that drives downstream linking (e.g. CoachProfilePhotoEventListener.updatePhotoUrlByUserId) is published afterwards via the in-memory ApplicationEventPublisher at line 197; the durable outbox carries only replication jobs. If the instance crashes or is redeployed between the commit and the publish, the row exists but the linked field (e.g. coach photo) is never set. The only recovery is the client retrying confirm within uploadTtlSeconds so reconfirm (lines 409-413) republishes; outside that window, or if the client does not retry, the transition is permanently lost and nothing sweeps it.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "FileStorageService.confirmUpload (line 186 commit vs line 197 publish)",
+      "title": "StorageObjectConfirmedEvent published in-memory after commit; a restart between commit and publish drops the transition with no sweeper",
+      "verification": "Confirm no scheduled job or outbox consumer re-drives StorageObjectConfirmedEvent for confirmed-but-unlinked objects (grep found listeners only in CoachProfilePhotoEventListener and no sweeper)."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

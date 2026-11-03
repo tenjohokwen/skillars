@@ -1,0 +1,88 @@
+{
+  "arm": "concurrency",
+  "case": "368-pack-status-badges",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "paymentGateway.chargeAndCapture (line 131) throws ChargeOutcomeUnknownException when Stripe may have captured the charge (connection timeout, 5xx, idempotency conflict \u2014 StripePaymentGateway.java:172-175, 185-188), and purchasePack has no catch around the charge: the try block (line 141) covers only createPurchase. The booking path (PaymentLifecycleService.java:261, 475) catches this exception and leaves a reservation row for ChargeOutcomeReconciler; the pack path writes nothing before the charge, so after this throw \u2014 or a JVM crash/deploy restart between line 131 and the createPurchase commit at line 142 \u2014 a possibly-captured charge exists with no purchase row, no stripe_refund_failures row, and no reconciler coverage (ChargeOutcomeReconciler contains no pack handling). Unless the client retries with the identical attemptKey (which it does not after an HTTP response \u2014 see the SessionPackPurchasePage finding), the money is taken with no pack, no refund and no durable trace.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "purchasePack",
+      "title": "Unknown-outcome pack charge leaves no local record and no reconciliation row \u2014 captured money untracked",
+      "verification": "Confirm ChargeOutcomeReconciler.java scans only booking payment reservations (grep for pack: no matches), and that no sweeper lists the payer's PaymentIntents for pack-prefixed idempotency keys."
+    },
+    {
+      "category": "concurrency",
+      "description": "Line 181 runs `if (e?.response) attemptKey = null`, treating every HTTP error response as a definite failure. But a ChargeOutcomeUnknownException (charge possibly captured) surfaces to the client as a 5xx response, and a proxy 504 while the server is still mid-purchase is also a response \u2014 in both cases the first charge may have been (or still be about to be) captured. Interleaving: request 1's chargeAndCapture captures PaymentIntent PI1 \u2192 client receives 5xx/504 \u2192 attemptKey is cleared \u2192 user retries \u2192 new key \u2192 Stripe creates and captures PI2 \u2192 a second pack (or, combined with the previous finding, one pack plus one orphaned charge). The key must only be discarded on success or a response proving no charge happened; keeping it would make the retry replay PI1 via Stripe idempotency and the findByStripePaymentIntentId dedup at SessionPackPaymentService.java:135.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "confirmPurchase",
+      "title": "Purchase page clears the Idempotency-Key on any HTTP response, including unknown-outcome 5xx/504 \u2014 retry double-charges",
+      "verification": "Confirm how ApiAdvice maps ChargeOutcomeUnknownException/PaymentGatewayException to HTTP status (any 4xx/5xx response triggers the key reset), and that the proxy returns 504 with a body on upstream timeout."
+    },
+    {
+      "category": "concurrency",
+      "description": "If purchasePack fails or crashes between the Stripe capture (line 131) and the createPurchase commit (line 142), the charge exists at Stripe with no session_pack_purchases row. A charge.refunded (full, external) webhook delivered in that state reaches PackSessionService.revokeForCharge (ChargeDisputeWebhookService.java:224-227), which finds no pack via findByStripePaymentIntentId and returns -1; the handler deliberately never throws (an alert only), so the event is acknowledged and never redelivered. A later client retry with the same attemptKey makes Stripe replay the already-captured intent, findByStripePaymentIntentId (line 135) is still empty, and createPurchase commits a pack with full remainingSessions \u2014 the payer now holds both the refunded money and a spendable pack, and nothing re-drives the revocation. The same window applies to charge.dispute.created: freezeForDispute returns false and the pack is later created unfrozen while the dispute is open (though a subsequent dispute-lost close would still revoke it).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "purchasePack / PackSessionService.revokeForCharge",
+      "title": "Full external refund webhook acknowledged before the pack row exists \u2014 idempotent purchase retry then creates a usable pack for a refunded charge",
+      "verification": "Confirm StripeWebhookService.handleEventAtomically commits the event-idempotency row when these handlers return normally, and that createPurchase performs no check against charge_disputes or refund state for the intent it records."
+    },
+    {
+      "category": "concurrency",
+      "description": "The recheck at line 569 re-runs findConflictingBookingsForPause under the pack's row lock, but createBookingRequest takes no session_pack_purchases lock (stated in the D8 comment at lines 560-563): a booking transaction that read the pack as unpaused via findActivePacks (pausedFrom/pausedUntil still NULL \u2014 the pause is uncommitted) and whose INSERT is uncommitted at recheck time is invisible under READ COMMITTED. If it commits after the recheck but before pausePackTransactional commits, the pause is applied over a window containing a live booking the parent never confirmed cancelling. The wrong state: a REQUESTED/ACCEPTED booking sits inside [pausedFrom, pausedUntil); when the coach accepts it, deductSession throws payment.packPaused and the accept path records a payment failure, stranding the booking.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "pausePackTransactional",
+      "title": "Booking created concurrently with pausePack commits inside the paused window \u2014 the D8 recheck cannot see it under READ COMMITTED",
+      "verification": "Confirm BookingService.createBookingRequest attaches the pack via the read-only findActivePackId (no PESSIMISTIC_WRITE on session_pack_purchases) and inserts the booking without touching the pack row."
+    },
+    {
+      "category": "concurrency",
+      "description": "StripeCustomer carries no @Version and no @DynamicUpdate, so save(existing) at line 359 writes every column from the in-memory snapshot. Interleaving: request B loads the row (line 356, last_payment_intent_id = PI_old); request A's chargeAndCapture commits last_payment_intent_id = PI_A (StripePaymentGateway.java:201-202, each save autocommitted in its own transaction since purchasePack is non-transactional); B's save then writes PI_old back, silently erasing PI_A; B's own charge declines, so the column is never rewritten. CashOutService.processCashOut (CashOutService.java:74-82) reads last_payment_intent_id to choose the refund target for a wallet cash-out \u2014 the reverted value steers the cash-out refund at an older charge with possibly no headroom, failing or landing the money on a card the payer no longer uses. The same window exists against the save-card flow's writes.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "getOrCreateStripeCustomer",
+      "title": "StripeCustomer has no @Version \u2014 getOrCreateStripeCustomer's full-row save can revert last_payment_intent_id written by a concurrent charge",
+      "verification": "Confirm CashOutService.refundTarget's fallback behaviour when last_payment_intent_id points at a stale/consumed intent, and that no other writer of stripe_customers uses a conditional UPDATE."
+    },
+    {
+      "category": "database",
+      "description": "refundSessionToWallet guards the wallet credit with ledgerRepository.existsByReferenceIdAndType(bookingId, BOOKING_REFUND) (line 242) before writeLedgerEntry \u2014 but the migrations define partial unique indexes only for BATCH_SHARE_REFUND (V208:75) and the two chargeback types (V199:75-82); there is no unique index for type = 'BOOKING_REFUND'. The pack row lock held here serializes only redeliveries of the same restore event, not the independent booking-refund writer the method's own comment names (\"the same BOOKING_REFUND row the refund outbox would write, with its existence check\"). If that other handler's insert for the same bookingId commits between this transaction's exists-check and its own commit (invisible under READ COMMITTED), both transactions pass the check and both insert \u2014 the parent is credited twice for one booking's session.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "refundSessionToWallet",
+      "title": "BOOKING_REFUND dedup is check-then-insert with no unique index \u2014 restore-outbox wallet refund can race the booking refund path into a double credit",
+      "verification": "Confirm whether any cancellation flow enqueues both the pack-session-restore outbox event and a money-refund outbox event for the same pack-funded booking, and that no later migration adds a unique index over (reference_id) WHERE type = 'BOOKING_REFUND'."
+    },
+    {
+      "category": "logic",
+      "description": "computeStatus (SessionPackPaymentService.java:433-446) never surfaces the dispute freeze or revocation: a disputeFrozen pack with sessions left returns ACTIVE, and a revoked pack (remainingSessions forced to 0) returns EXHAUSTED. SessionPackDashboardPage.vue:60 therefore shows an enabled Pause button for a frozen pack, and pausePackTransactional checks remainingSessions, expiry and pausedUntil (lines 471-477) but never isDisputeFrozen() \u2014 the parent who opened the card dispute can pause the frozen pack, pushing expiresAt out by the pause length (line 581) while the dispute is pending, gaining validity the freeze was meant to suspend; deductSession and findActivePacks block spending, so the pack silently fails every booking attempt while displaying as ACTIVE/paused. extendPack has the same gap (no frozen/revoked check), and CoachSoldPackQueryService marks a frozen pack extendable.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "pausePackTransactional / SessionPackPaymentService.computeStatus",
+      "title": "Dispute-frozen pack reported as ACTIVE and pausable \u2014 pause extends expiry during an open chargeback; revoked pack shown as EXHAUSTED",
+      "verification": "Confirm no other guard rejects pausePack/extendPack for disputeFrozenAt != null, and whether product intends FROZEN/REVOKED to be distinct displayed statuses."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two simultaneous first purchases for a parent with no stripe_customers row both take the orElseGet branch (line 362): both call paymentGateway.createStripeCustomer, creating two live customers at Stripe, then both save. With an assigned @Id and no @Version the second save merges: if the first insert already committed, the second commits an UPDATE that overwrites stripe_customer_id with its own customer, orphaning the first (to which the first request's charge and attached payment method may belong); if not yet committed, the second insert fails on the primary key after the external customer was already created. Either way an unowned Stripe customer object persists, and the row can point at a customer different from the one holding the saved payment method, failing later off-session charges.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "getOrCreateStripeCustomer",
+      "title": "Concurrent first-time purchases by one parent create duplicate Stripe customers",
+      "verification": "Check whether createStripeCustomer attaches the payment method to the customer at Stripe, and whether any cleanup reconciles stripe_customers against Stripe's customer list."
+    }
+  ],
+  "input_rev": "b123c73de463e349f082c70b2a1861350e3eee83",
+  "model": null
+}

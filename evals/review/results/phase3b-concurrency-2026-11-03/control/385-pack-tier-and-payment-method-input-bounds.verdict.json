@@ -1,0 +1,63 @@
+{
+  "arm": "control",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "getOrCreateStripeCustomer persists the caller-supplied paymentMethodId with no ownership check (and commits before the charge, since purchasePack is intentionally non-transactional), and getSavedPaymentMethod returns brand/last4/exp from stripeClient.retrievePaymentMethod(id) without ever comparing paymentMethod.getCustomer() to the caller's stripeCustomerId. The retrieve wrapper receives only the pm id so it cannot enforce ownership; the unshown sync path runs after the commit and its failures are swallowed in scheduleSubscriptionCardSync.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "getOrCreateStripeCustomer's existing-customer branch saves paymentMethodId into stripe_customers before paymentGateway.chargeAndCapture runs in purchasePack, and chargeAndCapture is not wrapped in any try/catch \u2014 a declined-card exception propagates with no write-back of previousCard, which is only used in the success-path scheduleSubscriptionCardSync. The saved card is thus left as the bad one, contradicting the javadoc's \"declined card is never pushed\" claim.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "createTier itself does no scale check, divides the raw totalPrice for pricePerSession, and returns the in-memory entity via toTierResponse(saved) \u2014 consistent with the finding \u2014 but the outcome depends on code not shown: the request DTO/controller (a @Digits-style constraint could reject 10.005 upstream) and the migration/entity mapping proving session_pack_tiers.total_price is numeric(10,2).",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 1.303721,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 covers the missing upper/scale bounds causing DB overflow 500s; R4 covers the 0.00 per-session rounding violating the price CHECK \u2014 together they cover the whole defect.",
+        "reported_ids": [
+          "R3",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R6 identifies unvalidated paymentMethodId reaching Stripe but only for the blank new-customer case, not the general format-validation gap for garbage/oversized ids on both endpoints.",
+        "reported_ids": [
+          "R6"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] getOrCreateStripeCustomer persists the caller-supplied paymentMethodId with no ownership check (and commits before the charge, since purchasePack is intentionally non-transactional), and getSavedPaymentMethod returns brand/last4/exp from stripeClient.retrievePaymentMethod(id) without ever comparing paymentMethod.getCustomer() to the caller's stripeCustomerId. The retrieve wrapper receives only the pm id so it cannot enforce ownership; the unshown sync path runs after the commit and its failures are swallowed in scheduleSubscriptionCardSync. | pass-1: Missing ownership check (pm.customer vs caller's stripeCustomerId) enabling cross-user card detail disclosure is a distinct defect with a concrete trigger, not in the key.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] getOrCreateStripeCustomer's existing-customer branch saves paymentMethodId into stripe_customers before paymentGateway.chargeAndCapture runs in purchasePack, and chargeAndCapture is not wrapped in any try/catch \u2014 a declined-card exception propagates with no write-back of previousCard, which is only used in the success-path scheduleSubscriptionCardSync. The saved card is thus left as the bad one, contradicting the javadoc's \"declined card is never pushed\" claim. | pass-1: Persisting the new paymentMethodId before chargeAndCapture with no restore on failure leaves a declined card as the saved default \u2014 concrete trigger stated, distinct from the key.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] createTier itself does no scale check, divides the raw totalPrice for pricePerSession, and returns the in-memory entity via toTierResponse(saved) \u2014 consistent with the finding \u2014 but the outcome depends on code not shown: the request DTO/controller (a @Digits-style constraint could reject 10.005 upstream) and the migration/entity mapping proving session_pack_tiers.total_price is numeric(10,2). | pass-1: Unbounded scale means creation response shows unrounded 10.005 while Postgres stores/charges 10.01 \u2014 concrete inconsistency with a stated trigger, not listed in the key.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

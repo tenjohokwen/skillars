@@ -1,0 +1,58 @@
+{
+  "arm": "concurrency",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "PackSessionService.pausePackTransactional cancels every conflicting booking in REQUESTED/ACCEPTED/CONFIRMED/UPCOMING via BookingService.cancelDueToPause (PackSessionService.java:288), and findConflictingBookingsForPause does not filter by funding source. For a CONFIRMED or UPCOMING booking, money has already been taken: a credit/card booking was charged at settle, and a pack booking had a session deducted by PackSessionService.deductSession. But BookingCancelledDueToPauseEvent is consumed only by BookingEmailListener \u2014 RefundEnqueueListener handles the parent-, coach-, admin-cancel and coach-no-show events and CancellationRefundService never restores for pause \u2014 so the booking commits to CANCELLED while the captured charge is kept and the deducted pack session is never restored. A parent who pauses their pack permanently loses one paid session (or one captured charge) per confirmed conflicting booking.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "BookingCancelledDueToPauseEvent (unhandled) / BookingService.cancelDueToPause",
+      "title": "Pause-driven cancellation of CONFIRMED/UPCOMING bookings issues no refund and no pack restore",
+      "verification": "Confirm PaymentLifecycleService deducts the pack session / captures the charge at PAYMENT_PENDING\u2192CONFIRMED settle (it does per handlePackBasedBooking/handleCreditBasedBooking), and grep src/main for BookingCancelledDueToPauseEvent consumers \u2014 only BookingEmailListener matches; check no sweeper reconciles CANCELLED bookings against remaining_sessions or booking_payments."
+    },
+    {
+      "category": "logic",
+      "description": "cancelBookingAsParent (line 1090), cancelBookingAsCoach (line 1122) and recordNoShowCoach (line 1199) all compute the refund amount with resolveSessionPrice, which for a non-pack booking reads coachPricingRepository's *current* perSessionPrice \u2014 not the booking_payments row's creditDebited + stripeCharged that was actually captured. The admin path's resolveAmountPaid (line 299) was written precisely because the current price 'is wrong once the coach has re-priced'. If the coach edits their pricing between capture and cancellation, the BEFORE_COMMIT RefundEnqueueListener enqueues a wallet refund for the new price: a coach who raises their price and then cancels (even with an excused reason, which costs no strike) mints the difference as parent wallet credit; a price cut under-refunds the parent.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "resolveSessionPrice via cancelBookingAsParent / cancelBookingAsCoach / recordNoShowCoach",
+      "title": "Cancellation refunds pay the coach's current list price, not the amount actually captured",
+      "verification": "Confirm CoachPricingService allows price updates while bookings are CONFIRMED/UPCOMING, and that the refund outbox consumer credits BookingRefundPayload.amount verbatim to the wallet."
+    },
+    {
+      "category": "database",
+      "description": "All four handlers are @TransactionalEventListener(AFTER_COMMIT) + REQUIRES_NEW, and packSessionService.restoreSession is not wrapped like issueStrikeSafely is. If the instance restarts between the cancellation's commit and the listener running, or restoreSession's NOWAIT PESSIMISTIC_WRITE retry on session_pack_purchases exhausts (~2-3s) \u2014 e.g. because a concurrent pausePackTransactional deliberately holds that row's lock for its entire multi-booking cancel loop \u2014 the exception escapes the listener, the REQUIRES_NEW transaction rolls back, and the restore is lost permanently: the booking is already committed CANCELLED_COACH/CANCELLED_PARENT, remaining_sessions is never incremented, and nothing re-drives it. The wallet-refund half of the same decision was explicitly moved to the durable outbox (RefundOutboxSupport, skillars-deferred-91 AC2) for this exact failure mode; pack restores were left inline. In onBookingCancelledByCoach a restore failure additionally skips saveCancellationHistory and the strike, since restoreSession throws first.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "onBookingCancelledByCoach / onBookingCancelledByParent / onCoachNoShow / onBookingCancelledByAdmin",
+      "title": "Pack-session restore runs in a non-durable AFTER_COMMIT listener and is lost on crash or lock-retry exhaustion",
+      "verification": "Confirm no scheduler/outbox handler reconciles CANCELLED pack bookings with session_pack_purchases.remaining_sessions (RefundOutboxSupport's Javadoc states pack restores 'stay inline \u2014 out of scope for AC2')."
+    },
+    {
+      "category": "logic",
+      "description": "BookingEmailListener enqueues these four templates BEFORE_COMMIT; the envelope insert succeeds because V185's envelope_entity_email_template_check and the i18n subject keys both include them, so the cancellation transaction commits normally. At send time EmailContentRenderer.render resolves CaseFormat-converted names under the 'mails/' prefix (ThymeleafConfiguration), but bookingCancelledByParent.html, bookingCancelledByCoach.html, coachNoShow.html and playerNoShow.html do not exist in src/main/resources/mails/, so rendering throws and the envelope is marked FAILED (the documented behavior for template-less rows). Every parent/coach notice about a cancellation, refund-affecting coach cancel, or no-show is silently dropped with no visible error on the request path.",
+      "file": "src/main/resources/mails/",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "BOOKING_CANCELLED_BY_PARENT / BOOKING_CANCELLED_BY_COACH / COACH_NO_SHOW / PLAYER_NO_SHOW",
+      "title": "Four booking cancellation/no-show emails enqueue successfully but have no Thymeleaf template and are never delivered",
+      "verification": "Also check packPaused.html (enum PACK_PAUSED renders 'packPaused', only sessionPackPaused.html exists), emailChange.html and coachVisibilityReduced.html \u2014 same gap, producers outside this file set; confirm NotificationEmailOutboxHandler marks a TemplateInputException as FAILED retry=false rather than looping the outbox."
+    },
+    {
+      "category": "edge-case",
+      "description": "packExpired is computed with Instant.now() against pack.expiresAt before the cancellation commits (BookingService.java:1127 and :1204). If expiresAt passes between that read and CancellationRefundService's AFTER_COMMIT restoreSession, the flag is false so RefundEnqueueListener enqueues no wallet refund, and the session is restored into a pack that has just expired \u2014 the parent gets neither a usable session nor the cash refund the expired-pack branch would have paid. restoreSession does not extend expiresAt, so the restored unit is unreachable.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "cancelBookingAsCoach / recordNoShowCoach (packExpired)",
+      "title": "Pack expiry crossing between cancel commit and AFTER_COMMIT restore yields an unusable restored session instead of a refund",
+      "verification": "Confirm no path lets a parent book against an expired pack (createBookingRequest rejects pack.expiresAt in the past) and that no job converts expired-pack remaining sessions into credit."
+    }
+  ],
+  "input_rev": "7a9508836b55c97e28b9bfb96fb985c16aff0573",
+  "model": null
+}

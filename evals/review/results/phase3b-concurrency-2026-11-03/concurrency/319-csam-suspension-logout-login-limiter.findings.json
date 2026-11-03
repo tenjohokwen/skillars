@@ -1,0 +1,118 @@
+{
+  "arm": "concurrency",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "The listener sets verificationStatus=SUSPENDED and nothing else: it does not set locked, does not stamp securitySessionInvalidatedAt, and does not call RefreshTokenRepository.markAllUsedByUserId \u2014 the three steps AdminUserService.suspendUser performs for exactly this purpose. AuthService.refresh's ensureAccountIsLive checks only activated and locked, and JWTAuthorizationFilter's DB re-auth uses AccountStatusUserDetailsChecker (enabled/locked/expired), so no per-request or refresh-time check ever reads SUSPENDED. The CSAM uploader's existing JWT keeps re-authenticating and their 7-day refresh token keeps rotating into new tokens indefinitely; even a fresh login is only blocked by AuthService.login's verificationStatus != BASIC_VERIFIED branch, which is skipped entirely when skillarsRole is null or security.registration.phone-otp-required is false.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested",
+      "title": "CSAM suspension leaves the account's live sessions and refresh tokens fully working",
+      "verification": "Confirm no other filter/guard reads Principal.getVerificationStatus()==SUSPENDED per request (grep found only admin DTO mapping and registration-flow checks); confirm the value of security.registration.phone-otp-required in production config."
+    },
+    {
+      "category": "concurrency",
+      "description": "In ModerationOrchestrationService.runArachnidLayer (lines 174-198) the CSAM branch commits the video's LOCKED transition and the FLAGGED scan row in their own transactions, then publishes the admin alert and AccountSuspensionRequestedEvent as synchronous in-memory events \u2014 no outbox row, despite the codebase having a durable outbox. If the instance restarts (or the @Async moderation thread dies) after the LOCKED commit but before the listener's REQUIRES_NEW transaction commits, the suspension \u2014 and, if the crash is early enough, the admin alert too \u2014 is lost with no durable record. Nothing retries it: onModerationRetry (lines 132-135) explicitly skips any video no longer in SCANNING, and the video is already LOCKED. A listener exception is caught and alerted, but a process death is not.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested / ModerationOrchestrationService.runArachnidLayer",
+      "title": "Restart between the video LOCKED commit and the suspension listener's commit permanently drops a CSAM account suspension",
+      "verification": "Confirm VideoModerationAdminAlertEvent's handler is also a synchronous in-memory @EventListener (not outbox-backed), and that no sweeper examines LOCKED videos for a missing owner suspension."
+    },
+    {
+      "category": "concurrency",
+      "description": "The listener resolves the account via findOneByLogin(ownerId).or(findOneByEmail(ownerId)), where ownerId is a string captured on the Video row at upload time. UserProfileService.updateUserEmail sets BOTH login and email to the new address, so if the user commits an email change at any point between upload and the moderation verdict (a window of minutes to hours), the old ownerId matches neither column, the ifPresentOrElse else-branch runs, and the suspension degrades to a CRITICAL log line. Because the listener returns normally instead of throwing, runArachnidLayer's catch block never fires the 'account suspension FAILED' admin alert \u2014 the drop is invisible except in logs, and a user who knows their upload will be flagged can trigger it deliberately.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested",
+      "title": "Email change between upload and CSAM verdict makes the suspension target lookup fail silently",
+      "verification": "Confirm Video.ownerId is populated from user login/email at upload (it is a String column, and the listener's lookup strategy implies it); confirm no reconciliation job re-resolves LOCKED videos' owners."
+    },
+    {
+      "category": "concurrency",
+      "description": "User has @DynamicUpdate but no @Version, so concurrent writers of the SAME column still last-write-wins. CoachRegistrationService.verifyPhoneOtp (and the Player/Parent siblings) loads the user unlocked, checks verificationStatus==EMAIL_VERIFIED, and later flushes verification_status='BASIC_VERIFIED'. If the suspension listener commits SUSPENDED between that read and the OTP transaction's commit, the OTP flush overwrites SUSPENDED with BASIC_VERIFIED and the CSAM suspension is silently lost. Reachability is narrow \u2014 the account must own a flagged video while still EMAIL_VERIFIED, which requires security.registration.phone-otp-required=false (otherwise login, and hence upload, needs BASIC_VERIFIED) \u2014 hence low rather than medium.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested / CoachRegistrationService.verifyPhoneOtp",
+      "title": "Concurrent phone-OTP verification can overwrite a just-committed SUSPENDED status with BASIC_VERIFIED",
+      "verification": "Check whether video upload is possible for an EMAIL_VERIFIED account (upload endpoints' role/verification gates) and whether phone-otp-required is ever false in a deployed profile."
+    },
+    {
+      "category": "concurrency",
+      "description": "login() reads countByIdentifierAndAttemptedAtAfter (line 81), compares to maxAttempts, and only inserts the LoginAttempt row after the bcrypt password check fails (lines 96-102) \u2014 with no lock, no claim row, and no unique constraint. N requests fired in parallel for the same email+IP all read the same sub-limit count (the ~100ms bcrypt check between the gate and the insert widens the window), so an attacker gets N password guesses per window instead of 5; the counts are shared across instances via the DB but the read-then-insert race is not serialized anywhere. The limiter degrades by exactly the attacker's concurrency factor.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "AuthService.login",
+      "title": "Login rate limiter is count-then-insert: concurrent requests all pass the gate before any attempt row commits",
+      "verification": "Confirm no serialization upstream (e.g., per-identifier advisory lock or a proxy-level concurrency cap on /api/auth/login)."
+    },
+    {
+      "category": "architecture",
+      "description": "All four Guava caches (per-user, per-IP-user, per-client-user attempts, 30-day client blacklist) are process-local, and the app runs as several instances behind a proxy. A failed attempt recorded via AuthenticationFailureListener on instance A is invisible to FraudAwareAuthenticationManager.isAllowed on instance B, so the effective limit on the /authenticate path is MAX\u00d7N under round-robin, and a fraud-blacklisted client stays blacklisted on only one node (and loses even that on restart). Worse, AdminUserService.unlockLogin (line 216) calls loginAttemptsService.unlockUser, which clears only the caches of the instance that served the admin's request: a user locked on another instance stays locked there for up to the 4-hour window while the admin console reports success. The code's own TODOs acknowledge multi-node unreadiness, but the admin-unlock path was built on top of it anyway.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "LoginAttemptsService / AdminUserService.unlockLogin",
+      "title": "In-memory LoginAttemptsService caches are per-instance in a multi-instance deployment; admin unlock clears only one node",
+      "verification": "Confirm the production instance count and that no sticky-session affinity routes a given user's logins to one instance."
+    },
+    {
+      "category": "database",
+      "description": "loginTokenManager.createLoginToken and the refresh/profile cookie writes (lines 135-140) execute inside the @Transactional method; the comment at line 125 claims persisting the refresh token first 'ensures DB state is committed before the client receives auth credentials', but the commit happens at the proxy boundary after the method returns. If the commit fails (DB outage, constraint), the error response can still carry the already-set Set-Cookie headers: the stateless 15-minute JWT works with no committed refresh-token row, so a login the client saw fail nonetheless yields a usable session, and the refresh token cookie points at a row that never existed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Auth cookies are written to the response before the login transaction commits",
+      "verification": "Check whether the error-handling path (ApiAdvice / servlet container) resets response headers before writing the error body; if it calls response.reset() the window closes."
+    },
+    {
+      "category": "edge-case",
+      "description": "retryAfterSeconds (lines 83-88) uses findFirstByIdentifierOrderByAttemptedAtAsc \u2014 the oldest attempt row for the identifier, which survives up to the 24h purge (AuthCleanupService's deleteByAttemptedAtBefore). If that oldest attempt predates the 15-minute lock window while 5+ recent attempts fill it, oldestAttempt+15min is in the past and Math.max clamps Retry-After to 1 second, even though the windowed count will stay at or above the limit for up to 15 more minutes. A well-behaved client honouring Retry-After loops on 1-second retries against a still-closed gate.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Retry-After for a rate-limited login derived from the oldest attempt ever, not the oldest in-window attempt",
+      "verification": "Confirm AuthCleanupService's purge cutoff for login_attempts exceeds the lock window (it is documented as 24h)."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two concurrent POST /api/security/players from the same parent (double-click, retry after a timeout) each insert a fresh PlayerProfile row and a ParentPlayerLink row. The only relevant constraint, uq_ppl_player_id on parent_player_links(player_id), dedupes per profile id \u2014 and each request creates its own profile id, so both inserts succeed. V138 shows player_profiles has no unique key covering parent-created children (uq_pp_user_id is partial on user_id IS NOT NULL, and children have user_id NULL). The result is two profiles for one real child: bookings, consent records and development data can split across them, and the parent sees the child twice.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "ShadowAccountService.createPlayerProfile",
+      "title": "Double-submitted child-profile creation inserts duplicate children \u2014 no claim marker or natural unique key",
+      "verification": "Check whether CreatePlayerProfilePage.vue disables its submit button until the response arrives; the backend remains unprotected either way."
+    },
+    {
+      "category": "edge-case",
+      "description": "createSelfOwnedPlayerProfile guards with existsByUserId (line 91) and then inserts. Two concurrent POST /me requests both read exists=false; the partial unique index uq_pp_user_id makes the loser's insert fail at flush with a DataIntegrityViolationException that \u2014 unlike the link insert in createPlayerProfile two methods up \u2014 has no catch, so the client gets a raw 500 instead of the mapped security.playerProfileAlreadyExists error. No data corruption (the index holds), purely a wrong error surface on the race path.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "ShadowAccountService.createSelfOwnedPlayerProfile",
+      "title": "Self-profile create loses the exists-then-insert race to an unhandled unique-index violation",
+      "verification": "None needed \u2014 uq_pp_user_id confirmed in V138__baseline_schema.sql:3748."
+    },
+    {
+      "category": "logic",
+      "description": "router/index.js derives its gates from meta.requiresCoach, meta.role==='PARENT', meta.role==='PLAYER', and meta.roles \u2014 nothing reads meta.role==='COACH'. The 'coach/revenue' (routes.js:356) and 'coach/bookings/:bookingId/receipt' (routes.js:368) routes use role: 'COACH', so for any authenticated non-coach the guard falls through to next(): a parent or player navigating there mounts the coach revenue dashboard and gets raw 401s from the coach-only APIs instead of being bounced to their own home \u2014 the exact bug class the coach/profile-builder comment at routes.js:69-74 documents as previously fixed. Backend authorization still holds, so this is a UX/consistency defect, not an access-control hole.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "routes: coach/revenue, coach/bookings/:bookingId/receipt",
+      "title": "meta.role 'COACH' on two routes matches no router guard, leaving them effectively auth-only",
+      "verification": "Confirm no other code path (e.g., roleRoutes.js) interprets meta.role==='COACH'; grep of index.js shows only PARENT and PLAYER comparisons."
+    }
+  ],
+  "input_rev": "651ed1effc048bc7e6fe04cf68c77464b22ed6f5",
+  "model": null
+}

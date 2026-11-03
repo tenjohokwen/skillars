@@ -1,0 +1,163 @@
+{
+  "arm": "concurrency",
+  "case": "337-subscription-entitlement-integrity",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "subscribeCoach's check-then-act is real: the ACTIVE+stripeSubscriptionId guard runs unlocked outside any transaction and the row is only written later in self.persistCoachSubscription (same in subscribePlayer), so this service does not serialize concurrent subscribes. But the consequence hinges on StripeClient.createSubscription's idempotency key being per-price (sub-create-{customer}-{price}) and on the absence of controller/frontend serialization \u2014 both outside this file, and the finding's own verification caveat requires checking the controller.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "applyPendingChanges' per-item transactionTemplate block applies the detached change (sub.setTier(change.getToTier())) and saves it without re-checking applied/voidedAt after the batch-load tx commits and releases the SKIP LOCKED locks, so persistCoachTierUpgrade's voidPendingCoachDowngrade committed in that gap is overwritten (the merge of the stale change even restores voidedAt=null) while Stripe stays on the upgraded price. @SchedulerLock only serializes scheduler instances, not changeCoachTier/changePlayerTier requests; Interleaving B's SKIP-LOCKED claim for findPendingForCoach isn't shown here, but the race holds regardless via Interleaving A. Same unguarded shape in the player loop.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "confirmed",
+      "note": "checkPastDueGracePeriod's per-item transactionTemplate block saves the batch-loaded detached `sub` (setTier/setStatus/save) with no re-read or status re-check, unlike applyPendingChanges which re-reads via findByCoachId; a FOR UPDATE batch variant would be moot since the file's own applyPendingChanges comment confirms batch-load locks are released at that transaction's commit, before per-item writes. Only an unshown @Version field on the entities could avert the stale overwrite, and nothing here indicates one.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "confirmed",
+      "note": "reconcileMarketplaceTiers' per-item lambda compares the re-read marketplace row against the detached batch-loaded `sub`'s tier and never re-fetches the payment row, even after syncMarketplaceTier's coach_profiles lock, so a webhook/grace-period downgrade committing in between gets overwritten with the stale paid tier. Worse than stated: the now-CANCELLED row is excluded from the next sweep's ACTIVE/TRIALLING load, so the next nightly run does not self-correct it.",
+      "reported_id": "R11"
+    },
+    {
+      "check": "confirmed",
+      "note": "findOrCreateCoachSubscription/findOrCreatePlayerSubscription do findBy \u2192 orElseGet(save) with no DataIntegrityViolationException handling, upsert, or retry anywhere in the file (PessimisticLockRetryer is used only in syncMarketplaceTier for lock acquisition), and @Transactional getCoachSubscription calls the coach helper, so the read path inserts. Verification caveat: no mapper/retry exists in this file, and a global exception mapper cannot retry a rolled-back service transaction anyway \u2014 one of two concurrent first-touch requests fails as described.",
+      "reported_id": "R14"
+    }
+  ],
+  "judge_cost_usd": 3.5171699999999997,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding says applyPendingChanges ignores subscription status and re-grants a paid tier on a CANCELLED row; R6 is a different (lock-race) mechanism against a concurrent upgrade.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R4 trigger (1) identifies the same place (createSubscription returning 'incomplete' under default payment_behavior, persistCoachSubscription) but describes the consequence as CHECK-violation rollback/orphan rather than the tier being granted without payment.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "Nothing reported touches CoachProfileService.getCoachSubscriptionTier or QuotaConfigService.resolvePlayerTierKey reading tier without a status gate.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R7 states no stripeClient call exists in the downgrade lifecycle, so Stripe keeps billing the old higher price after a downgrade \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers changeCoachTier/changePlayerTier allowing tier changes on PAST_DUE/CANCELLED rows; R8 concerns subscribe, not change.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R7 covers checkPastDueGracePeriod cancelling locally while Stripe keeps dunning; R8 covers the ACTIVE_STATUSES-only subscribe guard letting a non-active row create a second live Stripe subscription \u2014 jointly the full defect.",
+        "reported_ids": [
+          "R7",
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R13 is exactly the never-cleared pastDueSince causing zero grace on a second delinquency.",
+        "reported_ids": [
+          "R13"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "R4 covers the unmapped-status CHECK violation and the resulting webhook 500/retry loop; R12 covers the missing event.created ordering guard; only the minor missing invoice.paid fragment is uncovered.",
+        "reported_ids": [
+          "R4",
+          "R12"
+        ]
+      },
+      {
+        "expected_id": "F9",
+        "match": "full",
+        "note": "R5 identifies the read-outside-transaction / Stripe call / detached save pattern with no @Version causing silent lost updates \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F10",
+        "match": "full",
+        "note": "R3 is the 24h replay of a dead subscription under the stable sub-create-{customer}-{price} key; R1 is the same root-cause key colliding across sibling players \u2014 jointly the full defect.",
+        "reported_ids": [
+          "R3",
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F11",
+        "match": "none",
+        "note": "No reported finding mentions ProrationBehavior.CREATE_PRORATIONS deferring the upgrade charge to the next invoice.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F12",
+        "match": "full",
+        "note": "R10 describes the orphan branch acknowledging a subscription.updated that arrives before stripeSubscriptionId is persisted, losing the status transition with no reconcile recovery \u2014 same defect.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F13",
+        "match": "none",
+        "note": "Nothing reported covers the unnormalised tier string causing valueOf to throw after Stripe charged, or the player quota fallback.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] subscribeCoach's check-then-act is real: the ACTIVE+stripeSubscriptionId guard runs unlocked outside any transaction and the row is only written later in self.persistCoachSubscription (same in subscribePlayer), so this service does not serialize concurrent subscribes. But the consequence hinges on StripeClient.createSubscription's idempotency key being per-price (sub-create-{customer}-{price}) and on the absence of controller/frontend serialization \u2014 both outside this file, and the finding's own verification caveat requires checking the controller. | pass-1: Concrete TOCTOU: two concurrent subscribes pass the unlocked guard before either persists; different tiers mean different idempotency keys, producing two live Stripe subscriptions with the first orphaned \u2014 not in the answer key.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] applyPendingChanges' per-item transactionTemplate block applies the detached change (sub.setTier(change.getToTier())) and saves it without re-checking applied/voidedAt after the batch-load tx commits and releases the SKIP LOCKED locks, so persistCoachTierUpgrade's voidPendingCoachDowngrade committed in that gap is overwritten (the merge of the stale change even restores voidedAt=null) while Stripe stays on the upgraded price. @SchedulerLock only serializes scheduler instances, not changeCoachTier/changePlayerTier requests; Interleaving B's SKIP-LOCKED claim for findPendingForCoach isn't shown here, but the race holds regardless via Interleaving A. Same unguarded shape in the player loop. | pass-1: Concrete race: the batch transaction releases FOR UPDATE SKIP LOCKED locks before per-item work, so a concurrent upgrade's void is either overwritten (voidedAt reset by the detached merge) or skipped by SKIP LOCKED, applying a stale downgrade \u2014 distinct from any expected finding.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] checkPastDueGracePeriod's per-item transactionTemplate block saves the batch-loaded detached `sub` (setTier/setStatus/save) with no re-read or status re-check, unlike applyPendingChanges which re-reads via findByCoachId; a FOR UPDATE batch variant would be moot since the file's own applyPendingChanges comment confirms batch-load locks are released at that transaction's commit, before per-item writes. Only an unshown @Version field on the entities could avert the stale overwrite, and nothing here indicates one. | pass-1: Concrete race: checkPastDueGracePeriod's per-item transaction saves the batch-loaded detached entity without re-reading, so a recovery webhook committing ACTIVE in between is overwritten with CANCELLED/SCOUT \u2014 a scheduler-side lost update not covered by F9's Stripe-round-trip paths.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] reconcileMarketplaceTiers' per-item lambda compares the re-read marketplace row against the detached batch-loaded `sub`'s tier and never re-fetches the payment row, even after syncMarketplaceTier's coach_profiles lock, so a webhook/grace-period downgrade committing in between gets overwritten with the stale paid tier. Worse than stated: the now-CANCELLED row is excluded from the next sweep's ACTIVE/TRIALLING load, so the next nightly run does not self-correct it. | pass-1: Concrete race: reconcileMarketplaceTiers compares the marketplace projection against a stale batch-loaded payment row, so a cancellation committed in between is 'reconciled' back to the paid tier \u2014 not in the answer key.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] findOrCreateCoachSubscription/findOrCreatePlayerSubscription do findBy \u2192 orElseGet(save) with no DataIntegrityViolationException handling, upsert, or retry anywhere in the file (PessimisticLockRetryer is used only in syncMarketplaceTier for lock acquisition), and @Transactional getCoachSubscription calls the coach helper, so the read path inserts. Verification caveat: no mapper/retry exists in this file, and a global exception mapper cannot retry a rolled-back service transaction anyway \u2014 one of two concurrent first-touch requests fails as described. | pass-1: Concrete trigger: concurrent first-touch findBy\u2192save with no upsert or constraint handling makes one request fail with DataIntegrityViolationException (a 500) on uq_pcs_coach_id/uq_pps_player_id; minor but genuine.",
+        "reported_id": "R14",
+        "verdict": "real"
+      }
+    ]
+  }
+}

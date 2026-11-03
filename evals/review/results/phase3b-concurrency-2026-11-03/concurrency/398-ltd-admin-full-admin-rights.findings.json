@@ -1,0 +1,48 @@
+{
+  "arm": "concurrency",
+  "case": "398-ltd-admin-full-admin-rights",
+  "findings": [
+    {
+      "category": "database",
+      "description": "update() has no @Transactional, so alertRuleRepository.deleteById(id) commits in its own SimpleJpaRepository transaction before alertRuleRepository.save(updated) runs in a second one. The request body is bound without @Valid and AlertRuleRequest has no constraints, so a PUT with a null metricName, threshold, or notificationChannel deterministically violates the entity's nullable=false columns at save time \u2014 after the delete has already committed \u2014 leaving the rule gone with nothing in its place (an instance crash between the two statements does the same). Within the 60s AlertRuleCache scheduled refresh on each node, evaluation of that metric (e.g. FRAUD_SPIKE_RATE) silently stops fleet-wide.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AlertRuleAdminResource.update",
+      "title": "Alert rule update deletes the rule in one committed transaction before a save that can fail",
+      "verification": "Confirm no @Transactional is inherited (none on the class; controller beans are not transactional by default). The javadoc says FeeRuleAdminResource uses the same delete-then-save pattern \u2014 check it for the same defect."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two concurrent PUTs for the same id both pass findById before either delete commits; Spring Data JPA 3's deleteById is a silent no-op on a missing row, so both save() calls insert fresh rows with new generated ids \u2014 two live, enabled copies of the rule, and every threshold breach then notifies twice. alert_rule has only a primary key (V138__baseline_schema.sql), no unique index on metric_name, so nothing stops the duplicate; create() has the same double-submit exposure. Additionally, because every successful update replaces the row id, a client or proxy retry of the same PUT after a timeout 404s on the old id even though the update succeeded.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "AlertRuleAdminResource.update",
+      "title": "Concurrent or retried alert-rule PUTs create duplicate enabled rules and orphan the resource id",
+      "verification": "Confirm the deployed Spring Data JPA version is 3.x (deleteById no longer throws on missing id); check the admin frontend for a submit guard on the alert-rule editor."
+    },
+    {
+      "category": "concurrency",
+      "description": "deleteUserInTransaction re-fetches the user with a plain findOneByLogin (no lock), checks !activated, then issues DELETE by id. If a registration activation (any registration service committing activated=true) lands between that re-read and the DELETE \u2014 including the common case where the activation transaction already holds the row lock, the DELETE blocks on it, and then proceeds once activation commits \u2014 the sweep destroys a freshly activated account. The method's own javadoc states the TOCTOU window was narrowed, not closed; there is no conditional DELETE ... WHERE activated = false and no affected-row check.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "UserAdminService.deleteUserInTransaction",
+      "title": "Nightly sweep can delete a user whose activation commits between its unlocked re-read and the DELETE",
+      "verification": "Confirm userRepository.delete(entity) emits DELETE WHERE id = ? with no activated predicate and that User has no @Version (it does not \u2014 only @DynamicUpdate)."
+    },
+    {
+      "category": "security",
+      "description": "The method is guarded by SecurityConstants.HAS_ANY_ROLE, which includes ROLE_USER, ROLE_COACH, ROLE_PARENT and ROLE_PLAYER, and deletes an arbitrary user by login with no self-ownership check and no audit record \u2014 unlike lockUserAccount in the same class, which requires HAS_ADMIN_ROLE. No production caller exists today (grep finds only the definition and tests), so this is latent, but any future endpoint that wires it exposes deletion of any account \u2014 including children's accounts \u2014 to every authenticated user.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "UserAdminService.deleteUserInformation",
+      "title": "deleteUserInformation hard-deletes any account by login under an any-authenticated-role guard",
+      "verification": "Re-grep for deleteUserInformation across main sources and any reflective/endpoint wiring to confirm it remains uncalled in production code."
+    }
+  ],
+  "input_rev": "4899534f12a1f87d89f49267522293609eb0a8d7",
+  "model": null
+}

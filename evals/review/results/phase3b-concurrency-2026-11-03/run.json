@@ -1,0 +1,11 @@
+{
+  "arms": [
+    "blind-hunter",
+    "concurrency",
+    "control",
+    "security"
+  ],
+  "effort": null,
+  "model": null,
+  "run_id": "phase3b-concurrency-2026-11-03"
+}

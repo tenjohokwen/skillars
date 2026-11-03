@@ -1,0 +1,119 @@
+{
+  "arm": "concurrency",
+  "case": "340-unpaid-paused-grace-sweep",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "subscribeCoach/subscribePlayer check assertCanSubscribe on an unlocked read and claim the row only in persistCoachSubscription/persistPlayerSubscription (findBy*IdForUpdate), so two requests can both call createPaidStripeSubscription \u2014 each with a fresh sub-create-UUID idempotency key and error_if_incomplete (per the file's own javadoc), charging the first invoice at create time. The loser hits isOtherLiveSubscription \u2192 cancelStripeSubscriptionQuietly, which only calls stripeClient.cancelSubscriptionImmediately with no refund/credit (Stripe's immediate cancel doesn't auto-refund by default, and the same method is reused for grace-expiry cancels where refunding would be wrong), so the duplicate first-period charge is kept.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "Confirmed from the diff: createPaidStripeSubscription uses a per-attempt \"sub-create-\" + UUID.randomUUID() idempotency key, assertCanSubscribe passes when the local stripeSubscriptionId is null (the state after a crash before persistCoachSubscription commits), and the isOtherLiveSubscription duplicate-cancel only fires on a different *locally stored* live id \u2014 so a retry creates and charges a second Stripe subscription with nothing in this file cancelling the first. The caveat (whether StripeSubscriptionReconciliationScheduler cancels vs. only alerts on orphans) is unresolvable here, but the cancelStripeSubscriptionQuietly comment says \"orphan alert\", and even an active reconciler would only shorten the double-billing window, not prevent the duplicate creation.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "checkPastDueGracePeriod selects on the local PAST_DUE status, so the race window is the full Stripe-payment-to-invoice.paid-webhook lag, not just the phase-1\u2192cancel gap; cancelAtStripeForGrace does no status re-check, and GraceTarget.matches (per its own javadoc) deliberately revokes a row that went ACTIVE as long as stripeSubscriptionId is unchanged \u2014 after revoke clears the id, the late invoice.paid finds no row, so the paid customer is cancelled with no recovery.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "applyCoachChange/applyPlayerChange phase 1 commits (releasing the row lock) before syncStripePriceForChange calls stripeClient.updateSubscriptionTier, so a concurrent restoreCoachPriceAndVoidDowngrade (or upgrade) that voids the change leaves the applicator setting Stripe to the downgrade price while phase 2 (pendingCoachChange == null) silently skips without reverting it. handleSubscriptionUpdated explicitly never syncs tier from Stripe (\"no priceId\u2192tier map\") and reconcileMarketplaceTiers is payment\u2192marketplace only, so the drift is uncorrected.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "persistCoachTierUpgrade's superseded guard (`!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())` \u2192 log + return from a void method) runs after changeCoachTier already charged the proration via updateStripePrice(chargeNow=true), and neither it nor any other path refunds, retries, or cancels that paid invoice \u2014 the caller returns success. Caveat checked: the deleted-webhook race (revokeCoachSubscription nulls the id under lock between the Stripe charge and the persist) is the primary interleaving, with a follow-on re-subscribe as a variant; either way the charge is silently dropped. Same applies to persistPlayerTierUpgrade.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "reconcileMarketplaceTiers computes effectiveCoachTier from the batch-loaded `sub` (findAll snapshot) and never re-reads the payment row inside the per-item transactionTemplate block \u2014 only the marketplace projection is read fresh (findByCoachId), unlike applyCoachChange/checkPastDueGracePeriod which re-read via findByCoachIdForUpdate. A handleInvoicePaid commit between batch load and the item's turn is therefore overwritten: the sweep sees the recovered projection as a mismatch against stale SCOUT and calls syncMarketplaceTier(coachId, \"SCOUT\"). Sweep interval and effectiveCoachTier's body are outside this diff but don't affect the mechanism.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The gap itself is visible: changeCoachTier's downgrade branch calls updateStripePrice before self.persistCoachTierDowngrade runs in a separate transaction (restoreCoachPriceAndVoidDowngrade mirrors it), and handleSubscriptionUpdated explicitly never derives tier from Stripe price. But the \"never reconciled\" claim depends on reconcileStripeSubscriptions() / StripeSubscriptionReconciliationScheduler, referenced in reconcileMarketplaceTiers' javadoc and cancelStripeSubscriptionQuietly but not present in the diff, so the verification caveat (no Stripe\u2192payment price-vs-tier comparison) cannot be confirmed from the shown code.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "confirmed",
+      "note": "handleInvoicePaid advances the shared lastStripeEventAt via newer() without writing currentPeriodEnd, and isStaleEvent's strict eventCreated.isBefore(lastApplied) then drops a subscription.updated whose created is one second earlier; persistCoach/PlayerTierDowngrade use sub.getCurrentPeriodEnd() as effectiveAt, so the stale period end propagates. Stripe guarantees neither delivery order nor updated.created >= invoice.paid.created (the rollover update typically precedes payment), so the caveat does not close the window; only equal timestamps are safe.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "undetermined",
+      "note": "Code mechanics match: PAUSED is excluded from RECOVERABLE_ON_PAYMENT, requireBillingHealthy throws notActive, assertCanSubscribe throws updatePaymentMethod, and no resume path exists. But the finding's own caveat \u2014 whether PAUSED is reachable \u2014 depends on Stripe account trial/pause settings (and SubscriptionEntitlement.BILLING_HEALTHY_STATUSES, not shown); the in-app subscribe path uses error_if_incomplete with a required payment method, so the trial-pause route may never occur for app-created subscriptions.",
+      "reported_id": "R10"
+    }
+  ],
+  "judge_cost_usd": 8.357890000000001,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R10 identifies the grace-sweep gap (only PAST_DUE selected) and the dead-end for PAUSED, but omits UNPAID entirely and describes the consequence as user lockout rather than the Stripe subscription lingering unclosed and raising invoices.",
+        "reported_ids": [
+          "R10"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] subscribeCoach/subscribePlayer check assertCanSubscribe on an unlocked read and claim the row only in persistCoachSubscription/persistPlayerSubscription (findBy*IdForUpdate), so two requests can both call createPaidStripeSubscription \u2014 each with a fresh sub-create-UUID idempotency key and error_if_incomplete (per the file's own javadoc), charging the first invoice at create time. The loser hits isOtherLiveSubscription \u2192 cancelStripeSubscriptionQuietly, which only calls stripeClient.cancelSubscriptionImmediately with no refund/credit (Stripe's immediate cancel doesn't auto-refund by default, and the same method is reused for grace-expiry cancels where refunding would be wrong), so the duplicate first-period charge is kept. | pass-1: Concrete TOCTOU: no lock between assertCanSubscribe and persist, per-attempt idempotency keys, error_if_incomplete charges at create, and the duplicate is cancelled with bare params (no refund) \u2014 double charge is stateable from the text.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] Confirmed from the diff: createPaidStripeSubscription uses a per-attempt \"sub-create-\" + UUID.randomUUID() idempotency key, assertCanSubscribe passes when the local stripeSubscriptionId is null (the state after a crash before persistCoachSubscription commits), and the isOtherLiveSubscription duplicate-cancel only fires on a different *locally stored* live id \u2014 so a retry creates and charges a second Stripe subscription with nothing in this file cancelling the first. The caveat (whether StripeSubscriptionReconciliationScheduler cancels vs. only alerts on orphans) is unresolvable here, but the cancelStripeSubscriptionQuietly comment says \"orphan alert\", and even an active reconciler would only shorten the double-billing window, not prevent the duplicate creation. | pass-1: Concrete partial-failure window: Stripe create (charged) precedes local persist, fresh UUID idempotency key on retry defeats replay, and no local row references the orphan \u2014 second live billing subscription is stateable.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] checkPastDueGracePeriod selects on the local PAST_DUE status, so the race window is the full Stripe-payment-to-invoice.paid-webhook lag, not just the phase-1\u2192cancel gap; cancelAtStripeForGrace does no status re-check, and GraceTarget.matches (per its own javadoc) deliberately revokes a row that went ACTIVE as long as stripeSubscriptionId is unchanged \u2014 after revoke clears the id, the late invoice.paid finds no row, so the paid customer is cancelled with no recovery. | pass-1: Concrete interleaving: payment recovers the subscription between phase-1 commit and the Stripe cancel, the retrieve-first guard does not skip 'active', and GraceTarget.matches still revokes \u2014 paid-then-cancelled with no refund; the javadoc acknowledgment does not remove the money loss and this is not the listed non-finding.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] applyCoachChange/applyPlayerChange phase 1 commits (releasing the row lock) before syncStripePriceForChange calls stripeClient.updateSubscriptionTier, so a concurrent restoreCoachPriceAndVoidDowngrade (or upgrade) that voids the change leaves the applicator setting Stripe to the downgrade price while phase 2 (pendingCoachChange == null) silently skips without reverting it. handleSubscriptionUpdated explicitly never syncs tier from Stripe (\"no priceId\u2192tier map\") and reconcileMarketplaceTiers is payment\u2192marketplace only, so the drift is uncorrected. | pass-1: Concrete race: applicator releases the lock before updateSubscriptionTier, a concurrent void/upgrade restores or re-prices Stripe first, applicator then applies the voided downgrade price with no priceId\u2192tier reconciliation, leaving permanent Stripe/local tier drift.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] persistCoachTierUpgrade's superseded guard (`!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())` \u2192 log + return from a void method) runs after changeCoachTier already charged the proration via updateStripePrice(chargeNow=true), and neither it nor any other path refunds, retries, or cancels that paid invoice \u2014 the caller returns success. Caveat checked: the deleted-webhook race (revokeCoachSubscription nulls the id under lock between the Stripe charge and the persist) is the primary interleaving, with a follow-on re-subscribe as a variant; either way the charge is silently dropped. Same applies to persistPlayerTierUpgrade. | pass-1: Concrete: proration is charged at Stripe before persistCoachTierUpgrade; if the row's subscription id changed (e.g. deleted webhook), the SUPERSEDED branch returns void without saving, refunding, or erroring \u2014 paid upgrade silently dropped.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] reconcileMarketplaceTiers computes effectiveCoachTier from the batch-loaded `sub` (findAll snapshot) and never re-reads the payment row inside the per-item transactionTemplate block \u2014 only the marketplace projection is read fresh (findByCoachId), unlike applyCoachChange/checkPastDueGracePeriod which re-read via findByCoachIdForUpdate. A handleInvoicePaid commit between batch load and the item's turn is therefore overwritten: the sweep sees the recovered projection as a mismatch against stale SCOUT and calls syncMarketplaceTier(coachId, \"SCOUT\"). Sweep interval and effectiveCoachTier's body are outside this diff but don't affect the mechanism. | pass-1: Concrete stale-read race: sweep writes marketplace tier from the batch-load snapshot without re-reading under lock (unlike the other sweeps), so an invoice.paid recovery mid-loop is overwritten back to SCOUT until the next sweep run.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The gap itself is visible: changeCoachTier's downgrade branch calls updateStripePrice before self.persistCoachTierDowngrade runs in a separate transaction (restoreCoachPriceAndVoidDowngrade mirrors it), and handleSubscriptionUpdated explicitly never derives tier from Stripe price. But the \"never reconciled\" claim depends on reconcileStripeSubscriptions() / StripeSubscriptionReconciliationScheduler, referenced in reconcileMarketplaceTiers' javadoc and cancelStripeSubscriptionQuietly but not present in the diff, so the verification caveat (no Stripe\u2192payment price-vs-tier comparison) cannot be confirmed from the shown code. | pass-1: Concrete crash window: Stripe price is moved before the pending-change row is persisted in a separate transaction; a failure between leaves Stripe billing the lower price with full local entitlement and no reconciliation path, permanently.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Explicitly latent: all current Stripe statuses are mapped and the loop only triggers if Stripe introduces a new status in the future \u2014 speculative, no concrete trigger today.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] handleInvoicePaid advances the shared lastStripeEventAt via newer() without writing currentPeriodEnd, and isStaleEvent's strict eventCreated.isBefore(lastApplied) then drops a subscription.updated whose created is one second earlier; persistCoach/PlayerTierDowngrade use sub.getCurrentPeriodEnd() as effectiveAt, so the stale period end propagates. Stripe guarantees neither delivery order nor updated.created >= invoice.paid.created (the rollover update typically precedes payment), so the caveat does not close the window; only equal timestamps are safe. | pass-1: Concrete mechanism: a single lastStripeEventAt watermark shared across event types drops a subscription.updated whose created timestamp is earlier than an already-processed invoice.paid (Stripe does not guarantee event ordering), losing current_period_end and shifting a scheduled downgrade a period early.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] Code mechanics match: PAUSED is excluded from RECOVERABLE_ON_PAYMENT, requireBillingHealthy throws notActive, assertCanSubscribe throws updatePaymentMethod, and no resume path exists. But the finding's own caveat \u2014 whether PAUSED is reachable \u2014 depends on Stripe account trial/pause settings (and SubscriptionEntitlement.BILLING_HEALTHY_STATUSES, not shown); the in-app subscribe path uses error_if_incomplete with a required payment method, so the trial-pause route may never occur for app-created subscriptions. | pass-1: Matched partially to F1; its additional content (misleading updatePaymentMethod error message for a pause, no in-app resume path) is a real adjacent defect beyond the sweep gap.",
+        "reported_id": "R10",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

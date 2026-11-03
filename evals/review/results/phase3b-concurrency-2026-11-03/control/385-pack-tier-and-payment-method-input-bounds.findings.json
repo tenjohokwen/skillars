@@ -1,0 +1,68 @@
+{
+  "arm": "control",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "findings": [
+    {
+      "category": "security",
+      "description": "SavedPaymentMethodRequest only requires @NotBlank, and POST /save-payment-method stores whatever id the client sends (the purchase body's paymentMethodId is stored the same way by getOrCreateStripeCustomer). Nothing checks that the PaymentMethod is attached to the caller's stripe_customer_id. GET /payment-method then calls PaymentMethod.retrieve(id) with the platform secret key and returns brand, last4, expMonth and expYear without comparing paymentMethod.getCustomer() to the caller's customer. A user who learns another payer's pm_ id (from logs, support tooling or a shared screen) can save it and read that payer's card details back.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "getSavedPaymentMethod / SavedPaymentMethodRequest / getOrCreateStripeCustomer",
+      "title": "Saved/purchase paymentMethodId is never checked against the caller's Stripe customer, so another user's card details can be read",
+      "verification": "Confirm in StripeClient/PaymentMethodSyncOutboxSupport that no other step verifies pm.customer == caller's stripeCustomerId before the id is persisted. As far as visible, nothing does."
+    },
+    {
+      "category": "logic",
+      "description": "For an existing customer, getOrCreateStripeCustomer writes the request's paymentMethodId into stripe_customers before chargeAndCapture runs. If that card is declined, foreign, or the id is junk, the charge throws, and the previous card (captured in previousCard) is lost: stripe_customers now points at the bad card. The Stripe subscriptions still use the old default, because the sync only runs on success. The payer's later pack purchases and subscribe calls then use the declined card. Any older outbox sync for the real card is also skipped as 'superseded', because the saved card no longer matches. This contradicts the method's claim that a declined card is never adopted.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "purchasePack / getOrCreateStripeCustomer",
+      "title": "Pack purchase overwrites the saved card before charging and never restores it if the charge fails",
+      "verification": "Purchase a pack as an existing customer with a declining test card (pm_card_chargeDeclined), then read stripe_customers.stripe_payment_method_id: it holds the declined card."
+    },
+    {
+      "category": "edge-case",
+      "description": "totalPrice only has @DecimalMin(\"0.01\"), with no @Digits or @DecimalMax. A value of 100000000 or more overflows session_pack_tiers.total_price numeric(10,2) and causes an unmapped DataException (a 500), not a validation 400. Stripe's limits are not enforced either. A tier priced below Stripe's minimum charge (e.g. 0.01) or above its maximum (999,999.99) is created, shown as active, and deactivates the coach's previous tier, but every purchase of it then fails at chargeAndCapture. sessionCount has no @Max either.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "CreateSessionPackTierRequest / SessionPackPaymentService.createTier",
+      "title": "Tier totalPrice/sessionCount have no upper or scale bound, so out-of-range tiers fail at the DB or can never be charged",
+      "verification": "POST /coaches/me/session-pack-tiers with totalPrice=0.01 and try to purchase it (Stripe amount_too_small), or with totalPrice=100000000 (numeric field overflow)."
+    },
+    {
+      "category": "edge-case",
+      "description": "pricePerSession = totalPrice / sessionCount, rounded HALF_UP to 2 places. Any valid request where totalPrice/sessionCount < 0.005 (e.g. totalPrice=0.02, sessionCount=5, or a large sessionCount) gives 0.00. The insert then violates the CHECK price_per_session > 0. That constraint is not in ApiAdvice's mappings, so the coach gets an untranslated generic.dataError instead of a validation message, even though the request passed bean validation.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "createTier",
+      "title": "pricePerSession can round to 0.00 and violate chk_spt_price_per_session_positive",
+      "verification": "Create a tier with totalPrice=0.02 and sessionCount=5 and observe the chk_spt_price_per_session_positive violation."
+    },
+    {
+      "category": "database",
+      "description": "Nothing limits the scale of totalPrice, so a value like 10.005 is accepted. Postgres rounds it to 10.01 in numeric(10,2). pricePerSession, however, is computed from the unrounded 10.005, and the returned SessionPackTierResponse shows 10.005 from the in-memory entity. What the coach sees at creation differs from what parents are later charged (the reloaded 10.01) and from amount_charged.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "createTier",
+      "title": "totalPrice with more than 2 decimals is stored rounded, but the response and pricePerSession use the unrounded value",
+      "verification": "Create a tier with totalPrice=10.005 and compare the creation response with a later GET of the tiers."
+    },
+    {
+      "category": "edge-case",
+      "description": "paymentMethodId has no constraint at all. For a payer with no stripe_customers row, getOrCreateStripeCustomer first creates a Stripe customer, then stores the raw value (\"\" or whitespace) without the isBlank guard the existing-customer branch has. StripePaymentGateway.charge only rejects null, so it calls Stripe with payment_method=\"\". The result is an invalid-request lifecycleFailure instead of payment.noPaymentMethod, after a Stripe customer has already been created.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/PurchaseSessionPackRequest.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "PurchaseSessionPackRequest.paymentMethodId / getOrCreateStripeCustomer",
+      "title": "A blank (non-null) purchase paymentMethodId is stored for a new customer and sent to Stripe",
+      "verification": "As a new payer, POST /session-packs/purchase with paymentMethodId=\"\" and check the stored row and the error returned."
+    }
+  ],
+  "input_rev": "980eff338df64b0b3704c756c53a9c5db56c3224",
+  "model": null
+}

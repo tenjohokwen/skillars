@@ -1,0 +1,76 @@
+{
+  "arm": "concurrency",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "RefundEnqueueListener confirms the narrow claim: its four @TransactionalEventListener methods cover parent/coach/admin-cancel and coach-no-show only, with no BookingCancelledDueToPauseEvent handler. But the finding's consequence depends on PackSessionService.pausePackTransactional, PaymentLifecycleService settle behavior, CancellationRefundService's event handlers, and a repo-wide grep for other pause-event consumers \u2014 none of which were provided, so the required verification cannot be run.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "The file confirms the mechanism: all four AFTER_COMMIT/REQUIRES_NEW handlers call packSessionService.restoreSession bare (unlike issueStrikeSafely's catch of PessimisticLockingFailureException), and in onBookingCancelledByCoach a restore failure skips saveCancellationHistory and the strike. But the finding's required verification \u2014 that no scheduler/outbox (RefundOutboxSupport) reconciles CANCELLED pack bookings, and that restoreSession really uses an exhaustible NOWAIT PESSIMISTIC_WRITE retry \u2014 depends on PackSessionService and RefundOutboxSupport code not shown here.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "The trigger is real in this file: cancelBookingAsCoach and recordNoShowCoach compute packExpired from pack.getExpiresAt().isBefore(Instant.now()) before the transition commits, and createBookingRequest does reject expired packs (payment.packExpired), satisfying half the verification caveat. But the consequence depends on CancellationRefundService.restoreSession (AFTER_COMMIT, no expiry extension), RefundEnqueueListener keying refunds solely off the event's packExpired flag, and whether any job converts expired-pack remaining sessions to credit \u2014 none of which is in this file.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 1.2916199999999998,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 identifies the same four live EmailTemplate constants with no Thymeleaf body under mails/ and the same net consequence (emails silently never delivered), differing only in the retry-vs-FAILED detail.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R4 mentions the PACK_PAUSED/packPaused vs sessionPackPaused.html mismatch only as an 'also check' item in its verification caveat, which counts as partial.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding notices that CANCEL_COACH from ACCEPTED refunds/restores money that was never captured; R1 and R2 cover different refund defects.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R2 identifies the same resolveSessionPrice-vs-resolveAmountPaid defect in the same cancel/no-show paths with the same over/under-refund consequence after a coach re-price.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] RefundEnqueueListener confirms the narrow claim: its four @TransactionalEventListener methods cover parent/coach/admin-cancel and coach-no-show only, with no BookingCancelledDueToPauseEvent handler. But the finding's consequence depends on PackSessionService.pausePackTransactional, PaymentLifecycleService settle behavior, CancellationRefundService's event handlers, and a repo-wide grep for other pause-event consumers \u2014 none of which were provided, so the required verification cannot be run. | pass-1: Concrete trigger stated: pack pause cancels CONFIRMED/UPCOMING bookings via an event with no refund/restore consumer, losing a captured charge or deducted session; distinct from the 'parent cancel from PAUSED' non-finding.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The file confirms the mechanism: all four AFTER_COMMIT/REQUIRES_NEW handlers call packSessionService.restoreSession bare (unlike issueStrikeSafely's catch of PessimisticLockingFailureException), and in onBookingCancelledByCoach a restore failure skips saveCancellationHistory and the strike. But the finding's required verification \u2014 that no scheduler/outbox (RefundOutboxSupport) reconciles CANCELLED pack bookings, and that restoreSession really uses an exhaustible NOWAIT PESSIMISTIC_WRITE retry \u2014 depends on PackSessionService and RefundOutboxSupport code not shown here. | pass-1: Concrete trigger stated: crash or lock-retry exhaustion between the cancel commit and the AFTER_COMMIT listener permanently loses the pack-session restore, with no reconciling job.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The trigger is real in this file: cancelBookingAsCoach and recordNoShowCoach compute packExpired from pack.getExpiresAt().isBefore(Instant.now()) before the transition commits, and createBookingRequest does reject expired packs (payment.packExpired), satisfying half the verification caveat. But the consequence depends on CancellationRefundService.restoreSession (AFTER_COMMIT, no expiry extension), RefundEnqueueListener keying refunds solely off the event's packExpired flag, and whether any job converts expired-pack remaining sessions to credit \u2014 none of which is in this file. | pass-1: Concrete trigger stated: pack expiry crossing between the pre-commit packExpired read and the AFTER_COMMIT restore yields a session restored into an expired pack and no wallet refund.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}
