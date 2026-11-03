@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
 import com.softropic.skillars.platform.security.infrastructure.jwt.TokenCreator;
+import com.softropic.skillars.platform.security.service.RefreshTokenRevocationService;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
 import org.junit.jupiter.api.AfterEach;
@@ -109,6 +110,13 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private TokenCreator tokenCreator;
+
+    // skillars-deferred-166: the chain revoke is what every logout path now depends on, so its durability
+    // is asserted directly rather than only through HTTP. A plain @Autowired does not fork a Spring
+    // context (the cache key is built from annotations and mock definitions), so this is safe under the
+    // AC3 context ceiling that IntegrationTestConventionTest guards.
+    @Autowired
+    private RefreshTokenRevocationService refreshTokenRevocationService;
 
     @Autowired
     private ApplicationEventPublisher eventPublisher;
@@ -1035,6 +1043,115 @@ class AuthResourceIT extends AbstractIntegrationTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    void refresh_threeConcurrentRefreshesOfTheSameToken_neverTripTheftDetection() throws Exception {
+        // The regression guard for the chain-depth bound. resolveGraceSuccessor's first version stopped
+        // after two hops, so a third client refreshing the same cookie inside one 30 s window walked
+        // T0 -> T1(used) -> T2(used), ran out of hops, and was answered as theft: every refresh token for
+        // the account revoked and the JWT session epoch bumped. The query it replaced found the live token
+        // however deep the chain went, so stopping early was a regression, and AC7's two-thread test could
+        // not see it.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+
+        RestTemplate client = new RestTemplateBuilder()
+            .requestFactory(SimpleClientHttpRequestFactory.class)
+            .build();
+        ExecutorService pool = Executors.newFixedThreadPool(3);
+        CountDownLatch start = new CountDownLatch(1);
+        try {
+            List<Future<HttpStatusCode>> results = new ArrayList<>();
+            for (int i = 0; i < 3; i++) {
+                results.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        return client.exchange(baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST,
+                            new HttpEntity<>(null, cookieHeaders(rtkn)), Map.class).getStatusCode();
+                    } catch (HttpClientErrorException e) {
+                        return e.getStatusCode();
+                    }
+                }));
+            }
+            start.countDown();
+            List<HttpStatusCode> statuses = new ArrayList<>();
+            for (Future<HttpStatusCode> f : results) {
+                statuses.add(f.get(60, TimeUnit.SECONDS));
+            }
+
+            assertThat(statuses).allMatch(st -> st.equals(HttpStatus.OK) || st.equals(HttpStatus.UNAUTHORIZED));
+            assertThat(sessionEpochOf(COACH_USER_ID))
+                .as("three tabs refreshing one cookie is a race, not theft: the account's revocation epoch "
+                    + "must not be bumped")
+                .isNull();
+            assertThat(liveTokenCountFor(COACH_USER_ID))
+                .as("theft revocation would leave zero live tokens; a handled race leaves exactly one")
+                .isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    void logout_withAChainLongerThanTheHopBound_leavesNothingTradeable() {
+        // The hop bound used to fail OPEN: the walk logged a warning and returned, leaving the rows beyond
+        // it `used = false, revoked_at = null` — ordinary live tokens that refresh would keep rotating, so
+        // the logged-out session continued indefinitely. That is ledger RS01 again, reached through the
+        // bound. It now falls back to revoking every token for the account.
+        String head = loginAndGetRtkn(COACH_EMAIL);
+
+        // Ten rotations, so the chain from `head` is longer than MAX_CHAIN_HOPS (8).
+        String cursor = head;
+        for (int i = 0; i < 10; i++) {
+            ResponseEntity<Map> rotated = httpTestClient.makeHttpRequest(
+                baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(cursor), Map.class);
+            assertThat(rotated.getStatusCode()).isEqualTo(HttpStatus.OK);
+            cursor = extractCookieValue(rotated, "rtkn");
+            assertThat(cursor).isNotNull();
+        }
+        final String tail = cursor;
+        assertThat(usedFlagOf(sha256Hex(tail))).isFalse();
+
+        ResponseEntity<Void> logoutResponse = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(head), Void.class);
+        assertThat(logoutResponse.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        assertThat(liveTokenCountFor(COACH_USER_ID))
+            .as("no token may remain tradeable after the logout, bound or no bound")
+            .isZero();
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(tail), Map.class))
+            .as("the tail beyond the hop bound must not be rotatable")
+            .isInstanceOf(HttpClientErrorException.class);
+    }
+
+    @Test
+    void revokeChainByTokenHash_commitsEvenWhenTheCallingTransactionRollsBack() {
+        // The property every logout path now rests on, tested in isolation from HTTP. AuthService.refresh's
+        // denial paths revoke and then throw, which rolls their own transaction back; the revoke survives
+        // only because this service is REQUIRES_NEW. The sibling test below asserts the same thing for
+        // markUsedByTokenHash, which since skillars-deferred-166 has no production caller — so without
+        // this test the durability of the revoke that actually runs would be unasserted, and a future
+        // change to the service's propagation would break every denial silently.
+        String rtkn = loginAndGetRtkn(COACH_EMAIL);
+        ResponseEntity<Map> firstRefresh = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
+        String successor = extractCookieValue(firstRefresh, "rtkn");
+        assertThat(successor).isNotNull();
+
+        transactionTemplate.execute(status -> {
+            refreshTokenRevocationService.revokeChainByTokenHash(sha256Hex(rtkn));
+            status.setRollbackOnly();
+            return null;
+        });
+
+        assertThat(revokedAtOf(sha256Hex(rtkn)))
+            .as("the presented row stays revoked after the caller's transaction rolled back")
+            .isNotNull();
+        assertThat(revokedAtOf(sha256Hex(successor)))
+            .as("and so does the successor the walk reached")
+            .isNotNull();
+        assertThat(liveTokenCountFor(COACH_USER_ID)).isZero();
     }
 
     @Test

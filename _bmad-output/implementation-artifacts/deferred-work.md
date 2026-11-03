@@ -28,6 +28,20 @@ not renumber, so the list below starts at RS03.
   does not enforce the link for rows written before the constraint, which only matters if something
   writes `replaced_by_id` outside `AuthService.refresh` — nothing does today. Same shape as the other
   outstanding `NOT VALID` constraints in this file; bundle it with the next one.
+- **[skillars-deferred-166 residual, medium]** Three revoke-all callers stamp
+  `security_session_invalidated_at` BEFORE `markAllUsedByUserId`, not after: `AdminUserService.suspendUser`,
+  `AgeVerificationService` and `AccountSuspensionEventListener.suspend`. A refresh that commits a successor
+  between those two statements produces a token whose `created_at` is after the epoch, so
+  `AuthService.refresh`'s epoch check (deferred-166 AC6) passes it, and the bulk UPDATE's snapshot never saw
+  it either. While the account stays suspended `locked = true` keeps it out via `ensureAccountIsLive`, but
+  `AdminUserService.reactivateUser` clears `locked` without revoking tokens or re-stamping the epoch, so a
+  suspend-then-reactivate can restore the very session the suspension was meant to kill, for the rest of its
+  7-day TTL. The window is two statements inside one transaction, so this is narrow, and the reactivate half
+  is pre-existing. Fix: swap the two statements in those three callers (the revoke is REQUIRES_NEW on
+  `refresh_tokens`, the stamp is MANDATORY on the user row, so the order is free), and/or revoke on
+  reactivate. Found by the security reviewer on deferred-166's own PR; left out of that story because it
+  touches three services outside its scope, and `AuthService.isBeforeSessionEpoch`'s javadoc now states the
+  limit precisely rather than overclaiming.
 - **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
   `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
   suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than

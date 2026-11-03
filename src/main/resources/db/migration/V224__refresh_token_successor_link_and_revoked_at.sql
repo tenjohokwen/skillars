@@ -33,8 +33,13 @@
 --  - Rule 3: the FK goes on a table that grows, so it is added NOT VALID here; the VALIDATE ships in a
 --    later migration (filed in deferred-work.md by this story). NOT VALID takes only a brief
 --    ACCESS EXCLUSIVE lock and skips the full-table scan.
---  - No new index: both new columns are read by primary key (the successor walk) or on an already-fetched
---    row (revoked_at), never as a search predicate.
+--  - replaced_by_id IS indexed, and not for any query: PostgreSQL does not index a referencing column
+--    automatically, and ON DELETE SET NULL runs a referential-action trigger that searches it
+--    (WHERE replaced_by_id = <deleted id>) once per deleted row. AuthCleanupService.purgeExpiredRefreshTokens
+--    bulk-deletes by expires_at every hour, so without the index that sweep is one sequential scan per
+--    deleted row, holding its locks long enough to risk outliving its own @SchedulerLock lease. Partial
+--    (WHERE NOT NULL): only rotated rows carry a successor. revoked_at needs none — it is read on a row
+--    already fetched by hash or id, never as a search predicate.
 --  - Rule 7 (pollers): AuthCleanupService's hourly DELETE and every live /api/auth/refresh touch this
 --    table, so lock_timeout makes these ALTERs fail fast instead of queueing behind one.
 SET LOCAL lock_timeout = '5s';
@@ -47,6 +52,13 @@ ALTER TABLE main.refresh_tokens
     DROP CONSTRAINT IF EXISTS fk_refresh_tokens_replaced_by,
     ADD CONSTRAINT fk_refresh_tokens_replaced_by
         FOREIGN KEY (replaced_by_id) REFERENCES main.refresh_tokens (id) ON DELETE SET NULL NOT VALID;
+
+-- migration-lint: allow-blocking-index prod is not live (dev/uat only, as V168/V183/V185/V189/V198/V212/V223);
+-- refresh_tokens is small by construction (bounded by logins x rotations inside the 7-day TTL, swept hourly),
+-- so the build is a short ACCESS SHARE scan, not a rolling-deploy lock exposure. CONCURRENTLY cannot be used:
+-- Flyway runs each migration in one transaction.
+CREATE INDEX IF NOT EXISTS idx_rt_replaced_by ON main.refresh_tokens USING btree (replaced_by_id)
+    WHERE replaced_by_id IS NOT NULL;
 
 COMMENT ON COLUMN main.refresh_tokens.replaced_by_id IS
     'skillars-deferred-166: the successor row this token was rotated into, or NULL when it was never '

@@ -68,12 +68,15 @@ public class RefreshTokenRevocationService {
      * setting {@code used = true} and {@code revokedAt = now} on each. Returns the number of rows this call
      * actually revoked.
      *
-     * <p>Idempotent and cheap to repeat: a row that already has a {@code revokedAt} is skipped, and the walk
-     * continues past it in case a later successor is still live. This matters because
-     * {@code JWTAuthorizationFilter}'s denial teardown calls {@code terminateSession} on <em>every</em>
-     * request from a client that ignores {@code Set-Cookie} and keeps replaying a dead JWT; such a client
-     * costs reads, not writes. (That was the point of skillars-deferred-144 AC6.6's {@code used = false}
-     * predicate on the single-row primitive, and it is preserved here by the {@code revokedAt} guard.)
+     * <p>Idempotent and cheap to repeat: an already-revoked presented row returns immediately from an
+     * UNLOCKED read, without walking or locking anything. That fast path is load-bearing, not an
+     * optimisation — {@code JWTAuthorizationFilter}'s denial teardown calls {@code terminateSession} on
+     * <em>every</em> request from a client that ignores {@code Set-Cookie} and keeps replaying a dead JWT,
+     * and without it each such request would take up to {@link #MAX_CHAIN_HOPS} row locks and hold them for
+     * its whole transaction, serialising those requests against each other and against real traffic on the
+     * same rows. A revoked row is safe to trust unlocked: whoever set {@code revokedAt} walked the rest of
+     * the chain in the same transaction, and {@code revokedAt} is never cleared. (skillars-deferred-144
+     * AC6.6 bounded the same client with its {@code used = false} predicate on the single-row primitive.)
      *
      * <p>Writes go through the managed entities rather than a bulk {@code @Modifying} {@code UPDATE}, so
      * Hibernate bumps {@code @Version} itself and the rows stay outside
@@ -82,9 +85,18 @@ public class RefreshTokenRevocationService {
      * ordinary, and the caller clears the cookies either way.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public int revokeChainByTokenHash(final String tokenHash) {
+    public ChainRevocation revokeChainByTokenHash(final String tokenHash) {
         if (tokenHash == null || tokenHash.isBlank()) {
-            return 0;
+            return ChainRevocation.none();
+        }
+        // Unlocked pre-check: nothing to do, and nothing to lock, for a chain already revoked. See the
+        // javadoc above for why this is required rather than merely cheaper — and
+        // RefreshTokenRepository.existsByTokenHashAndRevokedAtIsNotNull for why it must be a projection
+        // rather than a findByTokenHash: loading the entity here would make the locked read below return
+        // that same managed instance with stale state, so the write would fail its version check and the
+        // lock would protect nothing.
+        if (refreshTokenRepository.existsByTokenHashAndRevokedAtIsNotNull(tokenHash)) {
+            return ChainRevocation.none();
         }
         final Instant now = Instant.now(ClockProvider.getClock());
         Optional<RefreshToken> cursor = refreshTokenRepository.findByTokenHashForUpdate(tokenHash);
@@ -100,19 +112,61 @@ public class RefreshTokenRevocationService {
             }
             final Long successorId = row.getReplacedById();
             if (successorId == null) {
-                return revoked;
+                return new ChainRevocation(revoked, null);
             }
             if (++hops >= MAX_CHAIN_HOPS) {
-                // Deliberately not a throw: the caller is ending a session and must still clear its
-                // cookies. Logged at warn because any row beyond the bound is a token that outlived the
-                // logout meant to kill it.
-                log.warn("Refresh-token chain walk stopped at {} hops for user {}; revoked {} row(s), "
-                        + "successor {} and anything beyond it remain live", MAX_CHAIN_HOPS,
-                    row.getUserId(), revoked, successorId);
-                return revoked;
+                // Fail SAFE, not open — but the fallback CANNOT run here. Returning plainly would leave the
+                // rows beyond the bound `used = false, revoked_at = null`, i.e. ordinary live tokens that
+                // AuthService.refresh will keep rotating, so the ended session would continue indefinitely
+                // (ledger RS01 again, reached through the bound). The account-wide revoke that fixes that is
+                // markAllUsedByUserId, a REQUIRES_NEW bulk UPDATE over this user's rows — including the
+                // MAX_CHAIN_HOPS rows this transaction currently holds locked. Calling it from here waits
+                // for locks only this transaction can release, with PostgreSQL unable to see the cycle
+                // because this side is blocked in Java: it hangs rather than erroring, which is exactly what
+                // it did when first written this way. So the decision is reported to the caller and acted on
+                // after this transaction has committed — the same decide-inside/act-outside rule
+                // AuthService.refresh follows, for the same reason.
+                log.warn("Refresh-token chain for user {} exceeds {} hops (revoked {} row(s), successor {} "
+                        + "still live); the caller must revoke the account's remaining tokens",
+                    row.getUserId(), MAX_CHAIN_HOPS, revoked, successorId);
+                return new ChainRevocation(revoked, row.getUserId());
             }
             cursor = refreshTokenRepository.findByIdForUpdate(successorId);
         }
-        return revoked;
+        return new ChainRevocation(revoked, null);
+    }
+
+    /**
+     * Revokes every refresh token the account has. The fallback for a chain longer than
+     * {@link #MAX_CHAIN_HOPS}, called by {@code SecurityUtil.terminateSession} <em>after</em>
+     * {@link #revokeChainByTokenHash}'s transaction has committed and released its row locks — never from
+     * inside it, see that method's hop-bound comment.
+     *
+     * <p>Blunter than the walk: it ends the user's other sessions too. Accepted at this depth, because nine
+     * or more rotations ahead of the presented cookie is already pathological, and losing the other sessions
+     * is strictly better than leaving the logged-out one tradeable for the rest of its 7-day TTL.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void revokeAllForUser(final Long userId) {
+        refreshTokenRepository.markAllUsedByUserId(userId);
+    }
+
+    /**
+     * What a chain walk did, and whether the caller still has work to do.
+     *
+     * @param revoked                rows this call actually revoked
+     * @param boundExceededForUserId the user whose chain outran {@link #MAX_CHAIN_HOPS}, or {@code null}
+     *                               when the walk reached the end. Non-null means the caller must follow up
+     *                               with {@link #revokeAllForUser} once this transaction has committed.
+     */
+    public record ChainRevocation(int revoked, Long boundExceededForUserId) {
+
+        static ChainRevocation none() {
+            return new ChainRevocation(0, null);
+        }
+
+        public boolean boundExceeded() {
+            return boundExceededForUserId != null;
+        }
     }
 }

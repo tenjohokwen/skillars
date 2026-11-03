@@ -118,8 +118,8 @@ Story drafted 2026-11-03 by Claude Fable 5.1 (claude-fable-5-1); implemented 202
 
 ### Debug Log References
 
-Three failures found and fixed during implementation, each listed because the cause was not what the
-story predicted:
+Failures found and fixed during implementation, each listed because the cause was not what the story
+predicted:
 
 1. **`GraceResolution.chainRevoked()` would not compile.** A record component named `chainRevoked`
    generates an accessor of that name, which collided with the static factory. Factory renamed to
@@ -137,6 +137,23 @@ story predicted:
    legitimately redirected to it. Switched to this class's own `commitWrite`. Same defect
    skillars-deferred-144 AC5 found in the sibling tests; the test had been commented out since before
    that fix, so it never got the correction.
+4. **The integration phase hung for 19 minutes, and it was my own fix.** The hop-bound fail-safe added in
+   response to the code review called `markAllUsedByUserId` — a `REQUIRES_NEW` bulk `UPDATE` over the
+   user's rows — from inside the locked walk, which still held `MAX_CHAIN_HOPS` of those rows. The inner
+   transaction waited for locks only the outer one could release, and with no `lock_timeout` on that
+   plain `UPDATE` it waited forever rather than erroring. Exactly the hazard this story's design exists to
+   avoid, re-introduced while hardening it. The walk now reports the overrun and
+   `SecurityUtil.terminateSession` runs the fallback after the walk's transaction has committed.
+   (`timeout` does not exist on macOS, so two attempts to bound the run silently no-opped first.)
+5. **`logoutAndRefreshRacingOnTheSameToken` returned 409 instead of 204, and the cause was the fast path
+   I had just added.** The unlocked "already revoked?" pre-check loaded the entity, putting it in the
+   persistence context; the `findByTokenHashForUpdate` that followed in the same transaction then
+   returned that managed instance with its ORIGINAL state, because Hibernate takes the row lock but does
+   not overwrite a managed entity from a new query. The `save()` therefore wrote a stale `@Version` and
+   failed — a 409 on logout, and, worse, a lock that protected nothing. Replaced with a scalar
+   `existsByTokenHashAndRevokedAtIsNotNull` projection so the locked read is the first and only load of
+   that row; both the trap and the symptom are documented on that repository method. The AC5 race test is
+   what caught it.
 
 ### Completion Notes List
 
@@ -174,14 +191,42 @@ the whole chain.
    skillars-deferred-143 code review added is gone: it existed only because a single-row revoke could not
    reach the successor the grace window had resolved to, and the walk reaches it from the predecessor now.
 
+**Applied from this branch's own `/pr-review` (two arms, 14 findings).** The two that were genuine
+regressions against pre-change behaviour: `resolveGraceSuccessor` stopped after two hops, so three or more
+clients refreshing one cookie were answered as theft and the account revoked — the query it replaced found
+the live token however deep the chain went, so the walk now runs to the chain's live end; and the 30 s
+window was tested before the chain was walked, so a predecessor replayed 31 s after a logout also looked
+like theft — the walk now runs first, because "was this chain revoked?" is true whatever the clock says
+while the window only gates handing over a live successor. Also applied: both locking queries gained a
+bounded 5 s `lock.timeout` (every other `*ForUpdate` query in the repo pairs its lock with one; these are
+reachable from two `permitAll` endpoints) with a bounded retry in `terminateSession` so a contended logout
+still revokes; a real deadlock or lock timeout now answers 401 instead of 500
+(`PessimisticLockingFailureException`); V224 gained a partial index on `replaced_by_id`, because
+`ON DELETE SET NULL` makes PostgreSQL search that column once per row the hourly sweep deletes and the
+migration's own comment claimed the opposite; the hop bound fails safe instead of leaving a rotatable
+token; the JWT filter's per-request teardown costs one scalar read again rather than up to eight row
+locks; `validate.py` rejects a malformed `fix_pr`; the provisioning checklist carries V224 and its
+outstanding `VALIDATE`; and a test comment that claimed a negative assertion proved a branch ran was
+corrected, with the positive counterpart added.
+
+**One finding corrected rather than fixed.** The security arm showed that `isBeforeSessionEpoch` closes the
+revoke-all snapshot gap only for the two callers that stamp the epoch AFTER the bulk revoke
+(`changePassword`, `completePasswordReset`). `AdminUserService.suspendUser`, `AgeVerificationService` and
+`AccountSuspensionEventListener` stamp it first, so a successor committed between their two statements
+passes the check; `locked = true` covers it until an admin reactivation clears that without revoking. The
+javadoc now states the limit precisely instead of overclaiming, and the ordering plus the reactivate hole
+are filed in `deferred-work.md` rather than fixed by reordering three services outside this story's scope.
+
 **Deliberately not done.** `markAllUsedByUserId` still does not set `revoked_at` (six callers; the epoch
 check masks the consequence), and the V224 FK's `VALIDATE` ships later. Both filed in `deferred-work.md`.
 No frontend change: the SPA does not call `POST /api/auth/refresh` at all.
 
 **Validation.** Targeted per `docs/validation-strategy.md`; no local `mvn verify` (project rule, CI is the
-gate). `AuthResourceIT` 34/34 (8 new + the revived one + the updated grace-window test),
-`RefreshTokenRepositoryIT` 1/1, `AuthServiceTest` 12/12 (7 new), `SecurityUtilTest` 6/6,
-`MigrationConventionLintTest` 30/30, `check-docs` OK after rebuilding the search index.
+gate). Final run, all green: `AuthResourceIT` 37/37 (11 new, the revived test, and the updated
+grace-window one), `RefreshTokenRepositoryIT` 1/1, `AuthServiceTest` 14/14 (9 new), `SecurityUtilTest`
+8/8 (3 new), `MigrationConventionLintTest` 30/30, `NativeModifyingVersionAuditTest` 2/2,
+`IntegrationTestConventionTest` 6/6 (the context ceiling is unaffected: the new `@Autowired` field does
+not fork a context), `check-docs` OK after rebuilding the search index.
 
 ### File List
 
@@ -202,11 +247,15 @@ gate). `AuthResourceIT` 34/34 (8 new + the revived one + the updated grace-windo
 - `evals/review/README.md` (modified)
 - `evals/review/cases/logout-successor-revocation.yaml` (moved from `_drafts/pending-`, AC9)
 - `evals/review/cases/refresh-grace-window-account-wide.yaml` (moved from `_drafts/pending-`, AC9)
+- `docs/deployment/provisioning-checklist.md` (modified)
 - `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified)
 
 ### Change Log
 
+- 2026-11-03 — applied this branch's own `/pr-review` findings: chain-depth and revoked-chain ordering
+  regressions, bounded lock timeouts with a logout retry, lock-failure to 401, the FK index, a fail-safe
+  hop bound, the persistence-context trap in the fast path, validator and checklist gaps.
 - 2026-11-03 — implemented all 12 ACs. V224 + successor link + `revoked_at`; refresh restructured onto a
   locked decide-then-act block; chain revocation on logout; successor-only grace window; session-epoch
   check; docs, ledger and eval cases updated.

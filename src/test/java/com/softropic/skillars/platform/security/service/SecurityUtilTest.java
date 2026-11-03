@@ -27,6 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 /**
  * skillars-deferred-143: first test class for {@link SecurityUtil}, scoped to
@@ -55,6 +56,10 @@ class SecurityUtilTest {
     void setUp() {
         MockitoAnnotations.openMocks(this);
         securityUtil = new SecurityUtil(loginTokenManager, refreshTokenRevocationService);
+        // terminateSession reads the walk's result to decide whether the hop-bound fallback is needed, so
+        // the mock has to return one; a bare Mockito null would NPE on a path that is not under test here.
+        when(refreshTokenRevocationService.revokeChainByTokenHash(anyString()))
+            .thenReturn(new RefreshTokenRevocationService.ChainRevocation(1, null));
         request = new MockHttpServletRequest();
         response = new MockHttpServletResponse();
         SecurityContextHolder.clearContext();
@@ -123,6 +128,33 @@ class SecurityUtilTest {
         securityUtil.terminateSession(request, response);
 
         verify(refreshTokenRevocationService, never()).revokeChainByTokenHash(anyString());
+    }
+
+    @Test
+    @DisplayName("terminateSession revokes the whole account when the chain outruns the hop bound")
+    void terminateSession_chainLongerThanTheHopBound_fallsBackToRevokingEveryToken() {
+        // The walk reports the overrun instead of handling it, because the account-wide bulk UPDATE would
+        // contend with the row locks the walk still holds — it hung exactly that way when first written
+        // inside the walk. terminateSession runs the fallback after that transaction has committed, which
+        // is the only place it can safely run.
+        request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
+        when(refreshTokenRevocationService.revokeChainByTokenHash(anyString()))
+            .thenReturn(new RefreshTokenRevocationService.ChainRevocation(8, 4242L));
+
+        securityUtil.terminateSession(request, response);
+
+        verify(refreshTokenRevocationService).revokeAllForUser(4242L);
+    }
+
+    @Test
+    @DisplayName("terminateSession does not revoke the account when the chain walk completed")
+    void terminateSession_chainWalkCompleted_doesNotRevokeTheWholeAccount() {
+        request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
+
+        securityUtil.terminateSession(request, response);
+
+        // Logging out one device must not end the user's other sessions.
+        verify(refreshTokenRevocationService, never()).revokeAllForUser(org.mockito.ArgumentMatchers.anyLong());
     }
 
     @Test

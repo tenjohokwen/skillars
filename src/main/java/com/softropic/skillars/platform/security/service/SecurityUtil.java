@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
 
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -42,6 +43,9 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.R
 @Slf4j
 @Component
 public final class SecurityUtil {
+
+    /** Attempts {@link #revokeChainWithBoundedRetry} makes before giving up and logging at error. */
+    private static final int REVOKE_ATTEMPTS = 3;
 
     private final LoginTokenManager loginTokenManager;
     private final RefreshTokenRevocationService refreshTokenRevocationService;
@@ -187,7 +191,7 @@ public final class SecurityUtil {
             // Still cheap to repeat, which the JWT filter's per-request teardown depends on: a row that
             // already carries `revoked_at` is skipped, so a client replaying a dead JWT costs reads, not
             // writes — the same bound AC6.6's `used = false` predicate provided.
-            refreshTokenRevocationService.revokeChainByTokenHash(sha256Hex(rawToken));
+            revokeChainWithBoundedRetry(sha256Hex(rawToken));
         }
         clearAuthCookies(response);
     }
@@ -223,6 +227,47 @@ public final class SecurityUtil {
      * credential by itself — it relies on the caller having already revoked (or never needing to
      * revoke) the underlying {@code refresh_tokens} row.
      */
+    /**
+     * skillars-deferred-166: the chain revoke, retried a bounded number of times if it loses a row lock.
+     *
+     * <p>{@code findByTokenHashForUpdate} waits at most 5 s (see its javadoc) and then throws
+     * {@code PessimisticLockingFailureException}. A logout must not give up on that: the likeliest holder
+     * is a concurrent refresh on the same chain, which is the exact race ledger RS01 is about, and losing
+     * the revoke there is the defect this story exists to fix. Each attempt is a fresh
+     * {@code REQUIRES_NEW} transaction, because this class is not transactional and the call crosses the
+     * service's proxy — so retrying here really does re-take the lock rather than re-run inside a
+     * transaction PostgreSQL has already aborted.
+     *
+     * <p>If every attempt loses, the cookies are still cleared and the caller still succeeds: the client's
+     * session is over from its own point of view. Logged at error because the server-side credential may
+     * have survived, which is a real (if remote) revocation gap and must not be silent.
+     */
+    private void revokeChainWithBoundedRetry(final String tokenHash) {
+        for (int attempt = 1; attempt <= REVOKE_ATTEMPTS; attempt++) {
+            try {
+                final RefreshTokenRevocationService.ChainRevocation result =
+                    refreshTokenRevocationService.revokeChainByTokenHash(tokenHash);
+                if (result.boundExceeded()) {
+                    // Deliberately out here: the walk's transaction has committed and dropped its row
+                    // locks, so this bulk UPDATE over the same user's rows can take them. Inside the walk
+                    // it would wait for locks only the walk could release and hang (see the hop-bound
+                    // comment in revokeChainByTokenHash).
+                    refreshTokenRevocationService.revokeAllForUser(result.boundExceededForUserId());
+                }
+                return;
+            } catch (PessimisticLockingFailureException e) {
+                if (attempt == REVOKE_ATTEMPTS) {
+                    log.error("Could not revoke the refresh-token chain after {} attempts: the row stayed "
+                        + "locked. Cookies are cleared, but a server-side credential may still be live.",
+                        REVOKE_ATTEMPTS, e);
+                    return;
+                }
+                log.warn("Refresh-token chain revoke lost a row lock (attempt {} of {}); retrying",
+                    attempt, REVOKE_ATTEMPTS);
+            }
+        }
+    }
+
     public void clearAuthCookies(final HttpServletResponse response) {
         loginTokenManager.deleteLoginToken(response);
         CookieUtil.removeCookie(REFRESH_TOKEN_COOKIE, response, true, "Lax");

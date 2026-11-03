@@ -117,6 +117,22 @@ class AuthServiceTest {
             }
             return null;
         }).when(refreshTokenRepository).markUsedByTokenHash(anyString());
+        // The denial paths' real revoke goes through terminateSession -> revokeChainByTokenHash
+        // (REQUIRES_NEW), so it has to be instrumented too: markUsedByTokenHash has no AuthService caller
+        // left, and a guard that watched only the two bulk primitives would pass while the revoke that
+        // actually runs sat inside the lock.
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (insideLockedBlock.get()) {
+                revokeInsideLockedBlock.set(true);
+            }
+            return null;
+        }).when(securityUtil).terminateSession(any(), any());
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (insideLockedBlock.get()) {
+                revokeInsideLockedBlock.set(true);
+            }
+            return null;
+        }).when(userRepository).invalidateSessionsForUser(anyLong(), any());
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -144,7 +160,11 @@ class AuthServiceTest {
         verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
         verify(securityUtil).clearAuthCookies(response);
         verify(securityUtil, never()).terminateSession(any(), any());
-        // Proves the grace branch ran rather than being skipped: it is the only caller of the by-id walk.
+        // With no link to follow there is nothing to walk, so the absence of a by-id lookup is the
+        // expected OUTCOME here, not evidence that the branch ran. The positive counterpart — the walk
+        // firing and resolving a successor — is
+        // refresh_staleTokenInGraceWindow_rotatesItsOwnSuccessor below, which verifies findByIdForUpdate
+        // was called and that the successor it returned is the row that got consumed.
         verify(refreshTokenRepository, never()).findByIdForUpdate(anyLong());
         assertThat(revokeInsideLockedBlock).isFalse();
     }
@@ -172,9 +192,9 @@ class AuthServiceTest {
     @DisplayName("reuse: rotated long before the grace window, with a live successor link")
     void refresh_reuseRotatedLongAgo_clearsCookiesOnlyNotTerminateSession() {
         // The real comparison against a past Instant well outside REFRESH_GRACE_WINDOW (30 s). The
-        // successor link is deliberately present and live: expiry of the WINDOW, not absence of a
-        // successor, is what makes this reuse — which is exactly the distinction the old
-        // newest-live-for-the-account query could not express.
+        // successor link is deliberately present: expiry of the WINDOW, not absence of a successor, is what
+        // makes this reuse — exactly the distinction the old newest-live-for-the-account query could not
+        // express.
         RefreshToken usedToken = presentedToken();
         usedToken.setUsed(true);
         usedToken.setRotatedAt(Instant.now().minusSeconds(3600));
@@ -187,8 +207,12 @@ class AuthServiceTest {
 
         verify(refreshTokenRepository).markAllUsedByUserId(USER_ID);
         verify(securityUtil).clearAuthCookies(response);
-        verify(refreshTokenRepository, never()).findByIdForUpdate(anyLong());
         verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
+        // The chain IS walked even though the window has expired, and that is deliberate: the walk answers
+        // "was this chain deliberately revoked?", which decides theft versus a stale replay after a logout
+        // and is true whatever the clock says. The window only gates whether a live successor may be handed
+        // over — see refresh_staleTokenOutsideTheWindowWhoseChainWasRevoked_isNotTreatedAsTheft.
+        verify(refreshTokenRepository).findByIdForUpdate(SUCCESSOR_ID);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -221,6 +245,8 @@ class AuthServiceTest {
         // that device's session.
         assertThat(successor.isUsed()).isTrue();
         assertThat(successor.getReplacedById()).isNotNull();
+        // The walk really ran and really resolved THIS successor.
+        verify(refreshTokenRepository).findByIdForUpdate(SUCCESSOR_ID);
         verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
         verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
         assertThat(revokeInsideLockedBlock).isFalse();
@@ -319,6 +345,71 @@ class AuthServiceTest {
     }
 
     @Test
+    @DisplayName("RS02 regression: the walk reaches the live end of a chain several rotations deep")
+    void refresh_staleTokenWithAChainSeveralRotationsDeep_stillResolvesTheLiveEnd() {
+        // The first version of resolveGraceSuccessor stopped after two hops, which turned three or more
+        // clients refreshing the same cookie inside one window into "theft" and revoked the whole account.
+        // The query this replaced (findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc)
+        // found the live token however deep the chain was, so stopping early was a regression.
+        RefreshToken stale = presentedToken();
+        stale.setUsed(true);
+        stale.setRotatedAt(Instant.now());
+        stale.setReplacedById(2L);
+
+        RefreshToken hop1 = rotatedLink(2L, 3L);
+        RefreshToken hop2 = rotatedLink(3L, 4L);
+        RefreshToken liveEnd = new RefreshToken();
+        liveEnd.setId(4L);
+        liveEnd.setUserId(USER_ID);
+        liveEnd.setUsed(false);
+        liveEnd.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        lockReturns(stale);
+        when(refreshTokenRepository.findByIdForUpdate(2L)).thenReturn(Optional.of(hop1));
+        when(refreshTokenRepository.findByIdForUpdate(3L)).thenReturn(Optional.of(hop2));
+        when(refreshTokenRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(liveEnd));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
+        stubSuccessorIdOnSave();
+
+        authService.refresh(request, response);
+
+        assertThat(liveEnd.isUsed()).as("the chain's live end is what gets rotated").isTrue();
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+    }
+
+    @Test
+    @DisplayName("RS01 regression: a revoked row deep in the chain is 'ended', even outside the window")
+    void refresh_staleTokenOutsideTheWindowWhoseChainWasRevoked_isNotTreatedAsTheft() {
+        // Logout walks FORWARD from the cookie it was given, so a predecessor another client still holds
+        // keeps revoked_at = null. Testing the 30 s window before walking the chain made such a replay look
+        // like theft once the window had passed, and revoked every session on the account — the failure AC3
+        // exists to prevent, arriving by a path AC3 did not describe.
+        RefreshToken stale = presentedToken();
+        stale.setUsed(true);
+        stale.setRotatedAt(Instant.now().minusSeconds(3600));
+        stale.setReplacedById(SUCCESSOR_ID);
+
+        RefreshToken revokedSuccessor = new RefreshToken();
+        revokedSuccessor.setId(SUCCESSOR_ID);
+        revokedSuccessor.setUserId(USER_ID);
+        revokedSuccessor.setUsed(true);
+        revokedSuccessor.setRevokedAt(Instant.now());
+        revokedSuccessor.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        lockReturns(stale);
+        when(refreshTokenRepository.findByIdForUpdate(SUCCESSOR_ID)).thenReturn(Optional.of(revokedSuccessor));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class)
+            .hasMessageContaining("Session has ended");
+
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+    }
+
+    @Test
     @DisplayName("AC4: no REQUIRES_NEW revoke is issued while the row lock is held")
     void refresh_everyRevokeHappensAfterTheLockedBlockHasCommitted() {
         // The mechanical guard for the design's load-bearing rule. A revoke issued inside the locked
@@ -411,6 +502,18 @@ class AuthServiceTest {
         token.setUsed(false);
         token.setExpiresAt(Instant.now().plusSeconds(3600));
         return token;
+    }
+
+    /** A rotated, unrevoked link in the middle of a chain: used, with a successor to follow. */
+    private RefreshToken rotatedLink(long id, long successorId) {
+        RefreshToken link = new RefreshToken();
+        link.setId(id);
+        link.setUserId(USER_ID);
+        link.setUsed(true);
+        link.setRotatedAt(Instant.now());
+        link.setReplacedById(successorId);
+        link.setExpiresAt(Instant.now().plusSeconds(3600));
+        return link;
     }
 
     private void lockReturns(RefreshToken token) {

@@ -4,6 +4,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -11,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
 
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 
 /**
  * Persistence for {@link RefreshToken} — the long-lived (7-day, {@code SecurityConstants
@@ -76,6 +78,21 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     Optional<RefreshToken> findByTokenHash(String hash);
 
     /**
+     * skillars-deferred-166: "is this chain already revoked?" as a SCALAR, for
+     * {@code RefreshTokenRevocationService}'s fast path.
+     *
+     * <p>Deliberately not {@code findByTokenHash(...).getRevokedAt() != null}: loading the entity would put
+     * it in the persistence context, and a later {@code findByTokenHashForUpdate} in the same transaction
+     * would then return that already-managed instance with its ORIGINAL field values. Hibernate takes the
+     * row lock but does not overwrite a managed entity's state from the new query, so the write that
+     * followed used a stale {@code @Version} and failed with
+     * {@code ObjectOptimisticLockingFailureException} — surfacing as a 409 on logout and, worse, meaning
+     * the lock protected nothing. A projection touches no entity state, so the locked read stays the first
+     * and only load of that row.
+     */
+    boolean existsByTokenHashAndRevokedAtIsNotNull(String tokenHash);
+
+    /**
      * skillars-deferred-166: {@link #findByTokenHash} with a {@code PESSIMISTIC_WRITE} row lock, held until
      * the calling transaction ends. {@code AuthService.refresh} and
      * {@code RefreshTokenRevocationService.revokeChainByTokenHash} both enter through this, which is what
@@ -90,18 +107,35 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * {@code AuthService.refresh} decides inside the locked block but performs every revoke after it has
      * committed. skillars-deferred-143 hit the same hazard from the other direction and documented it on
      * {@link #markUsedByTokenHash}.
+     *
+     * <p><strong>Bounded wait, not {@code NO_WAIT}.</strong> Every other {@code *ForUpdate} query here
+     * ({@code UserRepository}, {@code BookingRepository}, {@code CoachReviewRepository}) pairs
+     * {@code lock.timeout = 0} with {@code PessimisticLockRetryer}, because those call sites can retry a
+     * read in place from a savepoint. These two cannot: the refresh decision and the logout chain walk are
+     * whole transactions, and failing them instantly would turn the ordinary logout-versus-refresh overlap
+     * — the very race ledger RS01 is about — into a logout that does not revoke. A 5 s cap is the middle
+     * ground: the holder is a refresh or a chain walk that finishes in milliseconds, so a legitimate
+     * contender waits and succeeds, while a client replaying one {@code rtkn} concurrently against these
+     * two {@code permitAll} endpoints cannot pin a servlet thread and a pooled connection indefinitely.
+     * (Before skillars-deferred-166 the same rows were contended by {@code markUsedByTokenHash}'s plain
+     * {@code UPDATE}, which waited with no bound at all, so this is a tightening either way.) A timeout
+     * surfaces as {@code PessimisticLockingFailureException}, which {@code AuthService.refresh} answers
+     * with a 401 and {@code SecurityUtil.terminateSession} retries.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT r FROM RefreshToken r WHERE r.tokenHash = :hash")
     Optional<RefreshToken> findByTokenHashForUpdate(@Param("hash") String hash);
 
     /**
      * skillars-deferred-166: by-id lookup with the same {@code PESSIMISTIC_WRITE} lock and the same
      * never-across-a-{@code REQUIRES_NEW}-write rule as {@link #findByTokenHashForUpdate}. Used to walk
-     * {@code replacedById} from a rotated token to its successor — by primary key, which is why neither
-     * new column carries an index.
+     * {@code replaced_by_id} is indexed for the FK's {@code ON DELETE SET NULL} action, not for this
+     * lookup, which is by primary key. Same 5 s bounded wait and rationale as
+     * {@link #findByTokenHashForUpdate}.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT r FROM RefreshToken r WHERE r.id = :id")
     Optional<RefreshToken> findByIdForUpdate(@Param("id") Long id);
 
@@ -152,6 +186,14 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * can never move back to {@code false}, the residual risk is cosmetic — no code path re-reads
      * {@code version} to gate on it today — but it is a real, deliberate delta from the contract
      * documented above, not a side effect to discover later.
+     *
+     * <p><strong>skillars-deferred-166: no production caller remains.</strong>
+     * {@code SecurityUtil.terminateSession} — its last one — now calls
+     * {@code RefreshTokenRevocationService.revokeChainByTokenHash}, because revoking one row could not end
+     * a session whose token had just been rotated (ledger RS01). Kept because it is the single-row
+     * primitive the durability ITs and {@code NativeModifyingVersionAuditTest} are written against, and
+     * because "revoke exactly this row" is a reasonable thing for a future caller to want. If it is still
+     * unused when someone next reads this, delete it rather than inventing a caller.
      */
     @Modifying
     @Transactional(propagation = Propagation.REQUIRES_NEW)

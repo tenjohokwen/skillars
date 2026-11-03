@@ -15,6 +15,7 @@ import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.DisabledException;
@@ -51,6 +52,15 @@ public class AuthService {
     // A recently-rotated token presented within this window is treated as a legitimate
     // multi-tab refresh race, not a theft event — the caller is redirected to the successor.
     private static final Duration REFRESH_GRACE_WINDOW = Duration.ofSeconds(30);
+
+    /**
+     * skillars-deferred-166: how far {@link #resolveGraceSuccessor} will follow {@code replacedById} looking
+     * for the chain's live end. A chain grows by one per rotation inside the window, so this is the number
+     * of clients that can refresh the same cookie concurrently and still be treated as a race rather than
+     * theft. Matches {@code RefreshTokenRevocationService}'s own bound so logout can always revoke at least
+     * as far as the grace window can reach.
+     */
+    private static final int MAX_GRACE_HOPS = 8;
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -202,13 +212,21 @@ public class AuthService {
         final RefreshOutcome outcome;
         try {
             outcome = transactionTemplate.execute(status -> decideAndRotate(presentedHash));
-        } catch (ObjectOptimisticLockingFailureException ex) {
-            // Backstop only. The row lock taken in decideAndRotate serialises concurrent refreshes of the
-            // same token, so the loser now reads committed state and takes the grace-window redirect
-            // instead of losing a version check. This branch remains for a stale managed copy written from
-            // somewhere else entirely; the rollback of the template's transaction has already released the
-            // lock, so cookies-only teardown is both safe and sufficient (whoever won the race left the row
-            // `used`, and `used` is monotonic).
+        } catch (ObjectOptimisticLockingFailureException | PessimisticLockingFailureException ex) {
+            // Backstop for every "someone else got there first" shape, all of which must end as a 401 the
+            // client can act on rather than a 500:
+            //  - optimistic: a stale managed copy written from elsewhere. Rare now that decideAndRotate
+            //    takes a row lock, so the loser of a same-token race reads committed state and takes the
+            //    grace redirect instead of failing a version check.
+            //  - pessimistic (CannotAcquireLockException / DeadlockLoserDataAccessException, SQLState 40P01
+            //    or 55P03): this walk locks the presented row and then its successor, while
+            //    markAllUsedByUserId is a bulk UPDATE over the same user's rows in scan order, so a theft
+            //    revocation, password change, reset or suspension running concurrently with a grace-window
+            //    redirect can genuinely deadlock. Postgres kills one side; without this branch that side
+            //    surfaced as a 500.
+            // The template's transaction has already rolled back and released its locks, so cookies-only
+            // teardown is safe and sufficient: nothing was written, and whoever won left the row `used`,
+            // which is monotonic.
             securityUtil.clearAuthCookies(res);
             throw new BadCredentialsException("Concurrent refresh detected — please sign in again");
         }
@@ -352,9 +370,19 @@ public class AuthService {
      *
      * <p>This closes for refresh tokens the same gap V158 closed for JWTs: {@code markAllUsedByUserId} is a
      * bulk {@code UPDATE} whose snapshot cannot include a successor row that a concurrent refresh commits
-     * after the statement starts, so a revoke-all could leave one live token behind. Comparing against the
-     * epoch rejects it on first use regardless of what the bulk update saw. A token minted after the epoch
-     * is unaffected, which is what lets a legitimate re-login work immediately.
+     * after the statement starts, so a revoke-all could leave one live token behind. A token minted after
+     * the epoch is unaffected, which is what lets a legitimate re-login work immediately.
+     *
+     * <p><strong>It closes that gap only where the epoch is stamped AFTER the bulk revoke</strong>, which is
+     * {@code UserProfileService.changePassword} and {@code PasswordResetService.completePasswordReset}.
+     * {@code AdminUserService.suspendUser}, {@code AgeVerificationService} and
+     * {@code AccountSuspensionEventListener} stamp it first, so a successor committed between their two
+     * statements carries a {@code createdAt} after the epoch and passes this check. Those three also set
+     * {@code locked = true}, so {@code ensureAccountIsLive} refuses such a token for as long as the account
+     * stays suspended — but an admin reactivation clears {@code locked} without revoking anything, which
+     * would restore it. Narrow (the window is two statements of one transaction) and pre-existing, so it is
+     * filed in {@code deferred-work.md} rather than fixed here by reordering three services this story does
+     * not otherwise touch. Do not widen this javadoc's claim without fixing that ordering.
      *
      * <p>Fails CLOSED on a null {@code createdAt}: once an account carries a revocation epoch, a token that
      * cannot prove it was minted after it is refused. {@code refresh_tokens.created_at} is {@code NOT NULL}
@@ -382,44 +410,59 @@ public class AuthService {
      * just-rotated token within the 30 s window obtain a working credential for whichever session was
      * newest.
      *
-     * <p>Returns {@code chainRevoked} when a successor has been deliberately revoked — a stale tab
-     * replaying the predecessor of a logged-out token. That is not theft and must not escalate (the
-     * presented row itself is usually already revoked, and caught earlier, but logout starting from the
-     * successor leaves the predecessor untouched). Returns a null successor for everything else, which the
-     * caller reads as reuse: never rotated, rotated too long ago, no link at all (a rotation from before
-     * V224 — see that migration's accepted deploy-window trade-off), or a successor that is expired or
-     * itself already consumed beyond the hop bound.
+     * <p>The walk runs to the chain's live end, not one hop: that old query found the live token however
+     * many rotations deep it was, and three or more clients refreshing the same cookie inside one window
+     * build a chain that deep. Stopping early would answer a legitimate race with account-wide theft
+     * revocation — a regression this method's first version shipped with and
+     * {@code refresh_threeConcurrentRefreshesOfTheSameToken_neverTripTheftDetection} now guards.
+     *
+     * <p>The walk also runs <strong>before</strong> the grace-window test, because the two questions are
+     * different. "Was any token in this chain deliberately revoked?" decides whether this is a stale replay
+     * after a logout (401, no escalation) and is true whatever the clock says; logout walks forward from
+     * the cookie it was given, so a predecessor another client still holds keeps {@code revokedAt == null}
+     * and only the chain tells you. "May this caller be handed the live successor?" is what the 30 s window
+     * gates, and it is asked of the presented token alone. Testing the window first made a predecessor
+     * replayed 31 s after a logout look like theft and revoke every session on the account — exactly what
+     * AC3 exists to prevent, reached by a path AC3 did not describe.
+     *
+     * <p>Returns a null successor with {@code chainRevoked == false} for genuine reuse: never rotated, no
+     * link at all (a rotation from before V224 — see that migration's accepted deploy-window trade-off), a
+     * chain whose end is expired, a chain longer than {@link #MAX_GRACE_HOPS}, or a rotation older than the
+     * window.
      */
     private GraceResolution resolveGraceSuccessor(final RefreshToken presented, final Instant now) {
+        RefreshToken liveEnd = null;
         RefreshToken cursor = presented;
-        // Two hops: the presented row's successor, plus one more in case that successor was itself rotated
-        // inside the same window (a client refreshing twice in quick succession). Deeper than that is
-        // indistinguishable from replay and falls through to the reuse response.
-        for (int hop = 0; hop < 2; hop++) {
-            if (!cursor.isRotatedNotRevoked()
-                || !now.isBefore(cursor.getRotatedAt().plus(REFRESH_GRACE_WINDOW))) {
-                return GraceResolution.none();
-            }
+        for (int hop = 0; hop < MAX_GRACE_HOPS; hop++) {
             final Long successorId = cursor.getReplacedById();
             if (successorId == null) {
-                return GraceResolution.none();
+                break;
             }
             final RefreshToken successor = refreshTokenRepository.findByIdForUpdate(successorId).orElse(null);
             if (successor == null) {
-                return GraceResolution.none();
+                break;
             }
             if (successor.getRevokedAt() != null) {
                 return GraceResolution.revokedChain();
             }
-            if (successor.getExpiresAt().isBefore(now)) {
-                return GraceResolution.none();
-            }
             if (!successor.isUsed()) {
-                return GraceResolution.of(successor);
+                if (!successor.getExpiresAt().isBefore(now)) {
+                    liveEnd = successor;
+                }
+                break;
             }
             cursor = successor;
         }
-        return GraceResolution.none();
+        if (liveEnd == null) {
+            return GraceResolution.none();
+        }
+        // Only now does the clock matter: the presented token must have been rotated recently enough for
+        // this to be a plausible in-flight race rather than a replay of an old credential.
+        if (presented.getRotatedAt() == null
+            || !now.isBefore(presented.getRotatedAt().plus(REFRESH_GRACE_WINDOW))) {
+            return GraceResolution.none();
+        }
+        return GraceResolution.of(liveEnd);
     }
 
     /** The successor a grace-window redirect resolved to, or why it did not resolve one. */
