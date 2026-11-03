@@ -16,7 +16,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 
+import org.springframework.dao.DeadlockLoserDataAccessException;
+import org.springframework.transaction.annotation.Transactional;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.verify;
 
 /**
@@ -42,9 +48,54 @@ class AuthCleanupServiceTest {
 
     @Test
     void purgeExpiredRefreshTokens_delegatesToRepository() {
+        Instant before = Instant.now();
+
         service.purgeExpiredRefreshTokens();
 
-        verify(refreshTokenRepository).deleteExpiredTokens();
+        // skillars-deferred-167 AC9: the cutoff is now passed in rather than left to the database's
+        // CURRENT_TIMESTAMP, so that every expiry comparison in the auth code reads the same clock.
+        ArgumentCaptor<Instant> nowCaptor = ArgumentCaptor.forClass(Instant.class);
+        verify(refreshTokenRepository).deleteExpiredTokens(nowCaptor.capture());
+        assertThat(nowCaptor.getValue()).isBetween(before, Instant.now());
+    }
+
+    /**
+     * skillars-deferred-167 AC9. The sweep locks rows in ascending id order so it cannot cycle with the
+     * chain walks, but a bulk revoke-all over one user's rows is unordered and can still take it down.
+     * When that happens the run is skipped, not propagated: Spring's scheduler would otherwise log the
+     * failure and this hour's expired rows would simply wait for the next tick anyway, so the only thing
+     * the throw bought was noise. The next hourly run deletes the same rows.
+     */
+    @Test
+    void purgeExpiredRefreshTokens_lostDeadlock_isContainedSoTheNextRunRetries() {
+        doThrow(new DeadlockLoserDataAccessException("40P01", null))
+            .when(refreshTokenRepository).deleteExpiredTokens(any());
+
+        assertThatCode(() -> service.purgeExpiredRefreshTokens())
+            .as("a deadlocked sweep must not escape the @Scheduled method")
+            .doesNotThrowAnyException();
+    }
+
+    /**
+     * skillars-deferred-167 AC9 — the load-bearing half of the fix, and the half a reader is most likely
+     * to undo. The catch above can only work because this method owns no transaction:
+     * {@code deleteExpiredTokens} is itself {@code @Modifying @Transactional}, so a transactional caller
+     * would share its transaction, a deadlocked DELETE would mark that transaction rollback-only, and the
+     * catch would be followed by an {@code UnexpectedRollbackException} at the outer commit.
+     * {@code SchedulerLockTransactionOrderingIT} asserts the same property against the live proxy; this
+     * is the cheap unit-level guard next to the behaviour it protects.
+     */
+    @Test
+    void purgeExpiredRefreshTokens_isNotTransactional_whichIsWhatMakesTheCatchWork()
+        throws NoSuchMethodException {
+        Method method = AuthCleanupService.class.getMethod("purgeExpiredRefreshTokens");
+
+        assertThat(method.getAnnotation(Transactional.class))
+            .as("@Transactional here would make the deadlock catch above useless")
+            .isNull();
+        assertThat(AuthCleanupService.class.getAnnotation(Transactional.class))
+            .as("nor may the class carry one")
+            .isNull();
     }
 
     @Test

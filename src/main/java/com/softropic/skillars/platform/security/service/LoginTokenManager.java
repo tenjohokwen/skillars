@@ -7,6 +7,8 @@ import com.softropic.skillars.infrastructure.security.AuthorizationException;
 
 import java.util.Optional;
 
+import java.util.UUID;
+
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
@@ -16,7 +18,13 @@ public interface LoginTokenManager {
      * @param res Provides means of sending the created token to the client
      * @param principal holds the user data
      */
-    void createLoginToken(HttpServletResponse res, Principal principal);
+    /**
+     * @param refreshSessionId skillars-deferred-167 (AC3): the id of the refresh-token rotation chain
+     *     this JWT belongs to, written into the token as {@code SecurityConstants.RTKN_SESSION} so
+     *     {@code JWTAuthorizationFilter} can later refuse a JWT whose chain has no live row. May be
+     *     {@code null} — the claim is then omitted and the filter's check is skipped (AC5, fail-open).
+     */
+    void createLoginToken(HttpServletResponse res, Principal principal, UUID refreshSessionId);
 
     /**
      * This method re-creates the login token.
@@ -26,7 +34,12 @@ public interface LoginTokenManager {
      * @param res Provides means of sending the refreshed token to the client
      * @param principal holds the user data that is used to create the token
      */
-    void renewLoginToken(HttpServletResponse res, Principal principal);
+    /**
+     * @param refreshSessionId as on {@link #createLoginToken} — on this path it is the claim carried over
+     *     from the JWT being renewed, not a freshly minted id: a DB re-auth re-verifies the account, but
+     *     it does not create a new refresh-token chain.
+     */
+    void renewLoginToken(HttpServletResponse res, Principal principal, UUID refreshSessionId);
 
     /**
      * Sets session cookie for anonymous user
@@ -109,4 +122,12 @@ public interface LoginTokenManager {
      * @return the claim value, or null if absent
      */
     Long extractSessionIssuedAt(final HttpServletRequest request);
+
+    /**
+     * skillars-deferred-167 (AC3): the refresh-token chain id carried by the request's JWT, or
+     * {@code null} when it carries none (any token minted before that story). Delegates to
+     * {@code ClaimsExtractor}; exposed here because {@code JWTAuthorizationFilter} talks only to this
+     * interface, exactly as it does for {@link #extractSessionIssuedAt}.
+     */
+    UUID extractRefreshSessionId(final HttpServletRequest request);
 }

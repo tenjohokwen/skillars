@@ -41,6 +41,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.UUID;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -216,9 +217,12 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             // issued before a theft revocation and must not survive it, regardless of whether an
             // unrelated later login has since re-authenticated the account.
             assertSessionNotRevoked(req, authorizedPrincipal);
+            // skillars-deferred-167 AC4: and the per-SESSION counterpart of that account-wide check.
+            final UUID refreshSessionId = loginTokenManager.extractRefreshSessionId(req);
+            assertSessionChainStillLive(refreshSessionId);
             //JWT with new db refresh token and new expiration
             //JWTUtil.e
-            loginTokenManager.renewLoginToken(res, authorizedPrincipal);
+            loginTokenManager.renewLoginToken(res, authorizedPrincipal, refreshSessionId);
         } else {
             final Principal principal = loginTokenManager.extractPrincipal(req);
             // skillars-deferred-144 AC8: this used to also check isRefreshTokenRevoked(req,
@@ -265,6 +269,46 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         if (sessionIssuedAt == null || sessionIssuedAt < invalidatedAt.toEpochMilli()) {
             throw new AuthorizationException(
                 "Session predates a refresh-token-theft revocation", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
+        }
+    }
+
+    /**
+     * skillars-deferred-167 AC4: refuses a JWT whose refresh-token rotation chain has no live row left.
+     *
+     * <p>This is what finally makes a logout kill the access token it handed out. {@link
+     * #assertSessionNotRevoked} only catches an ACCOUNT-wide revocation ({@code
+     * security_session_invalidated_at}), and skillars-deferred-166 AC3 deliberately stopped bumping that
+     * epoch on a revoked-token replay, so that a stale tab could not sign the user out of every device.
+     * After that story nothing bumped it on logout at all, and a copied {@code potc} cookie kept
+     * re-authenticating here for as long as its holder kept making requests. The chain is the right
+     * granularity: logout revokes exactly one chain, so refusing a JWT whose chain is spent ends that one
+     * session and leaves the account's other devices alone.
+     *
+     * <p>Runs only on this branch, which {@code hasDbRefreshTokenExpired} gates to once per {@code
+     * DB_REFRESH_TOKEN_INTERVAL} (5 min). The fast path stays free of database work by design
+     * (skillars-deferred-144 AC8), so 5 minutes is the exposure bound — the same bound a LOCKED account
+     * has always relied on. One indexed existence query, no entity loaded.
+     *
+     * <p><strong>Fails OPEN on a missing claim, deliberately (AC5).</strong> A {@code null} id means the
+     * JWT was minted before this story: {@code extendTtlOfToken} rebuilds its claim map from what it can
+     * read, so it cannot invent one, and refusing every such token would sign out every live session the
+     * moment this deploys. Those JWTs are therefore unchecked for the rest of their lives, which is
+     * bounded by their chain's 7-day TTL; a stolen PRE-deploy {@code potc} is the one credential this
+     * check cannot kill. The flip to fail-closed is filed in {@code deferred-work.md} and cannot ship
+     * until no such token can still be presented. A post-deploy token always carries the claim, so the
+     * ordinary stolen-cookie case IS covered.
+     *
+     * <p>Throws the same exception and error code as its account-wide sibling: the client cannot act
+     * differently on "your session ended" versus "your account's sessions ended", and the SPA already
+     * handles this one.
+     */
+    private void assertSessionChainStillLive(final UUID refreshSessionId) {
+        if (refreshSessionId == null) {
+            return;
+        }
+        if (!securityUtil.hasLiveRefreshTokenForSession(refreshSessionId)) {
+            throw new AuthorizationException(
+                "Session's refresh-token chain has no live token", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
         }
     }
 

@@ -152,21 +152,30 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
     }
 
     /**
-     * skillars-deferred-120 AC3 Finding 2 — restores the advisor-ordering assertion this class's own
-     * Javadoc instructed reintroducing "if a future scheduler legitimately needs to stack both
-     * annotations again". {@code purgeExpiredRefreshTokens} keeps its existing plain
-     * {@code @Transactional} alongside the new {@code @SchedulerLock} (safe here: a single bulk
-     * statement, not a batch-wide transaction one item's exception could roll back) — uses {@link
-     * #assertShedLockOutermost}'s three-assertion shape below (code review 2026-09-17, Patch #14:
-     * an earlier draft of this Javadoc pointed at
-     * {@code bookingExpiryScheduler_shedLockAdvisorIsOutsideTheTransactionAdvisor}, a method that no
-     * longer exists in this file — it was renamed to {@code
-     * bookingExpiryScheduler_isNotTransactional_soOneRacedBookingCannotRollBackTheBatch} by
-     * {@code skillars-deferred-118} and now uses {@link #assertNotTransactional}, not this helper).
+     * skillars-deferred-167 AC9 — this method USED to stack {@code @Transactional} with
+     * {@code @SchedulerLock} and was pinned by {@link #assertShedLockOutermost}. The transaction was
+     * removed deliberately, so the assertion flips to {@link #assertNotTransactional}: what matters now is
+     * that the transaction stays gone and the lock stays.
+     *
+     * <p>Why it had to go: {@code RefreshTokenRepository.deleteExpiredTokens} is itself
+     * {@code @Modifying @Transactional}, so under a transactional caller it joined that transaction, and a
+     * {@code DELETE} chosen as a PostgreSQL deadlock victim (40P01) marked the shared transaction
+     * rollback-only. The {@code try/catch} AC9 requires was therefore impossible to honour from inside the
+     * method — the body would catch the deadlock and then still die at the outer commit with
+     * {@code UnexpectedRollbackException}. With no transaction on the scheduled method, the repository
+     * method is its own boundary and the catch has nothing poisoned to commit.
+     *
+     * <p>{@code assertShedLockOutermost} stays in this class for the schedulers that legitimately stack
+     * both (see {@code userAdminServiceRemoveNotActivatedUsers_*}); it is not dead.
      */
     @Test
-    void authCleanupServicePurgeExpiredRefreshTokens_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
-        assertShedLockOutermost(authCleanupService, "purgeExpiredRefreshTokens");
+    void authCleanupServicePurgeExpiredRefreshTokens_isNotTransactional_soALostDeadlockCanBeCaught() {
+        assertNotTransactional(authCleanupService, "purgeExpiredRefreshTokens", """
+            AuthCleanupService.purgeExpiredRefreshTokens must NOT be @Transactional \
+            (skillars-deferred-167 AC9). deleteExpiredTokens is itself @Modifying @Transactional, so a \
+            transactional caller shares its transaction; a deadlocked DELETE then marks that transaction \
+            rollback-only and the method's own try/catch cannot contain it — the outer commit throws \
+            UnexpectedRollbackException instead. The repository method owns the boundary.""");
     }
 
     /**

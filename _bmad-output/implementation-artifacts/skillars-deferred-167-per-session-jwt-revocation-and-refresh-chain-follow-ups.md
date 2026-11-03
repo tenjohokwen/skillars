@@ -182,32 +182,49 @@ defects introduced by the previous round's own fix.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: V225 migration (AC1)
-  - [ ] `session_id uuid` + btree index + `VALIDATE CONSTRAINT`, `SET LOCAL lock_timeout`, column comment
-  - [ ] Justify the `allow-blocking-index` marker with a row count and a build-time estimate
-  - [ ] `mvn -q -Dtest=MigrationConventionLintTest test`
-- [ ] Task 2: entity + repository (AC2, AC4, AC9)
-  - [ ] `RefreshToken.sessionId`; a finder for "a live row exists for this session id"
-  - [ ] `deleteExpiredTokens` → native, ordered, locked subselect
-- [ ] Task 3: mint and carry the claim (AC2, AC3)
-  - [ ] `SecurityConstants`: the new claim name; `toClaims` parameter; `ClaimsExtractorImpl` reader
-  - [ ] `LoginTokenManager`/`JwtManagerImpl` signatures; the `Rotated` record; the two test call sites
-  - [ ] `login` mints the id; `decideAndRotate` copies the rotated row's, minting a fresh one when it is null
-  - [ ] `extendTtlOfToken` carries it over (no `rtkn` derivation — see AC3)
-- [ ] Task 4: the filter check (AC4, AC5, AC6, AC10)
-  - [ ] The chain-liveness refusal beside `assertSessionNotRevoked`, with a precise javadoc
-- [ ] Task 5: the grace-window outcome (AC7)
-  - [ ] Third outcome from `resolveGraceSuccessor`; map it to 401 + cookies, no writes
-  - [ ] `warn` log + metric for the case that is no longer theft-detected
-- [ ] Task 6: the revoke-all ordering (AC8)
-  - [ ] Swap the two statements in the three callers
-  - [ ] IT first to decide whether `reactivateUser` needs a revoke at all; drop it if nothing survives
-  - [ ] Rewrite `isBeforeSessionEpoch`'s javadoc naming the two residuals, without overclaiming
-- [ ] Task 7: the sweep guard (AC9)
-  - [ ] Move the transaction so the catch is outside it; keep `@SchedulerLock` outermost
-  - [ ] Test the ordered delete against populated rows, including `ON DELETE SET NULL`
-- [ ] Task 8: tests (AC6, AC7, AC9, AC10 and regression)
-- [ ] Task 9: docs (AC11)
+- [x] Task 1: V225 migration (AC1)
+  - [x] `session_id uuid` + btree index + `VALIDATE CONSTRAINT`, `SET LOCAL lock_timeout`, column comment
+  - [x] Justify the `allow-blocking-index` marker with a row count and a build-time estimate
+  - [x] `mvn -q -Dtest=MigrationConventionLintTest test` — 30/30
+- [x] Task 2: entity + repository (AC2, AC4, AC9)
+  - [x] `RefreshToken.sessionId`; `existsLiveBySessionId` (scalar, inclusive expiry bound)
+  - [x] `deleteExpiredTokens` → native, ordered, locked subselect, cutoff passed in
+- [x] Task 3: mint and carry the claim (AC2, AC3)
+  - [x] `SecurityConstants.RTKN_SESSION = "rtsid"`; `ClaimsExtractorImpl.extractRefreshSessionId`
+        (`toClaims` left unchanged — see the Completion Notes for why, and what it means for AC3)
+  - [x] `LoginTokenManager`/`JwtManagerImpl` signatures; the `Rotated` record; six test call sites
+  - [x] `login` mints the id; `decideAndRotate` copies the rotated row's, minting a fresh one when it is null
+  - [x] `extendTtlOfToken` carries it over (no `rtkn` derivation — see AC3)
+- [x] Task 4: the filter check (AC4, AC5, AC6, AC10)
+  - [x] `assertSessionChainStillLive` beside `assertSessionNotRevoked`, via `SecurityUtil` rather than a
+        new filter dependency; three unit tests cover refuse / allow / skip-on-null-claim
+- [x] Task 5: the grace-window outcome (AC7)
+  - [x] `GraceResolution.stale()` → the `StaleChain` outcome → 401 + cookies, no writes
+  - [x] `warn` log carrying the user id and presented hash for the case no longer theft-detected
+- [x] Task 6: the revoke-all ordering (AC8)
+  - [x] Swapped in `AdminUserService.suspendUser`, `AgeVerificationService.blockAccount` and
+        `AccountSuspensionEventListener.suspend`
+  - [x] IT written first and it answered no: `reactivate_cannotRestoreASessionTheSuspensionEnded` passes
+        without any revoke on reactivate, because the session epoch is monotonic and never cleared. The
+        revoke was therefore **dropped** per AC8's own instruction, not implemented
+  - [x] `isBeforeSessionEpoch`'s javadoc rewritten, naming the unblocked `findById` read and node clock
+        skew as the two residuals rather than claiming the window is closed
+- [x] Task 7: the sweep guard (AC9)
+  - [x] `@Transactional` removed from the scheduled method so the catch sits outside the transaction;
+        `@SchedulerLock` kept and still asserted (`SchedulerLockTransactionOrderingIT` flipped to
+        `assertNotTransactional`)
+  - [x] IT covers the ordered delete against populated rows including the `ON DELETE SET NULL` path
+- [x] Task 8: tests (AC6, AC7, AC9, AC10 and regression)
+  - [x] `AuthResourceIT` 43/43 (6 new: logout kills the standing JWT but not another device; the
+        documented fail-open for a claimless JWT; an expired chain refuses its JWT; a stale token on a live
+        chain is 401 with no account-wide revocation; the ordered sweep and its `ON DELETE SET NULL` path;
+        a fresh id minted when the rotated row has none)
+  - [x] `AdminUserManagementIT` 15/15, `SchedulerLockTransactionOrderingIT` 5/5,
+        `RefreshTokenRepositoryIT` 1/1
+  - [x] Unit: `JWTAuthorizationFilterTest` 25/25, `JwtManagerImplTest` 29/29, `AuthServiceTest` 14/14,
+        `SecurityUtilTest` 8/8, `AuthCleanupServiceTest` 6/6, `MigrationConventionLintTest` 30/30,
+        `NativeModifyingVersionAuditTest` 2/2, `IntegrationTestConventionTest` 6/6
+- [x] Task 9: docs (AC11) — `check-docs: OK, 26 pages`
 - [ ] Task 10: `/pr-review` to a clean round (AC12)
 
 ## Dev Notes
@@ -456,11 +473,97 @@ renamed, not rebased around — the precedent is in git, not in the ledger (`062
 
 ### Agent Model Used
 
+Claude Opus 5 (claude-opus-5), via `/bmad-dev-story`.
+
 ### Debug Log References
+
+- `MigrationConventionLintTest` 30/30 with V225 in the tree (the first executed `VALIDATE CONSTRAINT` in
+  the repo; the linter does not recognise the statement, so the lock reasoning is in the header instead).
+- Two IT invocations silently no-opped before I noticed: both were wrapped in `timeout`, which **does not
+  exist on macOS** (exit 127). The same trap is recorded in this project's history. Reruns were unwrapped.
+- A third IT run looked like it had passed `AuthResourceIT` at 37 tests — that was the previous session's
+  stale `target/failsafe-reports` XML, since `rm` had only cleared `*.txt`. The file has 44 `@Test`s, so 37
+  was the pre-change count. Report directory is now deleted wholesale before a run.
+- `-Dit.test=AuthResourceIT` does not restrict this project's failsafe execution to one class.
 
 ### Completion Notes List
 
+**Deviation from AC3, deliberate, with the reason.** AC3 says the claim is "written by
+`TokenCreatorImpl.toClaims`". It is not: `toClaims` is unchanged, and each of the three mint paths puts the
+claim itself. That is exactly how `SESSION_ISSUED_AT` — the only other claim not derivable from the
+`Principal` — is already handled, and following it kept `toClaims`'s signature, its `generateToken`
+wrapper and the tests that pin them untouched. The AC's actual requirement (the claim is written from a
+value the caller supplies, carried over by `extendTtlOfToken`, and set on the DB-reauth path) is met.
+
+**AC8's `reactivateUser` half was dropped, as AC8 instructed, because the test showed it catches nothing.**
+`AdminUserManagementIT.reactivate_cannotRestoreASessionTheSuspensionEnded` is the test that decided it:
+`suspendUser` both revokes every refresh token and stamps `security_session_invalidated_at`, which is
+monotonic and never cleared — not by `reactivateUser`, not by a later login. So a pre-suspension refresh
+token stays refused by `isBeforeSessionEpoch` and a pre-suspension JWT by `assertSessionNotRevoked`,
+permanently. A revoke on reactivate would be a write that cannot change an outcome. The statement
+**reorder** did ship, since that closes a real window. The test is written so that if this reasoning ever
+breaks, it fails rather than quietly passing.
+
+**AC4's check went on `SecurityUtil`, not into the filter's constructor.** The filter already depends on
+`SecurityUtil`, which already delegates chain work to `RefreshTokenRevocationService`; adding a repository
+to `JWTAuthorizationFilter` would have changed its constructor and every test that builds it, to ask one
+boolean. The query itself lives on the revocation service, which owns the repository.
+
+**Two defects I introduced and caught before they shipped**, both previously seen on #413:
+- I left two adjacent javadoc blocks on `purgeExpiredRefreshTokens`, which orphans the first. Merged.
+- `GraceResolution.staleButLive()` as a static factory collided with the record's generated accessor of
+  the same name — the identical clash that forced `revokedChain()` in deferred-166. Renamed to `stale()`.
+
+**One consistency fix of my own.** `existsLiveBySessionId` first used `expires_at > :now`, while
+`decideAndRotate` treats `expiresAt == now` as still live. Changed to `>=` so the two cannot disagree
+about the same row.
+
+**AC9's guard required removing `@Transactional` from the scheduled method**, which flipped
+`SchedulerLockTransactionOrderingIT`'s assertion for it from `assertShedLockOutermost` to
+`assertNotTransactional` (the existing helper, already used for two other schedulers). `@SchedulerLock`
+stays and is still asserted.
+
 ### File List
+
+**Migration**
+- `src/main/resources/db/migration/V225__refresh_token_session_id_and_validate_successor_fk.sql` (new)
+
+**Main**
+- `src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/repo/RefreshToken.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/AuthService.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/AuthCleanupService.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/RefreshTokenRevocationService.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/SecurityUtil.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/LoginTokenManager.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/ClaimsExtractor.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/ClaimsExtractorImpl.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtManagerImpl.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/admin/service/AdminUserService.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/AgeVerificationService.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java` (modified)
+
+**Tests**
+- `src/test/java/com/softropic/skillars/platform/security/api/AuthResourceIT.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/admin/api/AdminUserManagementIT.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilterTest.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtManagerImplTest.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/security/service/AuthCleanupServiceTest.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java` (modified)
+
+**Docs**
+- `docs/session-refresh-mechanism.md` (modified)
+- `docs/security-api-endpoints.md` (modified)
+- `docs/dev-docs/security/index.html` (modified)
+- `docs/dev-docs/assets/search-index.js` (regenerated)
+- `docs/deployment/provisioning-checklist.md` (modified)
+
+**Artifacts**
+- `_bmad-output/implementation-artifacts/skillars-deferred-167-...md` (this file)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
 
 ### Change Log
 

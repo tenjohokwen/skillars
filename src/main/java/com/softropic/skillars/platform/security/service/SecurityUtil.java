@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -144,6 +145,21 @@ public final class SecurityUtil {
         SecurityContext context = SecurityContextHolder.getContext();
         Authentication authentication = context.getAuthentication();
         return authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList();
+    }
+
+
+    /**
+     * skillars-deferred-167 (AC4): does this refresh-token rotation chain still have a live token?
+     *
+     * <p>A thin delegate, for the same reason {@link #terminateSession} delegates its chain walk:
+     * {@code JWTAuthorizationFilter} depends on this class and not on the repository or the revocation
+     * service, and threading a new dependency into that filter's constructor (and into everything that
+     * builds it) to ask one boolean would be the larger change. The answer itself, and why a null id
+     * answers {@code true}, are documented on
+     * {@link RefreshTokenRevocationService#hasLiveTokenForSession(UUID)}.
+     */
+    public boolean hasLiveRefreshTokenForSession(final UUID refreshSessionId) {
+        return refreshTokenRevocationService.hasLiveTokenForSession(refreshSessionId);
     }
 
 

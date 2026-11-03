@@ -8,7 +8,9 @@ import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.contract.event.AccountSuspensionRequestedEvent;
+import com.softropic.skillars.platform.security.infrastructure.jwt.ClaimsExtractor;
 import com.softropic.skillars.platform.security.infrastructure.jwt.TokenCreator;
+import com.softropic.skillars.platform.security.service.AuthCleanupService;
 import com.softropic.skillars.platform.security.service.RefreshTokenRevocationService;
 import com.softropic.skillars.infrastructure.util.TestClockProvider;
 
@@ -120,6 +122,17 @@ class AuthResourceIT extends AbstractIntegrationTest {
 
     @Autowired
     private ApplicationEventPublisher eventPublisher;
+
+    // skillars-deferred-167: AC4's check lives on the filter's DB-reauth branch, so these tests have to
+    // read and re-sign a real JWT's claims rather than hand-build one (hand-building loses the
+    // client-fixation claims isTokenFixed compares, which would throw JWTTheftException before the branch
+    // under test is reached). AuthCleanupService is called directly for AC9's sweep test — waiting for the
+    // hourly cron is not an option. Both are plain @Autowired, which does not fork a Spring context.
+    @Autowired
+    private ClaimsExtractor claimsExtractor;
+
+    @Autowired
+    private AuthCleanupService authCleanupService;
 
     private static final String PHONE_OTP_REQUIRED_KEY = "security.registration.phone-otp-required";
 
@@ -1446,6 +1459,289 @@ class AuthResourceIT extends AbstractIntegrationTest {
             assertThat(loginAttemptCountFor(COACH_EMAIL)).isEqualTo(maxAttempts);
         } finally {
             pool.shutdownNow();
+        }
+    }
+
+
+    // ---------------------------------------------------------------------------------------------
+    // skillars-deferred-167: per-session JWT revocation
+    // ---------------------------------------------------------------------------------------------
+
+    /**
+     * AC6, the story's whole point. Before this story a logout revoked the refresh chain but left the
+     * access token it had handed out working: the filter's fast path does no DB work by design, and its
+     * DB-reauth branch only compared the JWT against the ACCOUNT-wide epoch, which deferred-166 AC3
+     * deliberately stopped bumping on a revoked-token replay. So a copied {@code potc} kept
+     * re-authenticating for as long as its holder kept making requests.
+     *
+     * <p>Asserts both halves that matter: the logged-out session's JWT stops working, and a second
+     * device's JWT does not — per-session revocation, not the account-wide epoch, which is exactly the
+     * distinction deferred-166 AC3 demanded.
+     */
+    @Test
+    void logout_killsThatSessionsStandingJwt_butNotAnotherDevices() {
+        ResponseEntity<Map> deviceA = login(COACH_EMAIL);
+        ResponseEntity<Map> deviceB = login(COACH_EMAIL);
+        String rtknA = extractCookieValue(deviceA, "rtkn");
+        String jwtA = withExpiredDbRefreshToken(extractCookieValue(deviceA, "potc"));
+        String jwtB = withExpiredDbRefreshToken(extractCookieValue(deviceB, "potc"));
+
+        // Precondition: both JWTs force the DB-reauth branch and both chains are live, so both pass.
+        assertThat(accountGetStatus(cookiesWithJwt(deviceA, jwtA)))
+            .as("device A's JWT must work before the logout — otherwise this test proves nothing")
+            .isEqualTo(HttpStatus.OK);
+        assertThat(accountGetStatus(cookiesWithJwt(deviceB, jwtB))).isEqualTo(HttpStatus.OK);
+
+        httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtknA), Map.class);
+
+        assertThat(accountGetStatus(cookiesWithJwt(deviceA, jwtA)))
+            .as("the logged-out session's standing JWT must be refused on its next DB-reauth")
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(accountGetStatus(cookiesWithJwt(deviceB, jwtB)))
+            .as("device B was never logged out; refusing it would be the account-wide epoch behaviour "
+                + "deferred-166 AC3 forbids")
+            .isEqualTo(HttpStatus.OK);
+        assertThat(sessionEpochOf(COACH_USER_ID))
+            .as("and no account-wide revocation was involved")
+            .isNull();
+    }
+
+    /**
+     * AC5, pinning the deliberate fail-open. A JWT minted before this story carries no {@code rtsid}
+     * claim, {@code extendTtlOfToken} cannot invent one, and refusing every such token would sign out
+     * every live session the moment this deploys — so the check is skipped for them.
+     *
+     * <p>This test therefore asserts a KNOWN GAP, on purpose: a pre-deploy JWT survives the logout that
+     * should have killed it. The flip to fail-closed is filed in deferred-work.md and cannot ship until no
+     * such token can still be presented (one REFRESH_TOKEN_TTL after deploy). When that flip happens this
+     * test is the one that must change, which is why the gap is pinned rather than left implicit.
+     */
+    @Test
+    void logout_doesNotKillAJwtMintedBeforeThisStory_theDocumentedFailOpen() {
+        ResponseEntity<Map> device = login(COACH_EMAIL);
+        String rtkn = extractCookieValue(device, "rtkn");
+        String legacyJwt = withoutRefreshSessionClaim(extractCookieValue(device, "potc"));
+
+        httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
+
+        assertThat(accountGetStatus(cookiesWithJwt(device, legacyJwt)))
+            .as("a claimless JWT must be skipped, not refused (AC5) — deploying fail-closed would log "
+                + "every live session out at once")
+            .isEqualTo(HttpStatus.OK);
+    }
+
+    /**
+     * AC10, a deliberate behaviour change rather than a bug fix. An access token used to slide forever as
+     * long as the user kept clicking, even after its refresh chain had expired and been swept — nothing on
+     * either filter path consulted {@code refresh_tokens}. The chain's 7-day TTL is now an absolute cap on
+     * the session.
+     */
+    @Test
+    void standingJwt_whoseChainHasExpired_isRefused() {
+        ResponseEntity<Map> device = login(COACH_EMAIL);
+        String rtkn = extractCookieValue(device, "rtkn");
+        String jwt = withExpiredDbRefreshToken(extractCookieValue(device, "potc"));
+        assertThat(accountGetStatus(cookiesWithJwt(device, jwt))).isEqualTo(HttpStatus.OK);
+
+        // The chain's only row expires. commitWrite, not ClockProvider: a bare jdbcTemplate write in a
+        // test body never commits (hikari auto-commit=false) and so would be invisible to the server.
+        commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+            Timestamp.from(Instant.now().minus(Duration.ofMinutes(5))), sha256Hex(rtkn));
+
+        assertThat(accountGetStatus(cookiesWithJwt(device, jwt)))
+            .as("the refresh chain is the session's absolute bound now")
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    /**
+     * AC7. Two concurrent refreshes of one cookie both answer with {@code Set-Cookie: rtkn} and the jar
+     * keeps whichever arrived last; when that is the winner's, the client is left permanently one hop
+     * behind a live chain. Its next refresh past the 30 s window used to take the theft branch, which
+     * revoked every token on the account and bumped the session epoch — a logout from every device, caused
+     * by a double-submitted request.
+     *
+     * <p>Now it is one 401 for that client and nothing else. The window and the rotation are unchanged;
+     * only the blast radius is. The second device is the assertion that matters: before this story it was
+     * collateral damage.
+     */
+    @Test
+    void refresh_staleTokenOnALiveChainOutsideTheWindow_is401WithNoAccountWideRevocation() {
+        String deviceB = loginAndGetRtkn(COACH_EMAIL);
+        ResponseEntity<Map> deviceA = login(COACH_EMAIL);
+        String a0 = extractCookieValue(deviceA, "rtkn");
+
+        ResponseEntity<Map> refreshed = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(a0), Map.class);
+        String a1 = extractCookieValue(refreshed, "rtkn");
+        assertThat(a1).isNotNull();
+
+        // Age A0's rotation past the grace window. ClockProvider cannot be used for this: it is a
+        // ThreadLocal and the server refreshes on its own worker thread.
+        commitWrite("UPDATE main.refresh_tokens SET rotated_at = ? WHERE token_hash = ?",
+            Timestamp.from(Instant.now().minus(Duration.ofMinutes(2))), sha256Hex(a0));
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(a0), Map.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED));
+
+        assertThat(revokedAtOf(sha256Hex(a1)))
+            .as("the live end of A's own chain must survive — it may be a sibling tab's credential")
+            .isNull();
+        assertThat(usedFlagOf(sha256Hex(deviceB)))
+            .as("device B must be untouched; it being revoked is the defect this AC removes")
+            .isFalse();
+        assertThat(sessionEpochOf(COACH_USER_ID))
+            .as("and no session epoch may be stamped: that is what logged the user out everywhere")
+            .isNull();
+        assertThat(liveTokenCountFor(COACH_USER_ID))
+            .as("A's live end plus device B's token")
+            .isEqualTo(2);
+    }
+
+    /**
+     * AC9. The sweep now deletes in ascending id order so it cannot cycle with the chain walks, and this
+     * exercises the referential action V224's header reasons about but nothing tested: deleting a
+     * SUCCESSOR fires {@code ON DELETE SET NULL} on its predecessor's {@code replaced_by_id}, a write to a
+     * different row than the one being deleted.
+     */
+    @Test
+    void expiredTokenSweep_deletesInIdOrder_andNullsThePredecessorsSuccessorLink() {
+        String a0 = loginAndGetRtkn(COACH_EMAIL);
+        ResponseEntity<Map> refreshed = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(a0), Map.class);
+        String a1 = extractCookieValue(refreshed, "rtkn");
+        assertThat(replacedByIdOf(sha256Hex(a0)))
+            .as("precondition: A0 points at A1")
+            .isNotNull();
+
+        // Expire the SUCCESSOR only, so the sweep deletes a row that another row still references.
+        commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+            Timestamp.from(Instant.now().minus(Duration.ofMinutes(5))), sha256Hex(a1));
+
+        authCleanupService.purgeExpiredRefreshTokens();
+
+        assertThat(rowExistsFor(sha256Hex(a1))).as("the expired successor is gone").isFalse();
+        assertThat(rowExistsFor(sha256Hex(a0))).as("its unexpired predecessor is not").isTrue();
+        assertThat(replacedByIdOf(sha256Hex(a0)))
+            .as("ON DELETE SET NULL must have cleared the dangling successor link")
+            .isNull();
+    }
+
+    /**
+     * AC2's fresh-id-on-null rule, which is what keeps a pre-V225 chain from staying unmatched forever.
+     * Copying the predecessor's null would have left a continuously refreshing client (an API or mobile
+     * client — the SPA never calls this endpoint) without an id for the rest of its life, and AC4's check
+     * silently skipping it.
+     */
+    @Test
+    void refresh_ofAPreV225RowWithNoSessionId_mintsAFreshChainId() {
+        String original = loginAndGetRtkn(COACH_EMAIL);
+        commitWrite("UPDATE main.refresh_tokens SET session_id = NULL WHERE token_hash = ?",
+            sha256Hex(original));
+        assertThat(sessionIdOf(sha256Hex(original))).isNull();
+
+        ResponseEntity<Map> refreshed = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(original), Map.class);
+        String successor = extractCookieValue(refreshed, "rtkn");
+
+        assertThat(sessionIdOf(sha256Hex(successor)))
+            .as("the successor of an id-less row must get a fresh id, not inherit the null")
+            .isNotNull();
+    }
+
+
+    // ---------------------------------------------------------------------------------------------
+    // skillars-deferred-167 helpers
+    // ---------------------------------------------------------------------------------------------
+
+    /** The rotation-chain id (V225) stamped on the row with this token hash, or null for a pre-V225 row. */
+    private UUID sessionIdOf(String tokenHash) {
+        return jdbcTemplate.queryForObject(
+            "SELECT session_id FROM main.refresh_tokens WHERE token_hash = ?", UUID.class, tokenHash);
+    }
+
+    /** The successor link, so the ON DELETE SET NULL referential action can be asserted. */
+    private Long replacedByIdOf(String tokenHash) {
+        return jdbcTemplate.queryForObject(
+            "SELECT replaced_by_id FROM main.refresh_tokens WHERE token_hash = ?", Long.class, tokenHash);
+    }
+
+    private boolean rowExistsFor(String tokenHash) {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.refresh_tokens WHERE token_hash = ?", Long.class, tokenHash) > 0;
+    }
+
+    /**
+     * Re-signs a real login/refresh JWT with its {@code dbRToken} claim already in the past, which is what
+     * makes {@code JWTAuthorizationFilter} take its DB-reauth branch — where AC4's chain-liveness check
+     * lives — on the very next request instead of up to {@code DB_REFRESH_TOKEN_INTERVAL} (5 min) later.
+     *
+     * <p>Re-signing the server's own claims, rather than building a map by hand as
+     * {@link #routineDenial_expiredJwt_alsoClearsSkillarsProfileCookie} does, is deliberate and necessary
+     * here: that test's token only has to fail to parse, while these have to be accepted far enough to
+     * reach the branch under test. A hand-built map would omit {@code userAgent}, {@code clientId} and
+     * {@code sessionId}, and {@code TokenValidatorImpl.isTokenFixed} compares all three against the live
+     * request — a mismatch throws {@code JWTTheftException} first and the test would pass for the wrong
+     * reason. It also preserves the genuine {@code rtsid} claim the server minted.
+     *
+     * <p>This is also why {@code ClockProvider} is not used to age the token: it is a {@code ThreadLocal}
+     * and the embedded server answers on its own worker thread, so a clock set here would not be seen by
+     * the code under test (see the comment in that same test).
+     */
+    private String withExpiredDbRefreshToken(String jwt) {
+        Map<String, Object> claims = new HashMap<>(claimsExtractor.extractClaims(jwt));
+        claims.put(SecurityConstants.DB_REFRESH_TOKEN,
+            Instant.now().minus(Duration.ofMinutes(1)).toEpochMilli());
+        // generateTokenFromClaims sets its own expiration; leaving the parsed one in the map is harmless
+        // but removing it keeps the intent obvious.
+        claims.remove(Claims.EXPIRATION);
+        return tokenCreator.generateTokenFromClaims(claims);
+    }
+
+    /** Same, but with the chain-id claim stripped — the shape of every JWT minted before V225. */
+    private String withoutRefreshSessionClaim(String jwt) {
+        Map<String, Object> claims = new HashMap<>(claimsExtractor.extractClaims(jwt));
+        claims.put(SecurityConstants.DB_REFRESH_TOKEN,
+            Instant.now().minus(Duration.ofMinutes(1)).toEpochMilli());
+        claims.remove(SecurityConstants.RTKN_SESSION);
+        claims.remove(Claims.EXPIRATION);
+        return tokenCreator.generateTokenFromClaims(claims);
+    }
+
+    /** Every cookie a login response set, with {@code potc} swapped for the given JWT. */
+    private HttpHeaders cookiesWithJwt(ResponseEntity<?> loginResponse, String jwt) {
+        List<String> setCookies = loginResponse.getHeaders().get("Set-Cookie");
+        assertThat(setCookies).isNotNull();
+        String cookieHeader = setCookies.stream()
+            .map(c -> c.split(";", 2)[0])
+            .map(c -> c.startsWith("potc=") ? "potc=" + jwt : c)
+            .reduce((a, b) -> a + "; " + b)
+            .orElseThrow();
+        assertThat(cookieHeader).contains("potc=" + jwt);
+        HttpHeaders headers = clientHeaders();
+        headers.add(HttpHeaders.COOKIE, cookieHeader);
+        return headers;
+    }
+
+    private ResponseEntity<Map> login(String email) {
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + LOGIN_ENDPOINT, HttpMethod.POST,
+            Map.of("email", email, "password", TEST_PASSWORD), clientHeaders(), Map.class);
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        return response;
+    }
+
+    /** GETs an authenticated endpoint with the given cookies; the account endpoint the other tests use. */
+    private HttpStatusCode accountGetStatus(HttpHeaders headers) {
+        try {
+            return httpTestClient.makeHttpRequest(
+                baseUrl() + "/v1/account/", HttpMethod.GET, null, headers, Map.class).getStatusCode();
+        } catch (HttpClientErrorException e) {
+            return e.getStatusCode();
         }
     }
 

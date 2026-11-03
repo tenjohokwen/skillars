@@ -15,6 +15,7 @@ import io.jsonwebtoken.security.SignatureException;
 import jakarta.servlet.http.HttpServletRequest;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -23,12 +24,14 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 
 import static com.softropic.skillars.infrastructure.security.SecurityConstants.*;
 import static com.softropic.skillars.infrastructure.security.SecurityError.*;
 import static com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants.ANONYMOUS;
 import static java.lang.String.format;
 
+@Slf4j
 @Service
 public class ClaimsExtractorImpl implements ClaimsExtractor {
     private final JwtConfiguration jwtConfiguration;
@@ -121,6 +124,39 @@ public class ClaimsExtractorImpl implements ClaimsExtractor {
             return Instant.ofEpochMilli(((Number) sessionIssuedAt).longValue()).toEpochMilli();
         }
         return null;
+    }
+
+    /**
+     * skillars-deferred-167 (AC3): the refresh-token chain id this JWT was minted for
+     * ({@code SecurityConstants.RTKN_SESSION}), or {@code null} when the token carries no such claim —
+     * every JWT minted before this story, and every anonymous token.
+     *
+     * <p>Returning {@code null} is a normal, expected answer, not an error: the filter skips its
+     * chain-liveness check for such a token (AC5, deliberately fail-open) because failing closed would
+     * sign out every live session the moment this deploys.
+     *
+     * <p>Read as a {@code String} and parsed, rather than cast: a uuid claim round-trips through JJWT's
+     * JSON as a string, and a malformed one is treated as absent rather than thrown — a JWT whose claim
+     * cannot be parsed must not be able to 500 an otherwise-valid request, and "absent" already has a
+     * safe, documented meaning here. The {@code (Number)} cast that {@link #extractSessionIssuedAt} needs
+     * does not apply for the same reason: this claim is never numeric.
+     */
+    @Override
+    public UUID extractRefreshSessionId(HttpServletRequest request) {
+        final String token = CookieUtil.getCookieValue(request, JWT_COOKIE_NAME);
+        if (StringUtils.isBlank(token)) {
+            return null;
+        }
+        final Object raw = extractClaims(token).get(RTKN_SESSION);
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return UUID.fromString(String.valueOf(raw));
+        } catch (IllegalArgumentException e) {
+            log.warn("Ignoring an unparseable {} claim", RTKN_SESSION);
+            return null;
+        }
     }
 
     @Override

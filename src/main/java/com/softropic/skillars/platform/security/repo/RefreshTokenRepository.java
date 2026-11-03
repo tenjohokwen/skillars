@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 import jakarta.persistence.LockModeType;
 
@@ -230,8 +231,59 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
         + "WHERE r.tokenHash = :tokenHash AND r.used = false")
     void markUsedByTokenHash(@Param("tokenHash") String tokenHash);
 
+    /**
+     * skillars-deferred-167 (AC4): does this rotation chain still have a token that could be traded in for
+     * a session? Live means {@code used = false AND revoked_at IS NULL AND expires_at >= :now} — the same
+     * three conditions {@code AuthService.decideAndRotate} applies before it rotates. The bound is
+     * inclusive because that method treats {@code expiresAt == now} as still live
+     * ({@code expiresAt.isBefore(now)} is false), and the two must not disagree about the same row.
+     *
+     * <p>This is the whole of the per-session JWT check, and it is deliberately a scalar
+     * {@code exists}/count rather than a fetch: {@code JWTAuthorizationFilter} calls it on a request that
+     * has just authorized the user, and loading a managed {@code RefreshToken} there would put a row in
+     * the persistence context that a later locked read in the same request would return WITHOUT refreshing
+     * (the trap that cost skillars-deferred-166 a 409 on logout). Nothing in the filter needs the row.
+     *
+     * <p><strong>Never call this with a null {@code sessionId}.</strong> {@code session_id = NULL} matches
+     * no row, so a null argument would report "no live token" for every pre-V225 session and reject it —
+     * the exact opposite of AC5's deliberate fail-open. The caller checks for null first.
+     *
+     * <p>{@code :now} is a parameter rather than {@code CURRENT_TIMESTAMP} so the caller supplies
+     * {@code Instant.now(ClockProvider.getClock())}, keeping this consistent with every other expiry
+     * comparison in the auth code and testable without touching the database clock.
+     */
+    @Query("SELECT COUNT(r) > 0 FROM RefreshToken r WHERE r.sessionId = :sessionId "
+        + "AND r.used = false AND r.revokedAt IS NULL AND r.expiresAt >= :now")
+    boolean existsLiveBySessionId(@Param("sessionId") UUID sessionId, @Param("now") Instant now);
+
+    /**
+     * Deletes every expired row, acquiring them in ascending {@code id} order.
+     *
+     * <p><strong>skillars-deferred-167 (AC9): the ordering is the point.</strong> This used to be a plain
+     * JPQL bulk {@code DELETE}, which cannot carry an {@code ORDER BY}, so PostgreSQL locked rows in
+     * whatever order its scan produced. Meanwhile both chain walks —
+     * {@code AuthService.resolveGraceSuccessor} and
+     * {@code RefreshTokenRevocationService.revokeChainByTokenHash} — take {@code PESSIMISTIC_WRITE} locks
+     * along {@code replaced_by_id}, which is ascending {@code id} in practice (a successor is always
+     * created after its predecessor, and {@code BaseEntity}'s TSID ids are monotonic within a node). An
+     * expired chain being walked while the hourly sweep ran could therefore cycle: the walk holding a
+     * predecessor and waiting for a successor the {@code DELETE} already held. PostgreSQL kills one side,
+     * and before deferred-166 logout took a single-row lock that could wait but never cycle.
+     *
+     * <p>The {@code FOR UPDATE} subselect is what imposes the order: PostgreSQL does not pull a locking
+     * subquery up into the outer statement, so it runs as its own plan with {@code LockRows} above
+     * {@code Sort} and takes every row lock in {@code id} order before the delete proceeds. Native,
+     * because JPQL has no way to express either the ordering or {@code FOR UPDATE} in a bulk delete.
+     *
+     * <p><strong>What this does NOT fix:</strong> {@link #markAllUsedByUserId(Long)} and
+     * {@link #markAllRevokedByUserId(Long, Instant)} are still unordered bulk {@code UPDATE}s over one
+     * user's rows, so they can still deadlock against this sweep. That shape predates deferred-167 and is
+     * documented as a deadlock source on {@code AuthService.refresh}, which converts it to a 401.
+     */
     @Modifying
     @Transactional
-    @Query("DELETE FROM RefreshToken r WHERE r.expiresAt < CURRENT_TIMESTAMP")
-    void deleteExpiredTokens();
+    @Query(value = "DELETE FROM main.refresh_tokens WHERE id IN ("
+        + "SELECT id FROM main.refresh_tokens WHERE expires_at < :now ORDER BY id FOR UPDATE)",
+        nativeQuery = true)
+    void deleteExpiredTokens(@Param("now") Instant now);
 }

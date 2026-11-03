@@ -38,7 +38,7 @@ public class JwtManagerImpl implements LoginTokenManager {
     }
 
     @Override
-    public void createLoginToken(HttpServletResponse res, Principal principal) {
+    public void createLoginToken(HttpServletResponse res, Principal principal, UUID refreshSessionId) {
         final long dbRefreshToken = Instant.now(ClockProvider.getClock())
                 .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
                 .toEpochMilli();
@@ -47,11 +47,12 @@ public class JwtManagerImpl implements LoginTokenManager {
         // session-issued-at epoch — it is by definition authenticated as of now, so it cannot
         // predate any prior revocation. See SecurityConstants.SESSION_ISSUED_AT's own javadoc.
         claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
+        putRefreshSessionId(claims, refreshSessionId);
         createAndSetJwt(res, claims);
     }
 
     @Override
-    public void renewLoginToken(HttpServletResponse res, Principal principal) {
+    public void renewLoginToken(HttpServletResponse res, Principal principal, UUID refreshSessionId) {
         final long dbRefreshToken = Instant.now(ClockProvider.getClock())
                 .plus(DB_REFRESH_TOKEN_INTERVAL.toMillis(), ChronoUnit.MILLIS)
                 .toEpochMilli();
@@ -60,6 +61,10 @@ public class JwtManagerImpl implements LoginTokenManager {
         // DB-reauth success path -- a verified-as-of-now re-authentication, so the epoch resets here
         // too, same as dbRefreshToken.
         claims.put(SESSION_ISSUED_AT, Instant.now(ClockProvider.getClock()).toEpochMilli());
+        // skillars-deferred-167 (AC3): the chain id does NOT reset here, unlike the two values above. A
+        // DB re-auth re-verifies the account; it does not start a new refresh-token chain, and the caller
+        // passes the claim it read off the token being renewed.
+        putRefreshSessionId(claims, refreshSessionId);
         createAndSetJwt(res, claims);
     }
 
@@ -88,6 +93,12 @@ public class JwtManagerImpl implements LoginTokenManager {
                 if (sessionIssuedAt != null) {
                     claims.put(SESSION_ISSUED_AT, sessionIssuedAt);
                 }
+                // skillars-deferred-167 (AC3): same carry-forward, and for the same structural reason --
+                // toClaims() above rebuilds the map from scratch, so a claim not re-put here is DROPPED
+                // (OPF_SEED is the standing proof: nothing sets it and nothing noticed). Losing this one
+                // would silently turn every fast-path extension into a JWT that skips the chain-liveness
+                // check for the rest of its life.
+                putRefreshSessionId(claims, claimsExtractor.extractRefreshSessionId(req));
                 createAndSetJwt(res, claims);
             } else {
                 throw new InvalidJWTDataException("Cannot find dbRefreshToken in JWT.", MISSING_JWT_DB_REFRESH_TOKEN);
@@ -139,6 +150,11 @@ public class JwtManagerImpl implements LoginTokenManager {
     }
 
     @Override
+    public UUID extractRefreshSessionId(HttpServletRequest request) {
+        return claimsExtractor.extractRefreshSessionId(request);
+    }
+
+    @Override
     public void ensureClientHasPreLoginId() {
         tokenValidator.ensureClientHasPreLoginId();
     }
@@ -156,6 +172,21 @@ public class JwtManagerImpl implements LoginTokenManager {
     @Override
     public Optional<String> extractSessionIdSilently(HttpServletRequest request) {
         return claimsExtractor.extractSessionIdSilently(request);
+    }
+
+    /**
+     * skillars-deferred-167 (AC3): writes {@code RTKN_SESSION} only when there is one to write.
+     *
+     * <p>A {@code null} id must leave the claim ABSENT rather than present-and-null: absent is the state
+     * {@code ClaimsExtractor.extractRefreshSessionId} reports as "no claim", which the filter treats as
+     * "skip the check" (AC5). A literal null in the map would serialise into the token and read back as a
+     * claim whose value cannot be parsed — the same skip in the end, but by accident rather than by
+     * contract, and one more thing for a reader to have to work out.
+     */
+    private static void putRefreshSessionId(final Map<String, Object> claims, final UUID refreshSessionId) {
+        if (refreshSessionId != null) {
+            claims.put(RTKN_SESSION, refreshSessionId.toString());
+        }
     }
 
     private void createAndSetJwt(HttpServletResponse res, Map<String, Object> claims) {

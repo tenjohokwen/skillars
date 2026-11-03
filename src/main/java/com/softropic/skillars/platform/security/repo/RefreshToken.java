@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.persistence.BaseEntity;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 
 import java.time.Instant;
+import java.util.UUID;
 
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -75,6 +76,29 @@ public class RefreshToken extends BaseEntity {
     @Column(name = "revoked_at")
     private Instant revokedAt;
 
+
+    /**
+     * skillars-deferred-167 (AC2): identity of the rotation CHAIN this row belongs to. Minted by
+     * {@code AuthService.login}, copied onto every successor by {@code AuthService.decideAndRotate}, and
+     * carried in the access token as a claim so {@code JWTAuthorizationFilter}'s DB-reauth branch can
+     * refuse a JWT whose chain has no live row left — per-session revocation that, unlike
+     * {@code security_session_invalidated_at}, does not reach the account's other devices (which
+     * skillars-deferred-166 AC3 forbids).
+     *
+     * <p>{@code NULL} on every row written before V225, which added the column with no backfill. A null id
+     * means "unknown" and must never match: readers pass it as a query argument only when it is non-null,
+     * because {@code session_id = NULL} matches no row and would turn AC5's deliberate fail-open skip into
+     * a rejection. A rotation of a row whose id is null mints a FRESH id for the successor rather than
+     * copying the null, so a pre-V225 chain acquires one on its next rotation instead of staying unmatched
+     * for the rest of its life.
+     *
+     * <p><strong>Not a credential.</strong> It identifies a chain, it is readable in any JWT that carries
+     * it, and nothing is ever authorised by possessing it: the only question ever asked of it is whether
+     * the chain still has a live token.
+     */
+    @Column(name = "session_id")
+    private UUID sessionId;
+
     public Long getUserId() { return userId; }
     public void setUserId(Long userId) { this.userId = userId; }
 
@@ -94,6 +118,9 @@ public class RefreshToken extends BaseEntity {
 
     public Long getReplacedById() { return replacedById; }
     public void setReplacedById(Long replacedById) { this.replacedById = replacedById; }
+
+    public UUID getSessionId() { return sessionId; }
+    public void setSessionId(UUID sessionId) { this.sessionId = sessionId; }
 
     public Instant getRevokedAt() { return revokedAt; }
     public void setRevokedAt(Instant revokedAt) { this.revokedAt = revokedAt; }

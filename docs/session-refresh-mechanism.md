@@ -124,20 +124,66 @@ button in the warning dialog.
   Before skillars-deferred-166 the redirect went to "the newest live token for this user", which on
   a second device was that device's session: the stale request consumed it, and the other device's
   next refresh then tripped theft detection and logged the account out everywhere.
-- **Token reuse (theft) → revoke-all.** A used token that is not a live chain's recent rotation
+- **Token reuse (theft) → revoke-all.** A used token whose chain has **nothing live at its end**
   revokes every refresh token of the account and bumps `user.security_session_invalidated_at`.
+- **A stale token on a chain that is still live** (skillars-deferred-167) is answered with `401` and
+  cookie deletion headers, and **nothing is written** — no revoke-all, no session epoch. Two
+  concurrent refreshes of one cookie both set `rtkn`, the browser keeps whichever response arrived
+  last, and when that is the first one the client is left permanently one hop behind a live chain.
+  Treating that as theft logged the user out of every device over a double-submitted request.
+  Nothing is revoked because the chain's live end may be a sibling tab's current credential, and the
+  presented row is already `used` so nobody can trade it in.
+  **What this gives up:** this branch was also where a stolen refresh token showed itself — an
+  attacker who steals an `rtkn` and rotates it first leaves the victim holding exactly this shape,
+  and the old behaviour revoked the whole account, killing the attacker's session too. That signal is
+  gone; the case is logged at `warn` instead. Narrow in practice because the SPA never calls
+  `POST /api/auth/refresh` at all, so only API and mobile clients can reach it.
 - **A token whose session was ended** (logout, forced logout, an earlier denial — i.e. one carrying
   `revoked_at`) is refused with `401` and cookie deletion headers, and deliberately does **not**
   trigger revoke-all: a stale tab retrying after Logout must not sign the user out of their other
   devices.
 - **Session epoch.** A token minted before `user.security_session_invalidated_at` is refused, which
-  closes the window where a revoke-all's bulk `UPDATE` could miss a successor a concurrent refresh
-  was committing.
+  narrows the window where a revoke-all's bulk `UPDATE` could miss a successor a concurrent refresh
+  was committing. Every revoke-all caller stamps the epoch **after** its bulk revoke
+  (skillars-deferred-167 AC8 reordered the three that did not), so a row that survives the revoke is
+  older than the epoch and refused. Two residuals remain: `refresh` reads the user row without
+  blocking on the revoking transaction's lock, so it can still see a null epoch until that
+  transaction commits; and the comparison can be inverted by clock skew between application nodes.
 - Every decision is taken inside one short transaction holding a `PESSIMISTIC_WRITE` lock on the
   presented row, and every revocation runs after it, in its own transaction. That ordering is what
   makes a concurrent logout and refresh safe in both directions; holding the lock across a
   `REQUIRES_NEW` revoke self-deadlocks (SQLState 55P03, surfacing as a 409).
 - Response body is a `LoginResponse` (`{ userId, role, displayName, limitedAdmin }`).
+
+### Per-session access-token revocation (skillars-deferred-167)
+
+A logout revokes the whole refresh chain, but until this story it did not stop the **access token**
+that session had already handed out: the TTL-only filter path does no database work, and the
+DB-reauth path only checked the account-wide epoch — which a revoked-token replay deliberately does
+not bump, so that a stale tab cannot sign the user out of their other devices. A copied `potc`
+cookie therefore kept working for as long as its holder kept making requests.
+
+- `main.refresh_tokens.session_id` (uuid, V225) identifies a **rotation chain**: minted at login,
+  copied onto every successor, and a fresh one minted if the rotated row has none (every row written
+  before V225). It is **not a credential** — it is readable in any JWT and nothing is authorised by
+  holding it.
+- The JWT carries it as the `rtsid` claim. Note it is **not** `sessionId`, which is the *browser*
+  session id that `isTokenFixed` compares on every request.
+- `JWTAuthorizationFilter`'s DB-reauth branch asks whether that chain still has a row that is
+  unused, unrevoked and unexpired, and refuses the JWT when it does not. One indexed existence
+  query, on that branch only — the TTL-only path stays database-free by design, so exposure is
+  bounded by `DB_REFRESH_TOKEN_INTERVAL` (5 min), the same bound a locked account has always had.
+- **Fail-open on a missing claim, deliberately.** A JWT minted before this story carries no `rtsid`,
+  the TTL-only path cannot invent one, and refusing all of them would sign out every live session the
+  moment the story deploys. Those tokens are unchecked for the rest of their lives (bounded by the
+  chain's 7-day TTL), so a stolen **pre-deploy** `potc` is the one credential this does not kill. The
+  flip to fail-closed is filed in `deferred-work.md` and cannot ship until no such token can be
+  presented. A post-deploy token always carries the claim.
+- **The refresh TTL is now an absolute session cap.** An access token used to slide indefinitely as
+  long as the user kept clicking, even after its refresh chain had expired and been swept. It no
+  longer does: once the chain has no live row, the session ends within one DB-reauth cycle. This is
+  intended, and it is a behaviour change for a continuously active client, which is now cut off 7
+  days after login rather than never.
 - **No frontend caller.** The SPA does not call this endpoint: `src/api/auth.api.js` dropped its
   helper, and routine keep-alive goes through `GET /refresh` (see above), which re-mints the JWT and
   never touches `refresh_tokens`. This endpoint is reached by API clients and tests.

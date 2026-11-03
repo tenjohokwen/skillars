@@ -299,6 +299,62 @@ class AdminUserManagementIT extends AbstractIntegrationTest {
         assertThat(rawLogin(PARENT_EMAIL, TEST_PASSWORD).getStatusCode()).isEqualTo(HttpStatus.OK);
     }
 
+    /**
+     * skillars-deferred-167 AC8 — the test that decides whether {@code reactivateUser} needs to revoke
+     * refresh tokens at all. The ledger filed it as an authorisation hole: suspend clears nothing on
+     * reactivation, so a session that survived the suspension would come back to life.
+     *
+     * <p>It does not come back, and this pins why. {@code suspendUser} does two things that outlast the
+     * suspension: it revokes every refresh token, and it stamps {@code security_session_invalidated_at},
+     * which is a MONOTONIC marker that nothing — including {@code reactivateUser} and including a later
+     * login — ever clears. So a pre-suspension refresh token stays refused by
+     * {@code AuthService.isBeforeSessionEpoch} after the account is unlocked, and a pre-suspension JWT
+     * stays refused by the filter's {@code assertSessionNotRevoked}, both permanently.
+     *
+     * <p>That is why AC8 ships the statement REORDER (which closes the window where a racing refresh's
+     * successor could outlive the revoke) but deliberately does NOT add a revoke to
+     * {@code reactivateUser}: there is nothing left for it to revoke. Adding one would be a write that
+     * cannot change an outcome. If this test ever fails, that reasoning has broken and the revoke becomes
+     * necessary.
+     */
+    @Test
+    void reactivate_cannotRestoreASessionTheSuspensionEnded() {
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        String adminCookies = loginAndGetCookies(ADMIN_EMAIL);
+
+        suspend(PARENT_ID, adminCookies, "Abusive messages");
+        Timestamp epochAfterSuspend = jdbcTemplate.queryForObject(
+            "SELECT security_session_invalidated_at FROM main.\"user\" WHERE id = ?",
+            Timestamp.class, PARENT_ID);
+        assertThat(epochAfterSuspend).as("precondition: suspend stamps the epoch").isNotNull();
+
+        assertThat(reactivate(PARENT_ID, adminCookies, "Appeal accepted").getStatusCode())
+            .isEqualTo(HttpStatus.NO_CONTENT);
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT security_session_invalidated_at FROM main.\"user\" WHERE id = ?",
+            Timestamp.class, PARENT_ID))
+            .as("the epoch is monotonic — reactivation must not clear it, or every pre-suspension "
+                + "credential would come back with the account")
+            .isEqualTo(epochAfterSuspend);
+
+        // The credential the user held before the suspension, replayed after the account is live again.
+        ResponseEntity<Map> refresh = call(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null,
+            authenticatedHeaders(parentCookies), Map.class);
+        assertThat(refresh.getStatusCode().is4xxClientError())
+            .as("a pre-suspension refresh token must stay dead after reactivation")
+            .isTrue();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM main.refresh_tokens WHERE user_id = ? AND used = false "
+                + "AND revoked_at IS NULL", Long.class, PARENT_ID))
+            .as("and reactivation must not leave a live token behind either")
+            .isZero();
+
+        // A fresh login still works — reactivation restores the account, just not its old sessions.
+        assertThat(rawLogin(PARENT_EMAIL, TEST_PASSWORD).getStatusCode()).isEqualTo(HttpStatus.OK);
+    }
+
     @Test
     void reactivate_accountWithGdprErasure_isRefusedWith409() {
         String adminCookies = loginAndGetCookies(ADMIN_EMAIL);

@@ -4,6 +4,7 @@ import com.softropic.skillars.platform.security.contract.Principal;
 import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface ClaimsExtractor {
     Claims extractClaims(String token);
@@ -12,6 +13,7 @@ public interface ClaimsExtractor {
     Principal extractPrincipal(HttpServletRequest request);
     Long extractDbRefreshToken(HttpServletRequest request);
     Long extractSessionIssuedAt(HttpServletRequest request);
+    UUID extractRefreshSessionId(HttpServletRequest request);
     String extractUserNameSilently(HttpServletRequest request);
     Optional<String> extractSessionIdSilently(HttpServletRequest request);
     java.util.Set<org.springframework.security.core.authority.SimpleGrantedAuthority> getRoles(io.jsonwebtoken.Claims claims);

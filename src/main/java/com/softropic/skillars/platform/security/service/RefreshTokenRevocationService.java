@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +51,34 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class RefreshTokenRevocationService {
+
+    /**
+     * skillars-deferred-167 (AC4): can the rotation chain identified by {@code refreshSessionId} still be
+     * traded in for a session? True while it has at least one row that is unused, unrevoked and unexpired.
+     *
+     * <p>This is the whole of the per-session JWT check that {@code JWTAuthorizationFilter} runs on its
+     * DB-reauth branch. False means every token in the chain is spent, revoked or expired — a logout, a
+     * forced logout, a revoke-all, or simply a chain that ran out its 7-day TTL — so the access token minted
+     * for that chain must stop working too.
+     *
+     * <p>Read-only and NOT {@code REQUIRES_NEW}, unlike everything else on this service: it writes nothing,
+     * so it has no rollback to protect itself from, and it must be able to join the caller's transaction (or
+     * run with none at all, which is the filter's case) rather than forcing a second one per request.
+     *
+     * <p>Rejects a {@code null} id by returning {@code true} — "cannot tell, so do not block". A null
+     * {@code session_id} matches no row, so asking the database would answer "nothing live" for every
+     * pre-V225 session and log those users out, which is the precise opposite of AC5's deliberate
+     * fail-open. The filter also checks for null before calling, so this is defence in depth, not the
+     * primary guard.
+     */
+    @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
+    public boolean hasLiveTokenForSession(final UUID refreshSessionId) {
+        if (refreshSessionId == null) {
+            return true;
+        }
+        return refreshTokenRepository.existsLiveBySessionId(
+            refreshSessionId, Instant.now(ClockProvider.getClock()));
+    }
 
     /**
      * Links ({@code replaced_by_id} hops) the chain walk will follow before giving up, so it revokes the
