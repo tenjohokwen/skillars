@@ -1,6 +1,6 @@
-id: pending-logout-successor-revocation
+id: logout-successor-revocation
 kind: pre-fix-snapshot
-fix_pr: pending
+fix_pr: 413
 input_rev: 9923ffb02479
 confidence: high
 scope:
@@ -29,6 +29,8 @@ expected_findings:
         symbol: rotatedAt
 source: results/baseline-2026-11-02/real-sample.md S01, owner-verified 2026-11-03
 notes: >
-  Open bug, no fix PR yet. input_rev is the 242-logout-race-and-cookie-id input revision the reviewer
+  Fixed by PR #413 (skillars-deferred-166); `fix_merge` is added in a follow-up commit once the squash
+  sha exists, and `input_rev` is dropped then. Until that lands, validate.py reads a numeric fix_pr with
+  a pinned input_rev and no fix_merge as "fix PR open, not merged". input_rev is the 242-logout-race-and-cookie-id input revision the reviewer
   saw. The account-wide grace-window lookup inside refresh at this same revision is the separate case
   pending-refresh-grace-window-account-wide, not a finding here.

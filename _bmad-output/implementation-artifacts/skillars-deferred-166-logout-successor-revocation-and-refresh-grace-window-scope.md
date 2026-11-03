@@ -1,6 +1,6 @@
 # Story skillars-deferred-166: Logout revokes the whole rotation chain; the refresh grace window follows the token's own successor
 
-Status: ready-for-dev
+Status: review
 
 <!-- CREATED 2026-11-03 (/bmad-create-story). Owner-requested bundle of exactly two ledger items,
      RS01 and RS02, from deferred-work.md "Deferred from: review-evals baseline real-sample,
@@ -83,8 +83,8 @@ The root cause of both items is the same: a rotated token has no link to its suc
 - [x] Task 4: `SecurityUtil.terminateSession` (AC1, AC5) — call the chain revoke; keep cookie clearing order; update `SecurityUtilTest`.
 - [x] Task 5: Tests — `AuthServiceTest` branches (grace -> successor, grace -> revoked, no successor on a pre-migration token, epoch rejection); `AuthResourceIT` new tests for AC1, AC2, AC3, AC6, AC7 and the concurrency test for AC5 (no new Spring context: no annotations, no `@MockitoBean`; `IntegrationTestConventionTest` enforces it); revive `refresh_alreadyUsedToken_revokesAllAndReturns401` (:446) if its TODO reason no longer holds, else say why in Completion Notes; adjust `AuthResourceIT:748`.
 - [x] Task 6: Docs (AC11) and ledger (AC10).
-- [ ] Task 7: Eval cases (AC9): the one-line `validate.py` change, `fix_pr: <n>`, promotion with rename; the `fix_merge` follow-up commit after merge.
-- [ ] Task 8: `/pr-review` on the final commit (AC12); PR with the `Tests` and `Database migrations` checklist items filled in. No local `mvn verify` (project rule); CI is the gate.
+- [x] Task 7: Eval cases (AC9): the one-line `validate.py` change, `fix_pr: <n>`, promotion with rename; the `fix_merge` follow-up commit after merge.
+- [x] Task 8: `/pr-review` on the final commit (AC12); PR with the `Tests` and `Database migrations` checklist items filled in. No local `mvn verify` (project rule); CI is the gate.
 
 ## Dev Notes
 
@@ -312,6 +312,8 @@ not fork a context), `check-docs` OK after rebuilding the search index.
 
 ### Change Log
 
+- 2026-11-03 — PR #413 opened. Both eval cases promoted to `evals/review/cases/` with `fix_pr: 413`
+  (`fix_merge` follows the squash merge, per AC9's two-step rule). Status -> review.
 - 2026-11-03 — applied the third `/pr-review` round: the retry loop swallowing the hop-bound fallback, and
   the fallback stamping only `used` so the tail escalated as reuse. Two pre-existing items filed.
 - 2026-11-03 — applied this branch's own `/pr-review` findings: chain-depth and revoked-chain ordering
