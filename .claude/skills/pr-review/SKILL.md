@@ -36,7 +36,7 @@ Launch **both** subagents in the same message so they run in parallel: `subagent
 >
 > An empty `findings` array is a valid answer.
 
-If a subagent returns no parseable JSON, re-ask it once for the JSON only; if it still fails, record "arm failed" in the record and continue with the other arm.
+If a subagent returns no parseable JSON, re-ask it once for the JSON only; if it still fails, record "arm failed" in the record and continue with the other arm. If **both** arms fail, do not write the record: the hook must keep blocking until a review has actually happened.
 
 ## 3. Merge and filter
 

@@ -35,7 +35,13 @@ def arm_template(arm):
     spec = ARMS[arm]
     if "prompt" in spec:
         return read_prompt(spec["prompt"])
-    with open(os.path.join(ROOT, ".claude", "agents", f"{spec['agent']}.md")) as fh:
+    # A staging copy (SKILLARS_REVIEW_EVALS_DIR) may carry an edited agent under agents/; the
+    # committed one under .claude/agents/ is the default, so an eval can measure a prompt edit
+    # before it lands.
+    candidates = [os.path.join(EVALS, "agents", f"{spec['agent']}.md"),
+                  os.path.join(ROOT, ".claude", "agents", f"{spec['agent']}.md")]
+    path = next(c for c in candidates if os.path.exists(c))
+    with open(path) as fh:
         body = fh.read()
     if body.startswith("---"):
         body = body.split("---", 2)[2]  # strip the agent frontmatter

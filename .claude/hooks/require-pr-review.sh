@@ -14,13 +14,15 @@
 #   transcript and cannot be smuggled in via --title or --body.
 set -u
 input="$(cat)"
-# An actual invocation: at the start of the command or after ; & | ( or a newline, optionally
-# preceded by VAR=value assignments. The phrase inside a string, heredoc line or comment that is
-# not at a command boundary does not count, so editing docs that mention it is not blocked.
+# An actual invocation of gh pr create, recognised at a command boundary (start, ; & | ( { `, or
+# after then/do/else/exec/command/env), optionally after VAR=value assignments (quoted or not), with
+# gh possibly path-qualified and possibly carrying global flags (gh --repo x pr create). This is a
+# heuristic over the command text, not a shell parser: `sh -c "..."`, `gh api .../pulls` and a
+# heredoc line that begins with the phrase are not distinguished. It is a guardrail against
+# forgetting the review, not a security boundary.
 looks_like_pr_create() {
-  printf '%s\n' "$1" | grep -Eq '(^|[;&|(])[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]"'"'"']*[[:space:]]+)*gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$)'
+  printf '%s\n' "$1" | grep -Eq '(^|[;&|({`])[[:space:]]*((then|do|else|exec|command|env)[[:space:]]+)?([A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'"'"'[^'"'"']*'"'"'|[^[:space:]]*)[[:space:]]+)*([^[:space:]]*/)?gh([[:space:]]+-[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+pr[[:space:]]+create([^[:alnum:]_-]|$)'
 }
-# Loose check for input we could not parse: fail closed if the phrase appears anywhere.
 mentions_pr_create() { printf '%s' "$1" | grep -q 'gh pr create'; }
 
 if command -v python3 >/dev/null 2>&1; then
@@ -44,13 +46,19 @@ case "$cmd" in "PR_REVIEW_SKIP=1 "*) exit 0 ;; esac
 
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "Blocked: \`gh pr create\` outside a git checkout; the PR-review gate cannot resolve HEAD." >&2; exit 2; }
 sha="$(git -C "$root" rev-parse HEAD 2>/dev/null)" || { echo "Blocked: the PR-review gate cannot resolve HEAD." >&2; exit 2; }
-[ -f "$root/.pr-review/$sha.md" ] && exit 0
+# The record must exist and be non-empty (an empty touch does not count).
+[ -s "$root/.pr-review/$sha.md" ] && exit 0
 
-# Docs-only branch: nothing the build or tests read changed, so no code review is required.
+# Docs-only branch: nothing the build, the tests or a Claude Code session executes changed, so no
+# code review is required. ALLOWED mirrors .github/scripts/classify-no-build.sh; NEEDS_REVIEW adds
+# that script's NEEDS_BUILD exception (a test parses monitoring.md) and the parts of .claude/ that
+# are executable: hooks and settings, which run commands on every tool call.
 ALLOWED='^(docs/|_bmad-output/|evals/|\.claude/|[^/]+\.md$)'
+NEEDS_REVIEW='^(docs/deployment/monitoring\.md$|\.claude/hooks/|\.claude/settings)'
 if git -C "$root" rev-parse --verify -q origin/master >/dev/null 2>&1; then
   changed="$(git -C "$root" -c core.quotePath=false diff --no-renames --name-only origin/master...HEAD 2>/dev/null)"
-  if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -Evq "$ALLOWED"; then
+  if [ -n "$changed" ] && ! printf '%s\n' "$changed" | grep -Evq "$ALLOWED" \
+     && ! printf '%s\n' "$changed" | grep -Eq "$NEEDS_REVIEW"; then
     exit 0
   fi
 fi
@@ -58,7 +66,7 @@ fi
 cat >&2 <<MSG
 Blocked: no /pr-review record for HEAD (${sha:0:12}) at .pr-review/${sha:0:12}….md.
 Run /pr-review on this branch first (and again after every new commit; the record is keyed to the commit).
-A branch that changes only docs/, _bmad-output/, evals/, .claude/ or root *.md passes automatically.
+A branch that changes only docs/, _bmad-output/, evals/, .claude/ (except hooks and settings) or root *.md passes automatically.
 To skip deliberately, start the command with: PR_REVIEW_SKIP=1 gh pr create ...
 MSG
 exit 2
