@@ -10,6 +10,14 @@ export class BookingRequestScreen extends Screen {
   readonly route = R.requestBooking
   readonly readyTestId = 'booking-request-title'
   slots = () => this.tid('booking-slot')
+  /**
+   * The offered slot whose START reads `label` (see slotLabel). A row reads "<start> <end>", so the
+   * match is anchored, or the previous slot's end would match too.
+   */
+  slotAt = (label: string) =>
+    this.slots().filter({
+      hasText: new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`),
+    })
   ownSlots = () => this.tid('booking-slot-own')
   noSlots = () => this.tid('booking-no-slots')
   packSelect = () => this.tid('booking-pack-select')

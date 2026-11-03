@@ -1,8 +1,6 @@
-import type { Page } from '@playwright/test'
 import { expect, scenario, test } from '../../src/app.js'
 import { asRole } from '../../src/data/accounts.js'
-import { nextWeekSlot, slotInstant } from '../../src/data/slots.js'
-import { E2E } from '../../src/env.js'
+import { nextWeekSlot, slotInstant, slotLabel, zonedLabel } from '../../src/data/slots.js'
 import { t } from '../../src/i18n.js'
 import {
   BookingRequestScreen,
@@ -184,6 +182,78 @@ test.describe('F · Booking lifecycle', () => {
       expect(await chargesFor(parent.userId)).toBe(1)
     },
   )
+  test(
+    'only published availability is offered: inside the windows, never outside them',
+    scenario({
+      id: 'BKG-03',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@parent', '@booking'],
+    }),
+    async ({ actor, suite, provision }) => {
+      // Provisioned coaches publish Monday–Friday 09:00–17:00 (Europe/Berlin), 60-minute sessions.
+      const zone = 'Europe/Berlin'
+      const coach = await provision.coach({ timezone: zone })
+      const parent = await provision.parent()
+      const family = await actor(asRole(parent))
+      const tuesday = (time: string) => nextWeekSlot(2, time)
+      const profile = await new CoachPublicProfileScreen(family.page, suite).openWithSlot(
+        coach.coachId!,
+        tuesday('10:00'),
+      )
+      await profile.primaryCta().click()
+      const request = await new BookingRequestScreen(family.page, suite).waitReady()
+      const at = async (slot: string) => request.slotAt(await slotLabel(family.page, slot, zone))
+
+      await expect(await at(tuesday('09:00'))).toHaveCount(1)
+      await expect(await at(tuesday('16:00'))).toHaveCount(1)
+      await expect(await at(tuesday('08:00'))).toHaveCount(0)
+      await expect(await at(tuesday('17:00'))).toHaveCount(0)
+      await expect(await at(nextWeekSlot(6, '10:00'))).toHaveCount(0)
+    },
+  )
+
+  test(
+    'a slot another family has requested is not offered again',
+    scenario({
+      id: 'BKG-05',
+      priority: 'P0',
+      type: 'neg',
+      tags: ['@regression', '@parent', '@booking'],
+    }),
+    async ({ actor, suite, provision }) => {
+      test.slow()
+      const zone = 'Europe/Berlin'
+      const coach = await provision.coach({ timezone: zone })
+      const first = await provision.parent()
+      await provision.saveCard(first)
+      const second = await provision.parent()
+      const slot = nextWeekSlot(3, '10:00')
+
+      // The first family requests 10:00 (a REQUESTED booking already holds the slot).
+      const a = await actor(asRole(first))
+      const profileA = await new CoachPublicProfileScreen(a.page, suite).openWithSlot(
+        coach.coachId!,
+        slot,
+      )
+      await profileA.primaryCta().click()
+      await (await new BookingRequestScreen(a.page, suite).waitReady()).submit().click()
+      await new ParentBookingsScreen(a.page, suite).waitReady()
+
+      // The second family sees the week without 10:00, and with 11:00 as the control.
+      const b = await actor(asRole(second))
+      const profileB = await new CoachPublicProfileScreen(b.page, suite).openWithSlot(
+        coach.coachId!,
+        slot,
+      )
+      await profileB.primaryCta().click()
+      const request = await new BookingRequestScreen(b.page, suite).waitReady()
+      await expect(
+        request.slotAt(await slotLabel(b.page, nextWeekSlot(3, '11:00'), zone)),
+      ).toHaveCount(1)
+      await expect(request.slotAt(await slotLabel(b.page, slot, zone))).toHaveCount(0)
+    },
+  )
 })
 
 // C-12: a slot belongs to the coach's zone. A parent's browser elsewhere must not shift it.
@@ -191,33 +261,6 @@ test.describe('F · Booking lifecycle — parent browser in New York, coach in B
   test.use({ timezoneId: 'America/New_York' })
   const coachZone = 'Europe/Berlin'
   const parentZone = 'America/New_York'
-  // A slot row reads "<start>  <end>": anchor on the start, or the previous slot's end matches too.
-  const startsWith = (label: string) =>
-    new RegExp(`^\\s*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
-
-  // Formatted in the browser with the app's own options. The request page labels a slot with its
-  // zone using explicit components (SLOT_FORMAT in BookingRequestPage; dateStyle cannot be combined
-  // with timeZoneName); the bookings list uses dateStyle/timeStyle without a zone.
-  const format = (page: Page, instant: Date, timeZone: string, withZone: boolean) =>
-    page.evaluate(
-      ([iso, zone, locale, labelled]) =>
-        new Intl.DateTimeFormat(
-          locale,
-          labelled
-            ? {
-                timeZone: zone,
-                year: 'numeric',
-                month: 'short',
-                day: 'numeric',
-                hour: 'numeric',
-                minute: '2-digit',
-                timeZoneName: 'short',
-              }
-            : { timeZone: zone, dateStyle: 'medium', timeStyle: 'short' },
-        ).format(new Date(iso)),
-      [instant.toISOString(), timeZone, E2E.locale, withZone] as const,
-    )
-
   test(
     'slots render in the coach’s zone, labelled with it',
     scenario({
@@ -239,15 +282,9 @@ test.describe('F · Booking lifecycle — parent browser in New York, coach in B
       const request = await new BookingRequestScreen(family.page, suite).waitReady()
       // 10:00 in Berlin, written in Berlin time with its zone; 04:00 New York time must not appear.
       const start = slotInstant(slot, coachZone)
+      await expect(request.slotAt(await slotLabel(family.page, slot, coachZone))).toHaveCount(1)
       await expect(
-        request
-          .slots()
-          .filter({ hasText: startsWith(await format(family.page, start, coachZone, true)) }),
-      ).toHaveCount(1)
-      await expect(
-        request
-          .slots()
-          .filter({ hasText: startsWith(await format(family.page, start, parentZone, true)) }),
+        request.slotAt(await zonedLabel(family.page, start, parentZone, true)),
       ).toHaveCount(0)
     },
   )
@@ -280,17 +317,17 @@ test.describe('F · Booking lifecycle — parent browser in New York, coach in B
       const start = slotInstant(slot, coachZone)
       const requested = t('booking.requests.statusRequested')
       await expect(bookings.time(booking)).toHaveText(
-        await format(family.page, start, coachZone, false),
+        await zonedLabel(family.page, start, coachZone, false),
       )
       await bookings.timezoneToggle(booking).click()
       await expect(bookings.time(booking)).toHaveText(
-        await format(family.page, start, parentZone, false),
+        await zonedLabel(family.page, start, parentZone, false),
       )
       await expect(bookings.status(booking)).toHaveText(requested)
       await expect(booking).toHaveCount(1)
       await bookings.timezoneToggle(booking).click()
       await expect(bookings.time(booking)).toHaveText(
-        await format(family.page, start, coachZone, false),
+        await zonedLabel(family.page, start, coachZone, false),
       )
     },
   )
