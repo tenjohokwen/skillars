@@ -1,6 +1,6 @@
 # Story skillars-deferred-167: per-session JWT revocation and the refresh-chain follow-ups
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- CREATED 2026-11-03 (/bmad-create-story), then REVISED the same day after /mto-story-review (findings
 H1, H2, H3, M2, M4, the clock hook and the AC8 overclaim all applied; see the Change Log). Owner-requested
@@ -225,10 +225,14 @@ defects introduced by the previous round's own fix.
         `SecurityUtilTest` 8/8, `AuthCleanupServiceTest` 6/6, `MigrationConventionLintTest` 30/30,
         `NativeModifyingVersionAuditTest` 2/2, `IntegrationTestConventionTest` 6/6
 - [x] Task 9: docs (AC11) — `check-docs: OK, 26 pages`
-- [~] Task 10: `/pr-review` (AC12) — three rounds run, 26 findings; **not a clean round**: four owner
-      decisions remain, one of which (the AC7 remediation loss) is a code change, so a fourth round is
-      pointless until it is settled. Records: `.pr-review/826ac6cf...md`, `.pr-review/f5380b7a...md`,
-      `.pr-review/d45d11d3...md`
+- [~] Task 10: `/pr-review` (AC12) — **seven rounds run so far; not yet a clean round.** Rounds 1-5 found
+      behaviour defects, rounds 6-7 found only stale claims, which is the signal the code has settled and
+      the documentation load is where the remaining risk sits. Every round found at least one defect the
+      previous round introduced or left behind. Records in `.pr-review/`, one per reviewed commit:
+      `826ac6cf` (1), `f5380b7a` (2), `d45d11d3` (3), `b3b7083b` (4), `c5e609bb` (5), `1eab3dc5` (6),
+      `6920654e` (7) — the last three were written only when round 7 pointed out the story claimed records
+      that did not exist, found by listing `.pr-review/` rather than trusting the claim. The owner's four decisions are settled and applied; AC12 closes when a round comes
+      back with nothing actionable.
 
 ## Dev Notes
 

@@ -184,19 +184,33 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
     }
 
     /**
-     * skillars-deferred-120 code review (2026-09-17, Patch #9) — the restored assertion above only
-     * covered {@code AuthCleanupService}'s plain {@code @Transactional} (REQUIRED) shape; this
-     * story's own Javadoc on {@code UserAdminService.removeNotActivatedUsers} argues at length that
-     * stacking {@code @SchedulerLock} with {@code @Transactional(propagation = NOT_SUPPORTED)} is
-     * equally safe, but left that distinct combination untested. Covers it directly rather than
-     * relying on "the advisor ordering is `AsyncConfig`-wide, not per-bean" as a substitute —
-     * {@link #assertShedLockOutermost}'s own assertion (3) exists specifically to catch
+     * skillars-deferred-120 code review (2026-09-17, Patch #9) — covers the
+     * {@code @Transactional(propagation = NOT_SUPPORTED)} shape, which {@code UserAdminService
+     * .removeNotActivatedUsers}'s own Javadoc argues at length is equally safe to stack with
+     * {@code @SchedulerLock} but which was left untested. Covered directly rather than by appeal to "the
+     * advisor ordering is {@code AsyncConfig}-wide, not per-bean", because
+     * {@link #assertShedLockOutermost}'s assertion (3) exists specifically to catch
      * {@code @Transactional}/{@code @SchedulerLock} moving to (or missing from) a particular method,
      * which a per-bean argument alone does not verify.
      */
     @Test
     void userAdminServiceRemoveNotActivatedUsers_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
         assertShedLockOutermost(userAdminService, "removeNotActivatedUsers");
+    }
+
+    /**
+     * skillars-deferred-167 AC9 left this gap and round 7 of that story's review found it: the plain
+     * {@code @Transactional} (REQUIRED) shape used to be pinned via
+     * {@code AuthCleanupService.purgeExpiredRefreshTokens}, and AC9 removed that method's
+     * {@code @Transactional} so a lost deadlock could be caught — taking the REQUIRED-propagation
+     * ordering guard with it, since the only other covered method is {@code NOT_SUPPORTED}.
+     * {@code purgeOldLoginAttempts} is the same class's remaining stacked method and keeps that shape, so
+     * the guard moves here rather than disappearing. Without it, a regression in the
+     * {@code AsyncConfig}-wide advisor ordering would be caught for one propagation and not the other.
+     */
+    @Test
+    void authCleanupServicePurgeOldLoginAttempts_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
+        assertShedLockOutermost(authCleanupService, "purgeOldLoginAttempts");
     }
 
     /**

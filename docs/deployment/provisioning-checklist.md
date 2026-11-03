@@ -712,9 +712,11 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       filed as its own story in `deferred-work.md`. Tell support before this ships.
 - [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
       carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
-      sign every live session out at deploy. Such a token never acquires a claim, so a holder who keeps
-      making requests keeps that session alive indefinitely — a `potc` stolen *before* the rollout is a
-      permanent session. Waiting 7 days does not close it. The flip to fail-closed needs a deliberate
+      sign every live session out at deploy. A claimless token presented WITH its `rtkn` cookie is
+      repaired — the filter re-derives the chain id from that cookie, owner-scoped — so the exposed
+      population is narrower than it first appears: a holder presenting a claimless `potc` WITHOUT the
+      matching cookie, which is precisely a thief who copied only that cookie. For them the session stays
+      alive as long as they keep making requests, and waiting 7 days does not close it. The flip to fail-closed needs a deliberate
       trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
       flip); tracked as an owner decision in `deferred-work.md`.
 - [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain

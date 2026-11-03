@@ -72,7 +72,7 @@ Two consequences that trip people up:
 | Constant | Value | Where | Meaning |
 |---|---|---|---|
 | `JWT_TTL` | 15 min | `SecurityConstants` | Access-token (`potc` cookie) lifetime; reset on every authed request |
-| `DB_REFRESH_TOKEN_INTERVAL` | 5 min | `SecurityConstants` | How often `JWTAuthorizationFilter` does a full DB re-authorisation (`daoAuthProvider.authorize`) instead of a TTL-only bump. The TTL-only path is **not** DB-free: it still runs one `refresh_tokens` revocation lookup whenever an `rtkn` cookie is present. |
+| `DB_REFRESH_TOKEN_INTERVAL` | 5 min | `SecurityConstants` | How often `JWTAuthorizationFilter` does a full DB re-authorisation (`daoAuthProvider.authorize`) instead of a TTL-only bump. The TTL-only path is DB-free: `skillars-deferred-144` AC8 removed the per-request `refresh_tokens` lookup it once ran, and `skillars-deferred-167` put its chain-liveness check on the DB-reauth branch rather than this one. |
 | `REFRESH_TOKEN_TTL` | 7 days | `SecurityConstants` | `rtkn` and `skp` cookie lifetime |
 | `rint` cookie value | absolute epoch ms (`now + JWT_TTL`) | `JwtManagerImpl` | The JWT's absolute expiry; rewritten (advanced) on every authenticated response |
 | `WARNING_THRESHOLD` | 5 min (300000 ms) | `plugins/sessionManager.js` | Fixed client-side constant; warning shows when `timeUntilExpiry` drops below it |
@@ -188,7 +188,7 @@ cookie therefore kept working for as long as its holder kept making requests.
   **That exposure has no time bound, for a token presented WITHOUT its `rtkn` cookie.** With the cookie
   the claim is repaired, as described above. Without it there is nothing to derive from: the DB-reauth
   path passes the missing value straight back and the TTL-only path omits what it cannot read, while both
-  re-mint `exp`, `dbRToken` and `sessIat` — and nothing else on either path consults `refresh_tokens`.
+  carry `dbRToken` and `sessIat` forward unchanged (only `exp` is fresh) — and nothing else on either path consults `refresh_tokens`.
   Omitting a cookie costs an attacker nothing, which is why the repair narrows this gap without closing
   it.
   So a holder who makes one request every 15 minutes keeps that session alive indefinitely, long after

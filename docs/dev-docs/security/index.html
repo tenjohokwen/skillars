@@ -226,7 +226,7 @@
     </ul>
     <p>Defined here but published elsewhere and (partly) consumed here:</p>
     <ul>
-      <li><code>AccountSuspensionRequestedEvent</code> — published by video's <code>ModerationOrchestrationService</code> (CSAM hit); <code>AccountSuspensionEventListener</code> resolves the event's <code>ownerId</code> (a <code>Video.ownerId</code>: a CoachProfile UUID &rarr; <code>coach_profiles.user_id</code>; a PlayerProfile id &rarr; its <code>userId</code>, or <code>parentId</code> for a managed minor; otherwise login/email), then, in a <code>REQUIRES_NEW</code> transaction under the user row lock, sets <code>verificationStatus = SUSPENDED</code>, locks the account, clears persistent tokens, stamps <code>securitySessionInvalidatedAt</code> and revokes every refresh token. When nothing resolves (or the user row is gone) it throws, and the publisher turns that into an urgent "CSAM match — account suspension FAILED" admin alert. <code>admin.CoachSafetySuspensionListener</code> also consumes it and, for a CoachProfile UUID owner, suspends the coach's marketplace profile (a non-appealable <code>COACH_SAFETY_HOLD</code>).</li>
+      <li><code>AccountSuspensionRequestedEvent</code> — published by video's <code>ModerationOrchestrationService</code> (CSAM hit); <code>AccountSuspensionEventListener</code> resolves the event's <code>ownerId</code> (a <code>Video.ownerId</code>: a CoachProfile UUID &rarr; <code>coach_profiles.user_id</code>; a PlayerProfile id &rarr; its <code>userId</code>, or <code>parentId</code> for a managed minor; otherwise login/email), then, in a <code>REQUIRES_NEW</code> transaction under the user row lock, sets <code>verificationStatus = SUSPENDED</code>, locks the account, clears persistent tokens, revokes every refresh token and <em>then</em> stamps <code>securitySessionInvalidatedAt</code> (that order, per skillars-deferred-167 AC8). When nothing resolves (or the user row is gone) it throws, and the publisher turns that into an urgent "CSAM match — account suspension FAILED" admin alert. <code>admin.CoachSafetySuspensionListener</code> also consumes it and, for a CoachProfile UUID owner, suspends the coach's marketplace profile (a non-appealable <code>COACH_SAFETY_HOLD</code>).</li>
       <li><code>UserErasedEvent</code> — published by admin's <code>GdprErasureService</code>; <code>UserErasedEventListener</code> (<code>AFTER_COMMIT</code>) re-asserts <code>activated=false, locked=true</code> and clears persistent tokens if erasure somehow left them. Also consumed by notification.</li>
       <li><code>AccountDeletionRequestedEvent</code> — published by <code>GdprErasureService</code>, consumed by video's <code>AccountDeletionCascadeListener</code>. Its ids are in the <code>videos.owner_id</code> space: coach-profile UUID, player <code>PlayerProfile</code> id, and <code>linkedPlayerIds</code> = the parent's children's <code>PlayerProfile</code> ids.</li>
     </ul>
@@ -448,7 +448,7 @@ sequenceDiagram
   else used, rotated under 30s ago, replaced_by_id live
     AS->>DB: redirect to its own successor (multi-tab race)
   else used, chain still live but rotated over 30s ago
-    AS-->>C: 401 stale (nothing written, warn logged)
+    AS->>DB: revoke THIS chain only (401 stale, warn + metric)
   else used, nothing live at the end of the chain
     AS->>DB: markAllUsedByUserId + invalidateSessionsForUser (REQUIRES_NEW, after the lock)
     AS-->>C: 401 Token reuse detected
@@ -480,18 +480,26 @@ sequenceDiagram
       suspension, GDPR erasure, refresh-token-theft revocation <em>and now a plain logout</em> all take effect on open
       sessions within at most 5 minutes &mdash; the chain check is what closes logout, which the account-wide epoch
       deliberately does not cover (bumping it would sign the user out of their other devices). Two consequences worth
-      knowing: a JWT minted before that story carries no <code>rtsid</code> and is deliberately <em>not</em> checked
-      (failing closed at deploy would end every live session), and the refresh chain's 7-day TTL is now an absolute
-      cap on a session rather than something a continuously active client could slide past indefinitely. A genuine denial (locked, theft, invalid JWT) gets the full teardown (<code>terminateSession</code>),
+      knowing: a JWT minted before that story carries no <code>rtsid</code>; presented WITH its <code>rtkn</code>
+      cookie the claim is re-derived and the check applies, presented without it the check is deliberately
+      skipped (failing closed at deploy would end every live session), and the refresh chain's 7-day TTL now caps a session &mdash; but it binds the SPA, not
+      API clients: every rotation writes a fresh <code>expires_at</code>, so a client that keeps refreshing
+      is never capped, while the SPA (which has no caller for <code>POST /api/auth/refresh</code>) keeps the
+      deadline written at login. Three attempts to remove that were withdrawn; see
+      <code>docs/session-refresh-mechanism.md</code>. A genuine denial (locked, theft, invalid JWT) gets the full teardown (<code>terminateSession</code>),
       routine expiry only drops the JWT cookies, and the 401 body is an <code>ErrorDto</code> the SPA's axios interceptor
       routes on.
     </p>
     <p>
       Admin suspend (<code>AdminUserService.suspendUser</code>, admin module) sets <code>locked = true</code> under the user
-      row lock (<code>UserRepository.findByIdForUpdate</code>, NO_WAIT + <code>PessimisticLockRetryer</code>), stamps
-      <code>securitySessionInvalidatedAt</code> in the same transaction
-      (<code>invalidateSessionsForUserInCurrentTransaction</code>, <code>MANDATORY</code>), then revokes all refresh
-      tokens. <code>unlockLogin</code> calls <code>AuthService.clearLoginRateLimit</code> for both the login and the email.
+      row lock (<code>UserRepository.findByIdForUpdate</code>, NO_WAIT + <code>PessimisticLockRetryer</code>), revokes
+      all refresh tokens, and <em>then</em> stamps <code>securitySessionInvalidatedAt</code> in the same transaction
+      (<code>invalidateSessionsForUserInCurrentTransaction</code>, <code>MANDATORY</code>). That order is
+      load-bearing and was reversed by <code>skillars-deferred-167</code> AC8: stamping first left a window in which a
+      racing refresh's successor carried a <code>created_at</code> after the epoch and so passed
+      <code>isBeforeSessionEpoch</code>; stamping after means any row that survived the revoke is older than the epoch.
+      The same reorder was applied to <code>AgeVerificationService.blockAccount</code> and
+      <code>AccountSuspensionEventListener.suspend</code>. <code>unlockLogin</code> calls <code>AuthService.clearLoginRateLimit</code> for both the login and the email.
     </p>
 
     <h2 id="conventions-gotchas">Conventions &amp; Gotchas</h2>

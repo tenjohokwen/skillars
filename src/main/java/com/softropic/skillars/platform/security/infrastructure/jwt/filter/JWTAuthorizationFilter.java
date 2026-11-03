@@ -82,12 +82,15 @@ import jakarta.servlet.http.HttpServletResponse;
  *         re-loads the account and re-runs Spring Security's own pre-authentication checks, so a
  *         <i>locked or deactivated</i> account is caught, then {@code renewLoginToken(...)} mints
  *         the fresh token. ({@code renewLoginToken} itself touches no repository &mdash; the DB
- *         hit is {@code daoAuthProvider.authorize}.) It does <i>not</i> read {@code refresh_tokens}
- *         at all &mdash; GDPR erasure is caught on this cycle only because
- *         {@code GdprErasureService} also sets {@code locked = true} on the account, not because
- *         anything here checks for revoked refresh tokens; theft-driven mass-revocation (
- *         {@code markAllUsedByUserId} with no accompanying lock) is <i>not</i> caught by this path
- *         at all &mdash; see the deferred, pre-existing finding on that gap.</li>
+ *         hit is {@code daoAuthProvider.authorize}.)
+ *         <p>Since skillars-deferred-167 AC4 this path <i>does</i> read {@code refresh_tokens}: one
+ *         indexed existence query per cycle ({@code assertSessionChainStillLive} &rarr;
+ *         {@code existsLiveBySessionId}) refusing a JWT whose refresh chain has no live row. That is
+ *         what makes a plain logout end this session's access token. It also closes, for any JWT
+ *         carrying the {@code rtsid} claim, the theft-driven mass-revocation gap this paragraph used
+ *         to describe as open: {@code markAllUsedByUserId} leaves every row {@code used}, and the
+ *         liveness predicate requires {@code used = false}. GDPR erasure is still caught by
+ *         {@code locked = true} as well, so neither mechanism depends on the other.</li>
  * </ul>
  * Either path also rewrites the {@code user}, {@code potc} and {@code rint} cookies (see
  * {@code JwtManagerImpl.createLoginCookies}). Because the TTL is always reset to the full 15 min,
@@ -301,8 +304,10 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      *
      * <p><strong>A claimless token sent WITHOUT it is unbounded</strong> — not bounded by the chain's TTL,
      * as a draft of this javadoc once claimed. There is nothing to derive from, so the check is skipped;
-     * {@code extendTtlOfToken} omits what it cannot read and re-mints {@code exp}, {@code dbRToken} and
-     * {@code SESSION_ISSUED_AT}, and nothing else on either path consults {@code refresh_tokens}
+     * {@code extendTtlOfToken} omits what it cannot read while CARRYING {@code dbRToken} and
+     * {@code SESSION_ISSUED_AT} forward unchanged (only {@code exp} is fresh, which is what keeps the
+     * sliding window going without advancing the DB-reauth deadline), and nothing else on either path
+     * consults {@code refresh_tokens}
      * (skillars-deferred-144 AC8 removed the per-request lookup). So a holder who makes one request every
      * {@code JWT_TTL} keeps that session alive indefinitely, past logout, past the chain's expiry and past
      * the sweep. That is precisely the shape of a thief who copied a {@code potc} and nothing else, and

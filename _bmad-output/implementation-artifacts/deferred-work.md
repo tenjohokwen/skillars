@@ -188,17 +188,17 @@ the alternatives and stay queued behind it.
   bound-exceeded as its own outcome and answer 401 without revoking, accepting that a genuinely deep
   replay then goes undetected too.
 
-- **[skillars-deferred-167 residual, low/performance]** The `StaleChain` outcome writes nothing, so the
-  presented token stays replayable, and each replay takes `findByTokenHashForUpdate` plus up to
-  `MAX_GRACE_HOPS` (8) `findByIdForUpdate` `PESSIMISTIC_WRITE` reads over a chain that is **still live** —
-  locks that wait without a bound, on an endpoint with no rate limiter. Before that story the first such
-  request marked the whole chain `used`, so repeats could not contend with an active session; now a client
-  holding one superseded cookie can repeatedly serialise the victim's real refresh and logout on the same
-  rows. Worsens, rather than creates, the unrate-limited-`/api/auth/refresh` residual already filed by
-  deferred-166. The fix is the same one that entry names: rate-limit that endpoint, or a session
-  `lock_timeout` on application connections. Note also that each replay emits one unthrottled `warn` line
-  (`JWTAuthorizationFilter` has a `SecurityAlertThrottle` for its own alerts; this branch has none), so a
-  flood is a log-volume vector as well as a lock one.
+- **[skillars-deferred-167 residual, low/performance — SUPERSEDED by the AC7 amendment, kept for the
+  record]** This was filed when the `StaleChain` outcome wrote nothing: the presented token stayed
+  replayable, and each replay took `findByTokenHashForUpdate` plus up to `MAX_GRACE_HOPS` (8)
+  `findByIdForUpdate` `PESSIMISTIC_WRITE` reads over a still-live chain, on an endpoint with no rate
+  limiter, plus one unthrottled `warn` per attempt.
+  **The owner's AC7 amendment removed the amplification.** The branch now calls `terminateSession`, which
+  stamps `revoked_at` on the presented row, so a second replay short-circuits at `decideAndRotate`'s
+  `presented.getRevokedAt() != null` check and returns `Revoked` — no chain walk, no warn. What remains is
+  the first replay's walk, which is the same cost any refresh pays, and the pre-existing
+  unrate-limited-`/api/auth/refresh` residual that deferred-166 already filed with the same two fixes
+  (rate-limit the endpoint, or a session `lock_timeout` on application connections).
 
 - **[skillars-deferred-167 residual, low/performance]** `extendTtlOfToken` now performs a FOURTH full JWT
   parse and HMAC verification per authenticated request (`extractPrincipal`, `extractDbRefreshToken`,

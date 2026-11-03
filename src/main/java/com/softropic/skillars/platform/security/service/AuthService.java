@@ -441,8 +441,13 @@ public class AuthService {
      * after the statement starts, so a revoke-all could leave one live token behind. A token minted after
      * the epoch is unaffected, which is what lets a legitimate re-login work immediately.
      *
-     * <p><strong>This check depends on every revoke-all caller stamping the epoch AFTER its bulk
-     * revoke</strong>, which as of skillars-deferred-167 AC8 they all do:
+     * <p><strong>This check depends on a revoke-all caller stamping the epoch AFTER its bulk revoke, and
+     * two callers deliberately never stamp it at all.</strong> {@code RefreshTokenRevocationService
+     * .revokeAllForUser} revokes without stamping on purpose (deferred-166 AC3: a chain-scoped revoke must
+     * not reach the account's other devices), and {@code GdprErasureService} does not stamp either —
+     * it sets {@code locked} and {@code activated = false}, which {@code ensureAccountIsLive} catches
+     * instead. {@link #refresh}'s own {@code Reuse} branch stamps after its revoke. For the callers that
+     * do stamp, the order matters and as of skillars-deferred-167 AC8 it is correct in all of them:
      * {@code UserProfileService.changePassword} and {@code PasswordResetService.completePasswordReset}
      * always did, and {@code AdminUserService.suspendUser}, {@code AgeVerificationService.blockAccount} and
      * {@code AccountSuspensionEventListener.suspend} were reordered by that story. Stamping first left a
