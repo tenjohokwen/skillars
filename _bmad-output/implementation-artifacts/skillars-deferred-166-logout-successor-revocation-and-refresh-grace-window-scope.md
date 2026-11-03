@@ -1,6 +1,6 @@
 # Story skillars-deferred-166: Logout revokes the whole rotation chain; the refresh grace window follows the token's own successor
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-03 (/bmad-create-story). Owner-requested bundle of exactly two ledger items,
      RS01 and RS02, from deferred-work.md "Deferred from: review-evals baseline real-sample,
@@ -312,6 +312,10 @@ not fork a context), `check-docs` OK after rebuilding the search index.
 
 ### Change Log
 
+- 2026-11-03 — PR #413 merged as `f0ad7706` (CI green: build 13m15s, docker-image, frontend-quality,
+  classify, check-docs). AC9 step 2 done: both eval cases now carry `fix_merge: f0ad7706` and no
+  `input_rev`, so their input revision is `fix_merge^1`; `validate.py` reports 27 cases / 118 expected
+  findings / 0 problems. Status -> done.
 - 2026-11-03 — PR #413 opened. Both eval cases promoted to `evals/review/cases/` with `fix_pr: 413`
   (`fix_merge` follows the squash merge, per AC9's two-step rule). Status -> review.
 - 2026-11-03 — applied the third `/pr-review` round: the retry loop swallowing the hop-bound fallback, and
