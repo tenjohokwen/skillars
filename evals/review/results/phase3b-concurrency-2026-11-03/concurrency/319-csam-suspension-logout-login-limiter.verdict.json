@@ -1,0 +1,124 @@
+{
+  "arm": "concurrency",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "AccountSuspensionEventListener.onAccountSuspensionRequested is indeed a synchronous in-memory @EventListener with REQUIRES_NEW and no durable record (only ERROR logs), consistent with the finding, but the crash-loss claim hinges on ModerationOrchestrationService.runArachnidLayer/onModerationRetry, the VideoModerationAdminAlertEvent handler, and the absence of a LOCKED-video sweeper \u2014 none of that code is available here (file tools disabled), so the verification caveat cannot be run.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "AccountSuspensionEventListener.onAccountSuspensionRequested indeed does an unlocked read-check-save in a REQUIRES_NEW transaction, so this side offers no race protection, but the finding's consequence and its verification caveat depend on files not shown: the User entity (presence/absence of @Version), CoachRegistrationService.verifyPhoneOtp, the upload endpoints' verification gates, and the phone-otp-required config in deployed profiles.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "createPlayerProfile unconditionally saves a new PlayerProfile with no existence/idempotency check for the parent (unlike createSelfOwnedPlayerProfile's existsByUserId guard), and the only constraint catch \u2014 DataIntegrityViolationException on parentPlayerLinkRepository.save, keyed on player_id \u2014 cannot fire because each concurrent request creates its own fresh profile id, so both inserts commit. Could not open CreatePlayerProfilePage.vue (no file tools this session), but per the caveat the backend is unprotected either way.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "confirmed",
+      "note": "createSelfOwnedPlayerProfile does exactly the check-then-insert described: existsByUserId at line 91 followed by playerProfileRepository.save with no try/catch for DataIntegrityViolationException, unlike the parentPlayerLinkRepository.save in createPlayerProfile which catches it and maps to ShadowAccountException. With the finding's own verification of uq_pp_user_id, the race loser's constraint violation propagates unmapped.",
+      "reported_id": "R10"
+    }
+  ],
+  "judge_cost_usd": 1.207238,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R3 identifies the same findOneByLogin/findOneByEmail lookup and the silent failure branch, but misreads the mechanism as an email-change race instead of ownerId always being a profile UUID that never matches.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 describes the same defect: SUSPENDED set without locking, session invalidation, or refresh-token revocation, with ensureAccountIsLive/filters never checking SUSPENDED and the login check gated on phone-otp-required.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "Nothing reported touches /api/logout or SecurityConfiguration.logoutUrl.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R6 identifies the same per-instance Guava caches with restart reset and multi-instance multiplication of the /authenticate budget; the legacy-vs-SPA independent-budget angle is implied by the same root cause.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R11 identifies the same guard gap: meta.role 'COACH' on coach/revenue and coach receipt routes matches no check, leaving them login-gated only for parents/players.",
+        "reported_ids": [
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions toggle2fa or the unenforced otpEnabled flag.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "R9/R10 cover other ShadowAccountService methods; nothing reports linkAdditionalParent's missing ownership/consent check.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "R8 identifies the same defect: Retry-After derived from the oldest attempt row overall, clamped to 1 second while the windowed count still blocks, due to the 24h purge horizon.",
+        "reported_ids": [
+          "R8"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] AccountSuspensionEventListener.onAccountSuspensionRequested is indeed a synchronous in-memory @EventListener with REQUIRES_NEW and no durable record (only ERROR logs), consistent with the finding, but the crash-loss claim hinges on ModerationOrchestrationService.runArachnidLayer/onModerationRetry, the VideoModerationAdminAlertEvent handler, and the absence of a LOCKED-video sweeper \u2014 none of that code is available here (file tools disabled), so the verification caveat cannot be run. | pass-1: Concrete trigger: process restart between the LOCKED commit and the listener's REQUIRES_NEW commit loses the suspension, with onModerationRetry explicitly skipping non-SCANNING videos and no outbox backing the event.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] AccountSuspensionEventListener.onAccountSuspensionRequested indeed does an unlocked read-check-save in a REQUIRES_NEW transaction, so this side offers no race protection, but the finding's consequence and its verification caveat depend on files not shown: the User entity (presence/absence of @Version), CoachRegistrationService.verifyPhoneOtp, the upload endpoints' verification gates, and the phone-otp-required config in deployed profiles. | pass-1: Concrete trigger: verifyPhoneOtp's read-check-flush on verification_status with no @Version lets a concurrent SUSPENDED commit be overwritten by BASIC_VERIFIED, silently undoing the CSAM suspension.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Matches the acknowledged non-finding: count-then-insert in AuthService.login is not atomic, known and left unfixed by PR 319.",
+        "reported_id": "R5",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "Consequence depends on whether the error path resets response headers, which the reporter concedes is unverified; no confirmed trigger that a failed commit actually delivers usable cookies.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] createPlayerProfile unconditionally saves a new PlayerProfile with no existence/idempotency check for the parent (unlike createSelfOwnedPlayerProfile's existsByUserId guard), and the only constraint catch \u2014 DataIntegrityViolationException on parentPlayerLinkRepository.save, keyed on player_id \u2014 cannot fire because each concurrent request creates its own fresh profile id, so both inserts commit. Could not open CreatePlayerProfilePage.vue (no file tools this session), but per the caveat the backend is unprotected either way. | pass-1: Concrete trigger: two concurrent POSTs from the same parent each create a fresh PlayerProfile id, so uq_ppl_player_id cannot dedupe and duplicate child profiles are inserted with no covering unique key.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] createSelfOwnedPlayerProfile does exactly the check-then-insert described: existsByUserId at line 91 followed by playerProfileRepository.save with no try/catch for DataIntegrityViolationException, unlike the parentPlayerLinkRepository.save in createPlayerProfile which catches it and maps to ShadowAccountException. With the finding's own verification of uq_pp_user_id, the race loser's constraint violation propagates unmapped. | pass-1: Concrete trigger: two concurrent self-profile creates both pass existsByUserId, and the loser's uq_pp_user_id violation is uncaught, surfacing a raw 500 instead of the mapped already-exists error.",
+        "reported_id": "R10",
+        "verdict": "real"
+      }
+    ]
+  }
+}

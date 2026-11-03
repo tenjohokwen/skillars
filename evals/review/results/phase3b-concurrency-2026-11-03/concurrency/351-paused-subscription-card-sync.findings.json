@@ -1,0 +1,78 @@
+{
+  "arm": "concurrency",
+  "case": "351-paused-subscription-card-sync",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "syncPaymentMethod reads the subscription's status (PAST_DUE/UNPAID) with no lock and writes nothing locally, then calls Stripe. If checkPastDueGracePeriod selects the same row (pastDueSince expired), it can cancelSubscriptionImmediately, set CANCELLED/SCOUT and null stripeSubscriptionId either between sync's status read and its invoice.pay, or after a successful invoice.pay but before the invoice.paid webhook is processed. Cancelling leaves the open invoice payable, so the charge succeeds; the invoice.paid handler then looks up findByStripeSubscriptionId on a link the sweeper already cleared, finds no row, and acks the event. The customer pays a full invoice and stays cancelled on the free tier; GraceTarget.matches and the FOR UPDATE re-read only defend against local row changes, which the sync path never makes.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "SubscriptionService.syncPaymentMethod / checkPastDueGracePeriod",
+      "title": "Grace-sweep cancel races card-save invoice retry: customer charged for a subscription that is cancelled anyway",
+      "verification": "Confirm cancelAtStripeForGrace clears stripeSubscriptionId before the invoice.paid webhook for the retried payment is processed is possible (it is, per SubscriptionLifecycleIT assertions), and that cancelSubscriptionImmediately does not void the subscription's open invoices at Stripe."
+    },
+    {
+      "category": "logic",
+      "description": "The PR adds PAUSED to GRACE_STATUSES, so startMissingGraceClocks, the payment-failed handler and applyStatus stamp pastDueSince for it and checkPastDueGracePeriod cancels it at Stripe once the clock expires. But saving a new card only sets default_payment_method for PAUSED (RETRY_ON_NEW_PAYMENT_METHOD excludes it), nothing in the diff calls Stripe's resume API despite the comment claiming it resumes via Stripe's resume flow, PAUSED is not in RECOVERABLE_ON_PAYMENT, and pastDueSince is never cleared. The frontend paymentIssue banner also only shows for PAST_DUE/UNPAID. Sequence: trial ends without payment method \u2192 PAUSED \u2192 clock starts \u2192 user saves a card \u2192 nothing resumes \u2192 sweep cancels the subscription at Stripe despite the user doing exactly what the product copy promised would restore it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "SubscriptionService.syncPaymentMethod / GRACE_STATUSES",
+      "title": "PAUSED subscriptions have no recovery path but the PR now starts their grace clock and cancels them",
+      "verification": "Grep for any caller of Stripe's Subscription resume API outside this diff; Stripe does not auto-resume a paused subscription when a default payment method is set."
+    },
+    {
+      "category": "concurrency",
+      "description": "The idempotency key is derived only from subscription id and payment method id. Save card A, then card B, then A again within Stripe's 24-hour idempotency window: the third call replays the cached response of the first 'set A' request without executing, so the subscription's default_payment_method stays card B while the local StripeCustomer row records A. Stripe keeps charging the card the user switched away from (possibly one they consider replaced or expiring). Two legitimate, distinct set-default operations share one key.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "StripeClient.updateSubscriptionDefaultPaymentMethod",
+      "title": "Fixed idempotency key 'sub-pm-{sub}-{pm}' replays a stale update when switching back to a card within 24h",
+      "verification": "Confirm against Stripe idempotency semantics: a replayed key returns the original response without re-executing the mutation for 24 hours."
+    },
+    {
+      "category": "logic",
+      "description": "The PR's own comment notes UNPAID subscriptions keep raising invoices, so several can be open at once, but payLatestOpenInvoice pays only subscription.latest_invoice. The resulting invoice.paid restores ACTIVE (UNPAID is in RECOVERABLE_ON_PAYMENT) and clears pastDueSince while older invoices remain open and Stripe may still report the subscription unpaid. The user regains paid-tier entitlement and a fresh grace window after settling only the newest invoice, and can repeat this each cycle to extend grace indefinitely while local and Stripe status diverge.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "StripeClient.payLatestOpenInvoice",
+      "title": "UNPAID retry pays only the latest invoice; invoice.paid restores ACTIVE and clears the grace clock with older invoices still open",
+      "verification": "Check whether the invoice.paid handler restores ACTIVE unconditionally for the subscription regardless of other open invoices, and whether Stripe keeps the subscription in 'unpaid' until all open invoices are settled."
+    },
+    {
+      "category": "concurrency",
+      "description": "savePaymentMethod commits the StripeCustomer row and then calls syncPaymentMethodToSubscriptions with no lock or claim marker, so two in-flight saves from two tabs (cards A and B) interleave freely: the DB commits can land in order A,B while the Stripe default_payment_method updates (distinct idempotency keys, both executed) land in order B,A, or vice versa. The result is a persistent mismatch where the UI shows one saved card and subscription invoices charge the other, lasting until the next save.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentResource.savePaymentMethod",
+      "title": "Concurrent card saves are not serialized: DB saved card and Stripe subscription default can permanently diverge",
+      "verification": "Confirm there is no per-user serialization (advisory lock, version, or unique claim) around save-payment-method; the diff shows a plain load-set-save on StripeCustomer followed by the sync call."
+    },
+    {
+      "category": "logic",
+      "description": "syncPaymentMethod catches CardException (and all StripeException/RuntimeException) and only logs, so a declined retry still yields a 204 and the PaymentMethodCard 'saved' flow. The new copy explicitly promises 'saving it retries the payment and restores your plan', so a user whose retry was declined sees success, believes the subscription is recovered, and gets no further prompt while pastDueSince keeps aging until checkPastDueGracePeriod cancels the subscription at Stripe.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "SubscriptionService.syncPaymentMethod",
+      "title": "Declined invoice retry is swallowed: endpoint returns 204 and the UI reports success while the grace clock runs to cancellation",
+      "verification": "Confirm no other channel (email, webhook-driven notification) surfaces the decline; the diff returns noContent unconditionally after the sync call."
+    },
+    {
+      "category": "database",
+      "description": "The sync call (which can pay an invoice at Stripe) runs after stripeCustomerRepository.save but, if the controller method is @Transactional, before that save commits. A commit failure after a successful invoice.pay leaves the invoice paid and the subscription moved onto a card the local StripeCustomer row does not record. If the method is not transactional, the repository save auto-commits first via SimpleJpaRepository and the ordering is correct \u2014 this is latent on a deployment/annotation fact the diff does not show.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "SessionPackPaymentResource.savePaymentMethod",
+      "title": "If savePaymentMethod is @Transactional, the Stripe charge happens before the local card save commits",
+      "verification": "Check whether savePaymentMethod or SessionPackPaymentResource carries @Transactional; if not, the Spring Data default commit on save() makes the external call correctly ordered after the local commit."
+    }
+  ],
+  "input_rev": "1f1240ac91e1e334178b56cf40e2994f8b1077f7",
+  "model": null
+}

@@ -1,0 +1,44 @@
+{
+  "arm": "concurrency",
+  "case": "353-excused-cancel-cap-race",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "issueStrikeSafely catches only PessimisticLockingFailureException; any other runtime exception from reliabilityStrikeService.issue (REQUIRES_NEW confines data rollback but not propagation) resumes in onBookingCancelledByCoach and rolls back its REQUIRES_NEW transaction, destroying the saveCancellationHistory row saved earlier in the same method, with no retry since AFTER_COMMIT listener exceptions are only logged. PessimisticLockRetryer isn't shown, but the finding fails only if issue wrapped all failures as lock exceptions, which the method's own Javadoc (catch is specifically for lock-retry exhaustion) contradicts.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "The crash window itself is real in this file: onBookingCancelledByCoach/onCoachNoShow are AFTER_COMMIT + REQUIRES_NEW, writing history and strikes only after the booking commit, with no outbox here. But the finding's verification caveat \u2014 that no sweeper/reconciliation rebuilds coach_cancellation_history and BookingCancelledByCoachEvent has no outbox redelivery \u2014 requires schedulers, other CoachCancellationHistoryRepository callers, and the event publisher, none of which were provided; permanence cannot be confirmed from this file alone.",
+      "reported_id": "R3"
+    }
+  ],
+  "judge_cost_usd": 0.532725,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same write-skew: insert-then-count under READ COMMITTED with nothing serializing per coach, so two concurrent excused cancels each count max and the COACH_CANCELLATION_EXCUSED_LIMIT strike is never issued; it also correctly avoids proposing a coach-row lock.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] issueStrikeSafely catches only PessimisticLockingFailureException; any other runtime exception from reliabilityStrikeService.issue (REQUIRES_NEW confines data rollback but not propagation) resumes in onBookingCancelledByCoach and rolls back its REQUIRES_NEW transaction, destroying the saveCancellationHistory row saved earlier in the same method, with no retry since AFTER_COMMIT listener exceptions are only logged. PessimisticLockRetryer isn't shown, but the finding fails only if issue wrapped all failures as lock exceptions, which the method's own Javadoc (catch is specifically for lock-retry exhaustion) contradicts. | pass-1: Concrete trigger: any non-PessimisticLockingFailureException from ReliabilityStrikeService.issue (e.g. missing coach_profile, query timeout) escapes issueStrikeSafely's narrow catch and rolls back the listener's REQUIRES_NEW transaction, destroying the already-saved history row and undercounting the cap window.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The crash window itself is real in this file: onBookingCancelledByCoach/onCoachNoShow are AFTER_COMMIT + REQUIRES_NEW, writing history and strikes only after the booking commit, with no outbox here. But the finding's verification caveat \u2014 that no sweeper/reconciliation rebuilds coach_cancellation_history and BookingCancelledByCoachEvent has no outbox redelivery \u2014 requires schedulers, other CoachCancellationHistoryRepository callers, and the event publisher, none of which were provided; permanence cannot be confirmed from this file alone. | pass-1: Concrete trigger: process crash/restart between the booking's commit and the AFTER_COMMIT listener's REQUIRES_NEW commit permanently drops both the history row and the strike, with no outbox/sweeper redelivery unlike the sibling refund path.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

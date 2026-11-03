@@ -1,0 +1,44 @@
+{
+  "arm": "concurrency",
+  "case": "330-filestorage-quota-race",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "signUpload (presignPutObject, lines ~114-121) binds only bucket/key/contentType for uploadTtlSeconds, and confirmUpload/persistConfirmed record head.contentLength()/contentType() without storing or ever re-checking the ETag, so a second PUT on the still-valid URL (between HEAD and insert, or post-confirm) replaces the object while the row keeps stale size/type used by quota, findActiveObject and assertOwnership. No conditional-write or version pinning exists in the code; bucket object-lock is infra config the code visibly does not rely on.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "confirmUpload commits via transactionTemplate.execute(persistConfirmed) and only then calls applicationEventPublisher.publishEvent(StorageObjectConfirmedEvent) in-memory; persistConfirmed durably records only an OutboxReplicationJob (REPLICATE), so a crash between commit and publish loses the event. The sole re-drive is reconfirm, gated to client retries within uploadTtlSeconds of uploadConfirmedAt, matching the finding; no sweeper exists in this file and the finding's grep caveat reports none elsewhere.",
+      "reported_id": "R3"
+    }
+  ],
+  "judge_cost_usd": 0.716495,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "Same unlocked read-then-insert quota check in confirmUpload with the same overshoot consequence and absence of any serialising lock or constraint.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] signUpload (presignPutObject, lines ~114-121) binds only bucket/key/contentType for uploadTtlSeconds, and confirmUpload/persistConfirmed record head.contentLength()/contentType() without storing or ever re-checking the ETag, so a second PUT on the still-valid URL (between HEAD and insert, or post-confirm) replaces the object while the row keeps stale size/type used by quota, findActiveObject and assertOwnership. No conditional-write or version pinning exists in the code; bucket object-lock is infra config the code visibly does not rely on. | pass-1: Concrete TOCTOU: presigned PUT stays valid after confirm, so a second PUT overwrites the object while the committed row keeps the first upload's size/type, defeating max-size and quota checks.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] confirmUpload commits via transactionTemplate.execute(persistConfirmed) and only then calls applicationEventPublisher.publishEvent(StorageObjectConfirmedEvent) in-memory; persistConfirmed durably records only an OutboxReplicationJob (REPLICATE), so a crash between commit and publish loses the event. The sole re-drive is reconfirm, gated to client retries within uploadTtlSeconds of uploadConfirmedAt, matching the finding; no sweeper exists in this file and the finding's grep caveat reports none elsewhere. | pass-1: Concrete trigger: crash between the insert commit and the in-memory event publish permanently drops the downstream linking, with no durable outbox or sweeper covering that event.",
+        "reported_id": "R3",
+        "verdict": "real"
+      }
+    ]
+  }
+}

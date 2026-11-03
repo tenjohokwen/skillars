@@ -1,0 +1,123 @@
+{
+  "arm": "concurrency",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "CoachRegistrationService.verifyPhone and verifyEmail do perform an unguarded read-check-then-write of verificationStatus (load at findOneById, write at setVerificationStatus/save with no lock or re-check), so the lost-update window exists in this file \u2014 but the finding's consequence depends on User.java lacking @Version and on AccountSuspensionEventListener committing verificationStatus=SUSPENDED concurrently, and neither of those files is shown.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "Within this file the claim holds up: registerCoach's try/catch (lines 101-105) wraps a plain userRepository.save(user) with no flush-triggering operation before method end, and the in-file AC10 comment in verifyEmail confirms @Tsid ids defer the INSERT to commit-time flush. But settling it requires code not shown: BaseEntity/User (to confirm User.id is app-assigned @Tsid), the schema (user_phone_key unique constraint on phone), and ApiAdvice (the finding's verification caveat \u2014 whether commit-time DataIntegrityViolationException is unmapped).",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "The facade shows the uncaught check-then-insert shape (findUserByEmailOrLogin \u2192 persistUser \u2192 publishEvent, no catch in registerAccount), but the consequence depends on code not shown: whether UserRegistrationService.createUser handles duplicates, whether the UserRegisteredEvent listener and EmailRegistrationStrategy.notifyNewUser are BEFORE_COMMIT/outbox-bound or plain/@Async (the finding's own verification caveat), and whether the user_login_key constraint/@Tsid-deferred insert exist as described.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "In verifyEmail, evt is managed (loaded via findByToken in the same transaction), so emailTokenRepository.save(evt) is a flush-free merge; the version-conflict UPDATE first executes at deleteByUserIdAndUsedFalse, saveAndFlush(otpToken), or commit (phone-otp-not-required path), all outside the try/catch at lines 154-158, so the ObjectOptimisticLockingFailureException catch is unreachable. Assumes standard SimpleJpaRepository.save semantics (no custom flushing override shown).",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The trigger is real: AuthService.login (class-level @Transactional) calls loginTokenManager.createLoginToken and CookieUtil.addCookie on the live response before the commit at the proxy boundary, so the lines 113-114 comment misstates the ordering. But the consequence depends on whether ApiAdvice/the servlet error dispatch calls response.reset() before rendering the error \u2014 that code is not provided and no file-access tools are available, so the caveat cannot be run.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 1.575286,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding addresses the (login, IP) keying allowing unbounded per-account guessing across rotated IPs; R2 explicitly calls LoginRateLimiter unaffected and R8 is about pool drain.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the same non-cryptographic 10-digit (~33-bit) activation/reset keys in RandomUtil with the same account-takeover-via-guessing consequence.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding mentions the missing rate limit on POST /account/activate; R1 discusses only the reset-finish endpoint's limiter.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R2 identifies the OTP brute-force budget as per-JVM in-memory, multiplied by instance count and reset on restart, the same defect and consequence as the missing durable failed-attempt state.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions the bcrypt-skip timing difference in AuthService.login enabling account enumeration.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions sendPasswordResetMail responding differently for ineligible accounts.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "R2 mentions resend endpoints only in the multi-instance-multiplication context; nothing identifies the per-IP keying that leaves the target email unprotected.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding mentions activate.security=false being honoured without a profile guard in SecurityConfiguration.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] CoachRegistrationService.verifyPhone and verifyEmail do perform an unguarded read-check-then-write of verificationStatus (load at findOneById, write at setVerificationStatus/save with no lock or re-check), so the lost-update window exists in this file \u2014 but the finding's consequence depends on User.java lacking @Version and on AccountSuspensionEventListener committing verificationStatus=SUSPENDED concurrently, and neither of those files is shown. | pass-1: Concrete lost-update race: User has no @Version, so verifyPhone/verifyEmail's read-check-write can overwrite a concurrently committed SUSPENDED verificationStatus, defeating the dedicated suspension check.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] Within this file the claim holds up: registerCoach's try/catch (lines 101-105) wraps a plain userRepository.save(user) with no flush-triggering operation before method end, and the in-file AC10 comment in verifyEmail confirms @Tsid ids defer the INSERT to commit-time flush. But settling it requires code not shown: BaseEntity/User (to confirm User.id is app-assigned @Tsid), the schema (user_phone_key unique constraint on phone), and ApiAdvice (the finding's verification caveat \u2014 whether commit-time DataIntegrityViolationException is unmapped). | pass-1: Concrete and deterministic: app-assigned @Tsid defers the INSERT to commit, so the DataIntegrityViolationException catch in coach/player registration never fires, and a duplicate phone number always surfaces as an unmapped commit-time error.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The facade shows the uncaught check-then-insert shape (findUserByEmailOrLogin \u2192 persistUser \u2192 publishEvent, no catch in registerAccount), but the consequence depends on code not shown: whether UserRegistrationService.createUser handles duplicates, whether the UserRegisteredEvent listener and EmailRegistrationStrategy.notifyNewUser are BEFORE_COMMIT/outbox-bound or plain/@Async (the finding's own verification caveat), and whether the user_login_key constraint/@Tsid-deferred insert exist as described. | pass-1: Concrete trigger (two concurrent registrations of one email): both pass the existence check and the loser fails at commit with no catch, bypassing the deliberate enumeration-safe notifyUserExists path.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] In verifyEmail, evt is managed (loaded via findByToken in the same transaction), so emailTokenRepository.save(evt) is a flush-free merge; the version-conflict UPDATE first executes at deleteByUserIdAndUsedFalse, saveAndFlush(otpToken), or commit (phone-otp-not-required path), all outside the try/catch at lines 154-158, so the ObjectOptimisticLockingFailureException catch is unreachable. Assumes standard SimpleJpaRepository.save semantics (no custom flushing override shown). | pass-1: Concrete trigger (double-use of one verification link): save() does not flush, so the optimistic-lock conflict surfaces at a later flush point outside the try/catch, making the ObjectOptimisticLockingFailureException handler dead code in all three services.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The trigger is real: AuthService.login (class-level @Transactional) calls loginTokenManager.createLoginToken and CookieUtil.addCookie on the live response before the commit at the proxy boundary, so the lines 113-114 comment misstates the ordering. But the consequence depends on whether ApiAdvice/the servlet error dispatch calls response.reset() before rendering the error \u2014 that code is not provided and no file-access tools are available, so the caveat cannot be run. | pass-1: Set-Cookie headers are written to the live response before the @Transactional commit, directly contradicting the code's own ordering comment; a commit-time failure can hand out a valid JWT alongside an error response.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Self-admitted bounded and 'correct today' behaviour: the 2s claim wait is a deliberate bounded design, and the pool-drain scenario requires an unusual single-key burst with no demonstrated trigger.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

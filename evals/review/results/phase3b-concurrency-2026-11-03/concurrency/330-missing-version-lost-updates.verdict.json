@@ -1,0 +1,78 @@
+{
+  "arm": "concurrency",
+  "case": "330-missing-version-lost-updates",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "cited file not available: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "CoachProfilePhotoEventListener.onStorageConfirmed indeed applies no erasure/lock guard before calling updatePhotoUrlByUserId, but the decisive facts \u2014 the JPQL/SQL of CoachProfileRepository.updatePhotoUrlByUserId (whether its WHERE clause excludes erased profiles), eraseTransactional's ordering/locking, and retryFailedErasures \u2014 are in files not provided, so the race cannot be confirmed or refuted from this file alone.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "createSession reads the booking snapshot and inserts with no post-insert status re-check, so handleBookingCompleted's conditional UPDATE (0 rows, debug-logged) can run before the INSERT commits, and updateSession's terminal-booking SESSION_PLAN_LOCKED guard then strands the DRAFT plan permanently. Both listeners are in-memory @TransactionalEventListener(AFTER_COMMIT) (one @Async) \u2014 plain application events, not outbox \u2014 and the Javadoc on handleBookingTerminalNonCompletion confirms the verification caveat: these are the only transition paths and the design is explicitly \"forward-only \u2026 not backfilled\", i.e., no sweeper/reconciliation.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "The try block in createSession contains only sessionRepository.save(session); buildResponse/toResponseMap run after the catch, so no flush there can revive it, and no saveAndFlush/explicit flush exists in the method. But whether save() itself flushes the INSERT inside the try depends on the Session entity's @GeneratedValue strategy (the finding's GenerationType.UUID premise); the Session entity class is not shown, so the catch's deadness cannot be confirmed from this file alone.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 1.1418050000000002,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R1 names the root cause (CoachProfile lacks @Version/@DynamicUpdate, stale full-row UPDATE silently reverts concurrent writes) but scopes the exposure to the GDPR path only, asserting other writers are guarded by findByIdForUpdate+refresh, so it covers a fragment of the entity-wide defect.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions Session's missing @Version or stale full-row Session saves; R4 concerns lost transition events via a different mechanism.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 identifies the same unlocked findByUserId + full-row save(cp) in the COACH branch with the same silent-overwrite consequence and the same oversized race window.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check impossible: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)] | pass-1: Concrete trigger: skip path sets FAILED without failedAt, and the retry query's 'failed_at < deadline' predicate excludes NULL, so the request is never re-driven \u2014 a specific, stateable defect not in the key.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] CoachProfilePhotoEventListener.onStorageConfirmed indeed applies no erasure/lock guard before calling updatePhotoUrlByUserId, but the decisive facts \u2014 the JPQL/SQL of CoachProfileRepository.updatePhotoUrlByUserId (whether its WHERE clause excludes erased profiles), eraseTransactional's ordering/locking, and retryFailedErasures \u2014 are in files not provided, so the race cannot be confirmed or refuted from this file alone. | pass-1: Concrete trigger: unconditional updatePhotoUrlByUserId blocked on the erasure's row lock commits after the COMPLETED erasure, re-linking a live photo with no re-scrub path; not covered by either non-finding.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] createSession reads the booking snapshot and inserts with no post-insert status re-check, so handleBookingCompleted's conditional UPDATE (0 rows, debug-logged) can run before the INSERT commits, and updateSession's terminal-booking SESSION_PLAN_LOCKED guard then strands the DRAFT plan permanently. Both listeners are in-memory @TransactionalEventListener(AFTER_COMMIT) (one @Async) \u2014 plain application events, not outbox \u2014 and the Javadoc on handleBookingTerminalNonCompletion confirms the verification caveat: these are the only transition paths and the design is explicitly \"forward-only \u2026 not backfilled\", i.e., no sweeper/reconciliation. | pass-1: Concrete triggers: markCompletedByBookingId's conditional UPDATE matches 0 rows before createSession's INSERT commits, and non-durable AFTER_COMMIT listeners drop transitions on crash, with no reconciliation sweeper; distinct from F2's missing-@Version defect.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The try block in createSession contains only sessionRepository.save(session); buildResponse/toResponseMap run after the catch, so no flush there can revive it, and no saveAndFlush/explicit flush exists in the method. But whether save() itself flushes the INSERT inside the try depends on the Session entity's @GeneratedValue strategy (the finding's GenerationType.UUID premise); the Session entity class is not shown, so the catch's deadness cannot be confirmed from this file alone. | pass-1: Concrete trigger: UUID id means persist defers the INSERT to commit, so the unique-violation on double submit surfaces outside the try/catch, breaking only the intended SESSION_ALREADY_EXISTS mapping.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

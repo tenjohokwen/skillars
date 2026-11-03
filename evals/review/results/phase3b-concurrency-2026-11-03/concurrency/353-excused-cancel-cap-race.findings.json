@@ -1,0 +1,38 @@
+{
+  "arm": "concurrency",
+  "case": "353-excused-cancel-cap-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "The cap is enforced by inserting the new history row and then counting (lines 50, 70-72) under READ COMMITTED with nothing serializing per coach: the skip branch never touches the locked coach row, and payment.coach_cancellation_history has only a PK on id (V138 baseline), so there is no unique/partial index, advisory lock, or FOR UPDATE covering the check. If a coach has maxPerWindow-1 committed excused cancellations and two more bookings are cancelled with excused reasons concurrently (two instances or two threads), each listener transaction counts its own uncommitted insert plus the committed rows = exactly maxPerWindow, both fail the '> maxPerWindow' test, and both commit without a strike \u2014 the window ends at maxPerWindow+1 excused cancellations and the crossing cancellation carries no COACH_CANCELLATION_EXCUSED_LIMIT strike. The PESSIMISTIC_WRITE coach-row lock in ReliabilityStrikeService.issue cannot help because issue() is only called after the check has already passed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "CancellationRefundService.exceedsExcusedCancellationCap",
+      "title": "Write skew lets concurrent excused cancellations both pass the per-coach cap without a strike",
+      "verification": "Confirm no later migration adds a lock surrogate or index on payment.coach_cancellation_history (only V138 references it), and that nothing in the coach-cancel request path (BookingService.cancelBookingByCoach / transition) serializes per coach rather than per booking \u2014 the booking transition uses per-booking optimistic locking only."
+    },
+    {
+      "category": "database",
+      "description": "issueStrikeSafely catches only PessimisticLockingFailureException. If ReliabilityStrikeService.issue (REQUIRES_NEW) throws anything else after the history save at line 50 \u2014 ResourceNotFoundException when the coach_profile row is absent, QueryTimeoutException, or a DataIntegrityViolationException on the strike insert \u2014 the strike transaction rolls back, the exception resumes uncaught inside the listener's own REQUIRES_NEW transaction, and that transaction rolls back too, destroying the cancellation history row for the booking. Spring merely logs exceptions from AFTER_COMMIT listeners, so there is no retry: the history record is permanently missing and every future exceedsExcusedCancellationCap count for that coach undercounts by one, directly contradicting the method's own Javadoc guarantee that strike failures cannot take the listener's other work down with them.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "CancellationRefundService.issueStrikeSafely / onBookingCancelledByCoach",
+      "title": "Any non-lock strike failure rolls back the just-saved cancellation history row",
+      "verification": "Confirm PessimisticLockRetryer.withBoundedRetry rethrows only PessimisticLockingFailureException (and its subclass CannotAcquireLockException) on exhaustion, and that ResourceNotFoundException / Spring DataAccessExceptions are runtime exceptions that mark both REQUIRES_NEW transactions rollback-only."
+    },
+    {
+      "category": "database",
+      "description": "The booking's cancellation transaction commits first; the coach_cancellation_history insert and the reliability strike are written only afterwards, in the listener's REQUIRES_NEW transaction, with no outbox row, sweeper, or redelivery (the sibling refund path was made durable via the BEFORE_COMMIT outbox in fix/payment-session-pack-integrity; this path was not). A process crash or rolling-deploy restart between the booking commit and the listener's commit leaves the booking durably CANCELLED with cancelReason set, but no history row and no strike, forever \u2014 an unexcused cancellation then carries no consequence and the excused-cap window undercounts. The in-code comments deliberately accept a dropped strike only for pessimistic-lock exhaustion; the crash window additionally drops the compliance history record, and nothing heals it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "CancellationRefundService.onBookingCancelledByCoach / onCoachNoShow",
+      "title": "Crash between booking commit and AFTER_COMMIT listener permanently loses history and strike with no retry",
+      "verification": "Confirm no sweeper or reconciliation job rebuilds coach_cancellation_history from bookings with cancel_reason set (grep schedulers for coach_cancellation_history / CoachCancellationHistoryRepository callers), and that BookingCancelledByCoachEvent exists only as an in-memory Spring event with no outbox-backed redelivery."
+    }
+  ],
+  "input_rev": "783845c71730318ab777657e2c55a9c5714feece",
+  "model": null
+}

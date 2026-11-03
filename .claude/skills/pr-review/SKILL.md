@@ -5,7 +5,7 @@ description: Review the current branch's committed changes against master with t
 
 # /pr-review
 
-Runs the same reviewers the evals measure (`evals/review/`) over this branch's diff, as subagents on the developer's own login. Nothing leaves the machine except the model calls. Cost is roughly one general plus one security subagent, a few dollars' worth of subscription usage for a typical PR.
+Runs the same reviewers the evals measure (`evals/review/`) over this branch's diff, as subagents on the developer's own login. Nothing leaves the machine except the model calls. Measured cost: about 35k–75k tokens per arm per pass on a 15–20 KB diff, so a typical two-arm review is around 100k tokens; the fan-out table below keeps off-topic diffs to one arm or none.
 
 ## 1. Find the change
 
@@ -27,7 +27,15 @@ wc -c .pr-review/<SHA>.diff
 
 ## 2. Fan out
 
-Launch **both** subagents in the same message so they run in parallel: `subagent_type: general-reviewer` and `subagent_type: security-reviewer`. If the Agent tool answers that a type is not found (agents added under `.claude/agents/` register a little after a session starts), use `subagent_type: general-purpose` instead and begin the prompt with: "First read `.claude/agents/<name>.md` and adopt everything below its frontmatter as your role and instructions for this task. Use only Read, Grep and Glob." Give each exactly this prompt, with the path filled in:
+Decide which arms the diff needs from the changed paths (`git diff --name-only origin/master...HEAD`), so a small or off-topic diff does not pay for reviewers that have nothing to find:
+
+| changed paths include | arms |
+|---|---|
+| anything under `src/main/`, `src/frontend/src/` (not `__tests__`), `src/main/resources/db/migration/`, `docker-compose*.yml`, `deploy/` | `general-reviewer` |
+| additionally `**/api/**`, `**/security/**`, `**/config/**`, `src/frontend/src/router/**`, `src/frontend/src/stores/**`, `src/main/resources/application*.yaml`, `docker-compose*.yml`, `deploy/`, anything named `*Resource.java`, `*Filter*.java`, `*Security*`, `*Auth*` | `general-reviewer` + `security-reviewer` |
+| only tests, docs, `evals/`, `.claude/` markdown, root `*.md` | no arms: write a record that says "no reviewable change" and stop |
+
+When in doubt, run both. Launch the chosen subagents in the same message so they run in parallel: `subagent_type: general-reviewer` and `subagent_type: security-reviewer`. If the Agent tool answers that a type is not found (agents added under `.claude/agents/` register a little after a session starts), use `subagent_type: general-purpose` instead and begin the prompt with: "First read `.claude/agents/<name>.md` and adopt everything below its frontmatter as your role and instructions for this task. Use only Read, Grep and Glob." Give each exactly this prompt, with the path filled in:
 
 > Review the pull request diff in `.pr-review/<SHA>.diff` (read it in full; use offset/limit if it is large). You are in the repository at the branch's HEAD, so read callers, callees, guards, constants, migrations and tests as needed to confirm or refute a suspicion. Review the change itself: what it adds, what it changes, what it fails to handle, and what it newly exposes. Report only defects with a concrete trigger and consequence; do not propose fixes.
 >

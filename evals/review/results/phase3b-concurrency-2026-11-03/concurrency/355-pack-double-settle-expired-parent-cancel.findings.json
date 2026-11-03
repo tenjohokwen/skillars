@@ -1,0 +1,18 @@
+{
+  "arm": "concurrency",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "BookingCancelledByParentEvent carries no packExpiredAtCancellation flag (unlike CoachNoShowEvent, BookingCancelledByCoachEvent, BookingCancelledByAdminEvent and BookingCancelledDueToPauseEvent, which all expose isWalletRefund() vs isPackRestore()), and cancelBookingAsParent never computes pack expiry. onBookingCancelledByParent therefore branches only on sessionPackPurchaseId != null && refundEligible and unconditionally calls packRestoreOutboxSupport.enqueuePackRestore. When a parent cancels a CONFIRMED/UPCOMING pack booking >24h out (or past the coach-never-started grace) whose pack has expired between purchase and cancellation, PackSessionService.restoreSessionForBooking just increments remainingSessions on the expired pack \u2014 a unit createBookingRequest will refuse to book against (it throws payment.packExpired) \u2014 while the resolveAmountPaid value placed in the event as sessionPrice is discarded. The payer, who paid for that session at pack purchase, receives neither usable sessions nor wallet credit, and unlike the four sibling paths (which call allocateSessionRefund and settle it on the pack ledger) the money is never returned and never recorded as settled.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "onBookingCancelledByParent",
+      "title": "Parent cancellation of an expired-pack booking restores a worthless session instead of refunding the payer",
+      "verification": "Confirm BookingCancelledByParentEvent/cancelBookingAsParent compute no packExpired and that no other listener on this event issues a wallet refund for an expired pack; confirm PackSessionService.restoreSessionForBooking (line 145) increments remainingSessions without any expiry check or refund fallback; compare against the isWalletRefund()/isPackRestore() split in the other four cancellation events."
+    }
+  ],
+  "input_rev": "dd2ec9c7cb2879b65b1d34d94fb75a69dfe2d5e4",
+  "model": null
+}

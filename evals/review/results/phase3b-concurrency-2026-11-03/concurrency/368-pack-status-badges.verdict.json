@@ -1,0 +1,114 @@
+{
+  "arm": "concurrency",
+  "case": "368-pack-status-badges",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "Within this file the mechanics hold: purchasePack calls paymentGateway.chargeAndCapture outside any try (the try covers only createPurchase), and nothing is persisted before the charge, so an unknown-outcome throw leaves no purchase row and no stripe_refund_failures row. But the finding's required verification \u2014 that ChargeOutcomeReconciler.java has no pack handling, that StripePaymentGateway.chargeAndCapture throws ChargeOutcomeUnknownException without recording anything, and that no sweeper scans pack-prefixed idempotency keys \u2014 depends on files not shown and no file tools are available, so the end-to-end consequence (money permanently untracked) cannot be confirmed or refuted.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "In confirmPurchase's catch block, `if (e?.response) attemptKey = null` clears the key on any HTTP response regardless of status, so the verification caveat is moot: whatever status ApiAdvice maps ChargeOutcomeUnknownException to (and a proxy 504) is still an `e.response` and resets the key, contradicting the comment above `attemptKey` that a fresh key is minted only on success or definite failure. The retry then mints a new key via `attemptKey ??= newAttemptKey()`, bypassing idempotent replay and allowing a second charge.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "The retry half is real in this file: createPurchase does no refund/dispute check, and after chargeAndCapture replays the captured intent, findByStripePaymentIntentId (the guard after line 131) finds no row, so a full-session pack commits. But the finding's verification caveat \u2014 that StripeWebhookService.handleEventAtomically acknowledges the event when revokeForCharge returns -1 without throwing (ChargeDisputeWebhookService.java:224-227) \u2014 depends on webhook code not shown here, so the acknowledged-and-never-redelivered consequence cannot be settled from this file alone.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "The D8 recheck in pausePackTransactional re-runs findConflictingBookingsForPause as a plain non-locking SELECT under only the pack's own row lock, while the booking path (findActivePackId, readOnly, plain findActivePacks \u2014 no-lock fact also stated in the D8 comment itself) never touches that lock; under READ COMMITTED an uncommitted concurrent booking INSERT is invisible to the recheck and, once both commit, sits inside [pausedFrom, pausedUntil) where deductSession's isPausedAt guard throws payment.packPaused on accept.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "getOrCreateStripeCustomer's unconditional save(existing) of a detached snapshot (line ~356-359, non-transactional purchasePack) matches the claimed trigger, but the consequence depends on code not shown: the StripeCustomer entity (whether it lacks @Version/@DynamicUpdate and has a lastPaymentIntentId field at all \u2014 this file never touches that column), the concurrent write at StripePaymentGateway.java:201-202, and CashOutService.refundTarget's stale-intent fallback, which the finding's verification caveat requires checking.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "refundSessionToWallet does use a racy existsByReferenceIdAndType(bookingId, BOOKING_REFUND) check before writeLedgerEntry with only the pack row locked, but whether any cancellation flow enqueues both the pack-restore event and a money-refund outbox event for the same booking, and whether any migration adds a unique index on (reference_id) WHERE type='BOOKING_REFUND', cannot be verified from this file \u2014 the outbox enqueue code and migrations (V199/V208 and later) are not available here.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "confirmed",
+      "note": "getOrCreateStripeCustomer's findById(parentId).orElseGet(...) is an unguarded check-then-act with no lock, no idempotency key on paymentGateway.createStripeCustomer, and purchasePack is intentionally non-transactional, so two concurrent first purchases both create live Stripe customers and one is left unreferenced whichever save wins. The caveat's questions (payment-method attachment inside createStripeCustomer, orphan reconciliation) live in the PaymentGateway implementation, not this file, but they only affect the off-session-charge tail, not the confirmed duplicate-customer race.",
+      "reported_id": "R8"
+    }
+  ],
+  "judge_cost_usd": 2.5645,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R7 states computeStatus never surfaces disputeFrozen/revoked, so a frozen pack with sessions reads ACTIVE to dashboard and coach views \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions the frontend badge/button keying on status === 'ACTIVE' plus isPaused when the backend returns PAUSED.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 explicitly notes pausePackTransactional never checks isDisputeFrozen and extendPack has the same missing frozen/revoked guard.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding addresses submitPause converting the picked date to UTC midnight or the pauseStartInPast rejection for users west of UTC.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] Within this file the mechanics hold: purchasePack calls paymentGateway.chargeAndCapture outside any try (the try covers only createPurchase), and nothing is persisted before the charge, so an unknown-outcome throw leaves no purchase row and no stripe_refund_failures row. But the finding's required verification \u2014 that ChargeOutcomeReconciler.java has no pack handling, that StripePaymentGateway.chargeAndCapture throws ChargeOutcomeUnknownException without recording anything, and that no sweeper scans pack-prefixed idempotency keys \u2014 depends on files not shown and no file tools are available, so the end-to-end consequence (money permanently untracked) cannot be confirmed or refuted. | pass-1: Concrete trigger: ChargeOutcomeUnknownException thrown before any row is written in purchasePack, with no pack handling in ChargeOutcomeReconciler, leaving a possibly-captured charge untracked.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] In confirmPurchase's catch block, `if (e?.response) attemptKey = null` clears the key on any HTTP response regardless of status, so the verification caveat is moot: whatever status ApiAdvice maps ChargeOutcomeUnknownException to (and a proxy 504) is still an `e.response` and resets the key, contradicting the comment above `attemptKey` that a fresh key is minted only on success or definite failure. The retry then mints a new key via `attemptKey ??= newAttemptKey()`, bypassing idempotent replay and allowing a second charge. | pass-1: Concrete trigger: confirmPurchase nulls attemptKey on any e.response including 5xx/504 for a possibly-captured charge, so the retry uses a fresh key and double-charges.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The retry half is real in this file: createPurchase does no refund/dispute check, and after chargeAndCapture replays the captured intent, findByStripePaymentIntentId (the guard after line 131) finds no row, so a full-session pack commits. But the finding's verification caveat \u2014 that StripeWebhookService.handleEventAtomically acknowledges the event when revokeForCharge returns -1 without throwing (ChargeDisputeWebhookService.java:224-227) \u2014 depends on webhook code not shown here, so the acknowledged-and-never-redelivered consequence cannot be settled from this file alone. | pass-1: Concrete trigger: crash between capture and createPurchase lets revokeForCharge ack a refund webhook with no pack row, then an attemptKey retry commits a spendable pack for the refunded charge.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] The D8 recheck in pausePackTransactional re-runs findConflictingBookingsForPause as a plain non-locking SELECT under only the pack's own row lock, while the booking path (findActivePackId, readOnly, plain findActivePacks \u2014 no-lock fact also stated in the D8 comment itself) never touches that lock; under READ COMMITTED an uncommitted concurrent booking INSERT is invisible to the recheck and, once both commit, sits inside [pausedFrom, pausedUntil) where deductSession's isPausedAt guard throws payment.packPaused on accept. | pass-1: Concrete interleaving: booking insert uncommitted at the D8 recheck is invisible under READ COMMITTED, committing a live booking inside the paused window that later fails deductSession.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] getOrCreateStripeCustomer's unconditional save(existing) of a detached snapshot (line ~356-359, non-transactional purchasePack) matches the claimed trigger, but the consequence depends on code not shown: the StripeCustomer entity (whether it lacks @Version/@DynamicUpdate and has a lastPaymentIntentId field at all \u2014 this file never touches that column), the concurrent write at StripePaymentGateway.java:201-202, and CashOutService.refundTarget's stale-intent fallback, which the finding's verification caveat requires checking. | pass-1: Concrete lost-update: version-less full-row save in getOrCreateStripeCustomer can write back a stale last_payment_intent_id that CashOutService then uses as the refund target.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] refundSessionToWallet does use a racy existsByReferenceIdAndType(bookingId, BOOKING_REFUND) check before writeLedgerEntry with only the pack row locked, but whether any cancellation flow enqueues both the pack-restore event and a money-refund outbox event for the same booking, and whether any migration adds a unique index on (reference_id) WHERE type='BOOKING_REFUND', cannot be verified from this file \u2014 the outbox enqueue code and migrations (V199/V208 and later) are not available here. | pass-1: Concrete trigger: existsByReferenceIdAndType check-then-insert for BOOKING_REFUND with no partial unique index for that type, so a concurrent booking-refund writer yields a double wallet credit.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] getOrCreateStripeCustomer's findById(parentId).orElseGet(...) is an unguarded check-then-act with no lock, no idempotency key on paymentGateway.createStripeCustomer, and purchasePack is intentionally non-transactional, so two concurrent first purchases both create live Stripe customers and one is left unreferenced whichever save wins. The caveat's questions (payment-method attachment inside createStripeCustomer, orphan reconciliation) live in the PaymentGateway implementation, not this file, but they only affect the off-session-charge tail, not the confirmed duplicate-customer race. | pass-1: Concrete race: two first-time purchases both take orElseGet, creating two Stripe customers; second save overwrites stripe_customer_id or fails on PK after the external customer exists.",
+        "reported_id": "R8",
+        "verdict": "real"
+      }
+    ]
+  }
+}

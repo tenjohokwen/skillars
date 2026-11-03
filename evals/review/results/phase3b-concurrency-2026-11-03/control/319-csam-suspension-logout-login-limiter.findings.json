@@ -1,0 +1,147 @@
+{
+  "arm": "control",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "The event's ownerId is the video owner id. For player videos that is a PlayerProfile id (Long TSID as a string); for coach videos it is a CoachProfile UUID (see VideoResource.initiatePlayerUpload, initiateCoachUpload and resolveCurrentOwnerId). The listener looks it up only with findOneByLogin(ownerId) and findOneByEmail(ownerId), which can never match those values. So every confirmed CSAM match ends in the 'user not found' log line and the uploader's account is never suspended.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested",
+      "title": "CSAM suspension never finds the account: ownerId is a profile id, not a login or email",
+      "verification": "Confirmed in VideoResource: ownerId = String.valueOf(currentPlayerProfileId()) or coachId.toString(). Running an integration test that publishes the event with a real video's ownerId would show the user row unchanged."
+    },
+    {
+      "category": "edge-case",
+      "description": "When no user is found, the listener only logs and returns normally. ModerationOrchestrationService.suspendAccount sends the urgent 'CSAM match \u2014 account suspension FAILED' admin alert only when publishEvent throws. Because nothing is thrown, admins are told nothing about a suspension that did not happen. Combined with the ownerId mismatch, this is every CSAM case.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested",
+      "title": "A failed CSAM suspension is swallowed, so the 'suspension FAILED' admin alert never fires"
+    },
+    {
+      "category": "security",
+      "description": "The listener only sets verificationStatus=SUSPENDED. It does not set locked, stamp securitySessionInvalidatedAt, revoke refresh tokens (markAllUsedByUserId), or suspend the coach profile, all of which AdminUserService.suspendUser does. No code anywhere checks SkillarsVerificationStatus.SUSPENDED: AuthService.ensureAccountIsLive checks only activated and locked, refresh() never looks at verificationStatus, and Principal.instanceFrom maps accountNonLocked from isLocked() only. As a result the suspended uploader's current JWT and refresh token keep working indefinitely, and a suspended coach stays bookable.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/AccountSuspensionEventListener.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "AccountSuspensionEventListener.onAccountSuspensionRequested",
+      "title": "CSAM suspension (verificationStatus=SUSPENDED) is not enforced and does not end existing sessions",
+      "verification": "Grep for 'SkillarsVerificationStatus.SUSPENDED' in main: the only hits are in this listener."
+    },
+    {
+      "category": "security",
+      "description": "The only check that could block a SUSPENDED user at /api/auth/login is the `skillarsRole != null && phoneOtpRequired && status != BASIC_VERIFIED` test. If security.registration.phone-otp-required is false, or the user has no skillarsRole, a CSAM-suspended account logs in normally. Even when the check fires, the user gets SkillarsAccountNotVerifiedException ('verify your phone') rather than a suspension denial. refresh() has no such check at all, so suspended sessions refresh forever.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "AuthService.login",
+      "title": "Login does not reject SUSPENDED accounts unless phone-OTP is required and the user has a role"
+    },
+    {
+      "category": "concurrency",
+      "description": "recentAttempts is read with countByIdentifierAndAttemptedAtAfter, and the failed-attempt row is inserted only later in the same READ COMMITTED transaction. An attacker who sends N concurrent password guesses for the same email/IP will see every request read the same count below maxAttempts, so all N guesses run. The intended 5-per-15-minutes cap becomes as many guesses as can be sent in parallel.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "AuthService.login",
+      "title": "Login rate limit is count-then-insert with no lock, so parallel requests bypass it"
+    },
+    {
+      "category": "security",
+      "description": "The rate-limit key is SHA-256(email|ip). subjectHash (the per-account key) is recorded but used only for admin read-out and unlock, never for enforcement. An attacker rotating source IPs (botnet, IPv6 range) gets maxAttempts guesses per IP against one account with no account-wide limit.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "AuthService.login",
+      "title": "There is no per-account cap, so brute force spread across IPs is unlimited"
+    },
+    {
+      "category": "logic",
+      "description": "findFirstByIdentifierOrderByAttemptedAtAsc has no time filter, and rows are kept until the 24h cleanup. If an email/IP pair failed an hour ago and then hits the limit again now, the oldest row is outside the window, so attemptedAt+window is in the past. retryAfterSeconds is then clamped to 1 while the client actually stays locked for up to the full window, and clients that follow Retry-After keep hammering a locked endpoint.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "AuthService.login",
+      "title": "Retry-After is computed from the oldest attempt ever recorded, not the oldest one in the window"
+    },
+    {
+      "category": "security",
+      "description": "When findOneByLogin returns empty, the method records an attempt and throws at once without any password-hash work. For an existing email it runs a BCrypt compare (~100ms at cost 10). The timing difference lets an attacker enumerate registered emails, which the legacy path explicitly prevents with AuthenticationManagerSimulator.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Unknown-email logins skip bcrypt, so response time reveals which accounts exist"
+    },
+    {
+      "category": "security",
+      "description": "After the password hash is replaced, refresh tokens are not marked used and securitySessionInvalidatedAt is not stamped. A user who changes their password because they suspect compromise leaves the attacker's stolen JWT and refresh cookie fully working, and the attacker can keep rotating the refresh token indefinitely.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "UserProfileService.changePassword",
+      "title": "Changing password does not revoke existing sessions or refresh tokens"
+    },
+    {
+      "category": "logic",
+      "description": "u.setLogin(newEmail) stores the value exactly as submitted. AuthService.login looks users up with findOneByLogin(email.toLowerCase()), so a user who types a mixed-case new address (e.g. 'John@X.com') can never log in again. There is also no check that another account already uses that email or login, so the change fails at commit with a constraint violation (500) or, without a constraint, creates duplicate logins. ProfileResource documents a verification email to the new address, but the change is applied immediately without one.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "UserProfileService.updateUserEmail",
+      "title": "Email change sets login to the raw new email (no lowercasing, no uniqueness check)",
+      "verification": "Check the unique constraints on main.\"user\".login and email in V138__baseline_schema.sql."
+    },
+    {
+      "category": "edge-case",
+      "description": "Map.of(\"oldEmail\", oldEmail, ...) throws NullPointerException when oldEmail (or newEmail) is null, so a mismatch returns a 500 instead of EMAIL_OR_PW_MISMATCH. The context map also records passwordMatch separately from emailMatch. If ApiAdvice returns that context to the client, it becomes an oracle that confirms the password independently of the email.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "UserProfileService.updateUserEmail",
+      "title": "Email-change mismatch path throws NPE on a null oldEmail and may expose a password-match flag",
+      "verification": "Check whether ApiAdvice serialises ProfileActionException's context map into the response, and whether ChangeEmailDto marks oldEmail/newEmail @NotNull."
+    },
+    {
+      "category": "performance",
+      "description": "The caches are built without maximumSize, and isAllowed and deRecordAttempts call LoadingCache.get(), which loads and stores a 0 entry for every new key. Every login attempt with a fresh username, clientId or IP therefore adds entries; blacklistedClients keeps each one for 30 days. An unauthenticated attacker rotating client identifiers can grow the heap without limit and run the node out of memory.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "LoginAttemptsService.isAllowed / buildCache",
+      "title": "In-memory login-attempt caches have no size bound and get() inserts entries for every probe"
+    },
+    {
+      "category": "edge-case",
+      "description": "Cache keys use metadata.getUserName() exactly as submitted, but AdminUserService.unlockLogin passes the stored (lowercase) login or email. If the locked-out user typed 'Foo@x.com', invalidate('foo@x.com') and the suffix match remove nothing, so the user stays locked while the admin is told it succeeded.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginAttemptsService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "LoginAttemptsService.unlockUser",
+      "title": "Admin 'unlock login' misses in-memory locks when the username was typed in a different case"
+    },
+    {
+      "category": "concurrency",
+      "description": "existsByUserId is checked before the insert with no lock. Two concurrent POST /api/security/players/me requests (for example a double-click) both pass the check. The second then fails on the uq_pp_user_id unique index at commit with an unhandled DataIntegrityViolationException (500) instead of security.playerProfileAlreadyExists.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ShadowAccountService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "ShadowAccountService.createSelfOwnedPlayerProfile",
+      "title": "Concurrent self-profile creation produces a 500 instead of the 'already exists' error"
+    },
+    {
+      "category": "edge-case",
+      "description": "pbStore.loadStatus() catches every error and leaves status unset. The guard then reads !pbStore.isComplete and redirects to /coach/profile-builder. A transient network or 5xx error on the status call therefore bounces a coach with a finished profile out of the command center and into the builder.",
+      "file": "src/frontend/src/router/index.js",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "Router.beforeEach (coach command-center gate)",
+      "title": "A failed profile-status load sends a completed coach to the profile builder"
+    }
+  ],
+  "input_rev": "651ed1effc048bc7e6fe04cf68c77464b22ed6f5",
+  "model": null
+}

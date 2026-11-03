@@ -163,7 +163,10 @@ evals/review/bin/scorecard.py $RUN                  # writes results/$RUN/scorec
 ```
 
 Runs resume: a case whose findings (or verdict) file already exists is skipped, so a
-run interrupted halfway is restarted with the same command. `--parallel N` (default 3)
+run interrupted halfway is restarted with the same command. A specialist arm is scored with
+`--subset <category>` (its cases plus a fixed five-case precision sample, about half the
+cost of a full run); `control` needs no re-review when nothing about it changed: copy its
+findings and verdicts from the previous run into the new run directory and compare there. `--parallel N` (default 3)
 bounds concurrent `claude -p` processes. `--model` and `--effort` pass through to the
 reviewer and are recorded in `results/<run-id>/run.json`.
 
@@ -174,6 +177,9 @@ reviewer and are recorded in `results/<run-id>/run.json`.
 | `control` | one plain review prompt, no layers | diff inlined, no tools | runs inside the exported tree with Read/Grep/Glob; scope list inlined |
 | `blind-hunter` | the Blind Hunter layer from `mto-code-review` | diff inlined, no tools | scoped files inlined, no tools |
 | `security` | the `.claude/agents/security-reviewer.md` agent | diff inlined, no tools | Read/Grep/Glob inside the tree; scope list inlined |
+
+A `concurrency` arm was tried and rejected (`results/phase3b-concurrency-2026-11-03/NOTES.md`:
+one net finding, 18 points of precision lost, five times the cost); its prompt is in git history.
 
 `control` is the floor every later reviewer must beat. Specialised reviewers are real
 Claude Code agents under `.claude/agents/`; an arm uses the agent file's body as its prompt

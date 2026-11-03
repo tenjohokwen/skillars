@@ -1,0 +1,156 @@
+{
+  "arm": "concurrency",
+  "case": "307-player-ownership-guards",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "StripeClient.createSubscription does build the key as \"sub-create-\" + stripeCustomerId + \"-\" + priceId with no playerId, so a same-customer/same-price replay is mechanically possible; but the finding's trigger and consequence depend on SubscriptionService.subscribePlayer resolving one Stripe customer per parent and on player_subscriptions lacking a unique index on stripe_subscription_id \u2014 neither is in the provided file, and the verification caveat explicitly requires checking them.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "checkPastDueGracePeriod's per-item transactionTemplate block saves the detached `sub` from the batch-load transaction with no re-read or status recheck (unlike applyPendingChanges, which re-fetches via findByCoachId inside each item transaction), so the merge overwrites a concurrent webhook's ACTIVE status/periodEnd with CANCELLED/SCOUT. handleSubscriptionUpdated's explicit \"do NOT sync tier from Stripe\" comment confirms nothing restores the tier afterward; the finding's @Version check (entities not in this file) is uncontradicted \u2014 no optimistic-lock handling exists anywhere here.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "Verified the caveat: applyPendingChanges' per-item lambda re-queries only the subscription (findByCoachId) and saves the captured detached `change` with no re-read of applied/voided_at; the method's own comment confirms the batch commit releases findPendingForScheduler's FOR UPDATE SKIP LOCKED locks and that @SchedulerLock only closes scheduler-vs-scheduler re-selection, not a concurrent changeCoachTier upgrade. So an upgrade committing in the window is overwritten: sub.setTier(change.getToTier()) applies the stale downgrade, syncMarketplaceTier propagates it, and save(change) merges voidedAt back to NULL. Player loop is identical.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "subscribePlayer calls stripeClient.createSubscription outside any transaction, then commits via self.persistPlayerSubscription in a separate @Transactional \u2014 a crash between them leaves the findOrCreatePlayerSubscription row (status ACTIVE default, stripeSubscriptionId null) orphaned while Stripe bills. Verification caveat holds on in-file evidence: reconcileOneStripeSubscription checks only paymentCoachSubscriptionRepository.findByStripeSubscriptionId and delegates to the coach-only resolveCoachAndAlertIfOrphaned; all three webhook handlers (handleSubscriptionUpdated/Deleted/InvoicePaymentFailed) use findByStripeSubscriptionId(...).ifPresent and never create a row for an unknown id, and reconcileStripeSubscriptions' Javadoc states the webhook path is alert-only, not auto-heal (StripeWebhookService source itself not provided).",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "The trigger side is real in this file: handleSubscriptionUpdated/handleInvoicePaymentFailed use findByStripeSubscriptionId(...).ifPresent(...) and silently no-op on a missing row, and persistCoachSubscription/persistPlayerSubscription commit after the Stripe create. But the finding's own verification caveat \u2014 whether StripeWebhookService acks a no-match event with 2xx or persists/retries it (note its maybeAlertOrphanedLiveSubscription/maybeAlertOrphanedInvoicePaymentFailed referenced in reconcileStripeSubscriptions' Javadoc fire exactly in this no-local-row case) \u2014 cannot be settled without StripeWebhookService, which is not shown.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "In-file mechanics confirmed: handleSubscriptionUpdated applies payload status with no ordering guard and never clears pastDueSince, and checkPastDueGracePeriod only selects status='PAST_DUE', so a stale status=active event would revive the row. But the finding's verification caveat \u2014 that StripeWebhookService does not dedupe/order events by event.created before calling handleSubscriptionWebhook \u2014 cannot be checked: that dispatcher code is not provided.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "In-file, the trigger is real: markComplete takes no player_profiles lock and never calls erasureGuard.isErasedUnderLock, unlike assignOne which does both before its insert. But the consequence depends on code not shown: GdprErasureService (does it delete homework_completions but not homework_assignments, and does the erased player_profiles row survive so findByIdAndParentId still matches post-erasure?) and the controller path to markComplete \u2014 the finding's own verification step requires grepping those, and they are not available here.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "undetermined",
+      "note": "handleBookingCompleted is indeed AFTER_COMMIT + @Async(\"taskExecutor\") with no durability in this file, but the finding's required verification \u2014 absence of an outbox/replay for BookingCompletedEvent or a backfill job from session_completion_data \u2014 depends on BookingCompletionService, QuickCompleteTimeoutService, and any scheduled jobs, none of which are shown; the \"replayed BookingCompletedEvent\" comment at the skillars-12-8 AC6 block even suggests a replay path may exist elsewhere.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "undetermined",
+      "note": "VideoEventResource.subscribeToEvents (lines 39-45) does read operationalState before calling videoSseService.subscribe, matching the T0/T1 pattern, but the finding's verification hinges on whether VideoSseService.subscribe re-reads DB state after emitters.computeIfAbsent(...).add(emitter) \u2014 VideoSseService.java was not provided, so the race cannot be confirmed or refuted.",
+      "reported_id": "R10"
+    },
+    {
+      "check": "undetermined",
+      "note": "findOrCreateCoachSubscription/findOrCreatePlayerSubscription confirm the in-file premise: bare findBy...().orElseGet(save) with no catch/retry, called from @Transactional getCoachSubscription/getPlayerSubscription. But the described consequence depends on code not shown: the uq_pcs_coach_id/uq_pps_player_id constraints (entity/migration files) and whether the GET controllers or a global exception advice surface DataIntegrityViolationException as a 500 \u2014 exactly the two checks the finding's verification caveat names.",
+      "reported_id": "R12"
+    }
+  ],
+  "judge_cost_usd": 4.587039999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions the HAS_PARENT_ROLE gate or parentId-based ownership lookup locking self-registered players out of markComplete.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R8 identifies the same catch-inside-@Transactional of DataIntegrityViolationException after saveAndFlush, with the same rollback-only/UnexpectedRollbackException 500 consequence.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding addresses the ROLE_USER-only @PreAuthorize on VideoResource player endpoints rejecting ROLE_PLAYER.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding identifies the user-id vs PlayerProfile-id confusion in currentPlayerProfileId/resolveCurrentOwnerId or VideoAccessGuard.isOwner.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R11 pinpoints the same isCurrentUserOwner coach-branch UUID-vs-username comparison with the same consequence (coaches 403 on events/status), though it omits the player Long-branch id-space aspect.",
+        "reported_ids": [
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions the HAS_PARENT_ROLE gate on subscribePlayer/changePlayerTier/cancelPlayerSubscription blocking self-owned players.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] StripeClient.createSubscription does build the key as \"sub-create-\" + stripeCustomerId + \"-\" + priceId with no playerId, so a same-customer/same-price replay is mechanically possible; but the finding's trigger and consequence depend on SubscriptionService.subscribePlayer resolving one Stripe customer per parent and on player_subscriptions lacking a unique index on stripe_subscription_id \u2014 neither is in the provided file, and the verification caveat explicitly requires checking them. | pass-1: Concrete trigger: idempotency key of customerId+priceId omits playerId, so a second child's subscribe within 24h replays the first child's Stripe response and duplicates the stripe_subscription_id locally.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] checkPastDueGracePeriod's per-item transactionTemplate block saves the detached `sub` from the batch-load transaction with no re-read or status recheck (unlike applyPendingChanges, which re-fetches via findByCoachId inside each item transaction), so the merge overwrites a concurrent webhook's ACTIVE status/periodEnd with CANCELLED/SCOUT. handleSubscriptionUpdated's explicit \"do NOT sync tier from Stripe\" comment confirms nothing restores the tier afterward; the finding's @Version check (entities not in this file) is uncontradicted \u2014 no optimistic-lock handling exists anywhere here. | pass-1: Concrete lost-update: per-item save of a detached entity loaded in an earlier committed transaction, no @Version or conditional update, overwrites a concurrent webhook's ACTIVE status.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] Verified the caveat: applyPendingChanges' per-item lambda re-queries only the subscription (findByCoachId) and saves the captured detached `change` with no re-read of applied/voided_at; the method's own comment confirms the batch commit releases findPendingForScheduler's FOR UPDATE SKIP LOCKED locks and that @SchedulerLock only closes scheduler-vs-scheduler re-selection, not a concurrent changeCoachTier upgrade. So an upgrade committing in the window is overwritten: sub.setTier(change.getToTier()) applies the stale downgrade, syncMarketplaceTier propagates it, and save(change) merges voidedAt back to NULL. Player loop is identical. | pass-1: Concrete interleaving: SKIP LOCKED locks released at batch commit, per-item transaction applies the stale change and merges voided_at back to NULL after a concurrent upgrade voided it.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] subscribePlayer calls stripeClient.createSubscription outside any transaction, then commits via self.persistPlayerSubscription in a separate @Transactional \u2014 a crash between them leaves the findOrCreatePlayerSubscription row (status ACTIVE default, stripeSubscriptionId null) orphaned while Stripe bills. Verification caveat holds on in-file evidence: reconcileOneStripeSubscription checks only paymentCoachSubscriptionRepository.findByStripeSubscriptionId and delegates to the coach-only resolveCoachAndAlertIfOrphaned; all three webhook handlers (handleSubscriptionUpdated/Deleted/InvoicePaymentFailed) use findByStripeSubscriptionId(...).ifPresent and never create a row for an unknown id, and reconcileStripeSubscriptions' Javadoc states the webhook path is alert-only, not auto-heal (StripeWebhookService source itself not provided). | pass-1: Concrete trigger: Stripe charge committed before the local persist with no player-side reconciliation or orphan handling, so a crash in the window leaves an invisible billing subscription.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The trigger side is real in this file: handleSubscriptionUpdated/handleInvoicePaymentFailed use findByStripeSubscriptionId(...).ifPresent(...) and silently no-op on a missing row, and persistCoachSubscription/persistPlayerSubscription commit after the Stripe create. But the finding's own verification caveat \u2014 whether StripeWebhookService acks a no-match event with 2xx or persists/retries it (note its maybeAlertOrphanedLiveSubscription/maybeAlertOrphanedInvoicePaymentFailed referenced in reconcileStripeSubscriptions' Javadoc fire exactly in this no-local-row case) \u2014 cannot be settled without StripeWebhookService, which is not shown. | pass-1: Concrete trigger: webhook for a just-created subscription arrives before persist commits, ifPresent no-ops, delivery is acked, and the PAST_DUE transition is permanently lost.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] In-file mechanics confirmed: handleSubscriptionUpdated applies payload status with no ordering guard and never clears pastDueSince, and checkPastDueGracePeriod only selects status='PAST_DUE', so a stale status=active event would revive the row. But the finding's verification caveat \u2014 that StripeWebhookService does not dedupe/order events by event.created before calling handleSubscriptionWebhook \u2014 cannot be checked: that dispatcher code is not provided. | pass-1: Concrete trigger: handler applies event payload with no event-timestamp ordering guard, so a late-delivered status=active event reverts PAST_DUE and defeats the grace-period downgrade.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] In-file, the trigger is real: markComplete takes no player_profiles lock and never calls erasureGuard.isErasedUnderLock, unlike assignOne which does both before its insert. But the consequence depends on code not shown: GdprErasureService (does it delete homework_completions but not homework_assignments, and does the erased player_profiles row survive so findByIdAndParentId still matches post-erasure?) and the controller path to markComplete \u2014 the finding's own verification step requires grepping those, and they are not available here. | pass-1: Concrete trigger: markComplete writes erasure-scoped homework_completions without the DevelopmentDataErasureGuard lock or erased-at check, so inserts survive or post-date a GDPR erasure since assignments are never deleted.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] handleBookingCompleted is indeed AFTER_COMMIT + @Async(\"taskExecutor\") with no durability in this file, but the finding's required verification \u2014 absence of an outbox/replay for BookingCompletedEvent or a backfill job from session_completion_data \u2014 depends on BookingCompletionService, QuickCompleteTimeoutService, and any scheduled jobs, none of which are shown; the \"replayed BookingCompletedEvent\" comment at the skillars-12-8 AC6 block even suggests a replay path may exist elsewhere. | pass-1: Concrete trigger: BookingCompletedEvent is in-memory with an AFTER_COMMIT async listener and no outbox or backfill, so a restart between commit and listener permanently loses homework assignments for a COMPLETED booking.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] VideoEventResource.subscribeToEvents (lines 39-45) does read operationalState before calling videoSseService.subscribe, matching the T0/T1 pattern, but the finding's verification hinges on whether VideoSseService.subscribe re-reads DB state after emitters.computeIfAbsent(...).add(emitter) \u2014 VideoSseService.java was not provided, so the race cannot be confirmed or refuted. | pass-1: Concrete race: initial status is read before the emitter is registered and never re-read afterward, so a transition in the gap is never delivered for the SSE timeout duration.",
+        "reported_id": "R10",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] findOrCreateCoachSubscription/findOrCreatePlayerSubscription confirm the in-file premise: bare findBy...().orElseGet(save) with no catch/retry, called from @Transactional getCoachSubscription/getPlayerSubscription. But the described consequence depends on code not shown: the uq_pcs_coach_id/uq_pps_player_id constraints (entity/migration files) and whether the GET controllers or a global exception advice surface DataIntegrityViolationException as a 500 \u2014 exactly the two checks the finding's verification caveat names. | pass-1: Concrete trigger: two concurrent first GETs both pass the find and both insert, the unique constraint rejects the second, and the uncaught DataIntegrityViolationException surfaces as a 500 from a read endpoint.",
+        "reported_id": "R12",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

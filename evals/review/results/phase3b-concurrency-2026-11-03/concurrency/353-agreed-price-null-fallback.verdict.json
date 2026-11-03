@@ -1,0 +1,65 @@
+{
+  "arm": "concurrency",
+  "case": "353-agreed-price-null-fallback",
+  "checks": [],
+  "judge_cost_usd": 0.323325,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same NULL agreed_price fallback in resolveSessionPrice/batchBookingPrice charging the coach's current, unseen price for unpriced-coach requests; R2 restates the same fallback as a settle-time race.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 explicitly states createBatch stores agreed_price = NULL with a \u20ac0 totalAmount quote for an unpriced coach, later charged at acceptance-time price.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R6 notes currentCoachPrice can return NULL at duplication with no null check, creating a post-V192 NULL row priced only at acceptance \u2014 the same defect at the same place.",
+        "reported_ids": [
+          "R6"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Trigger requires a commit that succeeded while the call still threw (lost commit ack / post-commit exception), an exotic scenario the report itself cannot verify occurs in this code structure.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The quote-to-request drift window is inherent to any quote-then-book flow and the claimed consequence (parent never reviews the locked price) depends on unverified UI behavior.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Depends on unverified constraint columns and outbox violation handling, and the premise (booking stays CONFIRMED after its batch share is refunded) is speculative; no concrete trigger is established from the text.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "The report concedes the scenario cannot occur today (prod not live, no rolling deploys); it is a future-risk warning, not a current defect.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hypothetical: no actual status added between V138 and V192 is identified, and the MERGE NOTE shows the risk is already acknowledged; the defect is conditional on an unverified concurrent migration.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

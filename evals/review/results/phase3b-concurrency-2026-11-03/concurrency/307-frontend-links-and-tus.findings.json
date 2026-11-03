@@ -1,0 +1,108 @@
+{
+  "arm": "concurrency",
+  "case": "307-frontend-links-and-tus",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The P18 check at line 68 accepts any callback whose state equals the authenticated coach's UUID, and generateOnboardingUrl (StripeOnboardingService.java:42) sets state to exactly that coachId \u2014 a value exposed publicly in marketplace URLs (routes.js `coaches/:coachId`). An attacker starts their own Stripe Connect flow, captures the authorization code before it reaches the callback, and lures the victim coach (while logged in) to GET /api/payment/coaches/me/stripe/callback?code=<attacker code>&state=<victim coachId>. The state check passes, exchangeOAuthCode succeeds (the code was issued for this platform's client_id), and upsertCoachStripeAccount silently overwrites the victim's stripeAccountId with the attacker's account, so the coach's earnings are paid out to the attacker. state must be an unguessable per-request nonce, not a public identifier.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripeOnboardingResource.handleOAuthCallback",
+      "title": "Stripe OAuth state is the predictable coachId, so the CSRF account-linking check is defeatable and payouts can be redirected",
+      "verification": "Confirm coach UUIDs are exposed to other users (routes.js `coaches/:coachId` and CoachPublicProfilePage) and that no server-side nonce store exists for the onboarding flow."
+    },
+    {
+      "category": "concurrency",
+      "description": "handleOAuthCallback deliberately runs the OAuth token exchange outside any transaction and only afterwards calls self.upsertCoachStripeAccount in its own @Transactional. From the moment OAuth.token returns, Stripe considers the account connected and can emit account.updated for it; with multiple instances that webhook can be processed before the upsert transaction commits. StripeWebhookService.java:161 handles account.updated with findByStripeAccountId(...).ifPresent(...), so a webhook for a not-yet-persisted stripeAccountId is acknowledged and discarded. The coach's row then stays onboardingStatus=PENDING / chargesEnabled=false despite Stripe having enabled charges, until Stripe happens to send another account.updated. A crash between the exchange and the upsert commit similarly leaves a connected Stripe account with no local row at all.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "StripeOnboardingService.handleOAuthCallback",
+      "title": "Stripe account.updated webhook racing the OAuth upsert is silently dropped, leaving the coach stuck PENDING",
+      "verification": "Confirm StripeWebhookService's account.updated branch (lines 125-165) returns 2xx (acknowledging the delivery) when findByStripeAccountId is empty, and that no sweeper re-polls Stripe account status."
+    },
+    {
+      "category": "concurrency",
+      "description": "sendPasswordResetMail/changeEmail here, EmailRegistrationStrategy.notifyNewUser/notifyUserExists, AccountChangeEmailListener, and ReportGenerationService.notifyParent all publish an in-memory Envelope consumed by MailManager.sendEmailFromTemplate, which is @Async(\"sendMailPool\") + @TransactionalEventListener(AFTER_COMMIT) and persists the EnvelopeEntity row only at the end of the send attempt (MailManager.java:284). If the business transaction commits (reset key stored, user created with activation key) and the instance restarts \u2014 or the sendMailPool rejects/drops the queued task \u2014 before the async body runs, no EnvelopeEntity exists, so EmailRetryScheduler has nothing to re-drive and the email is lost outright while the DB says it was triggered. This is the exact non-durable window skillars-deferred-92 closed for booking emails by moving them to the BEFORE_COMMIT NotificationOutboxSupport outbox; these legacy producers still use the lossy path, and a lost activation or password-reset email strands the user.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.sendMail",
+      "title": "Envelope-event emails (activation, password reset, profile change, report-shared) are durably recorded only after the async send attempt \u2014 a restart between commit and send loses them permanently",
+      "verification": "Confirm EmailRetryScheduler selects only persisted FAILED EnvelopeEntity rows and that no other mechanism records an Envelope before MailManager's REQUIRES_NEW transaction."
+    },
+    {
+      "category": "concurrency",
+      "description": "generateReport commits the PerformanceReport row as PENDING_UPLOAD and hands the PDF bytes to onReportGenerated via an AFTER_COMMIT @Async(\"reportExecutor\") event \u2014 the bytes are never persisted. If the instance restarts (or the executor queue is lost) between generateReport's commit and the async run, the row stays PENDING_UPLOAD permanently: grep shows no scheduler or sweeper ever touches PENDING_UPLOAD or UPLOAD_FAILED, and listReports filters them out, so the report silently never appears while the coach's 10/min rate budget was consumed. The same applies to a crash between fileStorageService.storeBytes succeeding and updateStatusAndStorageKey committing (orphaned S3 object plus a stuck PENDING_UPLOAD row). The UPLOAD_FAILED no-retry case is acknowledged in the Javadoc, but the restart/PENDING_UPLOAD case leaves no error anywhere.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "ReportGenerationService.onReportGenerated",
+      "title": "Generated report PDF exists only in a Spring event between commit and async upload; a restart strands the report in PENDING_UPLOAD forever with no sweeper",
+      "verification": "Grep schedulers for any job querying ReportStatus.PENDING_UPLOAD or UPLOAD_FAILED; none was found under src/main."
+    },
+    {
+      "category": "concurrency",
+      "description": "registerAccount reads findUserByEmailOrLogin (line 131) and, on empty, inserts via persistUser (line 151) with no lock and no handling of the unique constraint. If two registrations for the same email run concurrently (double-submit, or a retry hitting a second instance), both see no user and both insert; user_email_key / user_login_key (V138__baseline_schema.sql:2713,2720) make the loser fail at flush/commit with a DataIntegrityViolationException that nothing here catches, surfacing as a 500 instead of the deliberate notifyUserExists security-alert flow. The constraint prevents a duplicate account, but the losing request's distinct error response also undercuts the method's documented timing-safe anti-enumeration behavior, and the IP's rate-limit token is consumed for a failed attempt.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.registerAccount",
+      "title": "registerAccount's find-then-create race turns a concurrent duplicate registration into a 500 and breaks the anti-enumeration response",
+      "verification": "Check whether UserRegistrationService.createUser catches DataIntegrityViolationException and converts it to the user-exists path; no such handling is visible from this facade."
+    },
+    {
+      "category": "concurrency",
+      "description": "startUpload calls initiateVideoUpload with props.drill.id evaluated at call time, but after `await runTusUpload(...)` (which can take minutes) it re-reads props.drill.id at line 452 to call updateDrillVideoState. The panel is explicitly reused without remount as props.drill swaps (see the composable comment at line 377), and nothing aborts tusUpload on a drill change \u2014 only onUnmounted does. So if the coach opens another drill while the upload runs, the upload for drill A completes and drill B is marked hasVideo:true in the store: drill B now shows a Remove-video button for a video it does not have, while drill A (which actually has the backend video ref from initiateUpload) still shows the upload form, inviting a second initiate that silently replaces and physically deletes the first, still-PROCESSING video via DrillUploadService's non-READY replacement branch.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "startUpload",
+      "title": "DrillDetailPanel marks the wrong drill as having a video when props.drill swaps during a tus upload",
+      "verification": "Confirm DrillLibraryPage keeps one DrillDetailPanel instance mounted and swaps the drill prop (the useDrillVideoPlayback comment asserts it does)."
+    },
+    {
+      "category": "edge-case",
+      "description": "fetchVideoUploadEligibility is called only from this component's onMounted, and only if props.drill?.libraryType === 'PRIVATE' at mount time. The panel mounts once and is reused across drill swaps without remounting, and grep shows no other caller of fetchVideoUploadEligibility anywhere in the frontend. If the panel mounts with drill=null or a PUBLIC drill (the normal case when the library page renders before any drill is opened), canUploadVideo stays null, and the upload/remove section \u2014 gated on `sessionStore.canUploadVideo === true` at lines 122/293 \u2014 never renders for any PRIVATE drill opened afterwards, silently hiding the feature from an eligible INSTRUCTOR+ coach until a full page reload that happens to mount with a PRIVATE drill.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "onMounted",
+      "title": "Video-upload eligibility is fetched only in onMounted when the then-current drill is PRIVATE, so a reused panel can hide the upload UI for the whole session",
+      "verification": "Confirm the panel is mounted with a null drill prop in DrillLibraryPage/SessionBuilderPage before any drill is selected."
+    },
+    {
+      "category": "concurrency",
+      "description": "sendEmail (and the identical AccountManagementFacade.sendMail and AccountChangeEmailListener pattern) uses ShortCode.shortenInt(UUID.randomUUID().hashCode()) as both the user-facing helpCode and the Envelope sendId. MailManager treats sendId as the cluster-wide idempotency key: it advisory-locks on it, loads any existing EnvelopeEntity by sendId, and updates that row. With at most 2^32 distinct values, the birthday bound makes a collision between two unrelated emails likely after ~65k sends. When it happens, the second email's send overwrites the first row's status, recipient list and delivered flags (the code itself logs this as 'caller misuse', MailManager.java:255) \u2014 e.g. a FAILED activation email awaiting EmailRetryScheduler redrive is overwritten to SENT by an unrelated profile-change email and is never retried.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/registration/EmailRegistrationStrategy.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "EmailRegistrationStrategy.sendEmail",
+      "title": "sendId/helpCode derived from UUID.randomUUID().hashCode() shares one 32-bit-at-best space, so two unrelated emails can collide on the envelope dedup key",
+      "verification": "Check ShortCode.shortenInt's output space and the unique constraint on envelope_entity.send_id; compare with the booking listeners, which use UUID.randomUUID().toString() as sendId."
+    },
+    {
+      "category": "concurrency",
+      "description": "saveBranding does brandingRepository.findById(coachId).orElseGet(CoachBranding::new) and then save(), with no lock, no @Version visible, and no upsert. If a coach double-submits the branding form (or two tabs save) before either commits, both transactions see no row and both insert with the same assigned coachId primary key; the second fails at flush with a DataIntegrityViolationException surfacing as a 500. For an existing row the same pattern is a plain last-write-wins overwrite, which is acceptable here, so the defect is confined to the concurrent-first-insert window.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "ReportGenerationService.saveBranding",
+      "title": "saveBranding's find-or-new then save races on the coach_branding primary key: two concurrent first saves make one fail with a PK violation",
+      "verification": "Confirm CoachBranding has coachId as its @Id with no @Version, and that no ON CONFLICT upsert exists in CoachBrandingRepository."
+    },
+    {
+      "category": "architecture",
+      "description": "generateReport's explicit per-coach tryConsume (PER_COACH_BUCKET, 10/min), documented as 'the meaningful bound', goes through RateLimitingService, whose buckets live in an in-process ConcurrentHashMap (RateLimitingService.java:56) with no shared store. The system runs as several instances behind a proxy, so a coach whose requests spread across N instances gets N\u00d710 reports per minute, and any instance restart resets the budget to zero mid-window. The same applies to every @RateLimited aspect limit (registration, password reset, change email). Latent rather than exploitable today only to the extent the proxy pins clients to one instance.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "ReportGenerationService.generateReport",
+      "title": "All rate limits, including the per-coach report budget, are per-JVM ConcurrentHashMap buckets \u2014 multiplied by instance count and reset on every restart",
+      "verification": "Confirm the deployment runs more than one instance without sticky sessions, and that RateLimitingService has no Redis/DB-backed implementation selected by profile."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}
