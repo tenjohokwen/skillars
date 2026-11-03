@@ -1,0 +1,60 @@
+{
+  "arm": "security",
+  "case": "353-agreed-price-null-fallback",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The diff shows only the Javadoc on BatchPaymentQuoteService, which does say the quote previews the current price and createBatch independently locks the then-current price \u2014 consistent with the finding \u2014 but the verification caveat requires inspecting BookingBatchService.createBatch and the batch/single-booking request DTOs for an expected-price or quote-token check, and none of that code is available here.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 0.30415000000000003,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same NULL agreed_price fallback in resolveSessionPrice/batchBookingPrice with the same consequence: coach prices after the request and the parent is silently charged an unseen amount.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R1 mentions the \u20ac0 quote/batch total and NULL agreed_price only as the trigger for the fallback charge; it does not flag createBatch's silent zero-total-instead-of-refusing as a defect or cite BookingBatchService/BatchPaymentQuoteService as locations.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "partial",
+        "note": "R2 targets the exact non-pack branch setting agreedPrice = currentCoachPrice but describes a price-raise/inheritance problem, not the missing null check that creates a NULL-priced proposal for an unpriced coach.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Entirely conditional on the unread uq_pcl_booking_refund definition and outbox conflict handling ('if the constraint is\u2026 conversely if not\u2026'); no concrete trigger established from the text.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hinges on unverified sweeper behavior ('if the sweeper refunds from those columns\u2026 or if it does not refund at all'); speculative, no concrete trigger.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] The diff shows only the Javadoc on BatchPaymentQuoteService, which does say the quote previews the current price and createBatch independently locks the then-current price \u2014 consistent with the finding \u2014 but the verification caveat requires inspecting BookingBatchService.createBatch and the batch/single-booking request DTOs for an expected-price or quote-token check, and none of that code is available here. | pass-1: Concrete trigger stated: coach changes price between the parent's quote and createBatch/createBookingRequest, and no expected-price echo binds the reviewed figure to the locked one, so an unreviewed price is locked and charged.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

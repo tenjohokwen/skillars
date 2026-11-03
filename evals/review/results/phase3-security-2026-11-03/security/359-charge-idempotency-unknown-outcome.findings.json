@@ -1,0 +1,68 @@
+{
+  "arm": "security",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "charge() catches every StripeException \u2014 including ApiConnectionException (no HTTP response), 5xx and 409 idempotency conflicts, where the PaymentIntent (confirm=true, off-session) may have been created and captured \u2014 and collapses them all into one PaymentGatewayException(\"payment.lifecycleFailure\"), unlike refund() in the same class which classifies those as outcome-unknown. handleCreditBasedBooking then calls persistPaymentFailure, whose loadOrCreate overwrites the CAPTURE_PENDING reservation row with a zeroed CHARGE_FAILED row, declines the booking and sends the parent a 'nothing was charged' decline. A network timeout or Stripe 5xx after the request reached Stripe therefore leaves the parent's card charged while every durable signal (the CAPTURE_PENDING row the sweeper escalates, the runbook path) is destroyed \u2014 no refund, no alert, no reconciliation; the 1-minute time-bucket in the default idempotency key also prevents a later re-drive from replaying the original intent.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.charge / PaymentLifecycleService.handleCreditBasedBooking",
+      "title": "Unknown-outcome Stripe charge recorded as CHARGE_FAILED, erasing the CAPTURE_PENDING sentinel \u2014 parent charged with no record",
+      "verification": "Simulate stripeClient.createPaymentIntent throwing ApiConnectionException (or an InternalServerError StripeException) after the request reaches Stripe; observe booking_payments move CAPTURE_PENDING -> CHARGE_FAILED with zeroed amounts and BookingDeclinedEvent published, while the PaymentIntent exists captured at Stripe."
+    },
+    {
+      "category": "logic",
+      "description": "On any PaymentGatewayException from chargeAndCaptureForBatch, the catch block writes a BOOKING_DEDUCTION_REVERSAL restoring the credit share and calls declineBatchBooking for every reserved booking, writing zeroed CHARGE_FAILED rows. Because the gateway gives no rejected-vs-outcome-unknown distinction (see the charge() finding), a lost response or Stripe 5xx on a batch whose PaymentIntent actually captured leaves the parent charged the full card amount for a batch of declined bookings, with the books recording that no money moved and no CAPTURE_PENDING row left for the sweeper or an operator to find.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "PaymentLifecycleService.onBatchBookingAccepted",
+      "title": "Batch charge failure handler restores credit and zeroes all reserved rows even when the batch charge outcome is unknown",
+      "verification": "Same trigger as the gateway finding but on the batch path: make the batch PaymentIntent.create return a timeout after reaching Stripe and confirm every reserved booking_payments row becomes CHARGE_FAILED with stripe_charged=0 while the batch charge exists at Stripe."
+    },
+    {
+      "category": "security",
+      "description": "processConnectWebhook explicitly rejects deliveries when connect-webhook-secret is blank (lines 130-137), but processWebhook passes paymentProperties.getWebhookSecret() straight to Webhook.constructEvent with no blank check; application.yaml defaults app.payment.stripe.webhook-secret to empty and PaymentConfig validates only the API key at startup. Stripe's signature is HMAC-SHA256 of timestamp+payload with the secret, so with an empty secret anyone can compute a valid Stripe-Signature header: a deployment missing APP_PAYMENT_STRIPE_WEBHOOK_SECRET exposes the unauthenticated IS_PERMIT_ALL /api/payment/webhooks/stripe endpoint to fully forged events (invoice.paid re-entitling a delinquent subscription, charge.dispute.created, account.updated, customer.subscription.deleted).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "StripeWebhookService.processWebhook",
+      "title": "Platform webhook endpoint verifies signatures against a possibly-blank secret, unlike the Connect endpoint which fails closed",
+      "verification": "Confirm Webhook.constructEvent in the pinned stripe-java accepts an empty-string secret (it computes HMAC with the empty key rather than throwing), then POST a payload signed with HMAC-SHA256(key=\"\") to /api/payment/webhooks/stripe in a context where the property is blank."
+    },
+    {
+      "category": "security",
+      "description": "receive() enforces MAX_WEBHOOK_BODY_BYTES via request.getContentLength(), which returns -1 for a Transfer-Encoding: chunked request, so the -1 > 1MB check never trips and readAllBytes() buffers the entire stream into heap before any signature verification. Both webhook endpoints are IS_PERMIT_ALL, so an unauthenticated client can stream arbitrarily large chunked bodies (in parallel) and exhaust memory; neither application.yaml nor Tomcat defaults cap non-form request body size for this path.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeWebhookResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "StripeWebhookResource.receive",
+      "title": "1 MB webhook body cap bypassed by chunked transfer encoding on an unauthenticated endpoint",
+      "verification": "Send a chunked POST larger than 1MB to /api/payment/webhooks/stripe and confirm it is fully buffered (heap growth / no 413) before the signature check rejects it; also confirm no server.tomcat max-swallow/max-http-post setting applies to chunked non-form bodies."
+    },
+    {
+      "category": "concurrency",
+      "description": "The BOOKING_DEDUCTION ledger entry for the credit share is written in the listener's outer REQUIRES_NEW transaction before the Stripe charge, while each booking's CAPTURED row and CONFIRMED transition commit in their own perBookingTx REQUIRES_NEW transactions inside the loop. If the JVM dies (or the outer commit fails) after the inner confirms committed but before the outer transaction commits, the deduction rolls back while the bookings stay CONFIRMED: the parent keeps the credit and the confirmed sessions. The single-booking path avoids this by writing deduction, payment row and transition in one transaction (persistPaymentSuccess).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "PaymentLifecycleService.onBatchBookingAccepted",
+      "title": "Batch credit deduction commits in a different transaction than the per-booking confirms \u2014 a crash window confirms sessions without debiting credit",
+      "verification": "Kill the process between the last perBookingTx.executeWithoutResult commit and the listener transaction's commit (or force the outer commit to fail) and confirm credit_ledger has no BOOKING_DEDUCTION while the batch bookings are CONFIRMED with CAPTURED rows."
+    },
+    {
+      "category": "logic",
+      "description": "quote() returns the literal \"EUR\" as the currency of the pre-submit figure the parent reviews, but StripePaymentGateway.resolveCurrency() charges in whatever platform.payment.currency is configured. If an operator sets any other currency, every batch quote shows the right number in the wrong currency and the parent approves an amount that differs from what their card is charged.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "BatchPaymentQuoteService.quote",
+      "title": "Batch payment quote hardcodes EUR while the actual charge currency comes from platform.payment.currency",
+      "verification": "Set platform.payment.currency to a non-EUR ISO code and compare the BatchPaymentQuoteDto currency against the currency on the resulting PaymentIntent."
+    }
+  ],
+  "input_rev": "97f527f111a70dd0fdc2e50cd093fa65b8d9060e",
+  "model": null
+}

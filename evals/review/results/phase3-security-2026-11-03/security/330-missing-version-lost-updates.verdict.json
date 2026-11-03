@@ -1,0 +1,78 @@
+{
+  "arm": "security",
+  "case": "330-missing-version-lost-updates",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "cited file not available: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "cited file not available: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "cited file not available: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "saveStep5 does only the startsWith(\"coach_profile/\" + userId + \"/\") prefix check before updatePhotoUrlByUserId, and resolvePhotoUrl hands the raw key to fileStorageService.signedDownloadUrl \u2014 but whether an unconfirmed object is actually served depends on FileStorageService.signedDownloadUrl (does it require a confirmed/active FileStorageObject row?) and confirmUpload, neither of which is in the provided code; the file's own softDelete shows the storage layer can throw StorageObjectNotFoundException, so a lookup inside signedDownloadUrl is plausible and would block the exploit.",
+      "reported_id": "R4"
+    }
+  ],
+  "judge_cost_usd": 0.61141,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R5 names the missing @Version/@DynamicUpdate on CoachProfile but only for the single erasure writer, not the entity-wide stale-save exposure across all writer paths.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions the Session entity or SessionPlanService stale-save risk.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 identifies the same unlocked findByUserId read plus full-row save in the COACH erasure branch silently overwriting a concurrent coach write (suspension), the same defect and consequence.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check impossible: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)] | pass-1: Concrete trigger: skip paths set status FAILED without failedAt, and the retry scheduler selects only on failedAt < cutoff, so these requests are permanently orphaned.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check impossible: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)] | pass-1: Concrete trigger: parent/self-player erasure uses the scrubProfileIdentity=false overload, leaving real name/DOB in player_profiles, and the sticky tombstone blocks any re-drive from ever scrubbing them.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check impossible: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)] | pass-1: Concrete trigger: COACH erasure never clears displayName or changes status and no listener deactivates the profile, so public endpoints keep serving the erased coach's identity.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] saveStep5 does only the startsWith(\"coach_profile/\" + userId + \"/\") prefix check before updatePhotoUrlByUserId, and resolvePhotoUrl hands the raw key to fileStorageService.signedDownloadUrl \u2014 but whether an unconfirmed object is actually served depends on FileStorageService.signedDownloadUrl (does it require a confirmed/active FileStorageObject row?) and confirmUpload, neither of which is in the provided code; the file's own softDelete shows the storage layer can throw StorageObjectNotFoundException, so a lookup inside signedDownloadUrl is plausible and would block the exploit. | pass-1: Concrete trigger: saveStep5 accepts any key matching the prefix without findActiveObject/ownership/confirm validation, letting an unvalidated upload be served via signed URL to profile visitors.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

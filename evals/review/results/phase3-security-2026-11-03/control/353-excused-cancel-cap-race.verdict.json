@@ -1,0 +1,39 @@
+{
+  "arm": "control",
+  "case": "353-excused-cancel-cap-race",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "issueStrikeSafely catches only PessimisticLockingFailureException; any other RuntimeException from reliabilityStrikeService.issue escapes onBookingCancelledByCoach's REQUIRES_NEW transaction, rolling back the saveCancellationHistory write made earlier in the same transaction, and the AFTER_COMMIT listener failure is only logged \u2014 so the history row is silently lost.",
+      "reported_id": "R2"
+    }
+  ],
+  "judge_cost_usd": 0.30908,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same insert-then-count race under READ COMMITTED with the same missed COACH_CANCELLATION_EXCUSED_LIMIT strike consequence; its suggested coach-row-lock fix is the wrong shape per the non-finding, but the defect and mechanism match.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] issueStrikeSafely catches only PessimisticLockingFailureException; any other RuntimeException from reliabilityStrikeService.issue escapes onBookingCancelledByCoach's REQUIRES_NEW transaction, rolling back the saveCancellationHistory write made earlier in the same transaction, and the AFTER_COMMIT listener failure is only logged \u2014 so the history row is silently lost. | pass-1: Concrete mechanism: issueStrikeSafely catches only PessimisticLockingFailureException, so any other exception from ReliabilityStrikeService.issue crosses the REQUIRES_NEW boundary, rolls back the just-saved history row, and the AFTER_COMMIT listener swallows it, contradicting the always-record intent.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Reporter concedes the only publisher is BookingService.cancelBookingAsCoach and no duplicate-delivery path exists; the double-count is hypothetical with no concrete trigger.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "arm": "security",
+  "case": "337-subscription-entitlement-integrity",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "A coach or player who downgrades (POST /coach/change-tier or /player/change-tier with a lower tier) only gets a local payment.*_subscription_changes row; when applyPendingChanges fires at period end it sets the local tier and (for coaches) syncs the marketplace projection, but no Stripe call is ever made, so Stripe keeps billing the old higher price every period, indefinitely. Worst case: changeCoachTier accepts newTier=SCOUT (the free tier subscribeCoach refuses), so the coach is downgraded to free-tier entitlements while Stripe continues charging the paid price forever, and the row stays ACTIVE with a stripeSubscriptionId so they cannot even resubscribe (alreadyActive guard).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "applyPendingChanges / persistCoachTierDowngrade / persistPlayerTierDowngrade",
+      "title": "Scheduled tier downgrades never update the Stripe subscription price",
+      "verification": "Confirm there is no other code path that pushes the scheduled downgrade to Stripe (grep for updateSubscriptionTier callers \u2014 only the two upgrade branches in changeCoachTier/changePlayerTier call it)."
+    },
+    {
+      "category": "security",
+      "description": "A player on PRO schedules a downgrade to SEMI_PRO, then cancels; at period end the customer.subscription.deleted webhook sets tier=ATHLETE/status=CANCELLED, and the nightly applyPendingChanges then applies the still-pending change (nothing voids it on cancellation or deletion, and the applicator never checks status), leaving tier=SEMI_PRO on a CANCELLED row. QuotaConfigService.resolvePlayerTierKey reads the tier with no status check, so the player gets SEMI_PRO video quotas free, permanently. The coach variant is worse: the applicator calls syncMarketplaceTier, so marketplace.coach_subscriptions is set to the paid tier, and CoachProfileService.getCoachSubscriptionTier (used for quotas and marketplace capabilities) is status-blind; reconcileMarketplaceTiers only iterates ACTIVE/TRIALLING payment rows so it never repairs the CANCELLED row. The same stale-change path also hits a coach who re-subscribes after cancellation (subscribeCoach never voids pending changes): their freshly paid ACADEMY tier is silently downgraded that night while Stripe bills ACADEMY.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "applyPendingChanges / handleSubscriptionDeleted / subscribeCoach",
+      "title": "Pending scheduled downgrade applied onto a cancelled subscription grants permanent free paid-tier entitlements",
+      "verification": "Confirm the webhook ordinarily lands before the 02:00 scheduler (it does for any period end not within the scheduler window) and that no other sweep resets tier on CANCELLED rows."
+    },
+    {
+      "category": "logic",
+      "description": "When a past-due subscription recovers, the customer.subscription.updated webhook sets status back to ACTIVE but leaves pastDueSince set. On the next invoice.payment_failed \u2014 possibly months later \u2014 handleInvoicePaymentFailed deliberately does not overwrite a non-null pastDueSince, so the grace cutoff is computed from the old failure date and checkPastDueGracePeriod immediately downgrades the coach to SCOUT (or player to ATHLETE) and marks the row CANCELLED on its next run, with no grace period at all, while the Stripe subscription is still live and dunning. If the user then fixes their card, the recovery webhook flips status back to ACTIVE on a row whose tier was already reset, so they pay the full paid price while holding free-tier entitlements and cannot resubscribe (alreadyActive guard).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "handleSubscriptionUpdated / handleInvoicePaymentFailed / checkPastDueGracePeriod",
+      "title": "pastDueSince never cleared on recovery \u2014 second payment failure gets zero grace period",
+      "verification": "Confirm no other code path nulls pastDueSince (grep setPastDueSince \u2014 only handleInvoicePaymentFailed writes it, never null)."
+    },
+    {
+      "category": "database",
+      "description": "The idempotency key contains only customerId and priceId, but Stripe replays the original response for the same key for 24 hours. A parent with two children who subscribes child A and then child B to the same tier+interval the same day gets child A's subscription replayed for child B: B's payment.player_subscriptions row stores A's stripe_subscription_id (the column has no unique constraint in V138), B's tier is recorded ACTIVE though Stripe bills nothing for B, and every subsequent webhook for that subscription id makes findByStripeSubscriptionId (Optional over two rows) throw, rolling back the webhook idempotency insert and putting Stripe into a permanent retry/failure loop \u2014 so neither row ever receives status/period/deletion updates again. A coach whose subscription was deleted (e.g. via webhook) who resubscribes to the same tier within 24h similarly gets the stale creation response replayed: the local row shows ACTIVE with a dead Stripe subscription id and no billing.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "createSubscription",
+      "title": "Stripe idempotency key sub-create-{customer}-{price} collides across players and across resubscribes",
+      "verification": "Confirm Stripe's 24h idempotency replay semantics for Subscription.create and that Spring Data throws IncorrectResultSizeDataAccessException for a 2-row Optional query result."
+    },
+    {
+      "category": "logic",
+      "description": "The alreadyActive guard only blocks statuses in {ACTIVE, TRIALLING}. A coach or parent whose payment failed (status PAST_DUE, or CANCELLED after grace expiry \u2014 checkPastDueGracePeriod keeps stripeSubscriptionId) who clicks subscribe again gets a brand-new Stripe subscription while the old one is still live and in dunning; the local row's stripeSubscriptionId is overwritten, orphaning the old subscription. If the old subscription's retry later collects (same saved card), the user is billed for both subscriptions, and the old one's webhooks no longer match any local row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "subscribeCoach / subscribePlayer",
+      "title": "Subscribing while PAST_DUE (or post-grace CANCELLED) creates a second live Stripe subscription \u2014 double billing",
+      "verification": "Confirm the old subscription is never cancelled at Stripe on this path (no cancelSubscription call in subscribeCoach/subscribePlayer)."
+    },
+    {
+      "category": "concurrency",
+      "description": "handleAccountUpdated explicitly guards against Stripe's out-of-order delivery via lastEventCreatedAt, but the subscription-updated path applies whatever status arrives last. If a stale past_due snapshot is delivered after the active recovery event (or two near-simultaneous updates race across the multi-instance deployment), the row is left PAST_DUE while the subscription is actually active; getEffectiveCoachTier/getEffectivePlayerTier then resolve to SCOUT/ATHLETE, stripping a paying user's entitlements, and nothing corrects it until the next Stripe event for that subscription (the grace checker only selects rows with pastDueSince set, so a stale-status row without one is never even downgraded-and-noticed \u2014 it just silently serves the free tier).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "handleSubscriptionUpdated",
+      "title": "No out-of-order protection for customer.subscription.updated webhooks",
+      "verification": "Confirm PaymentCoachSubscription/PaymentPlayerSubscription carry no event-timestamp column and that no reconciliation sweep compares local status against Stripe's."
+    },
+    {
+      "category": "logic",
+      "description": "When the past-due grace period expires, the sweep sets tier SCOUT/ATHLETE and status CANCELLED but makes no Stripe call and keeps stripeSubscriptionId. Stripe continues dunning the customer's saved card; if a later retry succeeds (or the user updates their card in response to Stripe's dunning emails), the money is collected and the customer.subscription.updated webhook flips the local status back to ACTIVE \u2014 on a row whose tier was already reset \u2014 so the user pays the full paid price for free-tier entitlements, and cannot resubscribe because the alreadyActive guard now matches.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "checkPastDueGracePeriod",
+      "title": "Grace-period expiry downgrades locally but never cancels the Stripe subscription",
+      "verification": "Confirm Stripe dunning configuration for this account does not auto-cancel before a retry can succeed (Stripe setting, not in repo)."
+    },
+    {
+      "category": "edge-case",
+      "description": "Request DTOs validate tier/billingInterval with only @NotNull, and the service compares case-insensitively (equalsIgnoreCase, toUpperCase for rank, toLowerCase for config keys) but persists the raw request string via sub.setTier(tier)/setBillingInterval(billingInterval). A POST /coach/subscribe or /coach/change-tier with tier \"instructor\" (lowercase) passes every check, the Stripe subscription is created or prorated-upgraded and the card charged, and then the persist transaction fails on chk_pcs_tier (V138 CHECK admits only SCOUT/INSTRUCTOR/ACADEMY), rolling back the local record. The caller is billed with no recorded subscription (subscribe) or Stripe bills the new tier while the local row keeps the old one (upgrade); retries replay the same Stripe response and fail identically.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "persistCoachSubscription / persistCoachTierUpgrade / persistPlayerSubscription",
+      "title": "Tier and billingInterval persisted with request casing \u2014 CHECK constraint violation after Stripe has been charged",
+      "verification": "Confirm Hibernate flushes the tier value verbatim (no enum/converter on the String column) \u2014 the entity maps tier as a plain String, so it should."
+    },
+    {
+      "category": "edge-case",
+      "description": "normalizeStripeStatus upper-cases any status it does not recognise, but chk_pcs_status/chk_pps_status only admit ACTIVE/PAST_DUE/CANCELLED/TRIALLING. createSubscription does not set payment_behavior, so a card requiring SCA (routine for an EUR platform) yields a subscription with status \"incomplete\": persistCoachSubscription/persistPlayerSubscription then violates the CHECK and rolls back after the Stripe subscription exists \u2014 the user may complete authentication and be billed with no local record, and the subscription's later webhooks find no matching row. Likewise a live subscription transitioning to \"unpaid\" or \"paused\" at Stripe makes handleSubscriptionUpdated violate the CHECK, rolling back the webhook idempotency insert and putting Stripe into a retry loop on that event.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "normalizeStripeStatus",
+      "title": "Unknown Stripe statuses (incomplete, unpaid, paused) pass through normalizeStripeStatus into a CHECK-constrained column",
+      "verification": "Confirm the account's Stripe API version / payment_behavior default allows incomplete subscription creation (the code sets no payment_behavior), and the dunning setting that produces status=unpaid."
+    },
+    {
+      "category": "edge-case",
+      "description": "A coach or player who has cancelled (cancelAtPeriodEnd=true) can still call change-tier with a higher tier; updateSubscriptionTier applies the new price with CREATE_PRORATIONS but never clears cancel_at_period_end, so the user is charged a prorated upgrade for a subscription that still terminates at period end. The local row also keeps cancelAtPeriodEnd=true while showing the upgraded tier, so the UI state and the charge disagree with what the user will actually receive.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "changeCoachTier / changePlayerTier",
+      "title": "Tier upgrade after cancel-at-period-end charges prorated upgrade on a dying subscription",
+      "verification": "Confirm the intended UX is that upgrade should resume the subscription (compare with any frontend copy around upgrade-after-cancel)."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

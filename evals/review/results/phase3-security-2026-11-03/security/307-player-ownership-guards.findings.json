@@ -1,0 +1,68 @@
+{
+  "arm": "security",
+  "case": "307-player-ownership-guards",
+  "findings": [
+    {
+      "category": "security",
+      "description": "initiatePlayerUpload calls playerProfileRepository.findById(securityUtil.requireCurrentUserId()), but Principal.businessId is the User id (Principal.instanceFrom sets businessId = user.getId(); PlayerOwnershipGuard documents the same), while PlayerProfile.id is an independently generated TSID primary key \u2014 the lookup should be findByUserId. Any legitimate player who POSTs /api/video/player/uploads/initiate gets 403 'Player profile not found', so the homework-upload feature is dead; and if any player_profiles row's TSID happens to equal the caller's user id, the upload is silently attributed to that other (possibly child) profile, after which VideoAccessGuard grants that child's parents play and delete rights over the uploader's video and the child's locker shows a stranger's content \u2014 a safeguarding exposure. resolveCurrentOwnerId (used by /quotas/me and /my) likewise returns the raw User id as the video ownerId, hard-wiring the same wrong id space into quota and listing queries.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "initiatePlayerUpload / currentPlayerProfileId / resolveCurrentOwnerId",
+      "title": "Player upload resolves PlayerProfile by User id used as profile primary key",
+      "verification": "Confirm PlayerProfile rows are created with a generated TSID id distinct from the owning User.id (BaseEntity @Tsid; ShadowAccountService and PlayerRegistrationService creation paths), and that no code path creates a PlayerProfile whose id equals the user id."
+    },
+    {
+      "category": "security",
+      "description": "For a player-owned video, isOwner compares ownerId with the caller's User id (Principal.businessId), while the parent branches parse the same ownerId as ParentPlayerLink.playerId \u2014 which ShadowAccountService populates with profile.getId(), a PlayerProfile primary key. Only one interpretation of ownerId can be correct, so one branch always evaluates against the wrong id space: if ownerId is a PlayerProfile id (the Story 6.6 contract the class javadoc states), then a user whose User id numerically equals that profile id passes isOwner and can play and delete another family's child video via canPlay/canDelete, and the true player owner is never recognised as owner; if ownerId is a User id, the parent HIDDEN-bypass and delete grants evaluate links for an unrelated profile. VideoEventResource.isCurrentUserOwner repeats the businessId-vs-ownerId comparison for /status and /events.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "isOwner / canPlay step 3 / isParentOf / canDelete",
+      "title": "VideoAccessGuard compares player-video ownerId against two different id spaces",
+      "verification": "Determine the authoritative ownerId format for HOMEWORK videos (what videoService.initializeUpload persists) and check production data for videos whose Long ownerId matches a user id rather than a player_profiles id; check for cross-table TSID value overlap between users and player_profiles."
+    },
+    {
+      "category": "security",
+      "description": "POST /api/video/player/uploads/initiate is guarded by hasAnyRole('ROLE_USER'), and GET /quotas/me and GET /my by hasAnyRole('ROLE_USER','ROLE_COACH') \u2014 inline expressions instead of SecurityConstants. PlayerRegistrationService grants self-registered adult players only the ROLE_PLAYER authority, so every such player receives 403 on homework upload initiation, quota display and their own video list, even though the endpoint comments describe these as player-facing paths. The player video area is unusable for the entire ROLE_PLAYER population.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "initiatePlayerUpload / getMyQuota / getMyVideos",
+      "title": "Player video endpoints admit only legacy ROLE_USER, locking out ROLE_PLAYER",
+      "verification": "Confirm no code path grants ROLE_USER alongside ROLE_PLAYER to self-registered players (PlayerRegistrationService sets authorities to exactly Set.of(ROLE_PLAYER)), and confirm claimed child/shadow accounts also lack ROLE_USER if they are expected to upload."
+    },
+    {
+      "category": "security",
+      "description": "GET /api/session/players/{playerId}/homework admits self-owned adult players via playerOwnershipGuard (existsByIdAndUserId branch), but POST /api/session/homework/{assignmentId}/complete is annotated HAS_PARENT_ROLE only, and the body re-verifies with playerProfileRepository.findByIdAndParentId \u2014 which can never match a self-owned profile whose parentId is null. A ROLE_PLAYER who receives homework from a coach can list the assignments but gets 403 (or 404 even if the role were widened) when completing one, so the completed flag in their own homework list can never become true. The expression and body both admit only parents while the sibling read endpoint deliberately serves players.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/api/HomeworkResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "markComplete",
+      "title": "Self-registered adult player cannot mark own homework complete",
+      "verification": "Confirm there is no alternative player-facing completion endpoint elsewhere in the session module."
+    },
+    {
+      "category": "security",
+      "description": "GET /api/payment/subscriptions/player/me admits self-owned players via playerOwnershipGuard, and SubscriptionService.assertPlayerOwnership explicitly supports the self-owned branch (existsByIdAndUserId), but the three state-changing endpoints \u2014 subscribe, change-tier and DELETE /player \u2014 are annotated HAS_PARENT_ROLE only. A self-registered adult ROLE_PLAYER can view a subscription on their own profile but gets 403 on every attempt to start, change or cancel one; in particular a paid recurring subscription on a self-owned profile (e.g. set up during migration or by support) cannot be cancelled by the person being charged.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SubscriptionResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "subscribePlayer / changePlayerTier / cancelPlayerSubscription",
+      "title": "Adult player cannot subscribe, change tier or cancel their own subscription",
+      "verification": "Confirm whether any flow creates an active PaymentPlayerSubscription for a self-owned profile (migrations, admin tooling, webhook upserts); confirm product intent that players self-manage, evidenced by the guard on /player/me and the userId branch in assertPlayerOwnership."
+    },
+    {
+      "category": "logic",
+      "description": "For coach-owned videos (UUID ownerId), isCurrentUserOwner falls back to ownerId.equals(securityUtil.getCurrentUserName()), but getCurrentUserName() returns the login email \u2014 VideoAccessGuard's javadoc states explicitly that it matches neither ownerId format, and VideoAccessGuard.isOwner correctly resolves the coach profile UUID instead. The comparison is therefore always false: every coach who polls GET /api/video/{id}/status or subscribes to /api/video/{id}/events for a video they just uploaded gets OperationNotAllowedException, so upload-progress tracking is dead for all coaches.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "isCurrentUserOwner",
+      "title": "Coach can never access status or SSE events for their own video",
+      "verification": "Confirm getCurrentUserName() returns the email login for coach principals (Principal.username = user.getLogin()) and that no coach principal has a UUID-string username."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}

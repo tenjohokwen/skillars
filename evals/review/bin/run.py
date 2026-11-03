@@ -13,6 +13,8 @@ Arms:
                 list inlined.
   blind-hunter  the Blind Hunter layer prompt from the mto-code-review skill. Always
                 tool-less: diff cases inline the diff; snapshot cases inline the scoped files.
+  security      the .claude/agents/security-reviewer.md agent, run like control (tools on
+                snapshots). Reports security defects only, by design.
 
 Both arms run FROM the export directory with --setting-sources project, so neither the repo's
 nor ~/.claude skills are loaded. See evals/review/README.md.
@@ -24,7 +26,20 @@ from _common import *  # noqa
 ARMS = {
     "control":      {"prompt": "reviewer-control.md",      "snapshot_mode": "tools"},
     "blind-hunter": {"prompt": "reviewer-blind-hunter.md", "snapshot_mode": "inline"},
+    # Specialised reviewers are real Claude Code agents under .claude/agents/; the arm uses
+    # the agent file's body as its prompt so what is measured is what runs in a session.
+    "security":     {"agent": "security-reviewer",         "snapshot_mode": "tools"},
 }
+
+def arm_template(arm):
+    spec = ARMS[arm]
+    if "prompt" in spec:
+        return read_prompt(spec["prompt"])
+    with open(os.path.join(ROOT, ".claude", "agents", f"{spec['agent']}.md")) as fh:
+        body = fh.read()
+    if body.startswith("---"):
+        body = body.split("---", 2)[2]  # strip the agent frontmatter
+    return body.strip() + "\n\n{{MODE_INSTRUCTIONS}}\n\n{{INPUT}}"
 INLINE_CAP = 400_000  # bytes of inlined source before we refuse rather than truncate silently
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "findings.schema.json")
 
@@ -46,7 +61,7 @@ def filter_diff(diff):
 
 def build(case, arm, work):
     kind = case["kind"]
-    tpl = read_prompt(ARMS[arm]["prompt"])
+    tpl = arm_template(arm)
     if kind == "introducing-diff":
         with open(os.path.join(work, "input.diff")) as fh:
             diff = filter_diff(fh.read())

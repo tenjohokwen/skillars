@@ -1,0 +1,68 @@
+{
+  "arm": "security",
+  "case": "350-pack-refund-rounding-remainder",
+  "findings": [
+    {
+      "category": "security",
+      "description": "A parent cancellation within 24h of the session forfeits the payment (RefundEnqueueListener.onBookingCancelledByParent refunds and restores only when isRefundEligible). The new pause path refunds every captured booking in full \u2014 wallet credit of the amount actually paid, or a pack-session restore \u2014 with no notice-window check at all; cancelDueToPause checks only ownership and rejectIfPostCompletion. The pause is parent-initiated, and the PR's own SessionPackIntegrityIT shows a card-paid CONFIRMED booking (unrelated to the pack) being fully refunded through the pause's booking list, so a parent holding any pack for a coach can launder a last-minute cancellation of any booking with that coach through a pack pause, recovering money or a session the policy says is consumed, with no coach strike or history either.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "cancelDueToPause / RefundEnqueueListener.onBookingCancelledDueToPause",
+      "title": "Pause-cancellation refunds bypass the 24-hour parent-cancellation forfeiture, including for card-paid bookings",
+      "verification": "Inspect PackSessionService.pausePack (not in the diff): whether PausePackRequest's booking list is validated to contain only bookings that actually fall inside the pause window, whether the pause start has a minimum lead time (>= the 24h forfeiture window), and whether pause frequency is limited."
+    },
+    {
+      "category": "logic",
+      "description": "When createPurchase fails after capture and no winner row exists, the service refunds the PaymentIntent and throws lifecycleFailure, recording nothing when the refund succeeds. If that error response is lost in transit, the frontend deliberately keeps the attemptKey and retries; Stripe replays the same (now refunded) PaymentIntent under the same key, findByStripePaymentIntentId finds no pack, and createPurchase succeeds \u2014 the parent receives a full session pack for money that was already returned to them. Nothing marks the intent as refunded, so the replay is indistinguishable from a fresh successful charge.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "purchasePack",
+      "title": "Retry after a compensated record failure creates a pack backed by a fully refunded charge",
+      "verification": "Confirm Stripe's idempotent replay of a refunded PaymentIntent returns the intent without error, and that no other record (e.g. a reconciliation row on the successful-refund path) exists that would block re-recording a pack against it."
+    },
+    {
+      "category": "logic",
+      "description": "The Idempotency-Key header is optional, and when absent the service now mints a fresh random UUID per call, so two deliveries of the same double-clicked purchase are two distinct Stripe charges and two packs. The old per-parent per-tier time bucket deduped exactly this case within a minute. Any caller not sending the header \u2014 a user on a stale cached SPA bundle during rollout, or a direct API consumer \u2014 regresses from a deduped retry to a double charge. The PR's own test (twoAttemptsOfTheSameTier_twoPacks_twoCharges) codifies the new behaviour.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "purchasePack (4-arg overload) / StripePaymentGateway idempotency key",
+      "title": "Keyless purchases lost the time-bucket dedupe: a double-submit now charges twice",
+      "verification": "Check whether any other clients (mobile, older deployed frontend bundles) call /api/payment/session-packs/purchase without the header, and whether the rollout serves old bundles alongside the new backend."
+    },
+    {
+      "category": "edge-case",
+      "description": "If findByIdForUpdate returns empty (e.g. the purchase row was deleted by an erasure or admin cleanup between enqueue and drain), the handler logs an error and returns normally, so the outbox row is consumed and the owed session \u2014 or any substitute compensation \u2014 is permanently lost with only a log line as the record. The comment acknowledges this is deliberate to avoid infinite re-drive, but there is no durable reconciliation record equivalent to recordRefundFailure, so recovery depends entirely on someone reading the logs.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "restoreSessionForBooking",
+      "title": "Restore handler silently drops the session when the pack row is gone",
+      "verification": "Check which paths can delete a session_pack_purchases row (GDPR erasure, admin tooling) while bookings funded by it can still be cancelled, and whether log-based alerting exists for the [PACK_SESSION_RESTORE] error."
+    },
+    {
+      "category": "concurrency",
+      "description": "The method now locks the booking before deciding paymentCaptured from its status, which only prevents the race with a concurrent settle if the settle/capture path takes the same FOR UPDATE lock on the booking row before transitioning it to CONFIRMED/UPCOMING; if settle locks only the pack or the payment row, a pause landing mid-settle can still see ACCEPTED, publish paymentCaptured=false, and the parent loses the deducted session or captured payment with nothing returned. The packExpired check also reads the pack with a plain findById, unserialized against a concurrent extendPack, so the wallet-refund-vs-session-restore decision can be made on stale expiry.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "cancelDueToPause",
+      "title": "Captured/expired decision in cancelDueToPause relies on the settle path also locking the booking, and reads the pack without a lock",
+      "verification": "Open the settle/capture path (PaymentLifecycleService) and confirm it acquires bookingRepository.findByIdForUpdate on the same booking before deducting the pack session and writing CONFIRMED, as cancelBookingAsAdmin reportedly does."
+    },
+    {
+      "category": "edge-case",
+      "description": "After a network-level failure the page keeps the same attemptKey for the next retry, with no expiry. Stripe idempotency keys expire after about 24 hours, so a user who leaves the tab open and retries the next day gets a brand-new PaymentIntent under the 'same' key; findByStripePaymentIntentId then misses and a second charge and second pack are created even though the first attempt may have succeeded server-side with its response lost. Narrow window, but the dedupe guarantee the key is meant to provide silently ends without the client knowing.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "confirmPurchase / attemptKey",
+      "title": "Stripe idempotency keys expire after ~24h while the frontend keeps the attempt key indefinitely",
+      "verification": "Confirm Stripe's idempotency key retention (24h) for the API version in use, and whether the first lost-response attempt committing server-side while the client retries a day later is plausible for this flow."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

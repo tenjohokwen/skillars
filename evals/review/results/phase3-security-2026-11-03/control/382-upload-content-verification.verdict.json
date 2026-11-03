@@ -1,0 +1,75 @@
+{
+  "arm": "control",
+  "case": "382-upload-content-verification",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "signUpload's PutObjectPresignRequest signs only bucket/key/contentType (no length), and no read path re-HEADs: confirmUpload stores head.contentLength() once, reconfirm returns the stale row, and signDownload/findActiveObject/sumSizeBytesByOwnerId all trust DB sizeBytes while signedDownloadUrl serves whatever is in S3. A second PUT with the still-valid URL (irrevocable by design; content-length-range applies only to POST policies, not presigned PUT) overwrites the object unchecked.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "reconfirm's only gate before re-publishing StorageObjectConfirmedEvent is the time-window check on fso.getUploadConfirmedAt() (confirmedAt.isAfter(now - uploadTtlSeconds)); re-confirming older upload A within the TTL after B passes it and re-fires A's event, and the method's own javadoc/comment say listeners unconditionally set the field to the event's key, so photo_url reverts to A. The window shrinks but does not prevent the race.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 0.9251550000000001,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 states confirmUpload trusts the client-declared Content-Type and never reads the stored bytes, allowing arbitrary content (HTML, executables) to be stored under an image type \u2014 same defect, place, and consequence.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions that rejected confirms (validation/quota failures) leave the already-PUT object in the bucket uncounted and uncleaned.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "R3 mentions the allowlist accepting application/octet-stream only as context; no finding flags the FileStorageProperties defaults (octet-stream/.bin) as the defect to fix.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding addresses signUpload accepting arbitrary entity strings with ownership checked only for OWNER_BOUND_ENTITIES.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R4 identifies that saveStep5 only prefix-checks photoUrl and never verifies a confirmed, non-deleted, owned, image-typed object, including the \"..\" suffix case \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] signUpload's PutObjectPresignRequest signs only bucket/key/contentType (no length), and no read path re-HEADs: confirmUpload stores head.contentLength() once, reconfirm returns the stale row, and signDownload/findActiveObject/sumSizeBytesByOwnerId all trust DB sizeBytes while signedDownloadUrl serves whatever is in S3. A second PUT with the still-valid URL (irrevocable by design; content-length-range applies only to POST policies, not presigned PUT) overwrites the object unchecked. | pass-1: Concrete trigger: reuse the still-valid presigned PUT URL after confirmUpload to overwrite the object, making stored sizeBytes/quota stale \u2014 a genuine defect not in the key.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: confirm any non-image upload under coach_profile/<id>/ and CoachProfilePhotoEventListener sets it as the public photo with no contentType/size check \u2014 a listener-path defect distinct from F5's saveStep5 path.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] reconfirm's only gate before re-publishing StorageObjectConfirmedEvent is the time-window check on fso.getUploadConfirmedAt() (confirmedAt.isAfter(now - uploadTtlSeconds)); re-confirming older upload A within the TTL after B passes it and re-fires A's event, and the method's own javadoc/comment say listeners unconditionally set the field to the event's key, so photo_url reverts to A. The window shrinks but does not prevent the race. | pass-1: Concrete trigger: re-sending confirm for older upload A within uploadTtlSeconds makes reconfirm re-publish the event and the listener's unconditional UPDATE reverts photo_url from B to A.",
+        "reported_id": "R5",
+        "verdict": "real"
+      }
+    ]
+  }
+}

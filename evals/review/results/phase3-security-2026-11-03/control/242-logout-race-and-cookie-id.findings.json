@@ -1,0 +1,88 @@
+{
+  "arm": "control",
+  "case": "242-logout-race-and-cookie-id",
+  "findings": [
+    {
+      "category": "security",
+      "description": "AuthService is class-level @Transactional. recordAttempt() calls loginAttemptRepository.save() in that same transaction, and the code then throws BadCredentialsException, which is a RuntimeException. Spring rolls back on a RuntimeException, so the LoginAttempt row is never committed. countByIdentifierAndAttemptedAtAfter therefore stays at 0, and an attacker can guess passwords without limit.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AuthService.login / recordAttempt",
+      "title": "Failed-login attempts are rolled back, so the login rate limit never triggers",
+      "verification": "An integration test that posts more than max-attempts wrong passwords and expects a 429 would settle it. LoginAttemptRepository.save has no REQUIRES_NEW, and there is no noRollbackFor on the class."
+    },
+    {
+      "category": "logic",
+      "description": "findFirstByIdentifierOrderByAttemptedAtAsc ignores windowStart. If any attempt for this identifier is older than the lock window (rows are only purged by a periodic cleanup), its attemptedAt + lockWindow is already in the past. Math.max then clamps the value to 1 second, so the client is told to retry in 1s while the lock is still active. The client then retries in a tight loop against a 429 that keeps coming back.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "AuthService.login (retryAfterSeconds)",
+      "title": "Retry-After is computed from the oldest attempt ever recorded, not the oldest one inside the window",
+      "verification": "Check how often AuthCleanupService purges attempts. If the purge cutoff is longer than lock-window-minutes, the stale-row case happens."
+    },
+    {
+      "category": "concurrency",
+      "description": "logout only marks the token from the request cookie, and only if it is not already used (.filter(t -> !t.isUsed())). Trigger: a /api/auth/refresh from another tab, or an interceptor retry, rotates the token while the logout POST is in flight carrying the old cookie. Logout finds a used token and does nothing, so the successor token stays valid in the database for its 7-day TTL. If the refresh response lands after the logout response, its Set-Cookie also puts the rtkn/JWT/skp cookies back in the browser, and the user is silently logged in again after clicking Logout.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "AuthService.logout",
+      "title": "Logout does not revoke the live refresh token when the presented token was already rotated",
+      "verification": "Fire POST /api/auth/refresh and POST /api/auth/logout at the same time with the same rtkn cookie, then check whether any refresh_tokens row for the user still has used=false."
+    },
+    {
+      "category": "logic",
+      "description": "When a used token is replayed within 30s, the successor is picked as the user's newest unused token across ALL sessions (findFirstByUserIdAndUsedFalse...OrderByCreatedAtDesc), not the token rotated from this one. Trigger: a user is logged in on a phone and a laptop, and the laptop hits the multi-tab race. The phone's token is chosen, marked used, and replaced with a cookie sent to the laptop. The phone's next refresh then presents a used token outside the grace window, which fires the reuse-detected branch and revokes every session.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AuthService.refresh (grace-window branch)",
+      "title": "Refresh grace-window path rotates another device's token, logging that device out",
+      "verification": "RefreshToken has no predecessor/successor link, so nothing ties the successor to the rotated token. A test with two logins for the same user, then a replayed rotated token from session A, would show session B's token being consumed."
+    },
+    {
+      "category": "concurrency",
+      "description": "The Promise.race lets navigation continue after LOGOUT_BACKEND_WAIT_MS (3s) while POST /api/auth/logout is still pending. The HttpOnly JWT and rtkn cookies can only be cleared by that response. Until it arrives the user is still fully authenticated server-side, and a reload or any API call works. If it never arrives, the refresh token is never revoked. If it arrives late, after the user (or a different user on a shared machine) has logged in again on /login, its Set-Cookie max-age=0 headers delete the NEW session's JWT/rtkn/user/rint cookies, but the client-set skp is not touched, so the UI looks logged in with a dead session.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "handleLogout",
+      "title": "Timed-out logout leaves the server session alive and can later wipe a fresh login",
+      "verification": "Delay /api/auth/logout by more than 3s with a proxy, log in again during the delay, then inspect the cookies after the delayed response lands."
+    },
+    {
+      "category": "concurrency",
+      "description": "skp is cleared only once, synchronously, before the backend call. MainLayout re-clears 'rint' after the race to defend against exactly this, but does not re-clear skp. Any /api/auth/refresh or login response already in flight (for example the axios 401\u2192refresh interceptor) will write a fresh skp, and if logout timed out, rtkn/JWT as well. On the next boot hydrateFromCookie() then sets userId and role from skp, and the router treats the logged-out user as authenticated.",
+      "file": "src/frontend/src/stores/auth.store.js",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "logout",
+      "title": "skp is cleared only before the logout request, so an in-flight response can restore it",
+      "verification": "Trigger a refresh just before clicking Logout and check document.cookie for skp after the redirect. Confirm whether App.vue calls hydrateFromCookie on boot."
+    },
+    {
+      "category": "logic",
+      "description": "MainLayout is the persistent parent of /login and every app route, so it is mounted once. Its local selfPlayerId ref is filled only in onMounted when isPlayer is already true. handleLogout calls playerStore.resetSelfPlayerId() but never resets the component's own selfPlayerId ref. Trigger: player A logs out and player B logs in in the same tab. The 'packs' nav item still points at /parent/players/<A's id>/packs, so B sees another account's packs page or gets 403s. A player who logs in from a fresh /login load (where isPlayer was false at mount) never gets the nav item until a full reload.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "selfPlayerId / onMounted / handleLogout",
+      "title": "Packs nav link keeps the previous player's id after logout, and is never resolved for a later login",
+      "verification": "Log in as player A, log out, log in as player B without reloading, then inspect the packs link href."
+    },
+    {
+      "category": "logic",
+      "description": "buildRedirectQuery always sets redirect to the current fullPath, including for a deliberate logout from MainLayout or useSession. The next person who logs in on that tab, who may be a different account or role, is sent to the previous user's page, such as /parent/players/123/sessions or /coach/revenue. They get another account's resource ids in the URL and a role-guard bounce or 403.",
+      "file": "src/frontend/src/utils/sessionRedirect.js",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "buildRedirectQuery / pushLoginOrHardNavigate",
+      "title": "Deliberate logout stores the previous user's route as the post-login redirect",
+      "verification": "Check LoginPage.vue's use of route.query.redirect after login. If it navigates there without checking the role or user, this happens."
+    }
+  ],
+  "input_rev": "9923ffb024799b1fe7b98324191481ec3a74acb5",
+  "model": null
+}

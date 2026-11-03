@@ -1,0 +1,158 @@
+{
+  "arm": "security",
+  "case": "307-frontend-links-and-tus",
+  "findings": [
+    {
+      "category": "security",
+      "description": "generateOnboardingUrl sets state to coachId.toString() (StripeOnboardingService.java:42) and the callback only checks state equals the authenticated coach's own id \u2014 the value is predictable (coach UUIDs are exposed by the public /coaches/:coachId marketplace profile) and never single-use. An attacker who is also a coach starts their own onboarding, copies the Stripe authorization code from their redirect without consuming it, and sends the victim coach a link to GET /api/payment/coaches/me/stripe/callback?code=<attackerCode>&state=<victimCoachId>. Auth is carried by the JWT session cookie (RequestMetadataProvider reads JWT_SESSION_COOKIE), so the victim's top-level navigation passes @PreAuthorize and the state check, and upsertCoachStripeAccount silently replaces the victim's stripeAccountId with the attacker's account \u2014 future payouts go to the attacker. The endpoint is also a state-changing GET, making the CSRF trivially deliverable.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback",
+      "title": "Stripe OAuth state is the coach's public UUID, enabling CSRF payout-destination takeover",
+      "verification": "Confirm JWTAuthorizationFilter authenticates browser requests from the JWT session cookie without requiring an Authorization header or anti-CSRF token, and confirm Stripe OAuth codes are redeemable by any session (they are standard authorization codes bound only to the platform client_id)."
+    },
+    {
+      "category": "security",
+      "description": "The guard checks requiresCoach, meta.role === 'PARENT', meta.role === 'PLAYER' and meta.roles, but no branch ever reads meta.role === 'COACH'. routes.js declares 'coach/revenue' and 'coach/bookings/:bookingId/receipt' with meta { requiresAuth: true, role: 'COACH' } instead of requiresCoach like every sibling coach route, so a logged-in parent or player navigating directly to /coach/revenue or /coach/bookings/<id>/receipt is not bounced to their own home page and the page mounts and fires coach-only API calls. This is the exact sibling-mismatch failure class the coach/profile-builder comment in routes.js documents fixing (raw 401s instead of the guard redirect), and any revenue/receipt data the backend serves on a shared or mis-scoped endpoint would render.",
+      "file": "src/frontend/src/router/index.js",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "Router.beforeEach",
+      "title": "Router guard never enforces meta.role === 'COACH', leaving /coach/revenue and coach receipt open to any authenticated user",
+      "verification": "Confirm the backend endpoints RevenueDashboardPage.vue and ReceiptView.vue call all carry coach-scoped @PreAuthorize; the frontend defect stands regardless but backend scoping determines whether data is exposed."
+    },
+    {
+      "category": "security",
+      "description": "Every limiter \u2014 login/password-reset/registration @RateLimited aspects, the per-coach report_generate_user bucket in ReportGenerationService, and VideoService's video.upload.init per-owner bucket \u2014 stores its Bucket4j state in a ConcurrentHashMap inside each JVM. The system brief states the app runs as several instances behind a reverse proxy, so an attacker whose requests spread across instances gets capacity \u00d7 instance-count on every limit, and any restart or the hourly TTL sweep resets counters. The class's own Javadoc concedes it is not cluster-safe based on a 'single instance today' assumption that contradicts the stated deployment.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "RateLimitingService.buckets",
+      "title": "All rate limiting is per-JVM in-memory in a multi-instance deployment",
+      "verification": "Confirm the production topology (number of app replicas) and whether the proxy does sticky routing; with more than one replica every capacity figure in @RateLimited annotations is multiplied."
+    },
+    {
+      "category": "security",
+      "description": "sendPasswordResetMail (3/15min), resendRegistrationLink, changeEmail and the registration_email/registration_alert_email strategies are all @RateLimited, and per the documented RateLimitingAspect behaviour (cited in ReportGenerationService's Javadoc) the bucket key is the client IP, collapsing to a single shared 'unknown' bucket when the IP cannot be resolved. There is no per-target-account key, so an attacker rotating IPs can send unlimited password-reset or duplicate-registration alert emails to one victim mailbox (each reset request also rotates the victim's outstanding reset key via prepareForPasswordReset), while all clients behind one NAT or with unresolvable IPs share one tiny budget and get denial of service.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "sendPasswordResetMail / changeEmail / EmailRegistrationStrategy.notifyUserExists",
+      "title": "Mail-sending endpoints rate-limited per client IP only \u2014 one account can be flooded from many IPs",
+      "verification": "Open RateLimitingAspect (around lines 72-81) to confirm the key is the resolved client IP with the literal 'unknown' fallback, and that no secondary per-account consume exists on these paths."
+    },
+    {
+      "category": "security",
+      "description": "generateResetKey returns RandomStringUtils.randomNumeric(10) (~2^33 keyspace; same for activation keys) and completePasswordReset resolves it via userRepository.findOneByResetKey(key) with no email or user id required \u2014 any guessed key that matches ANY outstanding reset immediately takes over that account, so the effective search space divides by the number of concurrently outstanding resets (which the per-IP flood weakness above lets an attacker inflate). The only brute-force control is the password_reset_finish limit of 5/10min per IP, held in the per-JVM in-memory limiter, so a distributed guesser across instances is bounded only by infrastructure.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "generateResetKey / PasswordResetService.completePasswordReset",
+      "title": "Password reset key is a 10-digit numeric token redeemed by global lookup with no account binding",
+      "verification": "commons-lang3 is 3.21.0, where static RandomStringUtils delegates to a strong SecureRandom, so prediction is out but the 33-bit keyspace stands; confirm securityProperties.getPasswordResetExpiration() (window length) and whether a DB-level or gateway-level limit exists on POST reset-finish."
+    },
+    {
+      "category": "security",
+      "description": "User.completePasswordReset only swaps the password hash and clears the reset key; neither PasswordResetService, AccountManagementFacade.finishPasswordReset, nor the domain method touches JWT session cookies or refresh tokens. A user who resets their password because their account was compromised does not evict the attacker: every previously issued session cookie and refresh token keeps working until natural expiry, defeating the purpose of the reset.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/PasswordResetService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "completePasswordReset",
+      "title": "Password reset completion does not revoke live sessions or refresh tokens",
+      "verification": "Grep JwtManagerImpl and the refresh-token store for any password-version/credentials-updated claim or revocation call reachable from the reset path; I found none from this flow."
+    },
+    {
+      "category": "security",
+      "description": "updateUserEmail sets both email and login to the new address immediately with password-only confirmation \u2014 no verification link is ever sent to the new address even though ProfileResource's Javadoc claims 'Sends verification email to the new address'. A logged-in user (or an attacker holding a stolen session plus password) can point the account, including all future password-reset mail and safeguarding notifications, at an address nobody has proven control of; a typo permanently locks the owner out of recovery. The change also revokes no existing sessions or refresh tokens, and there is no pre-check that newEmail is free, so a duplicate surfaces as a constraint-violation error that doubles as an email-existence oracle.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "updateUserEmail",
+      "title": "Email change is applied unverified and without session revocation",
+      "verification": "Confirm the users table has unique constraints on email/login and what HTTP status the constraint violation maps to; confirm no verification-pending state exists elsewhere for email changes."
+    },
+    {
+      "category": "security",
+      "description": "registerAccount calls findUserByEmailOrLogin(email, login) using the raw request values, and only afterwards sets login = phone for phone registrations. An attacker (or any client) posting a phone registration with blank email and blank login makes the lookup run as (null, null), which cannot find the existing user whose login is that phone number, so the designed notifyUserExists/CREATION_DUP anti-enumeration path is skipped and persistUser is attempted with login = phone. The result is either a unique-constraint failure whose error response differs from the normal success tracking-code response \u2014 a clean phone-number enumeration oracle \u2014 or, absent a constraint, a duplicate account.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "registerAccount",
+      "title": "Phone registration duplicate check runs before login normalization and never checks the phone column",
+      "verification": "Confirm the unique constraint on users.login and how the resulting DataIntegrityViolationException is rendered by ApiAdvice (status/body) versus the normal registration success body; confirm the frontend does not populate login for phone registrations (irrelevant to an attacker but tells you whether legitimate users hit it)."
+    },
+    {
+      "category": "security",
+      "description": "prepareForPasswordReset filters on email match, login match and exact dateOfBirth match; on success the endpoint returns a tracking code, on any mismatch it throws OperationNotAllowedException (PWD_RESET_REJECTED). The response difference lets an attacker who knows an email address brute-force the account's date of birth (a few thousand candidates) or simply confirm account existence, with no mailbox access needed \u2014 and the only control is the 3-per-15-minutes-per-IP in-memory limiter, trivially spread across IPs and instances.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "sendPasswordResetMail",
+      "title": "Password reset request is a response oracle for email+login+date-of-birth correctness",
+      "verification": "Confirm the HTTP status/body produced for OperationNotAllowedException with PWD_RESET_REJECTED is distinguishable from the success response (it is by design, since the UI reports failure), and whether canInitiatePasswordReset's valid-outstanding-key rejection produces the same error (it does \u2014 also letting an attacker suppress a victim's legitimate reset by keeping a key outstanding)."
+    },
+    {
+      "category": "security",
+      "description": "Quota is checked and reserved from the client-declared req.fileSizeBytes, and the per-type size cap in VideoTypeConstraints.validate also only sees that declared number, but the TUS presigned credential is hex SHA-256(libraryId + apiKey + expireEpoch + videoId) (UploadCredentials.java) with expiry \u22653600s \u2014 nothing in the signature constrains Upload-Length. A coach can declare a tiny fileSizeBytes to reserve minimal quota and pass the DRILL_DEMO cap, then tus-upload a far larger file to the signed URL; the same still-valid URL can also be used to replace the object's bytes for up to an hour after the video has been confirmed READY, after any downstream checks ran.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/DrillUploadService.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "initiateUpload / DrillUploadInitiateResponse.signedUploadUrl",
+      "title": "TUS signed upload URL is not bound to the declared file size and stays valid after the video is READY",
+      "verification": "Check whether the provider webhook / upload-confirm handler reconciles the provider-reported actual size against the reservation and re-enforces getMaxSizeBytes, and whether anything invalidates or ignores further TUS writes once OperationalState becomes READY."
+    },
+    {
+      "category": "security",
+      "description": "DrillUploadService.initiateUpload passes req.durationSeconds() straight from the request into validate, and the check is 'durationSeconds > 0 && durationSeconds > maxDuration' \u2014 sending 0 skips the cap entirely. The frontend itself sends 0 whenever its local metadata read fails (DrillDetailPanel.onFileSelected), so the server demonstrably accepts it, and a coach crafting the request directly can upload a drill-demo video of any length regardless of the configured video.drillDemo.maxDurationSeconds. Impact is bounded by the (also client-declared, see separate finding) size cap and shows up as storage/transcoding cost rather than data exposure.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/service/VideoTypeConstraints.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "validate",
+      "title": "Video duration limit is enforced only on a client-declared value that 0 bypasses",
+      "verification": "Check whether any post-upload step (provider webhook, processing confirm) re-reads the real duration and rejects or deletes over-limit videos; none is visible from the initiate path."
+    },
+    {
+      "category": "security",
+      "description": "The Javadoc claims 'Uses timing-safe comparison to prevent user enumeration', but the two branches do very different work: the exists path only enqueues a CREATION_DUP email, while the new-user path runs a bcrypt password hash plus user insert inside the same request. Both return an opaque tracking code, so the body leaks nothing, but the response-time gap (bcrypt alone is typically tens to hundreds of milliseconds) is measurable and reveals whether an email or login already has an account.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "registerAccount",
+      "title": "Registration endpoint timing distinguishes existing from new accounts despite a claimed timing-safe design",
+      "verification": "Measure the two paths or inspect UserRegistrationService.createUser to confirm the password is encoded synchronously in-request (it is called from persistUser inside the same @Transactional request)."
+    },
+    {
+      "category": "logic",
+      "description": "The unconditionally rendered back button is :to=\"{ name: 'coach-dashboard' }\" but no route in routes.js (the sole route source) carries that name \u2014 the coach landing route is 'coach/command-center' with no name at all. Vue Router 4 throws 'No match for {name: coach-dashboard}' when RouterLink/q-btn resolves the location during render, so any coach opening /coach/session-templates hits a render error on the page's first element.",
+      "file": "src/frontend/src/pages/coach/SessionTemplateVault.vue",
+      "id": "R13",
+      "severity": "medium",
+      "symbol": "template header q-btn :to",
+      "title": "SessionTemplateVault back button resolves nonexistent named route 'coach-dashboard', breaking the page",
+      "verification": "Render the page or run router.resolve({name:'coach-dashboard'}) in the app; also confirm Quasar QBtn with :to resolves eagerly via useRouterLink (it does in Quasar 2)."
+    },
+    {
+      "category": "logic",
+      "description": "The CTA shown to a parent with no ACTIVE session packs is :to=\"{ name: 'marketplace' }\", but routes.js defines the marketplace route by path only, with no name. Resolving the unknown name throws during render, so exactly the parents the CTA is meant to convert (those with no packs) get a broken development-portal render instead of a link.",
+      "file": "src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "template noPacksState q-btn :to",
+      "title": "ParentDevelopmentPortalPage 'Find a coach' CTA targets unnamed route 'marketplace'",
+      "verification": "Confirm no other file registers a named 'marketplace' route dynamically (grep found only the path-only definition in routes.js and the pinia store id)."
+    },
+    {
+      "category": "edge-case",
+      "description": "When storage usage reaches 95% the component shows a router-link to '/upgrade', flagged in-file as a Story 7.x TODO. No such route exists, so the user most in need of an upsell path \u2014 one about to be blocked from uploading \u2014 lands on the ErrorNotFound catch-all page.",
+      "file": "src/frontend/src/components/video/QuotaUsageBar.vue",
+      "id": "R15",
+      "severity": "low",
+      "symbol": "upgrade router-link",
+      "title": "Quota upgrade prompt links to /upgrade, which only matches the 404 catch-all",
+      "verification": "Confirm no '/upgrade' route is registered anywhere (routes.js has none) and whether the parent passes showUpgradePrompt=false in production config."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}

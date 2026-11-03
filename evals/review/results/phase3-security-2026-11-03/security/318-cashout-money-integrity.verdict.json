@@ -1,0 +1,86 @@
+{
+  "arm": "security",
+  "case": "318-cashout-money-integrity",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "purchasePack passes no nonce to paymentGateway.chargeAndCapture and createPurchase saves without any duplicate check on stripePaymentIntentId, which is consistent with the finding \u2014 but the idempotency key format (the 60s bucket claim) is in the unshown PaymentGateway implementation, and the verification step (unique constraint on session_pack_purchases.stripe_payment_intent_id in V138/migrations or the SessionPackPurchase entity) cannot be checked from this file.",
+      "reported_id": "R4"
+    }
+  ],
+  "judge_cost_usd": 0.50571,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the non-transactional balance check, the two separate ledger writes, the uncalled SERIALIZABLE debitForCashOut, and the negative-wallet race consequence.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 states the same double fee: R+F debited from the ledger while only R\u2212F is refunded, with the full-balance cash-out leaving the wallet at \u2212F.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 covers the refund-{paymentIntentId} key replaying the first refund while the wallet is debited again; R5 covers F3's missing refundable-amount check against lastPaymentIntentId.",
+        "reported_ids": [
+          "R3",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R6 covers treating ambiguous Stripe failures (timeouts) as definite failures and restoring credit for a refund that executed; R7 covers the two reversal writes being separate transactions leaving a half-restored wallet.",
+        "reported_ids": [
+          "R6",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding touches ParentCreditWalletPage.vue or the err.response.data.message vs ErrorDto mismatch.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R8 identifies commission computed as gross \u00d7 current live rate instead of the stamped per-row rate and the Stripe fee applied to the credit-funded portion, with the same misstated-admin-figures consequence, though it omits the refunded-booking and pack-sale sub-points.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding mentions sumTotalCashOuts counting CASH_OUT_DEBIT rows whose reversals exist.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding covers getCoachRevenueSummary subtracting an estimated Stripe fee from the coach's net payout.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] purchasePack passes no nonce to paymentGateway.chargeAndCapture and createPurchase saves without any duplicate check on stripePaymentIntentId, which is consistent with the finding \u2014 but the idempotency key format (the 60s bucket claim) is in the unshown PaymentGateway implementation, and the verification step (unique constraint on session_pack_purchases.stripe_payment_intent_id in V138/migrations or the SessionPackPurchase entity) cannot be checked from this file. | pass-1: Concrete trigger stated: a second purchase POST of the same tier within the same 60s idempotency bucket replays the PaymentIntent yet persists a second SessionPackPurchase row, granting double sessions for one charge \u2014 a defect the answer key does not list.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "arm": "control",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "findings": [
+    {
+      "category": "security",
+      "description": "`state` is just `coachId.toString()`. It is not random, not tied to the session and not single-use. The 'P18' check only confirms it matches the logged-in coach, and a coach's profile UUID is visible in the marketplace. An attacker can open Stripe's authorize URL with the platform's public client_id, `state=<victimCoachId>` and the platform callback, approve it with a fresh Stripe account they control, and not use the returned `code`. They then send the victim coach a link to `/api/payment/coaches/me/stripe/callback?code=<attackerCode>&state=<victimCoachId>`. Auth uses cookies, and a top-level GET sends them, so the state check passes. `upsertCoachStripeAccount` then replaces the victim's `stripe_account_id` with the attacker's account. From then on, `StripePaymentGateway.resolveTransferDestination` sends every PENDING_RELEASE and future payout for that coach to the attacker.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback / StripeOnboardingService.generateOnboardingUrl",
+      "title": "OAuth state is the guessable coach ID, so an attacker can link their own Stripe account to a victim coach (login CSRF)",
+      "verification": "Check that the JWT cookie is SameSite=Lax or None (not Strict), so it is sent on a cross-site top-level GET. The JWTAuthorizationFilter reads the token from a cookie."
+    },
+    {
+      "category": "security",
+      "description": "For an existing row, the upsert overwrites `stripeAccountId` with no check that the account changed, no notification and no audit trail. The transfer destination is read live when the outbox runs, so payouts earned and queued under the old account go to whichever account was linked last. With the state CSRF above, or a hijacked session, the coach gets no signal before money is sent elsewhere.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "upsertCoachStripeAccount",
+      "title": "Re-pointing the payout destination needs no re-confirmation and moves every pending payout to the new account",
+      "verification": "Check whether the webhook handlers or audit listeners record or alert on a `stripe_account_id` change in coach_stripe_accounts."
+    },
+    {
+      "category": "edge-case",
+      "description": "`payment.coach_stripe_accounts.stripe_account_id` has a UNIQUE index (`idx_csa_stripe_account_id`). When coach B completes OAuth with a Stripe account already linked to coach A, the commit of `self.upsertCoachStripeAccount` throws DataIntegrityViolationException. Nothing in `handleOAuthCallback` or the resource catches it, so the browser that Stripe redirected gets a raw backend error instead of a redirect to the settings page with `stripe_error`. The single-use OAuth code has already been spent, so the coach is left stuck on a backend error page.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "handleOAuthCallback / upsertCoachStripeAccount",
+      "title": "Linking a Stripe account already used by another coach crashes the callback with an unhandled unique-index violation"
+    },
+    {
+      "category": "edge-case",
+      "description": "`onboardingService.handleOAuthCallback` throws PaymentGatewayException when Stripe errors or returns a null `stripe_user_id`. The resource does not catch it. This endpoint is reached by a browser redirect from Stripe, so the coach sees a JSON/HTTP error on the backend origin rather than the frontend settings page with `?stripe_error=...`, the path every other failure takes.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "handleOAuthCallback",
+      "title": "Callback failures after the code exchange give a backend error instead of a redirect to the settings page"
+    },
+    {
+      "category": "concurrency",
+      "description": "The upsert reads with `findById` and inserts if nothing is there. It takes no lock and does no ON CONFLICT handling. If two callbacks run at the same time for a coach with no row (double-click, or two tabs finishing OAuth), both see empty and both `save` a new entity. The second commit fails on `pk_coach_stripe_accounts`, and that request returns an unhandled error after its OAuth code was already used.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "upsertCoachStripeAccount",
+      "title": "Two concurrent first-time callbacks for the same coach both insert, and one fails with a PK violation"
+    },
+    {
+      "category": "logic",
+      "description": "`toTransfer = net - planOffset(...)` is worked out again on every attempt. If the Stripe transfer succeeds but the transaction then rolls back (for example `applyOffset` or the commit fails), the outbox re-drives the message. If the coach's debt changed in between (a new reversal-refused debt, or a debt repaid from another payout), the new `toTransfer` differs from the existing transfer. `findExistingTransfer` then raises a non-retryable AMOUNT_MISMATCH and the payout is parked in HOLD, even though the coach was paid and the debt was never offset.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "handle",
+      "title": "A change in the debt offset between retries turns an already-made transfer into an AMOUNT_MISMATCH HOLD",
+      "verification": "Check whether `CoachPayoutDebtService.planOffset` can return a different amount for the same coach between attempts, for example while other payouts or debts change concurrently."
+    }
+  ],
+  "input_rev": "c9c10fa6262f6e0413171c942ab24504061c587f",
+  "model": null
+}

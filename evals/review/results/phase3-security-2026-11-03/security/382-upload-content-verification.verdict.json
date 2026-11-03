@@ -1,0 +1,106 @@
+{
+  "arm": "security",
+  "case": "382-upload-content-verification",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "In signUpload, PutObjectPresignRequest signs only bucket/key/contentType \u2014 no Content-Length, checksum, or ETag condition \u2014 so the PUT URL accepts a replacement body for the full TTL; confirmUpload does not invalidate it, and signDownload/signedDownloadUrl mint unconditional GETs that never re-check the stored sizeBytes/checksum/ETag against the live object. (A bucket-policy mitigation is outside this file, but none exists in the code.)",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "CoachProfilePhotoEventListener.onStorageConfirmed does link any confirmed coach_profile object via updatePhotoUrlByUserId with no content-type/size/status check (lines 27-48), but the claimed consequence \u2014 unmoderated public serving of arbitrary blobs \u2014 depends on photoUrl consumers and the upload allow-list not shown here; the finding's required verification (grep marketplace/moderation for photoUrl consumers) cannot be performed with only this file.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "confirmUpload checks head.eTag() only for presence and persistConfirmed stores request.checksum() verbatim; formatChecksum then re-serves it as \"sha256:<value>\" via toConfirmUploadResponse and findActiveObject, so an arbitrary client value is presented as a verified digest. The verification caveat (whether ReplicatedStorageService or audit/dedupe consumers trust StorageObjectDto.checksum) could not be run \u2014 those files are not in scope \u2014 but that bears only on downstream impact, not on the in-file mechanism, which holds as described.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "confirmed",
+      "note": "FileStorageService.softDelete authorizes solely via fso.getCreatedBy().equals(currentUserLogin) with no ownerId or admin check, while signDownload, reconfirm, and assertOwnership all use the immutable ownerId. The login-recycling branch of the finding depends on registration/deletion code not shown, but the finding states it conditionally; the core mismatch is shown in this file.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "undetermined",
+      "note": "saveStep5 does confirm the trigger: it calls coachProfileRepository.updatePhotoUrlByUserId(userId, req.photoUrl()) with no read of the prior photoUrl and no fileStorageService.softDelete (only deletePhoto soft-deletes). But the finding's own verification caveat \u2014 whether the GDPR/account-deletion path deletes file_storage_objects by ownerId (which would bound the orphaning) or only currently-referenced keys \u2014 depends on FileStorageService, CoachProfilePhotoEventListener, and the account-deletion code, none of which are in this file, so the \"orphaned indefinitely / GDPR erasure misses superseded photos\" consequence cannot be settled here.",
+      "reported_id": "R9"
+    }
+  ],
+  "judge_cost_usd": 1.6859699999999997,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect: confirm compares client-bound Content-Type via HEAD and never inspects stored bytes, allowing arbitrary content served as images.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R6 states that confirm-rejected (and never-confirmed) uploads leave S3 objects with no FSO row, uncounted by quota and never reaped \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 flags application/octet-stream and .bin (plus text/plain) in the default allow-list defeating the type gate \u2014 same defect.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R10 identifies free-text entity with only three owner-bound entities, letting callers mint keys under arbitrary entityId namespaces \u2014 same defect.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R5 identifies saveStep5's prefix-only check with no confirmed/active/ownership/type verification, allowing never-confirmed, deleted, or non-image keys as the public photo \u2014 same defect.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] In signUpload, PutObjectPresignRequest signs only bucket/key/contentType \u2014 no Content-Length, checksum, or ETag condition \u2014 so the PUT URL accepts a replacement body for the full TTL; confirmUpload does not invalidate it, and signDownload/signedDownloadUrl mint unconditional GETs that never re-check the stored sizeBytes/checksum/ETag against the live object. (A bucket-policy mitigation is outside this file, but none exists in the code.) | pass-1: Distinct from F1: presigned PUT stays valid after confirm with no body/length binding, so a post-confirm re-PUT swaps content and size past all confirm-time validation; concrete trigger stated.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] CoachProfilePhotoEventListener.onStorageConfirmed does link any confirmed coach_profile object via updatePhotoUrlByUserId with no content-type/size/status check (lines 27-48), but the claimed consequence \u2014 unmoderated public serving of arbitrary blobs \u2014 depends on photoUrl consumers and the upload allow-list not shown here; the finding's required verification (grep marketplace/moderation for photoUrl consumers) cannot be performed with only this file. | pass-1: Distinct consumer-side gap: the photo listener links any confirmed coach_profile object (e.g. declared application/pdf, 100 MB) as the live public photo with no type/size check; concrete trigger stated.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] confirmUpload checks head.eTag() only for presence and persistConfirmed stores request.checksum() verbatim; formatChecksum then re-serves it as \"sha256:<value>\" via toConfirmUploadResponse and findActiveObject, so an arbitrary client value is presented as a verified digest. The verification caveat (whether ReplicatedStorageService or audit/dedupe consumers trust StorageObjectDto.checksum) could not be run \u2014 those files are not in scope \u2014 but that bears only on downstream impact, not on the in-file mechanism, which holds as described. | pass-1: Client-supplied checksum is persisted unverified yet re-served with an authoritative sha256: prefix, letting the uploader forge an integrity claim; concrete trigger stated.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] FileStorageService.softDelete authorizes solely via fso.getCreatedBy().equals(currentUserLogin) with no ownerId or admin check, while signDownload, reconfirm, and assertOwnership all use the immutable ownerId. The login-recycling branch of the finding depends on registration/deletion code not shown, but the finding states it conditionally; the core mismatch is shown in this file. | pass-1: softDelete authorizes on mutable createdBy login rather than ownerId, causing self-lockout after email change (acknowledged by the deletePhoto workaround) \u2014 concrete, distinct defect.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] saveStep5 does confirm the trigger: it calls coachProfileRepository.updatePhotoUrlByUserId(userId, req.photoUrl()) with no read of the prior photoUrl and no fileStorageService.softDelete (only deletePhoto soft-deletes). But the finding's own verification caveat \u2014 whether the GDPR/account-deletion path deletes file_storage_objects by ownerId (which would bound the orphaning) or only currently-referenced keys \u2014 depends on FileStorageService, CoachProfilePhotoEventListener, and the account-deletion code, none of which are in this file, so the \"orphaned indefinitely / GDPR erasure misses superseded photos\" consequence cannot be settled here. | pass-1: Both photo-setting paths overwrite photoUrl without soft-deleting the prior FSO, permanently orphaning superseded objects that still count against quota \u2014 concrete leak with stated trigger.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}
