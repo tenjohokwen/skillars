@@ -1,4 +1,4 @@
-import { test as base, type BrowserContext, type Page } from '@playwright/test'
+import { test as base, type BrowserContext, type Page, type TestInfo } from '@playwright/test'
 import type { SuiteEnv } from '../config/SuiteEnv.js'
 import {
   interpolate,
@@ -86,6 +86,43 @@ async function primeAndGuard(
   context.on('page', (page) => consoleGate.attach(page))
 }
 
+const gatesAttached = new WeakSet<TestInfo>()
+
+/**
+ * Attach what the gates recorded (once per test), then fail on it — but only when the test body
+ * itself passed, so a real failure stays first. (Not `status === expectedStatus`: that would silently
+ * disable the gates under test.fail().) Both gates are checked even if the first fails, and their
+ * violations are reported together. Each gate reports at most once, so the default page's context
+ * and the actor fixture can both call this.
+ */
+async function enforceGates(
+  testInfo: TestInfo,
+  consoleGate: ConsoleGate,
+  networkGate: NetworkGate,
+): Promise<void> {
+  const consoleFound = consoleGate.violations()
+  const networkFound = networkGate.violations()
+  if ((consoleFound.length > 0 || networkFound.length > 0) && !gatesAttached.has(testInfo)) {
+    gatesAttached.add(testInfo)
+    await testInfo.attach('pitchside-gates.json', {
+      contentType: 'application/json',
+      body: JSON.stringify({ console: consoleFound, network: networkFound }, null, 2),
+    })
+  }
+  if (testInfo.status !== 'passed') return
+  const failures: Error[] = []
+  for (const gate of [consoleGate, networkGate]) {
+    try {
+      gate.assertClean()
+    } catch (error) {
+      failures.push(error as Error)
+    }
+  }
+  const [only] = failures
+  if (failures.length === 1 && only) throw only
+  if (failures.length > 1) throw new Error(failures.map((f) => f.message).join('\n\n'))
+}
+
 interface OpenedActor {
   role: string
   context: BrowserContext
@@ -159,20 +196,7 @@ export function createSuiteTest(env: SuiteEnv) {
     context: async ({ context, suite, consoleGate, networkGate }, use, testInfo) => {
       await primeAndGuard(context, suite, consoleGate, networkGate)
       await use(context)
-      const consoleFound = consoleGate.violations()
-      const networkFound = networkGate.violations()
-      if (consoleFound.length > 0 || networkFound.length > 0) {
-        await testInfo.attach('pitchside-gates.json', {
-          contentType: 'application/json',
-          body: JSON.stringify({ console: consoleFound, network: networkFound }, null, 2),
-        })
-      }
-      // Only blame the gates when the test body itself passed — otherwise the real failure stays
-      // first. (Not `status === expectedStatus`: that would silently disable gates under test.fail().)
-      if (testInfo.status === 'passed') {
-        consoleGate.assertClean()
-        networkGate.assertClean()
-      }
+      await enforceGates(testInfo, consoleGate, networkGate)
     },
 
     actor: async (
@@ -215,12 +239,8 @@ export function createSuiteTest(env: SuiteEnv) {
       await writeBackSessions(opened, sessions, sessionOptions)
       for (const { context } of opened) await context.close().catch(() => undefined)
       // Actors share the test's gates. A two-persona test may never touch the default page, whose
-      // context fixture is the other place the gates are asserted, so assert them here too (same
-      // rule: only when the test body itself passed; each gate reports at most once).
-      if (opened.length > 0 && testInfo.status === 'passed') {
-        consoleGate.assertClean()
-        networkGate.assertClean()
-      }
+      // context fixture is the other place the gates are enforced, so enforce them here too.
+      if (opened.length > 0) await enforceGates(testInfo, consoleGate, networkGate)
     },
 
     gotoRoute: async ({ page, suite }, use) => {

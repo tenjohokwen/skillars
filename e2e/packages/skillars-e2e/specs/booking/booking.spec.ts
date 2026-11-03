@@ -36,7 +36,7 @@ test.describe('F · Booking lifecycle', () => {
       const coach = await provision.coach({ displayName: coachName })
       const parent = await provision.parent()
       await provision.saveCard(parent)
-      await provision.buyPack(parent, coach)
+      const sessions = await provision.buyPack(parent, coach)
       const child = parent.children[0]!
 
       // Family: request the shared slot, paying with the pack.
@@ -48,7 +48,10 @@ test.describe('F · Booking lifecycle', () => {
       await expect(profile.credits()).toBeVisible()
       await profile.primaryCta().click()
       const request = await new BookingRequestScreen(family.page, suite).waitReady()
-      await expect(request.packSelect()).toBeVisible()
+      await request.choosePack(
+        t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
+      )
+      await expect(request.paymentCard()).toHaveCount(0)
       await expect(request.submit()).toBeEnabled()
       await request.submit().click()
 
@@ -64,9 +67,17 @@ test.describe('F · Booking lifecycle', () => {
       await inbox.accept(incoming).click()
       await expect(incoming).toHaveCount(0)
 
-      // Family: the same booking now reads confirmed.
+      // Family: the same booking now reads confirmed, paid with a credit: the only charge is the
+      // pack purchase itself, and the pack holds one session fewer.
       await bookings.open()
       await expect(bookings.status(bookings.booking(coachName))).toHaveText(confirmed)
+      expect(await chargesFor(parent.userId)).toBe(1)
+      const packs = await new PacksDashboardScreen(family.page, suite).open({
+        playerId: child.playerId,
+      })
+      await expect(packs.credits(packs.card(coachName))).toHaveText(
+        t('booking.packs.creditsRemainingLabel', { remaining: sessions - 1, total: sessions }),
+      )
     },
   )
 
@@ -143,7 +154,11 @@ test.describe('F · Booking lifecycle', () => {
         nextWeekSlot(4),
       )
       await profile.primaryCta().click()
-      await (await new BookingRequestScreen(family.page, suite).waitReady()).submit().click()
+      const request = await new BookingRequestScreen(family.page, suite).waitReady()
+      await request.choosePack(
+        t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
+      )
+      await request.submit().click()
       const bookings = await new ParentBookingsScreen(family.page, suite).waitReady()
       await expect(bookings.status(bookings.booking(coachName))).toHaveText(
         t('booking.requests.statusRequested'),
@@ -162,9 +177,11 @@ test.describe('F · Booking lifecycle', () => {
       const packs = await new PacksDashboardScreen(family.page, suite).open({
         playerId: child.playerId,
       })
+      // The reserved credit is released, not spent, and nothing but the pack itself was charged.
       await expect(packs.credits(packs.card(coachName))).toHaveText(
         t('booking.packs.creditsRemainingLabel', { remaining: sessions, total: sessions }),
       )
+      expect(await chargesFor(parent.userId)).toBe(1)
     },
   )
 })

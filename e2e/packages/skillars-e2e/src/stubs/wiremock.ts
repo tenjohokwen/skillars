@@ -18,10 +18,14 @@ export async function chargesFor(payerUserId: string): Promise<number> {
 export async function chargeKeysFor(payerUserId: string): Promise<Set<string>> {
   const keys = (await chargeRequestsFor(payerUserId)).map(
     (r) =>
-      Object.entries(r.headers).find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1] ??
-      '(none)',
+      Object.entries(r.headers).find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1],
   )
-  return new Set(keys)
+  // A keyless charge can't be deduplicated by Stripe at all: two of them are two charges, never one
+  // "missing" key. Fail loudly rather than fold them together.
+  if (keys.some((key) => !key)) {
+    throw new Error(`A PaymentIntent for payer ${payerUserId} was sent without an Idempotency-Key`)
+  }
+  return new Set(keys as string[])
 }
 
 interface JournalRequest {
