@@ -253,29 +253,51 @@ public final class SecurityUtil {
      * have survived, which is a real (if remote) revocation gap and must not be silent.
      */
     private void revokeChainWithBoundedRetry(final String tokenHash) {
+        // The two steps retry SEPARATELY, deliberately. Retrying them as one block loses the fallback: the
+        // walk's first attempt has already committed revoked_at on the presented row, so a re-run hits
+        // revokeChainByTokenHash's own already-revoked fast path, reports "nothing to do" with no bound
+        // exceeded, and the method returns as if it had succeeded while the rows past the bound stay live —
+        // ledger RS01 again, and logged only at WARN.
+        final RefreshTokenRevocationService.ChainRevocation result =
+            retrying("chain revoke", () -> refreshTokenRevocationService.revokeChainByTokenHash(tokenHash));
+        if (result != null && result.boundExceeded()) {
+            // Deliberately out here: the walk's transaction has committed and dropped its row locks, so
+            // this bulk UPDATE over the same user's rows can take them. Inside the walk it would wait for
+            // locks only the walk could release and hang (see revokeChainByTokenHash's hop-bound comment).
+            retrying("account-wide revoke", () -> {
+                refreshTokenRevocationService.revokeAllForUser(result.boundExceededForUserId());
+                return Boolean.TRUE;
+            });
+        }
+    }
+
+    /**
+     * Runs one revocation step, retrying a lock conflict up to {@link #REVOKE_ATTEMPTS} times, and returns
+     * {@code null} if every attempt lost.
+     *
+     * <p>Each attempt is a fresh {@code REQUIRES_NEW} transaction, because this class is not transactional
+     * and the call crosses the service's proxy — so a retry really does re-take the lock rather than re-run
+     * inside a transaction PostgreSQL has already aborted. Exhausting the attempts is logged at ERROR, not
+     * thrown: the caller is ending a session and must still clear its cookies, so the client's session is
+     * over from its own point of view, but a server-side credential may have survived and that must not be
+     * silent.
+     */
+    private <T> T retrying(final String step, final java.util.function.Supplier<T> action) {
         for (int attempt = 1; attempt <= REVOKE_ATTEMPTS; attempt++) {
             try {
-                final RefreshTokenRevocationService.ChainRevocation result =
-                    refreshTokenRevocationService.revokeChainByTokenHash(tokenHash);
-                if (result.boundExceeded()) {
-                    // Deliberately out here: the walk's transaction has committed and dropped its row
-                    // locks, so this bulk UPDATE over the same user's rows can take them. Inside the walk
-                    // it would wait for locks only the walk could release and hang (see the hop-bound
-                    // comment in revokeChainByTokenHash).
-                    refreshTokenRevocationService.revokeAllForUser(result.boundExceededForUserId());
-                }
-                return;
+                return action.get();
             } catch (PessimisticLockingFailureException e) {
                 if (attempt == REVOKE_ATTEMPTS) {
-                    log.error("Could not revoke the refresh-token chain after {} attempts (lock conflict). "
-                        + "Cookies are cleared, but a server-side credential may still be live.",
-                        REVOKE_ATTEMPTS, e);
-                    return;
+                    log.error("Refresh-token {} failed after {} attempts (lock conflict). Cookies are "
+                        + "cleared, but a server-side credential may still be live.",
+                        step, REVOKE_ATTEMPTS, e);
+                    return null;
                 }
-                log.warn("Refresh-token chain revoke lost a lock conflict (attempt {} of {}); retrying",
-                    attempt, REVOKE_ATTEMPTS);
+                log.warn("Refresh-token {} lost a lock conflict (attempt {} of {}); retrying",
+                    step, attempt, REVOKE_ATTEMPTS);
             }
         }
+        return null;
     }
 
     /**

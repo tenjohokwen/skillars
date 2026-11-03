@@ -243,6 +243,29 @@ passes the check; `locked = true` covers it until an admin reactivation clears t
 javadoc now states the limit precisely instead of overclaiming, and the ordering plus the reactivate hole
 are filed in `deferred-work.md` rather than fixed by reordering three services outside this story's scope.
 
+**Third /pr-review round (general arm; the security arm's one open item was already the policy question
+below). Two real bugs, both inside round two's own fail-safe:**
+
+- **The retry loop swallowed the fallback.** When the chain outran the hop bound and the follow-up
+  account-wide revoke lost a lock conflict, the retry re-ran the chain walk — whose already-revoked fast
+  path then reported "nothing to do" with no bound exceeded, so the method returned as if it had succeeded
+  while the rows past the bound stayed live. Ledger RS01 again, logged only at WARN. The two steps now
+  retry separately.
+- **The fallback set the wrong columns.** It called `markAllUsedByUserId`, which sets `used` but not
+  `revoked_at`, so the tail of a hop-bound logout read as "rotated, successor unknown" and the next refresh
+  escalated to a second account-wide revocation plus an epoch bump instead of the plain 401 an ended
+  session gets. New `markAllRevokedByUserId` stamps both and bumps `version`;
+  `logout_withAChainLongerThanTheHopBound_leavesNothingTradeable` now asserts the stamp, the absence of
+  "reuse" in the body, and that the epoch stays null. This also invalidated the masking argument in the
+  `markAllUsedByUserId` ledger residual, which was corrected.
+
+Two more were filed rather than fixed, both pre-existing and both policy calls rather than patches: a
+client left holding a superseded cookie after a grace redirect is signed out everywhere once the 30 s
+window closes (the old newest-live branch behaved identically, and the two-device IT only checks the other
+device immediately after the redirect); and the new multi-row walks give
+`AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have, since the walks lock in
+chain order while the bulk `DELETE` locks in scan order. Each is in `deferred-work.md` with options.
+
 **One finding deliberately left for the owner.** Both arms observed that a replay of a revoked token no
 longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing JWT
 after a logout: `terminateSession` has never stamped the epoch, and the new REVOKED outcome answers 401
@@ -289,6 +312,8 @@ not fork a context), `check-docs` OK after rebuilding the search index.
 
 ### Change Log
 
+- 2026-11-03 — applied the third `/pr-review` round: the retry loop swallowing the hop-bound fallback, and
+  the fallback stamping only `used` so the tail escalated as reuse. Two pre-existing items filed.
 - 2026-11-03 — applied this branch's own `/pr-review` findings: chain-depth and revoked-chain ordering
   regressions, bounded lock timeouts with a logout retry, lock-failure to 401, the FK index, a fail-safe
   hop bound, the persistence-context trap in the fast path, validator and checklist gaps.

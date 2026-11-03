@@ -1119,10 +1119,21 @@ class AuthResourceIT extends AbstractIntegrationTest {
         assertThat(liveTokenCountFor(COACH_USER_ID))
             .as("no token may remain tradeable after the logout, bound or no bound")
             .isZero();
+        assertThat(revokedAtOf(sha256Hex(tail)))
+            .as("the fallback must STAMP revoked_at, not just `used`: a row left used-but-not-revoked reads "
+                + "as 'rotated, successor unknown', so the next refresh escalates to a second account-wide "
+                + "revocation instead of the plain 401 an ended session gets")
+            .isNotNull();
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(tail), Map.class))
             .as("the tail beyond the hop bound must not be rotatable")
-            .isInstanceOf(HttpClientErrorException.class);
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                .as("and it is an ended session, not theft")
+                .doesNotContain("reuse"));
+        assertThat(sessionEpochOf(COACH_USER_ID))
+            .as("so no second account-wide revocation is triggered by replaying the tail")
+            .isNull();
     }
 
     @Test

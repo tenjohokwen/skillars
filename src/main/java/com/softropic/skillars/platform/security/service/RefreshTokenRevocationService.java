@@ -164,7 +164,12 @@ public class RefreshTokenRevocationService {
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void revokeAllForUser(final Long userId) {
-        refreshTokenRepository.markAllUsedByUserId(userId);
+        // markAllRevokedByUserId, not markAllUsedByUserId: this is a revocation, so it must stamp
+        // revoked_at. Rows left `used` with revoked_at NULL read as "rotated, successor unknown", and the
+        // next refresh presenting one would take the reuse branch — a SECOND account-wide revocation plus a
+        // session-epoch bump and a "token reuse detected" 401 — instead of the plain 401 a deliberately
+        // ended session gets.
+        refreshTokenRepository.markAllRevokedByUserId(userId, Instant.now(ClockProvider.getClock()));
     }
 
     /**

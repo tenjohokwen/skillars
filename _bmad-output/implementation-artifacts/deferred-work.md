@@ -39,6 +39,33 @@ not renumber, so the list below starts at RS03.
   (a) plus a short JWT TTL review**, and treat (c) as the real fix if JWT-after-logout matters: it is the
   only option that does not trade one of the two properties away. Not decided in that story because it
   contradicts an approved AC.
+- **[skillars-deferred-166, pre-existing, medium/logic]** After a grace-window redirect, one client is left
+  holding a token that becomes account-wide theft 30 s later. Two concurrent refreshes of one cookie from
+  the same browser (a double submit, an axios retry) serialise on the row lock: the winner is issued A1, the
+  loser is redirected and rotates A1 into A2. Both responses carry `Set-Cookie: rtkn`, so the jar keeps
+  whichever arrived last; if that is the winner's, the client now holds A1, which is `used` with
+  `replaced_by_id -> A2`. A refresh more than `REFRESH_GRACE_WINDOW` (30 s) later fails the window test even
+  though the chain is intact and live, so it is answered as reuse: `markAllUsedByUserId` plus
+  `invalidateSessionsForUser`, signing the user out of every device over a benign race. Pre-existing — the
+  old newest-live grace branch behaved the same way — but it lives in the method deferred-166 rewrote, and
+  that story's two-device IT only checks the other device immediately after the redirect, never after the
+  window closes. **Options:** allow a redirect for a chain that is intact and exactly one hop behind
+  regardless of the window (weakens theft detection for a token one hop stale); make the window relative to
+  the chain's live end rather than the presented row's `rotatedAt`; or leave it and accept that a client
+  which keeps a superseded cookie is logged out everywhere once. Needs a policy call, not a patch.
+- **[skillars-deferred-166, low/database]** The self-referential FK and the new multi-row walks give
+  `AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have. Both
+  `AuthService.resolveGraceSuccessor` and `RefreshTokenRevocationService.revokeChainByTokenHash` take
+  `PESSIMISTIC_WRITE` locks on several rows of `refresh_tokens` in chain order and hold them for the whole
+  transaction, while `deleteExpiredTokens` is a bulk `DELETE` locking the same rows in physical scan order.
+  A chain whose rows are all expired (an expired `rtkn` presented, or a logout with a long-swept chain) can
+  cycle: the walk holds the predecessor and waits for a successor the `DELETE` already holds. Postgres kills
+  one side, and if that is the sweep, the `@Scheduled` method throws with no try/catch and skips an hour of
+  cleanup. Before deferred-166 logout took one single-row lock, which can wait but cannot cycle. **Options:**
+  make the delete acquire in ascending `id` order (chain order is ascending id in practice, since a
+  successor is always created later, so aligning the two removes the cycle), or wrap the scheduled sweep so
+  a lost deadlock is logged and retried next hour instead of propagating. Remote — it needs an expired chain
+  being walked during the hourly sweep — but cheap to close.
 - **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
   `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
   on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as

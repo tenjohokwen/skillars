@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import jakarta.persistence.LockModeType;
@@ -157,6 +158,30 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     @Query("UPDATE RefreshToken r SET r.used = true, r.version = r.version + 1 WHERE r.userId = :userId")
     void markAllUsedByUserId(@Param("userId") Long userId);
+
+    /**
+     * skillars-deferred-166: {@link #markAllUsedByUserId} that also stamps {@code revoked_at}, for
+     * {@code RefreshTokenRevocationService.revokeAllForUser} — the fallback when a logout's chain is longer
+     * than the walk will follow.
+     *
+     * <p>Why not just reuse {@link #markAllUsedByUserId}: that one sets {@code used} alone, and since this
+     * story {@code used} no longer means "revoked" on its own. Rows left {@code used = true} with
+     * {@code revoked_at = NULL} read as <em>rotated, successor unknown</em>, so the next refresh presenting
+     * one takes {@code AuthService}'s reuse branch — a second account-wide revocation plus a
+     * {@code security_session_invalidated_at} bump and a "token reuse detected" 401 — where a deliberately
+     * ended session should get the plain {@code Revoked} 401. Stamping both columns keeps the fallback
+     * consistent with what the chain walk writes.
+     *
+     * <p>Only touches rows that are not already revoked, so a repeat call is zero rows rather than a
+     * rewrite that would move an earlier {@code revoked_at} forward. Bumps {@code version} for the same
+     * reason {@link #markAllUsedByUserId} does (skillars-deferred-101 AC11), which is also what
+     * {@code NativeModifyingVersionAuditTest} requires of a bulk write against a {@code @Version} table.
+     */
+    @Modifying
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    @Query("UPDATE RefreshToken r SET r.used = true, r.revokedAt = :revokedAt, r.version = r.version + 1 "
+        + "WHERE r.userId = :userId AND r.revokedAt IS NULL")
+    void markAllRevokedByUserId(@Param("userId") Long userId, @Param("revokedAt") Instant revokedAt);
 
     /**
      * skillars-deferred-143 AC2: the single-token sibling of {@link #markAllUsedByUserId(Long)},
