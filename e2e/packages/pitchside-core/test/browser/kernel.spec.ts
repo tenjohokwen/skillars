@@ -204,8 +204,10 @@ test.describe('routing', () => {
     test(
       'settledRoute takes its budget from navigationTimeout',
       toy.scenario({ id: 'KRN-26', priority: 'P1', tags: ['@regression', '@guest', '@kernel'] }),
-      async ({ gotoRoute, settledRoute }) => {
-        await gotoRoute('/chain')
+      async ({ page, suite, settledRoute }) => {
+        // navigationTimeout also caps page.goto; give the load its own budget so a slow runner
+        // fails on the settle assertion, never on the navigation.
+        await page.goto(suite.routing.toUrl('/chain'), { timeout: 30_000 })
         await expect(settledRoute('/never')).rejects.toThrow(/Timed out after 700 ms/)
       },
     )
