@@ -1,0 +1,156 @@
+# Disposable stack for the Pitchside UI suite (skillars-e2e).
+#
+# Deliberately STANDALONE, not layered on docker-compose.yml: the base file carries production
+# concerns (Traefik, the observability stack, /opt/skillars bind mounts, present-and-blank env
+# variables that override dev defaults) that a throwaway browser-test stack must not inherit.
+# What it does reuse is the app image itself and the same service images as local dev.
+#
+#   docker compose -p skillars-e2e -f e2e/packages/skillars-e2e/stack/docker-compose.e2e.yml up -d
+#
+# (Project name passed with -p rather than a top-level `name:` key, which older Compose v2 rejects.)
+#
+# The app image defaults to `skillars:local` (what `docker compose -f docker-compose.yml -f
+# docker-compose.local.yml build app` produces); CI builds and tags its own and passes APP_IMAGE.
+#
+# Nothing here persists: postgres and storage run on tmpfs, so every `up` starts from an empty,
+# freshly migrated database.
+services:
+  app:
+    image: ${APP_IMAGE:-skillars:local}
+    environment:
+      # dev: local-friendly defaults. e2e: the overlay mounted below (SMTP to Mailpit, Gemini to
+      # WireMock, rate limiting off). Spring reads application-e2e.yaml from the extra location.
+      - SPRING_PROFILES_ACTIVE=dev,e2e
+      - SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/e2e-config/
+      - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/skillars?TimeZone=UTC
+      - SPRING_DATASOURCE_USERNAME=postgres
+      - SPRING_DATASOURCE_PASSWORD=e2e-postgres
+      - SPRING_DATA_REDIS_HOST=redis
+      - SPRING_DATA_REDIS_PORT=6379
+      - SPRING_DATA_REDIS_PASSWORD=e2e-redis-password
+      - APP_STORAGE_ENDPOINT_URL=http://storage:9500
+      - APP_STORAGE_BUCKET=skillars-e2e
+      - APP_STORAGE_S3_ACCESS_KEY=minioadmin
+      - APP_STORAGE_S3_SECRET_KEY=minioadmin123
+      - APP_FRONTEND_URL=${E2E_BASE_URL:-http://localhost:9990}
+      # Required to boot; test-shaped placeholders only (the guard rejects live keys outside prod).
+      - APP_PAYMENT_STRIPE_API_KEY=sk_test_e2e_placeholder
+      - APP_VIDEO_BUNNY_LIBRARY_ID=123456
+      - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=e2e-webhook-signing-secret
+      - JWT_SIGNING_KEY=ZTJlLW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1lMmUtc3VpdGUtb25seSEhIQ==
+      - LOKI_ENABLED=false
+      - MANAGEMENT_TRACING_ENABLED=false
+      - MANAGEMENT_HEALTH_MAIL_ENABLED=false
+      # The suite's own admin (role ADMIN), created on boot by AdminBootstrapRunner. The User entity
+      # accepts only 2-3 letter TLDs, so example.com, never .test.
+      - APP_BOOTSTRAP_ADMIN_EMAIL=${E2E_ADMIN_EMAIL:-admin@e2e.example.com}
+      - APP_BOOTSTRAP_ADMIN_PASSWORD=${E2E_ADMIN_PASSWORD:-E2e-Admin-Password-1!}
+      - APP_BOOTSTRAP_ADMIN_PHONE=+15550000001
+      - JAVA_TOOL_OPTIONS=-Duser.timezone=UTC -XX:MaxRAMPercentage=70
+    volumes:
+      - ./config:/e2e-config:ro
+    ports:
+      - '9990:9990'
+      - '8367:8367'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:8367/manage/health/smoke || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_started
+      wiremock:
+        condition: service_started
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_DB=skillars
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=e2e-postgres
+    tmpfs:
+      - /var/lib/postgresql/data
+    ports:
+      # Published so the suite's SQL seeding (only where no API exists) can reach it.
+      - '55432:5432'
+    healthcheck:
+      test: ['CMD', 'pg_isready', '-U', 'postgres', '-d', 'skillars']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--requirepass', 'e2e-redis-password']
+    healthcheck:
+      test: ['CMD-SHELL', '[ "$$(redis-cli -a e2e-redis-password --no-auth-warning ping)" = PONG ]']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  storage:
+    image: chrislusf/seaweedfs:3.97
+    entrypoint: ['/entrypoint.sh']
+    command: >
+      server -s3 -dir=/data -ip.bind=0.0.0.0 -s3.port=9500
+      -s3.config=/etc/seaweedfs/s3.json -master.volumeSizeLimitMB=256
+    tmpfs:
+      - /data
+    volumes:
+      - ../../../../deploy/seaweedfs/s3-identity.json:/etc/seaweedfs/s3.json:ro
+    ports:
+      # Presigned upload URLs name host `storage`: browsers need `127.0.0.1 storage` in /etc/hosts
+      # (CI adds it), exactly as for local dev.
+      - '9500:9500'
+    healthcheck:
+      test: ['CMD-SHELL', 'nc -z localhost 9500']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  storage-init:
+    image: amazon/aws-cli:2.31.13
+    depends_on:
+      storage:
+        condition: service_healthy
+    environment:
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin123
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ../../../../deploy/seaweedfs/s3-cors.json:/etc/seaweedfs/s3-cors.json:ro
+    entrypoint: >
+      /bin/sh -c "
+      aws --endpoint-url http://storage:9500 s3 mb s3://skillars-e2e || true &&
+      aws --endpoint-url http://storage:9500 s3api put-bucket-cors --bucket skillars-e2e --cors-configuration file:///etc/seaweedfs/s3-cors.json
+      "
+
+  # SMTP sink with a REST API. The app's `log` transport can't serve the suite: it dumps only the
+  # body, without recipient or subject, so nothing could be found "by address".
+  mailpit:
+    image: axllent/mailpit:v1.31.0
+    environment:
+      # The app's SMTP sender always sets mail.smtp.auth=true and starttls.enable=true; accept any
+      # credentials over plain SMTP.
+      - MP_SMTP_AUTH_ACCEPT_ANY=1
+      - MP_SMTP_AUTH_ALLOW_INSECURE=1
+      - MP_MAX_MESSAGES=5000
+    ports:
+      - '8025:8025'
+
+  # Stands in for Gemini (moderation verdicts) and, later, Bunny and Stripe.
+  wiremock:
+    image: wiremock/wiremock:3.13.2
+    command: ['--global-response-templating', '--disable-banner']
+    volumes:
+      - ./wiremock:/home/wiremock:ro
+    ports:
+      - '8089:8080'
