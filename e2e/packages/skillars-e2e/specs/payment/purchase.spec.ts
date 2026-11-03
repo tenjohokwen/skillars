@@ -1,5 +1,9 @@
+import type { Page } from '@playwright/test'
+import type { SuiteEnv } from 'pitchside-core'
+import type { CoachAccount, ParentAccount } from '../../src/data/provisioner.js'
 import { expect, scenario, test } from '../../src/app.js'
 import { t } from '../../src/i18n.js'
+import { chargeKeysFor } from '../../src/stubs/wiremock.js'
 import {
   CoachPublicProfileScreen,
   LoginScreen,
@@ -7,6 +11,23 @@ import {
   PacksDashboardScreen,
   ParentDashboardScreen,
 } from '../../src/screens/index.js'
+
+/** Log a fresh parent in through the form and open the coach's pack purchase page. */
+async function openPurchase(
+  page: Page,
+  suite: SuiteEnv,
+  parent: ParentAccount,
+  coach: CoachAccount,
+): Promise<{ profile: CoachPublicProfileScreen; purchase: PackPurchaseScreen }> {
+  const login = await new LoginScreen(page, suite).open()
+  await login.logIn(parent.email, parent.password)
+  await new ParentDashboardScreen(page, suite).waitReady()
+  const profile = await new CoachPublicProfileScreen(page, suite).open({ coachId: coach.coachId! })
+  await profile.buySessionsSecondary().click()
+  const purchase = await new PackPurchaseScreen(page, suite).waitReady()
+  await purchase.packOption().click()
+  return { profile, purchase }
+}
 
 test.describe('E · Payment method & pack purchase', () => {
   test(
@@ -77,6 +98,66 @@ test.describe('E · Payment method & pack purchase', () => {
       await purchase.packOption().click()
       await expect(purchase.addCardBanner()).toContainText(t('payment.card.addCardPrompt'))
       await expect(purchase.confirm()).toBeDisabled()
+    },
+  )
+
+  test(
+    'a declined card shows an error and leaves the family without credits',
+    scenario({
+      id: 'PAY-06',
+      priority: 'P0',
+      type: 'neg',
+      tags: ['@regression', '@parent', '@payment'],
+    }),
+    async ({ page, suite, provision, baseline }) => {
+      test.slow()
+      const coach = await baseline('coach')
+      const parent = await provision.parent()
+      await provision.saveCard(parent, { declines: true })
+
+      const { purchase } = await openPurchase(page, suite, parent, coach)
+      await purchase.confirm().click()
+
+      // GAP: the reason is not surfaced. The backend answers a decline with the catch-all
+      // payment.lifecycleFailure, and the page reads response.data.message, which ErrorDto never
+      // has, so every failure shows the generic text. The existing "card was declined" copy
+      // (subscription.errors.paymentDeclined) is never reached from here.
+      await expect(purchase.error()).toHaveText(t('booking.packs.purchaseError'))
+      // Still on the purchase page (success goes back to the profile), and no pack was created.
+      await expect(purchase.packOption()).toBeVisible()
+      const packs = await new PacksDashboardScreen(page, suite).open({
+        playerId: parent.children[0]!.playerId,
+      })
+      await expect(packs.empty()).toBeVisible()
+      await expect(packs.cards()).toHaveCount(0)
+    },
+  )
+
+  test(
+    'double-clicking confirm buys one pack with one charge',
+    scenario({
+      id: 'PAY-09',
+      priority: 'P0',
+      type: 'neg',
+      tags: ['@regression', '@parent', '@payment'],
+    }),
+    async ({ page, suite, provision, baseline }) => {
+      test.slow()
+      const coach = await baseline('coach')
+      const parent = await provision.parent()
+      await provision.saveCard(parent)
+
+      const { profile, purchase } = await openPurchase(page, suite, parent, coach)
+      await purchase.confirm().dblclick()
+      await profile.waitReady()
+
+      const packs = await new PacksDashboardScreen(page, suite).open({
+        playerId: parent.children[0]!.playerId,
+      })
+      await expect(packs.card(`${coach.firstName} Coaching`)).toHaveCount(1)
+      await expect(packs.cards()).toHaveCount(1)
+      // One Stripe idempotency key: however many requests, Stripe would charge once.
+      expect([...(await chargeKeysFor(parent.userId))]).toHaveLength(1)
     },
   )
 })

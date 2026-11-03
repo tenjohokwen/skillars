@@ -1,26 +1,9 @@
-import { Screen, waitForSettledRoute, type SettledRouteOptions } from 'pitchside-core'
+import { Screen } from 'pitchside-core'
 import type { Locator } from '@playwright/test'
 import { R } from '../routes.js'
+import { ListScreen } from './ListScreen.js'
 
 // Booking: the family's request page and bookings list, and the coach's inbox.
-
-/**
- * A list page that renders either rows or an empty state once loaded. Ready means settled on the
- * route and showing a first row OR the empty state, so an empty list is ready too.
- */
-abstract class ListScreen extends Screen {
-  protected abstract rows(): Locator
-  abstract empty(): Locator
-
-  override async waitReady(options?: SettledRouteOptions): Promise<this> {
-    await waitForSettledRoute(this.page, this.context.routing, this.route, options)
-    await this.rows()
-      .or(this.empty())
-      .first()
-      .waitFor({ state: 'visible', timeout: options?.timeoutMs })
-    return this
-  }
-}
 
 /** Reached from the profile's primary CTA, which carries ?playerId (and ?slot from a shared link). */
 export class BookingRequestScreen extends Screen {
@@ -30,6 +13,13 @@ export class BookingRequestScreen extends Screen {
   ownSlots = () => this.tid('booking-slot-own')
   noSlots = () => this.tid('booking-no-slots')
   packSelect = () => this.tid('booking-pack-select')
+  /**
+   * Pay with the held pack. The page defaults to "Per session" even when the family holds credits,
+   * so a spec that means to spend a credit must choose the pack. `label` is the option's text
+   * (booking.requests.packOptionLabel through t()).
+   */
+  choosePack = (label: string) =>
+    this.packSelect().getByRole('radio', { name: label, exact: true }).click()
   perSessionInfo = () => this.tid('per-session-info')
   paymentCard = () => this.tid('payment-card')
   notes = () => this.tid('booking-notes')
@@ -63,5 +53,7 @@ export class ParentBookingsScreen extends ListScreen {
       has: this.page.getByTestId('parent-booking-coach').getByText(coachName, { exact: true }),
     })
   status = (booking: Locator) => this.within(booking, 'parent-booking-status')
+  /** Switches the row between the session's zone and the browser's. */
+  timezoneToggle = (booking: Locator) => this.within(booking, 'parent-booking-tz-toggle')
   time = (booking: Locator) => this.within(booking, 'parent-booking-time')
 }

@@ -78,8 +78,12 @@ export class NetworkGate {
     return this.blocked
   }
 
+  private reported = false
+
+  /** Throws in strict mode when anything was blocked — once (see ConsoleGate.assertClean). */
   assertClean(): void {
-    if (this.options.mode !== 'strict' || this.blocked.length === 0) return
+    if (this.options.mode !== 'strict' || this.blocked.length === 0 || this.reported) return
+    this.reported = true
     throw new GateViolationError(
       'Network',
       this.blocked.map((b) => `${b.method} ${b.url} (${b.resourceType}) is outside the allow-list`),

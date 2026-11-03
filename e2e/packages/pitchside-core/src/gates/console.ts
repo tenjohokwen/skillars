@@ -75,9 +75,15 @@ export class ConsoleGate {
     return this.found
   }
 
-  /** Throws in strict mode when anything was recorded. */
+  private reported = false
+
+  /**
+   * Throws in strict mode when anything was recorded — once: the default page's context and each
+   * actor's teardown all assert, and one failure should not be reported twice.
+   */
   assertClean(): void {
-    if (this.options.mode !== 'strict' || this.found.length === 0) return
+    if (this.options.mode !== 'strict' || this.found.length === 0 || this.reported) return
+    this.reported = true
     throw new GateViolationError(
       'Console',
       this.found.map(

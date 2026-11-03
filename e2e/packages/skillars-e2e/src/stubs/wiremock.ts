@@ -7,9 +7,35 @@ import { E2E } from '../env.js'
  * per-user even though every worker shares one WireMock.
  */
 export async function chargesFor(payerUserId: string): Promise<number> {
+  return (await chargeRequestsFor(payerUserId)).length
+}
+
+/**
+ * The distinct Stripe idempotency keys among one payer's PaymentIntent requests. The stub answers
+ * every request with a new intent, where real Stripe would replay the first one for a repeated key;
+ * so "charged once" means one key, however many times the backend retried with it.
+ */
+export async function chargeKeysFor(payerUserId: string): Promise<Set<string>> {
+  const keys = (await chargeRequestsFor(payerUserId)).map(
+    (r) =>
+      Object.entries(r.headers).find(([name]) => name.toLowerCase() === 'idempotency-key')?.[1],
+  )
+  // A keyless charge can't be deduplicated by Stripe at all: two of them are two charges, never one
+  // "missing" key. Fail loudly rather than fold them together.
+  if (keys.some((key) => !key)) {
+    throw new Error(`A PaymentIntent for payer ${payerUserId} was sent without an Idempotency-Key`)
+  }
+  return new Set(keys as string[])
+}
+
+interface JournalRequest {
+  headers: Record<string, string>
+}
+
+async function chargeRequestsFor(payerUserId: string): Promise<JournalRequest[]> {
   const context = await request.newContext()
   try {
-    const response = await context.post(`${E2E.wiremockUrl}/__admin/requests/count`, {
+    const response = await context.post(`${E2E.wiremockUrl}/__admin/requests/find`, {
       data: {
         method: 'POST',
         urlPath: '/v1/payment_intents',
@@ -20,7 +46,7 @@ export async function chargesFor(payerUserId: string): Promise<number> {
       },
     })
     if (!response.ok()) throw new Error(`WireMock journal: HTTP ${response.status()}`)
-    return ((await response.json()) as { count: number }).count
+    return ((await response.json()) as { requests: JournalRequest[] }).requests
   } finally {
     await context.dispose()
   }
