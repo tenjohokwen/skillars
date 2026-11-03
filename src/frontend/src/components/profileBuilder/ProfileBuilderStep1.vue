@@ -69,10 +69,10 @@
       data-testid="builder-languages"
     />
 
-    <div class="text-label q-mb-sm q-mt-md" data-testid="builder-timezone">
+    <div class="text-label q-mb-sm q-mt-md">
       {{ t('auth.coach.step1SectionTimezone') }}
     </div>
-    <TimezoneSelect v-model="canonicalTimezone" />
+    <TimezoneSelect v-model="canonicalTimezone" data-testid="builder-timezone" />
 
     <div class="q-mt-md">
       <q-btn

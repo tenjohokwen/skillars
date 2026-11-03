@@ -77,7 +77,10 @@ export class CoachBuilderScreen extends Screen {
 
   /** Type into the timezone picker's filter, as a coach searching the list would. */
   async searchTimezone(text: string): Promise<void> {
-    // fill() on the q-select's root <label> retargets to its filter input.
+    // Open the menu first: typing alone does not reliably open it, and the no-match row only renders
+    // inside an open menu. fill() on the q-select's root <label> retargets to its filter input.
+    await this.timezoneSelect().click()
+    await this.page.getByRole('listbox').waitFor()
     await this.timezoneSelect().fill(text)
   }
 

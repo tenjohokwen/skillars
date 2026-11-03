@@ -101,11 +101,11 @@
         data-testid="builder-timezone-recovery"
       >
         <template #avatar>
-          <q-icon name="error_outline" data-testid="builder-timezone" />
+          <q-icon name="error_outline" />
         </template>
         {{ t('auth.coach.step4TimezoneUnavailable') }}
       </q-banner>
-      <TimezoneSelect v-model="canonicalTimezone" />
+      <TimezoneSelect v-model="canonicalTimezone" data-testid="builder-timezone" />
     </template>
     <template v-else>
       <div class="text-body q-mb-xs" data-testid="builder-timezone-readonly">
