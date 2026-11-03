@@ -21,7 +21,9 @@ import org.springframework.security.authentication.DisabledException;
 import org.springframework.security.authentication.LockedException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -58,6 +60,13 @@ public class AuthService {
     private final LoginTokenManager loginTokenManager;
     private final SecurityUtil securityUtil;
     private final UserIdentitySignalService userIdentitySignalService;
+    /**
+     * skillars-deferred-166: the refresh decision runs in its own short transaction rather than the
+     * class-level one, so the row lock it holds is released before any {@code REQUIRES_NEW} revoke. A
+     * {@code TransactionTemplate} and not a second {@code @Transactional} method on this bean, because
+     * Spring's proxy does not intercept self-invocation. Precedent: {@code MessagingService}.
+     */
+    private final TransactionTemplate transactionTemplate;
 
     /** Lazily encoded with the live encoder so its cost factor always matches real users' hashes. */
     private volatile String dummyPasswordHash;
@@ -150,155 +159,298 @@ public class AuthService {
         return hash;
     }
 
+    /**
+     * Trades the {@code rtkn} refresh-token cookie for a fresh JWT + refresh-token pair.
+     *
+     * <p><strong>skillars-deferred-166 (RS01/RS02) restructured this method.</strong> It now decides
+     * everything inside one short {@code TransactionTemplate} block that holds a {@code PESSIMISTIC_WRITE}
+     * lock on the presented row, returns a {@link RefreshOutcome} instead of throwing, and writes only when
+     * it rotates. Every revoke, cookie clear and throw happens after that block has committed and released
+     * its locks.
+     *
+     * <p>That shape is forced by two constraints that pull in opposite directions:
+     * <ul>
+     *   <li><strong>A lock is needed</strong> so a concurrent logout and refresh on the same token
+     *       serialise. Without it, logout's revoke and refresh's rotation interleave and the successor
+     *       outlives the logout (RS01), and the grace window has nothing trustworthy to redirect along.</li>
+     *   <li><strong>The lock must not be held across a revoke.</strong> Every revoke here is
+     *       {@code REQUIRES_NEW} — it has to be, because each denial path throws and would otherwise have
+     *       its own write rolled back (skillars-deferred-143 documented this on
+     *       {@code RefreshTokenRepository.markUsedByTokenHash}). A {@code REQUIRES_NEW} write against a row
+     *       the outer transaction holds locked waits for a lock only that outer transaction can release,
+     *       and Postgres cannot see the cycle because the outer side is blocked in Java, not in the
+     *       database: it surfaces as {@code lock_timeout} / SQLState 55P03, i.e. a 409 where a 401 was
+     *       meant. {@code markAllUsedByUserId} (a bulk {@code UPDATE} with no {@code used} predicate, so it
+     *       matches the locked row too) and {@code terminateSession} are both on that list.</li>
+     * </ul>
+     * Deciding under the lock and acting after it satisfies both without needing {@code noRollbackFor} or
+     * an in-transaction twin of every revoke (a {@code MANDATORY} revoke would simply be rolled back by the
+     * throw that follows it).
+     *
+     * <p>The {@code NOT_SUPPORTED} propagation is deliberate: this class is {@code @Transactional}, and an
+     * ambient transaction spanning the whole method would re-create exactly the hazard above.
+     */
+    @Transactional(propagation = Propagation.NOT_SUPPORTED)
     public LoginResponse refresh(HttpServletRequest req, HttpServletResponse res) {
         String rawToken = CookieUtil.getCookieValue(req, REFRESH_TOKEN_COOKIE);
         if (rawToken == null || rawToken.isBlank()) {
             throw new BadCredentialsException("Missing refresh token");
         }
 
-        String hash = sha256Hex(rawToken);
-        RefreshToken token = refreshTokenRepository.findByTokenHash(hash)
-            .orElseThrow(() -> new BadCredentialsException("Invalid refresh token"));
+        final String presentedHash = sha256Hex(rawToken);
 
-        if (token.isUsed()) {
-            // Capture before any reassignment — required for lambda capture below.
-            final Long ownerId = token.getUserId();
-            // If the token was rotated recently it is likely a multi-tab race: Tab A refreshed
-            // and Tab B still holds the old cookie. Redirect Tab B to use the successor token
-            // rather than treating the event as theft and revoking all sessions.
-            if (token.getRotatedAt() != null &&
-                    Instant.now(ClockProvider.getClock()).isBefore(token.getRotatedAt().plus(REFRESH_GRACE_WINDOW))) {
-                token = refreshTokenRepository
-                    .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(
-                            ownerId, Instant.now(ClockProvider.getClock()))
-                    .orElseGet(() -> {
-                        // skillars-deferred-144 AC6.2: markAllUsedByUserId above has already
-                        // revoked every token for this user, so clearAuthCookies (cookies only) is
-                        // enough — securityUtil.terminateSession's own markUsedByTokenHash would
-                        // only redundantly re-mark the one token already covered by the bulk update.
-                        // This also drops terminateSession's SecurityContextHolder.clearContext()
-                        // call, unlike that method — harmless here: /api/auth/refresh is
-                        // unrestricted, nothing is written to the context after this throw, and
-                        // SecurityContextHolderFilter clears the thread-local per request anyway.
-                        refreshTokenRepository.markAllUsedByUserId(ownerId);
-                        // skillars-deferred-149 AC3: markAllUsedByUserId above revokes
-                        // refresh_tokens but never touches the user row, so a standing JWT keeps
-                        // self-extending via the filter's no-DB-hit fast path. REQUIRES_NEW for the
-                        // identical reason as markAllUsedByUserId — this branch throws immediately
-                        // after, which would roll back an ambient write.
-                        userRepository.invalidateSessionsForUser(ownerId, Instant.now(ClockProvider.getClock()));
-                        securityUtil.clearAuthCookies(res);
-                        throw new BadCredentialsException("Token reuse detected — all sessions revoked");
-                    });
-            } else {
-                // skillars-deferred-144 AC6.2: same reasoning as the grace-window branch above —
-                // markAllUsedByUserId has already revoked every token for this user, and the
-                // dropped SecurityContextHolder.clearContext() (vs. terminateSession) is harmless
-                // for the same reason noted there.
-                refreshTokenRepository.markAllUsedByUserId(ownerId);
-                // skillars-deferred-149 AC3: see the grace-window branch's identical call above.
-                userRepository.invalidateSessionsForUser(ownerId, Instant.now(ClockProvider.getClock()));
-                securityUtil.clearAuthCookies(res);
-                throw new BadCredentialsException("Token reuse detected — all sessions revoked");
-            }
-        }
-
-        if (token.getExpiresAt().isBefore(Instant.now(ClockProvider.getClock()))) {
-            securityUtil.terminateSession(req, res);
-            throw new BadCredentialsException("Refresh token has expired");
-        }
-
-        // skillars-deferred-143 AC2: the account is resolved and its liveness checked BEFORE the
-        // presented token is rotated below — deliberately earlier than the story sketched it.
-        //
-        // The story placed both after the saveAndFlush, which self-deadlocks: that flush issues
-        // `UPDATE refresh_tokens ... WHERE token_hash = ?` inside THIS (outermost) transaction and
-        // holds the row lock until it ends, while the rejection teardown's revocation runs in a
-        // REQUIRES_NEW transaction that must update the very same row. The inner transaction waits
-        // on a lock only the outer one can release, and the outer one is waiting on the inner —
-        // measured empirically as `ERROR: canceling statement due to lock timeout` (SQLState
-        // 55P03) surfacing as a 409 instead of the intended 401.
-        //
-        // Checking first removes the hazard at the source rather than working around it: on the
-        // rejection path this transaction has issued no write to refresh_tokens at all, so the
-        // REQUIRES_NEW revocation takes an uncontended lock and commits. It is also better
-        // behaviour independently — a locked account's refresh attempt no longer consumes and
-        // rotates a token before being turned away.
-        // Code review [Patch] 2026-10-05: revoke the token this request actually RESOLVED to, not
-        // only the raw cookie value `terminateSession` derives its target from. The grace-window
-        // branch above can have reassigned `token` to a live SUCCESSOR row (:158-165) while the
-        // cookie still carries the stale, already-used original — in that case the successor is
-        // the account's one live credential, and revoking only the cookie's row would leave it
-        // standing after the very denial meant to kill it. In the ordinary (non-reassigned) case
-        // this is the same row `terminateSession` targets, and the write is idempotent because
-        // `used` is monotonic, so the cost is one redundant UPDATE on a rejection-only path.
-        //
-        // Not needed on the expiry branch above: the successor query filters on
-        // `ExpiresAtAfter(now)`, so a reassigned `token` can never be the expired one, and an
-        // unreassigned `token` hashes to exactly the cookie value.
-        //
-        // Deadlock-safe for the same reason the liveness check moved ahead of the rotation write
-        // (see below): on every path reaching here this transaction has issued no write against
-        // refresh_tokens, so the REQUIRES_NEW revocation takes an uncontended lock.
-        final String resolvedTokenHash = token.getTokenHash();
-
-        var user = userRepository.findById(token.getUserId()).orElseThrow(() -> {
-            refreshTokenRepository.markUsedByTokenHash(resolvedTokenHash);
-            securityUtil.terminateSession(req, res);
-            return new BadCredentialsException("User not found for refresh token");
-        });
-
+        final RefreshOutcome outcome;
         try {
-            ensureAccountIsLive(user);
-        } catch (DisabledException | LockedException e) {
-            // Rolls back this method's transaction, which is exactly why the revocation inside
-            // terminateSession (and the explicit one here) is REQUIRES_NEW — see
-            // RefreshTokenRepository.markUsedByTokenHash.
-            refreshTokenRepository.markUsedByTokenHash(resolvedTokenHash);
-            securityUtil.terminateSession(req, res);
-            throw e;
-        }
-
-        token.setUsed(true);
-        token.setRotatedAt(Instant.now(ClockProvider.getClock()));
-        try {
-            refreshTokenRepository.saveAndFlush(token);
+            outcome = transactionTemplate.execute(status -> decideAndRotate(presentedHash));
         } catch (ObjectOptimisticLockingFailureException ex) {
-            // True concurrent refresh (two requests in flight simultaneously): the loser gets a
-            // clean 401 rather than the default 409, so the client re-enters the login flow.
-            //
-            // Cookies only, deliberately: this is the one teardown that runs AFTER this
-            // transaction has already issued its UPDATE against the token row, so a REQUIRES_NEW
-            // revocation here would hit the same self-deadlock described above. It is also
-            // unnecessary — losing the optimistic-lock race means the row is already committed
-            // `used = true` by one of two possible writers: the winning concurrent refresh request
-            // (the case this branch exists for), or a concurrent forced-logout's
-            // markUsedByTokenHash (skillars-deferred-144 AC6.3) — either way `used` is monotonic,
-            // so the row is already in the state this branch would otherwise try to put it in.
+            // Backstop only. The row lock taken in decideAndRotate serialises concurrent refreshes of the
+            // same token, so the loser now reads committed state and takes the grace-window redirect
+            // instead of losing a version check. This branch remains for a stale managed copy written from
+            // somewhere else entirely; the rollback of the template's transaction has already released the
+            // lock, so cookies-only teardown is both safe and sufficient (whoever won the race left the row
+            // `used`, and `used` is monotonic).
             securityUtil.clearAuthCookies(res);
             throw new BadCredentialsException("Concurrent refresh detected — please sign in again");
         }
 
-        Principal principal = Principal.instanceFrom(user);
+        if (outcome instanceof Rotated rotated) {
+            final LoginResponse response = rotated.response();
+            loginTokenManager.createLoginToken(res, rotated.principal());
+            CookieUtil.addCookie(res, REFRESH_TOKEN_COOKIE, rotated.newRawToken(),
+                true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
+            new SkillarsProfileCookie(String.valueOf(response.userId()), response.role(),
+                response.limitedAdmin()).writeTo(res);
+            return response;
+        }
 
-        String newRaw = UUID.randomUUID().toString();
-        RefreshToken newRt = new RefreshToken();
-        newRt.setUserId(user.getId());
-        newRt.setTokenHash(sha256Hex(newRaw));
-        newRt.setExpiresAt(Instant.now(ClockProvider.getClock()).plus(REFRESH_TOKEN_TTL));
-        newRt.setUsed(false);
-        refreshTokenRepository.save(newRt);
+        if (outcome instanceof Unknown) {
+            // Unchanged: no cookie teardown for a hash that matches no row at all. There is no session to
+            // end, and clearing cookies here would let an attacker with a junk token log a victim's browser
+            // out. (An expired row already swept by deleteExpiredTokens lands here too.)
+            throw new BadCredentialsException("Invalid refresh token");
+        }
 
-        loginTokenManager.createLoginToken(res, principal);
-        CookieUtil.addCookie(res, REFRESH_TOKEN_COOKIE, newRaw,
-            true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
+        if (outcome instanceof Reuse reuse) {
+            // Unchanged theft response: a used token that is NOT a recent rotation of a still-live chain.
+            // skillars-deferred-144 AC6.2: cookies only, because markAllUsedByUserId has already revoked
+            // every row for the user, so terminateSession's per-token write would be redundant.
+            // skillars-deferred-149 AC3: the bulk update never touches the user row, so a standing JWT
+            // would keep self-extending via the filter's no-DB-hit fast path — hence the epoch bump.
+            refreshTokenRepository.markAllUsedByUserId(reuse.ownerId());
+            userRepository.invalidateSessionsForUser(reuse.ownerId(), Instant.now(ClockProvider.getClock()));
+            securityUtil.clearAuthCookies(res);
+            throw new BadCredentialsException("Token reuse detected — all sessions revoked");
+        }
 
-        String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
-        boolean limitedAdmin = AdminTierGuard.isLimitedAdmin(principal.getAuthorities());
-        new SkillarsProfileCookie(String.valueOf(user.getId()), role, limitedAdmin).writeTo(res);
+        if (outcome instanceof Revoked) {
+            // skillars-deferred-166: a token whose chain was deliberately ended (logout, forced logout, a
+            // denial) is NOT theft, and must not escalate to account-wide revocation. Before this story a
+            // stale tab replaying a logged-out cookie took the branch above and signed the user out of
+            // every other device. Nothing to revoke either: whoever set revokedAt walked the whole chain.
+            securityUtil.clearAuthCookies(res);
+            throw new BadCredentialsException("Session has ended — please sign in again");
+        }
 
-        return new LoginResponse(user.getId(), role, principal.getDisplayName(), limitedAdmin);
+        final Denied denied = (Denied) outcome;
+        // Expiry, missing user, stale session epoch and a non-live account all end this one session and
+        // leave the rest of the account alone. terminateSession revokes the chain reachable from the
+        // COOKIE's row (skillars-deferred-166 made it a chain walk), which is why the explicit
+        // markUsedByTokenHash(resolvedTokenHash) that used to sit on the missing-user and account-liveness
+        // paths is gone: that call existed because terminateSession could only reach the stale cookie row
+        // while the live credential was the successor the grace window had resolved to (the
+        // skillars-deferred-143 code-review patch). The walk reaches the successor from the predecessor
+        // now, so the extra write has nothing left to cover.
+        securityUtil.terminateSession(req, res);
+        throw denied.failure();
     }
+
+    /**
+     * The whole refresh decision, run inside {@link #transactionTemplate} with a
+     * {@code PESSIMISTIC_WRITE} lock on the presented row. Never throws for a business outcome and never
+     * writes except when it rotates — see {@link #refresh} for why both properties matter.
+     */
+    private RefreshOutcome decideAndRotate(final String presentedHash) {
+        final Instant now = Instant.now(ClockProvider.getClock());
+
+        final RefreshToken presented = refreshTokenRepository.findByTokenHashForUpdate(presentedHash)
+            .orElse(null);
+        if (presented == null) {
+            return new Unknown();
+        }
+        if (presented.getRevokedAt() != null) {
+            return new Revoked();
+        }
+
+        // The user row is loaded BEFORE the used/grace decision, earlier than it used to be, so that the
+        // session-epoch check below can answer a token invalidated by a revoke-all (password change, reset,
+        // suspension) with a plain 401. Reached the old way round, such a token is merely `used` with no
+        // recent rotation, so it fell into the theft branch and ran a second account-wide revocation on
+        // every replay. One extra query on the happy path, where the user is loaded regardless.
+        final User user = userRepository.findById(presented.getUserId()).orElse(null);
+        if (user == null) {
+            return new Denied(new BadCredentialsException("User not found for refresh token"));
+        }
+        if (isBeforeSessionEpoch(presented, user)) {
+            return new Denied(new BadCredentialsException("Session was revoked — please sign in again"));
+        }
+
+        RefreshToken token = presented;
+        if (presented.isUsed()) {
+            final GraceResolution resolution = resolveGraceSuccessor(presented, now);
+            if (resolution.chainRevoked()) {
+                return new Revoked();
+            }
+            if (resolution.successor() == null) {
+                return new Reuse(presented.getUserId());
+            }
+            token = resolution.successor();
+            if (isBeforeSessionEpoch(token, user)) {
+                return new Denied(new BadCredentialsException("Session was revoked — please sign in again"));
+            }
+        }
+
+        if (token.getExpiresAt().isBefore(now)) {
+            return new Denied(new BadCredentialsException("Refresh token has expired"));
+        }
+
+        // skillars-deferred-143 AC2: liveness is checked before the rotation write below, never after.
+        try {
+            ensureAccountIsLive(user);
+        } catch (DisabledException | LockedException e) {
+            return new Denied(e);
+        }
+
+        // Rotate. The successor is persisted and flushed first so its generated id is available to write
+        // into the predecessor's replaced_by_id, which is what makes the chain walkable (RS01) and gives
+        // the grace window something to follow (RS02). Both writes are in this transaction, under the lock.
+        final String newRaw = UUID.randomUUID().toString();
+        final RefreshToken successor = new RefreshToken();
+        successor.setUserId(user.getId());
+        successor.setTokenHash(sha256Hex(newRaw));
+        successor.setExpiresAt(now.plus(REFRESH_TOKEN_TTL));
+        successor.setUsed(false);
+        refreshTokenRepository.saveAndFlush(successor);
+
+        token.setUsed(true);
+        token.setRotatedAt(now);
+        token.setReplacedById(successor.getId());
+        refreshTokenRepository.saveAndFlush(token);
+
+        // Built here, not by the caller: User.authorities is LAZY and spring.jpa.open-in-view is false, so
+        // Principal.instanceFrom on a detached row would throw LazyInitializationException. Everything the
+        // response and the skp cookie need is assembled while the row is still managed.
+        final Principal principal = Principal.instanceFrom(user);
+        final String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
+        final boolean limitedAdmin = AdminTierGuard.isLimitedAdmin(principal.getAuthorities());
+        return new Rotated(newRaw, principal,
+            new LoginResponse(user.getId(), role, principal.getDisplayName(), limitedAdmin));
+    }
+
+    /**
+     * skillars-deferred-166 AC6: true when this token predates the account's last session-wide revocation
+     * ({@code security_session_invalidated_at}, V158). A null epoch — the normal case — skips the check.
+     *
+     * <p>This closes for refresh tokens the same gap V158 closed for JWTs: {@code markAllUsedByUserId} is a
+     * bulk {@code UPDATE} whose snapshot cannot include a successor row that a concurrent refresh commits
+     * after the statement starts, so a revoke-all could leave one live token behind. Comparing against the
+     * epoch rejects it on first use regardless of what the bulk update saw. A token minted after the epoch
+     * is unaffected, which is what lets a legitimate re-login work immediately.
+     *
+     * <p>Fails CLOSED on a null {@code createdAt}: once an account carries a revocation epoch, a token that
+     * cannot prove it was minted after it is refused. {@code refresh_tokens.created_at} is {@code NOT NULL}
+     * (V138) and assigned by {@link RefreshToken}'s {@code @PrePersist}, so no row loaded from the database
+     * can reach that branch — but a token whose age is unknown must not be the one thing that survives a
+     * deliberate account-wide revocation, and "unreachable" is a poor reason to fail open.
+     */
+    private boolean isBeforeSessionEpoch(final RefreshToken token, final User user) {
+        final Instant epoch = user.getSecuritySessionInvalidatedAt();
+        if (epoch == null) {
+            return false;
+        }
+        return token.getCreatedAt() == null || token.getCreatedAt().isBefore(epoch);
+    }
+
+    /**
+     * skillars-deferred-166 (RS02): resolves a used token to the successor it was rotated into, following
+     * {@code replacedById} and nothing else.
+     *
+     * <p>What this replaces: the grace window used to call
+     * {@code findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc}, i.e. the newest live token
+     * of the whole ACCOUNT. With two devices that is routinely the other device's session: the stale
+     * request was handed device B's credential and rotated it, B's cookie became a used token, and B's next
+     * refresh tripped theft detection and logged the user out everywhere. It also let anyone replaying a
+     * just-rotated token within the 30 s window obtain a working credential for whichever session was
+     * newest.
+     *
+     * <p>Returns {@code chainRevoked} when a successor has been deliberately revoked — a stale tab
+     * replaying the predecessor of a logged-out token. That is not theft and must not escalate (the
+     * presented row itself is usually already revoked, and caught earlier, but logout starting from the
+     * successor leaves the predecessor untouched). Returns a null successor for everything else, which the
+     * caller reads as reuse: never rotated, rotated too long ago, no link at all (a rotation from before
+     * V224 — see that migration's accepted deploy-window trade-off), or a successor that is expired or
+     * itself already consumed beyond the hop bound.
+     */
+    private GraceResolution resolveGraceSuccessor(final RefreshToken presented, final Instant now) {
+        RefreshToken cursor = presented;
+        // Two hops: the presented row's successor, plus one more in case that successor was itself rotated
+        // inside the same window (a client refreshing twice in quick succession). Deeper than that is
+        // indistinguishable from replay and falls through to the reuse response.
+        for (int hop = 0; hop < 2; hop++) {
+            if (!cursor.isRotatedNotRevoked()
+                || !now.isBefore(cursor.getRotatedAt().plus(REFRESH_GRACE_WINDOW))) {
+                return GraceResolution.none();
+            }
+            final Long successorId = cursor.getReplacedById();
+            if (successorId == null) {
+                return GraceResolution.none();
+            }
+            final RefreshToken successor = refreshTokenRepository.findByIdForUpdate(successorId).orElse(null);
+            if (successor == null) {
+                return GraceResolution.none();
+            }
+            if (successor.getRevokedAt() != null) {
+                return GraceResolution.revokedChain();
+            }
+            if (successor.getExpiresAt().isBefore(now)) {
+                return GraceResolution.none();
+            }
+            if (!successor.isUsed()) {
+                return GraceResolution.of(successor);
+            }
+            cursor = successor;
+        }
+        return GraceResolution.none();
+    }
+
+    /** The successor a grace-window redirect resolved to, or why it did not resolve one. */
+    private record GraceResolution(RefreshToken successor, boolean chainRevoked) {
+        static GraceResolution of(RefreshToken successor) { return new GraceResolution(successor, false); }
+        static GraceResolution none() { return new GraceResolution(null, false); }
+        static GraceResolution revokedChain() { return new GraceResolution(null, true); }
+    }
+
+    /**
+     * What {@link #decideAndRotate} concluded, carried out of its transaction so that every revoke, cookie
+     * clear and throw happens after the row locks are released. See {@link #refresh}.
+     */
+    private sealed interface RefreshOutcome
+        permits Rotated, Unknown, Reuse, Revoked, Denied { }
+
+    /** Rotation succeeded. Everything needed for the response is pre-built; the user row is detached by now. */
+    private record Rotated(String newRawToken, Principal principal, LoginResponse response)
+        implements RefreshOutcome { }
+
+    /** No row matches the presented hash: 401, and deliberately no cookie teardown. */
+    private record Unknown() implements RefreshOutcome { }
+
+    /** A used token that is not a live chain's recent rotation: account-wide theft revocation. */
+    private record Reuse(Long ownerId) implements RefreshOutcome { }
+
+    /** The chain was deliberately ended: 401 and cookies, never account-wide revocation. */
+    private record Revoked() implements RefreshOutcome { }
+
+    /** This one session is refused and revoked; {@code failure} is thrown after the teardown. */
+    private record Denied(RuntimeException failure) implements RefreshOutcome { }
 
     public void logout(HttpServletRequest req, HttpServletResponse res) {
         securityUtil.terminateSession(req, res);

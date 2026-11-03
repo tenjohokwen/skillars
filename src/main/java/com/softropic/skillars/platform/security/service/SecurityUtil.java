@@ -7,7 +7,6 @@ import com.softropic.skillars.platform.security.contract.Gender;
 import com.softropic.skillars.platform.security.contract.Principal;
 import com.softropic.skillars.platform.security.contract.SkillarsProfileCookie;
 import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.security.authentication.InsufficientAuthenticationException;
@@ -45,13 +44,13 @@ import static com.softropic.skillars.infrastructure.security.SecurityConstants.R
 public final class SecurityUtil {
 
     private final LoginTokenManager loginTokenManager;
-    private final RefreshTokenRepository refreshTokenRepository;
+    private final RefreshTokenRevocationService refreshTokenRevocationService;
 
 
     public SecurityUtil(LoginTokenManager loginTokenManager,
-                        RefreshTokenRepository refreshTokenRepository) {
+                        RefreshTokenRevocationService refreshTokenRevocationService) {
         this.loginTokenManager = loginTokenManager;
-        this.refreshTokenRepository = refreshTokenRepository;
+        this.refreshTokenRevocationService = refreshTokenRevocationService;
     }
 
     /**
@@ -159,9 +158,12 @@ public final class SecurityUtil {
      * /api/auth/refresh} could trade back in for a new one.
      *
      * <p>Callable from any transactional context, including none at all (the filter has no ambient
-     * transaction): {@link RefreshTokenRepository#markUsedByTokenHash(String)} commits in its own
+     * transaction): {@link RefreshTokenRevocationService#revokeChainByTokenHash(String)} commits in its own
      * {@code REQUIRES_NEW} transaction regardless of caller, which is what makes the revocation
-     * durable even when the calling method's own transaction rolls back. {@code SecurityUtil}
+     * durable even when the calling method's own transaction rolls back. The one rule it imposes on
+     * callers is the converse: never call this while holding a row lock on a token it will touch, or the
+     * inner transaction waits for a lock only the caller can release (55P03). {@code AuthService.refresh}
+     * is structured around that. {@code SecurityUtil}
      * therefore needs no {@code @Transactional} of its own — and could not carry one anyway, being
      * a {@code final} class implementing no interface, so Spring cannot proxy it.
      */
@@ -169,16 +171,23 @@ public final class SecurityUtil {
         SecurityContextHolder.clearContext();
         final String rawToken = CookieUtil.getCookieValue(request, REFRESH_TOKEN_COOKIE);
         if (rawToken != null && !rawToken.isBlank()) {
-            // skillars-deferred-144 AC6.4: this write is now unconditional on every caller,
-            // including AuthService.logout() — pre-skillars-deferred-143, that path only revoked
-            // if the token wasn't already used. Now it always runs, but costs nothing extra on an
-            // already-used token: skillars-deferred-144 AC6.6 narrowed the underlying @Query
-            // (RefreshTokenRepository#markUsedByTokenHash) to also require r.used = false, so a
-            // repeat call against an already-revoked row matches zero rows rather than issuing a
-            // redundant UPDATE — an accepted cost of the bulk-update redesign that avoids the
-            // self-deadlock documented on AuthService.refresh(), never previously stated as a
-            // tradeoff here.
-            refreshTokenRepository.markUsedByTokenHash(sha256Hex(rawToken));
+            // skillars-deferred-144 AC6.4: this write is unconditional on every caller, including
+            // AuthService.logout() — pre-skillars-deferred-143, that path only revoked if the token
+            // wasn't already used.
+            //
+            // skillars-deferred-166 (ledger RS01): it revokes the whole ROTATION CHAIN, not just the row
+            // the cookie hashes to. markUsedByTokenHash could not end a session that had just been
+            // refreshed: its WHERE clause requires `used = false` (skillars-deferred-144 AC6.6), so a
+            // token rotated a moment before logout matched zero rows and the successor that rotation had
+            // minted stayed live for the rest of its 7-day TTL. Waiting on the in-flight rotation would not
+            // have helped either — Postgres re-checks the predicate after the lock is released and still
+            // matches nothing. The walk follows `replaced_by_id` (V224) under row locks, which is what
+            // makes it correct against a concurrent rotation rather than merely likely to win.
+            //
+            // Still cheap to repeat, which the JWT filter's per-request teardown depends on: a row that
+            // already carries `revoked_at` is skipped, so a client replaying a dead JWT costs reads, not
+            // writes — the same bound AC6.6's `used = false` predicate provided.
+            refreshTokenRevocationService.revokeChainByTokenHash(sha256Hex(rawToken));
         }
         clearAuthCookies(response);
     }
@@ -202,11 +211,13 @@ public final class SecurityUtil {
      *     <li>{@code AuthService.refresh()}'s optimistic-lock-loser branch — runs after its own
      *         transaction has already issued an {@code UPDATE} against the token row, so a
      *         {@code REQUIRES_NEW} revocation here would self-deadlock against it.</li>
-     *     <li>{@code AuthService.refresh()}'s two reuse-detection branches (skillars-deferred-144
+     *     <li>{@code AuthService.refresh()}'s reuse-detection branch (skillars-deferred-144
      *         AC6.2) — {@code refreshTokenRepository.markAllUsedByUserId} has already revoked
-     *         every token for the user immediately before either call, so
-     *         {@code terminateSession}'s own per-token {@code markUsedByTokenHash} would be a
-     *         redundant extra write.</li>
+     *         every token for the user immediately before the call, so
+     *         {@code terminateSession}'s own chain revoke would be a redundant extra write.</li>
+     *     <li>{@code AuthService.refresh()}'s revoked-chain branch (skillars-deferred-166) — the row
+     *         already carries a {@code revoked_at}, written by whoever ended the session while walking
+     *         the whole chain, so there is nothing left to revoke.</li>
      * </ul>
      * This is not a general-purpose "log out" and does not end the session's server-side
      * credential by itself — it relies on the caller having already revoked (or never needing to

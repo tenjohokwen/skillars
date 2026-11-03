@@ -16,8 +16,30 @@ and at HEAD (`open` = still present at HEAD on 2026-11-03). Severity/category ar
 eval case (`evals/review/cases/_drafts/pending-*.yaml` or an added expected finding), so a fix PR should flip that
 case from `fix_pr: pending` to the PR number. Not a story yet: bundle per the usual ledger-mining rules.
 
-- **[PICKED UP skillars-deferred-166]** RS01 [high/concurrency] Logout does not revoke the live refresh token when the presented token was already rotated. logout only marks the token from the request cookie, and only if it is not already used (.filter(t -> !t.isUsed())). Owner: HEAD terminateSession still skips used tokens (markUsedByTokenHash requires used=false); no successor link. [`AuthService.java` `AuthService.logout`; input rev `9923ffb02479`; sample S01]
-- **[PICKED UP skillars-deferred-166]** RS02 [high/logic] Refresh grace window consumes the user's newest live token from any device, not this token's successor. In the grace branch the code calls `findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId, now)`, which returns the newest live token for the user across all sessions, then rotates it. Owner: same lookup at HEAD; duplicate of S15 — one draft case. [`AuthService.java` `refresh` (also S15: AuthService.java); input rev `651ed1effc04`; sample S03]
+RS01 and RS02 (the two auth items) were implemented by **skillars-deferred-166** and deleted from this
+list per this file's "deleted outright once implemented" rule; their eval cases moved to
+`evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
+not renumber, so the list below starts at RS03.
+
+- **[skillars-deferred-166 follow-up]** V224 added `main.refresh_tokens.replaced_by_id` with its
+  self-referential FK as `NOT VALID` (migration-conventions rule 3: the table grows). The
+  `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT fk_refresh_tokens_replaced_by` still has to ship
+  in a later migration. Cheap and non-blocking (a `SHARE UPDATE EXCLUSIVE` scan); until then Postgres
+  does not enforce the link for rows written before the constraint, which only matters if something
+  writes `replaced_by_id` outside `AuthService.refresh` — nothing does today. Same shape as the other
+  outstanding `NOT VALID` constraints in this file; bundle it with the next one.
+- **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
+  `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
+  suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than
+  "revoked". A replay of one therefore reaches the reuse branch and runs a second account-wide
+  revocation instead of the plain 401 a revoked token now gets. Mostly masked already: every revoke-all
+  caller except `GdprErasureService` also bumps `security_session_invalidated_at`, and
+  `AuthService.refresh`'s epoch check (that story's AC6) answers those with a 401 before the reuse
+  branch is reached; `GdprErasureService` locks the account, which the liveness gate catches. Fixing it
+  properly means adding `revoked_at = :now` to that bulk `UPDATE`, which changes a method with six
+  callers — deliberately out of scope there, recorded so the next person to touch it knows why the two
+  columns are not symmetric.
+
 - RS03 [medium/logic] Email change sets login to the raw new email (no lowercasing, no uniqueness check). u.setLogin(newEmail) stores the value exactly as submitted. Owner: HEAD updateUserEmail unchanged. [`UserProfileService.java` `UserProfileService.updateUserEmail` (also S16: AccountManagementFacade.java); input rev `651ed1effc04`; sample S04]
 - RS04 [medium/logic] findIdsByLanguage lowercases only the input, not the stored array elements. `lower(:lang) = ANY(languages)` matches only if stored values are already lowercase. Owner: frontend stores 'English' etc., so the filter never matches for anyone. [`CoachProfileRepository.java` `findIdsByLanguage`; input rev `deefa90f6d10`; sample S05]
 - RS05 [medium/concurrency] customer.subscription.updated arriving before persistCoachSubscription is recorded as processed and permanently dropped. In the window between the Stripe create call and the local persist, no row has that stripeSubscriptionId yet. Owner: reconcile sweep skips matched rows, so the dropped transition is never healed. [`StripeWebhookService.java` `handleSubscriptionUpdated`; input rev `cb23925514e5`; sample S06]

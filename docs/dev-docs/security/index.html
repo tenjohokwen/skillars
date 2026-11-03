@@ -130,7 +130,7 @@
       <tr><td><code>Authority</code></td><td><code>authority</code></td><td>Spring Security role/authority (<code>ROLE_USER</code>, <code>ROLE_ADMIN</code>, <code>ROLE_COACH</code>, <code>ROLE_PARENT</code>, <code>ROLE_PLAYER</code>, <code>ROLE_LTD_ADMIN</code> &mdash; the limited admin tier); many-to-many with <code>User</code>.</td></tr>
       <tr><td><code>PlayerProfile</code></td><td><code>main.player_profiles</code></td><td>Exactly one of <code>parent_id</code> (minor, created by parent) or <code>user_id</code> (self-registered adult) is set — enforced by <code>chk_pp_owner</code>. Carries <code>ageTier</code>, <code>position</code>, <code>independentAccountAllowed</code>, GDPR consent fields, and <code>development_data_erased_at</code> (V151) — the one-way GDPR erasure tombstone. An erased child keeps its row (bookings still reference it) but is filtered out of <code>ShadowAccountService.listPlayerProfiles</code>.</td></tr>
       <tr><td><code>ParentPlayerLink</code></td><td><code>main.parent_player_links</code></td><td>Join row linking a parent <code>User</code> to a <code>PlayerProfile</code>, with its own consent timestamp/version. <code>uq_ppl_player_id</code> prevents a player being linked to two parents (surfaced as <code>ShadowAccountException</code>).</td></tr>
-      <tr><td><code>RefreshToken</code></td><td><code>main.refresh_tokens</code></td><td>SHA-256-hashed rotating refresh token (7-day TTL) backing <code>/api/auth/refresh</code>; tracks <code>used</code>/<code>rotatedAt</code> for reuse (theft) detection. <code>markUsedByTokenHash</code>/<code>markAllUsedByUserId</code> are <code>REQUIRES_NEW</code> so a revocation survives the caller's rollback.</td></tr>
+      <tr><td><code>RefreshToken</code></td><td><code>main.refresh_tokens</code></td><td>SHA-256-hashed rotating refresh token (7-day TTL) backing <code>/api/auth/refresh</code>. <code>used</code> is set by rotation <em>and</em> revocation, so two more columns carry the distinction (V224): <code>replacedById</code> names the successor a rotation created, and <code>revokedAt</code> marks a session that was deliberately ended. Rotated = <code>used</code> with no <code>revokedAt</code>, and the grace window may redirect along the link; revoked = refused outright. <code>markUsedByTokenHash</code>/<code>markAllUsedByUserId</code> are <code>REQUIRES_NEW</code> so a revocation survives the caller's rollback.</td></tr>
       <tr><td><code>EmailVerificationToken</code></td><td><code>email_verification_tokens</code></td><td>Single-use UUID token shared by the three role registration flows (coach/parent/player).</td></tr>
       <tr><td><code>PhoneOtpToken</code></td><td><code>phone_otp_tokens</code></td><td>Keyed-HMAC 6-digit OTP (10-min TTL) for the phone-verification step, shared across the three registration flows. Partial unique index <code>uq_pot_one_active_per_user</code> allows one live OTP per user (a concurrent re-issue &rarr; 409 <code>security.otpResendInProgress</code>).</td></tr>
       <tr><td><code>LoginAttempt</code></td><td><code>main.login_attempts</code></td><td>One row per failed <code>/api/auth/login</code>, keyed by <code>identifier = SHA-256(email|ip)</code> plus (V171) <code>subject_hash = SHA-256(email)</code>, so an admin can count/clear an account's failures across all IPs. Purged after 24h by <code>AuthCleanupService</code>.</td></tr>
@@ -143,7 +143,7 @@
     <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>AuthService</code></td><td>SPA login (DB-backed rate limit on <code>SHA-256(email|ip)</code>, config <code>security.login.max-attempts</code> = 5 / <code>security.login.lock-window-minutes</code> = 15), refresh-token rotation with reuse/theft detection and a 30s multi-tab grace window, logout, and the <code>potc</code>/<code>rtkn</code>/<code>skp</code> cookies. <code>ensureAccountIsLive</code> (activated, then not locked) gates both login and refresh. Also <code>clearLoginRateLimit</code>/<code>countRecentFailedAttempts</code> (by <code>subject_hash</code>) for admin unlock.</td></tr>
+      <tr><td><code>AuthService</code></td><td>SPA login (DB-backed rate limit on <code>SHA-256(email|ip)</code>, config <code>security.login.max-attempts</code> = 5 / <code>security.login.lock-window-minutes</code> = 15), refresh-token rotation with reuse/theft detection and a 30s multi-tab grace window that follows the presented token&#39;s own <code>replaced_by_id</code> successor (never the account&#39;s newest live token), a session-epoch check, logout, and the <code>potc</code>/<code>rtkn</code>/<code>skp</code> cookies. <code>ensureAccountIsLive</code> (activated, then not locked) gates both login and refresh. Also <code>clearLoginRateLimit</code>/<code>countRecentFailedAttempts</code> (by <code>subject_hash</code>) for admin unlock.</td></tr>
       <tr><td><code>AccountManagementFacade</code></td><td>Legacy account registration (<code>/v1/account/register</code>), activation and password-reset orchestration used by <code>AccountResource</code>/<code>ProfileResource</code>; delegates to email/SMS strategies and is <code>@RateLimited</code> per IP (register 5/60min, resend 3/30, reset-init 3/15, reset-finish 5/10, change-email 5/60).</td></tr>
       <tr><td><code>CoachRegistrationService</code>, <code>ParentRegistrationService</code>, <code>PlayerRegistrationService</code></td><td>Near-identical register &rarr; email-verify &rarr; phone-OTP-verify &rarr; <code>BASIC_VERIFIED</code> pipelines per role, differing mainly in DOB handling and the events they publish. Each method is <code>@RateLimited</code> per IP (<code>{role}_register</code> 3/60min, <code>{role}_verify_email</code> 10/10, <code>{role}_resend_verification</code> 3/30, <code>{role}_resend_otp</code> 3/30). <code>ParentRegistrationService</code> maps a <code>user_phone_key</code> violation (by constraint name, after <code>saveAndFlush</code>) to a phone-in-use error.</td></tr>
       <tr><td><code>RegistrationOtpResendSupport</code></td><td>The shared body of the three <code>resendPhoneOtp</code> methods: per-user rate cap, OTP re-issue, role-specific OTP email event.</td></tr>
@@ -440,15 +440,19 @@ sequenceDiagram
 
   C->>AR: POST /api/auth/refresh (rtkn cookie)
   AR->>AS: refresh(req, res)
-  AS->>DB: findByTokenHash
-  alt used, rotated under 30s ago
-    AS->>DB: use newest live successor (multi-tab race)
-  else used, outside grace window or no successor
-    AS->>DB: markAllUsedByUserId + invalidateSessionsForUser (REQUIRES_NEW)
+  AS->>DB: findByTokenHashForUpdate (row lock, short tx)
+  alt revoked_at set
+    AS-->>C: 401 Session has ended (no revoke-all)
+  else token older than security_session_invalidated_at
+    AS-->>C: 401 Session was revoked
+  else used, rotated under 30s ago, replaced_by_id live
+    AS->>DB: redirect to its own successor (multi-tab race)
+  else used, any other case
+    AS->>DB: markAllUsedByUserId + invalidateSessionsForUser (REQUIRES_NEW, after the lock)
     AS-->>C: 401 Token reuse detected
   end
   AS->>DB: load user, ensureAccountIsLive (before any write)
-  AS->>DB: mark old token used (optimistic lock), save new RefreshToken
+  AS->>DB: save new RefreshToken, then mark old used and point replaced_by_id at it
   AS-->>C: new potc / rtkn / skp cookies
     </pre>
     <p>
@@ -588,10 +592,13 @@ sequenceDiagram
     </div>
     <div class="callout">
       <p><strong>Mind <code>REQUIRES_NEW</code> on revocation writes.</strong> <code>RefreshTokenRepository.markUsedByTokenHash</code>,
-      <code>markAllUsedByUserId</code> and <code>UserRepository.invalidateSessionsForUser</code> commit independently so
-      they survive the caller's rollback. Never call them after your own transaction has updated the same row, or they
-      self-deadlock (lock timeout &rarr; 409). Use <code>invalidateSessionsForUserInCurrentTransaction</code> when you
-      already hold the user row lock.</p>
+      <code>markAllUsedByUserId</code>, <code>RefreshTokenRevocationService.revokeChainByTokenHash</code> and
+      <code>UserRepository.invalidateSessionsForUser</code> commit independently so
+      they survive the caller's rollback. Never call them while your own transaction holds a lock on, or has updated, the
+      same row, or they self-deadlock (lock timeout &rarr; 409). Use <code>invalidateSessionsForUserInCurrentTransaction</code> when you
+      already hold the user row lock. <code>AuthService.refresh</code> is the worked example: it decides inside one short
+      <code>TransactionTemplate</code> block holding a <code>PESSIMISTIC_WRITE</code> lock, writes only when it rotates, and
+      performs every revocation after that block has committed.</p>
     </div>
 
     <h2 id="related-modules">Related Modules</h2>

@@ -77,12 +77,12 @@ The root cause of both items is the same: a rotated token has no link to its suc
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Migration V224 (AC8) — columns, NOT VALID self-FK with ON DELETE SET NULL, header comment citing this story; run `MigrationConventionLintTest`.
-- [ ] Task 2: Entity + repository (AC1-AC5) — `replacedBy` (Long id, not a relation, matching `userId`'s style) and `revokedAt` on `RefreshToken`; `findByTokenHashForUpdate`; idempotent chain revoke (REQUIRES_NEW, `revoked_at IS NULL` guard, version bump); delete the newest-live query; update the class javadoc (:13-53, :38-47).
-- [ ] Task 3: `AuthService.refresh` (AC2, AC3, AC4, AC6, AC7) — restructure into the locked `TransactionTemplate` block returning an outcome, and the post-block handling (cookies on ROTATED; REQUIRES_NEW revoke + `clearAuthCookies` + throw on the others); `@Transactional(propagation = NOT_SUPPORTED)` on `refresh`; epoch check on the resolved token; successor-only grace with bounded walk; link written at rotation; REVOKED -> 401 without revoke-all; fix the stale `:158-165` comment at :229.
-- [ ] Task 4: `SecurityUtil.terminateSession` (AC1, AC5) — call the chain revoke; keep cookie clearing order; update `SecurityUtilTest`.
-- [ ] Task 5: Tests — `AuthServiceTest` branches (grace -> successor, grace -> revoked, no successor on a pre-migration token, epoch rejection); `AuthResourceIT` new tests for AC1, AC2, AC3, AC6, AC7 and the concurrency test for AC5 (no new Spring context: no annotations, no `@MockitoBean`; `IntegrationTestConventionTest` enforces it); revive `refresh_alreadyUsedToken_revokesAllAndReturns401` (:446) if its TODO reason no longer holds, else say why in Completion Notes; adjust `AuthResourceIT:748`.
-- [ ] Task 6: Docs (AC11) and ledger (AC10).
+- [x] Task 1: Migration V224 (AC8) — columns, NOT VALID self-FK with ON DELETE SET NULL, header comment citing this story; run `MigrationConventionLintTest`.
+- [x] Task 2: Entity + repository (AC1-AC5) — `replacedBy` (Long id, not a relation, matching `userId`'s style) and `revokedAt` on `RefreshToken`; `findByTokenHashForUpdate`; idempotent chain revoke (REQUIRES_NEW, `revoked_at IS NULL` guard, version bump); delete the newest-live query; update the class javadoc (:13-53, :38-47).
+- [x] Task 3: `AuthService.refresh` (AC2, AC3, AC4, AC6, AC7) — restructure into the locked `TransactionTemplate` block returning an outcome, and the post-block handling (cookies on ROTATED; REQUIRES_NEW revoke + `clearAuthCookies` + throw on the others); `@Transactional(propagation = NOT_SUPPORTED)` on `refresh`; epoch check on the resolved token; successor-only grace with bounded walk; link written at rotation; REVOKED -> 401 without revoke-all; fix the stale `:158-165` comment at :229.
+- [x] Task 4: `SecurityUtil.terminateSession` (AC1, AC5) — call the chain revoke; keep cookie clearing order; update `SecurityUtilTest`.
+- [x] Task 5: Tests — `AuthServiceTest` branches (grace -> successor, grace -> revoked, no successor on a pre-migration token, epoch rejection); `AuthResourceIT` new tests for AC1, AC2, AC3, AC6, AC7 and the concurrency test for AC5 (no new Spring context: no annotations, no `@MockitoBean`; `IntegrationTestConventionTest` enforces it); revive `refresh_alreadyUsedToken_revokesAllAndReturns401` (:446) if its TODO reason no longer holds, else say why in Completion Notes; adjust `AuthResourceIT:748`.
+- [x] Task 6: Docs (AC11) and ledger (AC10).
 - [ ] Task 7: Eval cases (AC9): the one-line `validate.py` change, `fix_pr: <n>`, promotion with rename; the `fix_merge` follow-up commit after merge.
 - [ ] Task 8: `/pr-review` on the final commit (AC12); PR with the `Tests` and `Database migrations` checklist items filled in. No local `mvn verify` (project rule); CI is the gate.
 
@@ -114,10 +114,99 @@ The root cause of both items is the same: a rotated token has no link to its suc
 
 ### Agent Model Used
 
-Claude Fable 5.1 (claude-fable-5-1), story drafted 2026-11-03
+Story drafted 2026-11-03 by Claude Fable 5.1 (claude-fable-5-1); implemented 2026-11-03 by Claude Opus 5 (claude-opus-5).
 
 ### Debug Log References
 
+Three failures found and fixed during implementation, each listed because the cause was not what the
+story predicted:
+
+1. **`GraceResolution.chainRevoked()` would not compile.** A record component named `chainRevoked`
+   generates an accessor of that name, which collided with the static factory. Factory renamed to
+   `revokedChain()`.
+2. **`AuthServiceTest.refresh_tokenOlderThanSessionEpoch` failed with "Token reuse detected".**
+   `RefreshToken.createdAt` is assigned by `@PrePersist`, so a hand-built fixture has none, and the
+   first version of `isBeforeSessionEpoch` skipped the check when `createdAt` was null — which made it
+   fall through to the reuse branch. Resolved by making the check **fail closed**: once an account
+   carries a revocation epoch, a token that cannot prove it was minted after it is refused. The column
+   is `NOT NULL` in V138, so no loaded row reaches that branch; the test's value was in showing the
+   fail-open default was wrong on principle.
+3. **The revived `refresh_alreadyUsedToken_revokesAllAndReturns401` returned 200.** Its setup used a
+   bare `jdbcTemplate.update` to consume the successor, and with Hikari `auto-commit = false` that write
+   is rolled back when the connection is released, so the successor stayed live and the replay was
+   legitimately redirected to it. Switched to this class's own `commitWrite`. Same defect
+   skillars-deferred-144 AC5 found in the sibling tests; the test had been commented out since before
+   that fix, so it never got the correction.
+
 ### Completion Notes List
 
+**What shipped.** V224 adds `main.refresh_tokens.replaced_by_id` (self-referential FK, `NOT VALID`) and
+`revoked_at`. Rotation writes the successor link. `AuthService.refresh` was restructured into one short
+`TransactionTemplate` block that holds a `PESSIMISTIC_WRITE` lock on the presented row, decides
+everything, returns a sealed `RefreshOutcome` without throwing, and writes only when it rotates; every
+revoke, cookie clear and throw happens after that block commits. The grace window follows
+`replaced_by_id` and nothing else. A token carrying `revoked_at` gets a plain 401 with no account-wide
+revocation. A new `RefreshTokenRevocationService.revokeChainByTokenHash` (`REQUIRES_NEW`, idempotent via
+a `revoked_at IS NULL` guard, bounded at 8 hops) is what `SecurityUtil.terminateSession` now calls, so
+logout, Spring Security's `/api/logout`, the JWT filter's denial teardown and every refresh denial end
+the whole chain.
+
+**Four things the story did not foresee, decided here:**
+
+1. **`User.authorities` is `FetchType.LAZY` and `spring.jpa.open-in-view` is `false`.** Building the
+   `Principal` after the transaction closed would have thrown `LazyInitializationException` on the happy
+   path — the most-travelled path in the method. The `Rotated` outcome therefore carries a pre-built
+   `Principal` and `LoginResponse`, assembled while the user row is still managed. Had the outcome record
+   carried the `User` instead, as the story's sketch implied, every successful refresh would have 500'd.
+2. **The epoch check had to move ahead of the used/grace decision.** AC6 asks for a 401 on a token older
+   than `security_session_invalidated_at`, but a revoke-all leaves every row `used`, so reached in the
+   story's order such a token hit the reuse branch first and ran a *second* account-wide revocation. The
+   user row is now loaded before the grace decision (one extra query on a path that loads it anyway).
+3. **A revoked *successor* also means "session ended", not theft.** Logout walks forward from the
+   cookie's row, so a predecessor a background tab still holds keeps `revoked_at = null`. Reading that as
+   reuse would have signed the user out of every other device for clicking Logout — the exact failure AC3
+   exists to prevent, arriving through a path AC3 did not describe. `resolveGraceSuccessor` reports it
+   separately (`GraceResolution.revokedChain()`).
+4. **The four denial outcomes collapse into one.** Expiry, missing user, stale epoch and a non-live
+   account all do the same thing: revoke this session's chain, clear cookies, throw. One `Denied(failure)`
+   record carries the exception. They route through `terminateSession`, which revokes the chain reachable
+   from the *cookie's* row — so the explicit `markUsedByTokenHash(resolvedTokenHash)` that the
+   skillars-deferred-143 code review added is gone: it existed only because a single-row revoke could not
+   reach the successor the grace window had resolved to, and the walk reaches it from the predecessor now.
+
+**Deliberately not done.** `markAllUsedByUserId` still does not set `revoked_at` (six callers; the epoch
+check masks the consequence), and the V224 FK's `VALIDATE` ships later. Both filed in `deferred-work.md`.
+No frontend change: the SPA does not call `POST /api/auth/refresh` at all.
+
+**Validation.** Targeted per `docs/validation-strategy.md`; no local `mvn verify` (project rule, CI is the
+gate). `AuthResourceIT` 34/34 (8 new + the revived one + the updated grace-window test),
+`RefreshTokenRepositoryIT` 1/1, `AuthServiceTest` 12/12 (7 new), `SecurityUtilTest` 6/6,
+`MigrationConventionLintTest` 30/30, `check-docs` OK after rebuilding the search index.
+
 ### File List
+
+- `src/main/resources/db/migration/V224__refresh_token_successor_link_and_revoked_at.sql` (new)
+- `src/main/java/com/softropic/skillars/platform/security/repo/RefreshToken.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/RefreshTokenRevocationService.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/service/AuthService.java` (modified)
+- `src/main/java/com/softropic/skillars/platform/security/service/SecurityUtil.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/security/api/AuthResourceIT.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/security/service/AuthServiceTest.java` (modified)
+- `src/test/java/com/softropic/skillars/platform/security/service/SecurityUtilTest.java` (modified)
+- `docs/session-refresh-mechanism.md` (modified)
+- `docs/security-api-endpoints.md` (modified)
+- `docs/dev-docs/security/index.html` (modified)
+- `docs/dev-docs/assets/search-index.js` (regenerated)
+- `evals/review/bin/validate.py` (modified)
+- `evals/review/README.md` (modified)
+- `evals/review/cases/logout-successor-revocation.yaml` (moved from `_drafts/pending-`, AC9)
+- `evals/review/cases/refresh-grace-window-account-wide.yaml` (moved from `_drafts/pending-`, AC9)
+- `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` (modified)
+
+### Change Log
+
+- 2026-11-03 — implemented all 12 ACs. V224 + successor link + `revoked_at`; refresh restructured onto a
+  locked decide-then-act block; chain revocation on logout; successor-only grace window; session-epoch
+  check; docs, ledger and eval cases updated.

@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
@@ -15,9 +16,13 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 import jakarta.servlet.http.Cookie;
 
@@ -25,25 +30,38 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * skillars-deferred-144 AC6.2: {@code AuthService.refresh()}'s two reuse-detection branches
- * (token-reuse-within-grace-window-but-no-live-successor, and reuse-outside-the-grace-window)
- * must call {@code securityUtil.clearAuthCookies(res)} instead of
- * {@code securityUtil.terminateSession(req, res)} — {@code refreshTokenRepository
- * .markAllUsedByUserId} has already revoked every token for the user immediately before either
- * call, so {@code terminateSession}'s own per-token DB write would be redundant. First test class
- * for {@link AuthService}, scoped narrowly to this one behavior change rather than the whole
- * class.
+ * Unit tests for {@link AuthService#refresh}'s decision branches.
+ *
+ * <p>skillars-deferred-144 AC6.2 started this class, scoped to the reuse branches calling
+ * {@code clearAuthCookies} rather than {@code terminateSession}.
+ *
+ * <p>skillars-deferred-166 (ledger RS01/RS02) rewrote it. The method now decides inside a
+ * {@code TransactionTemplate} block that holds a row lock and returns an outcome, then acts on that
+ * outcome after the block commits. Two consequences shape every test here:
+ * <ul>
+ *   <li>{@code transactionTemplate} is stubbed to run its callback inline, so these tests still exercise
+ *       the real decision logic rather than a no-op.</li>
+ *   <li>Every revoke is {@code REQUIRES_NEW} and must therefore happen <em>after</em> the block, never
+ *       inside it — holding the row lock across one self-deadlocks (55P03, a 409 where a 401 was meant).
+ *       {@link #refresh_everyRevokeHappensAfterTheLockedBlockHasCommitted} is the mechanical guard for
+ *       that, and the revoke mocks below fail the test if they are called while the block is running.</li>
+ * </ul>
+ * The grace window is the other half: it now follows {@code replacedById} to the token's own successor
+ * instead of querying the account's newest live token, which is what let one device's refresh hand out and
+ * then mass-revoke another device's session.
  */
 class AuthServiceTest {
 
     private static final long USER_ID = 42L;
     private static final String RAW_REFRESH_TOKEN = "reused-raw-refresh-token-value";
+    private static final long SUCCESSOR_ID = 7001L;
 
     @Mock private UserRepository userRepository;
     @Mock private PasswordEncoder passwordEncoder;
@@ -53,56 +71,92 @@ class AuthServiceTest {
     @Mock private LoginTokenManager loginTokenManager;
     @Mock private SecurityUtil securityUtil;
     @Mock private UserIdentitySignalService userIdentitySignalService;
+    @Mock private TransactionTemplate transactionTemplate;
 
     private AuthService authService;
     private MockHttpServletRequest request;
     private MockHttpServletResponse response;
 
+    /** True while the {@code transactionTemplate} callback is executing, i.e. while the row lock is held. */
+    private final AtomicBoolean insideLockedBlock = new AtomicBoolean(false);
+    /** Set if any {@code REQUIRES_NEW} revoke was invoked while {@link #insideLockedBlock} was true. */
+    private final AtomicBoolean revokeInsideLockedBlock = new AtomicBoolean(false);
+
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
         authService = new AuthService(userRepository, passwordEncoder, refreshTokenRepository,
-            loginRateLimiter, configService, loginTokenManager, securityUtil, userIdentitySignalService);
+            loginRateLimiter, configService, loginTokenManager, securityUtil, userIdentitySignalService,
+            transactionTemplate);
         request = new MockHttpServletRequest();
         request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
         response = new MockHttpServletResponse();
+
+        // Run the decide-and-rotate callback inline, flagging the window in which the row lock is held.
+        when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            insideLockedBlock.set(true);
+            try {
+                return callback.doInTransaction(null);
+            } finally {
+                insideLockedBlock.set(false);
+            }
+        });
+
+        // Any REQUIRES_NEW revoke called while the lock is held is the 55P03 self-deadlock this design
+        // exists to prevent; record it rather than letting it pass silently.
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (insideLockedBlock.get()) {
+                revokeInsideLockedBlock.set(true);
+            }
+            return null;
+        }).when(refreshTokenRepository).markAllUsedByUserId(anyLong());
+        org.mockito.Mockito.doAnswer(inv -> {
+            if (insideLockedBlock.get()) {
+                revokeInsideLockedBlock.set(true);
+            }
+            return null;
+        }).when(refreshTokenRepository).markUsedByTokenHash(anyString());
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Reuse (theft) branch — carried over from skillars-deferred-144 AC6.2, restubbed for the lock.
+    // ---------------------------------------------------------------------------------------------
+
     @Test
-    void refresh_reuseWithinGraceWindowButNoLiveSuccessor_clearsCookiesOnlyNotTerminateSession() {
-        RefreshToken usedToken = new RefreshToken();
-        usedToken.setUserId(USER_ID);
+    @DisplayName("reuse: rotated inside the grace window but the successor link is missing (pre-V224 row)")
+    void refresh_rotatedInGraceWindowWithNoSuccessorLink_isReuse() {
+        // The V224 deploy-window case, and the one the old newest-live query papered over: a token rotated
+        // before the column existed (or by an old instance mid-deploy) has no link to follow, so there is
+        // no way to tell a legitimate multi-tab race from a replay. Treated as reuse, deliberately.
+        RefreshToken usedToken = presentedToken();
         usedToken.setUsed(true);
         usedToken.setRotatedAt(Instant.now());
-        usedToken.setExpiresAt(Instant.now().plusSeconds(3600));
-        when(refreshTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(usedToken));
-        when(refreshTokenRepository
-                .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(eq(USER_ID), any()))
-            .thenReturn(Optional.empty());
+        usedToken.setReplacedById(null);
+        lockReturns(usedToken);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
 
         assertThatThrownBy(() -> authService.refresh(request, response))
-            .isInstanceOf(BadCredentialsException.class);
+            .isInstanceOf(BadCredentialsException.class)
+            .hasMessageContaining("reuse");
 
         verify(refreshTokenRepository).markAllUsedByUserId(USER_ID);
+        verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
         verify(securityUtil).clearAuthCookies(response);
         verify(securityUtil, never()).terminateSession(any(), any());
-        // Code review 2026-10-06: without this, the test holds identically if the grace-window
-        // branch itself were deleted entirely — it must prove THIS branch, specifically, ran.
-        verify(refreshTokenRepository)
-            .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(eq(USER_ID), any());
-        // skillars-deferred-149 AC3: theft detection must also flip the user row, not just
-        // refresh_tokens — see UserRepository.invalidateSessionsForUser's own javadoc for why.
-        verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
+        // Proves the grace branch ran rather than being skipped: it is the only caller of the by-id walk.
+        verify(refreshTokenRepository, never()).findByIdForUpdate(anyLong());
+        assertThat(revokeInsideLockedBlock).isFalse();
     }
 
     @Test
+    @DisplayName("reuse: never rotated at all")
     void refresh_reuseNeverRotated_clearsCookiesOnlyNotTerminateSession() {
-        RefreshToken usedToken = new RefreshToken();
-        usedToken.setUserId(USER_ID);
+        RefreshToken usedToken = presentedToken();
         usedToken.setUsed(true);
-        usedToken.setRotatedAt(null); // never rotated — outside the grace-window branch
-        usedToken.setExpiresAt(Instant.now().plusSeconds(3600));
-        when(refreshTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(usedToken));
+        usedToken.setRotatedAt(null);
+        lockReturns(usedToken);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
 
         assertThatThrownBy(() -> authService.refresh(request, response))
             .isInstanceOf(BadCredentialsException.class);
@@ -110,34 +164,201 @@ class AuthServiceTest {
         verify(refreshTokenRepository).markAllUsedByUserId(USER_ID);
         verify(securityUtil).clearAuthCookies(response);
         verify(securityUtil, never()).terminateSession(any(), any());
-        verify(refreshTokenRepository, never())
-            .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(anyLong(), any());
+        verify(refreshTokenRepository, never()).findByIdForUpdate(anyLong());
         verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
     }
 
     @Test
+    @DisplayName("reuse: rotated long before the grace window, with a live successor link")
     void refresh_reuseRotatedLongAgo_clearsCookiesOnlyNotTerminateSession() {
-        // Code review 2026-10-06: the sibling test above only covers the degenerate rotatedAt =
-        // null case. A real past Instant well outside REFRESH_GRACE_WINDOW (30 s) must take the
-        // same else branch — this is the one test that actually exercises the
-        // `isBefore(rotatedAt.plus(REFRESH_GRACE_WINDOW))` comparison against a real value.
-        RefreshToken usedToken = new RefreshToken();
-        usedToken.setUserId(USER_ID);
+        // The real comparison against a past Instant well outside REFRESH_GRACE_WINDOW (30 s). The
+        // successor link is deliberately present and live: expiry of the WINDOW, not absence of a
+        // successor, is what makes this reuse — which is exactly the distinction the old
+        // newest-live-for-the-account query could not express.
+        RefreshToken usedToken = presentedToken();
         usedToken.setUsed(true);
         usedToken.setRotatedAt(Instant.now().minusSeconds(3600));
-        usedToken.setExpiresAt(Instant.now().plusSeconds(3600));
-        when(refreshTokenRepository.findByTokenHash(any())).thenReturn(Optional.of(usedToken));
+        usedToken.setReplacedById(SUCCESSOR_ID);
+        lockReturns(usedToken);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
 
         assertThatThrownBy(() -> authService.refresh(request, response))
             .isInstanceOf(BadCredentialsException.class);
 
         verify(refreshTokenRepository).markAllUsedByUserId(USER_ID);
         verify(securityUtil).clearAuthCookies(response);
-        verify(securityUtil, never()).terminateSession(any(), any());
-        verify(refreshTokenRepository, never())
-            .findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(anyLong(), any());
+        verify(refreshTokenRepository, never()).findByIdForUpdate(anyLong());
         verify(userRepository).invalidateSessionsForUser(eq(USER_ID), any());
     }
+
+    // ---------------------------------------------------------------------------------------------
+    // skillars-deferred-166: the successor-only grace window (RS02) and the revoked chain (RS01).
+    // ---------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("RS02: a stale token inside the window is redirected to ITS OWN successor and rotates it")
+    void refresh_staleTokenInGraceWindow_rotatesItsOwnSuccessor() {
+        RefreshToken stale = presentedToken();
+        stale.setUsed(true);
+        stale.setRotatedAt(Instant.now());
+        stale.setReplacedById(SUCCESSOR_ID);
+
+        RefreshToken successor = new RefreshToken();
+        successor.setId(SUCCESSOR_ID);
+        successor.setUserId(USER_ID);
+        successor.setUsed(false);
+        successor.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        lockReturns(stale);
+        when(refreshTokenRepository.findByIdForUpdate(SUCCESSOR_ID)).thenReturn(Optional.of(successor));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
+        stubSuccessorIdOnSave();
+
+        authService.refresh(request, response);
+
+        // The successor — the token this one was actually rotated into — is what gets consumed. Before
+        // this story the account's newest live token was consumed instead, which on a second device was
+        // that device's session.
+        assertThat(successor.isUsed()).isTrue();
+        assertThat(successor.getReplacedById()).isNotNull();
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+        assertThat(revokeInsideLockedBlock).isFalse();
+    }
+
+    @Test
+    @DisplayName("RS01/F5: a stale token whose successor was logged out is 401, NOT account-wide revocation")
+    void refresh_staleTokenWhoseSuccessorWasRevoked_doesNotRevokeTheWholeAccount() {
+        // The stale-tab-after-logout case. Logout revokes from the cookie's row forward, so the
+        // predecessor a background tab still holds keeps revokedAt = null — only its successor is marked.
+        // Reading that as theft would sign the user out of every other device for clicking Logout.
+        RefreshToken stale = presentedToken();
+        stale.setUsed(true);
+        stale.setRotatedAt(Instant.now());
+        stale.setReplacedById(SUCCESSOR_ID);
+
+        RefreshToken revokedSuccessor = new RefreshToken();
+        revokedSuccessor.setId(SUCCESSOR_ID);
+        revokedSuccessor.setUserId(USER_ID);
+        revokedSuccessor.setUsed(true);
+        revokedSuccessor.setRevokedAt(Instant.now());
+        revokedSuccessor.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        lockReturns(stale);
+        when(refreshTokenRepository.findByIdForUpdate(SUCCESSOR_ID)).thenReturn(Optional.of(revokedSuccessor));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class)
+            .hasMessageContaining("Session has ended");
+
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+        verify(securityUtil).clearAuthCookies(response);
+        verify(securityUtil, never()).terminateSession(any(), any());
+    }
+
+    @Test
+    @DisplayName("RS01: a token revoked by logout is 401, NOT account-wide revocation")
+    void refresh_revokedToken_isRejectedWithoutRevokingTheAccount() {
+        RefreshToken revoked = presentedToken();
+        revoked.setUsed(true);
+        revoked.setRevokedAt(Instant.now());
+        lockReturns(revoked);
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class)
+            .hasMessageContaining("Session has ended");
+
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+        verify(securityUtil).clearAuthCookies(response);
+    }
+
+    @Test
+    @DisplayName("AC6: a token older than the account's session epoch is 401 with no second revoke-all")
+    void refresh_tokenOlderThanSessionEpoch_isDeniedWithoutRevokeAll() {
+        // After a password change / reset / suspension, markAllUsedByUserId has flipped every row to
+        // used = true and the epoch is bumped. Reached the old way round, such a token was merely "used
+        // and not recently rotated", i.e. the theft branch — so every replay ran a fresh account-wide
+        // revocation. The epoch check answers it as the ended session it is.
+        RefreshToken token = presentedToken();
+        token.setUsed(true);
+        lockReturns(token);
+        User user = liveUser();
+        user.setSecuritySessionInvalidatedAt(Instant.now());
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class)
+            .hasMessageContaining("Session was revoked");
+
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+        // Denials end this one session: terminateSession revokes the chain reachable from the cookie.
+        verify(securityUtil).terminateSession(request, response);
+    }
+
+    @Test
+    @DisplayName("AC6: a null session epoch leaves an otherwise valid refresh untouched")
+    void refresh_nullSessionEpoch_rotatesNormally() {
+        RefreshToken token = presentedToken();
+        lockReturns(token);
+        User user = liveUser();
+        user.setSecuritySessionInvalidatedAt(null);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+        stubSuccessorIdOnSave();
+
+        authService.refresh(request, response);
+
+        assertThat(token.isUsed()).isTrue();
+        assertThat(token.getRotatedAt()).isNotNull();
+        // RS01's precondition: the predecessor now names its successor, so logout can follow the chain.
+        assertThat(token.getReplacedById()).isEqualTo(SUCCESSOR_ID);
+        verify(securityUtil, never()).terminateSession(any(), any());
+    }
+
+    @Test
+    @DisplayName("AC4: no REQUIRES_NEW revoke is issued while the row lock is held")
+    void refresh_everyRevokeHappensAfterTheLockedBlockHasCommitted() {
+        // The mechanical guard for the design's load-bearing rule. A revoke issued inside the locked
+        // block waits for a lock only the surrounding transaction can release; Postgres cannot see the
+        // cycle, because the outer side is blocked in Java, and it surfaces as lock_timeout / 55P03 —
+        // a 409 instead of a 401. The first version of this story's design did exactly that.
+        RefreshToken usedToken = presentedToken();
+        usedToken.setUsed(true);
+        usedToken.setRotatedAt(Instant.now().minusSeconds(3600));
+        lockReturns(usedToken);
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class);
+
+        assertThat(revokeInsideLockedBlock)
+            .as("a REQUIRES_NEW revoke ran while the presented row was locked (55P03 self-deadlock)")
+            .isFalse();
+        // And it did run, after the block: the assertion above must not pass by nothing happening at all.
+        verify(refreshTokenRepository).markAllUsedByUserId(USER_ID);
+    }
+
+    @Test
+    @DisplayName("an unknown token hash is 401 with no cookie teardown and no revoke")
+    void refresh_unknownTokenHash_doesNotClearCookies() {
+        when(refreshTokenRepository.findByTokenHashForUpdate(anyString())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class)
+            .hasMessageContaining("Invalid refresh token");
+
+        // Unchanged behaviour, and deliberate: a junk token must not be able to log a victim's browser out.
+        verify(securityUtil, never()).clearAuthCookies(any());
+        verify(securityUtil, never()).terminateSession(any(), any());
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // login() — unchanged by this story.
+    // ---------------------------------------------------------------------------------------------
 
     // skillars-deferred-149 AC3 code review (2026-10-08): login() deliberately does NOT clear
     // securitySessionInvalidatedAt anymore — a previous implementation did, and that let a
@@ -172,9 +393,53 @@ class AuthServiceTest {
         when(passwordEncoder.encode(any())).thenReturn("dummy-hash");
 
         assertThatThrownBy(() -> authService.login("nobody@skillars-test.com", "raw-password", "127.0.0.1", response))
-            .isInstanceOf(org.springframework.security.authentication.BadCredentialsException.class);
+            .isInstanceOf(BadCredentialsException.class);
 
         verify(passwordEncoder).matches("raw-password", "dummy-hash");
         verify(loginRateLimiter).recordFailure("nobody@skillars-test.com", "127.0.0.1");
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Fixtures
+    // ---------------------------------------------------------------------------------------------
+
+    /** The row the presented cookie hashes to: live, unused, unexpired unless a test says otherwise. */
+    private RefreshToken presentedToken() {
+        RefreshToken token = new RefreshToken();
+        token.setId(6001L);
+        token.setUserId(USER_ID);
+        token.setUsed(false);
+        token.setExpiresAt(Instant.now().plusSeconds(3600));
+        return token;
+    }
+
+    private void lockReturns(RefreshToken token) {
+        when(refreshTokenRepository.findByTokenHashForUpdate(anyString())).thenReturn(Optional.of(token));
+    }
+
+    private User liveUser() {
+        User user = new User();
+        user.setId(USER_ID);
+        user.setLogin("player@skillars-test.com");
+        user.setPassword("hashed-password");
+        user.setActivated(true);
+        user.setLocked(false);
+        return user;
+    }
+
+    /**
+     * The real {@code saveAndFlush} assigns the generated id that the predecessor's
+     * {@code replaced_by_id} is written from; a bare mock would leave it null and quietly turn the chain
+     * link — the whole point of V224 — into a no-op the tests could not see.
+     */
+    private void stubSuccessorIdOnSave() {
+        AtomicLong nextId = new AtomicLong(SUCCESSOR_ID);
+        when(refreshTokenRepository.saveAndFlush(any(RefreshToken.class))).thenAnswer(invocation -> {
+            RefreshToken saved = invocation.getArgument(0);
+            if (saved.getId() == null) {
+                saved.setId(nextId.getAndIncrement());
+            }
+            return saved;
+        });
     }
 }

@@ -1,14 +1,16 @@
 package com.softropic.skillars.platform.security.repo;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.Optional;
+
+import jakarta.persistence.LockModeType;
 
 /**
  * Persistence for {@link RefreshToken} — the long-lived (7-day, {@code SecurityConstants
@@ -19,32 +21,49 @@ import java.util.Optional;
  * security-sensitive: it is the actual list of "sessions that are still allowed to exist".
  *
  * <p>A row's lifecycle: created {@code used = false} by {@code AuthService.login()}; on a refresh,
- * the presented row is rotated (old one flips to {@code used = true}, a new row is created) by
- * {@code AuthService.refresh()}. {@code used} is a monotonic flag — once {@code true}, a row never
- * goes back to {@code false} — so it doubles as a revocation marker: "used" and "revoked" are the
- * same bit. A row leaves the table only by expiry (never by revocation), via the cleanup sweep
- * below.
+ * the presented row is rotated (old one flips to {@code used = true}, a new row is created, and the old
+ * row's {@code replacedById} is pointed at the new one) by {@code AuthService.refresh()}. {@code used} is
+ * a monotonic flag — once {@code true}, a row never goes back to {@code false}. A row leaves the table
+ * only by expiry (never by revocation), via the cleanup sweep below.
+ *
+ * <p><strong>skillars-deferred-166 (RS01/RS02): "used" and "revoked" are no longer the same bit.</strong>
+ * {@code used} is set by rotation <em>and</em> by revocation, so on its own it cannot tell a token that was
+ * replaced (successor live) from one whose session was ended. {@code revokedAt} is what does, and
+ * {@code replacedById} is what lets a reader find the successor instead of guessing at it:
+ * <ul>
+ *   <li>{@code used = false} — live.</li>
+ *   <li>{@code used = true, revokedAt = null} — rotated; {@code replacedById} names the successor, and a
+ *       stale replay inside {@code AuthService.REFRESH_GRACE_WINDOW} is redirected along that link.</li>
+ *   <li>{@code revokedAt != null} — the session was ended deliberately; refresh answers 401 without
+ *       account-wide revocation.</li>
+ * </ul>
+ * Before V224 there was no link, so logout revoked only the presented row while it was still unused
+ * (leaving a just-rotated successor live for its whole TTL — ledger RS01) and the grace window redirected
+ * to the newest live token of the whole <em>account</em>, i.e. possibly another device's session (RS02).
  *
  * <p><strong>Who calls what, and why:</strong>
  * <ul>
  *   <li>{@code AuthService.login()}/{@code refresh()} — the only writers of new rows ({@code save}),
  *       and the only callers of {@link #findByTokenHash}, to look up the token presented on a
  *       refresh request.</li>
- *   <li>{@code AuthService.refresh()}'s theft-detection branches, {@code SecurityUtil
- *       .terminateSession()} (logout / forced logout), and {@code GdprErasureService} (account
- *       erasure) all call {@link #markAllUsedByUserId} or {@link #markUsedByTokenHash} to revoke
- *       sessions — the former kills every token for a user, the latter just the one token a single
- *       request is tied to.</li>
- *   <li>{@code AuthService.refresh()} calls {@link
- *       #findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc} within its multi-tab
- *       grace window to find a live successor when a just-rotated (not stolen) token is
- *       re-presented, so a harmless Tab-A-refreshed/Tab-B-still-holds-old-cookie race is redirected
- *       to the successor instead of being treated as theft. (Until skillars-deferred-144 AC8,
- *       {@code JWTAuthorizationFilter} was a second caller, using it to force an early DB re-auth
- *       once a user's tokens were all revoked — removed as a per-request DB query whose only
- *       benefit was catching GDPR erasure / theft-revocation faster than this filter already
- *       tolerated for an admin-locked account, which never had an early-detection shortcut at
- *       all.)</li>
+ *   <li>{@code AuthService.refresh()}'s theft-detection branch and {@code GdprErasureService} (account
+ *       erasure) call {@link #markAllUsedByUserId} to kill every token for a user. {@code
+ *       RefreshTokenRevocationService.revokeChainByTokenHash} (skillars-deferred-166) is what
+ *       {@code SecurityUtil.terminateSession()} (logout / forced logout) and {@code AuthService
+ *       .refresh()}'s per-session denials use instead of {@link #markUsedByTokenHash}: it revokes the
+ *       presented row <em>and every successor it was rotated into</em>, which is the whole point of
+ *       {@code replacedById}. {@link #markUsedByTokenHash} remains for callers that genuinely mean "this
+ *       one row" and is still the single-row primitive the audit tests cover.</li>
+ *   <li>{@code AuthService.refresh()} uses {@link #findByTokenHashForUpdate} to take a
+ *       {@code PESSIMISTIC_WRITE} lock on the presented row for the whole of its decide-and-rotate block,
+ *       and {@link #findByIdForUpdate} to walk {@code replacedById} to the successor under the same lock.
+ *       That serialisation is what makes a concurrent logout and refresh safe in either order, and it is
+ *       why the lock must never be held across a {@code REQUIRES_NEW} revoke (55P03 self-deadlock — see
+ *       {@code AuthService.refresh}'s own comments). (Until skillars-deferred-144 AC8,
+ *       {@code JWTAuthorizationFilter} also queried this table per request to force an early DB re-auth
+ *       once a user's tokens were all revoked — removed as a per-request DB query whose only benefit was
+ *       catching GDPR erasure / theft-revocation faster than this filter already tolerated for an
+ *       admin-locked account, which never had an early-detection shortcut at all.)</li>
  *   <li>{@code AuthCleanupService} runs {@link #deleteExpiredTokens} on an hourly
  *       {@code @Scheduled} cron job to bulk-delete rows past {@code expiresAt} — housekeeping, not
  *       revocation (an expired row is already useless to {@code AuthService.refresh()}'s own
@@ -57,14 +76,34 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
     Optional<RefreshToken> findByTokenHash(String hash);
 
     /**
-     * The one still-live (unused, unexpired) token for a user, newest first. {@code AuthService
-     * .refresh()} uses it inside its multi-tab grace window to find the live successor of a
-     * just-rotated token, so it can redirect a harmless refresh race instead of treating it as
-     * theft. (Until skillars-deferred-144 AC8, {@code JWTAuthorizationFilter} was a second caller
-     * — see the class-level javadoc above for why that per-request lookup was removed.)
+     * skillars-deferred-166: {@link #findByTokenHash} with a {@code PESSIMISTIC_WRITE} row lock, held until
+     * the calling transaction ends. {@code AuthService.refresh} and
+     * {@code RefreshTokenRevocationService.revokeChainByTokenHash} both enter through this, which is what
+     * serialises a concurrent refresh and logout on the same token: whichever takes the lock first finishes
+     * its decision, so the other sees committed state (a rotation with its {@code replacedById} already
+     * written, or a {@code revokedAt}) instead of racing it.
+     *
+     * <p><strong>Never hold this lock across a {@code REQUIRES_NEW} write to the same row.</strong> The
+     * inner transaction would wait for a lock only the outer one can release, a cycle Postgres cannot see
+     * (the outer transaction is blocked in Java, not in the database), which surfaces as
+     * {@code lock_timeout} / SQLState 55P03 — a 409 instead of the intended 401. This is why
+     * {@code AuthService.refresh} decides inside the locked block but performs every revoke after it has
+     * committed. skillars-deferred-143 hit the same hazard from the other direction and documented it on
+     * {@link #markUsedByTokenHash}.
      */
-    Optional<RefreshToken> findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(
-            Long userId, Instant now);
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM RefreshToken r WHERE r.tokenHash = :hash")
+    Optional<RefreshToken> findByTokenHashForUpdate(@Param("hash") String hash);
+
+    /**
+     * skillars-deferred-166: by-id lookup with the same {@code PESSIMISTIC_WRITE} lock and the same
+     * never-across-a-{@code REQUIRES_NEW}-write rule as {@link #findByTokenHashForUpdate}. Used to walk
+     * {@code replacedById} from a rotated token to its successor — by primary key, which is why neither
+     * new column carries an index.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM RefreshToken r WHERE r.id = :id")
+    Optional<RefreshToken> findByIdForUpdate(@Param("id") Long id);
 
     /**
      * skillars-deferred-100 AC3: bulk {@code UPDATE} against a {@code @Version} table

@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.security.service;
 
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
-import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -46,7 +45,7 @@ class SecurityUtilTest {
     private LoginTokenManager loginTokenManager;
 
     @Mock
-    private RefreshTokenRepository refreshTokenRepository;
+    private RefreshTokenRevocationService refreshTokenRevocationService;
 
     private SecurityUtil securityUtil;
     private MockHttpServletRequest request;
@@ -55,7 +54,7 @@ class SecurityUtilTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        securityUtil = new SecurityUtil(loginTokenManager, refreshTokenRepository);
+        securityUtil = new SecurityUtil(loginTokenManager, refreshTokenRevocationService);
         request = new MockHttpServletRequest();
         response = new MockHttpServletResponse();
         SecurityContextHolder.clearContext();
@@ -67,14 +66,17 @@ class SecurityUtilTest {
     }
 
     @Test
-    @DisplayName("terminateSession revokes the presented refresh token by its SHA-256 hash")
-    void terminateSession_revokesPresentedRefreshTokenByHash() {
+    @DisplayName("terminateSession revokes the presented token's whole rotation chain, keyed by SHA-256 hash")
+    void terminateSession_revokesPresentedRefreshTokenChainByHash() {
         request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
 
         securityUtil.terminateSession(request, response);
 
-        // Keyed by hash, never by the raw cookie value — refresh_tokens stores only the hash.
-        verify(refreshTokenRepository).markUsedByTokenHash(sha256Hex(RAW_REFRESH_TOKEN));
+        // skillars-deferred-166 (RS01): the CHAIN, not the single row. markUsedByTokenHash could not end a
+        // session whose token had just been rotated (its WHERE requires used = false), so the successor
+        // survived the logout. Keyed by hash, never by the raw cookie value — refresh_tokens stores only
+        // the hash.
+        verify(refreshTokenRevocationService).revokeChainByTokenHash(sha256Hex(RAW_REFRESH_TOKEN));
     }
 
     @Test
@@ -109,7 +111,7 @@ class SecurityUtilTest {
         // write-amplifier that skillars-deferred-90 AC5/F22 exists to prevent.
         securityUtil.terminateSession(request, response);
 
-        verify(refreshTokenRepository, never()).markUsedByTokenHash(anyString());
+        verify(refreshTokenRevocationService, never()).revokeChainByTokenHash(anyString());
         verify(loginTokenManager).deleteLoginToken(response);
     }
 
@@ -120,7 +122,7 @@ class SecurityUtilTest {
 
         securityUtil.terminateSession(request, response);
 
-        verify(refreshTokenRepository, never()).markUsedByTokenHash(anyString());
+        verify(refreshTokenRevocationService, never()).revokeChainByTokenHash(anyString());
     }
 
     @Test
