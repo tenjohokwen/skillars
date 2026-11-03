@@ -72,12 +72,27 @@ public class RefreshTokenRevocationService {
      * primary guard.
      */
     @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
-    public boolean hasLiveTokenForSession(final UUID refreshSessionId) {
-        if (refreshSessionId == null) {
+    public boolean hasLiveTokenForSession(final UUID refreshSessionId, final Long userId) {
+        if (refreshSessionId == null || userId == null) {
             return true;
         }
         return refreshTokenRepository.existsLiveBySessionId(
-            refreshSessionId, Instant.now(ClockProvider.getClock()));
+            refreshSessionId, userId, Instant.now(ClockProvider.getClock()));
+    }
+
+    /**
+     * skillars-deferred-167 round 2: the chain id for a raw refresh token, used to put back a claim a
+     * rolling deploy stripped. See
+     * {@link RefreshTokenRepository#findSessionIdByTokenHashAndUserId(String, Long)} for why that state
+     * exists and why the lookup is owner-scoped. Returns {@code null} whenever it cannot answer, which the
+     * caller treats as "no claim" — the same deliberate fail-open as a token that never had one.
+     */
+    @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
+    public UUID sessionIdForTokenHash(final String tokenHash, final Long userId) {
+        if (tokenHash == null || tokenHash.isBlank() || userId == null) {
+            return null;
+        }
+        return refreshTokenRepository.findSessionIdByTokenHashAndUserId(tokenHash, userId);
     }
 
     /**

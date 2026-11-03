@@ -487,10 +487,21 @@ public class AuthService {
      * replayed 31 s after a logout look like theft and revoke every session on the account — exactly what
      * AC3 exists to prevent, reached by a path AC3 did not describe.
      *
-     * <p>Returns a null successor with {@code chainRevoked == false} for genuine reuse: never rotated, no
-     * link at all (a rotation from before V224 — see that migration's accepted deploy-window trade-off), a
-     * chain whose end is expired, a chain longer than {@link #MAX_GRACE_HOPS}, or a rotation older than the
-     * window.
+     * <p>Three distinct answers, and skillars-deferred-167 AC7 is why there are three rather than two:
+     * <ul>
+     *   <li>{@link GraceResolution#of} — a live successor to hand over.</li>
+     *   <li>{@link GraceResolution#revokedChain()} — a hop carried {@code revokedAt}; the session was
+     *       deliberately ended.</li>
+     *   <li>{@link GraceResolution#stale()} — the chain HAS a live end, but the presented row's rotation is
+     *       older than the window. Answered as {@code StaleChain}: 401, no writes, <strong>not</strong>
+     *       account-wide revocation. An earlier version of this paragraph listed "a rotation older than the
+     *       window" under genuine reuse, which is no longer what happens; do not restore a {@code none()}
+     *       return there without reading {@link StaleChain}'s javadoc first.</li>
+     *   <li>{@link GraceResolution#none()} — genuine reuse, i.e. nothing live to be found: never rotated,
+     *       no link at all (a rotation from before V224 — see that migration's accepted deploy-window
+     *       trade-off), a cross-account link, a chain whose end is expired, or a chain longer than
+     *       {@link #MAX_GRACE_HOPS}.</li>
+     * </ul>
      */
     private GraceResolution resolveGraceSuccessor(final RefreshToken presented, final Instant now) {
         RefreshToken liveEnd = null;

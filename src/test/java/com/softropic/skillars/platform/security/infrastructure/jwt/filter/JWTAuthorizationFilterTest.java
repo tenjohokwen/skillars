@@ -61,6 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -529,7 +530,7 @@ class JWTAuthorizationFilterTest {
         when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
         when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
         when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(chainId);
-        when(securityUtil.hasLiveRefreshTokenForSession(chainId)).thenReturn(false);
+        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), any())).thenReturn(false);
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -558,7 +559,7 @@ class JWTAuthorizationFilterTest {
         when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
         when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
         when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(chainId);
-        when(securityUtil.hasLiveRefreshTokenForSession(chainId)).thenReturn(true);
+        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), any())).thenReturn(true);
 
         filter.doFilterInternal(request, response, filterChain);
 
@@ -591,9 +592,12 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         verify(filterChain).doFilter(request, response);
-        // The database must not be asked at all: `session_id = NULL` matches no row, so asking would
-        // answer "nothing live" and reject every pre-story session.
-        verify(securityUtil, never()).hasLiveRefreshTokenForSession(any());
+        // The liveness query must not run: `session_id = NULL` matches no row, so asking would answer
+        // "nothing live" and reject every pre-story session. The filter does try to REPAIR the claim from
+        // the request's rtkn cookie first (round 2: a rolling deploy can strip it), and the unstubbed
+        // mock returns null for that, which is the same no-claim state.
+        verify(securityUtil).refreshSessionIdForRequest(eq(request), any());
+        verify(securityUtil, never()).hasLiveRefreshTokenForSession(any(), any());
     }
 
     @Test

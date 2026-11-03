@@ -175,7 +175,13 @@ cookie therefore kept working for as long as its holder kept making requests.
   bounded by `DB_REFRESH_TOKEN_INTERVAL` (5 min), the same bound a locked account has always had.
 - **Fail-open on a missing claim, deliberately.** A JWT minted before this story carries no `rtsid`,
   neither mint path can invent one, and refusing all of them would sign out every live session the
-  moment the story deploys. A post-deploy token always carries the claim.
+  moment the story deploys.
+  A post-deploy token normally carries the claim — but **a rolling deploy can strip it permanently**. An
+  instance still running the previous release rebuilds the claim map without `rtsid` (it does not know the
+  claim) and re-signs, and a token that has lost the claim would never be checked again. The filter
+  therefore re-derives the chain id from the request's own `rtkn` cookie whenever the claim is absent,
+  scoped to the authorised user, which puts it back on the next DB-reauth cycle. The same repair covers a
+  rollback, and it shrinks the pre-deploy gap for any session whose chain has rotated since.
   **That exposure has no time bound.** A claimless token never acquires a claim — the DB-reauth path
   passes the missing value straight back and the TTL-only path omits what it cannot read, while both
   re-mint `exp`, `dbRToken` and `sessIat` — and nothing else on either path consults `refresh_tokens`.

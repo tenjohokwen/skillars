@@ -1508,17 +1508,21 @@ class AuthResourceIT extends AbstractIntegrationTest {
     }
 
     /**
-     * AC5, pinning the deliberate fail-open. A JWT minted before this story carries no {@code rtsid}
-     * claim, {@code extendTtlOfToken} cannot invent one, and refusing every such token would sign out
-     * every live session the moment this deploys — so the check is skipped for them.
+     * AC5 plus the round-2 repair, which together decide what a claimless JWT can still do.
      *
-     * <p>This test therefore asserts a KNOWN GAP, on purpose: a pre-deploy JWT survives the logout that
-     * should have killed it. The flip to fail-closed is filed in deferred-work.md and cannot ship until no
-     * such token can still be presented (one REFRESH_TOKEN_TTL after deploy). When that flip happens this
-     * test is the one that must change, which is why the gap is pinned rather than left implicit.
+     * <p>A JWT with no {@code rtsid} claim is skipped rather than refused, because neither mint path can
+     * invent the claim and failing closed would sign out every live session the moment this deploys. But
+     * the filter first tries to REPAIR the claim from the request's own {@code rtkn} cookie — a rolling
+     * deploy (or a rollback) can strip the claim from a post-deploy token, since an instance on the
+     * previous release re-signs without a claim it does not know about, and without the repair that
+     * session would never be checked again.
+     *
+     * <p>So the gap is narrower than "any claimless JWT survives": it survives only when it arrives
+     * WITHOUT the cookie that would identify its chain. Both halves are asserted here, because the
+     * difference between them is the whole value of the repair.
      */
     @Test
-    void logout_doesNotKillAJwtMintedBeforeThisStory_theDocumentedFailOpen() {
+    void logout_andAClaimlessJwt_isRepairedFromTheCookieButFailsOpenWithoutIt() {
         ResponseEntity<Map> device = login(COACH_EMAIL);
         String rtkn = extractCookieValue(device, "rtkn");
         String legacyJwt = withoutRefreshSessionClaim(extractCookieValue(device, "potc"));
@@ -1526,9 +1530,20 @@ class AuthResourceIT extends AbstractIntegrationTest {
         httpTestClient.makeHttpRequest(
             baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
 
+        // (a) With the rtkn cookie the chain id is re-derived, the revoked chain is found, and the
+        // claimless JWT is refused — the rolling-deploy case is repaired rather than permanently exempt.
         assertThat(accountGetStatus(cookiesWithJwt(device, legacyJwt)))
-            .as("a claimless JWT must be skipped, not refused (AC5) — deploying fail-closed would log "
-                + "every live session out at once")
+            .as("a claimless JWT presented with its own rtkn must be repaired and refused")
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        // (b) Without any rtkn cookie there is nothing to derive from, and AC5's fail-open stands. This is
+        // the documented residual: a potc stolen before the rollout, presented on its own, is not killed.
+        // The flip to fail-closed is an owner decision filed in deferred-work.md; when it happens, this
+        // half is the assertion that must change.
+        assertThat(accountGetStatus(cookiesWithJwtButNoRtkn(device, legacyJwt)))
+            .as("with no rtkn to derive from, the chain check is skipped rather than failed (AC5). Note "
+                + "every OTHER cookie is kept: dropping bcookie/ION would fail isTokenFixed instead and "
+                + "this assertion would pass for the wrong reason")
             .isEqualTo(HttpStatus.OK);
     }
 
@@ -1710,6 +1725,31 @@ class AuthResourceIT extends AbstractIntegrationTest {
         claims.remove(SecurityConstants.RTKN_SESSION);
         claims.remove(Claims.EXPIRATION);
         return tokenCreator.generateTokenFromClaims(claims);
+    }
+
+    /**
+     * Every cookie a login response set EXCEPT {@code rtkn}, with {@code potc} swapped for the given JWT.
+     *
+     * <p>Dropping only {@code rtkn} matters: {@code bcookie} and {@code ION} feed
+     * {@code RequestMetadataProvider}, which {@code TokenValidatorImpl.isTokenFixed} compares against the
+     * token's own {@code clientId} and {@code sessionId} claims on every request. Sending {@code potc}
+     * alone makes that check fail and throws {@code JWTTheftException}, so the request is refused for a
+     * reason that has nothing to do with the chain — which is exactly how an earlier version of the
+     * no-cookie assertion below passed for the wrong reason.
+     */
+    private HttpHeaders cookiesWithJwtButNoRtkn(ResponseEntity<?> loginResponse, String jwt) {
+        List<String> setCookies = loginResponse.getHeaders().get("Set-Cookie");
+        assertThat(setCookies).isNotNull();
+        String cookieHeader = setCookies.stream()
+            .map(c -> c.split(";", 2)[0])
+            .filter(c -> !c.startsWith(SecurityConstants.REFRESH_TOKEN_COOKIE + "="))
+            .map(c -> c.startsWith("potc=") ? "potc=" + jwt : c)
+            .reduce((a, b) -> a + "; " + b)
+            .orElseThrow();
+        assertThat(cookieHeader).contains("potc=" + jwt).doesNotContain("rtkn=");
+        HttpHeaders headers = clientHeaders();
+        headers.add(HttpHeaders.COOKIE, cookieHeader);
+        return headers;
     }
 
     /** Every cookie a login response set, with {@code potc} swapped for the given JWT. */

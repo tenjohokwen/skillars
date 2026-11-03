@@ -248,13 +248,45 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * no row, so a null argument would report "no live token" for every pre-V225 session and reject it —
      * the exact opposite of AC5's deliberate fail-open. The caller checks for null first.
      *
+     * <p>Scoped to {@code userId} as defence in depth, not because a bypass exists today: the claim can
+     * only have come from a token this server signed off that user's own row, and AC3 deliberately removed
+     * the one path that would have read a chain id from the request. But the claim is copied through
+     * {@code renewLoginToken} unvalidated, so without this predicate the only thing standing between a
+     * {@code potc} from one account and another account's live chain is that no mint path currently takes
+     * the value from the request. That is a property of today's call sites, not an invariant, so the
+     * question this answers is "is THIS user's chain live", never "is some chain live".
+     *
      * <p>{@code :now} is a parameter rather than {@code CURRENT_TIMESTAMP} so the caller supplies
      * {@code Instant.now(ClockProvider.getClock())}, keeping this consistent with every other expiry
      * comparison in the auth code and testable without touching the database clock.
      */
     @Query("SELECT COUNT(r) > 0 FROM RefreshToken r WHERE r.sessionId = :sessionId "
-        + "AND r.used = false AND r.revokedAt IS NULL AND r.expiresAt >= :now")
-    boolean existsLiveBySessionId(@Param("sessionId") UUID sessionId, @Param("now") Instant now);
+        + "AND r.userId = :userId AND r.used = false AND r.revokedAt IS NULL AND r.expiresAt >= :now")
+    boolean existsLiveBySessionId(@Param("sessionId") UUID sessionId, @Param("userId") Long userId,
+                                  @Param("now") Instant now);
+
+    /**
+     * skillars-deferred-167 round 2: the chain id of the row this token hash names, but only if the row
+     * belongs to {@code userId}.
+     *
+     * <p>Exists to REPAIR a lost claim, which is a real state rather than a hypothetical one. During a
+     * rolling deploy (and after a rollback) an instance running the previous release serves requests for
+     * JWTs minted by an upgraded one; its {@code extendTtlOfToken} rebuilds the claim map from
+     * {@code toClaims} and re-puts only the claims it knows, so it drops {@code rtsid} and re-signs
+     * without it. The new code then passes the missing value straight through, and that session would be
+     * unenforceable for the rest of its life. Re-deriving on the DB-reauth branch is the only thing that
+     * puts the claim back.
+     *
+     * <p>Scalar, so nothing is loaded into the persistence context on a request that has other work to do;
+     * and scoped to {@code userId} because the value comes from a cookie on the request. Without that
+     * predicate a caller pairing their own {@code rtkn} with a victim's {@code potc} could attach their
+     * own live chain's id to the victim's token and keep it passing the liveness check. Returns
+     * {@code null} for an unknown hash, a row owned by someone else, or a row whose own
+     * {@code session_id} is still null (a chain predating V225).
+     */
+    @Query("SELECT r.sessionId FROM RefreshToken r WHERE r.tokenHash = :tokenHash AND r.userId = :userId")
+    UUID findSessionIdByTokenHashAndUserId(@Param("tokenHash") String tokenHash,
+                                           @Param("userId") Long userId);
 
     /**
      * Deletes every expired row, acquiring them in ascending {@code id} order.
@@ -265,7 +297,14 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * {@code AuthService.resolveGraceSuccessor} and
      * {@code RefreshTokenRevocationService.revokeChainByTokenHash} — take {@code PESSIMISTIC_WRITE} locks
      * along {@code replaced_by_id}, which is ascending {@code id} in practice (a successor is always
-     * created after its predecessor, and {@code BaseEntity}'s TSID ids are monotonic within a node). An
+     * created after its predecessor, and {@code BaseEntity}'s {@code @Tsid} ids are monotonic within a
+     * JVM). <strong>In practice, not by construction:</strong> a TSID's low bits are a per-JVM node and
+     * counter component, so a predecessor and successor written by two different application instances
+     * inside the same millisecond could invert. A rotation reads the predecessor under a row lock and
+     * inserts the successor after that commit, so the gap is a database round trip and this is
+     * unreachable rather than impossible. If it ever happens the walk locks descending while this sweep
+     * locks ascending, the cycle returns, and the guard on
+     * {@code AuthCleanupService.purgeExpiredRefreshTokens} logs a skipped run instead of a resolved one. An
      * expired chain being walked while the hourly sweep ran could therefore cycle: the walk holding a
      * predecessor and waiting for a successor the {@code DELETE} already held. PostgreSQL kills one side,
      * and before deferred-166 logout took a single-row lock that could wait but never cycle.

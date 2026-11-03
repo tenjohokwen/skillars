@@ -218,8 +218,8 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             // unrelated later login has since re-authenticated the account.
             assertSessionNotRevoked(req, authorizedPrincipal);
             // skillars-deferred-167 AC4: and the per-SESSION counterpart of that account-wide check.
-            final UUID refreshSessionId = loginTokenManager.extractRefreshSessionId(req);
-            assertSessionChainStillLive(refreshSessionId);
+            final UUID refreshSessionId = resolveRefreshSessionId(req, authorizedPrincipal);
+            assertSessionChainStillLive(refreshSessionId, authorizedPrincipal);
             //JWT with new db refresh token and new expiration
             //JWTUtil.e
             loginTokenManager.renewLoginToken(res, authorizedPrincipal, refreshSessionId);
@@ -311,13 +311,58 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
      * differently on "your session ended" versus "your account's sessions ended", and the SPA already
      * handles this one.
      */
-    private void assertSessionChainStillLive(final UUID refreshSessionId) {
+    private void assertSessionChainStillLive(final UUID refreshSessionId, final Principal principal) {
         if (refreshSessionId == null) {
             return;
         }
-        if (!securityUtil.hasLiveRefreshTokenForSession(refreshSessionId)) {
+        if (!securityUtil.hasLiveRefreshTokenForSession(refreshSessionId, userIdOf(principal))) {
             throw new AuthorizationException(
                 "Session's refresh-token chain has no live token", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
+        }
+    }
+
+    /**
+     * skillars-deferred-167 round 2: the chain id this JWT claims, falling back to the one its own
+     * {@code rtkn} cookie names when the claim is absent.
+     *
+     * <p>The fallback is not belt-and-braces, it repairs a state this release creates. During a rolling
+     * deploy — and after a rollback — an instance running the previous release handles requests for JWTs
+     * minted by an upgraded one. Its {@code extendTtlOfToken} rebuilds the claim map from
+     * {@code toClaims} and re-puts only the claims it knows about, so it drops {@code rtsid} and re-signs
+     * without it; the new code then passes that absence straight through and the session is never checked
+     * again. Re-deriving here is the only thing that puts the claim back, and the claim travels onward
+     * because {@code renewLoginToken} is given this resolved value.
+     *
+     * <p>Costs one extra query only when the claim is missing, so the normal request still makes exactly
+     * one. Owner-scoped in the repository, because the value now comes from a cookie rather than from a
+     * token this server signed: without that, a caller could pair their own {@code rtkn} with a victim's
+     * {@code potc} and keep the victim's token passing the liveness check against their own live chain.
+     *
+     * <p>Still {@code null} for a genuinely pre-V225 chain (the row has no id either), which is AC5's
+     * documented fail-open.
+     */
+    private UUID resolveRefreshSessionId(final HttpServletRequest req, final Principal principal) {
+        final UUID claimed = loginTokenManager.extractRefreshSessionId(req);
+        if (claimed != null) {
+            return claimed;
+        }
+        return securityUtil.refreshSessionIdForRequest(req, userIdOf(principal));
+    }
+
+    /**
+     * The authorized principal's user id, or {@code null} when it cannot be read as one. A null makes both
+     * callers above fail open rather than throw: this filter runs on every authenticated request, and a
+     * principal whose {@code businessId} is unreadable is a different fault from the one this check is
+     * about.
+     */
+    private static Long userIdOf(final Principal principal) {
+        if (principal == null || StringUtils.isBlank(principal.getBusinessId())) {
+            return null;
+        }
+        try {
+            return Long.valueOf(principal.getBusinessId());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
