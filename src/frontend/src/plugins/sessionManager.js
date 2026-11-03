@@ -298,30 +298,6 @@ export async function refreshSession() {
       const expiresAt = readSessionExpiryFromCookie()
       if (expiresAt === null || expiresAt <= expiryBeforeRefresh) refreshFailed.value = true
     }
-
-    // skillars-deferred-167: also rotate the refresh-token CHAIN, which GET /refresh above never
-    // touches — it only slides the access token's TTL. That story made a chain with no live row end
-    // the session, so a web session whose chain was never rotated died exactly 7 days after login,
-    // mid-task. This is the natural place: it runs when the user says "keep me signed in", not on
-    // every request, so it costs one row per extension rather than one per call.
-    //
-    // Deliberately AFTER the advance-check above and deliberately swallowed. The check belongs to
-    // GET /refresh's contract (deferred-109 AC2.2) and must not see this call's cookies; and a
-    // rotation that fails must not turn a successful extension into a "we couldn't extend your
-    // session" banner, because the access token has already been extended by this point. A 401 here
-    // returns errorKey 'security.badCreds', which the axios interceptor does not treat as a
-    // teardown, so swallowing it is safe rather than merely convenient.
-    if (!expired) {
-      try {
-        const { authApi } = await import('src/api/auth.api')
-        await authApi.rotateRefreshToken()
-      } catch (rotationError) {
-        console.warn(
-          'Refresh-token rotation failed; the session continues on its existing chain:',
-          rotationError,
-        )
-      }
-    }
   } catch (e) {
     // skillars-deferred-90 AC4: surface the failure. Without this the catch only logs, isRefreshing
     // returns to false so "Continue session" re-enables as though it worked, the countdown keeps

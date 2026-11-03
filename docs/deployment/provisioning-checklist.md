@@ -697,11 +697,15 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       The JWT carries the chain id as an `rtsid` claim, and the authorisation filter refuses a JWT whose
       chain has no live refresh token left — within `DB_REFRESH_TOKEN_INTERVAL` (5 min) of the logout.
       Previously a copied `potc` cookie kept working for as long as its holder kept making requests.
-- [x] **RESOLVED before merge: the chain cap is an idle timeout, not a 7-day guillotine.** The SPA now
-      rotates its chain on the existing "keep me signed in" path (`sessionManager.refreshSession()` ->
-      `authApi.rotateRefreshToken()`), so a session ends 7 days after its last extension rather than 7 days
-      after login. The original problem is kept below because it is what to re-test if that call is ever
-      removed: The SPA has no
+- [x] **RESOLVED before merge: an active session's deadline slides, so the TTL is an idle bound.** When
+      the DB-reauth branch finds a chain live and within a day of its deadline, it pushes the deadline out
+      a full TTL. A web session — whose chain is the single row written at login, because the SPA never
+      calls `POST /api/auth/refresh` — is therefore not ended mid-task on day seven, while a session left
+      idle past its deadline still ends and is still swept. Revocation is untouched: a logout kills the
+      session within one DB-reauth cycle regardless. Two earlier attempts were reverted (SPA rotation,
+      whose only trigger a polling tab never reaches; and exempting unrotated rows, which exempted every
+      chain because a rotated chain's live end is itself unrotated). The original problem is kept below
+      because it is what to re-test if the slide is ever removed: The SPA has no
       caller for `POST /api/auth/refresh`, so its chain is the one row created at login. Seven days later
       that row expires and the standing JWT is refused on the next DB-reauth cycle — a forced logout for
       every continuously active web user, possibly mid-form, with no client-side way to extend and no

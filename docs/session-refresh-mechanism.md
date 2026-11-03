@@ -196,18 +196,24 @@ cookie therefore kept working for as long as its holder kept making requests.
   no live row, the session ends within one DB-reauth cycle, where an access token used to slide
   indefinitely as long as the user kept clicking. Who that actually affects is the opposite of what it
   first looks like:
-  - **The cap is an IDLE timeout, not an absolute one.** Every rotation writes a fresh `expires_at`, so
-    a chain that is rotated at least once a week never expires. A session therefore ends 7 days after
-    its last extension, not 7 days after login — which is what `REFRESH_TOKEN_TTL` reads as everywhere
-    else in this document.
-  - **The SPA rotates on its existing "keep me signed in" path.** `sessionManager.refreshSession()`
-    calls `authApi.rotateRefreshToken()` (`POST /api/auth/refresh`) after the `GET /refresh` that
-    slides the access token. Without it the SPA had no caller for that endpoint at all, so a web
-    session's chain was the single row created at login and a continuously active user was
-    hard-logged-out exactly 7 days later, mid-task. The rotation is best-effort: it runs after
-    `GET /refresh`'s own advance-check, and a failure is logged and swallowed rather than turned into
-    a "we couldn't extend your session" banner, because the access token has already been extended by
-    that point.
+  - **`REFRESH_TOKEN_TTL` is an IDLE bound, because an active session's deadline slides.** `expires_at`
+    is written at login and again at each rotation, so a chain nobody rotates keeps its login deadline
+    — and the SPA has no caller for `POST /api/auth/refresh`, so that is every web session. Left
+    alone, this check would refuse such a user's standing access token exactly 7 days after login,
+    mid-task. So when the DB-reauth branch finds the chain live and its deadline within one day, it
+    pushes the deadline out by a full TTL (`slideExpiryForActiveSession`). In practice that writes
+    about once a day per active session, not once per 5-minute cycle.
+  - **The bound is still a bound.** The slide only ever touches a row that is still live, so a session
+    left idle past its deadline ends on schedule and is swept normally — an abandoned chain is not
+    kept alive by this.
+  - **Revocation is never relaxed.** `revoked_at IS NULL` is tested unconditionally, so a logout still
+    ends the session within one DB-reauth cycle. Only the expiry bound slides.
+  - **Two other approaches were tried and rejected**, recorded so they are not retried: rotating from
+    the SPA (its only trigger is the idle-warning dialog's "Continue session" button, which a polling
+    tab never reaches — so it missed the population it was for — and a failed rotation returns
+    cookie-deletion headers that would sign the user out), and exempting unrotated rows from the
+    expiry test (a rotated chain's live end is itself an unrotated row, so it exempted every chain and
+    the cap applied to nothing).
 - **No frontend caller.** The SPA does not call this endpoint: `src/api/auth.api.js` dropped its
   helper, and routine keep-alive goes through `GET /refresh` (see above), which re-mints the JWT and
   never touches `refresh_tokens`. This endpoint is reached by API clients and tests.

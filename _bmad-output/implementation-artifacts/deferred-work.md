@@ -102,14 +102,37 @@ the alternatives and stay queued behind it.
   cap to chains that have rotated at least once — keeps the logout-kill, drops the cap. (c) Accept the
   7-day logout and tell users, which needs at least a warning state in the SPA. **Recommend (a)**: it makes
   the chain do what the design assumed it already did, and the cap then means what AC10 said it meant.
-  **APPLIED.** `authApi.rotateRefreshToken()` is called from `sessionManager.refreshSession()`, the
-  existing "keep me signed in" path, so the chain rotates when a user extends their session rather than on
-  every request — one row per extension. Best-effort and swallowed: it runs after GET /refresh's own
-  advance-check so that contract (deferred-109 AC2.2) is untouched; a 401 there carries
-  `security.badCreds`, which the axios interceptor does not treat as a teardown; and nothing consumes the
-  `BadCredentialsEvent` it publishes, so a failed rotation can neither log the user out nor count toward a
-  lockout. The cap now binds an IDLE session — 7 days without an extension — which is what
-  `REFRESH_TOKEN_TTL` reads as everywhere else.
+  **(a) WAS APPLIED AND THEN REVERTED; (b) APPLIED INSTEAD — owner re-decided 2026-11-03 after round 4
+  of the PR review.** Option (a) added `authApi.rotateRefreshToken()` to
+  `sessionManager.refreshSession()`. Round 4 showed it failed on three counts, all verified in code:
+   1. **It did not protect the target population.** `refreshSession()`'s only non-test caller is
+      `useSession.handleRefresh()`, bound solely to `SessionWarningDialog.vue`'s "Continue session" button.
+      That dialog needs ~10 minutes with no authenticated response (every response rewrites `rint`), so a
+      tab that keeps polling never reaches it, never rotates, and was still capped at 7 days — exactly the
+      continuously active web user (a) was chosen to save.
+   2. **"Best-effort and swallowed" was wrong.** The teardown does not come from the `errorKey` gate that
+      reasoning relied on: every failure branch of `AuthService.refresh` except `Unknown` clears cookies
+      BEFORE throwing, so a failed rotation's 401 deletes `potc`/`rtkn`/`rint`/`user`/`skp`; the axios
+      interceptor then finds no `rint` and fires `session:expired`. Clicking "Continue session" could log
+      the user out, with `refreshFailed` left false so nothing explained it. On the `Reuse` branch the
+      swallowed call had also revoked every device.
+   3. **It made the `StaleChain` branch reachable from the web**, which AC7's blast-radius argument
+      explicitly assumed it was not. A stripped or lost `Set-Cookie`, or two tabs extending together,
+      leaves the browser one hop behind, and the next extension then revokes the chain all its tabs use.
+  **Option (b) was then tried in two forms; the second is what shipped.**
+  The first was an exemption: skip the expiry test for a row with no `rotated_at` and no `replaced_by_id`.
+  It was dead on arrival and an IT caught it — a rotated chain's LIVE END is itself always such a row
+  (`decideAndRotate` creates the successor with both null), so it exempted every chain and the cap applied
+  to nothing. Keying on sibling rows instead fails too, because the hourly sweep deletes the expired
+  predecessors that would be the evidence.
+  **Shipped: a sliding deadline.** When the filter's DB-reauth branch finds the chain live and its
+  deadline within one day, `slideExpiryForActiveSession` pushes it out by a full `REFRESH_TOKEN_TTL`. So
+  the TTL becomes an IDLE bound — which is what it reads as everywhere else — rather than an absolute one:
+  an actively used session is never ended by a deadline written when it began, while a session left idle
+  past its deadline still ends and is still swept, so abandoned chains are not kept alive. The write is
+  conditional in the query (live, unused, unrevoked, not already expired), runs at most once per 5-minute
+  DB-reauth cycle and in practice about once a day per session, and is `REQUIRES_NEW` so a later revoke or
+  denial cannot roll it back. `revoked_at IS NULL` stays unconditional: only the expiry bound slides.
 
 - **[skillars-deferred-167 residual, low/logic]** A benign stale cookie more than `MAX_GRACE_HOPS` (8)
   rotations behind an intact, live chain still gets the whole account revoked. The walk gives up after 8

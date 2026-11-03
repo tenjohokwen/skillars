@@ -8,12 +8,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
+import static com.softropic.skillars.infrastructure.security.SecurityConstants.REFRESH_TOKEN_TTL;
 
 /**
  * skillars-deferred-166 (ledger RS01): ends a session by revoking the presented refresh token
@@ -61,9 +64,10 @@ public class RefreshTokenRevocationService {
      * forced logout, a revoke-all, or simply a chain that ran out its 7-day TTL — so the access token minted
      * for that chain must stop working too.
      *
-     * <p>Read-only and NOT {@code REQUIRES_NEW}, unlike everything else on this service: it writes nothing,
-     * so it has no rollback to protect itself from, and it must be able to join the caller's transaction (or
-     * run with none at all, which is the filter's case) rather than forcing a second one per request.
+     * <p>{@code SUPPORTS}, unlike everything else on this service, so it can join the caller's transaction
+     * or run with none at all — the filter's case. It is marked {@code readOnly} because the question it
+     * answers is a read; the deadline slide it may trigger is a {@code REQUIRES_NEW} write that runs in its
+     * own transaction, so the flag is not violated and a failure there cannot roll back the caller.
      *
      * <p>Rejects a {@code null} id by returning {@code true} — "cannot tell, so do not block". A null
      * {@code session_id} matches no row, so asking the database would answer "nothing live" for every
@@ -71,13 +75,32 @@ public class RefreshTokenRevocationService {
      * fail-open. The filter also checks for null before calling, so this is defence in depth, not the
      * primary guard.
      */
+    /**
+     * How close to its deadline a live chain must be before {@link #hasLiveTokenForSession} slides it.
+     * One day against a 7-day TTL, so an active session writes roughly once a day rather than on every
+     * 5-minute DB-reauth cycle, while still having six further chances if a write is lost.
+     */
+    private static final Duration SLIDE_WHEN_WITHIN = Duration.ofDays(1);
+
     @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
     public boolean hasLiveTokenForSession(final UUID refreshSessionId, final Long userId) {
         if (refreshSessionId == null || userId == null) {
             return true;
         }
-        return refreshTokenRepository.existsLiveBySessionId(
-            refreshSessionId, userId, Instant.now(ClockProvider.getClock()));
+        final Instant now = Instant.now(ClockProvider.getClock());
+        if (!refreshTokenRepository.existsLiveBySessionId(refreshSessionId, userId, now)) {
+            return false;
+        }
+        // skillars-deferred-167, owner decision 2026-11-03: the session is live AND being used right now
+        // (this runs on the filter's DB-reauth branch), so push its deadline out if it is close. Without
+        // this, a chain nobody rotates — every SPA session, since the SPA has no caller for
+        // POST /api/auth/refresh — keeps the deadline written at login and this very check would refuse
+        // the user's standing access token exactly REFRESH_TOKEN_TTL later, mid-task. The write is scoped
+        // and conditional in the query itself, so a row that is already expired, used or revoked is never
+        // resurrected: REFRESH_TOKEN_TTL becomes an idle bound, not an absolute one.
+        refreshTokenRepository.slideExpiryForActiveSession(refreshSessionId, userId, now,
+            now.plus(SLIDE_WHEN_WITHIN), now.plus(REFRESH_TOKEN_TTL));
+        return true;
     }
 
     /**

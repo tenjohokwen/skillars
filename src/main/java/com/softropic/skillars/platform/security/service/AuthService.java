@@ -506,8 +506,8 @@ public class AuthService {
      *   <li>{@link GraceResolution#revokedChain()} — a hop carried {@code revokedAt}; the session was
      *       deliberately ended.</li>
      *   <li>{@link GraceResolution#stale()} — the chain HAS a live end, but the presented row's rotation is
-     *       older than the window. Answered as {@code StaleChain}: 401 and a revoke of THIS CHAIN,
-     *       <strong>never</strong> account-wide revocation. An earlier version of this paragraph listed "a rotation older than the
+     *       older than the window. Answered as {@code StaleChain}: 401 and a revoke of THIS CHAIN, which
+     *       escalates account-wide only through the hop-bound fallback described on {@link StaleChain}. An earlier version of this paragraph listed "a rotation older than the
      *       window" under genuine reuse, which is no longer what happens; do not restore a {@code none()}
      *       return there without reading {@link StaleChain}'s javadoc first.</li>
      *   <li>{@link GraceResolution#none()} — genuine reuse, i.e. nothing live to be found: never rotated,
@@ -621,7 +621,14 @@ public class AuthService {
      * skillars-deferred-167 (AC7, amended by the owner on 2026-11-03): the presented token is one hop or
      * more behind a chain that is still intact and live, but its own rotation is older than
      * {@link #REFRESH_GRACE_WINDOW}. 401, and <strong>this chain is revoked</strong> — from the presented
-     * row forward, so its live end goes too. The account's other chains are untouched.
+     * row forward, so its live end goes too. The account's other chains are untouched — with one
+     * exception, which this javadoc claimed did not exist until round 4 of the review found it:
+     * {@code terminateSession} delegates to {@code SecurityUtil.revokeChainWithBoundedRetry}, which
+     * escalates to {@code revokeAllForUser} if the revoke walk reports {@code boundExceeded}. Since
+     * {@link #resolveGraceSuccessor} can find a live end at exactly {@link #MAX_GRACE_HOPS} hops and the
+     * decide transaction commits before that walk runs, another client rotating the live end in between
+     * pushes the chain past the bound and the revoke does go account-wide. Narrow (8 hops plus a race) but
+     * real, so do not restate this as a guarantee.
      *
      * <p>Why this is not {@link Reuse}. Two concurrent refreshes of one cookie both answer with
      * {@code Set-Cookie: rtkn}; the browser keeps whichever response arrives last. When that is the

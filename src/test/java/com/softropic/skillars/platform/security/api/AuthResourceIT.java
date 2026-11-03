@@ -1548,25 +1548,112 @@ class AuthResourceIT extends AbstractIntegrationTest {
     }
 
     /**
-     * AC10, a deliberate behaviour change rather than a bug fix. An access token used to slide forever as
-     * long as the user kept clicking, even after its refresh chain had expired and been swept — nothing on
-     * either filter path consulted {@code refresh_tokens}. The chain's 7-day TTL is now an absolute cap on
-     * the session.
+     * AC10, as settled by the owner on 2026-11-03: the chain's TTL caps a session only once that chain has
+     * actually ROTATED.
+     *
+     * <p>An access token used to slide forever while the user kept clicking, even after its refresh chain
+     * expired and was swept, because nothing on either filter path consulted {@code refresh_tokens}. It no
+     * longer does — but applying that to every chain refused the standing token of any continuously active
+     * WEB user exactly 7 days after login, because the SPA never calls {@code POST /api/auth/refresh} and
+     * so its chain keeps the deadline written at login. Rotating from the SPA was tried and reverted (its
+     * only hook was the idle-warning dialog, which an actively polling tab never reaches). So the cap binds
+     * a chain that has rotated, where it means what AC10 intended, and exempts one that never has.
      */
     @Test
-    void standingJwt_whoseChainHasExpired_isRefused() {
+    void standingJwt_whoseRotatedChainHasExpired_isRefused() {
+        ResponseEntity<Map> device = login(COACH_EMAIL);
+        String original = extractCookieValue(device, "rtkn");
+
+        // Rotate once, so this chain is subject to the cap at all.
+        ResponseEntity<Map> refreshed = httpTestClient.makeHttpRequest(
+            baseUrl() + REFRESH_ENDPOINT, HttpMethod.POST, null, cookieHeaders(original), Map.class);
+        String successor = extractCookieValue(refreshed, "rtkn");
+        assertThat(successor).isNotNull();
+        String jwt = withExpiredDbRefreshToken(extractCookieValue(refreshed, "potc"));
+        assertThat(accountGetStatus(cookiesWithJwt(refreshed, jwt)))
+            .as("precondition: the rotated chain is live, so the JWT passes")
+            .isEqualTo(HttpStatus.OK);
+
+        // Expire the chain's live end. commitWrite, not ClockProvider: a bare jdbcTemplate write in a test
+        // body never commits (hikari auto-commit=false) and so would be invisible to the server.
+        commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+            Timestamp.from(Instant.now().minus(Duration.ofMinutes(5))), sha256Hex(successor));
+
+        assertThat(accountGetStatus(cookiesWithJwt(refreshed, jwt)))
+            .as("a rotated chain that has run out its TTL ends the session")
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    /**
+     * The half that protects every web session: a live chain whose deadline is near is pushed out while the
+     * session is in use, so an actively-used session is never ended by a deadline written when it started.
+     *
+     * <p>This is the assertion that would have caught the forced-logout defect before it shipped. Two
+     * earlier attempts at this guarantee failed and are worth not repeating: rotating from the SPA (its
+     * only hook is the idle-warning dialog, which an actively polling tab never reaches) and exempting
+     * unrotated rows from the expiry test (a rotated chain's live end is itself an unrotated row, so it
+     * exempted every chain and the cap applied to nothing).
+     */
+    @Test
+    void standingJwt_ofAnActiveSessionNearItsDeadline_slidesTheDeadlineInsteadOfEnding() {
+        ResponseEntity<Map> device = login(COACH_EMAIL);
+        String rtkn = extractCookieValue(device, "rtkn");
+        String jwt = withExpiredDbRefreshToken(extractCookieValue(device, "potc"));
+
+        // Bring the deadline inside the slide threshold (1 day) without expiring it.
+        Instant nearDeadline = Instant.now().plus(Duration.ofHours(2));
+        commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+            Timestamp.from(nearDeadline), sha256Hex(rtkn));
+
+        // One authenticated request forces the DB-reauth branch, which is where the slide happens.
+        assertThat(accountGetStatus(cookiesWithJwt(device, jwt)))
+            .as("an active session must not be refused while its chain is still live")
+            .isEqualTo(HttpStatus.OK);
+
+        Timestamp after = jdbcTemplate.queryForObject(
+            "SELECT expires_at FROM main.refresh_tokens WHERE token_hash = ?",
+            Timestamp.class, sha256Hex(rtkn));
+        assertThat(after).isNotNull();
+        assertThat(after.toInstant())
+            .as("the deadline must have been pushed out, which is what stops the 7-day forced logout")
+            .isAfter(nearDeadline.plus(Duration.ofDays(1)));
+    }
+
+    /**
+     * And the bound is still a bound: a chain left idle past its deadline ends the session. The slide only
+     * ever applies to a row that is still live, so it cannot resurrect an expired one — otherwise
+     * {@code REFRESH_TOKEN_TTL} would mean nothing at all.
+     */
+    @Test
+    void standingJwt_ofAnIdleSessionPastItsDeadline_isRefused() {
+        ResponseEntity<Map> device = login(COACH_EMAIL);
+        String rtkn = extractCookieValue(device, "rtkn");
+        String jwt = withExpiredDbRefreshToken(extractCookieValue(device, "potc"));
+
+        commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
+            Timestamp.from(Instant.now().minus(Duration.ofMinutes(5))), sha256Hex(rtkn));
+
+        assertThat(accountGetStatus(cookiesWithJwt(device, jwt)))
+            .as("an idle-expired chain ends the session; the slide must not bring it back")
+            .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    /**
+     * And revocation still wins, which is the property the whole story exists for: the slide relaxes the
+     * EXPIRY bound for an active session, never the revocation check.
+     */
+    @Test
+    void logout_killsTheJwtOfAnUnrotatedChainToo() {
         ResponseEntity<Map> device = login(COACH_EMAIL);
         String rtkn = extractCookieValue(device, "rtkn");
         String jwt = withExpiredDbRefreshToken(extractCookieValue(device, "potc"));
         assertThat(accountGetStatus(cookiesWithJwt(device, jwt))).isEqualTo(HttpStatus.OK);
 
-        // The chain's only row expires. commitWrite, not ClockProvider: a bare jdbcTemplate write in a
-        // test body never commits (hikari auto-commit=false) and so would be invisible to the server.
-        commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
-            Timestamp.from(Instant.now().minus(Duration.ofMinutes(5))), sha256Hex(rtkn));
+        httpTestClient.makeHttpRequest(
+            baseUrl() + LOGOUT_ENDPOINT, HttpMethod.POST, null, cookieHeaders(rtkn), Map.class);
 
         assertThat(accountGetStatus(cookiesWithJwt(device, jwt)))
-            .as("the refresh chain is the session's absolute bound now")
+            .as("relaxing the expiry bound must not relax the revocation check")
             .isEqualTo(HttpStatus.UNAUTHORIZED);
     }
 
@@ -1641,6 +1728,13 @@ class AuthResourceIT extends AbstractIntegrationTest {
         commitWrite("UPDATE main.refresh_tokens SET expires_at = ? WHERE token_hash = ?",
             Timestamp.from(Instant.now().minus(Duration.ofMinutes(5))), sha256Hex(a1));
 
+        // Mandatory before invoking a @SchedulerLock method, per AbstractIntegrationTest's own contract:
+        // lockAtLeastFor (PT1M here) makes a second acquisition inside a minute skip silently, so without
+        // this the sweep would become a no-op and all three assertions below would fail for a reason that
+        // has nothing to do with the code under test. It passes today only because this is the sole
+        // invocation of that lock name in the suite — which is exactly the kind of accident that breaks
+        // when someone adds the second one.
+        releaseSchedulerLock("AuthCleanupService_purgeExpiredRefreshTokens");
         authCleanupService.purgeExpiredRefreshTokens();
 
         assertThat(rowExistsFor(sha256Hex(a1))).as("the expired successor is gone").isFalse();
