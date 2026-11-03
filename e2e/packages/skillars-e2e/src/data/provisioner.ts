@@ -327,6 +327,34 @@ export class Provisioner {
     }
   }
 
+  /**
+   * Buy a coach's active pack tier for a parent's child through the purchase endpoint (card on file
+   * required, see saveCard; the stack's WireMock approves the charge). Returns the sessions bought.
+   */
+  async buyPack(
+    parent: ParentAccount,
+    coach: CoachAccount,
+    playerId: string = parent.children[0]!.playerId,
+  ): Promise<number> {
+    if (!coach.coachId) throw new Error('buyPack needs a published coach')
+    const session = await this.login(parent)
+    try {
+      const tier = await session.api.json<{ packTierId: string; sessionCount: number }>(
+        'GET',
+        `/payment/coaches/${coach.coachId}/session-pack-tiers`,
+      )
+      await session.api.post('/payment/session-packs/purchase', {
+        // As a string: player ids exceed Number.MAX_SAFE_INTEGER, and Jackson reads a string into a Long.
+        data: { packTierId: tier.packTierId, playerId },
+        headers: { 'Idempotency-Key': `e2e-${this.names.token('buy')}` },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+      return tier.sessionCount
+    } finally {
+      await session.dispose()
+    }
+  }
+
   async parent(options: { childAges?: number[] } = {}): Promise<ParentAccount> {
     const account = {
       ...(await this.registerAndVerify('parent')),

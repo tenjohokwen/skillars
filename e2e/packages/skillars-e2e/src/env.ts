@@ -7,6 +7,8 @@ import { optionalEnv } from 'pitchside-core'
 export const E2E = {
   baseUrl: optionalEnv('E2E_BASE_URL', 'http://localhost:9990'),
   mailpitUrl: optionalEnv('E2E_MAILPIT_URL', 'http://localhost:8025'),
+  /** The stack's WireMock admin API (stands in for Stripe and Gemini; its request journal is evidence). */
+  wiremockUrl: optionalEnv('E2E_WIREMOCK_URL', 'http://localhost:8089'),
   /**
    * Object storage as the BROWSER sees it: presigned upload/download URLs point here directly, not
    * through the app (the stack's APP_STORAGE_ENDPOINT_URL; `storage` resolves via /etc/hosts).

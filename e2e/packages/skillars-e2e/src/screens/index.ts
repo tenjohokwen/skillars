@@ -4,6 +4,7 @@ import { R } from '../routes.js'
 export * from './auth.js'
 export * from './coach.js'
 export * from './marketplace.js'
+export * from './booking.js'
 
 // One screen object per page under test. Thin by policy: locators and composite actions, never
 // assertions. Only pages that already carry data-testids are modelled; the rest wait for the
@@ -40,4 +41,12 @@ export class CoachPublicProfileScreen extends Screen {
   packs = () => this.tid('coach-profile-packs')
   /** A parent's remaining credits with this coach (only once they hold or held a pack). */
   credits = () => this.tid('coach-profile-credits')
+
+  /** Open the profile through a coach's shared-slot link; its CTAs carry the slot onwards. */
+  async openWithSlot(coachId: string, slot: string): Promise<this> {
+    await this.page.goto(
+      this.context.routing.toUrl(`${this.route.replace(':coachId', coachId)}?slot=${slot}`),
+    )
+    return this.waitReady()
+  }
 }
