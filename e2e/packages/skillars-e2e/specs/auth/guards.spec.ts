@@ -66,7 +66,7 @@ test.describe('A · Auth & session — guards and logout', () => {
   )
 
   test(
-    'an incomplete coach is held at the profile builder, by direct URL and by going back',
+    'an incomplete coach is held at the profile builder: direct URL, in-app navigation, back and forward',
     scenario({
       id: 'AUTH-13',
       priority: 'P0',
@@ -75,11 +75,26 @@ test.describe('A · Auth & session — guards and logout', () => {
     }),
     async ({ actor, suite }) => {
       const { page } = await actor('coach-incomplete')
+      const settled = (matcher: string | ((route: string) => boolean)) =>
+        waitForSettledRoute(page, suite.routing, matcher)
+      // Direct URL, on a fresh load.
       await page.goto(suite.routing.toUrl(R.commandCentre))
-      expect(await waitForSettledRoute(page, suite.routing, R.coachBuilder)).toBe(R.coachBuilder)
+      expect(await settled(R.coachBuilder)).toBe(R.coachBuilder)
+      // Then from inside the app (the profile page), so going back has somewhere in-app to land.
+      await page.goto(suite.routing.toUrl(R.profile))
+      expect(await settled(R.profile)).toBe(R.profile)
+      // In-app navigation (a hash change in the loaded app, as a link does): the guard turns the
+      // command centre into the builder. (page.goto to a hash-only URL is not a reliable stand-in.)
+      await page.evaluate((route) => {
+        location.hash = `#${route}`
+      }, R.commandCentre)
+      expect(await settled(R.coachBuilder)).toBe(R.coachBuilder)
+      // Back: the history entry the coach returns to is never the command centre.
       await page.goBack()
-      await page.goto(suite.routing.toUrl(R.commandCentre))
-      expect(await waitForSettledRoute(page, suite.routing, R.coachBuilder)).toBe(R.coachBuilder)
+      expect(await settled((route) => route !== R.commandCentre)).not.toBe(R.commandCentre)
+      // And forward again re-runs the guard.
+      await page.goForward()
+      expect(await settled((route) => route !== R.commandCentre)).not.toBe(R.commandCentre)
     },
   )
 })
