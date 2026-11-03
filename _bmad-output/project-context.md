@@ -180,6 +180,7 @@ The Playwright UI test framework (Pitchside) applies the `infrastructure` / `pla
   - the `portability` job in `.github/workflows/pitchside-core.yml` builds and tests the kernel copied out alone.
 - **Location:** it lives at the repository root under `e2e/`, deliberately **not** under `src/main/java/.../infrastructure`. It is TypeScript test tooling that drives the running app from outside: it must not ship in the Docker image (`.dockerignore` excludes `e2e/`) or sit inside Maven's Java source roots. It also must stay extractable for reuse in other projects.
 - **Placement test:** before adding code to the kernel, ask the same question as for `infrastructure`: "Could a completely different application use this as-is?" If not, it belongs in `skillars-e2e`.
+- **Test ids (frontend):** the only selector attribute is `data-testid` (Playwright's `getByTestId` default; Vitest specs select `[data-testid=…]`). Never `data-test`. Values are lower-kebab-case `<screen>-<element>-<qualifier>` ending in `-btn`, `-input`, `-checkbox`, `-select`, `-link`, `-error`, `-banner`, `-dialog` or `-empty` where they apply. A repeated row puts its id on the row container; children are found within it, not by an indexed id. Role variants of one screen (coach/parent/player registration) share ids.
 
 ---
 

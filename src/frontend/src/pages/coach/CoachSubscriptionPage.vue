@@ -16,12 +16,12 @@
           class="q-mb-md"
           rounded
           style="background: rgba(255, 82, 82, 0.15)"
-          data-test="payment-issue-banner"
+          data-testid="payment-issue-banner"
         >
           <template #avatar>
             <q-icon name="mdi-credit-card-off" color="negative" />
           </template>
-          <span v-if="paymentRetryPending" data-test="payment-retry-pending">{{
+          <span v-if="paymentRetryPending" data-testid="payment-retry-pending">{{
             t('subscription.paymentRetrying')
           }}</span>
           <span v-else-if="subscription?.status === 'PAUSED'">{{

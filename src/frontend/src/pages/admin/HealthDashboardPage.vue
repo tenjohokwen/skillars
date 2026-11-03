@@ -34,7 +34,7 @@
           :key="item.name"
           class="health-banner q-mb-lg"
           rounded
-          data-test="health-warning"
+          data-testid="health-warning"
         >
           <template #avatar>
             <q-icon name="warning" style="color: var(--accent-warning)" />

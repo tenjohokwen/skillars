@@ -266,7 +266,7 @@
                   icon="edit"
                   round
                   class="edit-btn"
-                  data-test="edit-coach-gallery"
+                  data-testid="edit-coach-gallery"
                   @click="showCoachGalleryDialog = true"
                 >
                   <q-tooltip>{{ t('profile.edit') }}</q-tooltip>

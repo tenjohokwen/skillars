@@ -680,7 +680,7 @@ describe('ParentBookingsPage.vue — receipt link (feat/coach-workflow-gaps A23)
     })
     await flushPromises()
 
-    expect(wrapper.findAll('[data-test="booking-receipt"]')).toHaveLength(1)
+    expect(wrapper.findAll('[data-testid="booking-receipt"]')).toHaveLength(1)
   })
 })
 

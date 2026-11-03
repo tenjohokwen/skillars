@@ -62,7 +62,7 @@ describe('AgeVerificationPage.vue', () => {
     getStatus.mockResolvedValue(status())
     const wrapper = await mountPage()
     expect(wrapper.text()).toContain('Skillars is for adults')
-    expect(wrapper.find('[data-test="age-start"]').text()).toContain('Verify my age')
+    expect(wrapper.find('[data-testid="age-start"]').text()).toContain('Verify my age')
     expect(wrapper.text()).toContain('Attempts left today: 3')
   })
 
@@ -82,7 +82,7 @@ describe('AgeVerificationPage.vue', () => {
     })
     try {
       const wrapper = await mountPage()
-      await wrapper.find('[data-test="age-start"]').trigger('click')
+      await wrapper.find('[data-testid="age-start"]').trigger('click')
       await flushPromises()
       expect(start).toHaveBeenCalledTimes(1)
       expect(hrefSetter).toHaveBeenCalledWith('https://verify.stripe.com/start/abc')
@@ -96,46 +96,46 @@ describe('AgeVerificationPage.vue', () => {
       .mockResolvedValueOnce(status({ state: 'PENDING' }))
       .mockResolvedValue(status({ state: 'VERIFIED' }))
     const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="age-pending"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="age-pending"]').exists()).toBe(true)
     await vi.advanceTimersByTimeAsync(4100)
     await flushPromises()
-    expect(wrapper.find('[data-test="age-verified"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="age-pending"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="age-verified"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="age-pending"]').exists()).toBe(false)
   })
 
   it('FAILED: tells the player to retry and the button says "Try again"', async () => {
     getStatus.mockResolvedValue(status({ state: 'FAILED', attemptsRemainingToday: 2 }))
     const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="age-failed"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="age-start"]').text()).toContain('Try again')
+    expect(wrapper.find('[data-testid="age-failed"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="age-start"]').text()).toContain('Try again')
   })
 
   it('attempts exhausted: the start button is disabled and the daily-cap copy shows', async () => {
     getStatus.mockResolvedValue(status({ state: 'FAILED', attemptsRemainingToday: 0 }))
     const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="age-exhausted"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="age-start"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-testid="age-exhausted"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="age-start"]').attributes('disabled')).toBeDefined()
   })
 
   it('BLOCKED: shows the under-18 notice and no start button', async () => {
     getStatus.mockResolvedValue(status({ state: 'BLOCKED' }))
     const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="age-blocked"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="age-start"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="age-blocked"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="age-start"]').exists()).toBe(false)
   })
 
   it('feature off: explains the fallback instead of offering a flow', async () => {
     getStatus.mockResolvedValue(status({ enabled: false }))
     const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="age-unavailable"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="age-start"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="age-unavailable"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="age-start"]').exists()).toBe(false)
   })
 
   it('VERIFIED with a same-app next path: the continue button navigates there', async () => {
     routeQuery = { next: '/messaging?conversation=4' }
     getStatus.mockResolvedValue(status({ state: 'VERIFIED' }))
     const wrapper = await mountPage()
-    await wrapper.find('[data-test="age-continue"]').trigger('click')
+    await wrapper.find('[data-testid="age-continue"]').trigger('click')
     expect(push).toHaveBeenCalledWith('/messaging?conversation=4')
   })
 
@@ -143,7 +143,7 @@ describe('AgeVerificationPage.vue', () => {
     routeQuery = { next: '//evil.example/x' }
     getStatus.mockResolvedValue(status({ state: 'VERIFIED' }))
     const wrapper = await mountPage()
-    expect(wrapper.find('[data-test="age-continue"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="age-continue"]').exists()).toBe(false)
   })
 
   it('a start failure with the attempts-exceeded code toasts the daily-cap copy', async () => {
@@ -155,7 +155,7 @@ describe('AgeVerificationPage.vue', () => {
       },
     })
     const wrapper = await mountPage()
-    await wrapper.find('[data-test="age-start"]').trigger('click')
+    await wrapper.find('[data-testid="age-start"]').trigger('click')
     await flushPromises()
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining('verification attempts') }),

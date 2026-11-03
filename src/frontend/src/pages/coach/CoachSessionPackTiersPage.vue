@@ -40,7 +40,7 @@
               v-if="activeTier.validityDays"
               class="text-caption"
               style="color: var(--text-secondary)"
-              data-test="tier-validity"
+              data-testid="tier-validity"
             >
               {{ t('booking.packs.validFor', { days: activeTier.validityDays }) }}
             </div>
@@ -115,7 +115,7 @@
               <q-item
                 v-for="pack in paymentStore.soldPacks"
                 :key="pack.purchaseId"
-                data-test="sold-pack"
+                data-testid="sold-pack"
               >
                 <q-item-section>
                   <q-item-label class="text-weight-medium">
@@ -150,7 +150,7 @@
                     v-if="statusNote(pack)"
                     caption
                     class="text-deep-orange"
-                    data-test="sold-pack-status-note"
+                    data-testid="sold-pack-status-note"
                   >
                     {{ statusNote(pack) }}
                   </q-item-label>
@@ -159,7 +159,7 @@
                   <q-badge
                     :color="statusColor(pack.status)"
                     :label="statusLabel(pack.status)"
-                    data-test="sold-pack-status"
+                    data-testid="sold-pack-status"
                   />
                   <q-btn
                     v-if="pack.extendable && pack.status !== 'REVOKED'"
@@ -169,7 +169,7 @@
                     :label="t('payment.myTiers.extendCta')"
                     :loading="extendingId === pack.purchaseId"
                     :disable="extendingId !== null"
-                    data-test="extend-pack"
+                    data-testid="extend-pack"
                     @click="submitExtend(pack)"
                   />
                 </q-item-section>

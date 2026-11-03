@@ -115,7 +115,7 @@
             no-caps
             icon="edit"
             :label="t('session.drillEditor.edit')"
-            data-test="drill-edit"
+            data-testid="drill-edit"
             @click="emit('edit', props.drill)"
           />
           <q-btn
@@ -125,7 +125,7 @@
             color="negative"
             icon="delete"
             :label="t('session.drillEditor.delete')"
-            data-test="drill-delete"
+            data-testid="drill-delete"
             @click="confirmDeleteDrill"
           />
         </div>
@@ -322,7 +322,7 @@
                 no-caps
                 icon="edit"
                 :label="t('session.drillEditor.edit')"
-                data-test="drill-edit"
+                data-testid="drill-edit"
                 @click="emit('edit', props.drill)"
               />
               <q-btn
@@ -332,7 +332,7 @@
                 color="negative"
                 icon="delete"
                 :label="t('session.drillEditor.delete')"
-                data-test="drill-delete"
+                data-testid="drill-delete"
                 @click="confirmDeleteDrill"
               />
             </div>

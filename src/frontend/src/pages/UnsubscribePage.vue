@@ -3,12 +3,12 @@
     <div class="glass-card--static q-pa-xl unsubscribe-card">
       <div class="text-page-title q-mb-md">{{ t('notifications.unsubscribe.title') }}</div>
 
-      <div v-if="!token" class="text-meta" data-test="unsub-missing">
+      <div v-if="!token" class="text-meta" data-testid="unsub-missing">
         {{ t('notifications.unsubscribe.missingToken') }}
       </div>
 
       <template v-else-if="state === 'done'">
-        <div class="text-body q-mb-md" data-test="unsub-done">
+        <div class="text-body q-mb-md" data-testid="unsub-done">
           {{ t('notifications.unsubscribe.success', { category: categoryLabel }) }}
         </div>
         <div class="text-meta">{{ t('notifications.unsubscribe.manageHint') }}</div>
@@ -20,7 +20,7 @@
           v-if="state === 'error'"
           class="bg-negative text-white q-mb-md"
           rounded
-          data-test="unsub-error"
+          data-testid="unsub-error"
         >
           {{ t('notifications.unsubscribe.invalid') }}
         </q-banner>
@@ -30,7 +30,7 @@
           color="primary"
           :loading="state === 'submitting'"
           :label="t('notifications.unsubscribe.confirm')"
-          data-test="unsub-confirm"
+          data-testid="unsub-confirm"
           @click="confirm"
         />
       </template>

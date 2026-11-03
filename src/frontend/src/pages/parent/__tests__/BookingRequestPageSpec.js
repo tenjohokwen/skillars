@@ -317,8 +317,8 @@ describe('BookingRequestPage.vue — self-booking PLAYER sees their packs', () =
     expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith(SELF_PLAYER_ID)
     // fix/per-session-booking-cta: no credits → no tracker; per session is the default instead.
     expect(wrapper.find('session-pack-tracker-stub').exists()).toBe(false)
-    expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="no-credits-warning"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="per-session-info"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="no-credits-warning"]').exists()).toBe(false)
   })
 })
 
@@ -353,11 +353,11 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
       expect(wrapper.vm.hasCredits).toBe(false)
       expect(wrapper.vm.selectedPackId).toBe(null)
       expect(wrapper.vm.canSubmit).toBe(true)
-      expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(true)
-      expect(wrapper.find('[data-test="no-credits-warning"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="per-session-info"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="no-credits-warning"]').exists()).toBe(false)
       expect(wrapper.find('session-pack-tracker-stub').exists()).toBe(false)
       // A parent paying per session gets the saved-card entry (charged on the coach's accept).
-      expect(wrapper.find('[data-test="payment-card"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="payment-card"]').exists()).toBe(true)
 
       await wrapper.vm.submit()
       expect(bookingStore.submitBookingRequest).toHaveBeenCalledWith(
@@ -377,8 +377,8 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     wrapper.vm.selectSlot(wrapper.vm.slotRows[0].slot)
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.find('[data-test="no-credits-warning"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="no-credits-warning"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="per-session-info"]').exists()).toBe(false)
     expect(wrapper.vm.canSubmit).toBe(false)
   })
 
@@ -401,13 +401,13 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     const tracker = wrapper.find('session-pack-tracker-stub')
     expect(tracker.exists()).toBe(true)
     expect(wrapper.vm.activePackSessionTotal).toBe(5)
-    expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="per-session-info"]').exists()).toBe(false)
     expect(wrapper.vm.packOptions[0]).toEqual({ label: 'booking.packs.perSession', value: null })
     expect(wrapper.vm.selectedPackId).toBe(null)
     // Choosing the pack hides the parent's per-session card entry.
     wrapper.vm.selectedPackId = 'p1'
     await wrapper.vm.$nextTick()
-    expect(wrapper.find('[data-test="payment-card"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="payment-card"]').exists()).toBe(false)
   })
 })
 

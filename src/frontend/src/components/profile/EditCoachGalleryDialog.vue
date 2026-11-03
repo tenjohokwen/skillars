@@ -21,7 +21,7 @@
               v-for="item in items"
               :key="item.id"
               class="coach-gallery__item"
-              data-test="gallery-item"
+              data-testid="gallery-item"
             >
               <q-img :src="item.fileUrl" :ratio="1" class="coach-gallery__img" />
               <q-btn
@@ -34,7 +34,7 @@
                 :loading="deletingId === item.id"
                 :disable="busy"
                 :aria-label="$t('profile.coachGalleryRemove')"
-                data-test="gallery-delete"
+                data-testid="gallery-delete"
                 @click="removeItem(item)"
               />
             </div>
@@ -73,7 +73,7 @@
           :label="$t('profile.coachGalleryUpload')"
           :loading="uploading"
           :disable="!selectedFile || busy"
-          data-test="gallery-upload"
+          data-testid="gallery-upload"
           @click="upload"
         />
       </q-card-actions>

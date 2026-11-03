@@ -63,7 +63,7 @@
                 :color="packBadgeColor(pack)"
                 :label="packBadgeLabel(pack, $t)"
                 class="q-mb-xs"
-                data-test="pack-status-badge"
+                data-testid="pack-status-badge"
               />
               <SessionPackTracker
                 :credits-remaining="pack.creditsRemaining"

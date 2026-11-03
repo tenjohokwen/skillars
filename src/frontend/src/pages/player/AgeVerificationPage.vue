@@ -1,13 +1,13 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="glass-card q-pa-lg age-verification" data-test="age-verification-page">
+    <div class="glass-card q-pa-lg age-verification" data-testid="age-verification-page">
       <div class="text-h6 q-mb-xs">{{ t('player.ageVerification.title') }}</div>
 
       <q-banner
         v-if="route.query.required && state !== 'VERIFIED'"
         class="q-mb-md"
         rounded
-        data-test="age-verification-required"
+        data-testid="age-verification-required"
       >
         {{ t('player.ageVerification.required') }}
       </q-banner>
@@ -19,13 +19,13 @@
         <div
           v-if="!status.enabled && state !== 'VERIFIED'"
           class="text-body2"
-          data-test="age-unavailable"
+          data-testid="age-unavailable"
         >
           {{ t('player.ageVerification.unavailable') }}
         </div>
 
         <template v-else>
-          <div v-if="state === 'VERIFIED'" data-test="age-verified">
+          <div v-if="state === 'VERIFIED'" data-testid="age-verified">
             <div class="row items-center q-gutter-sm q-mb-md">
               <q-icon name="verified" color="positive" size="28px" />
               <span class="text-body1">{{ t('player.ageVerification.verified') }}</span>
@@ -36,12 +36,12 @@
               unelevated
               no-caps
               :label="t('player.ageVerification.backToWhere')"
-              data-test="age-continue"
+              data-testid="age-continue"
               @click="continueToNext"
             />
           </div>
 
-          <div v-else-if="state === 'BLOCKED'" data-test="age-blocked">
+          <div v-else-if="state === 'BLOCKED'" data-testid="age-blocked">
             <q-banner class="bg-negative text-white" rounded>
               {{ t('player.ageVerification.blocked') }}
             </q-banner>
@@ -55,7 +55,7 @@
             <div
               v-if="state === 'PENDING'"
               class="row items-center q-gutter-sm q-my-md"
-              data-test="age-pending"
+              data-testid="age-pending"
             >
               <q-spinner-dots size="24px" />
               <span>{{ t('player.ageVerification.pending') }}</span>
@@ -65,7 +65,7 @@
               v-if="state === 'FAILED'"
               class="q-my-md bg-warning"
               rounded
-              data-test="age-failed"
+              data-testid="age-failed"
             >
               {{ t('player.ageVerification.failed') }}
             </q-banner>
@@ -73,7 +73,7 @@
             <div
               v-if="status.attemptsRemainingToday <= 0 && state !== 'PENDING'"
               class="text-negative q-my-md"
-              data-test="age-exhausted"
+              data-testid="age-exhausted"
             >
               {{ t('player.ageVerification.attemptsExhausted') }}
             </div>
@@ -86,7 +86,7 @@
                 :loading="starting"
                 :disable="status.attemptsRemainingToday <= 0 && state !== 'PENDING'"
                 :label="startLabel"
-                data-test="age-start"
+                data-testid="age-start"
                 @click="start"
               />
               <div class="text-meta q-mt-sm">

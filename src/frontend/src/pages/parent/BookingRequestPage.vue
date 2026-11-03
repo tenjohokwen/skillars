@@ -35,7 +35,7 @@
       dense
       rounded
       class="q-mb-md"
-      data-test="per-session-info"
+      data-testid="per-session-info"
     >
       <template #avatar>
         <q-icon name="info" color="primary" />
@@ -45,7 +45,7 @@
     <q-banner
       v-if="!hasCredits && coachUnpriced"
       class="bg-warning text-white q-mb-md"
-      data-test="no-credits-warning"
+      data-testid="no-credits-warning"
     >
       {{ t('booking.requests.noCreditsWarning') }}
       <template #action>
@@ -58,7 +58,7 @@
     <q-banner
       v-if="coachUnpriced"
       class="bg-warning text-white q-mb-md"
-      data-test="coach-pricing-unavailable"
+      data-testid="coach-pricing-unavailable"
     >
       {{ t('booking.errors.coachPricingUnavailable') }}
     </q-banner>
@@ -166,7 +166,7 @@
         flat
         bordered
         class="q-mb-md"
-        data-test="payment-card"
+        data-testid="payment-card"
       >
         <q-card-section>
           <div class="text-subtitle1 q-mb-sm">{{ t('payment.card.title') }}</div>
@@ -229,14 +229,14 @@
                card split, from the backend quote — the same price source and split rule the batch
                settlement applies on acceptance. Session-pack credits are never applied to a batch
                (batch bookings carry no pack), so the old pack-credit preview here was misleading. -->
-          <div class="q-mt-md" data-test="batch-quote">
+          <div class="q-mt-md" data-testid="batch-quote">
             <div v-if="batchQuoteLoading" class="flex flex-center q-py-sm">
               <q-spinner-dots size="24px" />
             </div>
             <div
               v-else-if="coachUnpriced"
               class="text-caption text-negative"
-              data-test="batch-quote-unpriced"
+              data-testid="batch-quote-unpriced"
             >
               {{ t('booking.errors.coachPricingUnavailable') }}
             </div>

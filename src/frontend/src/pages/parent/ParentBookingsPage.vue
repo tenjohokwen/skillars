@@ -306,7 +306,7 @@
             class="q-mt-xs"
             :label="t('creditStatement.receipt')"
             :to="{ name: 'parent-receipt', params: { bookingId: booking.id } }"
-            data-test="booking-receipt"
+            data-testid="booking-receipt"
           />
         </q-item-section>
       </q-item>

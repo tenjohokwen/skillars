@@ -102,7 +102,7 @@
           <div
             v-else-if="!templateStore.deployableBookings.length"
             class="text-body2 text-secondary"
-            data-test="no-deployable-bookings"
+            data-testid="no-deployable-bookings"
           >
             {{ t('session.templates.deployNoBookings') }}
           </div>
@@ -117,7 +117,7 @@
             :label="t('session.templates.deployBookingLabel')"
             :error="!!deployError"
             :error-message="deployError"
-            data-test="deploy-booking-select"
+            data-testid="deploy-booking-select"
           />
         </q-card-section>
         <q-card-actions align="right">

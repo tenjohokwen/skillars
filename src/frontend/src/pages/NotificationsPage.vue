@@ -12,7 +12,7 @@
           no-caps
           icon="done_all"
           :label="t('notifications.markAllRead')"
-          data-test="page-mark-all"
+          data-testid="page-mark-all"
           @click="onMarkAllRead"
         />
       </div>
@@ -25,7 +25,11 @@
         <div v-if="loading && !items.length" class="flex flex-center q-py-xl">
           <q-spinner-dots size="40px" style="color: var(--accent-primary)" />
         </div>
-        <div v-else-if="!items.length" class="text-meta q-pa-lg text-center" data-test="page-empty">
+        <div
+          v-else-if="!items.length"
+          class="text-meta q-pa-lg text-center"
+          data-testid="page-empty"
+        >
           {{ t('notifications.empty') }}
         </div>
         <q-list v-else separator>

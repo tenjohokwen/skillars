@@ -54,15 +54,15 @@ describe('NotificationBell.vue', () => {
     const { wrapper } = await mountBell(3)
 
     expect(notificationApi.unreadCount).toHaveBeenCalledTimes(1)
-    expect(wrapper.find('[data-test="notification-badge"]').text()).toBe('3')
+    expect(wrapper.find('[data-testid="notification-badge"]').text()).toBe('3')
   })
 
   it('hides the badge at zero and caps it at 99+', async () => {
     const zero = await mountBell(0)
-    expect(zero.wrapper.find('[data-test="notification-badge"]').exists()).toBe(false)
+    expect(zero.wrapper.find('[data-testid="notification-badge"]').exists()).toBe(false)
 
     const many = await mountBell(250)
-    expect(many.wrapper.find('[data-test="notification-badge"]').text()).toBe('99+')
+    expect(many.wrapper.find('[data-testid="notification-badge"]').text()).toBe('99+')
   })
 
   it('refreshes the count on route change and on window focus', async () => {
