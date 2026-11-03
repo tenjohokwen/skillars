@@ -697,21 +697,14 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       The JWT carries the chain id as an `rtsid` claim, and the authorisation filter refuses a JWT whose
       chain has no live refresh token left — within `DB_REFRESH_TOKEN_INTERVAL` (5 min) of the logout.
       Previously a copied `potc` cookie kept working for as long as its holder kept making requests.
-- [x] **RESOLVED before merge: an active session's deadline slides, so the TTL is an idle bound.** When
-      the DB-reauth branch finds a chain live and within a day of its deadline, it pushes the deadline out
-      a full TTL. A web session — whose chain is the single row written at login, because the SPA never
-      calls `POST /api/auth/refresh` — is therefore not ended mid-task on day seven, while a session left
-      idle past its deadline still ends and is still swept. Revocation is untouched: a logout kills the
-      session within one DB-reauth cycle regardless. Two earlier attempts were reverted (SPA rotation,
-      whose only trigger a polling tab never reaches; and exempting unrotated rows, which exempted every
-      chain because a rotated chain's live end is itself unrotated). The original problem is kept below
-      because it is what to re-test if the slide is ever removed: The SPA has no
-      caller for `POST /api/auth/refresh`, so its chain is the one row created at login. Seven days later
-      that row expires and the standing JWT is refused on the next DB-reauth cycle — a forced logout for
-      every continuously active web user, possibly mid-form, with no client-side way to extend and no
-      warning (the existing dialog covers the 15-minute JWT, not this). Conversely a client that *does*
-      rotate is never capped, because each rotation writes a fresh `expires_at`. Filed as an owner decision
-      in `deferred-work.md`; do not ship to a live PROD without settling it.
+- [ ] **Behaviour change to announce: a web session now ends 7 days after login.** The SPA has no caller
+      for `POST /api/auth/refresh`, so its refresh chain is the single row written at login; when that
+      expires the standing access token is refused on the next DB-reauth cycle (within 5 min). Previously
+      an access token slid indefinitely while the user kept clicking. There is no warning dialog for this
+      — the existing countdown covers the 15-minute access token, not the 7-day chain — so an active user
+      is signed out mid-task and must log in again. Three attempts to remove the cap were made and
+      withdrawn during that story (the third broke logout outright); the real fix is frontend rotation,
+      filed as its own story in `deferred-work.md`. Tell support before this ships.
 - [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
       carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
       sign every live session out at deploy. Such a token never acquires a claim, so a holder who keeps

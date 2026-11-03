@@ -156,7 +156,7 @@ public final class SecurityUtil {
      * service, and threading a new dependency into that filter's constructor (and into everything that
      * builds it) to ask one boolean would be the larger change. The answer itself, and why a null id
      * answers {@code true}, are documented on
-     * {@link RefreshTokenRevocationService#hasLiveTokenForSession(UUID)}.
+     * {@link RefreshTokenRevocationService#hasLiveTokenForSession(UUID, Long)}.
      */
     public boolean hasLiveRefreshTokenForSession(final UUID refreshSessionId, final Long userId) {
         return refreshTokenRevocationService.hasLiveTokenForSession(refreshSessionId, userId);

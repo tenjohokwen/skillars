@@ -196,24 +196,27 @@ cookie therefore kept working for as long as its holder kept making requests.
   no live row, the session ends within one DB-reauth cycle, where an access token used to slide
   indefinitely as long as the user kept clicking. Who that actually affects is the opposite of what it
   first looks like:
-  - **`REFRESH_TOKEN_TTL` is an IDLE bound, because an active session's deadline slides.** `expires_at`
-    is written at login and again at each rotation, so a chain nobody rotates keeps its login deadline
-    — and the SPA has no caller for `POST /api/auth/refresh`, so that is every web session. Left
-    alone, this check would refuse such a user's standing access token exactly 7 days after login,
-    mid-task. So when the DB-reauth branch finds the chain live and its deadline within one day, it
-    pushes the deadline out by a full TTL (`slideExpiryForActiveSession`). In practice that writes
-    about once a day per active session, not once per 5-minute cycle.
-  - **The bound is still a bound.** The slide only ever touches a row that is still live, so a session
-    left idle past its deadline ends on schedule and is swept normally — an abandoned chain is not
-    kept alive by this.
-  - **Revocation is never relaxed.** `revoked_at IS NULL` is tested unconditionally, so a logout still
-    ends the session within one DB-reauth cycle. Only the expiry bound slides.
-  - **Two other approaches were tried and rejected**, recorded so they are not retried: rotating from
-    the SPA (its only trigger is the idle-warning dialog's "Continue session" button, which a polling
-    tab never reaches — so it missed the population it was for — and a failed rotation returns
-    cookie-deletion headers that would sign the user out), and exempting unrotated rows from the
-    expiry test (a rotated chain's live end is itself an unrotated row, so it exempted every chain and
-    the cap applied to nothing).
+  - **This caps a web session at 7 days after login, and that is the shipped behaviour.** The SPA has no
+    caller for `POST /api/auth/refresh`, so its chain is the single row written at login and keeps that
+    deadline; when it expires the standing access token is refused on the next DB-reauth cycle. For a
+    client that does rotate, the cap means what it says — stop refreshing and you lose the session a TTL
+    later.
+  - **Three attempts to remove the cap were made and all withdrawn.** Recorded so none is retried blind:
+    1. *Rotating from the SPA.* Its only trigger was the idle-warning dialog's "Continue session" button,
+       which a tab that keeps polling never reaches — so it missed the very population it was for. And a
+       failed rotation returns cookie-deletion headers, so it could sign the user out instead of
+       extending them.
+    2. *Exempting chains that have never rotated.* Dead on arrival: a rotated chain's live end is itself
+       always an unrotated row, so it exempted every chain and the cap applied to nothing.
+    3. *Sliding `expires_at` for an active session.* It broke logout. The `rtkn` cookie's max-age **is**
+       `REFRESH_TOKEN_TTL`, so past that point the browser has dropped it while the slid row stayed live
+       — and logout revokes only when that cookie is present, so it silently revoked nothing and the
+       chain check could never answer false again. It re-opened the hole this mechanism exists to close.
+  - **The rule those add up to: a session may not outlive the cookie that identifies it.** Extending the
+    row requires issuing a fresh `Set-Cookie`, which only a rotation does, so there is no server-only
+    fix. Removing the cap needs the SPA to rotate on a trigger an active session actually reaches, which
+    is frontend work tracked in `deferred-work.md`.
+
 - **No frontend caller.** The SPA does not call this endpoint: `src/api/auth.api.js` dropped its
   helper, and routine keep-alive goes through `GET /refresh` (see above), which re-mints the JWT and
   never touches `refresh_tokens`. This endpoint is reached by API clients and tests.

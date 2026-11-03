@@ -238,13 +238,30 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * inclusive because that method treats {@code expiresAt == now} as still live
      * ({@code expiresAt.isBefore(now)} is false), and the two must not disagree about the same row.
      *
-     * <p><strong>What stops this capping an active web session at 7 days</strong> is
-     * {@link #slideExpiryForActiveSession(UUID, Long, Instant, Instant)}, not an exemption here. An
-     * exemption was tried — skip the expiry test for a row with no {@code rotated_at} and no
-     * {@code replaced_by_id} — and it was dead on arrival: a rotated chain's LIVE END is itself always
-     * such a row ({@code decideAndRotate} creates the successor with both null), so it exempted every
-     * chain and the cap applied to nothing. Keying on sibling rows instead does not work either, because
-     * the hourly sweep deletes the expired predecessors that would be the evidence.
+     * <p><strong>This does cap a web session at {@code REFRESH_TOKEN_TTL} after login, and three attempts
+     * to avoid that were all withdrawn.</strong> The SPA has no caller for
+     * {@code POST /api/auth/refresh}, so its chain is the single row written at login and keeps that
+     * deadline. Recorded here because each attempt failed for a different reason and none should be
+     * retried blind:
+     * <ol>
+     *   <li>Rotating from the SPA: its only trigger was the idle-warning dialog, which a polling tab
+     *       never reaches, so it missed the very population it was for — and a failed rotation returns
+     *       cookie-deletion headers, so it could sign the user out instead of extending them.</li>
+     *   <li>Exempting rows with no {@code rotated_at}/{@code replaced_by_id} from the expiry test: dead on
+     *       arrival, because a rotated chain's LIVE END is itself always such a row
+     *       ({@code decideAndRotate} creates the successor with both null), so it exempted every chain.
+     *       Keying on sibling rows fails too — the sweep deletes the expired predecessors that would be
+     *       the evidence.</li>
+     *   <li>Sliding {@code expires_at} for an active session: it broke logout. The {@code rtkn} cookie's
+     *       max-age IS {@code REFRESH_TOKEN_TTL}, so past that point the browser has dropped it while the
+     *       slid row stayed live — and {@code SecurityUtil.terminateSession} revokes only when that cookie
+     *       is present, so Logout silently revoked nothing and this check could never answer false again.
+     *       It re-opened the hole AC4 exists to close.</li>
+     * </ol>
+     * The general rule those add up to: <strong>a session may not outlive the cookie that identifies
+     * it</strong>. Extending the row's life requires issuing a fresh {@code Set-Cookie}, which only
+     * rotation does, so there is no server-only fix — removing the cap needs the SPA to rotate on a
+     * trigger an active session actually reaches, which is its own piece of frontend work.
      *
      * <p>This is the whole of the per-session JWT check, and it is deliberately a scalar
      * {@code exists}/count rather than a fetch: {@code JWTAuthorizationFilter} calls it on a request that
@@ -272,45 +289,6 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
         + "AND r.userId = :userId AND r.used = false AND r.revokedAt IS NULL AND r.expiresAt >= :now")
     boolean existsLiveBySessionId(@Param("sessionId") UUID sessionId, @Param("userId") Long userId,
                                   @Param("now") Instant now);
-
-    /**
-     * Pushes a still-live chain's deadline out, so an active session is not ended by a deadline written
-     * when it began.
-     *
-     * <p><strong>Why this exists (owner decision 2026-11-03, after the review found the alternative
-     * broken).</strong> {@code expires_at} is written at login and again at each rotation, so a chain
-     * nobody rotates keeps its login deadline forever. The SPA has no caller for
-     * {@code POST /api/auth/refresh}, so that is every web session: without this, AC4's liveness check
-     * refused the standing access token of a continuously active web user exactly
-     * {@code REFRESH_TOKEN_TTL} after login, mid-task, with nothing the client could do. Two other
-     * approaches were tried and rejected first — rotating from the SPA (its only hook is the idle-warning
-     * dialog, which an actively polling tab never reaches, and a failed rotation tears the session down)
-     * and exempting unrotated rows from the expiry test (every chain's live end is an unrotated row, so it
-     * exempted everything).
-     *
-     * <p>The effect is that {@code REFRESH_TOKEN_TTL} becomes an IDLE bound rather than an absolute one,
-     * which is what it already reads as elsewhere: a session that stops being used still expires on
-     * schedule and is still swept, and an abandoned chain is not kept alive by this. That also keeps the
-     * sweep honest, which an exemption would not have.
-     *
-     * <p>Called only from the filter's DB-reauth branch, which {@code hasDbRefreshTokenExpired} gates to
-     * once per {@code DB_REFRESH_TOKEN_INTERVAL} (5 min), and only when the deadline is within
-     * {@code :threshold} — so in practice this writes about once a day per active session, not once per
-     * cycle. {@code REQUIRES_NEW} for the reason every write on this table has it: the caller may have no
-     * transaction at all (the filter does not), and a revoke or denial after it must not roll it back.
-     *
-     * <p>Deliberately does NOT touch a row that is already expired ({@code expires_at >= :now}): a session
-     * that has been idle past its deadline has ended, and resurrecting it here would turn the idle bound
-     * into no bound. Nor a {@code used} or revoked row — those are not the chain's live end.
-     */
-    @Modifying
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    @Query("UPDATE RefreshToken r SET r.expiresAt = :newExpiry, r.version = r.version + 1 "
-        + "WHERE r.sessionId = :sessionId AND r.userId = :userId AND r.used = false "
-        + "AND r.revokedAt IS NULL AND r.expiresAt >= :now AND r.expiresAt < :threshold")
-    int slideExpiryForActiveSession(@Param("sessionId") UUID sessionId, @Param("userId") Long userId,
-                                    @Param("now") Instant now, @Param("threshold") Instant threshold,
-                                    @Param("newExpiry") Instant newExpiry);
 
     /**
      * skillars-deferred-167 round 2: the chain id of the row this token hash names, but only if the row

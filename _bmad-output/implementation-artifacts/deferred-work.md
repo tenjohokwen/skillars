@@ -119,7 +119,53 @@ the alternatives and stay queued behind it.
    3. **It made the `StaleChain` branch reachable from the web**, which AC7's blast-radius argument
       explicitly assumed it was not. A stripped or lost `Set-Cookie`, or two tabs extending together,
       leaves the browser one hop behind, and the next extension then revokes the chain all its tabs use.
-  **Option (b) was then tried in two forms; the second is what shipped.**
+  **OWNER RE-DECIDED 2026-11-03 (final): ship skillars-deferred-167 WITH the cap, and fix it in its own
+  story.** Three attempts to remove it were made and all withdrawn, each for a different reason, and the
+  third actively broke logout. The cap is therefore the shipped behaviour: a web session ends
+  `REFRESH_TOKEN_TTL` after login, which errs toward security and is documented in
+  `docs/session-refresh-mechanism.md` and the provisioning checklist.
+
+  **The three withdrawn attempts, so none is retried blind:**
+  1. *SPA rotation.* Its only trigger was `sessionManager.refreshSession()`, reachable solely from the
+     idle-warning dialog's "Continue session" button — which a tab that keeps polling never reaches, so it
+     missed the very population it was for. And "best-effort and swallowed" was false: every failure branch
+     of `AuthService.refresh` except `Unknown` clears cookies BEFORE throwing, so a failed rotation's 401
+     deletes `potc`/`rtkn`/`rint`/`user`/`skp` and the axios interceptor then fires `session:expired` —
+     clicking Continue could sign the user out, with `refreshFailed` false so nothing explained it. It also
+     made the `StaleChain` branch reachable from the web, which AC7's blast-radius argument assumed it was
+     not.
+  2. *Exempting chains that never rotated.* Dead on arrival, caught by an IT rather than a reviewer: a
+     rotated chain's LIVE END is itself always an unrotated row (`decideAndRotate` creates the successor
+     with `rotated_at` and `replaced_by_id` both null), so it exempted every chain and the cap applied to
+     nothing. Keying on sibling rows fails too — the sweep deletes the expired predecessors that would be
+     the evidence.
+  3. *Sliding `expires_at` for an active session.* Both reviewer arms found it broke logout. The `rtkn`
+     cookie's max-age IS `REFRESH_TOKEN_TTL` and only login/refresh write it, so past that point the
+     browser has dropped the cookie while the slid row stays live — and `SecurityUtil.terminateSession`
+     revokes only when that cookie is present, so Logout silently revoked nothing, `revoked_at` stayed
+     NULL, and the chain check could never answer false again. It re-opened the hole AC4 exists to close.
+     Two further holes: an attacker holding a copied jar performs the slide himself, so the cap never fires
+     on a stolen credential; and an `rtkn` exfiltrated on day 1 and left unused stays redeemable
+     indefinitely, kept alive by the victim's own browsing.
+
+  **The rule they add up to, which is the thing to design against: a session may not outlive the cookie
+  that identifies it.** Extending the row's life requires issuing a fresh `Set-Cookie`, which only a
+  rotation does, so there is no server-only fix.
+
+- **[NEW STORY NEEDED, filed 2026-11-03, medium/logic]** Let an actively-used web session rotate its
+  refresh chain, so it is not logged out every `REFRESH_TOKEN_TTL`. This is the real fix for the cap
+  skillars-deferred-167 shipped, and it is frontend work: a rotation call driven by a trigger an active
+  session actually reaches (a timer, or the sliding-TTL path — NOT the idle-warning dialog, which a polling
+  tab never sees), with real handling for the fact that every failure branch of `AuthService.refresh`
+  except `Unknown` returns cookie-deletion headers, so a failed rotation must be treated as a session
+  teardown rather than swallowed. Two constraints from that story's reviews: rotating makes the
+  `StaleChain` branch reachable from the web, so its behaviour has to be acceptable for browsers before
+  this ships; and `POST /api/auth/refresh` is `permitAll` and filter-exempt, so whichever `rtkn` is in the
+  jar decides whose session is issued — calling it unconditionally turns a planted cookie into a session,
+  which wants an owner check or a rethink of that endpoint's exposure. Sizing: small backend surface, real
+  frontend design, and it should carry its own `/pr-review` rounds.
+
+  **Option (b) was then tried in two forms; neither shipped.**
   The first was an exemption: skip the expiry test for a row with no `rotated_at` and no `replaced_by_id`.
   It was dead on arrival and an IT caught it — a rotated chain's LIVE END is itself always such a row
   (`decideAndRotate` creates the successor with both null), so it exempted every chain and the cap applied
