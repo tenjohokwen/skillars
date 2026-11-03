@@ -19,7 +19,11 @@
         "status": "succeeded",
         "payment_method_details": {
           "type": "card",
-          "card": { "brand": "visa", "last4": "4242", "fingerprint": "{{formData request.body 'form' urlDecode=true}}fp_{{form.payment_method}}" }
+          "card": {
+            "brand": "visa",
+            "last4": "4242",
+            "fingerprint": "{{formData request.body 'form' urlDecode=true}}fp_{{form.payment_method}}"
+          }
         }
       }
     }

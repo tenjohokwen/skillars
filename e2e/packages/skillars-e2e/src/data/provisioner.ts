@@ -114,10 +114,6 @@ export class Provisioner {
   }
 
   /**
-   * Unique, valid registration details for a spec that registers through the UI itself: a fresh
-   * email, a phone from the same per-worker sequence the API path uses, and the stack's password.
-   */
-  /**
    * A place name no other run or worker has used, letters only (digits read as phone numbers to the
    * contact-detail filter). For searches that must see exactly the coaches a test seeded.
    */
@@ -129,6 +125,10 @@ export class Provisioner {
     return `Town${letters}`
   }
 
+  /**
+   * Unique, valid registration details for a spec that registers through the UI itself: a fresh
+   * email, a phone from the same per-worker sequence the API path uses, and the stack's password.
+   */
   identity(kind: AccountKind): {
     email: string
     phone: string

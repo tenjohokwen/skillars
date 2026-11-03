@@ -36,8 +36,11 @@ test.describe('E · Payment method & pack purchase', () => {
       })
       await profile.buySessionsSecondary().click()
       const purchase = await new PackPurchaseScreen(page, suite).waitReady()
-      await expect(purchase.addCardBanner()).toHaveCount(0)
+      // The pack option renders only once the page has loaded the tier and the saved card, so the
+      // banner check after it is meaningful (before it, the banner is absent because of the spinner).
       await purchase.packOption().click()
+      await expect(purchase.addCardBanner()).toHaveCount(0)
+      await expect(purchase.confirm()).toBeEnabled()
       await purchase.confirm().click()
 
       // The page goes back to the profile, where the family now holds credits with this coach.
