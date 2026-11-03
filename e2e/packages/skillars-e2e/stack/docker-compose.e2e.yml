@@ -23,7 +23,7 @@ services:
     image: ${APP_IMAGE:-skillars:local}
     environment:
       # dev: local-friendly defaults. e2e: the overlay mounted below (SMTP to Mailpit, Gemini to
-      # WireMock, rate limiting off). Spring reads application-e2e.yaml from the extra location.
+      # WireMock, Stripe SDK to WireMock, rate limiting off). Spring reads application-e2e.yaml from the extra location.
       - SPRING_PROFILES_ACTIVE=dev,e2e
       - SPRING_CONFIG_ADDITIONAL_LOCATION=optional:file:/e2e-config/
       - SPRING_DATASOURCE_URL=jdbc:postgresql://postgres:5432/skillars?TimeZone=UTC
@@ -151,7 +151,7 @@ services:
     ports:
       - '127.0.0.1:8025:8025'
 
-  # Stands in for Gemini (moderation verdicts) and, later, Bunny and Stripe.
+  # Stands in for Gemini (moderation verdicts) and the Stripe API (the deterministic tier), and later Bunny.
   wiremock:
     image: wiremock/wiremock:3.13.2
     command: ['--global-response-templating', '--disable-banner']

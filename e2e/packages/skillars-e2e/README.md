@@ -55,10 +55,24 @@ Facts that shape the factories (all verified against the backend):
 `stack/config/application-e2e.yaml` is mounted into the app as an extra Spring config location, so the
 production image carries no test configuration: SMTP to Mailpit (the `log` transport dumps bodies
 without recipients, so it can't be searched by address), Gemini to WireMock (default verdict SAFE),
-rate limiting off.
+the Stripe SDK to WireMock, rate limiting off.
 
 ## Stripe
 
 `src/stubs/stripe.ts` serves a local Stripe.js stub on every context — `js.stripe.com` is never
 reached in the default tier. The network gate found the SPA loading Stripe.js for a guest on a public
 coach profile, which is why the stub is global rather than per-page.
+
+The backend never reaches Stripe either. Under the `e2e` profile, `StripeE2eApiBaseConfig` (in the
+payment module) points every Stripe SDK call (API, Connect OAuth, uploads and meter events) at
+`app.payment.stripe.base-url`, which the overlay sets to `http://wiremock:8080`. It refuses to start
+if that URL is missing, or if `prod` or `uat` is active as well.
+
+- Stubs: `stack/wiremock/mappings/stripe-*.json`, with ids such as `cus_e2e_…` and `seti_e2e_…`.
+  WireMock reads mappings when it starts, so restart the `wiremock` container after adding one.
+- A Stripe call with no stub gets a 400 `invalid_request_error`, code `e2e_unstubbed`, whose message
+  names the method and path. Look for it in the app log when a payment spec fails unexpectedly.
+- Coach Connect onboarding: the authorize link the backend returns also points at the stub host
+  (`http://wiremock:8080/oauth/authorize`), which the browser can't resolve. Intercept it with
+  `page.route` instead of following it.
+- `PAY-90` (smoke) checks the wiring: a card-setup request has to come back with the stub's client secret.

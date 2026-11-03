@@ -15,6 +15,13 @@ app:
           username: no-reply@e2e.example.com
           password: e2e-any-password
 
+  # The deterministic Stripe tier: StripeE2eApiBaseConfig (active under this profile only) points
+  # every Stripe SDK call here. Stubs live in stack/wiremock/mappings/stripe-*.json; a call with no
+  # stub gets a 400 naming the missing path.
+  payment:
+    stripe:
+      base-url: http://wiremock:8080
+
 infrastructure:
   gemini:
     mode: developer

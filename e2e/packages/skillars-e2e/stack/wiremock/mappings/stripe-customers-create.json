@@ -1,0 +1,17 @@
+{
+  "name": "Stripe — create customer (deterministic tier)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/customers"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "id": "cus_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}",
+      "object": "customer",
+      "livemode": false
+    }
+  }
+}

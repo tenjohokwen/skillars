@@ -1,0 +1,18 @@
+{
+  "name": "Stripe — any call with no stub of its own fails loudly",
+  "priority": 100,
+  "request": {
+    "urlPathPattern": "/(v1|oauth)/.*"
+  },
+  "response": {
+    "status": 400,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": {
+        "type": "invalid_request_error",
+        "code": "e2e_unstubbed",
+        "message": "No WireMock stub for {{request.method}} {{request.path}}: add one under e2e/packages/skillars-e2e/stack/wiremock/mappings/"
+      }
+    }
+  }
+}
