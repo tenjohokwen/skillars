@@ -47,6 +47,11 @@ export interface CoachOnboarding {
   pack?: { sessionCount: number; totalPrice: number; label: string } | null
   /** Seed a COMPLETE Stripe Connect account so the coach is payment-ready (bookable). */
   paymentReady?: boolean
+  /**
+   * Stop after this builder step, leaving the profile an unpublished DRAFT (no pack tier, no Connect
+   * account): the half-finished coach that search must never return.
+   */
+  stopAfterStep?: 1 | 2 | 3 | 4
 }
 
 /**
@@ -106,6 +111,18 @@ export class Provisioner {
 
   async dispose(): Promise<void> {
     await this.anonymous.dispose()
+  }
+
+  /**
+   * A place name no other run or worker has used, letters only (digits read as phone numbers to the
+   * contact-detail filter). For searches that must see exactly the coaches a test seeded.
+   */
+  uniqueCity(): string {
+    const letters = this.names
+      .token('c')
+      .replace(/[^a-z0-9]/g, '')
+      .replace(/[0-9]/g, (d) => String.fromCharCode(97 + Number(d)))
+    return `Town${letters}`
   }
 
   /**
@@ -233,15 +250,18 @@ export class Provisioner {
         languages: ['English'],
         canonicalTimezone: timezone,
       })
+      if (options.stopAfterStep === 1) return account
       await put(2, {
         specialties: ['Dribbling', 'Finishing'],
         ageGroups: ['AGE_10_12', 'AGE_13_17', 'ADULT'],
       })
+      if (options.stopAfterStep === 2) return account
       await put(3, {
         perSessionPrice: options.perSessionPrice ?? 55,
         sessionDurationMinutes: 60,
         sessionPacks: pack ? [pack] : [],
       })
+      if (options.stopAfterStep === 3) return account
       await put(4, {
         windows: [1, 2, 3, 4, 5].map((dayOfWeek) => ({
           dayOfWeek,
@@ -250,6 +270,7 @@ export class Provisioner {
           canonicalTimezone: timezone,
         })),
       })
+      if (options.stopAfterStep === 4) return account
       await put(5, { photoUrl: null })
       const published = await session.api.json<{ coachId: string; profileComplete: boolean }>(
         'POST',
@@ -285,6 +306,25 @@ export class Provisioner {
          SET onboarding_status = 'COMPLETE', charges_enabled = true, payouts_enabled = true`,
       [coach.coachId, `acct_e2e_${this.names.token('acct').replace(/-/g, '_')}`],
     )
+  }
+
+  /**
+   * Put a card on file through the app's own endpoint, the way the card dialog does after Stripe.js
+   * confirms a SetupIntent. The payment method id is unique per call; the stack's WireMock answers
+   * every `pm_e2e_*` lookup as a Visa ending 4242 (stack/wiremock/mappings/stripe-*.json).
+   */
+  async saveCard(account: Pick<Account, 'email' | 'password'>): Promise<string> {
+    const paymentMethodId = `pm_e2e_${this.names.token('pm').replace(/-/g, '_')}`
+    const session = await this.login(account)
+    try {
+      await session.api.post('/payment/save-payment-method', {
+        data: { paymentMethodId },
+        expectStatus: 204,
+      })
+      return paymentMethodId
+    } finally {
+      await session.dispose()
+    }
   }
 
   async parent(options: { childAges?: number[] } = {}): Promise<ParentAccount> {

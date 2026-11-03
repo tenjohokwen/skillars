@@ -1,0 +1,25 @@
+{
+  "name": "Stripe — retrieve payment method (deterministic tier): a Visa ending 4242",
+  "priority": 10,
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/v1/payment_methods/pm_e2e_[A-Za-z0-9_]+"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "id": "{{request.pathSegments.[2]}}",
+      "object": "payment_method",
+      "type": "card",
+      "livemode": false,
+      "card": {
+        "brand": "visa",
+        "last4": "4242",
+        "exp_month": 12,
+        "exp_year": 2034,
+        "fingerprint": "fp_{{request.pathSegments.[2]}}"
+      }
+    }
+  }
+}

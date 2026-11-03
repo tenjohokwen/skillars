@@ -1,5 +1,5 @@
 <template>
-  <q-card class="glass-card coach-card" @click="$emit('click', coach.id)">
+  <q-card class="glass-card coach-card" @click="$emit('click', coach.id)" data-testid="coach-card">
     <!-- Photo / Avatar -->
     <div class="coach-card__photo-wrap">
       <q-img
@@ -39,8 +39,10 @@
       />
 
       <!-- Name + location -->
-      <div class="coach-card__name q-mt-sm">{{ coach.displayName }}</div>
-      <div class="coach-card__location text-caption">
+      <div class="coach-card__name q-mt-sm" data-testid="coach-card-name">
+        {{ coach.displayName }}
+      </div>
+      <div class="coach-card__location text-caption" data-testid="coach-card-location">
         <q-icon name="location_on" size="12px" />
         {{ [coach.city, coach.district].filter(Boolean).join(', ') }}
       </div>
@@ -59,14 +61,14 @@
           color="amber"
           max="5"
         />
-        <span class="text-caption q-ml-xs">
+        <span class="text-caption q-ml-xs" data-testid="coach-card-rating">
           {{ (coach.averageRating ?? 0).toFixed(1) }}
           ({{ t('marketplace.reviewCount', { count: coach.reviewCount }) }})
         </span>
       </div>
 
       <!-- Price — BELOW trust signals (UX-DR7) -->
-      <div class="coach-card__price q-mt-sm">
+      <div class="coach-card__price q-mt-sm" data-testid="coach-card-price">
         <span class="text-h6">€{{ Number(coach.perSessionPrice).toFixed(2) }}</span>
         <span class="text-caption q-ml-xs text-secondary">/ {{ t('marketplace.perSession') }}</span>
       </div>

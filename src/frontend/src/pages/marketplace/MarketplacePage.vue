@@ -11,6 +11,7 @@
         clearable
         @keyup.enter="onSearch"
         @clear="onCityCleared"
+        data-testid="marketplace-city-input"
       >
         <template #append>
           <q-btn
@@ -20,6 +21,7 @@
             :label="t('marketplace.search')"
             :disable="!cityEntered"
             @click="onSearch"
+            data-testid="marketplace-search-btn"
           />
         </template>
       </q-input>
@@ -34,6 +36,7 @@
         :label="t('marketplace.filterDistrict')"
         clearable
         @update:model-value="onFilterChange"
+        data-testid="marketplace-district"
       />
       <q-select
         v-model="filters.ageGroup"
@@ -45,6 +48,7 @@
         map-options
         clearable
         @update:model-value="onFilterChange"
+        data-testid="marketplace-age-group"
       />
       <q-select
         v-model="filters.language"
@@ -56,6 +60,7 @@
         map-options
         clearable
         @update:model-value="onFilterChange"
+        data-testid="marketplace-language"
       />
       <q-select
         v-model="filters.sortBy"
@@ -66,6 +71,7 @@
         emit-value
         map-options
         @update:model-value="onFilterChange"
+        data-testid="marketplace-sort"
       />
       <q-btn
         v-if="hasActiveFilters"
@@ -74,18 +80,19 @@
         :label="t('marketplace.clearFilters')"
         icon="close"
         @click="onClearFilters"
+        data-testid="marketplace-clear-filters"
       />
     </div>
 
     <!-- Prompt state — no city entered yet (NOT the UX-DR25 empty state) -->
-    <div v-if="!cityEntered" class="marketplace-page__prompt">
+    <div v-if="!cityEntered" class="marketplace-page__prompt" data-testid="marketplace-prompt">
       <q-icon name="search" size="64px" color="grey-4" />
       <div class="text-h6 q-mt-md">{{ t('marketplace.enterCityPrompt') }}</div>
       <div class="text-body2 text-secondary q-mt-xs">{{ t('marketplace.enterCitySubtitle') }}</div>
     </div>
 
     <!-- Loading skeleton (UX-DR26) -->
-    <div v-else-if="loading" class="marketplace-page__grid">
+    <div v-else-if="loading" class="marketplace-page__grid" data-testid="marketplace-loading">
       <div v-for="n in 6" :key="n" class="glass-card coach-card-skeleton">
         <q-skeleton height="180px" square />
         <div class="q-pa-md">
@@ -100,6 +107,7 @@
     <div
       v-else-if="cityEntered && !loading && coaches.length === 0"
       class="marketplace-page__empty"
+      data-testid="marketplace-empty"
     >
       <q-icon name="search_off" size="64px" color="grey-5" />
       <div class="text-h6 q-mt-md">{{ t('marketplace.noCoachesFound') }}</div>
@@ -126,7 +134,7 @@
     <!-- Coach grid -->
     <template v-else>
       <div class="marketplace-page__results-header">
-        <span class="text-caption text-secondary">
+        <span class="text-caption text-secondary" data-testid="marketplace-results-count">
           {{ t('marketplace.resultsCount', { count: totalElements }) }}
         </span>
       </div>
@@ -143,6 +151,7 @@
           :label="t('marketplace.loadMore')"
           :loading="loadingMore"
           @click="store.fetchNextPage()"
+          data-testid="marketplace-load-more"
         />
       </div>
     </template>
