@@ -1,0 +1,37 @@
+{
+  "name": "pitchside-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Project-agnostic Playwright kernel: fixtures, auth strategies, mail sinks, seeding contract, gates and tag taxonomy. Must never import an app package.",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:browser": "playwright test -c test/browser/playwright.config.ts"
+  },
+  "peerDependencies": {
+    "@playwright/test": ">=1.50.0"
+  },
+  "dependencies": {
+    "@axe-core/playwright": "4.14.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@types/node": "22.20.5",
+    "typescript": "6.0.3",
+    "vitest": "4.1.12"
+  }
+}

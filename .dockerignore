@@ -33,6 +33,8 @@ src/frontend/dist/
 src/frontend/.quasar/
 src/frontend/node/
 src/frontend/coverage/
+# Pitchside UI test framework (Playwright): never part of the image.
+e2e/
 **/node_modules/
 **/.vite/
 **/*.jar

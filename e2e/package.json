@@ -1,0 +1,26 @@
+{
+  "name": "pitchside-workspace",
+  "private": true,
+  "type": "module",
+  "description": "Pitchside UI test framework: a portable Playwright kernel (pitchside-core) plus app adapters.",
+  "engines": {
+    "node": ">=22.16.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint": "10.13.0",
+    "prettier": "3.9.10",
+    "typescript-eslint": "8.71.2"
+  }
+}

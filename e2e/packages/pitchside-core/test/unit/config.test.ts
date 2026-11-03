@@ -1,0 +1,129 @@
+import type { Browser, BrowserContext } from '@playwright/test'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  CookieSessionStrategy,
+  defineTaxonomy,
+  hashRouting,
+  laneProjects,
+  optionalEnv,
+  requiredEnv,
+  SessionStore,
+  validateSuiteEnv,
+  videoMode,
+  withPriming,
+  type AuthStrategy,
+  type SuiteEnv,
+} from '../../src/index.js'
+
+const validEnv = (): SuiteEnv => ({
+  name: 'demo',
+  baseUrl: 'http://localhost:4321',
+  apiBaseUrl: 'http://localhost:4321/api',
+  routing: hashRouting('http://localhost:4321'),
+  auth: new CookieSessionStrategy({ cookies: async () => [] }),
+  taxonomy: defineTaxonomy({ persona: ['@guest'] }),
+  ids: { base: 1_000_000n },
+  emailDomain: 'example.test',
+})
+
+describe('validateSuiteEnv', () => {
+  it('accepts a complete env', () => {
+    expect(validateSuiteEnv(validEnv())).toEqual([])
+  })
+
+  it('lists every problem at once', () => {
+    const problems = validateSuiteEnv({
+      ...validEnv(),
+      name: ' ',
+      baseUrl: 'localhost:4321',
+      apiBaseUrl: 'ftp://x',
+      emailDomain: 'nope',
+      ids: { base: -1n },
+    })
+    expect(problems).toHaveLength(5)
+  })
+})
+
+describe('env helpers', () => {
+  it('reads required and optional variables', () => {
+    expect(requiredEnv('A', { A: 'x' })).toBe('x')
+    expect(() => requiredEnv('B', { B: ' ' })).toThrow(/B is required/)
+    expect(optionalEnv('C', 'fallback', {})).toBe('fallback')
+  })
+})
+
+describe('laneProjects', () => {
+  it('splits serial-lane tags into a dependent project', () => {
+    const [parallel, serial] = laneProjects({ namePrefix: 'chromium' })
+    expect(parallel?.name).toBe('chromium-parallel')
+    expect(serial?.dependencies).toEqual(['chromium-parallel'])
+    const grep = serial?.grep as RegExp
+    expect(grep.test('wipes @regression @destructive')).toBe(true)
+    expect(grep.test('edits @regression @config')).toBe(true)
+    expect(grep.test('edits @regression @config-viewer')).toBe(false)
+    expect((parallel?.grepInvert as RegExp).test('wipes @destructive')).toBe(true)
+  })
+})
+
+function fakeBrowser() {
+  const contexts: { cookies: unknown[]; closed: boolean }[] = []
+  const browser = {
+    newContext: vi.fn(async () => {
+      const record = { cookies: [] as unknown[], closed: false }
+      contexts.push(record)
+      return {
+        addCookies: async (cookies: unknown[]) => void record.cookies.push(...cookies),
+        storageState: async () => ({ cookies: record.cookies, origins: [] }),
+        close: async () => void (record.closed = true),
+      } as unknown as BrowserContext
+    }),
+  } as unknown as Pick<Browser, 'newContext'>
+  return { browser, contexts }
+}
+
+describe('SessionStore', () => {
+  const cookie = (name: string) => ({ name, value: '1', url: 'http://localhost:4321' })
+
+  it('establishes once per role in a primed throwaway context', async () => {
+    const { browser, contexts } = fakeBrowser()
+    const auth = withPriming(
+      new CookieSessionStrategy({ cookies: async (role) => [cookie(`session-${role}`)] }),
+      async () => [cookie('fingerprint')],
+    )
+    const store = new SessionStore(browser, auth)
+    const first = await store.state('coach')
+    const again = await store.state('coach')
+    expect(again).toBe(first)
+    expect(first.cookies.map((c) => c.name)).toEqual(['fingerprint', 'session-coach'])
+    expect(contexts).toHaveLength(1)
+    expect(contexts[0]?.closed).toBe(true)
+    expect(store.cachedRoles()).toEqual(['coach'])
+  })
+
+  it('does not cache a failed login, and can be invalidated', async () => {
+    const { browser } = fakeBrowser()
+    let attempts = 0
+    const flaky: AuthStrategy = {
+      establish: async (_role, context) => {
+        attempts += 1
+        if (attempts === 1) throw new Error('login refused')
+        return context.storageState()
+      },
+      logout: async () => {},
+    }
+    const store = new SessionStore(browser, flaky)
+    await expect(store.state('parent')).rejects.toThrow('login refused')
+    await expect(store.state('parent')).resolves.toBeDefined()
+    store.invalidate('parent')
+    await store.state('parent')
+    expect(attempts).toBe(3)
+  })
+})
+
+describe('videoMode', () => {
+  it('defaults to retain-on-failure and validates overrides', () => {
+    expect(videoMode(undefined)).toBe('retain-on-failure')
+    expect(videoMode('off')).toBe('off')
+    expect(() => videoMode('sometimes')).toThrow(/PITCHSIDE_VIDEO/)
+  })
+})

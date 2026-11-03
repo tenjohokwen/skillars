@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Toy app</title>
+  </head>
+  <body>
+    <main id="view"></main>
+    <script>
+      const view = document.getElementById('view')
+      const cookie = (name) =>
+        document.cookie
+          .split(';')
+          .map((p) => p.trim().split('='))
+          .find(([n]) => n === name)?.[1] ?? ''
+      const go = (route) => (location.hash = route)
+
+      const routes = {
+        '/login': () => {
+          view.innerHTML = `
+            <h1>Sign in</h1>
+            <form data-testid="login-form">
+              <label for="u">Username</label><input id="u" data-testid="login-username-input" />
+              <label for="p">Password</label><input id="p" type="password" data-testid="login-password-input" />
+              <button data-testid="login-submit-btn">Sign in</button>
+            </form>
+            <p data-testid="login-error" role="alert"></p>`
+          view.querySelector('form').addEventListener('submit', async (event) => {
+            event.preventDefault()
+            const res = await fetch('/api/login', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ username: u.value, password: p.value }),
+            })
+            if (!res.ok)
+              return (view.querySelector('[data-testid=login-error]').textContent =
+                'Wrong credentials')
+            const redirect = new URLSearchParams(location.hash.split('?')[1] ?? '').get('redirect')
+            go(redirect ?? '/home')
+          })
+        },
+        '/home': async () => {
+          const res = await fetch('/api/me')
+          if (!res.ok) return go(`/login?redirect=${encodeURIComponent('/home')}`)
+          const { role } = await res.json()
+          view.innerHTML = `<h1 data-testid="home-title">Home</h1>
+            <p>Signed in as <span data-testid="home-role">${role}</span></p>
+            <p>Fingerprint <span data-testid="home-fingerprint">${cookie('fp') || 'none'}</span></p>`
+        },
+        // Two intermediate hops before the final route, like an async guard resolving an id.
+        '/chain': () => {
+          view.innerHTML = '<p>resolving…</p>'
+          setTimeout(() => go('/hop'), 150)
+        },
+        '/hop': () => setTimeout(() => go('/landing/42'), 150),
+        '/landing/:id': (id) =>
+          (view.innerHTML = `<h1 data-testid="landing-title">Landing ${id}</h1>`),
+        '/broken': () => {
+          view.innerHTML = '<h1 data-testid="broken-title">Broken</h1>'
+          console.error('Cannot read properties of undefined (reading "rating")')
+        },
+        '/leaky': () => {
+          view.innerHTML =
+            '<h1 data-testid="leaky-title">Leaky</h1><img alt="" src="https://tracker.example.invalid/pixel.png" />'
+        },
+        '/data': async () => {
+          view.innerHTML = '<p data-testid="data-loading">Loading…</p>'
+          const load = async () => {
+            const res = await fetch('/api/data')
+            if (!res.ok) {
+              view.innerHTML =
+                '<p data-testid="data-error">Unavailable</p><button data-testid="data-retry-btn">Retry</button>'
+              view.querySelector('button').addEventListener('click', load)
+              return
+            }
+            const { value } = await res.json()
+            view.innerHTML = `<p data-testid="data-value">${value}</p>`
+          }
+          await load()
+        },
+        '/confirm': () => {
+          const params = new URLSearchParams(location.hash.split('?')[1] ?? '')
+          view.innerHTML = `<h1 data-testid="confirm-title">Confirmed</h1><p data-testid="confirm-code">${params.get('c')}</p>`
+        },
+      }
+
+      const render = () => {
+        const route = location.hash.replace(/^#/, '').split('?')[0] || '/login'
+        for (const [pattern, handler] of Object.entries(routes)) {
+          const regex = new RegExp(`^${pattern.replace(/:[a-z]+/g, '([^/]+)')}$`)
+          const match = regex.exec(route)
+          if (match) return handler(...match.slice(1))
+        }
+        view.innerHTML = '<h1 data-testid="not-found">Not found</h1>'
+      }
+      addEventListener('hashchange', render)
+      render()
+    </script>
+  </body>
+</html>
