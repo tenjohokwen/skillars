@@ -12,7 +12,9 @@ cd e2e && npm ci
 npm run stack:up -w skillars-e2e        # app (image skillars:local by default), postgres, redis,
                                         # storage, Mailpit, WireMock — all disposable (tmpfs)
 cd packages/skillars-e2e
-npm run test:e2e                        # parallel lane, then the serial lane on one worker
+npm run test:e2e                        # parallel lane, then the serial lane on one worker —
+                                        # the serial lane runs even if the parallel one failed
+                                        # (as in CI); exits non-zero if either failed
 npx playwright test --project=parallel --grep @smoke   # just the smoke set
 npm run stack:down                      # tear down (data is gone either way)
 ```

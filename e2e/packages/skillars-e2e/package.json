@@ -9,7 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test:e2e": "npm run test:e2e:parallel && npm run test:e2e:serial",
+    "test:e2e": "npm run test:e2e:parallel; parallel=$?; npm run test:e2e:serial; serial=$?; [ $parallel -eq 0 ] && [ $serial -eq 0 ]",
     "test:e2e:parallel": "playwright test --project=parallel --pass-with-no-tests",
     "test:e2e:serial": "playwright test --project=serial --no-deps --workers=1 --output=test-results/serial --pass-with-no-tests",
     "stack:up": "docker compose -p skillars-e2e -f stack/docker-compose.e2e.yml up -d",
