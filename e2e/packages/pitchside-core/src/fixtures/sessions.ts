@@ -46,6 +46,15 @@ export class SessionStore {
     for (const key of [...this.cache.keys()]) if (roleOf(key) === role) this.cache.delete(key)
   }
 
+  /**
+   * Replace a role's cached session with a newer snapshot — call it when a context that used the
+   * session closes. Apps rotate refresh tokens on use; replaying the ORIGINAL snapshot after a
+   * rotation looks like token theft to reuse detection, which revokes every session of that user.
+   */
+  update(role: string, options: SessionContextOptions, state: StorageState): void {
+    this.cache.set(cacheKey(role, options), Promise.resolve(state))
+  }
+
   cachedRoles(): string[] {
     return [...new Set([...this.cache.keys()].map(roleOf))]
   }
@@ -56,7 +65,7 @@ export class SessionStore {
       ...definedOnly(options),
     })
     try {
-      const priming = (await this.auth.priming?.()) ?? []
+      const priming = (await this.auth.priming?.(role)) ?? []
       if (priming.length > 0) await context.addCookies(priming)
       return await this.auth.establish(role, context)
     } finally {

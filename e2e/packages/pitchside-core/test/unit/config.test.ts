@@ -128,6 +128,37 @@ describe('videoMode', () => {
   })
 })
 
+describe('SessionStore priming and write-back', () => {
+  it('primes the login context with the role, so per-persona values stay consistent', async () => {
+    const primedFor: (string | undefined)[] = []
+    const { browser } = fakeBrowser()
+    const auth = new CookieSessionStrategy({
+      cookies: async () => [],
+      priming: async (role) => {
+        primedFor.push(role)
+        return [{ name: 'fp', value: `fp-${role}`, url: 'http://localhost:4321' }]
+      },
+    })
+    const state = await new SessionStore(browser, auth).state('coach')
+    expect(primedFor).toEqual(['coach'])
+    expect(state.cookies.map((c) => `${c.name}=${c.value}`)).toEqual(['fp=fp-coach'])
+  })
+
+  it('serves the written-back snapshot instead of re-establishing or replaying the original', async () => {
+    const { browser, contexts } = fakeBrowser()
+    const store = new SessionStore(browser, new CookieSessionStrategy({ cookies: async () => [] }))
+    const original = await store.state('coach', { userAgent: 'UA' })
+    expect(original.cookies).toEqual([])
+    const rotated = {
+      cookies: [{ name: 'rtkn', value: 'rotated' }],
+      origins: [],
+    } as unknown as typeof original
+    store.update('coach', { userAgent: 'UA' }, rotated)
+    expect(await store.state('coach', { userAgent: 'UA' })).toBe(rotated)
+    expect(contexts).toHaveLength(1)
+  })
+})
+
 describe('SessionStore user-agent pinning', () => {
   it('logs in with the caller user agent and caches per role and user agent', async () => {
     const seen: unknown[] = []

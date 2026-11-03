@@ -1,4 +1,4 @@
-import { randomBytes, randomInt } from 'node:crypto'
+import { createHash, randomBytes, randomInt } from 'node:crypto'
 import { request, type APIRequestContext } from '@playwright/test'
 import {
   ApiClient,
@@ -49,8 +49,21 @@ export interface CoachOnboarding {
   paymentReady?: boolean
 }
 
-/** The fingerprint cookie the backend requires on login (it becomes the session's client id). */
-export const FINGERPRINT = 'e2e-fixed-fingerprint'
+/**
+ * The `fcookie` device fingerprint for one account. The backend requires it on login (it becomes the
+ * session's client id) and records it as a BROWSER identity signal at login and at booking time;
+ * RelatedPartyService flags a booking whose payer and coach share a signal. So every persona gets its
+ * own stable value, the same for the provisioning login and for every browser context replaying the
+ * session — one shared value would make every coach–payer pair look related.
+ */
+export function fingerprintFor(email: string): string {
+  return `e2e-${createHash('sha256').update(email.toLowerCase()).digest('hex').slice(0, 24)}`
+}
+
+/** A fresh fingerprint for an anonymous browser context (no login, so no recorded signal). */
+export function guestFingerprint(): string {
+  return `e2e-guest-${randomBytes(8).toString('hex')}`
+}
 
 const VERIFY_TOKEN = /token=([0-9a-f-]{36})/
 
@@ -146,7 +159,7 @@ export class Provisioner {
         cookies: [
           {
             name: 'fcookie',
-            value: FINGERPRINT,
+            value: fingerprintFor(account.email),
             domain: host.hostname,
             path: '/',
             expires: -1,

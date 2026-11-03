@@ -28,7 +28,8 @@ export const toy = defineSuite({
       logoutPath: '/logout',
       credentials: (role) => ({ username: role, password: 'secret' }),
     }),
-    async () => [{ name: 'fp', value: 'fixed-fingerprint', url: baseUrl }],
+    // A per-persona fingerprint, identical at login and on replay; guests get their own.
+    async (role) => [{ name: 'fp', value: role ? `fp-${role}` : 'fp-guest', url: baseUrl }],
   ),
   taxonomy: defineTaxonomy({ persona: ['@guest', '@member', '@admin'], domain: ['@kernel'] }),
   ids: { base: 5_000_000_000n },

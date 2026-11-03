@@ -71,8 +71,9 @@ async function primeAndGuard(
   suite: SuiteEnv,
   consoleGate: ConsoleGate,
   networkGate: NetworkGate,
+  role?: string,
 ): Promise<void> {
-  const priming = (await suite.auth.priming?.()) ?? []
+  const priming = (await suite.auth.priming?.(role)) ?? []
   if (priming.length > 0) await context.addCookies(priming)
   await networkGate.install(context)
   // After the gate: Playwright matches the most recently registered route first, so app stubs
@@ -146,22 +147,33 @@ export function createSuiteTest(env: SuiteEnv) {
       },
       use,
     ) => {
-      const opened: BrowserContext[] = []
+      const opened: Actor[] = []
       await use(async (role: string) => {
         // Same user agent for login and replay: fingerprint-pinned sessions reject a mismatch.
+        const sessionOptions = { userAgent, locale }
         const context = await browser.newContext({
-          storageState: await sessions.state(role, { userAgent, locale }),
+          storageState: await sessions.state(role, sessionOptions),
           viewport,
           locale,
           timezoneId,
           baseURL,
           userAgent,
         })
-        opened.push(context)
-        await primeAndGuard(context, suite, consoleGate, networkGate)
-        return { role, context, page: await context.newPage() }
+        await primeAndGuard(context, suite, consoleGate, networkGate, role)
+        const actor = { role, context, page: await context.newPage() }
+        opened.push(actor)
+        return actor
       })
-      for (const context of opened) await context.close()
+      for (const { role, context } of opened) {
+        // Write the session back before closing: if the app rotated its refresh token during this
+        // test, the next test must start from the rotated one, never replay the original.
+        try {
+          sessions.update(role, { userAgent, locale }, await context.storageState())
+        } catch {
+          sessions.invalidate(role)
+        }
+        await context.close()
+      }
     },
 
     gotoRoute: async ({ page, suite }, use) => {

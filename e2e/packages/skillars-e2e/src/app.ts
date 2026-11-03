@@ -14,7 +14,7 @@ import {
   type Baseline,
   type BaselineRole,
 } from './data/accounts.js'
-import { FINGERPRINT, type Provisioner } from './data/provisioner.js'
+import { fingerprintFor, guestFingerprint, type Provisioner } from './data/provisioner.js'
 import { API_BASE_URL, E2E } from './env.js'
 import { stubStripeJs } from './stubs/stripe.js'
 import { taxonomy } from './taxonomy.js'
@@ -31,15 +31,24 @@ export const skillars = defineSuite({
   // Login sets HttpOnly potc/rtkn/bcookie/ION plus the readable `skp` cookie the router guard
   // hydrates from. The backend refuses a login without `fcookie` (it becomes the session's client
   // id) and pins the session to the User-Agent: the kernel's SessionStore logs in with the same UA
-  // the test contexts use, and every context is primed with the same fingerprint.
+  // the test contexts use, and every context of a persona is primed with that persona's fingerprint.
+  // Refresh tokens rotate; the kernel writes each actor's session back when it closes, so a later
+  // test never replays a rotated token (which the backend would treat as theft).
   auth: new ApiSessionStrategy({
     apiBaseUrl: API_BASE_URL,
     loginPath: '/auth/login',
     logoutPath: '/auth/logout',
     credentials: credentialsFor,
     body: ({ username, password }) => ({ email: username, password }),
-    priming: async () => [
-      { name: 'fcookie', value: FINGERPRINT, url: E2E.baseUrl, sameSite: 'Lax' },
+    // One fingerprint per persona (see fingerprintFor), identical at login and on replay; a fresh
+    // one per anonymous context.
+    priming: async (role) => [
+      {
+        name: 'fcookie',
+        value: role ? fingerprintFor((await credentialsFor(role)).username) : guestFingerprint(),
+        url: E2E.baseUrl,
+        sameSite: 'Lax',
+      },
     ],
   }),
   taxonomy,

@@ -5,6 +5,12 @@ export interface UniqueNamesOptions {
   emailDomain: string
   /** Identifies one run; defaults to a random 6-hex token. Pass the CI run id to correlate logs. */
   runId?: string
+  /**
+   * Distinguishes this instance from every other with the same run id and worker index — a second
+   * Playwright invocation in the same CI job (e.g. a serial lane) restarts worker indexes and
+   * counters at 0. Random 4-hex by default; inject a fixed value only in unit tests.
+   */
+  nonce?: string
 }
 
 /**
@@ -15,6 +21,7 @@ export interface UniqueNamesOptions {
 export class UniqueNames {
   private counter = 0
   readonly runId: string
+  readonly nonce: string
 
   constructor(
     readonly workerIndex: number,
@@ -27,16 +34,19 @@ export class UniqueNames {
       .replace(/[^a-z0-9]/gi, '')
       .toLowerCase()
     if (!this.runId) throw new Error('runId must contain at least one alphanumeric character')
+    this.nonce = (options.nonce ?? randomBytes(2).toString('hex'))
+      .replace(/[^a-z0-9]/gi, '')
+      .toLowerCase()
   }
 
-  /** e.g. `coach-r3f9a1-w2-7` */
+  /** e.g. `coach-r3f9a1c0de-w2-7`: prefix, run id + nonce, worker, counter. */
   token(prefix: string): string {
     const safePrefix = prefix
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')
     this.counter += 1
-    return `${safePrefix || 'x'}-r${this.runId}-w${this.workerIndex}-${this.counter}`
+    return `${safePrefix || 'x'}-r${this.runId}${this.nonce}-w${this.workerIndex}-${this.counter}`
   }
 
   email(prefix: string): string {

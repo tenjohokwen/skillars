@@ -13,6 +13,23 @@ mkdirSync(mailDir, { recursive: true })
 
 const html = readFileSync(join(here, 'index.html'), 'utf8')
 const users = { member: 'secret', admin: 'secret' }
+// Session tokens with rotation and reuse detection, like a real refresh-token scheme: presenting a
+// token that was already rotated revokes every session of that user.
+const tokens = new Map() // token -> { user, used }
+const issue = (user) => {
+  const token = `tok-${Math.random().toString(36).slice(2, 12)}`
+  tokens.set(token, { user, used: false })
+  return token
+}
+const resolve = (token) => {
+  const entry = token && tokens.get(token)
+  if (!entry) return undefined
+  if (entry.used) {
+    for (const value of tokens.values()) if (value.user === entry.user) value.used = true
+    return undefined
+  }
+  return entry.user
+}
 const items = []
 let dataCalls = 0
 
@@ -38,7 +55,7 @@ const json = (res, status, payload, headers = {}) => {
 
 createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${port}`)
-  const session = cookies(req).session
+  const token = cookies(req).session
 
   if (req.method === 'POST' && url.pathname === '/api/login') {
     const { username, password } = await body(req)
@@ -47,7 +64,7 @@ createServer(async (req, res) => {
         res,
         200,
         { role: username },
-        { 'set-cookie': `session=${username}; HttpOnly; Path=/; SameSite=Lax` },
+        { 'set-cookie': `session=${issue(username)}; HttpOnly; Path=/; SameSite=Lax` },
       )
     }
     return json(res, 401, { error: 'bad credentials' })
@@ -56,7 +73,19 @@ createServer(async (req, res) => {
     return json(res, 200, {}, { 'set-cookie': 'session=; Path=/; Max-Age=0' })
   }
   if (url.pathname === '/api/me') {
-    return session ? json(res, 200, { role: session }) : json(res, 401, { error: 'anonymous' })
+    const user = resolve(token)
+    return user ? json(res, 200, { role: user }) : json(res, 401, { error: 'anonymous' })
+  }
+  if (req.method === 'POST' && url.pathname === '/api/rotate') {
+    const user = resolve(token)
+    if (!user) return json(res, 401, { error: 'anonymous' })
+    tokens.get(token).used = true
+    return json(
+      res,
+      200,
+      {},
+      { 'set-cookie': `session=${issue(user)}; HttpOnly; Path=/; SameSite=Lax` },
+    )
   }
   if (url.pathname === '/api/data') {
     dataCalls += 1

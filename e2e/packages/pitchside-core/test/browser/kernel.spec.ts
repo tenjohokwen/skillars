@@ -21,7 +21,7 @@ test.describe('sessions and actors', () => {
       const { page } = await actor('member')
       const home = await new HomeScreen(page, suite).open()
       await expect(home.role()).toHaveText('member')
-      await expect(home.fingerprint()).toHaveText('fixed-fingerprint')
+      await expect(home.fingerprint()).toHaveText('fp-member')
     },
   )
 
@@ -53,6 +53,34 @@ test.describe('sessions and actors', () => {
       await login.password().fill('secret')
       await login.submit().click()
       await settledRoute('/home')
+    },
+  )
+})
+
+test.describe('session write-back', () => {
+  // Two tests, in order, in one worker: the first rotates the session token mid-test, the second
+  // must start from the rotated token. Replaying the original would trip the toy app's reuse
+  // detection, revoke the session and bounce the second test to the login page.
+  test.describe.configure({ mode: 'serial' })
+
+  test(
+    'an actor whose session token is rotated mid-test hands the rotated token on',
+    toy.scenario({ id: 'KRN-15', priority: 'P0', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor }) => {
+      const { page } = await actor('member')
+      const rotated = await page.request.post('/api/rotate')
+      expect(rotated.ok()).toBe(true)
+      expect((await page.request.get('/api/me')).ok()).toBe(true)
+    },
+  )
+
+  test(
+    'the next actor for that role starts from the rotated session, not the stale snapshot',
+    toy.scenario({ id: 'KRN-16', priority: 'P0', tags: ['@regression', '@member', '@kernel'] }),
+    async ({ actor, suite }) => {
+      const { page } = await actor('member')
+      const home = await new HomeScreen(page, suite).open()
+      await expect(home.role()).toHaveText('member')
     },
   )
 })
