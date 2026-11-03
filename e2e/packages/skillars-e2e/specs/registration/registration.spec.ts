@@ -128,4 +128,69 @@ test.describe('B · Registration & verification', () => {
       await expect(register.submit()).toBeEnabled()
     },
   )
+
+  test(
+    'a parent registers through all three consent boxes, verifies and logs in',
+    scenario({
+      id: 'REG-02',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@parent', '@registration'],
+    }),
+    async ({ page, suite, mail, provision, settledRoute }) => {
+      test.slow()
+      const who = provision.identity('parent')
+      const register = await new RegisterScreen(page, suite, 'parent').open()
+      await register.fillDetails(who)
+      await scrollToEnd(register.tosScrollBox())
+      await scrollToEnd(register.privacyScrollBox())
+      await scrollToEnd(register.parentConsentScrollBox())
+      await register.tos().click()
+      await register.privacy().click()
+      await register.parentConsent().click()
+      const since = new Date(Date.now() - 2_000)
+      await register.submit().click()
+
+      const pending = await new EmailPendingScreen(page, suite, 'parent').waitReady()
+      await expect(pending.body()).toContainText(who.email)
+      const message = await mail.waitForMessage({
+        to: who.email,
+        subjectMatches: /verify/i,
+        since,
+        timeoutMs: 30_000,
+      })
+      await page.goto(
+        suite.routing.toUrl(
+          `${REGISTRATION.parent.verifyEmail}?token=${message.code(VERIFY_TOKEN)}`,
+        ),
+      )
+      const login = await new LoginScreen(page, suite).waitReady()
+      await expect(login.verifiedBanner()).toHaveText(t('auth.emailVerifiedPleaseLogin'))
+      await login.logIn(who.email, who.password)
+      // A verified parent, no child yet, lands on the parent dashboard.
+      expect(await settledRoute(R.parentDashboard)).toBe(R.parentDashboard)
+    },
+  )
+
+  test(
+    'a player under 18 sees the age banner, with a link to parent registration, and cannot submit',
+    scenario({
+      id: 'REG-05',
+      priority: 'P0',
+      type: 'neg',
+      tags: ['@regression', '@guest', '@registration'],
+    }),
+    async ({ page, suite, provision, clock }) => {
+      const register = await new RegisterScreen(page, suite, 'player').open()
+      await register.fillDetails({
+        ...provision.identity('player'),
+        dateOfBirth: clock.dateOfBirthForAge(15).toISODate(),
+      })
+      await register.tos().click()
+      await register.privacy().click()
+      await expect(register.mustBeAdultBanner()).toContainText(t('auth.player.mustBeAdult'))
+      await expect(register.parentRegistrationLink()).toHaveAttribute('href', /parent-register/)
+      await expect(register.submit()).toBeDisabled()
+    },
+  )
 })

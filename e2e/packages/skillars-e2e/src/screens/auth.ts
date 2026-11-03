@@ -85,6 +85,8 @@ export class RegisterScreen extends Screen {
   dateOfBirth = () => this.tid('register-dob-input')
   /** Player only: shown while the date of birth is under 18. */
   mustBeAdultBanner = () => this.tid('register-must-be-adult-banner')
+  /** Player only: the banner's link to parent registration. */
+  parentRegistrationLink = () => this.tid('register-adult-banner-parent-link')
   /** Parent only: each policy must be scrolled to the end before its checkbox enables. */
   tosScrollBox = () => this.tid('register-tos-scroll-box')
   privacyScrollBox = () => this.tid('register-privacy-scroll-box')
@@ -165,4 +167,10 @@ export class PlayerBuilderScreen extends Screen {
     await this.position().click()
     await this.page.getByRole('option', { name: label, exact: true }).click()
   }
+}
+
+/** Log out through the header's user menu, the way a user would. */
+export async function logOutViaUserMenu(page: Page): Promise<void> {
+  await page.getByTestId('user-menu-btn').click()
+  await page.getByTestId('user-menu-logout').click()
 }
