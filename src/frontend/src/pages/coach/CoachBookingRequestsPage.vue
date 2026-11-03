@@ -14,7 +14,11 @@
       style="min-height: 40vh"
     >
       <q-icon name="inbox" size="64px" style="color: var(--text-secondary)" />
-      <div class="text-body1" style="color: var(--text-secondary)">
+      <div
+        class="text-body1"
+        style="color: var(--text-secondary)"
+        data-testid="coach-requests-empty"
+      >
         {{ t('booking.requests.coachInboxEmpty') }}
       </div>
     </div>
@@ -89,9 +93,12 @@
           v-for="booking in bookingStore.coachBookingRequests"
           :key="booking.id"
           class="q-py-md"
+          data-testid="coach-request"
         >
           <q-item-section>
-            <q-item-label class="text-weight-bold">{{ booking.playerName }}</q-item-label>
+            <q-item-label class="text-weight-bold" data-testid="coach-request-player">{{
+              booking.playerName
+            }}</q-item-label>
             <q-item-label caption>{{
               t('booking.requests.parentLabel', { name: booking.parentName })
             }}</q-item-label>
@@ -124,6 +131,7 @@
                 :label="t('booking.requests.accept')"
                 :loading="accepting[booking.id]"
                 @click="handleAccept(booking.id)"
+                data-testid="coach-request-accept"
               />
               <q-btn
                 flat
@@ -136,6 +144,7 @@
                 "
                 :loading="declining[booking.id]"
                 @click="handleDecline(booking.id)"
+                data-testid="coach-request-decline"
               />
             </div>
           </q-item-section>

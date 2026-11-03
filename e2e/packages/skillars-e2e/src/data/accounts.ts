@@ -55,9 +55,29 @@ export function ensureBaseline<R extends BaselineRole>(role: R): Promise<Baselin
   return pending
 }
 
+const ACCOUNT_ROLE_PREFIX = 'account:'
+const adhoc = new Map<string, Credentials>()
+
+/**
+ * A role key for an account a test provisioned itself, so `actor(asRole(account))` opens a logged-in
+ * context for it with the same priming, gates and session handling as a baseline persona. For
+ * two-persona tests whose accounts must not be the shared baseline (e.g. a coach whose slots a booking
+ * occupies).
+ */
+export function asRole(account: { email: string; password: string }): string {
+  const role = `${ACCOUNT_ROLE_PREFIX}${account.email}`
+  adhoc.set(role, { username: account.email, password: account.password })
+  return role
+}
+
 /** The kernel's credentials resolver: baseline personas are provisioned on demand. */
 export async function credentialsFor(role: string): Promise<Credentials> {
   if (role === 'admin') return { username: E2E.adminEmail, password: E2E.adminPassword }
+  const registered = adhoc.get(role)
+  if (registered) return registered
+  if (role.startsWith(ACCOUNT_ROLE_PREFIX)) {
+    throw new Error(`"${role}" was never registered: call asRole(account) in this worker first`)
+  }
   if (!(role in recipes)) throw new Error(`Unknown Skillars role "${role}"`)
   const account = await ensureBaseline(role as BaselineRole)
   return { username: account.email, password: account.password }
@@ -69,4 +89,5 @@ export async function closeAccounts(): Promise<void> {
   provisionerPromise = undefined
   sqlPromise = undefined
   baseline.clear()
+  adhoc.clear()
 }
