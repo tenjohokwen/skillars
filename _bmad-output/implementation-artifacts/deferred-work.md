@@ -3340,3 +3340,17 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Adult players can't finish email verification: the verify page shows "Network error".** `playerRegistrationApi` uses the `api` axios instance, whose response interceptor already returns the body (`boot/axios.js:142`). `PlayerEmailVerifyPage.vue:75` then destructures `response.data` from that body, which is `undefined`, so a `TypeError` lands in its `catch`, which `setError` shows as "Network error". The server has verified the account (200), but the player never reaches `/login?verified=true` (or `/player/verify-phone` when the phone OTP is on). The coach and parent verify pages use plain `axios` and are unaffected. `PlayerEmailVerifyPageSpec.js` mocks `{ data: {...} }`, which matches the bug, so the unit suite stays green. A sweep of every `api`-instance caller found no other `.data` read on an unwrapped body. Found by the Pitchside spec REG-03. Fixed in commit `95d4e9d6` (the page plus a spec that resolves the body and fails against the old code), which is in PR #416 into `feature/pitchside`, not master. Fix on master by cherry-picking `95d4e9d6`.
 
   **RESOLVED 2026-11-03:** `95d4e9d6` cherry-picked to master on `fix/player-email-verify-network-error`; `feature/pitchside` already had it through #416.
+
+## Deferred from: Pitchside UI tests, spec ONB-06 (2026-11-03)
+
+- **A pack added in the coach profile builder is advertised to parents but can't be bought.**
+  - **Where the data goes:**
+    - Builder step 3 saves its packs to `marketplace.session_packs` (`CoachProfileService.saveStep3`, `CoachProfileService.java:287`).
+    - The public profile reads those rows. `coachHasPacks` (`CoachPublicProfilePage.vue:611`) turns on the parent's "Buy sessions" button (`showBuySessionsSecondary`, `:622`).
+    - The purchase page and the purchase itself read `payment.session_pack_tiers`. Only the coach's "My Session Pack Offer" page (`/coach/session-pack-tiers`) writes that table.
+    - Nothing copies builder packs into a tier, at publish time or later.
+  - **What a parent sees:** a coach who onboards through the wizard, adds a pack and finishes Stripe Connect shows "Buy sessions" to parents. Clicking it opens "This coach has no session pack available for purchase" (`booking.packs.noTierAvailable`, `SessionPackPurchasePage.vue:60`).
+  - **What the coach sees:** their own "My Session Pack Offer" page says "You have no active session pack offer", even though they just entered a pack.
+  - **Why tests missed it:** the Pitchside provisioner creates the tier with a separate `POST /payment/coaches/me/session-pack-tiers` after publishing (`e2e/packages/skillars-e2e/src/data/provisioner.ts:260`), which hides the gap.
+  - **The decision needed:** which table is the source of truth. Either publishing, or step 3 itself, creates the tier from the builder's pack, or the profile stops advertising builder-only packs.
+  - Found by the Pitchside spec ONB-06 (W2, on `feature/pitchside`). That spec is marked `test.fail` until this is fixed; remove the marker with the fix.
