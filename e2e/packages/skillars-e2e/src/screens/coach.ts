@@ -32,6 +32,7 @@ export class CoachBuilderScreen extends Screen {
   languages = () => this.tid('builder-languages')
   /** Steps 1 and 4 (on step 4 only as the recovery picker). */
   timezone = () => this.tid('builder-timezone')
+  /** The picker's filter <input> (Quasar forwards the test id there when use-input is on). */
   timezoneSelect = () => this.tid('timezone-select')
   timezoneNoOption = () => this.tid('timezone-no-option')
   timezoneUnknownHint = () => this.tid('timezone-browser-unknown')
@@ -87,6 +88,14 @@ export class CoachBuilderScreen extends Screen {
   async chooseTimezone(zone: string): Promise<void> {
     await this.searchTimezone(zone)
     await this.page.getByRole('option', { name: zone, exact: true }).click()
+    // Wait until the choice has landed, then close the menu: a Next clicked earlier (seen under
+    // load) saved the preselected browser zone instead. The selected value renders as its own text
+    // in the picker's wrapper (`timezone-select` is on the inner <input>, which Quasar's use-input
+    // select forwards attributes to); exact, because the hint "e.g. Europe/Berlin" contains it too.
+    await this.timezone().getByText(zone, { exact: true }).waitFor()
+    // Escape dismisses the option list (a use-input select can keep it open while focused); its
+    // listbox is not reliably hidden afterwards, so nothing waits on that.
+    await this.page.keyboard.press('Escape')
   }
 
   async addPackRow(pack: { sessionCount: number; totalPrice: number; label: string }) {
