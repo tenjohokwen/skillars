@@ -52,12 +52,13 @@ import lombok.extern.slf4j.Slf4j;
 public class RefreshTokenRevocationService {
 
     /**
-     * Hops the chain walk will follow before giving up. A chain grows by one per rotation, and only
-     * rotations that happened after the holder's current cookie was minted are ahead of it, so in practice
-     * the walk is one or two hops: the presented row plus whatever a concurrent refresh just created. Eight
-     * leaves room for a client refreshing in a tight loop while logging out, and bounds the work a
-     * replayed stale cookie can ask for. Hitting it is logged rather than retried: the rows beyond the bound
-     * are still live, which is a real (if remote) revocation gap, and a silent one would be worse.
+     * Links ({@code replaced_by_id} hops) the chain walk will follow before giving up, so it revokes the
+     * presented row plus up to this many successors. Deliberately the same number as
+     * {@code AuthService.MAX_GRACE_HOPS} and counted the same way, so the grace window can never hand over
+     * a token that a logout of the same chain would have refused to reach. A chain grows by one per
+     * rotation, and only rotations after the holder's cookie was minted are ahead of it, so in practice the
+     * walk is one or two links. Exceeding it is reported to the caller, which revokes the whole account
+     * instead — see the hop-bound comment below for why that cannot happen here.
      */
     private static final int MAX_CHAIN_HOPS = 8;
 
@@ -100,8 +101,9 @@ public class RefreshTokenRevocationService {
         }
         final Instant now = Instant.now(ClockProvider.getClock());
         Optional<RefreshToken> cursor = refreshTokenRepository.findByTokenHashForUpdate(tokenHash);
+        final Long ownerId = cursor.map(RefreshToken::getUserId).orElse(null);
         int revoked = 0;
-        int hops = 0;
+        int links = 0;
         while (cursor.isPresent()) {
             final RefreshToken row = cursor.get();
             if (row.getRevokedAt() == null) {
@@ -114,7 +116,7 @@ public class RefreshTokenRevocationService {
             if (successorId == null) {
                 return new ChainRevocation(revoked, null);
             }
-            if (++hops >= MAX_CHAIN_HOPS) {
+            if (links == MAX_CHAIN_HOPS) {
                 // Fail SAFE, not open — but the fallback CANNOT run here. Returning plainly would leave the
                 // rows beyond the bound `used = false, revoked_at = null`, i.e. ordinary live tokens that
                 // AuthService.refresh will keep rotating, so the ended session would continue indefinitely
@@ -126,12 +128,25 @@ public class RefreshTokenRevocationService {
                 // it did when first written this way. So the decision is reported to the caller and acted on
                 // after this transaction has committed — the same decide-inside/act-outside rule
                 // AuthService.refresh follows, for the same reason.
-                log.warn("Refresh-token chain for user {} exceeds {} hops (revoked {} row(s), successor {} "
-                        + "still live); the caller must revoke the account's remaining tokens",
+                log.warn("Refresh-token chain for user {} is longer than {} links (revoked {} row(s), "
+                        + "successor {} still live); the caller must revoke the account's remaining tokens",
                     row.getUserId(), MAX_CHAIN_HOPS, revoked, successorId);
                 return new ChainRevocation(revoked, row.getUserId());
             }
-            cursor = refreshTokenRepository.findByIdForUpdate(successorId);
+            links++;
+            final Optional<RefreshToken> successor = refreshTokenRepository.findByIdForUpdate(successorId);
+            // Defence in depth: replaced_by_id must name a token of the SAME account. Nothing enforces
+            // that today — V224's FK checks existence only, and ships NOT VALID — so a bad manual data
+            // fix, a partial restore or any future writer of the column could point a chain at another
+            // user's row. Revoking it would be bad; AuthService.resolveGraceSuccessor making the mirror
+            // mistake would be a cross-account session takeover, so both walks check. Logged at error
+            // because a mismatch means the table is corrupt, not that a request was unusual.
+            if (successor.isPresent() && !successor.get().getUserId().equals(ownerId)) {
+                log.error("refresh_tokens.replaced_by_id {} points at user {} from user {}'s chain; "
+                        + "stopping the walk", successorId, successor.get().getUserId(), ownerId);
+                return new ChainRevocation(revoked, ownerId);
+            }
+            cursor = successor;
         }
         return new ChainRevocation(revoked, null);
     }
@@ -142,9 +157,10 @@ public class RefreshTokenRevocationService {
      * {@link #revokeChainByTokenHash}'s transaction has committed and released its row locks — never from
      * inside it, see that method's hop-bound comment.
      *
-     * <p>Blunter than the walk: it ends the user's other sessions too. Accepted at this depth, because nine
-     * or more rotations ahead of the presented cookie is already pathological, and losing the other sessions
-     * is strictly better than leaving the logged-out one tradeable for the rest of its 7-day TTL.
+     * <p>Blunter than the walk: it ends the user's other sessions too. Accepted at this depth, because a
+     * cookie more than {@link #MAX_CHAIN_HOPS} rotations behind the chain's live end is already
+     * pathological, and losing the other sessions is strictly better than leaving the logged-out one
+     * tradeable for the rest of its 7-day TTL.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void revokeAllForUser(final Long userId) {

@@ -209,7 +209,8 @@ public final class SecurityUtil {
      * <p>Callers, each with its own reason to skip {@link #terminateSession}'s DB revocation:
      * <ul>
      *     <li>{@link #terminateSession} itself, as its own last step — it has already issued its
-     *         own {@code markUsedByTokenHash} revocation above, so this call exists purely for the
+     *         own chain revocation above (skillars-deferred-166; it was {@code markUsedByTokenHash}
+     *         until that story), so this call exists purely for the
      *         cookie-clearing side; this is the one caller skipping the revocation because it is
      *         not this method's caller to skip at all, but the author of it.</li>
      *     <li>{@code AuthService.refresh()}'s optimistic-lock-loser branch — runs after its own
@@ -227,13 +228,22 @@ public final class SecurityUtil {
      * credential by itself — it relies on the caller having already revoked (or never needing to
      * revoke) the underlying {@code refresh_tokens} row.
      */
+    public void clearAuthCookies(final HttpServletResponse response) {
+        loginTokenManager.deleteLoginToken(response);
+        CookieUtil.removeCookie(REFRESH_TOKEN_COOKIE, response, true, "Lax");
+        SkillarsProfileCookie.removeFrom(response);
+    }
+
     /**
      * skillars-deferred-166: the chain revoke, retried a bounded number of times if it loses a row lock.
      *
-     * <p>{@code findByTokenHashForUpdate} waits at most 5 s (see its javadoc) and then throws
-     * {@code PessimisticLockingFailureException}. A logout must not give up on that: the likeliest holder
-     * is a concurrent refresh on the same chain, which is the exact race ledger RS01 is about, and losing
-     * the revoke there is the defect this story exists to fix. Each attempt is a fresh
+     * <p>{@code findByTokenHashForUpdate} waits for the row rather than failing fast (see its javadoc for
+     * why {@code NO_WAIT} is wrong here), so the failure this retries is a genuine deadlock — SQLState
+     * 40P01, which PostgreSQL resolves by killing one side, most plausibly against
+     * {@code markAllUsedByUserId}'s bulk {@code UPDATE} over the same user's rows. A logout must not give
+     * up on that: the likeliest contender is a concurrent refresh on the same chain, which is the exact
+     * race ledger RS01 is about, and losing the revoke there is the defect this story exists to fix. Each
+     * attempt is a fresh
      * {@code REQUIRES_NEW} transaction, because this class is not transactional and the call crosses the
      * service's proxy — so retrying here really does re-take the lock rather than re-run inside a
      * transaction PostgreSQL has already aborted.
@@ -257,21 +267,15 @@ public final class SecurityUtil {
                 return;
             } catch (PessimisticLockingFailureException e) {
                 if (attempt == REVOKE_ATTEMPTS) {
-                    log.error("Could not revoke the refresh-token chain after {} attempts: the row stayed "
-                        + "locked. Cookies are cleared, but a server-side credential may still be live.",
+                    log.error("Could not revoke the refresh-token chain after {} attempts (lock conflict). "
+                        + "Cookies are cleared, but a server-side credential may still be live.",
                         REVOKE_ATTEMPTS, e);
                     return;
                 }
-                log.warn("Refresh-token chain revoke lost a row lock (attempt {} of {}); retrying",
+                log.warn("Refresh-token chain revoke lost a lock conflict (attempt {} of {}); retrying",
                     attempt, REVOKE_ATTEMPTS);
             }
         }
-    }
-
-    public void clearAuthCookies(final HttpServletResponse response) {
-        loginTokenManager.deleteLoginToken(response);
-        CookieUtil.removeCookie(REFRESH_TOKEN_COOKIE, response, true, "Lax");
-        SkillarsProfileCookie.removeFrom(response);
     }
 
     /**

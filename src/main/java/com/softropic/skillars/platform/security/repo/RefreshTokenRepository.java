@@ -4,7 +4,6 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -12,7 +11,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.Optional;
 
 import jakarta.persistence.LockModeType;
-import jakarta.persistence.QueryHint;
 
 /**
  * Persistence for {@link RefreshToken} — the long-lived (7-day, {@code SecurityConstants
@@ -108,34 +106,40 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
      * committed. skillars-deferred-143 hit the same hazard from the other direction and documented it on
      * {@link #markUsedByTokenHash}.
      *
-     * <p><strong>Bounded wait, not {@code NO_WAIT}.</strong> Every other {@code *ForUpdate} query here
-     * ({@code UserRepository}, {@code BookingRepository}, {@code CoachReviewRepository}) pairs
-     * {@code lock.timeout = 0} with {@code PessimisticLockRetryer}, because those call sites can retry a
-     * read in place from a savepoint. These two cannot: the refresh decision and the logout chain walk are
-     * whole transactions, and failing them instantly would turn the ordinary logout-versus-refresh overlap
-     * — the very race ledger RS01 is about — into a logout that does not revoke. A 5 s cap is the middle
-     * ground: the holder is a refresh or a chain walk that finishes in milliseconds, so a legitimate
-     * contender waits and succeeds, while a client replaying one {@code rtkn} concurrently against these
-     * two {@code permitAll} endpoints cannot pin a servlet thread and a pooled connection indefinitely.
-     * (Before skillars-deferred-166 the same rows were contended by {@code markUsedByTokenHash}'s plain
-     * {@code UPDATE}, which waited with no bound at all, so this is a tightening either way.) A timeout
-     * surfaces as {@code PessimisticLockingFailureException}, which {@code AuthService.refresh} answers
-     * with a 401 and {@code SecurityUtil.terminateSession} retries.
+     * <p><strong>This lock WAITS, deliberately, and carries no timeout hint.</strong> The other
+     * {@code *ForUpdate} queries here pair {@code lock.timeout = 0} with {@code PessimisticLockRetryer};
+     * that is {@code NO_WAIT}, the only value Hibernate's {@code PostgreSQLDialect} special-cases — a
+     * finite timeout is silently ignored on PostgreSQL, as {@code CoachProfileRepository},
+     * {@code PlayerProfileRepository} and {@code VideoRepository} all record. (A 5 s hint was tried here
+     * first and was inert: the emitted SQL was a plain {@code FOR UPDATE} and the javadoc promising a
+     * bounded wait was simply false.)
+     *
+     * <p>{@code NO_WAIT} is wrong for these two call sites. Each is a whole transaction, not a read that a
+     * savepoint can retry in place, and failing instantly would turn the ordinary logout-versus-refresh
+     * overlap — the exact race ledger RS01 is about — into a logout that does not revoke. Waiting is also
+     * what the rows were doing before this story, when the same contention queued behind
+     * {@code markUsedByTokenHash}'s plain {@code UPDATE}; the holder is a refresh or a chain walk that
+     * finishes in milliseconds, so the queue drains. The residual — an unbounded queue on two
+     * {@code permitAll} endpoints — is unchanged by this story and filed in {@code deferred-work.md}.
+     * A genuine deadlock (SQLState 40P01) still surfaces as {@code PessimisticLockingFailureException},
+     * which {@code AuthService.refresh} answers with a 401 and {@code SecurityUtil.terminateSession}
+     * retries.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT r FROM RefreshToken r WHERE r.tokenHash = :hash")
     Optional<RefreshToken> findByTokenHashForUpdate(@Param("hash") String hash);
 
     /**
-     * skillars-deferred-166: by-id lookup with the same {@code PESSIMISTIC_WRITE} lock and the same
-     * never-across-a-{@code REQUIRES_NEW}-write rule as {@link #findByTokenHashForUpdate}. Used to walk
-     * {@code replaced_by_id} is indexed for the FK's {@code ON DELETE SET NULL} action, not for this
-     * lookup, which is by primary key. Same 5 s bounded wait and rationale as
-     * {@link #findByTokenHashForUpdate}.
+     * skillars-deferred-166: by-id lookup with the same {@code PESSIMISTIC_WRITE} lock, the same waiting
+     * behaviour and the same never-across-a-{@code REQUIRES_NEW}-write rule as
+     * {@link #findByTokenHashForUpdate}. Used to walk {@code replaced_by_id} from a rotated token to its
+     * successor.
+     *
+     * <p>This lookup is by primary key and needs no index of its own. {@code replaced_by_id} is indexed
+     * (V224, partial) for a different reason entirely: the FK's {@code ON DELETE SET NULL} action searches
+     * that column once per row {@code deleteExpiredTokens} removes.
      */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT r FROM RefreshToken r WHERE r.id = :id")
     Optional<RefreshToken> findByIdForUpdate(@Param("id") Long id);
 

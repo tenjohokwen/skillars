@@ -21,6 +21,35 @@ list per this file's "deleted outright once implemented" rule; their eval cases 
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
 not renumber, so the list below starts at RS03.
 
+- **[skillars-deferred-166, OWNER DECISION NEEDED, medium/security]** A replay of a revoked refresh token
+  no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
+  JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such
+  a replay was "used with no recent rotation", took the theft branch, and called
+  `invalidateSessionsForUser`; `AuthService.refresh`'s new REVOKED outcome answers 401 and deliberately
+  runs no account-wide revocation (that story's AC3, so a stale tab retrying after Logout cannot sign the
+  user out of their other devices). Consequence: anyone holding a copy of that session's JWT cookie — an
+  exfiltrated cookie, a shared machine, or an attacker who stole the `rtkn`, refreshed once and then called
+  logout specifically to suppress detection — keeps passing the JWT filter's re-auth, because
+  `SecurityUtil.terminateSession` has never stamped the epoch and nothing else does now. Note the baseline:
+  logout never killed standing JWTs; the victim's replay was the only thing that did.
+  **Options.** (a) Keep AC3 and accept the detection loss, which is the current state. (b) Bump the epoch
+  on REVOKED, which restores the control but logs the user out of every device (the harm AC3 was written to
+  prevent, since the epoch check then refuses the other devices' older tokens). (c) Have logout stamp the
+  epoch for its own session only, which needs a per-session epoch the schema does not have. **Recommend
+  (a) plus a short JWT TTL review**, and treat (c) as the real fix if JWT-after-logout matters: it is the
+  only option that does not trade one of the two properties away. Not decided in that story because it
+  contradicts an approved AC.
+- **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
+  `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
+  on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as
+  `CoachProfileRepository`, `PlayerProfileRepository` and `VideoRepository` all record), and a 5 s hint was
+  tried and removed as misleading. `NO_WAIT` is wrong for these two call sites — each is a whole
+  transaction, and failing fast would let a contended logout skip its revoke. So concurrent replays of one
+  `rtkn` against `POST /api/auth/refresh` and `/api/auth/logout` (both `permitAll`, unrate-limited) queue on
+  the row, each holding a servlet thread and a pooled connection until the holder finishes. Unchanged by
+  that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
+  practice because every holder is a short transaction. A real fix is a session `lock_timeout` on
+  application connections, or rate-limiting those two endpoints.
 - **[skillars-deferred-166 follow-up]** V224 added `main.refresh_tokens.replaced_by_id` with its
   self-referential FK as `NOT VALID` (migration-conventions rule 3: the table grows). The
   `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT fk_refresh_tokens_replaced_by` still has to ship

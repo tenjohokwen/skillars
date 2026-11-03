@@ -209,6 +209,32 @@ locks; `validate.py` rejects a malformed `fix_pr`; the provisioning checklist ca
 outstanding `VALIDATE`; and a test comment that claimed a negative assertion proved a branch ran was
 corrected, with the positive counterpart added.
 
+**Second /pr-review round, both arms, 10 findings.** The two headline ones were raised independently by
+both arms, which is why they were trusted and fixed rather than argued with:
+
+- **The 5 s `lock.timeout` added in round one was inert.** A finite value has no effect on PostgreSQL —
+  Hibernate's dialect special-cases only `NO_WAIT` and `SKIP_LOCKED`, which is why the other twelve
+  `*ForUpdate` queries here use `0`, and three separate repository comments already said so. The emitted
+  SQL was a plain `FOR UPDATE`, so the javadoc promising a bounded wait was false and the retry it
+  described was unreachable. The hint is removed, the javadoc now states that these locks wait and why
+  `NO_WAIT` is wrong for a logout that must not skip its revoke, and the retry and the 401 branch are
+  reframed as deadlock (40P01) handling, which is the failure that can actually occur. The unbounded queue
+  is filed in the ledger; it is unchanged from before this story, when the same rows queued behind
+  `markUsedByTokenHash`'s plain `UPDATE`.
+- **Neither walk checked that a successor belongs to the same account.** V224's FK checks existence only
+  and ships `NOT VALID`, so a bad manual fix, a partial restore or a future writer of the column could
+  point a chain across accounts — which in `resolveGraceSuccessor` would be a cross-account session
+  takeover, the worst version of the RS02 defect. Both walks now verify the owner and log at error.
+
+Also fixed: the two hop bounds were off by one against each other while the javadoc claimed they matched,
+so logout escalated to account-wide revocation one rotation earlier than documented (aligned, and counted
+the same way in both); `clearAuthCookies`'s javadoc had been orphaned onto the private retry helper by
+round one's insertion, leaving a security-relevant caller list documenting the wrong method, and a stale
+`markUsedByTokenHash` reference inside it; and the rotation now commits before the response cookies are
+written, where it used to be one transaction, so a throw in between consumes the token — recorded in place
+of the old invariant, together with why it self-heals (the client still holds the old cookie, whose
+`replaced_by_id` now points at the successor, so a retry inside the window is redirected to it).
+
 **One finding corrected rather than fixed.** The security arm showed that `isBeforeSessionEpoch` closes the
 revoke-all snapshot gap only for the two callers that stamp the epoch AFTER the bulk revoke
 (`changePassword`, `completePasswordReset`). `AdminUserService.suspendUser`, `AgeVerificationService` and
@@ -217,12 +243,22 @@ passes the check; `locked = true` covers it until an admin reactivation clears t
 javadoc now states the limit precisely instead of overclaiming, and the ordering plus the reactivate hole
 are filed in `deferred-work.md` rather than fixed by reordering three services outside this story's scope.
 
+**One finding deliberately left for the owner.** Both arms observed that a replay of a revoked token no
+longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing JWT
+after a logout: `terminateSession` has never stamped the epoch, and the new REVOKED outcome answers 401
+without account-wide revocation. An attacker who stole an `rtkn`, refreshed once and then called logout can
+use that to suppress the victim's future theft trigger. This is AC3's own trade-off, approved with the
+story, so it is not reversed here — but AC3 was written weighing only the benign stale-tab case. Filed in
+`deferred-work.md` as needing an owner decision, with three options and a recommendation; the honest
+summary is that the design trades JWT-after-logout detection against not mass-revoking on a stale replay,
+and only a per-session epoch (which the schema lacks) gives both.
+
 **Deliberately not done.** `markAllUsedByUserId` still does not set `revoked_at` (six callers; the epoch
 check masks the consequence), and the V224 FK's `VALIDATE` ships later. Both filed in `deferred-work.md`.
 No frontend change: the SPA does not call `POST /api/auth/refresh` at all.
 
 **Validation.** Targeted per `docs/validation-strategy.md`; no local `mvn verify` (project rule, CI is the
-gate). Final run, all green: `AuthResourceIT` 37/37 (11 new, the revived test, and the updated
+gate). Final run after both review rounds, all green: `AuthResourceIT` 37/37 (11 new, the revived test, and the updated
 grace-window one), `RefreshTokenRepositoryIT` 1/1, `AuthServiceTest` 14/14 (9 new), `SecurityUtilTest`
 8/8 (3 new), `MigrationConventionLintTest` 30/30, `NativeModifyingVersionAuditTest` 2/2,
 `IntegrationTestConventionTest` 6/6 (the context ceiling is unaffected: the new `@Autowired` field does

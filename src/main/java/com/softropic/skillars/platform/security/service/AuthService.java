@@ -54,11 +54,12 @@ public class AuthService {
     private static final Duration REFRESH_GRACE_WINDOW = Duration.ofSeconds(30);
 
     /**
-     * skillars-deferred-166: how far {@link #resolveGraceSuccessor} will follow {@code replacedById} looking
-     * for the chain's live end. A chain grows by one per rotation inside the window, so this is the number
-     * of clients that can refresh the same cookie concurrently and still be treated as a race rather than
-     * theft. Matches {@code RefreshTokenRevocationService}'s own bound so logout can always revoke at least
-     * as far as the grace window can reach.
+     * skillars-deferred-166: how many {@code replacedById} links {@link #resolveGraceSuccessor} will follow
+     * looking for the chain's live end. A chain grows by one per rotation inside the window, so this is
+     * roughly the number of clients that can refresh the same cookie concurrently and still be treated as a
+     * race rather than theft; beyond it the replay is answered as reuse, which revokes the account. Equal to
+     * {@code RefreshTokenRevocationService.MAX_CHAIN_HOPS} and counted the same way, so logout always
+     * reaches at least as far as the grace window can hand out.
      */
     private static final int MAX_GRACE_HOPS = 8;
 
@@ -218,8 +219,10 @@ public class AuthService {
             //  - optimistic: a stale managed copy written from elsewhere. Rare now that decideAndRotate
             //    takes a row lock, so the loser of a same-token race reads committed state and takes the
             //    grace redirect instead of failing a version check.
-            //  - pessimistic (CannotAcquireLockException / DeadlockLoserDataAccessException, SQLState 40P01
-            //    or 55P03): this walk locks the presented row and then its successor, while
+            //  - pessimistic (CannotAcquireLockException / DeadlockLoserDataAccessException, SQLState
+            //    40P01): the locks here WAIT rather than failing fast (a finite lock.timeout is inert on
+            //    PostgreSQL — see findByTokenHashForUpdate), so this is a genuine deadlock, not a timeout.
+            //    This walk locks the presented row and then its successor, while
             //    markAllUsedByUserId is a bulk UPDATE over the same user's rows in scan order, so a theft
             //    revocation, password change, reset or suspension running concurrently with a grace-window
             //    redirect can genuinely deadlock. Postgres kills one side; without this branch that side
@@ -232,6 +235,20 @@ public class AuthService {
         }
 
         if (outcome instanceof Rotated rotated) {
+            // NOTE, changed by skillars-deferred-166: the rotation has already COMMITTED by the time these
+            // cookies are written, where before the restructure both happened in one transaction and a
+            // failure here rolled the rotation back (the invariant login() still states for itself). So a
+            // throw between this point and the Set-Cookie headers — a JWT signing failure, an
+            // already-committed response — consumes the presented token without handing the client its
+            // successor.
+            //
+            // Self-healing, and by the same mechanism this story added: the client still holds the OLD
+            // cookie, because nothing was written, and that row is now `used` with its `replaced_by_id`
+            // pointing at the live successor. A retry inside REFRESH_GRACE_WINDOW is therefore redirected
+            // to that successor and issued normally. Outside the window it is reuse, and the user signs in
+            // again. Accepted rather than fixed: keeping the cookies inside the transaction would mean
+            // holding the row lock across them, which is exactly the shape that deadlocks against every
+            // REQUIRES_NEW revoke (see this method's javadoc).
             final LoginResponse response = rotated.response();
             loginTokenManager.createLoginToken(res, rotated.principal());
             CookieUtil.addCookie(res, REFRESH_TOKEN_COOKIE, rotated.newRawToken(),
@@ -441,6 +458,15 @@ public class AuthService {
             final RefreshToken successor = refreshTokenRepository.findByIdForUpdate(successorId).orElse(null);
             if (successor == null) {
                 break;
+            }
+            // Defence in depth, mirroring RefreshTokenRevocationService: a successor must belong to the
+            // SAME account. Nothing enforces that (V224's FK checks existence only and ships NOT VALID), and
+            // handing a caller another user's live token would be a cross-account session takeover — the
+            // worst possible version of the RS02 defect this method exists to fix.
+            if (!successor.getUserId().equals(presented.getUserId())) {
+                log.error("refresh_tokens.replaced_by_id {} points at user {} from user {}'s chain; "
+                        + "refusing to redirect", successorId, successor.getUserId(), presented.getUserId());
+                return GraceResolution.none();
             }
             if (successor.getRevokedAt() != null) {
                 return GraceResolution.revokedChain();
