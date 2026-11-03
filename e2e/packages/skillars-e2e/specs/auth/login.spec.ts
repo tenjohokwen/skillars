@@ -56,7 +56,8 @@ test.describe('A · Auth & session — login form', () => {
       test.slow()
       // A reset revokes every session of the account, so never the shared baseline player.
       const player = await provision.adultPlayer()
-      const since = new Date()
+      // Margin for the mail container's clock; the subject filter keeps out the verification mail.
+      const since = new Date(Date.now() - 2_000)
 
       const forgot = await new ForgotPasswordScreen(page, suite).open()
       await forgot.request(player.email, player.dateOfBirth)
