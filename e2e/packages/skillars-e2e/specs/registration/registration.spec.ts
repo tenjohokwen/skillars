@@ -12,6 +12,47 @@ import {
 
 test.describe('B · Registration & verification', () => {
   test(
+    'a coach registers, verifies by email, logs in and is held at the profile builder',
+    scenario({
+      id: 'REG-01',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@coach', '@registration', '@onboarding'],
+    }),
+    async ({ page, suite, mail, provision, settledRoute }) => {
+      // The spine of the coach funnel. The phone-OTP step is off in the seeded config
+      // (REG-21 covers it on); with it off, verification hands straight over to login.
+      test.slow()
+      const who = provision.identity('coach')
+      const register = await new RegisterScreen(page, suite, 'coach').open()
+      await register.fillDetails(who)
+      await register.tos().click()
+      await register.privacy().click()
+      const since = new Date(Date.now() - 2_000)
+      await register.submit().click()
+
+      const pending = await new EmailPendingScreen(page, suite, 'coach').waitReady()
+      await expect(pending.body()).toContainText(who.email)
+
+      const message = await mail.waitForMessage({
+        to: who.email,
+        subjectMatches: /verify/i,
+        since,
+        timeoutMs: 30_000,
+      })
+      const token = message.code(VERIFY_TOKEN)
+      await page.goto(suite.routing.toUrl(`${REGISTRATION.coach.verifyEmail}?token=${token}`))
+      const login = await new LoginScreen(page, suite).waitReady()
+      await expect(login.verifiedBanner()).toHaveText(t('auth.emailVerifiedPleaseLogin'))
+
+      // A brand-new coach has an incomplete profile: the command-centre guard holds them at
+      // the builder (C-11).
+      await login.logIn(who.email, who.password)
+      expect(await settledRoute(R.coachBuilder)).toBe(R.coachBuilder)
+    },
+  )
+
+  test(
     'an adult player registers, verifies by email, logs in and finishes their profile',
     scenario({
       id: 'REG-03',
