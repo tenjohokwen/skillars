@@ -45,7 +45,8 @@ services:
       # accepts only 2-3 letter TLDs, so example.com, never .test.
       - APP_BOOTSTRAP_ADMIN_EMAIL=${E2E_ADMIN_EMAIL:-admin@e2e.example.com}
       - APP_BOOTSTRAP_ADMIN_PASSWORD=${E2E_ADMIN_PASSWORD:-E2e-Admin-Password-1!}
-      - APP_BOOTSTRAP_ADMIN_PHONE=+15550000001
+      # 12 characters on purpose: generated account phones are 15, so they can never collide with it.
+      - APP_BOOTSTRAP_ADMIN_PHONE=${E2E_ADMIN_PHONE:-+15550000001}
       - JAVA_TOOL_OPTIONS=-Duser.timezone=UTC -XX:MaxRAMPercentage=70
     volumes:
       - ./config:/e2e-config:ro

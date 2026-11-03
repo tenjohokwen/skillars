@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 import { request, type APIRequestContext } from '@playwright/test'
 import {
   ApiClient,
@@ -54,6 +54,9 @@ export const FINGERPRINT = 'e2e-fixed-fingerprint'
 
 const VERIFY_TOKEN = /token=([0-9a-f-]{36})/
 
+/** Phones the stack itself seeds (docker-compose.e2e.yml); generated numbers must never take one. */
+const RESERVED_PHONES = new Set([process.env.E2E_ADMIN_PHONE ?? '+15550000001'])
+
 /**
  * Creates Skillars accounts the way a user would — register, follow the emailed link, log in, fill
  * the builders — over HTTP only, plus three narrow SQL writes for state that needs a real Stripe
@@ -61,7 +64,11 @@ const VERIFY_TOKEN = /token=([0-9a-f-]{36})/
  */
 export class Provisioner {
   private phoneCounter = 0
-  private readonly runDigits: string
+  /**
+   * Six random digits drawn once per worker process — not derived from the run id, which workers
+   * share in CI and which a reused local stack or a persistent environment sees again run after run.
+   */
+  private readonly phoneNonce = String(randomInt(0, 1_000_000)).padStart(6, '0')
 
   constructor(
     private readonly anonymous: APIRequestContext,
@@ -69,10 +76,7 @@ export class Provisioner {
     private readonly names: UniqueNames,
     private readonly sql: () => Promise<SqlExecutor>,
     private readonly clock: Clock = systemClock,
-  ) {
-    const digest = createHash('sha256').update(names.runId).digest()
-    this.runDigits = String(digest.readUInt16BE(0) % 1000).padStart(3, '0')
-  }
+  ) {}
 
   static async create(workerIndex: number, sql: () => Promise<SqlExecutor>): Promise<Provisioner> {
     const anonymous = await request.newContext()
@@ -298,11 +302,23 @@ export class Provisioner {
     }
   }
 
-  /** `+1` + 3 run digits + 2 worker digits + 4 counter digits: unique per run and worker. */
+  /**
+   * `+1` + 6 random digits + 3 worker digits + 4 counter digits = 15 characters (`main.user.phone`
+   * is UNIQUE). The fixed width keeps every generated number distinct from the shorter fixed numbers
+   * the stack seeds — the bootstrap admin is `+15550000001` (12 characters) — and the 3-digit worker
+   * field does not wrap until Playwright's worker index (new on every restart) passes 999. Within
+   * the regexes of all three registration requests (at most 20 characters).
+   */
   private nextPhone(): string {
     this.phoneCounter += 1
-    const worker = String(this.names.workerIndex % 100).padStart(2, '0')
-    return `+1${this.runDigits}${worker}${String(this.phoneCounter).padStart(4, '0')}`
+    if (this.phoneCounter > 9999)
+      throw new Error('Provisioner phone counter exhausted (9999 accounts)')
+    if (this.names.workerIndex > 999)
+      throw new Error('Provisioner supports worker indexes up to 999')
+    const worker = String(this.names.workerIndex).padStart(3, '0')
+    const phone = `+1${this.phoneNonce}${worker}${String(this.phoneCounter).padStart(4, '0')}`
+    if (RESERVED_PHONES.has(phone)) throw new Error(`Generated phone ${phone} is reserved`)
+    return phone
   }
 
   private api(context: APIRequestContext): ApiClient {
