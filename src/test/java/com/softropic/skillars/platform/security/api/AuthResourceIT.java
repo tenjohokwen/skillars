@@ -1582,7 +1582,7 @@ class AuthResourceIT extends AbstractIntegrationTest {
      * collateral damage.
      */
     @Test
-    void refresh_staleTokenOnALiveChainOutsideTheWindow_is401WithNoAccountWideRevocation() {
+    void refresh_staleTokenOnALiveChainOutsideTheWindow_revokesThatChainOnly() {
         String deviceB = loginAndGetRtkn(COACH_EMAIL);
         ResponseEntity<Map> deviceA = login(COACH_EMAIL);
         String a0 = extractCookieValue(deviceA, "rtkn");
@@ -1603,18 +1603,22 @@ class AuthResourceIT extends AbstractIntegrationTest {
             .satisfies(e -> assertThat(((HttpClientErrorException) e).getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED));
 
+        // AC7 as amended by the owner: the chain the stale token belongs to is revoked, so the thief's
+        // live successor goes with it. Writing nothing here left the victim unable to reach that row at
+        // all, because the same branch clears the rtkn cookie their Logout would have walked from.
         assertThat(revokedAtOf(sha256Hex(a1)))
-            .as("the live end of A's own chain must survive — it may be a sibling tab's credential")
-            .isNull();
+            .as("A's own live end must be revoked — that is the row a thief would be holding")
+            .isNotNull();
+        // And the part AC7 exists for, unchanged: the blast radius stops at this chain.
         assertThat(usedFlagOf(sha256Hex(deviceB)))
-            .as("device B must be untouched; it being revoked is the defect this AC removes")
+            .as("device B must be untouched; revoking it is the defect this AC removes")
             .isFalse();
         assertThat(sessionEpochOf(COACH_USER_ID))
             .as("and no session epoch may be stamped: that is what logged the user out everywhere")
             .isNull();
         assertThat(liveTokenCountFor(COACH_USER_ID))
-            .as("A's live end plus device B's token")
-            .isEqualTo(2);
+            .as("device B's token alone: A's chain is revoked, B's session is not")
+            .isEqualTo(1);
     }
 
     /**

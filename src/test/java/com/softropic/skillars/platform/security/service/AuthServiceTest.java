@@ -261,9 +261,9 @@ class AuthServiceTest {
     }
 
     @Test
-    @DisplayName("skillars-deferred-167 AC7: a stale token on a chain that is STILL LIVE, outside the "
-        + "window, is 401 with no writes — and is counted")
-    void refresh_staleTokenOutsideTheWindowOnALiveChain_is401WithNoRevocation() {
+    @DisplayName("skillars-deferred-167 AC7 as amended: a stale token on a chain that is STILL LIVE, "
+        + "outside the window, revokes THAT CHAIN only — never the account — and is counted")
+    void refresh_staleTokenOutsideTheWindowOnALiveChain_revokesTheChainNotTheAccount() {
         // The case AC7 downgraded. Two concurrent refreshes of one cookie both set rtkn and the jar keeps
         // whichever arrived last; when that is the winner's, the client is left permanently one hop behind
         // a live chain. Its next refresh past the window used to run markAllUsedByUserId +
@@ -289,15 +289,14 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.refresh(request, response))
             .isInstanceOf(BadCredentialsException.class);
 
+        // The point of AC7, and what the amendment kept: the ACCOUNT is never revoked here.
         verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
         verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
-        verify(securityUtil).clearAuthCookies(response);
-        // The live end must survive untouched: it may be a sibling tab's current credential, and the
-        // presented row is already used so nobody can trade it in anyway.
-        assertThat(liveEnd.isUsed()).isFalse();
-        assertThat(liveEnd.getRevokedAt()).isNull();
-        // AC7 requires this to be counted, not just logged: it is the only numeric trace of a signal that
-        // used to revoke an account, and a warn line alone cannot be alerted on by rate.
+        // What the amendment added: this chain IS revoked, via the walk that starts at the presented
+        // cookie. Without it, clearing the cookie left the victim of a stolen-and-rotated token no way to
+        // reach the thief's live successor — not by logging out, not by logging in again.
+        verify(securityUtil).terminateSession(request, response);
+        // Counted, not just logged: a warn line alone cannot be alerted on by rate.
         assertThat(meterRegistry.counter("security.refresh.stale_live_chain").count()).isEqualTo(1.0);
     }
 

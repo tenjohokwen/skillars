@@ -28,7 +28,7 @@ RS09 compounds it (the parent's saved default card is overwritten before the cha
 context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + RS04 (the small logic pair) were
 the alternatives and stay queued behind it.
 
-- **[skillars-deferred-167, OWNER DECISION NEEDED, medium/security]** Flip the per-session JWT check from
+- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a), IMPLEMENTATION PENDING A DATE, medium/security]** Flip the per-session JWT check from
   fail-open to fail-closed on a missing session claim — and the trigger cannot be "wait 7 days", which is
   what this entry first said. skillars-deferred-167 AC5 skips the check for a JWT with no `rtsid` claim,
   because failing closed at deploy would sign out every live session and neither mint path can invent the
@@ -47,8 +47,16 @@ the alternatives and stay queued behind it.
   cookie when the row carries one, with an ownership check against the authorized principal — narrows the
   population but cannot help a holder who has only the `potc`, which is precisely the thief. **Recommend
   (a)**, with the date announced; (c) adds a query and a new failure mode for partial coverage.
+  **DECIDED 2026-11-03: (a) — flip on an announced date.** Note that (c) shipped anyway for a different
+  reason (a rolling deploy strips the claim from post-deploy tokens, and re-derivation is the only repair),
+  so the remaining population is narrower than when this entry was written: only a holder presenting a
+  claimless `potc` WITHOUT the matching `rtkn` cookie. **Deliberately NOT implemented in
+  skillars-deferred-167:** the flip needs a date, which is an operational choice, and shipping it blind
+  would sign those holders out at an unannounced moment. Whoever picks the date owns inverting the
+  early return in `JWTAuthorizationFilter.assertSessionChainStillLive` and rewriting its javadoc, which
+  currently documents the fail-open as deliberate.
 
-- **[skillars-deferred-167, OWNER DECISION NEEDED, high/security]** The AC7 downgrade also destroys the
+- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option b) -> APPLIED, high/security]** The AC7 downgrade also destroyed the
   victim's only remediation, which neither the story nor the AC7 decision anticipated. Both reviewer arms
   raised it independently in round 3 of that story's PR review.
   The shape: an attacker who steals an `rtkn` and rotates it first leaves the victim holding a `used` row
@@ -69,9 +77,16 @@ the alternatives and stay queued behind it.
   set out to avoid, though scoped to one chain rather than the whole account. (c) Keep AC7 as shipped and
   accept that this theft shape is unremediable short of a password change. **Recommend (b)**: it keeps
   AC7's blast radius inside one chain, which was the point, while restoring a revocation the victim's own
-  client triggers. Not changed in the story because AC7's text specifies `401 + clearAuthCookies`.
+  client triggers.
+  **APPLIED.** The branch now calls `securityUtil.terminateSession`, which walks forward from the presented
+  cookie's row and so reaches the thief's live successor. The account-wide revocation AC7 removed stays
+  removed — that was always the distinction that mattered — so a benign double-refresh costs that one chain
+  a re-login rather than every device. This supersedes AC7's written text (`401 + clearAuthCookies`); the
+  AC was left as approved and the amendment is recorded in the story's Completion Notes and Change Log.
+  Residual, accepted: revoking one chain does not kill a JWT the thief holds from a DIFFERENT chain of the
+  same account, which only the account-wide epoch would — that is the trade AC7 exists to make.
 
-- **[skillars-deferred-167, OWNER DECISION NEEDED, medium/logic]** The chain cap introduced by that story
+- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a) -> APPLIED, medium/logic]** The chain cap introduced by that story
   logs every continuously active WEB user out 7 days after login, and does not cap API clients at all.
   The SPA has no caller for `POST /api/auth/refresh` (`src/frontend/src/api/auth.api.js` records that the
   helper was removed), so an SPA session's chain is the single row created at login. Seven days later it
@@ -87,6 +102,14 @@ the alternatives and stay queued behind it.
   cap to chains that have rotated at least once — keeps the logout-kill, drops the cap. (c) Accept the
   7-day logout and tell users, which needs at least a warning state in the SPA. **Recommend (a)**: it makes
   the chain do what the design assumed it already did, and the cap then means what AC10 said it meant.
+  **APPLIED.** `authApi.rotateRefreshToken()` is called from `sessionManager.refreshSession()`, the
+  existing "keep me signed in" path, so the chain rotates when a user extends their session rather than on
+  every request — one row per extension. Best-effort and swallowed: it runs after GET /refresh's own
+  advance-check so that contract (deferred-109 AC2.2) is untouched; a 401 there carries
+  `security.badCreds`, which the axios interceptor does not treat as a teardown; and nothing consumes the
+  `BadCredentialsEvent` it publishes, so a failed rotation can neither log the user out nor count toward a
+  lockout. The cap now binds an IDLE session — 7 days without an extension — which is what
+  `REFRESH_TOKEN_TTL` reads as everywhere else.
 
 - **[skillars-deferred-167 residual, low/logic]** A benign stale cookie more than `MAX_GRACE_HOPS` (8)
   rotations behind an intact, live chain still gets the whole account revoked. The walk gives up after 8

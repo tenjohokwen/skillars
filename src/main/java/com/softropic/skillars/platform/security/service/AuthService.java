@@ -291,13 +291,26 @@ public class AuthService {
         }
 
         if (outcome instanceof StaleChain stale) {
-            // AC7: no writes. The warn is the whole of the residual signal — see StaleChain's javadoc for
-            // what this branch stopped detecting and why that was accepted.
             log.warn("Refresh presented a token whose chain is still live but was rotated outside the "
-                    + "{}s grace window; answering 401 without account-wide revocation. user={} tokenHash={}",
+                    + "{}s grace window; revoking that chain only. user={} tokenHash={}",
                 REFRESH_GRACE_WINDOW.toSeconds(), stale.ownerId(), stale.presentedHash());
             meterRegistry.counter("security.refresh.stale_live_chain").increment();
-            securityUtil.clearAuthCookies(res);
+            // Owner decision 2026-11-03, amending AC7: revoke THIS CHAIN, from the presented row forward,
+            // and nothing else. AC7 as written answered 401 and cleared cookies without writing anything,
+            // which both reviewer arms showed was worse than it looked — clearing the rtkn cookie destroys
+            // the only value terminateSession can hash to start its walk, so a victim whose token had been
+            // stolen and rotated could no longer revoke the thief's live successor by logging out, and a
+            // fresh login merely starts an unrelated chain. The foothold outlived every action short of a
+            // password change.
+            //
+            // terminateSession walks forward from the cookie's row, so it reaches exactly that successor.
+            // Safe here and nowhere earlier: the locked block has committed and released its locks by the
+            // time this runs, which is the rule a REQUIRES_NEW revoke imposes (55P03 otherwise).
+            //
+            // What AC7 was actually for is kept: the blast radius stays inside one chain instead of
+            // signing the user out of every device. A benign double-refresh now costs that one chain a
+            // re-login; it used to cost all of them.
+            securityUtil.terminateSession(req, res);
             throw new BadCredentialsException("Refresh token is stale — please sign in again");
         }
 
@@ -493,8 +506,8 @@ public class AuthService {
      *   <li>{@link GraceResolution#revokedChain()} — a hop carried {@code revokedAt}; the session was
      *       deliberately ended.</li>
      *   <li>{@link GraceResolution#stale()} — the chain HAS a live end, but the presented row's rotation is
-     *       older than the window. Answered as {@code StaleChain}: 401, no writes, <strong>not</strong>
-     *       account-wide revocation. An earlier version of this paragraph listed "a rotation older than the
+     *       older than the window. Answered as {@code StaleChain}: 401 and a revoke of THIS CHAIN,
+     *       <strong>never</strong> account-wide revocation. An earlier version of this paragraph listed "a rotation older than the
      *       window" under genuine reuse, which is no longer what happens; do not restore a {@code none()}
      *       return there without reading {@link StaleChain}'s javadoc first.</li>
      *   <li>{@link GraceResolution#none()} — genuine reuse, i.e. nothing live to be found: never rotated,
@@ -605,9 +618,10 @@ public class AuthService {
     private record Revoked() implements RefreshOutcome { }
 
     /**
-     * skillars-deferred-167 (AC7): the presented token is one hop or more behind a chain that is still
-     * intact and live, but its own rotation is older than {@link #REFRESH_GRACE_WINDOW}. 401, cookies
-     * cleared for this client, and <strong>nothing written</strong>.
+     * skillars-deferred-167 (AC7, amended by the owner on 2026-11-03): the presented token is one hop or
+     * more behind a chain that is still intact and live, but its own rotation is older than
+     * {@link #REFRESH_GRACE_WINDOW}. 401, and <strong>this chain is revoked</strong> — from the presented
+     * row forward, so its live end goes too. The account's other chains are untouched.
      *
      * <p>Why this is not {@link Reuse}. Two concurrent refreshes of one cookie both answer with
      * {@code Set-Cookie: rtkn}; the browser keeps whichever response arrives last. When that is the
@@ -616,18 +630,22 @@ public class AuthService {
      * the theft branch, which revoked every token on the account and bumped the session epoch, logging the
      * user out of every device over a double-submitted request.
      *
-     * <p>Why nothing is written. The live end may be a legitimate sibling tab's current credential, so
-     * revoking the chain would end that session too; and the presented row is already {@code used}, so it
-     * cannot be traded in by anyone, including whoever presented it. There is nothing to revoke that would
-     * make the account safer.
+     * <p>Why the chain is revoked rather than left alone. AC7 originally wrote nothing here, reasoning that
+     * the live end might be a sibling tab's credential. Both reviewer arms then showed what that cost: this
+     * branch clears the {@code rtkn} cookie, and that cookie is the only value
+     * {@code SecurityUtil.terminateSession} can hash to start a chain walk. Writing nothing therefore left
+     * a victim whose token had been stolen and rotated with no way to revoke the thief's live successor —
+     * not by logging out, and not by logging in again, which starts an unrelated chain. Revoking costs a
+     * sibling tab on that same chain its credential (one re-login, scoped to the chain) and buys back the
+     * remediation. The account-wide revocation AC7 removed stays removed: that was always the distinction
+     * that mattered.
      *
-     * <p><strong>What this gives up, deliberately — and it is more than the benign case above.</strong>
-     * This branch was also the one place a stolen refresh token showed itself: an attacker who steals an
-     * {@code rtkn} and rotates it first leaves the victim holding exactly this shape, and the old
-     * behaviour revoked the whole account, which killed the attacker's session along with everyone
-     * else's. That signal is gone, so the case is counted
-     * ({@code security.refresh.stale_live_chain}) and logged at {@code warn} to stay observable even
-     * though no state changes.
+     * <p><strong>What this still gives up.</strong> The old behaviour also bumped
+     * {@code security_session_invalidated_at}, which killed any standing JWT the thief held on ANY chain of
+     * that account. Revoking one chain does not: a JWT minted off this chain is refused within
+     * {@code DB_REFRESH_TOKEN_INTERVAL} by AC4's check, but one the thief holds from a different chain of
+     * the same account survives. The case is counted ({@code security.refresh.stale_live_chain}) and logged
+     * at {@code warn} so the rate stays observable.
      *
      * <p>Three limits of this branch that its name does not convey, each verified rather than assumed:
      * <ul>
@@ -645,19 +663,12 @@ public class AuthService {
      * </ul>
      * A replay against a chain with NOTHING live at its end is still {@link Reuse} and still escalates.
      *
-     * <p><strong>And the 401 takes the victim's remediation with it.</strong> This branch calls
-     * {@code clearAuthCookies}, which deletes the {@code rtkn} cookie. That cookie was the only value
-     * {@code SecurityUtil.terminateSession} could have hashed to start a chain walk, and the walk is what
-     * would have reached the attacker's live successor and revoked it. After this 401 the victim's Logout
-     * button therefore revokes nothing, and a fresh login starts an unrelated chain, so the foothold
-     * outlives every action the user can take short of a password change (which still revokes account-wide).
-     * Before this story the victim's own refresh remediated automatically, because it escalated.
-     *
-     * <p>Not changed here, deliberately: AC7 specifies {@code 401 + clearAuthCookies}, and whether to keep
-     * clearing is part of the AC7 decision already filed in {@code deferred-work.md} — leaving the cookie
-     * standing would preserve the Logout path at the cost of a client that believes it is still signed in.
-     * Both reviewer arms raised this independently; do not "tidy up" the cookie clearing without reading
-     * that entry.
+     * <p><strong>Do not replace {@code terminateSession} with {@code clearAuthCookies} here.</strong> That
+     * was AC7's original shape and it is what created a remediation hole both reviewer arms found: the
+     * cookie is cleared either way, so without the revoke there is nothing left able to reach the chain
+     * afterwards — not Logout, which hashes that cookie to start its walk, and not a fresh login, which
+     * starts an unrelated chain. The foothold then outlived every action a user could take short of a
+     * password change.
      */
     private record StaleChain(Long ownerId, String presentedHash) implements RefreshOutcome { }
 

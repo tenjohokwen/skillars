@@ -697,7 +697,11 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       The JWT carries the chain id as an `rtsid` claim, and the authorisation filter refuses a JWT whose
       chain has no live refresh token left — within `DB_REFRESH_TOKEN_INTERVAL` (5 min) of the logout.
       Previously a copied `potc` cookie kept working for as long as its holder kept making requests.
-- [ ] **BLOCKER BEFORE PROD: the chain cap logs every active web user out at 7 days.** The SPA has no
+- [x] **RESOLVED before merge: the chain cap is an idle timeout, not a 7-day guillotine.** The SPA now
+      rotates its chain on the existing "keep me signed in" path (`sessionManager.refreshSession()` ->
+      `authApi.rotateRefreshToken()`), so a session ends 7 days after its last extension rather than 7 days
+      after login. The original problem is kept below because it is what to re-test if that call is ever
+      removed: The SPA has no
       caller for `POST /api/auth/refresh`, so its chain is the one row created at login. Seven days later
       that row expires and the standing JWT is refused on the next DB-reauth cycle — a forced logout for
       every continuously active web user, possibly mid-form, with no client-side way to extend and no
@@ -711,12 +715,14 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       permanent session. Waiting 7 days does not close it. The flip to fail-closed needs a deliberate
       trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
       flip); tracked as an owner decision in `deferred-work.md`.
-- [ ] **Accepted detection loss.** A used refresh token presented against a chain that is still live, more
-      than 30 s after its rotation, now answers `401` and writes nothing, where it used to revoke the whole
-      account. That branch was also the signal for a refresh token stolen and rotated by an attacker, so
-      that signal is gone; it is logged at `warn` instead. Watch for
-      `"Refresh presented a token whose chain is still live"` in the logs. The change exists because the old
-      behaviour signed a user out of every device over a benign double-submitted refresh.
+- [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain
+      that is still live, more than 30 s after its rotation, now answers `401` and revokes **that chain
+      only**, where it used to revoke every chain on the account and bump the session epoch. The change
+      exists because the old behaviour signed a user out of every device over a benign double-submitted
+      refresh. What is still given up: the epoch bump also killed any access token the thief held on
+      another chain of the same account, and revoking one chain does not. Watch for
+      `"Refresh presented a token whose chain is still live"` and the
+      `security.refresh.stale_live_chain` counter.
 
 - [ ] **Rolling-deploy window (accepted, 30 s per token).** Tokens rotated by an instance running the old code
       have no `replaced_by_id`, so a replay of one inside the 30 s grace window is treated as reuse and revokes

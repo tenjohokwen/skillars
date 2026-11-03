@@ -556,6 +556,10 @@ stays and is still asserted.
 - `src/test/java/com/softropic/skillars/platform/security/service/AuthCleanupServiceTest.java` (modified)
 - `src/test/java/com/softropic/skillars/platform/scheduler/SchedulerLockTransactionOrderingIT.java` (modified)
 
+**Frontend** (added by the owner's AC10 decision, 2026-11-03)
+- `src/frontend/src/api/auth.api.js` (modified — `rotateRefreshToken`)
+- `src/frontend/src/plugins/sessionManager.js` (modified — rotation on the session-extension path)
+
 **Docs**
 - `docs/session-refresh-mechanism.md` (modified)
 - `docs/security-api-endpoints.md` (modified)
@@ -569,6 +573,36 @@ stays and is still asserted.
 - `_bmad-output/implementation-artifacts/deferred-work.md` (modified)
 
 ### Change Log
+
+- 2026-11-03 — owner ruled on all four open decisions; all four applied or recorded.
+  - **AC7 amended (owner option b).** The stale-but-live branch now calls
+    `securityUtil.terminateSession`, revoking that chain from the presented row forward, instead of
+    answering 401 with no writes. Both reviewer arms had shown the original shape destroyed the victim's
+    only remediation: the same branch clears the `rtkn` cookie, which is the only value `terminateSession`
+    can hash to start its walk, so a victim whose token had been stolen and rotated could not revoke the
+    thief's live successor by any means short of a password change. The account-wide revocation AC7 removed
+    stays removed, which was always the distinction that mattered. **This supersedes AC7's written text
+    (`401 + clearAuthCookies`)**; the AC itself is left as approved because this workflow may not edit it.
+  - **AC10's cap turned into an idle timeout (owner option a).** `authApi.rotateRefreshToken()` is called
+    from `sessionManager.refreshSession()`, the SPA's existing "keep me signed in" path, so a web session's
+    chain rotates when the user extends it. Before this the SPA had no caller for `POST /api/auth/refresh`
+    at all, so its chain was the single row created at login and a continuously active user was
+    hard-logged-out exactly 7 days later, mid-task. Verified three things first, because a best-effort auth
+    call is where this would go wrong: a 401 there returns `security.badCreds`, which the axios interceptor
+    does NOT treat as a session teardown; nothing consumes the `BadCredentialsEvent` it publishes; and the
+    login rate limiter is only called from `login()`. So a failed rotation can neither log the user out nor
+    count toward a lockout. It runs after `GET /refresh`'s own advance-check, leaving the deferred-109
+    AC2.2 contract untouched, and its failure is logged rather than surfaced as "we couldn't extend your
+    session" — the access token has already been extended by that point.
+  - **Fail-closed flip decided (owner option a: an announced date) and deliberately NOT implemented.** The
+    date is an operational choice and shipping it blind would sign the remaining claimless holders out at
+    an unannounced moment. The ledger entry names exactly what the implementer changes.
+  - **AC7 ships**, which the first item resolves: it no longer trades theft detection away, it contains the
+    blast radius to one chain.
+  - One process failure worth recording: the first edit script for the AC7 change aborted on its last
+    replacement, so NONE of it was written while a separately-applied javadoc paragraph already described
+    the new behaviour. `AuthServiceTest` caught the mismatch. Re-applied and verified statement by
+    statement.
 
 - 2026-11-03 — three `/pr-review` rounds applied (records in `.pr-review/`). 26 findings. Every round found
   at least one defect the previous round introduced or left behind, which is why AC12 asks for rounds

@@ -126,18 +126,21 @@ button in the warning dialog.
   next refresh then tripped theft detection and logged the account out everywhere.
 - **Token reuse (theft) → revoke-all.** A used token whose chain has **nothing live at its end**
   revokes every refresh token of the account and bumps `user.security_session_invalidated_at`.
-- **A stale token on a chain that is still live** (skillars-deferred-167) is answered with `401` and
-  cookie deletion headers, and **nothing is written** — no revoke-all, no session epoch. Two
-  concurrent refreshes of one cookie both set `rtkn`, the browser keeps whichever response arrived
-  last, and when that is the first one the client is left permanently one hop behind a live chain.
-  Treating that as theft logged the user out of every device over a double-submitted request.
-  Nothing is revoked because the chain's live end may be a sibling tab's current credential, and the
-  presented row is already `used` so nobody can trade it in.
-  **What this gives up:** this branch was also where a stolen refresh token showed itself — an
-  attacker who steals an `rtkn` and rotates it first leaves the victim holding exactly this shape,
-  and the old behaviour revoked the whole account, killing the attacker's session too. That signal is
-  gone; the case is logged at `warn` instead. Narrow in practice because the SPA never calls
-  `POST /api/auth/refresh` at all, so only API and mobile clients can reach it.
+- **A stale token on a chain that is still live** (skillars-deferred-167) is answered with `401`, and
+  **that one chain is revoked** — from the presented row forward, so its live end goes too. The
+  account's other chains are untouched: no revoke-all, no session epoch. Two concurrent refreshes of
+  one cookie both set `rtkn`, the browser keeps whichever response arrived last, and when that is the
+  first one the client is left permanently one hop behind a live chain. Treating that as theft logged
+  the user out of every device over a double-submitted request; it now costs that one chain a
+  re-login.
+  Revoking the chain rather than writing nothing is deliberate, and was added after review: this
+  branch clears the `rtkn` cookie, and that cookie is the only value logout can walk from, so writing
+  nothing left a victim whose token had been stolen and rotated with no way to revoke the thief's live
+  successor — not by logging out, and not by logging in again, which starts an unrelated chain.
+  **What this still gives up:** the old behaviour also bumped the session epoch, which killed any
+  standing access token the thief held on *any* chain of that account. Revoking one chain does not, so
+  a thief holding a token minted off a different chain keeps it. The case is counted
+  (`security.refresh.stale_live_chain`) and logged at `warn`.
 - **A token whose session was ended** (logout, forced logout, an earlier denial — i.e. one carrying
   `revoked_at`) is refused with `401` and cookie deletion headers, and deliberately does **not**
   trigger revoke-all: a stale tab retrying after Logout must not sign the user out of their other
@@ -193,13 +196,18 @@ cookie therefore kept working for as long as its holder kept making requests.
   no live row, the session ends within one DB-reauth cycle, where an access token used to slide
   indefinitely as long as the user kept clicking. Who that actually affects is the opposite of what it
   first looks like:
-  - **The SPA is capped at 7 days.** It has no caller for `POST /api/auth/refresh`, so its chain is the
-    single row created at login; 7 days later that row expires and the standing JWT is refused on the
-    next DB-reauth cycle. Every continuously active web user is logged out at that mark, with no
-    client-side way to extend and no warning dialog (the existing one covers the 15-minute JWT, not
-    this). **This is an owner decision filed in `deferred-work.md`, not a settled behaviour.**
-  - **A rotating client is not capped at all.** Every rotation writes a fresh `expires_at`, so a client
-    that refreshes at least once a week keeps its chain alive forever and the check never fires for it.
+  - **The cap is an IDLE timeout, not an absolute one.** Every rotation writes a fresh `expires_at`, so
+    a chain that is rotated at least once a week never expires. A session therefore ends 7 days after
+    its last extension, not 7 days after login — which is what `REFRESH_TOKEN_TTL` reads as everywhere
+    else in this document.
+  - **The SPA rotates on its existing "keep me signed in" path.** `sessionManager.refreshSession()`
+    calls `authApi.rotateRefreshToken()` (`POST /api/auth/refresh`) after the `GET /refresh` that
+    slides the access token. Without it the SPA had no caller for that endpoint at all, so a web
+    session's chain was the single row created at login and a continuously active user was
+    hard-logged-out exactly 7 days later, mid-task. The rotation is best-effort: it runs after
+    `GET /refresh`'s own advance-check, and a failure is logged and swallowed rather than turned into
+    a "we couldn't extend your session" banner, because the access token has already been extended by
+    that point.
 - **No frontend caller.** The SPA does not call this endpoint: `src/api/auth.api.js` dropped its
   helper, and routine keep-alive goes through `GET /refresh` (see above), which re-mints the JWT and
   never touches `refresh_tokens`. This endpoint is reached by API clients and tests.
