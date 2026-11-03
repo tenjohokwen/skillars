@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
   assertTestId,
+  DEFAULT_SETTLE_TIMEOUT_MS,
   hashRouting,
   historyRouting,
   interpolate,
+  resolveSettleTimeout,
   routePattern,
   rowTestId,
+  settleTimeoutMs,
   waitForSettledRoute,
 } from '../../src/index.js'
 
@@ -82,6 +85,26 @@ describe('waitForSettledRoute', () => {
     await expect(
       waitForSettledRoute(page, routing, '/home', { timeoutMs: 120, stableMs: 10 }),
     ).rejects.toThrow(/last seen: \/login/)
+  })
+})
+
+describe('resolveSettleTimeout', () => {
+  it('prefers navigationTimeout, then actionTimeout, then the default', () => {
+    expect(resolveSettleTimeout({ navigationTimeout: 30_000, actionTimeout: 5_000 })).toBe(30_000)
+    expect(resolveSettleTimeout({ actionTimeout: 5_000 })).toBe(5_000)
+    expect(resolveSettleTimeout({})).toBe(DEFAULT_SETTLE_TIMEOUT_MS)
+    expect(resolveSettleTimeout(undefined)).toBe(DEFAULT_SETTLE_TIMEOUT_MS)
+  })
+
+  it('skips 0, which Playwright reads as "no limit"', () => {
+    expect(resolveSettleTimeout({ navigationTimeout: 0, actionTimeout: 4_000 })).toBe(4_000)
+    expect(resolveSettleTimeout({ navigationTimeout: 0, actionTimeout: 0 })).toBe(
+      DEFAULT_SETTLE_TIMEOUT_MS,
+    )
+  })
+
+  it('falls back to the default outside a running Playwright test', () => {
+    expect(settleTimeoutMs()).toBe(DEFAULT_SETTLE_TIMEOUT_MS)
   })
 })
 
