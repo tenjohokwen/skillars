@@ -1,117 +1,241 @@
-# Story review: skillars-deferred-167-per-session-jwt-revocation-and-refresh-chain-follow-ups
+# Story review — skillars-deferred-168 (payments/Stripe bundle RS05-RS09)
 
-Audit date 2026-11-03. Real HEAD at review time: `b3b0d647 skillars-deferred-167: record the five owner decisions and create the story`
-(source files are unchanged since `21e72013`). Every citation below was checked against this HEAD, not against any
-SHA the story states. Static review only: nothing was executed, so every runtime claim rests on reading code.
+**Audit date:** 2026-11-04
+**Real HEAD:** `50eebd75` — `docs(story): record the owner's three decisions on skillars-deferred-168`
+(docs-only commits on top of master `bed75f19`, so every `src/` and `src/frontend/` line is master's).
+Citations were checked against this HEAD, not against any SHA the story quotes.
+**Story:** `_bmad-output/implementation-artifacts/skillars-deferred-168-stripe-retry-double-charge-webhook-ordering-and-card-save-fixes.md`
+**Status when reviewed:** `ready-for-dev`.
 
-Layers: 1 citations (66 checked), 2 ledger/precedent attributions (12), 3 mechanistic claims (8 groups), 4 corner cases (9 hypotheses).
-Step 4b: I re-read the cited lines myself for the findings that change the design (H1, H2, H3, the clock hook).
+**Independence caveat.** The author of this story also ran the four audits that produced its citations.
+The four review layers here were therefore given the story and the HEAD only, and were not shown those
+earlier audits' conclusions. Two of the author's own written "corrections" did not survive this review (H6, L5).
 
-## 1. Citation verification
+## Headline
 
-62 of 66 MATCH. Real non-matches:
+Citations are in good shape: of ~105 checked, 3 drifted by a few lines and none could not be located.
+**The design is not ready for development.** Six high-severity findings survived adversarial re-checking, and
+four of them are holes in the ACs themselves — an implementer following AC1, AC3, AC4 or AC6 literally would
+ship a regression or a table that cannot be written. One more is an identity collision with an unmerged
+story. Recommendation: do not start `/bmad-dev-story` until H1 is decided and H2-H6 are folded into the ACs.
 
-| citation | verdict | correct location |
+## 1. Citation verification (Layer 1)
+
+~105 citations resolved and opened. **MATCH: all but the following.**
+
+| Citation | Verdict | Corrected |
 |---|---|---|
-| `JWTAuthorizationFilter` "comment at `:228-246`" | DRIFTED | comment is `:224-241`; `:242-247` is code |
-| `AuthService` window test "`:485`" | DRIFTED | `:487-488` (`:485` is the comment above it) |
-| `AuthService` `used` branch "`:332-344`" | DRIFTED (minor) | `:333-345` |
-| `JwtManagerImpl:77` "carried over by hand" | PARTIAL | `:77` is the read; the value reaches the claims as an argument to `toClaims` at `:79` |
+| `SessionPackDashboardPageSpec.js:177` | DRIFTED | `:177` sets `startDate`; the notify assertion is `:180` (block `:170-180`). The claim (asserts the message, not the instant) is true. |
+| `SubscriptionEntitlementIntegrityTest:562` | DRIFTED (minor) | `:562` is the method; `never()).save(any())` is `:567`. |
+| `ChargeOutcomeReconciler.java:203,227,259` | PARTIAL | `:227`,`:259` check `CAPTURE_PENDING`; `:203` is `findByChargeIdempotencyKey`; the driving query is `findReconcilableCharges` at `:124-125`. |
+| `SubscriptionService.java:1547` quoted as `"sub-upgrade-" + UUID.randomUUID()` | form differs | `:1547` is `keyPrefix + UUID.randomUUID()`; the literal is passed at `:305`. Behaviour (fresh key per attempt) is true. |
+| Hard-constraint bullet: "both comments `:259-267` and `:353-357` state rolling back after Stripe has billed is the worse outcome" | overstated | `:259-266` says "worst available outcome". `:353-357` says only that a rollback would leave Stripe at the new tier and the DB at the old one. |
 
-Everything else (the V224 text, `UserRepository` propagation, `User.java:166-167`, all `AuthResourceIT` helper lines,
-`assert-context-count.sh`/`pr-build.yml:127`, the context-key constants) matches.
+Everything else matched with the quoted line, including all `purchasePack` lines (`:78,98,139,140,143,144,148,154,166,176-186,188-190,198-199,204,402,411`), the webhook lines (`:75,177-187,264-279,344-352`), both superseded branches, `V138/V195/V207`, the scheduler annotations, and every frontend line cited for RS06 and RS08.
 
-## 2. Ledger and precedent attribution
+## 2. Ledger and precedent attribution (Layer 2)
 
-| claim | sources checked | verdict |
+| Claim | Sources checked | Verdict |
 |---|---|---|
-| 144 AC8 removed the per-request refresh_tokens query | code comment `JWTAuthorizationFilter:224-241`, `GdprErasureIT:401`, `JWTAuthorizationFilterTest:171`; no ledger entry; `git log --grep` empty | CONFIRMED (code and tests only) |
-| 166 AC3 (revoked replay never revokes all) | ledger, `AuthService` `Revoked`, `f0ad7706` body | CONFIRMED |
-| `isBeforeSessionEpoch` javadoc names the three callers | `AuthService:~392-403` | CONFIRMED, and it must be rewritten by AC8 |
-| #413 rounds 2 and 3 found defects from the prior round's fix | `f0ad7706` body, 166 story | CONFIRMED |
-| 5 s `lock.timeout` added then removed | `f0ad7706` body, ledger | CONFIRMED |
-| "#413 hung an IT phase 19 minutes on a `REQUIRES_NEW` revoke of a row the caller already wrote" | 166 story, commit body | PARTLY: the rows were locked by the walk, not written |
-| "five items filed by the reviewer arms" | ledger | PARTLY: the VALIDATE item was filed by #413's author, not the arms |
-| every decision is recorded in the ledger, "do not re-litigate" | ledger `:71` | **MISATTRIBUTED for AC7**: the ledger still says "measure the window from the chain's live end", the opposite of AC7. The re-decision exists only in chat. Fixed in the ledger as part of this review |
-| "the merge-hotspots note in `deferred-work.md`" | ledger, repo-wide grep | **NOT SUPPORTED**: no such note. Real support: renumber commits `0621d23f`, `dce987cb`, `67d7f945` and `docs/dev-docs/README.md` (search-index is generated) |
-| `GdprErasureService` revokes, never stamps the epoch | `:810`, grep of the file | CONFIRMED |
-| V224 promises the VALIDATE; V225 is the first executed one | V224 header, `provisioning-checklist:684`, `V145:49` is a comment | CONFIRMED |
+| RS05-RS09 text in `deferred-work.md` matches what the story paraphrases | ledger `:338-342` | CONFIRMED |
+| `real-sample.md:314` maps RS05→337, RS06→350, RS07→359, RS08→368 | `real-sample.md:312,314` | CONFIRMED; RS09→the draft (`:312`). S07 is `fixed` and is not RS05. |
+| `4db90562` / #362 introduced the `previousCard` snapshot | `git log -S`, `git blame`, subject | CONFIRMED (its body is about pack-pause; the snapshot is not described there) |
+| "the fix landed after the sample was taken" | `git merge-base --is-ancestor` | **REFUTED** — see H6 |
+| V207 adds keys to booking_payments + subscription tables only | `V207__…sql` | CONFIRMED (it also adds `subscribe_attempt_at` and an index; none for packs) |
+| V195 `uq_spp_stripe_payment_intent_id` `:18-20`; V138 `stripe_webhook_events` columns | both files | CONFIRMED |
+| "Next free migration is V226" | master tail V220-V225; **all branches** | **PARTLY** — free on master, **taken on an unmerged branch** — see H1 |
+| `fix/payment-subscription-entitlements` | git branches/PRs, code comments | PARTLY — not a branch; a label in comments (`SubscriptionService :414,:1385`, test `:69`) for PR #337 / `eea53ee9` |
+| deferred-167 constraints and "closed at seven rounds" | 167 story `:418-462`, Task 10 | CONFIRMED |
+| Ledger rule "implemented items are deleted outright" | `deferred-work.md:8,30` | CONFIRMED |
 
-## 3. Mechanistic claims
+## 3. Mechanistic claims (Layer 3)
 
-- **`extendTtlOfToken` rebuilds the map** (`JwtManagerImpl:79`, `:87-90`): CONFIRMED. A new claim must be forwarded by hand.
-- **`SESSION_ID` is the browser session id** (`TokenValidatorImpl:39-42`, `JWTAuthorizationFilter:201-202`): CONFIRMED. A second consumer exists at `JwtManagerImpl:184`.
-- **DB branch vs fast path** (`TokenValidatorImpl:48-54`, filter `:206-221`, `:222-248`): CONFIRMED.
-- **"live end's `createdAt` is the same instant as `rotatedAt`": WRONG.** `now` is taken at `AuthService:308`, before the lock wait; the successor's `createdAt` is set by `@PrePersist` at `saveAndFlush` (`RefreshToken:42-47`). `createdAt = rotatedAt + rotation latency`. The AC7 correction survives (the window is keyed on `presented.getRotatedAt()` either way) but the sentence must be reworded.
-- **Transaction boundary of `refresh`** (`:204`, `:215`): CONFIRMED. All revokes and throws run after the template.
-- **Concurrent-refresh divergence** (`:341` onward rotates the live end, chain goes A0 to A1 to A2): CONFIRMED.
-- **AC8 reorder**: the swap works because a surviving successor was inserted before the revoke committed, so its `createdAt` precedes an epoch computed afterwards. It does **not** make the window fully closed: `decideAndRotate` reads the user with a plain `findById` (`:322`), which does not block on the suspender's lock, and multi-node clock skew can invert the comparison. The javadoc rewrite must not claim closure.
-- **AC9 fix**: an ascending-id native delete does remove the cycle against the chain walks. It does not cover `markAllUsedByUserId`/`markAllRevokedByUserId`, which are unordered bulk UPDATEs (the `AuthService:225-229` comment already names them as a deadlock source).
-- **AC10 (nothing consults `refresh_tokens` on the reauth branch)**: CONFIRMED.
+| Claim | Verdict |
+|---|---|
+| `PaymentApiAdvice` maps the whole `PaymentGatewayException` family to 422 | CONFIRMED (`@Order(HIGHEST_PRECEDENCE)`, no override on `payment.api`) |
+| `purchasePack` non-transactional; card write commits before `:144`; no `try` around `:144` | CONFIRMED (no class-level annotation, no `TransactionTemplate`, `open-in-view: false`, private in-class call so no proxy) |
+| `charge()` re-reads the card from `stripe_customers`, no payment-method parameter | CONFIRMED |
+| `scheduleSubscriptionCardSync` compares the pre-overwrite snapshot | PARTLY — true for a first attempt; **false-as-claimed for a retry after a decline** — see H6 |
+| `insertIfAbsent` precedes dispatch in one `@Transactional`; no-match path commits only that row; table has no outcome column | CONFIRMED |
+| Subscribe window: row committed with null id, Stripe call outside any tx, persist sets id/status from create-time object, never sets `lastStripeEventAt` | CONFIRMED |
+| Superseded upgrade branch is `warn` + bare `return`; Stripe before persist; endpoint 204 | CONFIRMED (`SubscriptionResource :72,:121`) |
+| Sweep is alert-only, coach-only; `ChargeOutcomeReconciler` booking-only; `stripe_refund_failures` has no reader | CONFIRMED |
+| `onCoachSubscriptionOrphaned` is `@EventListener` + `REQUIRES_NEW` | CONFIRMED |
+| Pause: strict instant compare; `new Date('YYYY-MM-DD')` is UTC | CONFIRMED |
+| "`handleSubscriptionDeleted` locks by a *different lock key*" | **PARTLY** — both `findBy…ForUpdate` are `PESSIMISTIC_WRITE` on the same `coach_subscriptions` row (different predicate). They serialize. The race is real regardless, because Stripe is called before the lock is taken. (L3) |
+| "no generic way to clear an AdminAlert" justifies not shortening the grace window | CONFIRMED in substance — the cited `:50-57` comment states the premise verbatim, though it was written for the live-status allowlist. Not a defect. |
 
-## 4. Findings that survived re-verification
+## 4. Corner cases, false assumptions, missed flows (survived Step 4b)
 
-**H1 (high). AC7 gives up the canonical theft signal, and the story, and my own option text, said it did not.**
-`decideAndRotate:333-339` plus `resolveGraceSuccessor:482-490`: a used token whose chain has a live end but whose rotation is
-outside 30 s returns `none()`, so the outcome is `Reuse` and `markAllUsedByUserId` + `invalidateSessionsForUser` run
-(`:274-275`). That is exactly what happens when an attacker rotates a stolen refresh token first and the victim later presents
-the stale cookie. After AC7 the victim gets a 401, the attacker's chain stays live for up to 7 days, and nothing is logged.
-When I offered this option I described it as "no weakening of theft detection". That was wrong. What remains detected: a
-replay when no live end exists. What is lost: replay of a rotated token against a still-live chain after 30 s.
-Required: state the loss in AC7 and `docs/session-refresh-mechanism.md`, and log at `warn` / count a metric (no DB write needed).
-Exposure note: the SPA never calls `POST /api/auth/refresh`, so only API or mobile clients are affected today.
+### HIGH
 
-**H2 (high). The `rtkn` derivation in AC3 is dead code, and null ids propagate forever.**
-Row creation is only `AuthService:146` (login) and `:362` (rotation). Pre-V225 rows have a null `session_id` and AC1 forbids a
-backfill, so deriving from the cookie's row yields null for exactly the sessions the bullet says it helps. Worse, AC2 says
-rotation copies the predecessor's id, so a pre-V225 chain stays null **through every rotation**: a continuously refreshing
-API client never acquires an id. Also the story misstates the uncovered attacker: a post-deploy `potc` already carries the
-claim, so a thief with only that `potc` is covered; the uncovered thief holds a **pre-deploy** `potc`.
-Fix: drop the derivation; in `decideAndRotate`, mint a fresh id when the predecessor's is null; the next `createLoginToken`
-then carries it. The fail-closed flip can follow one `REFRESH_TOKEN_TTL` (7 days) after deploy. This also removes the
-second query (the story's "exactly one query" in AC4 contradicts the derivation), the new repository dependency the filter
-javadoc says `renewLoginToken` does not have (`:83`), and the unchecked cross-chain pairing of a `potc` with a different `rtkn`.
+**H1 — The story id and migration number collide with an unmerged story already in review.**
+A separate worktree `/Users/mokwen/dev/gitrepos/bluegithub/skillars-deferred-168`, branch
+`skillars-deferred-168-builder-packs-become-the-purchasable-tier` (HEAD `b13047a4`, 2026-11-04 11:38,
+status `review`, **not pushed**), is a *different* story under the *same id*. It adds
+`V226__backfill_builder_packs_into_session_pack_tiers.sql`, a sprint-status entry
+`skillars-deferred-168-builder-packs-become-the-purchasable-tier: review`, and a 44-file diff that touches
+the payment module (`SessionPackOfferTest`, i18n bundles). Both claims in this story — "the next story is 168"
+and "next free version is V226" — are false the moment that branch merges. Verified directly with
+`git worktree list`, `git diff --name-only origin/master...<branch>`, `git ls-tree`.
+*Evidence:* worktree `skillars-deferred-168`; `git diff --name-only origin/master...skillars-deferred-168-builder-packs-become-the-purchasable-tier -- src/main/resources/db/migration`.
 
-**H3 (high if implemented as written). AC9's "log at warn" cannot work inside the current method.**
-`purgeExpiredRefreshTokens` is `@Transactional` (`AuthCleanupService:38-45`) and `deleteExpiredTokens` is itself
-`@Modifying @Transactional` (`RefreshTokenRepository:233-235`) so it joins that transaction. A deadlock thrown through the
-participating proxy marks the transaction rollback-only; a catch in the body then still ends in `UnexpectedRollbackException`
-from the outer commit, and Postgres has already aborted the transaction. The catch must sit outside the transaction (a
-non-transactional wrapper, or a `TransactionTemplate` inside the lock). I verified the annotations, not the runtime behaviour.
-AC9 should also require a real test of the ordered delete including the `ON DELETE SET NULL` path, which nothing exercises.
+**H2 — AC1 as written breaks retry-after-a-card-decline.**
+A decline is a 4xx, so `isOutcomeUnknown` is false and `charge()` throws
+`PaymentGatewayException("payment.lifecycleFailure")` (`StripePaymentGateway.java:~177-179`) — the **same
+code and the same 422** as the refunded and unreconciled branches. AC1 says the frontend should keep the key
+"for every answer that does not prove no charge landed", but the frontend cannot tell these apart. Keeping the
+key across a proven decline then (a) replays Stripe's cached decline even after the parent tops up
+(Stripe saves the result of a keyed request whether it succeeded or failed), and (b) if the parent saves a
+different card first (`onCardSaved`, `SessionPackPurchasePage.vue`), changes the PaymentIntent's
+`payment_method`, which Stripe rejects as an idempotency mismatch — which `isOutcomeUnknown` classifies as
+**unknown outcome**. Today's "clear on any response" is *correct* for declines; the defect is only for the
+non-decline failures. The ACs need a distinct, machine-readable code for proven no-charge outcomes (decline,
+`packTierInactive`, validation), a key reset on card save, and a `DECLINED` attempt status that does not
+block a retry.
+*Evidence:* `StripePaymentGateway.java:174-181` (decline → `lifecycleFailure`), `:112-130,160-167`; `SessionPackPurchasePage.vue:75,174,188`.
 
-**M2 (medium). Plumbing is larger than Tasks 3 and 4 say.** `LoginTokenManager.createLoginToken/renewLoginToken` have no
-parameter for an id, the `Rotated` record carries none, `toClaims` is called from `JwtManagerImpl:45,58,79`, and
-`JWTAuthorizationFilterTest:471,503` verify exact `renewLoginToken(response, principal)` arguments. AC2's "predecessor's id"
-is ambiguous in a grace redirect: the row rotated is the live end (`token`), not `presented`.
+**H3 — AC1/AC1a's "pre-charge rejections" include throws that happen *inside* `chargeAndCapture`, after the attempt row exists.**
+`charge()` calls `resolveCoachStripeAccountId` (`payment.coachStripeNotConfigured`, `:117`),
+`resolveCurrency` (`payment.configurationUnavailable`, `:123-125`) and the customer/payment-method checks
+(`payment.noStripeCustomer`, `payment.noPaymentMethod`, `:138-143`) *before* creating the PaymentIntent. All
+are no-charge outcomes, but `:144` is where the attempt row would already be written. Recorded as replayable
+terminal outcomes they would block the retry after the coach fixes their Stripe setup; they must delete the
+row or be marked non-replayable. `getOrCreateStripeCustomer` (`:140`, a Stripe call for a first-time payer)
+fails after the row too.
 
-**M4 (low-medium). V225 holds `ACCESS EXCLUSIVE` across the index build and the validation scan.** One Flyway transaction,
-so `ADD COLUMN`'s lock is held through `CREATE INDEX` and `VALIDATE`, which defeats rule 3's stated reason for validating in
-a *later* migration. The lint does not look for this. Acceptable on a small, not-yet-live table; say so in the migration.
+**H4 — AC2 does not close the refunded-intent trap on the crash path.**
+The refund runs at `:177`; the `REFUNDED` outcome would be a *separate* committed write after it. A process
+death between them leaves the row `IN_PROGRESS`. A replay re-sends the same key, Stripe returns the original
+(refunded) intent, `:148` finds no pack, and `createPurchase` succeeds — a pack funded by refunded money,
+which is exactly what AC2 forbids. Replay of any non-terminal row must consult the PaymentIntent's refunded
+state (`retrieveCharge` exists) before `createPurchase`. Related: replaying a recorded
+`PACK_PURCHASE_UNRECONCILED` intent turns a captured-unrefunded charge into a pack (correct outcome) while the
+`stripe_refund_failures` row stays open — an operator who later refunds it takes money back from a funded
+pack. (Layer 4 also called the trap "unreachable from the UI today"; that is overstated — a crash yields no
+HTTP response, so the key is retained and a replay is possible today. Downgraded, see §6.)
 
-**Test hook (medium). The story's clock instructions do not work for HTTP ITs.** `ClockProvider` is a `ThreadLocal`
-(`ClockProvider.java`) and the embedded server handles requests on its own thread (`AuthResourceIT:391-401` says so).
-AC6/AC7/AC10 tests must change state through `commitWrite` (`rotated_at`, `expires_at`) or hand-build a JWT as `:402-415` does.
+**H5 — AC4's park-and-reapply has an unspecified race that reproduces the bug it fixes, and an unsafe re-apply site.**
+Interleaving: the webhook transaction reads no local row; `persistCoachSubscription` commits the link and
+looks for parked rows — finding none, because the webhook's park insert is not yet committed; the webhook then
+commits the park. That is the same window the story is closing, and "re-apply once a local row carries the
+id" cannot see it. The handler must re-check for the row *after* parking (READ COMMITTED sees the committed
+link) and apply directly if found, or a sweeper must collect it. Separately, if the re-apply runs inside
+`persistCoachSubscription` (`@Transactional`, `:235-270`), an exception there rolls back the persist after
+Stripe has billed — which `:259-266` calls "the worst available outcome". The re-apply needs its own
+`try/catch` or an after-commit step.
 
-**AC8 reactivate half is probably unnecessary.** Suspend already marks every token used and stamps a monotonic epoch that
-is never cleared, so pre-suspension tokens and JWTs stay refused after reactivation. Once the statements are swapped, the
-only token a revoke-on-reactivate could still catch is a race successor that is already refused. The ledger entry claimed
-otherwise. This is a re-read of the same lines, not an executed test; it deserves an IT before the owner decides to keep the work.
+**H6 — Correction 3 is itself wrong, and AC11/AC12 would instruct the dev to delete a true claim.**
+The story says RS09's "the subscription sync is skipped later" is **false at HEAD** because `previousCard` is
+snapshotted at `:139` before the write at `:140`. That holds only for the *first* attempt. After a decline the
+declined card X is **committed** to `stripe_customers`; a retry with the same card reads
+`previousCard == X` at `:139`, so `scheduleSubscriptionCardSync` returns early at `:204` and the live
+subscriptions are never moved onto X. This is exactly the scenario the draft case's `F1` description narrates
+("If the parent then retries with the same card and it succeeds, previousCard already equals paymentMethodId…"),
+and it is true at HEAD. The story's other sentence — "the fix landed after the sample was taken" — is also
+false: `4db90562` is an ancestor of both RS09 input revs (`b123c73de463`, `980eff338df6`); it is not an
+ancestor of `cb23925514e5` (RS05-RS07). AC8's revert *does* fix the retry case, which is the useful thing to
+say. AC11 ("correct, not copied") and AC12 must not rewrite a true clause. The story's count of "four ledger
+claims refuted" is really three and a half.
+*Evidence:* `SessionPackPaymentService.java:137-140,188-190,203-206`; `git merge-base --is-ancestor 4db90562 <rev>`; `evals/review/cases/_drafts/pending-card-default-before-charge.yaml` F1.
 
-## 5. What did not survive re-verification
+### MEDIUM
 
-- Layer 1 rows 30 and 56 were flagged DRIFTED by the agent itself while noting the content was correct: dropped.
-- Layer 4 M3 (`expires_at > now()` ignoring `ClockProvider`): downgraded to a nit. In HTTP ITs `ClockProvider` already falls back to the system clock on the server thread, so a DB `now()` and `Instant.now()` agree; it only matters for unit tests. A `:now` parameter is still the cleaner shape.
-- "Mid-rotation moment with zero live rows": dismissed; rotation is one transaction.
-- Orphan `replaced_by_id` breaking `VALIDATE`: dismissed; `ON DELETE SET NULL` applies even to a `NOT VALID` FK and ids are written only from flushed successors.
-- `NativeModifyingVersionAuditTest` rejecting the native delete: dismissed; it skips statements starting with `DELETE`.
-- Layer 4's claim that the reactivate "authorisation hole" is real: not accepted, see above.
+**M1 — AC3 would page on self-healing events.** The tag `[STRIPE_CHARGE_OUTCOME_UNKNOWN]` is logged from the
+shared `charge()` used by *both* the booking path (4-arg `chargeAndCapture`) and the pack path (5-arg), and
+`ChargeOutcomeReconciler` self-heals the booking case. It is also logged for a Stripe 409 idempotency
+conflict (two tabs, same key). Adding it to the `MoneyIntegrityEvent` regex fires on both. Use a pack-specific
+tag logged from `SessionPackPaymentService`; `deploy/lgtm/dashboards/payments.json:1314` already carries the
+current token as a log panel and AC13 omits it.
 
-## 6. Recommendation (per claim, not a blanket score)
+**M2 — AC3's "durable row the same way the other two branches do" cannot be written.**
+`ChargeOutcomeUnknownException` carries only the idempotency key (`ChargeOutcomeUnknownException.java:20-27`);
+the PaymentIntent id is unknown. `payment.stripe_refund_failures` has `payment_intent_id text NOT NULL`,
+`amount numeric NOT NULL`, `parent_id bigint NOT NULL`, `pack_tier_id uuid NOT NULL` (`V138:1933-1944`). The
+record must be the attempt row with status `UNKNOWN`, keyed on the attempt key, and the story must say who
+runs recovery (`findChargeByIdempotencyKey`, `StripePaymentGateway.java:~175`); nothing reads
+`stripe_refund_failures` today.
 
-- High confidence, re-read by me: H1, H2, H3, the clock hook, the `createdAt`/`rotatedAt` correction, the ledger contradiction.
-- Medium confidence, from agent reports and unrun: M2 (a grep-able omission), M4, the AC8 reactivate redundancy, the rollback-only mechanics in H3.
-- Not independently re-checked: `NativeModifyingVersionAuditTest`'s logic, Layer 4's SSE timeout claim, cross-node clock skew.
-- Not re-checked at all: whether `session_id uuid` fits the project's id conventions beyond one precedent (`admin.gdpr_requests`).
+**M3 — AC6's precedent does not fit.** A proration has no PaymentIntent id and no amount at the persist site
+(`StripeClient.updateSubscriptionTier` returns only the `Subscription`, `:297-316`); the upgrade key is not
+passed to `persist*TierUpgrade`; coach ids are UUID and player ids `Long`. It needs a new table keyed on the
+subscription id, with polymorphic ids and a nullable amount. A plain same-transaction insert inside
+`persistCoachTierUpgrade` is fine (the branch returns normally and commits); a `REQUIRES_NEW` write would be
+wrong — `RefundReconciliationService.recordRefundFailure` is `REQUIRES_NEW`, and an FK to `coach_subscriptions`
+would block on the `FOR UPDATE` held at `:341` and self-deadlock (the story's own carried constraint).
 
-Do not run `dev-story` until H1 (an owner decision, below) and H2/H3 are folded into the ACs.
+**M4 — AC8's revert has no mechanism.** `StripeCustomer` has no `@Version` (`StripeCustomer.java:19-32`), and the
+gateway saves the same entity (`setLastPaymentIntentId`, `StripePaymentGateway.java:~207-211`) on success. A
+load-modify-save revert can clobber a concurrent `savePaymentMethodAndScheduleSync`, whose sync then sees the
+card changed and skips itself as superseded (`SubscriptionService.java:688-690`). It needs a conditional
+column update (`… WHERE stripe_payment_method_id = :attempted`). Also: `previousCard` must be stored on the
+attempt row, because on a replay after a crash it is re-read at `:139` and may already be the new card; the
+attempt lookup must precede the card write; do **not** revert on `ChargeOutcomeUnknownException` (the charge
+may have captured); first-time payer → restore to null and keep the row (null is handled downstream).
+
+**M5 — AC4 gives no ordering baseline.** `persistCoachSubscription`/`persistPlayerSubscription` never set
+`lastStripeEventAt`, so `isStaleEvent` has nothing to compare; a parked older event (e.g. `incomplete` from
+the creation sequence) would overwrite the persist's correct `ACTIVE`. Several parked events for one
+subscription need a defined re-apply order, and `handleSubscriptionDeleted` ignores the stale guard.
+
+**M6 — AC4 covers only `customer.subscription.updated`.** `handleSubscriptionDeleted` has the identical drop
+and does not even call the orphan alert, so a cancel in the signup window leaves the coach entitled;
+`invoice.paid` is a silent no-op when no row matches. The story neither covers nor declares these out of scope.
+
+**M7 — RS09's fix is unreachable from the shipped UI, and a decision rationale rests on an unenforced premise.**
+The only frontend caller passes `undefined` for the payment method
+(`SessionPackPurchasePage.vue:184`; `booking.store.js:309`; no other caller exists). `getOrCreateStripeCustomer`
+writes only when the id is non-blank, so the pre-charge card write is a no-op for every UI purchase and AC8
+affects only direct API clients. The "declined card stays saved" problem for UI users arises through
+`/save-payment-method`, which the Owner-decisions section rejected fixing on the ground that it "follows a
+confirmed, customer-scoped SetupIntent so the card is already Stripe-authenticated". The server does not
+enforce that: `SessionPackPaymentResource.savePaymentMethod` passes `request.paymentMethodId()` to
+`SubscriptionService.savePaymentMethodAndScheduleSync`, whose only guard is `StripeIdFormat.requirePaymentMethodId`
+(`:659`). Both facts bear on a decision the owner already made; they are surfaced, not decided.
+
+**M8 — The "tests that change deliberately" table is partly wrong.**
+`SubscriptionServiceStripeReconciliationIT :91/:112` call `subscriptionService.reconcileStripeSubscriptions()` —
+the **daily sweep** — which AC4/AC5 do not change, so they will not change and passing is not a signal.
+`SubscriptionEntitlementIntegrityTest :562-568` verifies `never()).save(any())` on
+`paymentCoachSubscriptionRepository`; a write to a *different* repository does not trip it. The realistic
+failure is an NPE if `@InjectMocks` leaves a new dependency null. Only `SessionPackPurchasePageSpec.js:61-71`
+is correctly listed.
+
+### LOW
+
+- **L1** Parked rows for subscriptions that never link (`cancelDuplicateSubscription`, `SubscriptionService :190,:453,:1522` deliberately cancels unlinked duplicates) have no retention.
+- **L2** AC1 leaves undefined: what the loser of a concurrent same-key insert returns (a naive "catch and charge" yields a Stripe 409, which is an unknown-outcome 422); what happens when the optional header is absent (`:143` mints a random UUID, so there is nothing to dedup); a stuck `IN_PROGRESS` row outliving Stripe's key lifetime (~24h); storing tier and player on the row so reuse across tiers is rejected up front.
+- **L3** Wording: "different lock key" (Layer 3 table); `:353-357` "worse outcome"; `"sub-upgrade-" + UUID.randomUUID()` form.
+- **L4** Citation drifts listed in §1; `fix/payment-subscription-entitlements` is PR #337.
+- **L5** AC11's "add/keep expected findings" on 337/350/359/368 is already satisfied: each case already carries the finding with `fix_pr` set to its original PR. The only real edit is the draft's `fix_pr`. Its `F1` title and description are **correct** (H6) — do not "correct" them.
+
+## 5. Did not survive re-verification
+
+| Raised by | Claim | Why it died |
+|---|---|---|
+| Layer 2 | The draft case's retry scenario is "false at HEAD" | It is true: a declined card is committed, so the retry's snapshot equals it (H6). |
+| Layer 2 | The draft's anchor `StripePaymentGateway.chargeAndCapture` does not exist (it is in `SessionPackPaymentService`) | `chargeAndCapture` is declared in `StripePaymentGateway` (4-arg and 5-arg). |
+| Layer 3 | The `:50-57` grace-window cite is wrong | The comment states the premise ("no generic way to clear an AdminAlert once raised") verbatim, albeit for the allowlist decision. Kept as a supporting cite. |
+| Layer 4 | The refunded-intent trap is "unreachable from the UI today" | A crash after the refund yields no HTTP response, so the key is retained and a replay is possible today. H4 stands; the sub-claim is dropped. |
+| Layer 4 | AC10 DST / east-of-UTC / single-sender concerns | Checked and fine (no Invalid Date, one sender, correct east of UTC). |
+
+## 6. Not independently re-checked
+
+Stripe's replay-the-cached-decline and ~24h key lifetime (documented Stripe behaviour, not exercised here —
+the implementer should pin it with a test before relying on it); the `payment.idempotencyKeyReused` 409
+semantics under a changed tier; that adding a token to `grafana-alerts.yml` leaves
+`AlertDocumentationParityTest` green (Layer 4 reports it matches alert titles only); Flyway-linter behaviour
+for a new table's unique index; the line numbers of Dev-Notes bullets not listed in §1.
+
+## 7. Recommendation
+
+| Area | Confidence |
+|---|---|
+| Citations and file:line references | High — every row opened; 3 minor drifts |
+| Mechanistic descriptions of existing code | High — full method bodies read, transaction boundaries traced |
+| The four "refutations" in Corrections 1-5 | **Mixed** — 1 (422), 2 (untraceable path) and 4 (sweep) hold; **3 is wrong as written (H6)**; 5 holds |
+| The ACs as a design | **Low until H2-H5 are fixed** — they are specification holes, not typos |
+| Owner decisions | Still valid as chosen, but H2/H3 widen the attempt-record status model, M7 changes the facts under the RS09 decision, and M3 undercuts "following the existing precedent" |
+
+Next: decide H1 (renumber this story, and take the next free migration only after the builder-packs branch
+merges), then apply H2-H6, M1-M8 to the story. Nothing in this report has been applied.
