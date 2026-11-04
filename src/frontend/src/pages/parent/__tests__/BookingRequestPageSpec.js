@@ -397,12 +397,13 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     expect(wrapper.vm.canSubmit).toBe(false)
   })
 
-  it('with credits: tracker shows the real pack size; per session stays selectable', async () => {
+  it('with credits: the pack starts selected (no card entry); per session stays selectable, last', async () => {
     const { wrapper } = await mountPage(
       {
         computedSlots: [SLOT],
         coachTimezone: 'UTC',
         coachPriced: true,
+        sessionPacksPlayerId: '5',
         sessionPacks: [
           { id: 'p1', coachId: '77', status: 'ACTIVE', creditsRemaining: 3, sessionCount: 5 },
         ],
@@ -417,12 +418,190 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     expect(tracker.exists()).toBe(true)
     expect(wrapper.vm.activePackSessionTotal).toBe(5)
     expect(wrapper.find('[data-test="per-session-info"]').exists()).toBe(false)
-    expect(wrapper.vm.packOptions[0]).toEqual({ label: 'booking.packs.perSession', value: null })
-    expect(wrapper.vm.selectedPackId).toBe(null)
-    // Choosing the pack hides the parent's per-session card entry.
-    wrapper.vm.selectedPackId = 'p1'
-    await wrapper.vm.$nextTick()
+    // Before: "Per session" was first and preselected, so a pack holder who submitted without
+    // touching the radio was charged by card with the credits left unused.
+    expect(wrapper.vm.packOptions.at(-1)).toEqual({
+      label: 'booking.packs.perSession',
+      value: null,
+    })
+    expect(wrapper.vm.selectedPackId).toBe('p1')
     expect(wrapper.find('[data-test="payment-card"]').exists()).toBe(false)
+    // Choosing per session brings the card entry back.
+    wrapper.vm.selectedPackId = null
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-test="payment-card"]').exists()).toBe(true)
+  })
+
+  const pack = (id, extra = {}) => ({
+    id,
+    coachId: '77',
+    status: 'ACTIVE',
+    creditsRemaining: 2,
+    sessionCount: 5,
+    ...extra,
+  })
+  const inDays = (days) => new Date(Date.now() + days * 86_400_000).toISOString()
+
+  it('with several usable packs, the soonest-expiring one is preselected', async () => {
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [
+          pack('later', { expiresAt: inDays(90) }),
+          pack('no-expiry'),
+          pack('sooner', { expiresAt: inDays(10) }),
+        ],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe('sooner')
+  })
+
+  it('a pack with no credits left, or past its expiry, is not preselected', async () => {
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [
+          pack('empty', { creditsRemaining: 0 }),
+          pack('expired', { expiresAt: inDays(-1) }),
+        ],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe(null)
+  })
+
+  it('an explicit choice survives the pack list loading or reloading', async () => {
+    const { wrapper, bookingStore } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacks: [],
+        sessionPacksPlayerId: '5',
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    // Packs arriving after mount still set the default...
+    bookingStore.sessionPacks = [pack('p1')]
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+    // ...but once the parent picks per session, a reload with another pack does not override it.
+    // (The option group's @update:model-value sets packChoiceTouched; shallow-mounted, it is not a
+    // live component, so the test makes the same two writes.)
+    wrapper.vm.packChoiceTouched = true
+    wrapper.vm.selectedPackId = null
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe(null)
+    bookingStore.sessionPacks = [pack('p1'), pack('p2', { expiresAt: inDays(3) })]
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe(null)
+  })
+
+  it('a pack whose credits are all held by open bookings with this coach is not preselected', async () => {
+    // The pack list has no reserved count; an open booking for this player with this coach may hold
+    // a session, so 2 credits with 2 open bookings is not a safe default (the backend would answer
+    // payment.packSessionsReserved).
+    const open = (id, status) => ({ id, coachId: '77', playerId: 5, status })
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1', { creditsRemaining: 2 })],
+        parentBookings: [open('b1', 'REQUESTED'), open('b2', 'ACCEPTED'), open('b3', 'CONFIRMED')],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe(null)
+  })
+
+  it('a pack with a pause covering the chosen slot is not the default for that slot', async () => {
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [
+          pack('paused', {
+            pausedFrom: '2026-03-01T00:00:00Z',
+            pausedUntil: '2026-03-31T00:00:00Z',
+          }),
+        ],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    // No slot yet: a scheduled pause makes the pack an unsafe default.
+    expect(wrapper.vm.selectedPackId).toBe(null)
+    // SLOT is 10 March 2026, inside the pause.
+    wrapper.vm.selectSlot(SLOT)
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe(null)
+  })
+
+  it('a list refreshing (loading) never flips a preselected pack back to per session', async () => {
+    // Seen on the E2E stack: the bookings list reloaded while the parent was on the page, the default
+    // briefly read null, the untouched selection followed it, and the submit was charged by card.
+    const { wrapper, bookingStore } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1')],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+    bookingStore.bookingsLoading = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+    bookingStore.packsLoading = true
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+  })
+
+  it("another child's packs still in the store are never the default", async () => {
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '9',
+        sessionPacks: [pack('sibling')],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe(null)
   })
 })
 
