@@ -104,7 +104,7 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
       // Mutation: send packsForRequest(form.sessionPacks) unconditionally → [] → RED.
     })
 
-    it('adding then removing the pack sends [], which withdraws the offer', () => {
+    it('adding then removing the pack sends null, never a withdrawal (V2)', () => {
       const wrapper = mountStep3()
       wrapper.vm.form.perSessionPrice = 40
       wrapper.vm.addPack()
@@ -112,17 +112,17 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
 
       wrapper.vm.submit()
 
-      expect(wrapper.emitted('submit')[0][0].sessionPacks).toEqual([])
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
     })
 
-    it('an added but empty pack is not sent and does not block', () => {
+    it('an added but empty pack is not sent, does not block and does not withdraw an offer (V2)', () => {
       const wrapper = mountStep3()
       wrapper.vm.form.perSessionPrice = 40
       wrapper.vm.addPack()
 
       wrapper.vm.submit()
 
-      expect(wrapper.emitted('submit')[0][0].sessionPacks).toEqual([])
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
       expect(wrapper.vm.packError).toBe('')
     })
 
@@ -236,7 +236,7 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
 
       wrapper.vm.submit()
 
-      expect(wrapper.emitted('submit')[0][0].sessionPacks).toEqual([])
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
       expect(wrapper.vm.packError).toBe('')
     })
 

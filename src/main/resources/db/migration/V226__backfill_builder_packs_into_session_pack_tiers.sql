@@ -19,11 +19,12 @@
 --    rounds to more than 0.00 (chk_spt_price_per_session_positive).
 --  - price_per_session = round(total_price / session_count, 2), as SessionPackPaymentService.createTier
 --    computes it (HALF_UP; PostgreSQL's numeric round() rounds half away from zero, identical for positives).
---  - label: blank or NULL becomes 'Session pack' (SessionPackLimits.DEFAULT_LABEL, read back as "no label").
---    A label that looks like it carries contact details (an @, a URL, or a run of 7+ digits) also becomes the
---    default: the builder never ran @NoContactDetails on pack labels, and these rows are about to become a
---    public, purchasable offer. Labels longer than 200 characters cannot exist (session_packs.label is
---    varchar(100)).
+--  - label: ALWAYS 'Session pack' (SessionPackLimits.DEFAULT_LABEL, which the profile reads back as "no label" and
+--    renders as its own localized "N sessions"). The builder never ran @NoContactDetails on pack labels, and these
+--    rows are about to become a public, purchasable offer on a platform that bans off-platform contact. A regex
+--    cannot tell 'Season 10' from 'insta: coach_x' or 'name at gmail dot com', so no legacy free text is carried
+--    over (skillars-deferred-168 /pr-review V4). A coach who wants a label sets one on the profile or the "My
+--    Session Pack Offer" page, where it is validated.
 -- Everything else in session_packs (a coach's other packs, invalid rows) is discarded: it was never
 -- purchasable. The table itself stays for one release (migration-conventions.md rule 2: a DROP ships only
 -- in a release after the one that removed its last reader); the DROP is a filed follow-up in deferred-work.md.
@@ -41,11 +42,7 @@ SET LOCAL lock_timeout = '5s';
 INSERT INTO payment.session_pack_tiers (coach_id, label, session_count, total_price, price_per_session, is_active)
 SELECT DISTINCT ON (sp.coach_id)
        sp.coach_id,
-       CASE
-           WHEN NULLIF(trim(sp.label), '') IS NULL THEN 'Session pack'
-           WHEN sp.label ~* '(@|https?://|www\.|[0-9][0-9 ()+./-]{5,}[0-9])' THEN 'Session pack'
-           ELSE sp.label
-       END,
+       'Session pack',
        sp.session_count,
        sp.total_price,
        round(sp.total_price / sp.session_count, 2),

@@ -407,12 +407,18 @@ Claude Opus 5.5 (claude-opus-5-5), /bmad-dev-story, 2026-11-04.
   does not (`ACCEPT_FLOAT_AS_INT` applies to `Integer` too). Changing the global ObjectMapper is out of scope, so the
   guard is client-side (both forms reject non-integers) and the record's Javadoc says so. The boxed type still turns a
   missing count into a `@NotNull` violation instead of 0.
-- **Legacy label contact-detail check (Design 11).** UAT data could not be queried from here, so instead of an owner
-  decision the backfill substitutes the default label for any legacy label that looks like contact details (`@`, URL,
-  or a 7+ digit run). Recorded in the migration header and the checklist line.
+- **Legacy labels (Design 11).** UAT data could not be queried from here, and /pr-review (V4) showed a regex cannot
+  catch 'insta: coach_x' or 'name at gmail dot com', so `V226` carries NO legacy label over: every backfilled tier is
+  labelled 'Session pack' (read back as no label, shown as the localized "N sessions"). Recorded in the migration
+  header and the checklist line.
 - **Story said an `ApiAdviceTest` case for `uq_session_pack` exists; it does not** (grep found none). Only the mapping was removed.
 - **i18n:** `auth.coach.step3PackDuplicateSessionCount` was replaced by the four new pack error keys (its only reference
   was removed); `marketplace.duplicateSessionPackCount` (now unreferenced) is left for the DROP follow-up.
+- **/pr-review round 1 fixes (V1, V2, V4):** the frontend now sends the pack only when the coach changed it
+  (`packsPayload`: `null` = untouched, `[]` only when they removed the pack they were shown). That fixes the
+  Edit-pricing dialog withdrawing the offer on a price-only save from a stale or pack-less form (V1) and the builder
+  withdrawing it after an added-then-emptied row (V2). V3 (a Javadoc wording question; the ITs show both race cases
+  are 409s) was left. V4 is the label change above.
 - **Doc footer stamps were not bumped**: only the edited rows were verified, not whole pages.
 - **Ledger:** the ONB-06 section is replaced in this PR (so it disappears when the PR merges) by a
   skillars-deferred-168 section with two follow-ups: the `DROP TABLE` (prepared in V226) and the Pitchside hand-off.

@@ -94,7 +94,7 @@ class BuilderPackTierBackfillIT extends AbstractIntegrationTest {
         runBackfill();
 
         assertThat(tiersOf(coachId)).singleElement().satisfies(t -> {
-            assertThat(t.get("label")).isEqualTo("Starter");
+            assertThat(t.get("label")).isEqualTo("Session pack");
             assertThat(t.get("session_count")).isEqualTo(5);
             assertThat((BigDecimal) t.get("total_price")).isEqualByComparingTo("200.00");
             assertThat((BigDecimal) t.get("price_per_session")).isEqualByComparingTo("40.00");
@@ -114,28 +114,26 @@ class BuilderPackTierBackfillIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void blankLabelsAndLabelsWithContactDetailsGetTheDefault() throws Exception {
-        UUID blank = coach(3);
-        builderPack(blank, 5, "200.00", "  ");
-        UUID nullLabel = coach(4);
-        builderPack(nullLabel, 5, "200.00", null);
-        UUID phone = coach(5);
-        builderPack(phone, 5, "200.00", "call 0791 112 3456");
-        UUID email = coach(6);
-        builderPack(email, 5, "200.00", "mail me@coach.de");
-        UUID url = coach(7);
-        builderPack(url, 5, "200.00", "see https://coach.example");
-        UUID plain = coach(8);
-        builderPack(plain, 10, "350.00", "10-pack, save 10%");
+    void everyLegacyLabelBecomesTheDefault_noFreeTextIsCarriedOver() throws Exception {
+        // pr-review V4: legacy builder labels were never checked for contact details, and a regex cannot catch
+        // 'insta: coach_x' or 'name at gmail dot com', so none is copied into a public, purchasable tier.
+        String[] labels = {
+            "  ", null, "call 0791 112 3456", "mail me@coach.de", "see https://coach.example",
+            "insta: coach_x", "name at gmail dot com", "WhatsApp me: zero seven nine one", "10-pack, save 10%", "Season 10"
+        };
+        List<UUID> coaches = new java.util.ArrayList<>();
+        for (int i = 0; i < labels.length; i++) {
+            UUID coachId = coach(20 + i);
+            builderPack(coachId, 5, "200.00", labels[i]);
+            coaches.add(coachId);
+        }
 
         runBackfill();
 
-        for (UUID coachId : List.of(blank, nullLabel, phone, email, url)) {
+        for (UUID coachId : coaches) {
             assertThat(tiersOf(coachId)).singleElement()
                 .satisfies(t -> assertThat(t.get("label")).isEqualTo("Session pack"));
         }
-        assertThat(tiersOf(plain)).singleElement()
-            .satisfies(t -> assertThat(t.get("label")).isEqualTo("10-pack, save 10%"));
     }
 
     @Test

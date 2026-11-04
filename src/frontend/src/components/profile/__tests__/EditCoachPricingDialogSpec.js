@@ -52,7 +52,7 @@ describe('EditCoachPricingDialog.vue (deferred-139 AC2)', () => {
     ])
   })
 
-  it('submit calls saveProfileBuilderStep(3, …) with the edited price', async () => {
+  it('a price-only save sends sessionPacks: null, so it never touches the offer (V1)', async () => {
     saveProfileBuilderStep.mockResolvedValue({})
     const wrapper = mountDialog()
     wrapper.vm.form.perSessionPrice = 75
@@ -63,9 +63,40 @@ describe('EditCoachPricingDialog.vue (deferred-139 AC2)', () => {
     expect(saveProfileBuilderStep).toHaveBeenCalledWith(3, {
       perSessionPrice: 75,
       sessionDurationMinutes: 60,
-      sessionPacks: [{ sessionCount: 5, totalPrice: 200, label: 'Starter' }],
+      sessionPacks: null,
     })
     expect(wrapper.emitted('updated')).toHaveLength(1)
+  })
+
+  it('a price-only save from a form that loaded WITHOUT the pack does not withdraw the live offer (V1)', async () => {
+    saveProfileBuilderStep.mockResolvedValue({})
+    const wrapper = mountDialog({ current: { ...CURRENT, sessionPacks: [] } })
+    wrapper.vm.form.perSessionPrice = 75
+
+    await wrapper.vm.handleSubmit()
+    await flushPromises()
+
+    expect(saveProfileBuilderStep).toHaveBeenCalledWith(
+      3,
+      expect.objectContaining({ sessionPacks: null }),
+    )
+    // Mutation: send packsForRequest(form.sessionPacks) unconditionally -> [] -> RED.
+  })
+
+  it('an edited pack is sent', async () => {
+    saveProfileBuilderStep.mockResolvedValue({})
+    const wrapper = mountDialog()
+    wrapper.vm.form.sessionPacks[0].totalPrice = 180
+
+    await wrapper.vm.handleSubmit()
+    await flushPromises()
+
+    expect(saveProfileBuilderStep).toHaveBeenCalledWith(
+      3,
+      expect.objectContaining({
+        sessionPacks: [{ sessionCount: 5, totalPrice: 180, label: 'Starter' }],
+      }),
+    )
   })
 
   it('submit is a no-op without a positive perSessionPrice', async () => {
@@ -114,7 +145,7 @@ describe('EditCoachPricingDialog.vue (deferred-139 AC2)', () => {
     )
   })
 
-  it('a pack with no label round-trips as an empty label and is sent as null', async () => {
+  it('a pack with no label shows an empty label and, left alone, is not re-sent', async () => {
     saveProfileBuilderStep.mockResolvedValue({})
     const wrapper = mountDialog({
       current: { ...CURRENT, sessionPacks: [{ sessionCount: 5, totalPrice: 200, label: null }] },
@@ -126,8 +157,24 @@ describe('EditCoachPricingDialog.vue (deferred-139 AC2)', () => {
 
     expect(saveProfileBuilderStep).toHaveBeenCalledWith(
       3,
+      expect.objectContaining({ sessionPacks: null }),
+    )
+  })
+
+  it('an edited pack with no label is sent with a null label', async () => {
+    saveProfileBuilderStep.mockResolvedValue({})
+    const wrapper = mountDialog({
+      current: { ...CURRENT, sessionPacks: [{ sessionCount: 5, totalPrice: 200, label: null }] },
+    })
+    wrapper.vm.form.sessionPacks[0].totalPrice = 190
+
+    await wrapper.vm.handleSubmit()
+    await flushPromises()
+
+    expect(saveProfileBuilderStep).toHaveBeenCalledWith(
+      3,
       expect.objectContaining({
-        sessionPacks: [{ sessionCount: 5, totalPrice: 200, label: null }],
+        sessionPacks: [{ sessionCount: 5, totalPrice: 190, label: null }],
       }),
     )
   })

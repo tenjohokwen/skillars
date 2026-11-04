@@ -67,6 +67,19 @@ export function packsForRequest(packs) {
 }
 
 /**
+ * What to send as `sessionPacks`: `null` (leave the coach's offer untouched) unless the coach actually changed
+ * the pack from what the form started with, then the new pack list (`[]` only when they removed a pack they were
+ * shown). Sending the list unconditionally would let a stale form (a second tab, a profile that loaded without
+ * its pack) or an added-then-emptied row withdraw an offer the coach set up elsewhere.
+ * `initialPacks` is the form's starting pack list: empty for the builder, which never shows the current offer.
+ */
+export function packsPayload(initialPacks, currentPacks) {
+  const initial = packsForRequest(initialPacks)
+  const current = packsForRequest(currentPacks)
+  return JSON.stringify(initial) === JSON.stringify(current) ? null : current
+}
+
+/**
  * The first server field error about the pack. Bean validation reports nested fields as
  * `sessionPacks[0].totalPrice`, which an exact `hasFieldError('sessionPacks')` never matches.
  */

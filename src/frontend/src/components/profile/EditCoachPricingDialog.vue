@@ -156,7 +156,7 @@ import {
   PACK_MAX_TOTAL_PRICE,
   packErrorKey,
   packServerError,
-  packsForRequest,
+  packsPayload,
 } from 'src/utils/sessionPackForm'
 
 const props = defineProps({
@@ -197,6 +197,10 @@ const form = reactive({
   sessionDurationMinutes: null,
   sessionPacks: [],
 })
+// skillars-deferred-168: the pack list the form started with. A save sends the pack list only if the coach
+// changed it (see packsPayload), so a price-only save never touches the offer, even when this form loaded
+// stale or without the pack.
+let initialPacks = []
 
 const DURATION_CHOICES = [30, 45, 60, 90, 120]
 const durationOptions = computed(() => {
@@ -225,6 +229,7 @@ watch(
         totalPrice: p.totalPrice,
         label: p.label || '',
       }))
+      initialPacks = form.sessionPacks.map((p) => ({ ...p }))
     }
   },
   { immediate: true },
@@ -259,9 +264,8 @@ async function handleSubmit() {
     await saveProfileBuilderStep(3, {
       perSessionPrice: form.perSessionPrice,
       sessionDurationMinutes: form.sessionDurationMinutes,
-      // Always sent: this dialog shows the current offer, so what it shows is what the coach saves, and
-      // an empty list withdraws the offer.
-      sessionPacks: packsForRequest(form.sessionPacks),
+      // null unless the coach changed the pack; [] only when they removed the pack they were shown.
+      sessionPacks: packsPayload(initialPacks, form.sessionPacks),
     })
 
     $q.notify({ type: 'positive', message: t('success.infoChanged') })

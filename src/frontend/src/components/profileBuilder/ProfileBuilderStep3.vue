@@ -122,7 +122,7 @@ import {
   PACK_MAX_SESSION_COUNT,
   PACK_MAX_TOTAL_PRICE,
   packErrorKey,
-  packsForRequest,
+  packsPayload,
 } from 'src/utils/sessionPackForm'
 
 const { t } = useI18n()
@@ -134,11 +134,11 @@ const emit = defineEmits(['submit'])
 // was touched but is not one the coach's offer can hold (see packErrorKey).
 const packError = ref('')
 
-// skillars-deferred-168: this screen always starts with no pack, and the builder's step rail lets a
-// coach come back to it. Sending [] would WITHDRAW an offer they set up meanwhile (here or on the
-// "My Session Pack Offer" page), so until the coach adds, edits or removes the pack the step sends
-// sessionPacks: null, which leaves the offer untouched.
-const packEdited = ref(false)
+// skillars-deferred-168: this screen always starts with no pack (it never shows the current offer), and the
+// builder's step rail lets a coach come back to it. Sending [] would WITHDRAW an offer they set up meanwhile
+// (here or on the "My Session Pack Offer" page), so the step sends a pack only when the coach filled one in,
+// and sessionPacks: null (leave the offer untouched) otherwise, including after an added-then-emptied or
+// added-then-removed row. See packsPayload.
 
 const form = reactive({
   perSessionPrice: null,
@@ -176,12 +176,10 @@ const durationOptions = computed(() => {
 
 function addPack() {
   form.sessionPacks.push({ sessionCount: null, totalPrice: null, label: '' })
-  packEdited.value = true
 }
 
 function removePack(i) {
   form.sessionPacks.splice(i, 1)
-  packEdited.value = true
   // skillars-deferred-109 code review: packError is otherwise only cleared by a SUCCESSFUL submit,
   // so removing (or fixing) the offending row left the red message standing under a pack list that
   // no longer has anything wrong with it. Clearing on any pack edit keeps the message tied to the
@@ -190,7 +188,6 @@ function removePack(i) {
 }
 
 function onPackEdited() {
-  packEdited.value = true
   packError.value = ''
 }
 
@@ -207,7 +204,7 @@ function submit() {
   emit('submit', {
     perSessionPrice: form.perSessionPrice,
     sessionDurationMinutes: form.sessionDurationMinutes,
-    sessionPacks: packEdited.value ? packsForRequest(form.sessionPacks) : null,
+    sessionPacks: packsPayload([], form.sessionPacks),
   })
 }
 </script>
