@@ -75,7 +75,7 @@ public class CoachRegistrationService {
         // tell the existing account's owner instead (no enumeration oracle).
         if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, rateLimitingService,
                 "coach",
-                req.email(), req.phone(), req.password())) {
+                req.email(), req.phone(), req.password(), req.langKey())) {
             return;
         }
 

@@ -11,6 +11,7 @@ import com.softropic.skillars.platform.security.contract.SkillarsVerificationSta
 import com.softropic.skillars.platform.security.contract.event.ParentOtpEmailEvent;
 import com.softropic.skillars.platform.security.contract.event.ParentVerificationEmailEvent;
 import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationPhoneInUseEvent;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
 import com.softropic.skillars.platform.security.repo.Authority;
@@ -148,6 +149,18 @@ class ParentRegistrationServiceTest {
             eq(TimeUnit.MINUTES))).thenReturn(true);
     }
 
+    private void registrantNoticeAllowed(boolean allowed) {
+        when(rateLimitingService.tryConsume("jane.doe@test.com", "registration_phone_in_use_notice", 2L, 60L,
+            TimeUnit.MINUTES)).thenReturn(allowed);
+    }
+
+    private User phoneHolderOfTheRequestPhone() {
+        User phoneHolder = existingAccount(8L, "holder@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(phoneHolder));
+        return phoneHolder;
+    }
+
     @Test
     void registerParent_noticeLimitForThatAccountSpent_returnsNormallyWithoutANotice() {
         // A pool of IPs must not flood one inbox: past the per-account limit the notice is skipped,
@@ -189,18 +202,68 @@ class ParentRegistrationServiceTest {
 
         assertNeutralNoCreate(existing);
         verify(userRepository, never()).findOneByPhoneNumber(any());
+        // An email match tells only the existing account: the typed address IS that account.
+        verify(publisher, never()).publishEvent(any(RegistrationPhoneInUseEvent.class));
+        verify(rateLimitingService, never()).tryConsume(anyString(), eq("registration_phone_in_use_notice"),
+            anyLong(), anyLong(), any());
     }
 
     @Test
-    void registerParent_phoneAlreadyRegistered_returnsNormallyAndNotifiesThePhoneHolder() {
+    void registerParent_phoneAlreadyRegistered_returnsNormallyAndNotifiesThePhoneHolderAndTheTypedAddress() {
+        // Phones are not verified at registration: the number may sit on someone else's account, so the
+        // registrant is told at the (new) address they typed, next to the phone holder's notice.
         allowNotice();
-        User phoneHolder = existingAccount(8L, "holder@test.com");
-        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
-        when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(phoneHolder));
+        registrantNoticeAllowed(true);
+        User phoneHolder = phoneHolderOfTheRequestPhone();
 
         assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
 
         assertNeutralNoCreate(phoneHolder);
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en"));
+    }
+
+    @Test
+    void registerParent_phoneMatch_registrantLimitSpent_stillNeutralAndTheHolderIsStillTold() {
+        allowNotice();
+        registrantNoticeAllowed(false);
+        User phoneHolder = phoneHolderOfTheRequestPhone();
+
+        assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(phoneHolder);
+        verify(publisher, never()).publishEvent(any(RegistrationPhoneInUseEvent.class));
+    }
+
+    @Test
+    void registerParent_phoneMatch_holderLimitSpent_theRegistrantIsStillTold() {
+        // The two limits are independent: a spent per-account bucket must not silence the registrant.
+        when(rateLimitingService.tryConsume("8", "registration_duplicate_notice", 2L, 60L, TimeUnit.MINUTES))
+            .thenReturn(false);
+        registrantNoticeAllowed(true);
+        phoneHolderOfTheRequestPhone();
+
+        assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
+
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en"));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+    }
+
+    @Test
+    void registerParent_phoneMatch_registrantBucketKeyedOnTheLowercasedAddress_andBlankLangFallsBackToEn() {
+        allowNotice();
+        when(rateLimitingService.tryConsume("jane.doe@test.com", "registration_phone_in_use_notice", 2L, 60L,
+            TimeUnit.MINUTES)).thenReturn(true);
+        ParentRegistrationRequest req = new ParentRegistrationRequest(
+            "Jane", "Doe", "Jane.Doe@Test.com", "password123", "+491701234567", " ");
+        when(userRepository.findOneByEmail("Jane.Doe@Test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByPhoneNumber("+491701234567"))
+            .thenReturn(Optional.of(existingAccount(8L, "holder@test.com")));
+
+        assertThatCode(() -> service.registerParent(req)).doesNotThrowAnyException();
+
+        // Mail goes to the address as typed; only the bucket key is normalised (case variants share it).
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("Jane.Doe@Test.com", "en"));
     }
 
     @Test

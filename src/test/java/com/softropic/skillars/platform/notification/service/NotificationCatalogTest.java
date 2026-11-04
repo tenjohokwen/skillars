@@ -44,7 +44,7 @@ class NotificationCatalogTest {
 
     @ParameterizedTest
     @EnumSource(value = EmailTemplate.class, names = {
-        "ACTIVATION", "CREATION_DUP", "PASSWORD_RESET", "SEND_OTP", "COACH_EMAIL_VERIFY", "COACH_OTP",
+        "ACTIVATION", "CREATION_DUP", "REGISTRATION_PHONE_IN_USE", "PASSWORD_RESET", "SEND_OTP", "COACH_EMAIL_VERIFY", "COACH_OTP",
         "PARENT_EMAIL_VERIFY", "PARENT_OTP", "PLAYER_EMAIL_VERIFY", "PLAYER_OTP", "EMAIL_CHANGE", "PROFILE_CHANGE"})
     void accountAndSecurityEmails_areTransactionalAndNeverInApp(EmailTemplate template) {
         NotificationCatalog.Entry entry = NotificationCatalog.of(template);

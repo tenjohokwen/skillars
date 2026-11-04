@@ -90,7 +90,7 @@ public class PlayerRegistrationService {
         // tell the existing account's owner instead (no enumeration oracle).
         if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, rateLimitingService,
                 "player",
-                req.email(), req.phone(), req.password())) {
+                req.email(), req.phone(), req.password(), req.langKey())) {
             return;
         }
 

@@ -5,6 +5,7 @@ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationPhoneInUseEvent;
 import com.softropic.skillars.platform.security.contract.util.ShortCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,6 +31,9 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  * ({@code baseUrl} = the frontend origin, {@code helpCode} = a short support code). That method is not
  * reused because it is {@code @RateLimited} per IP: a 429 only on the duplicate path would itself tell
  * a caller the address is taken.
+ *
+ * <p>Also sends the {@link EmailTemplate#REGISTRATION_PHONE_IN_USE} mail to the address the registrant
+ * typed when only the phone number matched ({@link RegistrationPhoneInUseEvent}), same shape and data.
  */
 @Slf4j
 @Component
@@ -61,6 +65,31 @@ public class RegistrationDuplicateAttemptListener {
             notificationOutboxSupport.enqueueEmail(EmailTemplate.CREATION_DUP, recipient, data, sendId);
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.CREATION_DUP),
+                kv("sendId", sendId), e);
+        }
+    }
+
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onPhoneInUse(RegistrationPhoneInUseEvent event) {
+        if (event.toAddress() == null || event.toAddress().isBlank()) {
+            log.warn("Cannot send phone-in-use registration notice: address is blank");
+            return;
+        }
+        String sendId = UUID.randomUUID().toString();
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("baseUrl", frontendLinks.base());
+            data.put("helpCode", ShortCode.shortenInt(UUID.randomUUID().hashCode()));
+
+            // No first name: the registrant has no account, and the typed name is not echoed into a mail
+            // to an address nobody has verified (the template greets without one).
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.toAddress());
+            recipient.setLangKey(event.langKey());
+
+            notificationOutboxSupport.enqueueEmail(EmailTemplate.REGISTRATION_PHONE_IN_USE, recipient, data, sendId);
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.REGISTRATION_PHONE_IN_USE),
                 kv("sendId", sendId), e);
         }
     }
