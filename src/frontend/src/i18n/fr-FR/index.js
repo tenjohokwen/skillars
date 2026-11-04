@@ -393,9 +393,6 @@ export default {
   },
   marketplace: {
     sharedSlot: 'Votre coach a partagé ce créneau : {slot} (heure locale du coach)',
-    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
-    duplicateSessionPackCount:
-      'Ce nombre de séances est indiqué deux fois. Chaque pack doit avoir un nombre de séances différent.',
     // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws.
     stepOutOfOrder: "Veuillez d'abord terminer l'étape précédente.",
     profileNotFound: 'Profil de coach introuvable.',
@@ -2043,7 +2040,7 @@ export default {
       coachPackSessionsReserved:
         "Le pack de séances de la famille n'a plus de séance libre pour une autre réservation.",
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
-      tierLabel: '{label} — {count} séances pour {price} €',
+      tierSummary: '{count} séances pour {price} €',
       noActiveTier: "Ce coach n'a aucun pack de séances actif disponible.",
     },
     card: {

@@ -1,79 +1,129 @@
-# Story review — skillars-deferred-169 (pass 4)
+# Story review: skillars-deferred-170-session-pack-tier-follow-ups
 
-- **Story:** `skillars-deferred-169-stripe-retry-double-charge-webhook-ordering-and-card-save-fixes` (723 lines, `ready-for-dev`)
+- **Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-170-session-pack-tier-follow-ups.md` (status `ready-for-dev`)
 - **Audit date:** 2026-11-04
-- **Real HEAD:** `30e2c712 docs(story): simplify RS06 in skillars-deferred-169 after the third review` (master = `281b8433`). Every citation was checked against this HEAD, not any SHA the story quotes.
-- **Method:** four read-only layers, then my own adversarial re-check (Step 4b) of every finding against source.
+- **HEAD verified against:** `b21ea376` "docs(story): create skillars-deferred-170 — session-pack tier follow-ups from deferred-168". Its parent is `281b8433` = origin/master (#434).
+- **The story says it was verified at `0ee68f07`.** That is stale. #434 has landed since and changed `BookingRequestPage.vue`. Every citation below was re-checked at `b21ea376`, not at the SHA the story names.
+- **Method:** four parallel read-only layers (citations, ledger/precedents, mechanisms, corner cases), then my own skeptical re-read of every finding (Step 4b).
+- **Also checked:** Jackson behaviour was checked against the pinned jar, jackson-databind 2.21.7 (`pom.xml:95`), using `javap` and a jshell run. The skillars-deferred-169 story was read at its branch tip `05b8bea8`.
 
-## 1. Citation verification (Layer 1)
-About 200 `file:line` citations; none could not be located. Six drifted, all minor:
+## 1. Citation verification (43 citations)
 
-| Story location | Claim | Reality | Fix |
-|---|---|---|---|
-| AC8 | `getSavedPaymentMethod:367` | null guard is `:409` (Numbering already says so; AC8 not updated) | `:409` |
-| Dev Notes RS09 | "`:347`,`:361`,`:378` added by #436" | #436 added `:347`,`:361`; `:378` is old `:336` shifted +42 | reword |
-| Numbering | "unchanged at or before `:203`" | insertion hunk is `@@ -335,0 +336,42`; boundary is `:335` | reword |
-| Numbering | `createPurchase :414→:457` | old position `:415` | `:415` |
-| Dev Notes / Task 7 | `zonedMidnightMs` docblock `:542-551` | `:544-553` | fix |
-| AC6 | player `payment.subscription.notFound` `:575` | `:576` (`:575` is the lock query) | `:576` |
+| Citation | Verdict | Evidence / correction |
+|---|---|---|
+| `V138__baseline_schema.sql:1628` | MATCH | `CREATE TABLE marketplace.session_packs (` |
+| i18n `duplicateSessionPackCount` en-US `:393`, fr-FR `:397`, de-DE `:920`; en-US `:398` comment | MATCH | key lines and `// ... (e.g. duplicateSessionPackCount above,` |
+| `docs/dev-docs/database/index.html:72` | MATCH | marketplace row lists `session_packs` |
+| `CoachSessionPackPort.java:12` | MATCH | `{@code marketplace.session_packs} table that nothing could buy.` |
+| `BuilderPackTierBackfillIT.java:69` | MATCH | `INSERT INTO marketplace.session_packs (...)` |
+| `CoachSessionPackTiersPage.vue:29`, `:77`, `:32-36`, `:80-84` | MATCH | heading `tierName(...)`; caption `t('payment.sessionPack.tierLabel', { label: tierName(...), ... })` |
+| `tierLabel` en-US `:2391`, de-DE `:1618`, fr-FR `:2044` | MATCH | `'{label} — {count} sessions for €{price}'` etc. |
+| "`payment.sessionPack.tierLabel: 'Tier'`" en-US `:1466` (Design 3) | **WRONG PATH** | `:1466` is **`admin.coaches.tierLabel`** (used at `AdminCoachEnforcementPage.vue:139`). `payment.sessionPack.tierLabel` exists once per locale and is the `'{label} — …'` string. See F6. |
+| `SessionPackPaymentService.java:98`, `:126-130`, `:135`, `:137`, `:140`, `:144`, `:440-455` | MATCH | quoted by Layer 1; re-read by me at `:88-158`, `:440-455` |
+| `StripePaymentGateway.java:113-116`, `:631` | MATCH | `resolveCoachStripeAccountId(coachId);` first in `charge()`; throws at `:635` |
+| `BookingService.java:599`, `:415`; `BookingBatchService.java:156` | MATCH | package-private `requireCoachPaymentReady`; its two callers |
+| `SessionPackPurchasePage.vue:189` | MATCH | `e?.response?.data?.message ?? t('booking.packs.purchaseError')` |
+| `application.yaml:134-137` | MATCH | jackson block sets only `time-zone` and `WRITE_DATES_AS_TIMESTAMPS` |
+| `ProfileBuilderStep3Request.java:42`, `CreateSessionPackTierRequest.java:27` | MATCH | boxed `Integer sessionCount` |
+| `BookingRequestPage.vue:656` | MATCH (no drift despite #434) | `} else if (errorKey === 'payment.coachStripeNotConfigured') {` |
+| `CoachPublicProfilePage.vue:617` | MATCH | `if (!coachHasPerSessionPrice.value && !coachHasPacks.value) return 'unbookable'` |
+| `ApiAdvice.java:486` | MATCH (minor) | `:486` is the `@ExceptionHandler`; the method is at `:488` |
+| en-US `:2327` `payment.error.coachStripeNotConfigured` | MATCH | all three locales have it |
+| `deferred-work.md:2321` → `runbook.md:598-613` (D1) | **DRIFTED** | `runbook.md:598-613` is now "Config change appears to have no effect". The statement lives at `docs/deployment/migration-rebaseline.md:137` ("no production deploy has ever happened") and at `runbook.md:691` ("prod is not live yet"). |
+| `V142__drop_pending_blob_deletions.sql` header | MATCH | owner decision 2026-09-16 (skillars-deferred-117), drop now because nothing was ever deployed. Note: it uses plain `SET lock_timeout`; Design 1's `SET LOCAL` is the current convention, so it is right not to copy that line. |
+| `PhoneNumberDto.java:24` as the `@JsonDeserialize` precedent | MATCH, partly | It is the only `@JsonDeserialize` in src/main. It is applied at TYPE level, not on a record component, so it is not an exact precedent. |
+| `sessionPackForm.js` `packErrorKey`; `ProfileBuilderStep3.vue` `step="1"` | MATCH | `:29` / `:36 Number.isInteger`; `:49` |
 
-Numbering claims verified: V226 on master, V227 free on master and contested by three branches, #436 added exactly 42 lines in one hunk.
+## 2. Ledger and precedent attribution
 
-## 2. Ledger & precedent attribution (Layer 2)
-Almost all CONFIRMED (ledger RS05-RS09 at `deferred-work.md :338-342`; #337 `eea53ee9`; #362 `4db90562`; #436 `47180ea7`; deferred-170's text; eval cases 337/350/359/368 `fix_pr`+`fix_merge`; README/validate.py cites; routed-pool, REQUIRES_NEW and `@Modifying` precedents; Grafana lines `:638-648`, `:771`; `payments.json:1314`). Non-confirmed:
+| Claim | Sources checked | Verdict |
+|---|---|---|
+| The four ledger bullets map to AC1–AC4 | ledger `:3558-3566` (tagged `[PICKED UP by skillars-deferred-170]`) | SUPPORTED |
+| ONB-06 is "the ledger's sixth bullet there", "done in PR #439" | ledger; `gh pr view 439` | **WRONG / OVERSTATED.** It is the **second** of five bullets in that section. #439 is **OPEN** (in review, not merged). |
+| #436 removed `SessionPack`/`SessionPackRepository`; V226 copied rows | `git show --stat 47180ea7`; V226 header; ledger `:3558` | SUPPORTED |
+| #436's body said an unready coach's pack "can be bought" | `gh pr view 436` body ("Known, low severity") | SUPPORTED (that sentence is quoted; the ledger corrects it) |
+| deferred-168 Completion Notes record the fractional-count deviation | story file `:406`; Javadoc `ProfileBuilderStep3Request.java:37-40` | SUPPORTED |
+| No production deploy has happened | ledger `:2321` (stale citation, see §1); `migration-rebaseline.md:137`; `runbook.md:691`; `provisioning-checklist.md:160-172`; git log after 2026-09-16 (latest #428 still says prod not live) | SUPPORTED (citation drifted) |
+| V142 precedent (deferred-117) | V142 header; commit e374aa6c (#197) | SUPPORTED. V142's marker named a separate *marker* migration (V141); here V226 plays that role, which the lint accepts (`preparedVersion < version`). |
+| Rule 2 and the lint marker / reference scan | `migration-conventions.md:58-85`; `MigrationLint.java:97-99`, `:197`, `:994` (skips `db/migration`) | SUPPORTED |
+| 169 rewrites `purchasePack` ordering and the purchase page's error/retry handling; claims V227+ | 169 story at `05b8bea8` (AC1a/AC1b, AC8, Task 2; V227+ at `:24`, `:96`, `:155`) | SUPPORTED. **169 adds no readiness check**, so AC3 is not redundant. |
+| PR #433 / #435 / #439 | gh | #433 and #435 are **MERGED into `feature/pitchside`** (the story calls them "on `feature/pitchside`", which is fine). #439 is open. |
+| V184 defers the `main.video_approval_requests` drop | `V184:16-18` | SUPPORTED |
 
-| Claim | Verdict |
-|---|---|
-| `feature/pitchside-master-sync` is "local-only" | WRONG: `origin/feature/pitchside-master-sync` exists with the same V227 file. The V227 contest stands. |
-| AC12: "delete RS05-RS09 outright" | INCOMPLETE: the ledger entries themselves still say "corrected in place by the story's AC12/Task 8". Reword the ledger text when AC12 runs, or now. |
-| `charge_reconcile_after_minutes` is a "ConfigBounds key" | IMPRECISE: a string constant passed to `configService.getBoundedLong(...)` (`ChargeOutcomeReconciler :112`) with local bounds; not a `BoundedKey`. Values (10, 5-1440) match. |
+## 3. Mechanistic claims
 
-Not checked: "#436 added 42 lines" was verified by Layer 1; the 167 "table and code together" detail was not independently verified.
+1. **`purchasePack` has no transaction; the customer writes commit before the charge and survive its failure.** TRUE.
+   - The Javadoc at `:78` says it is "Not annotated @Transactional ..."; the controller is not transactional either, and `open-in-view: false`.
+   - `StripeCustomerRepository.save` commits in its own transaction.
+2. **No Stripe charge call happens for an unready coach.** TRUE. `charge()`'s first statement is `resolveCoachStripeAccountId` (`:116`), before currency resolution and before the PaymentIntent builder. The only Stripe call earlier in the flow is `createStripeCustomer`, from `purchasePack:140`.
+3. **`isCoachPaymentReady` is on the `PaymentGateway` interface and uses the same predicate.** TRUE (`PaymentGateway.java:134-135`; `StripePaymentGateway.java:601-605` against `:631-636`, both `COMPLETE && chargesEnabled`). `BookingService.requireCoachPaymentReady` is a package-private instance method.
+4. **The 422 shape is `{helpCode, errorMsg:{errorKey, message}, fieldErrors}`.** TRUE. `PaymentApiAdvice` covers `payment.api` (where `SessionPackPaymentResource` lives) and handles only `PaymentGatewayException`.
+5. **The purchase page always shows the generic text.** TRUE. The axios error interceptor rejects with the original error (`boot/axios.js:268`), so `e.response.data` is the `ErrorDto`, which has no `message`.
+6. **Jackson truncates 2.5 → 2 by default.** TRUE.
+   - jackson-databind 2.21.7, `ACCEPT_FLOAT_AS_INT` defaults on. No customizer, `ObjectMapper` bean or coercion config exists in src/main.
+   - jshell results: `2.5`, `2.0`, `2.9e0` and `"2"` all bind to 2. `"2.5"` and `"2.0"` are **already rejected** with `InvalidFormatException`.
+7. **Design 5's "extends `NumberDeserializers.IntegerDeserializer`".** **FALSE: that class is `public final`** (re-checked with `javap`). `StdScalarDeserializer<Integer>` / `StdDeserializer<Integer>` works, and `_parseInteger(p, ctxt, Integer.class)` is callable for non-float tokens. `@JsonDeserialize` on a record component is honoured (javac propagates it to the field, accessor and parameter).
+8. **The resulting response is `ApiAdvice`'s 400 `validation.badRequest`.** TRUE for `InvalidFormatException`/`MismatchedInputException`, which arrive as `HttpMessageNotReadableException`. A deserializer that fails with a *definition* error (`InvalidDefinitionException`) would surface as `HttpMessageConversionException` instead, so the deserializer must raise its failure through `ctxt.handleWeirdNumberValue` / `InvalidFormatException`. No package advice intercepts it first.
+9. **Endpoints:** TRUE. Step 3 is `PUT /api/marketplace/coaches/me/profile/steps/3` (`ProfileBuilderResource`). The tier POST is `POST /api/payment/coaches/me/session-pack-tiers` (`SessionPackPaymentResource:138`, 201).
+10. **`payment.sessionPack.tierLabel` has only the two page callers; `sessionsFallbackLabel` stays because the public profile uses it.** TRUE (`SessionPackPricingDisplay.vue:48`, rendered by `CoachPublicProfilePage.vue:318`).
+11. **The lint "may" flag `CoachSessionPackPort.java:12`.** It **will**:
+    - the scan reads whole files, Javadoc included, and finds `\bsession_packs\b`, which matches here;
+    - it is the only src/main file outside `db/migration` that does.
 
-## 3. Mechanistic claims (Layer 3)
-HOLD: `purchasePack` non-transactional and its gate order; `chargeAndCapture :144` outside the try; the catch `:154-186`; sync early-return `:204` (correction 3 true); gateway pre-flight throws before any Stripe call; decline mapping; `isOutcomeUnknown` incl. `IdempotencyException`; `findChargeByIdempotencyKey` empty for both no-customer and not-found; 422 vs `errorMsg.message` wire contract; `handleEventAtomically` transaction scope; orphan paths; webhook 500 → duplicate on redelivery; routed-pool mechanics from a separate bean; `OperationalBacklogMetrics` shape (a new branch fits); `ConfigBounds` shapes; GDPR `:805`; AC6's FK-free `REQUIRES_NEW` insert cannot deadlock or poison the outer transaction.
+    The rewording is required work, not an "if".
 
-PARTIAL / WRONG (all re-read by me, all confirmed — see §4):
-- `getOrCreateStripeCustomer` writes only when the id is non-blank **only for an existing row**; the no-row branch stores whatever it is given (null or blank).
-- `handleSubscriptionWebhook` does **not** run `isStaleEvent` in the `deleted` branches (the story says "every branch").
-- The 409 wire contract silently depends on `generic.requestError` staying out of the message bundles.
+## 4. Corner cases, false assumptions, missed flows (survived Step 4b)
 
-## 4. Findings that survived re-verification
+- **F1 (medium, AC3): existing purchase unit tests go red.**
+  - `SessionPackPaymentServiceTest` (`@Mock PaymentGateway`, `:54`; strict `MockitoExtension`, `:46`; 21 `purchasePack(` calls) and `PackPriceLockedOnPurchaseTest` both get `false` from an unstubbed `isCoachPaymentReady`. Every test that gets past the coach-status gate would then throw `coachStripeNotConfigured`.
+  - Fix: `lenient().when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true)` in `@BeforeEach`, following the existing `lenient()` stub at `:72`.
+  - `SessionPackInputBoundsTest` also mocks the gateway; check it.
+  - ITs are unaffected (`StubPaymentGateway:97` returns `true`).
+- **F2 (medium, AC3): `SessionPackPurchaseIT` calls the service directly, not over HTTP** (`:47`, `:64`, `:88`). The "422 with `errorMsg.errorKey`" assertion cannot live there as written.
+  - Option 1: assert the code and the absence of a `stripe_customers` row at service level in that IT.
+  - Option 2: put the HTTP shape in `SessionPackPaymentResourceWebMvcTest` (service mocked to throw).
+  - Either way the IT must override the stub's always-ready answer, e.g. `doReturn(false)` on the shared spy, if the base class exposes one. Confirm at dev time.
+- **F3 (medium, AC3 and 169): after 169, the backstop no longer answers `coachStripeNotConfigured`.**
+  - 169 AC1b (its story `:200-207`) reclassifies any plain `PaymentGatewayException` from `chargeAndCapture` as a pack-service subclass with its own code (e.g. `payment.noChargeMade`).
+  - So the page message for `coachStripeNotConfigured` covers only the new early check. A coach losing readiness between the two checks would get the no-charge message. That is acceptable, but the story should say so.
+  - 169 also orders "look up before you gate" (`:562-563`): the replay lookup runs first, and the new-attempt gates run before the attempt row is inserted. AC3's check belongs in that gate block, or "refused before any write" is false, because 169's attempt row is a write.
+- **F4 (low, AC2): the "label appears once" mutation check cannot go red under the default setup.** `test/vitest/setup-file.js:18-26` installs `createI18n` with `messages: { 'en-US': {} }`, so `t(key, params)` renders the bare key and ignores `label`. The spec needs real messages for `tierSummary` (a local i18n instance) or must assert the params passed to `t`.
+- **F5 (low, AC2): an existing spec breaks.** `CoachSessionPackTiersPageSpec.js:110-119` expects `marketplace.sessionsFallbackLabel` for label-less tiers. Under Design 3 the page no longer renders it. Rewrite that test.
+- **F6 (low, AC2): Design 3 names the wrong key to keep.** See §1: the `'Tier'` key is `admin.coaches.tierLabel`. As written, the instruction keeps and deletes the same path `payment.sessionPack.tierLabel`.
+- **F7 (low, AC2, missed flow): the sold-packs list shows "—" for a label-less tier.** `CoachSessionPackTiersPage.vue:135` renders `{{ pack.tierLabel || '—' }}`, fed by `CoachSoldPackQueryService.java:89` (`tier.getLabel()`, null for every V226 backfill and unlabelled builder tier). It is the same naming rule on the third list of the same page; include it in AC2 (use the count-based name).
+- **F8 (low, AC1): two more docs promise a later drop.**
+  - `docs/dev-docs/marketplace/index.html:126` ("... is dropped by a later migration").
+  - `docs/deployment/provisioning-checklist.md:171` (V226 entry: "stays one release").
 
-### HIGH
-**H1. A premature `NO_CHARGE` frees the index while the original request can still capture → second charge and second pack.** AC1 (CAS exception, line 194), AC2 (line 258), AC3.
-Trigger: attempt A is `IN_PROGRESS` and its thread is slow or hung past the 10-minute minimum age (the story itself sizes a legitimate request at 6-8 minutes, `PaymentConfig:56-60`, 2-4 sequential Stripe calls at ~2 min worst case each, so the margin is thin). The job or a same-key replay finds nothing at Stripe and, per AC2 line 258 sentence 1, writes `NO_CHARGE` — and AC8 runs the card **revert first**. The partial index is now free, the parent starts attempt B and is charged. A's thread then captures and uses the proof-of-capture exception (`NO_CHARGE → SUCCEEDED`) to create a second pack. Nothing refunds either charge. The CAS-to-`UNRECONCILED` variant can additionally **throw** on the partial unique index when B is open, leaving the row at `NO_CHARGE` where the gauge never sees it (the story only handles an UPDATE that affects no row).
-The root cause is that absence of a PaymentIntent is inferred while the originating request may be alive. Fix directions: infer `NO_CHARGE` from absence only past a much larger age (or the Stripe-key window), or keep an `IN_PROGRESS` row `IN_PROGRESS` unless a heartbeat/`updated_at` shows the thread is dead; and specify that a CAS that violates the index is caught and logged at `error`.
-
-### MEDIUM
-**M1. AC2 contradicts itself on "not found" (line 258).** Sentence 1: it "counts as `NO_CHARGE` only past the minimum age". Sentence 2: a row "stays `UNKNOWN`" until ~24 h plus a margin. The accepted cost (line 135, "minimum age plus one job cycle") assumes sentence 1; sentence 2 makes the terminal rule dead code under it, or blocks a lost-key parent for ~24 h under the other reading. A dev can implement either. Resolving H1 forces this choice.
-
-**M2. A parent can be blocked from every pack purchase indefinitely with no exit.** The index is on `parent_id` alone across `IN_PROGRESS/UNKNOWN/UNRECONCILED`. No exit when: (a) the job's AC2 "create the pack" step fails deterministically (specified only for the request-path catch `:154-186`; a copied compensating refund would refund a funded pack); (b) the Stripe lookup fails forever (deleted customer, `REFUND_TARGET_INVALID`) — the terminal rule requires a *successful* lookup; (c) a row genuinely needs a human — AC12 defers the reconciler and there is no operator close/abandon transition, so the remedy is hand-edited SQL. The block applies to every tier of every coach. Specify the job's create-failure path and an operator resolution (status transition or runbook step).
-
-**M3. A zero `getRefundableAmount` for a captured payment becomes `REFUNDED` with no pack.** `StripePaymentGateway.java :541-552` returns `ZERO` when `getLatestChargeObject()` is null. AC2 maps zero to `REFUNDED`, so a `succeeded` intent whose latest charge is not expanded yields captured money, no pack and no refund. Treat a null charge on a `succeeded` intent as a failed lookup (stay `UNKNOWN`), and add a test.
-
-**M4. Parked `deleted` events bypass the staleness check.** `handleSubscriptionDeleted` (`SubscriptionService :1272-1285`) never calls `isStaleEvent`, so a parked *older* `deleted` is applied over a newer applied `updated`; AC4's drain text says `handleSubscriptionWebhook` "already runs `isStaleEvent` … in every branch", which is false for `deleted`. State the intended behaviour (a delete is final regardless of order, or compare `event_created`) and test it.
-
-**M5. First-time payer with a null/blank payment method.** `getOrCreateStripeCustomer` (`:440-453`) stores the payment method unconditionally in the no-row branch, so "the card write is a no-op for the shipped UI" is true only for an existing customer. The `previous_card`/`attempted_card`/`customer_existed` semantics in AC1/AC8 should say so; a blank `""` is stored and passes `charge()`'s `== null` check.
-
-### LOW
-- **L1.** Keyless retries are refused 10-15 min after any timeout, and an unclassified pre-Stripe `RuntimeException` (pool timeout in `charge`'s `findById`, `:138-139`) is marked `UNKNOWN` although Stripe was never reached. Safe, but the cost is understated in line 135.
-- **L2.** A linked parked event that throws on every apply is retried every 5 minutes and, with "oldest first, stop", blocks later events for that subscription; duty (d) purges only never-linked rows and no alert covers it.
-- **L3.** `cancelDuplicateSubscription` (`:190,:453,:1522`) makes every lost subscribe race park an `updated`/`deleted` that is later purged unapplied with a `warn` and metric, which fires on an expected path. Tag or exclude it so the metric stays meaningful.
-- **L4.** A concurrent same-key insert and the open-per-parent violation are both `23505`; AC1a step 4 should say to re-read by `(parent_id, attempt_key)` first to tell them apart.
-- **L5.** The 409 wire contract relies on `generic.requestError` staying absent from the message bundles; pin it with a test.
-- **L6.** Story 170 cites 169's lines `:562-563` and `:200-207`, now about `:578-580` and `:217-231`. No behavioural conflict (170's readiness check sits after 169's replay lookup and before the insert).
+  Also, because D1 relies on prod not being live, the new migration (and V226, which is missing too) belongs in the checklist list at `:160` ("Recent migrations assume 'prod is not live'", which ends at V224).
+- **F9 (low, AC4, partly refuted, see §5): the wrong IT is named.** `SessionPackPaymentServiceIT` calls the service, so Jackson never runs. Use:
+  - `SessionPackPaymentResourceWebMvcTest` (already POSTs the tier endpoint through MockMvc with real Jackson, `:410-430`) for the tier POST;
+  - `CoachProfileSelfEditIT` / `CoachProfileBuilderIT` (HTTP) for step 3.
+- **F10 (low, AC4, clarification): fractional strings are already rejected.** Of the deserializer unit test's cases, `"2"` should stay accepted and `"2.5"` already fails today. Exponent floats (`1e1`) are float tokens and will be rejected, which matches the intent. Out of scope but worth a line: `ProfileBuilderStep3Request.sessionDurationMinutes` (`:26`) truncates the same way. The UI never sends floats or strings (`packsForRequest`; `v-model.number` + `Number.isInteger` at `CoachSessionPackTiersPage.vue:325`).
+- **Story text errors:**
+  - "sixth bullet" should be "second".
+  - "done in PR #439" should be "in review in PR #439".
+  - "verified at 0ee68f07" should be `281b8433`.
+  - The D1 runbook citation should be `migration-rebaseline.md:137`.
+  - "extends `IntegerDeserializer`" is impossible (§3.7).
+  - "if the lint flags it" should be "the lint will flag it" (§3.11).
 
 ## 5. What did not survive re-verification
-- Layer 4's "AC4 interleaving fails" and "failed apply loses the event" probes: the two-case argument at lines 298-299 holds under READ COMMITTED, and `DELETE … RETURNING` plus the apply share one transaction, so an apply failure restores the row. Dropped.
-- Layer 4's AC10 DST/west-of-UTC probes: local midnight tomorrow is always accepted and `formatDate` renders in local time. Dropped.
-- Layer 3's note that the refund-failed branch writes no tag: the `:157` `PACK_PURCHASE_RECORD_FAILED` tag covers it. Dropped.
-- Layer 1's "AC8 `:367` drift" is a stale AC8 cite, not a wrong Numbering claim — kept only as a minor drift.
-- Not verified: the "closed at seven rounds" claim for deferred-167 (Layer 4 could not glob the file); Stripe's idempotency behaviours (stated in the story as not exercised); primary pool size 25.
+
+- **"A replay for a coach who lost readiness would now 422 instead of returning the recorded pack" (Layer 4 hypothesis).** Killed. Today `charge()` already throws before the `alreadyRecorded` lookup (`SessionPackPaymentService.java:144` vs `:148`), so a replay to an unready coach already fails. After 169, the lookup precedes the gates, so a replay skips the new check. The early check changes nothing for replays in either world.
+- **"No tier-resource IT exists, so AC4's tier-endpoint test has no home" (F9 as raised).** Partly killed. The claim that only `CoachProfileSelfEditIT` POSTs the tier endpoint over HTTP is wrong: `SessionPackPaymentResourceWebMvcTest:410-430` does, and a WebMvc slice runs the real Jackson converter. The finding survives only as "`SessionPackPaymentServiceIT` is the wrong place".
+- **"About 23 tests break" (F1's count).** Downgraded to approximate. I confirmed the mock default and 21 `purchasePack(` calls in one class, but did not count, test by test, which ones pass the earlier gates. The finding stands; the exact number does not matter.
+- **"A non-null `stripeAccountId` difference between `isCoachPaymentReady` and `resolveCoachStripeAccountId`" (Layer 3 aside).** Killed. The column is NOT NULL in both the entity and the schema.
 
 ## 6. Recommendation
-- Trend across passes: high-severity findings 6 → 3 → 4 → **1**. The simplification removed the structural defects; H1 is a residue of the "infer NO_CHARGE from absence" rule, not a new mechanism.
-- **H1 should be fixed before `/bmad-dev-story`** (one rule change in AC2, with M1's contradiction resolved by the same edit). M2-M5 are small spec additions. The citation and precedent fixes are mechanical.
-- Confidence: citations and precedents — high (each re-read). Mechanistic claims — high for those I re-read myself (L2/M3, M4, M5, M1 wording); the rest rest on Layer 3's quoted evidence. H1 is a reasoning chain over verified facts; its trigger needs a request exceeding the minimum age, which the story's own sizing makes plausible but rare.
-- A split is no longer indicated by the trend; it remains available (RS08 | RS06+RS09 | RS05+RS07).
-- The findings above were applied in the next revision of the story (see its Change Log).
+
+The story's diagnosis holds. Every defect it describes reproduces at `b21ea376`, and the ledger correction about `purchasePack` is right: no PaymentIntent is created for an unready coach. The design needs edits before dev. Confidence by area:
+
+| Area | Confidence | Basis |
+|---|---|---|
+| AC1 (drop) | high | Lint mechanics read in full; reference sweep done. Apply F8 and the required Javadoc rewording. D1 stays an owner call; its evidence is current, but its citation needs fixing. |
+| AC2 (caption) | high on the defect, medium on the test plan | Apply F4–F7. |
+| AC3 (readiness) | high on mechanics | Re-read by me. Its sequencing on 169 is right, and F3 makes it more so. Apply F1–F3. 169's final shape is not merged, so the AC3 details must be re-derived on rebase, as D2 already says. |
+| AC4 (fractional) | high | Checked against the pinned Jackson jar. Fix the base class (§3.7), the failure type (§3.8) and the test homes (F9). F10 narrows the test cases. |
+
+Not independently re-checked by me: Layer 4's sweep of e2e/ and Pitchside for caption-text assertions (accepted from that layer: none found), and Layer 2's git-log sweep for a production deploy (spot-checked #428 only).

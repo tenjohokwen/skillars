@@ -5,6 +5,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
+import { createI18n } from 'vue-i18n'
+import enUS from 'src/i18n/en-US'
 
 vi.mock('src/boot/axios', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
@@ -25,11 +27,16 @@ import SessionPackPurchasePage from 'src/pages/parent/SessionPackPurchasePage.vu
 
 const mounted = []
 
-async function mountPage() {
+// realMessages: mount with the real en-US texts (the global test i18n has none, so te() is always false there).
+async function mountPage({ realMessages = false } = {}) {
   const pinia = createTestingPinia({ createSpy: vi.fn })
+  const plugins = [pinia]
+  if (realMessages) {
+    plugins.push(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } }))
+  }
   const wrapper = mount(SessionPackPurchasePage, {
     shallow: true,
-    global: { plugins: [pinia], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    global: { plugins, stubs: { QPage: { template: '<div><slot /></div>' } } },
   })
   mounted.push(wrapper)
   await flushPromises()
@@ -237,5 +244,20 @@ describe('SessionPackPurchasePage.vue — what a failed purchase says', () => {
 
     expect(wrapper.vm.purchaseError).toBe('booking.packs.purchaseError')
     expect(wrapper.vm.cardDeclined).toBe(false)
+  })
+
+  // skillars-deferred-170 AC3: the server refuses a coach who cannot be paid before any attempt exists.
+  it('a coach who cannot be paid yet says so, not "Purchase failed", and the next try gets a new key', async () => {
+    const { wrapper, store } = await mountPage({ realMessages: true })
+    store.purchasePack.mockRejectedValueOnce(apiFailure('payment.coachStripeNotConfigured'))
+
+    await wrapper.vm.confirmPurchase()
+
+    expect(wrapper.vm.purchaseError).toBe('This coach has not completed their payment setup yet')
+    expect(wrapper.vm.cardDeclined).toBe(false)
+    wrapper.vm.onCardSaved()
+    await wrapper.vm.confirmPurchase()
+    const [first, second] = keysSent(store)
+    expect(second).not.toBe(first)
   })
 })

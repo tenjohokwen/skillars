@@ -333,7 +333,9 @@
       with reference = the pack id, settled on the pack ledger) and is revoked as
       <code>COACH_SUSPENDED</code>. The handler is a no-op if the coach was reinstated meanwhile.
       <code>purchasePack</code> refuses a coach who can't be booked before charging
-      (<code>BookingService.requireBookableCoachStatus</code>).</p>
+      (<code>BookingService.requireBookableCoachStatus</code>), and a coach who can't be paid
+      (<code>PaymentGateway.isCoachPaymentReady</code>, 422 <code>payment.coachStripeNotConfigured</code>) before it
+      writes anything: no attempt row, no Stripe customer, no card change (skillars-deferred-170).</p>
       <p><strong>Pack status</strong> (<code>SessionPackPaymentService.computeStatus</code>, shared by
       <code>CoachSoldPackQueryService</code>) is evaluated in the order <code>REVOKED</code> → <code>EXHAUSTED</code> →
       <code>FROZEN</code> → <code>PAUSED</code> → <code>EXPIRED</code> → <code>ACTIVE</code>. Revoked outranks exhausted
@@ -480,7 +482,7 @@
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/extend</td><td>One-time 30-day extension within the 14-day pre-expiry window</td><td>COACH (owner)</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/session-packs?page&amp;size</td><td>Coach's sold packs (size clamped to 1–100) with status and <code>revokedReason</code>, feeding the Extend action (hidden on a withdrawn pack)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Own pack tiers (active and inactive)</td><td>COACH</td></tr>
-        <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a tier, which deactivates the previous active tier. A race returns 409</td><td>COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a tier, which deactivates the previous active tier. A race returns 409. <code>sessionCount</code> must be a whole JSON number: <code>2.5</code> (or <code>2.0</code>) is a 400 <code>validation.badRequest</code>, not truncated (<code>StrictIntegerDeserializer</code>, skillars-deferred-170)</td><td>COACH</td></tr>
         <tr><td>PATCH</td><td>/api/payment/coaches/me/session-pack-tiers/{tierId}/deactivate</td><td>Deactivate a tier</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>A coach's active tier (404 if none), with <code>validityDays</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/setup-intent</td><td>Create a Stripe SetupIntent (creates the Stripe customer if needed)</td><td>PARENT|PLAYER|COACH</td></tr>

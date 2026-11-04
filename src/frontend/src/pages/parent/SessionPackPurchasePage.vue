@@ -257,7 +257,8 @@ async function confirmPurchase() {
     } else if (outcomeMayHaveCharged(e, code)) {
       keyHeldForUnresolved = true
     } else {
-      // A definite refusal raised before any attempt row existed (403 age gate, 404/409 inactive tier or suspended coach, 400):
+      // A definite refusal raised before any attempt row existed (403 age gate, 404/409 inactive tier or suspended coach,
+      // 422 coach who cannot be paid yet, 400):
       // nothing was charged and nothing is open, so a card save or pack change may mint a fresh key.
       attemptKey = null
       keyHeldForUnresolved = false
