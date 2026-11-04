@@ -67,6 +67,9 @@ public class SessionPackPaymentService {
     static final java.time.Duration EXTENSION_WINDOW = java.time.Duration.ofDays(14);
 
     /** A client purchase-attempt key: UUID-like, bounded so the derived Stripe key stays under 255 chars. */
+    /** A captured fact beats a resolver's inference from absence: the request thread that captured may move NO_CHARGE to these. */
+    private static final Set<Status> OPEN_OR_NO_CHARGE = EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN, Status.UNRECONCILED, Status.NO_CHARGE);
+
     /** AC2: how far before the attempt row Stripe's PaymentIntent listing is widened (same value as ChargeOutcomeReconciler.LOOKUP_SLACK). */
     private static final java.time.Duration LOOKUP_SLACK = java.time.Duration.ofMinutes(10);
 
@@ -222,7 +225,7 @@ public class SessionPackPaymentService {
         // A replayed attempt whose pack is already recorded: return it, charge nothing more.
         Optional<SessionPackPurchase> alreadyRecorded = sessionPackPurchaseRepository.findByStripePaymentIntentId(paymentIntentId);
         if (alreadyRecorded.isPresent()) {
-            markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, Status.OPEN);
+            markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, OPEN_OR_NO_CHARGE);
             return replayedPurchase(alreadyRecorded.get(), playerId, tier);
         }
 
@@ -244,11 +247,11 @@ public class SessionPackPaymentService {
                     + "parentId={} packTierId={}", paymentIntentId, tier.getTotalPrice(), parentId, packTierId, lookupEx);
                 recordReconciliation(paymentIntentId, tier.getTotalPrice(), parentId, packTierId,
                     "pack record failed and intent lookup failed (not refunded): " + lookupEx);
-                markQuietly(attempt, Status.UNRECONCILED, paymentIntentId, Status.OPEN);
+                markQuietly(attempt, Status.UNRECONCILED, paymentIntentId, OPEN_OR_NO_CHARGE);
                 throw new PaymentGatewayException("payment.lifecycleFailure");
             }
             if (winner.isPresent()) {
-                markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, Status.OPEN);
+                markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, OPEN_OR_NO_CHARGE);
                 return replayedPurchase(winner.get(), playerId, tier);
             }
             try {
@@ -259,17 +262,17 @@ public class SessionPackPaymentService {
                 // reconciliation record and the lifecycleFailure wrap. Excludes Error only.
                 log.error("Compensating refund also failed: intentId={}", paymentIntentId, refundEx);
                 recordReconciliation(paymentIntentId, tier.getTotalPrice(), parentId, packTierId, refundEx.toString());
-                markQuietly(attempt, Status.UNRECONCILED, paymentIntentId, Status.OPEN);
+                markQuietly(attempt, Status.UNRECONCILED, paymentIntentId, OPEN_OR_NO_CHARGE);
                 throw new PaymentGatewayException("payment.lifecycleFailure");
             }
             // The row is written BEFORE the exception propagates; a crash between the refund and this write leaves
             // IN_PROGRESS, which a same-key replay or the job resolves from Stripe (the refund is visible there).
-            markQuietly(attempt, Status.REFUNDED, paymentIntentId, Status.OPEN);
+            markQuietly(attempt, Status.REFUNDED, paymentIntentId, OPEN_OR_NO_CHARGE);
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }
 
         // A failed SUCCEEDED write must never fail a response for a pack that exists.
-        markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, Status.OPEN);
+        markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, OPEN_OR_NO_CHARGE);
         if (customerExisted) {
             scheduleSubscriptionCardSync(parentId, previousCard, paymentMethodId);
         }
@@ -326,7 +329,13 @@ public class SessionPackPaymentService {
                 }
                 Resolution resolved = resolveAttempt(attempt.getId());
                 return switch (resolved.status()) {
-                    case SUCCEEDED -> replayedPurchase(resolved.pack(), playerId, tier);
+                    case SUCCEEDED -> {
+                        if (resolved.pack() == null) {
+                            // closed by a concurrent writer whose pack is not visible yet: never hand a null pack to the mapper
+                            throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.attemptUnresolved");
+                        }
+                        yield replayedPurchase(resolved.pack(), playerId, tier);
+                    }
                     case NO_CHARGE, REFUNDED -> throw new PackNoChargeException(null);
                     default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.attemptUnresolved");
                 };

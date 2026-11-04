@@ -708,6 +708,19 @@ class SessionPackPaymentServiceTest {
     }
 
     @Test
+    void purchasePack_successAfterTheResolverWroteNoCharge_isAllowedToMoveNoChargeToSucceeded() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.empty());
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY);
+
+        // proof of capture beats a resolver's inference from absence (fourth review, H1)
+        verify(attemptRepository).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED),
+            eq("pi_test"), org.mockito.ArgumentMatchers.argThat(c -> c.contains(
+                com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE)));
+    }
+
+    @Test
     void purchasePack_declineWithNoCardAttempted_doesNotTouchTheSavedCard() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))

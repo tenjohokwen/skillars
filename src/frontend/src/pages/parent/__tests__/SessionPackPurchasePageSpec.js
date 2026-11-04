@@ -107,6 +107,18 @@ describe('SessionPackPurchasePage.vue — purchase attempt key', () => {
     expect(third).not.toBe(second)
   })
 
+  it('mints a new key after a definite refusal raised before any attempt existed (403 / inactive tier)', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(gatewayError('payment.packTierInactive'))
+
+    await wrapper.vm.confirmPurchase()
+    wrapper.vm.onCardSaved()
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second] = keysSent(store)
+    expect(second).not.toBe(first)
+  })
+
   it('keeps the key and says "still being confirmed" on attemptInProgress / attemptUnresolved', async () => {
     const { wrapper, store } = await mountPage()
     store.purchasePack.mockRejectedValueOnce(statusError(409, 'payment.attemptUnresolved'))

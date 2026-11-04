@@ -215,6 +215,17 @@ const KEY_CLEARING_CODES = [
   'payment.invalidIdempotencyKey',
   'payment.idempotencyKeyReused',
 ]
+// An answer that may have moved money: no answer at all, a 5xx, "still being confirmed", or a 422 that is not a definite refusal.
+function outcomeMayHaveCharged(e, code) {
+  const status = e?.response?.status
+  if (!status || status >= 500) return true
+  if (STILL_CONFIRMING_CODES.includes(code)) return true
+  return (
+    status === 422 &&
+    (code === 'payment.lifecycleFailure' || code === 'payment.chargeOutcomeUnknown')
+  )
+}
+
 const STILL_CONFIRMING_CODES = ['payment.attemptInProgress', 'payment.attemptUnresolved']
 
 function newAttemptKey() {
@@ -243,8 +254,13 @@ async function confirmPurchase() {
     if (KEY_CLEARING_CODES.includes(code)) {
       attemptKey = null
       keyHeldForUnresolved = false
-    } else {
+    } else if (outcomeMayHaveCharged(e, code)) {
       keyHeldForUnresolved = true
+    } else {
+      // A definite refusal raised before any attempt row existed (403 age gate, 404/409 inactive tier or suspended coach, 400):
+      // nothing was charged and nothing is open, so a card save or pack change may mint a fresh key.
+      attemptKey = null
+      keyHeldForUnresolved = false
     }
     if (STILL_CONFIRMING_CODES.includes(code)) {
       purchaseError.value = t('booking.packs.purchasePending')
