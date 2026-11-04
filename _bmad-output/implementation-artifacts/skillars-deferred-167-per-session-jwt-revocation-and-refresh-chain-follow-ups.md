@@ -1,6 +1,6 @@
 # Story skillars-deferred-167: per-session JWT revocation and the refresh-chain follow-ups
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-03 (/bmad-create-story), then REVISED the same day after /mto-story-review (findings
 H1, H2, H3, M2, M4, the clock hook and the AC8 overclaim all applied; see the Change Log). Owner-requested
