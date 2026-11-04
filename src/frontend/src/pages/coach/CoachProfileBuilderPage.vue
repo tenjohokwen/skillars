@@ -109,6 +109,12 @@ const authStore = useAuthStore()
 const builderErrorMessage = computed(() => {
   const errorMsg = store.error?.response?.data?.errorMsg
   if (!errorMsg) return t('error.generic')
+  // skillars-deferred-168: a rejected step-3 pack comes back as a nested field error
+  // (sessionPacks[0].totalPrice, ...) under the generic "Invalid data" key; show its own message.
+  const packFieldError = (store.error?.response?.data?.fieldErrors || []).find(
+    (fe) => fe?.field === 'sessionPacks' || fe?.field?.startsWith('sessionPacks['),
+  )
+  if (packFieldError?.errorMsg?.message) return packFieldError.errorMsg.message
   if (errorMsg.errorKey && te(errorMsg.errorKey)) return t(errorMsg.errorKey)
   return errorMsg.message || t('error.generic')
 })

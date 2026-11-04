@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionEntitlementPort;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileNotFoundException;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
+import com.softropic.skillars.platform.marketplace.contract.CoachSessionPackPort;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
@@ -41,8 +42,6 @@ import com.softropic.skillars.platform.marketplace.repo.CoachSpecialty;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
-import com.softropic.skillars.platform.marketplace.repo.SessionPack;
-import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
 import com.softropic.skillars.platform.security.contract.AgeTier;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import jakarta.persistence.EntityManager;
@@ -84,7 +83,6 @@ public class CoachProfileService {
     private final CoachSpecialtyRepository coachSpecialtyRepository;
     private final CoachAgeGroupRepository coachAgeGroupRepository;
     private final CoachPricingRepository coachPricingRepository;
-    private final SessionPackRepository sessionPackRepository;
     private final CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     private final CoachSubscriptionRepository coachSubscriptionRepository;
     private final ContactDetailSanitizer contactDetailSanitizer;
@@ -96,6 +94,7 @@ public class CoachProfileService {
     private final PessimisticLockRetryer lockRetryer;
     private final FileStorageService fileStorageService;
     private final CoachSubscriptionEntitlementPort coachSubscriptionEntitlementPort;
+    private final CoachSessionPackPort coachSessionPackPort;
 
     /**
      * The timezones the profile builder is allowed to offer a coach.
@@ -284,21 +283,13 @@ public class CoachProfileService {
         pricing.setSessionDurationMinutes(req.sessionDurationMinutes());
         coachPricingRepository.save(pricing);
 
+        // skillars-deferred-168: the pack is the coach's purchasable offer (their active session pack tier),
+        // written through the payment module in THIS transaction, so a rejected or lost-race pack also rolls
+        // back the pricing above. null leaves the offer untouched; an empty list withdraws it.
         if (req.sessionPacks() != null) {
-            // Same flush-before-reinsert fix as saveStep2, for the same reason: uq_session_pack is
-            // (coach_id, session_count), and a resubmission that repeats a session count would
-            // otherwise insert before the stale row is deleted.
-            sessionPackRepository.deleteByCoachId(profile.getId());
-            entityManager.flush();
-            List<SessionPack> packs = req.sessionPacks().stream().map(sp -> {
-                SessionPack pack = new SessionPack();
-                pack.setCoachId(profile.getId());
-                pack.setSessionCount(sp.sessionCount());
-                pack.setTotalPrice(sp.totalPrice());
-                pack.setLabel(sp.label());
-                return pack;
-            }).toList();
-            sessionPackRepository.saveAll(packs);
+            coachSessionPackPort.replaceActivePack(profile.getId(), req.sessionPacks().stream()
+                .findFirst()
+                .map(sp -> new CoachSessionPackPort.PackSpec(sp.sessionCount(), sp.totalPrice(), sp.label())));
         }
 
         return new ProfileBuilderStepResponse(profile.getId(), 3, 4);
@@ -400,9 +391,7 @@ public class CoachProfileService {
             .stream().map(CoachSpecialty::getSkill).toList();
         List<AgeTier> ageGroups = coachAgeGroupRepository.findByCoachId(profile.getId())
             .stream().map(CoachAgeGroup::getAgeTier).toList();
-        List<SessionPackDto> sessionPacks = sessionPackRepository.findByCoachId(profile.getId())
-            .stream().map(sp -> new SessionPackDto(sp.getSessionCount(), sp.getTotalPrice(), "EUR", sp.getLabel()))
-            .toList();
+        List<SessionPackDto> sessionPacks = coachSessionPackPort.findActivePack(profile.getId()).stream().toList();
         List<CoachAvailabilityWindowDto> windows = coachAvailabilityWindowRepository
             .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId())
             .stream().map(w -> new CoachAvailabilityWindowDto(w.getDayOfWeek(), w.getStartTime(), w.getEndTime(), w.getCanonicalTimezone()))
@@ -619,11 +608,8 @@ public class CoachProfileService {
                 CoachPublicProfileFactsRepository.KIND_SAFEGUARDING_VALID_UNTIL).stream()
             .findFirst().map(LocalDate::parse).orElse(null);
 
-        // (3) session packs
-        List<SessionPackDto> sessionPacks = sessionPackRepository.findByCoachId(profile.getId())
-            .stream()
-            .map(sp -> new SessionPackDto(sp.getSessionCount(), sp.getTotalPrice(), "EUR", sp.getLabel()))
-            .toList();
+        // (3) session packs: the coach's one purchasable offer (skillars-deferred-168), 0 or 1 element
+        List<SessionPackDto> sessionPacks = coachSessionPackPort.findActivePack(profile.getId()).stream().toList();
 
         // (4) media gallery
         List<CoachMediaItemDto> mediaGallery = coachMediaItemRepository

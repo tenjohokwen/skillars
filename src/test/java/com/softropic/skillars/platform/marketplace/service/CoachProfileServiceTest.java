@@ -7,11 +7,15 @@ import com.softropic.skillars.infrastructure.security.AuthorizationException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileSelfResponse;
+import com.softropic.skillars.platform.marketplace.contract.CoachSessionPackPort;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionEntitlementPort;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep1Request;
+import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep3Request;
+import com.softropic.skillars.platform.marketplace.contract.SessionPackDto;
 import com.softropic.skillars.platform.marketplace.contract.ProfileBuilderStep4Request;
+import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroup;
 import com.softropic.skillars.platform.marketplace.repo.CoachAgeGroupRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindow;
 import com.softropic.skillars.platform.marketplace.repo.CoachAvailabilityWindowRepository;
@@ -22,10 +26,10 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachPublicProfileFactsRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachReliabilityStrikeRepository;
+import com.softropic.skillars.platform.marketplace.repo.CoachSpecialty;
 import com.softropic.skillars.platform.marketplace.repo.CoachSpecialtyRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
-import com.softropic.skillars.platform.marketplace.repo.SessionPackRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import org.junit.jupiter.api.BeforeEach;
@@ -67,7 +71,6 @@ class CoachProfileServiceTest {
     @Mock private CoachSpecialtyRepository coachSpecialtyRepository;
     @Mock private CoachAgeGroupRepository coachAgeGroupRepository;
     @Mock private CoachPricingRepository coachPricingRepository;
-    @Mock private SessionPackRepository sessionPackRepository;
     @Mock private CoachAvailabilityWindowRepository coachAvailabilityWindowRepository;
     @Mock private CoachSubscriptionRepository coachSubscriptionRepository;
     @Mock private ContactDetailSanitizer contactDetailSanitizer;
@@ -79,6 +82,7 @@ class CoachProfileServiceTest {
     @Mock private PessimisticLockRetryer lockRetryer;
     @Mock private FileStorageService fileStorageService;
     @Mock private CoachSubscriptionEntitlementPort coachSubscriptionEntitlementPort;
+    @Mock private CoachSessionPackPort coachSessionPackPort;
 
     @InjectMocks
     private CoachProfileService service;
@@ -151,7 +155,7 @@ class CoachProfileServiceTest {
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
         when(coachSpecialtyRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
         when(coachAgeGroupRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
-        when(sessionPackRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
+        when(coachSessionPackPort.findActivePack(COACH_ID)).thenReturn(Optional.empty());
         when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
             .thenReturn(List.of());
 
@@ -173,7 +177,7 @@ class CoachProfileServiceTest {
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
         when(coachSpecialtyRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
         when(coachAgeGroupRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
-        when(sessionPackRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
+        when(coachSessionPackPort.findActivePack(COACH_ID)).thenReturn(Optional.empty());
         when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
             .thenReturn(List.of());
 
@@ -193,7 +197,7 @@ class CoachProfileServiceTest {
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.of(pricing));
         when(coachSpecialtyRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
         when(coachAgeGroupRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
-        when(sessionPackRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
+        when(coachSessionPackPort.findActivePack(COACH_ID)).thenReturn(Optional.empty());
         when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
             .thenReturn(List.of());
 
@@ -210,7 +214,7 @@ class CoachProfileServiceTest {
         when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
         when(coachSpecialtyRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
         when(coachAgeGroupRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
-        when(sessionPackRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
+        when(coachSessionPackPort.findActivePack(COACH_ID)).thenReturn(Optional.empty());
         when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
             .thenReturn(List.of());
 
@@ -441,5 +445,71 @@ class CoachProfileServiceTest {
 
         verify(coachProfileRepository).save(profile);
         assertThat(profile.getPhotoUrl()).isNull();
+    }
+
+    // ---- skillars-deferred-168: step 3's pack is the coach's purchasable offer, through the port ----
+
+    private void stubStep3Prerequisites() {
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(draftProfile()));
+        when(coachSpecialtyRepository.findByCoachId(COACH_ID)).thenReturn(List.of(new CoachSpecialty()));
+        when(coachAgeGroupRepository.findByCoachId(COACH_ID)).thenReturn(List.of(new CoachAgeGroup()));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
+    }
+
+    @Test
+    void saveStep3_onePack_setsTheOfferThroughThePort() {
+        stubStep3Prerequisites();
+
+        service.saveStep3(USER_ID, new ProfileBuilderStep3Request(new BigDecimal("40"), null,
+            List.of(new ProfileBuilderStep3Request.SessionPackRequest(10, new BigDecimal("380"), "Season 10"))));
+
+        verify(coachSessionPackPort).replaceActivePack(COACH_ID,
+            Optional.of(new CoachSessionPackPort.PackSpec(10, new BigDecimal("380"), "Season 10")));
+    }
+
+    @Test
+    void saveStep3_packWithoutLabel_passesTheBlankLabelOnForTheDefault() {
+        stubStep3Prerequisites();
+
+        service.saveStep3(USER_ID, new ProfileBuilderStep3Request(new BigDecimal("40"), null,
+            List.of(new ProfileBuilderStep3Request.SessionPackRequest(5, new BigDecimal("180"), null))));
+
+        verify(coachSessionPackPort).replaceActivePack(COACH_ID,
+            Optional.of(new CoachSessionPackPort.PackSpec(5, new BigDecimal("180"), null)));
+    }
+
+    @Test
+    void saveStep3_emptyPackList_withdrawsTheOffer() {
+        stubStep3Prerequisites();
+
+        service.saveStep3(USER_ID, new ProfileBuilderStep3Request(new BigDecimal("40"), null, List.of()));
+
+        verify(coachSessionPackPort).replaceActivePack(COACH_ID, Optional.empty());
+    }
+
+    @Test
+    void saveStep3_nullPackList_leavesTheOfferUntouched() {
+        stubStep3Prerequisites();
+
+        service.saveStep3(USER_ID, new ProfileBuilderStep3Request(new BigDecimal("40"), null, null));
+
+        verify(coachSessionPackPort, never()).replaceActivePack(any(), any());
+        verify(coachPricingRepository).save(any());
+    }
+
+    @Test
+    void getOwnProfile_sessionPacksComeFromTheActiveOffer() {
+        when(coachProfileRepository.findByUserId(USER_ID)).thenReturn(Optional.of(draftProfile()));
+        when(coachPricingRepository.findByCoachId(COACH_ID)).thenReturn(Optional.empty());
+        when(coachSpecialtyRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
+        when(coachAgeGroupRepository.findByCoachId(COACH_ID)).thenReturn(List.of());
+        SessionPackDto offer = new SessionPackDto(10, new BigDecimal("380.00"), "EUR", "Season 10");
+        when(coachSessionPackPort.findActivePack(COACH_ID)).thenReturn(Optional.of(offer));
+        when(coachAvailabilityWindowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(COACH_ID))
+            .thenReturn(List.of());
+
+        CoachProfileSelfResponse response = service.getOwnProfile(USER_ID);
+
+        assertThat(response.sessionPacks()).containsExactly(offer);
     }
 }

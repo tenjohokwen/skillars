@@ -1,0 +1,64 @@
+-- skillars-deferred-168 (ledger: "Deferred from: Pitchside UI tests, spec ONB-06"): turn the packs coaches
+-- entered in the profile builder into the purchasable offer they always looked like.
+--
+-- Why: builder step 3 (and the profile's "Edit pricing" dialog) wrote marketplace.session_packs, which the
+-- public profile advertised with a "Buy sessions" button, while the purchase page and the purchase itself
+-- read payment.session_pack_tiers, which only the "My Session Pack Offer" page wrote. Nothing connected the
+-- two, so a wizard-only coach advertised packs nobody could buy. From this release the coach's ONE active
+-- payment.session_pack_tiers row is the single source of truth: step 3 writes it through
+-- marketplace.contract.CoachSessionPackPort, and no code reads or writes marketplace.session_packs.
+--
+-- What this backfills, for each coach that has session_packs rows:
+--  - only coaches with NO session_pack_tiers row at all. A coach with only inactive rows withdrew their
+--    offer on purpose ("Withdraw offer"), and must not get it back; a coach with an active row already sells
+--    something, and that row now also becomes what their profile shows.
+--  - only coaches not erased (coach_profiles.recap_data_erased_at IS NULL, the V166 tombstone).
+--  - one tier per coach, from their lowest-session_count VALID row (the cheapest entry point). Valid means
+--    within the tier's own bounds, which the builder never enforced (its nested pack validation did not run
+--    before this story): session_count 1..100, total_price 0.01..50000.00, and a per-session share that
+--    rounds to more than 0.00 (chk_spt_price_per_session_positive).
+--  - price_per_session = round(total_price / session_count, 2), as SessionPackPaymentService.createTier
+--    computes it (HALF_UP; PostgreSQL's numeric round() rounds half away from zero, identical for positives).
+--  - label: NULL ("no label"; the profile shows its own localized "N sessions"). The builder never ran
+--    @NoContactDetails on pack labels, and these rows are about to become a public, purchasable offer on a
+--    platform that bans off-platform contact. A regex cannot tell 'Season 10' from 'insta: coach_x' or 'name at
+--    gmail dot com', so no legacy free text is carried over (skillars-deferred-168 /pr-review V4). A coach who
+--    wants a label sets one on the profile or the "My Session Pack Offer" page, where it is validated.
+--    session_pack_tiers.label was NOT NULL, so this migration first drops that constraint: since this story a pack
+--    set from the builder may have no label, and storing a stand-in string instead would be indistinguishable from
+--    a coach who typed that string (/pr-review round 2, V1). Widening a column to nullable is metadata-only.
+-- Everything else in session_packs (a coach's other packs, invalid rows) is discarded: it was never
+-- purchasable. The table itself stays for one release (migration-conventions.md rule 2: a DROP ships only
+-- in a release after the one that removed its last reader); the DROP is a filed follow-up in deferred-work.md.
+--
+-- Size: session_packs holds at most 5 rows per coach (the old @Size(max = 5)), so this is one small
+-- INSERT ... SELECT, not a chunked backfill. Prod is not live (dev/uat only, as V186-V224 record in the
+-- provisioning checklist); UAT coaches can re-enter a discarded pack on their "My Session Pack Offer" page.
+--
+-- Migration conventions (docs/deployment/migration-conventions.md):
+--  - Additive only: one metadata-only DROP NOT NULL on a label column nothing requires, then inserts; no
+--    UPDATE/DELETE of existing rows, no DROP of a table, column, index or constraint. Like V186-V224 it writes the
+--    widened column in the same release ("prod is not live").
+--  - Rule 7: purchases and the tier page write session_pack_tiers, so lock_timeout makes this fail fast
+--    instead of queueing behind a long transaction.
+SET LOCAL lock_timeout = '5s';
+
+ALTER TABLE payment.session_pack_tiers ALTER COLUMN label DROP NOT NULL;
+
+
+INSERT INTO payment.session_pack_tiers (coach_id, label, session_count, total_price, price_per_session, is_active)
+SELECT DISTINCT ON (sp.coach_id)
+       sp.coach_id,
+       NULL,
+       sp.session_count,
+       sp.total_price,
+       round(sp.total_price / sp.session_count, 2),
+       true
+FROM marketplace.session_packs sp
+JOIN marketplace.coach_profiles cp ON cp.id = sp.coach_id
+WHERE cp.recap_data_erased_at IS NULL
+  AND sp.session_count BETWEEN 1 AND 100
+  AND sp.total_price BETWEEN 0.01 AND 50000.00
+  AND round(sp.total_price / sp.session_count, 2) > 0
+  AND NOT EXISTS (SELECT 1 FROM payment.session_pack_tiers t WHERE t.coach_id = sp.coach_id)
+ORDER BY sp.coach_id, sp.session_count, sp.id;
