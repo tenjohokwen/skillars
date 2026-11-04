@@ -1,6 +1,6 @@
 # Story skillars-deferred-170: Session-pack tier follow-ups (drop the old table, tier caption, purchase readiness order, fractional counts)
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand). Owner-requested bundle of the
      four follow-ups skillars-deferred-168 (PR #436, merged 47180ea7) left in deferred-work.md, section
@@ -476,3 +476,4 @@ Claude Opus 5.5 (claude-opus-5-5)
   AC6 done; status -> review. T6 (/pr-review, PR) next.
 - 2026-11-04: rebased onto master `ac493f1a` (#445, ledger only); /pr-review at `ff67a4d7`: general and security
   reviewers both clean (0 findings). PR #446 opened.
+- 2026-11-04: PR #446 merged as debd4dca (PR CI and master CI green); status -> done.
