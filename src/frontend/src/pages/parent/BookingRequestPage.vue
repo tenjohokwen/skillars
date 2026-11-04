@@ -486,6 +486,17 @@ watch(
   { immediate: true },
 )
 
+// The header's child switcher changes playerStore.activePlayerId while this page stays mounted. A pack
+// chosen (or preselected) for the previous child is not this child's: the backend refuses it
+// (packPlayerMismatch). Clear the choice and load this child's packs; defaultPackId stays undefined
+// until they arrive (sessionPacksPlayerId still names the previous child), then sets the new default.
+watch(playerId, async (id, previous) => {
+  if (String(id) === String(previous)) return
+  selectedPackId.value = null
+  packChoiceTouched.value = false
+  if (ownListsLoaded.value && id) await bookingStore.loadPlayerPacks(id)
+})
+
 // fix/booking-price-and-excused-race: only an explicit false blocks — an unknown (null) state must not
 // disable booking; the backend refusal (booking.coachPricingUnavailable) is the real guard.
 const coachUnpriced = computed(() => bookingStore.coachPriced === false)
