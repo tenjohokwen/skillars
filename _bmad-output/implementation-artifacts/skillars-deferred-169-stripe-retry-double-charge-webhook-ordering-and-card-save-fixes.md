@@ -415,50 +415,50 @@ defects after five, raise it rather than looping silently.
 
 ## Tasks / Subtasks
 
-- [ ] Task 0: confirm this branch is current (`git fetch`, merge `origin/master`), and **re-derive the migration number** (Numbering); re-locate anything not listed there by symbol; check whether `skillars-deferred-170` has started and agree the `purchasePack` ordering
+- [x] Task 0: confirm this branch is current (`git fetch`, merge `origin/master`), and **re-derive the migration number** (Numbering); re-locate anything not listed there by symbol; check whether `skillars-deferred-170` has started and agree the `purchasePack` ordering
 - [ ] Task 1: RS06 attempt record and index (AC1, AC1a)
-  - [ ] Migration for `payment.session_pack_purchase_attempts` — additive; inline `UNIQUE`; the **partial unique index** on open attempts per parent; `SET LOCAL lock_timeout`; follow `migration-conventions.md`;
+  - [x] Migration for `payment.session_pack_purchase_attempts` — additive; inline `UNIQUE`; the **partial unique index** on open attempts per parent; `SET LOCAL lock_timeout`; follow `migration-conventions.md`;
         `mvn -q -Dtest=MigrationConventionLintTest test` (add `allow-blocking-index` only if it flags the index, with the stated reason)
-  - [ ] Order in `purchasePack`: gates → key lookup → tier/coach gates (new rows only) → snapshot → insert (server-minted key if absent) → card write → charge; the two 409s and the open-vs-terminal mismatch rules
-  - [ ] Compare-and-set on every status write; the proof-of-capture exception for `NO_CHARGE`; unclassified `RuntimeException` → `UNKNOWN`
-  - [ ] Pre-flight rejections inside `charge()` and `getOrCreateStripeCustomer` failures → `NO_CHARGE`; a failed `SUCCEEDED` write never fails the response
+  - [x] Order in `purchasePack`: gates → key lookup → tier/coach gates (new rows only) → snapshot → insert (server-minted key if absent) → card write → charge; the two 409s and the open-vs-terminal mismatch rules
+  - [x] Compare-and-set on every status write; the proof-of-capture exception for `NO_CHARGE`; unclassified `RuntimeException` → `UNKNOWN`
+  - [x] Pre-flight rejections inside `charge()` and `getOrCreateStripeCustomer` failures → `NO_CHARGE`; a failed `SUCCEEDED` write never fails the response
   - [ ] ITs: concurrent different keys (the index refuses the second); concurrent same key; a keyless request while a keyed one is open; replay after the tier is deactivated; a stale CAS
 - [ ] Task 1b: AC2 resolution (same-key replay and the job)
-  - [ ] Existing-pack check first; no-customer-row → `NO_CHARGE` (re-query the repository); `createdAfter = created_at − slack`; classification order as an invariant (a `requires_payment_method` intent never reaches `getRefundableAmount`)
-  - [ ] Terminal rule after the key window; minimum age from a `ConfigBounds` key; resolved-captured runs `scheduleSubscriptionCardSync` and resolves the `stripe_refund_failures` row; transitions out of the `:154-186` catch
-  - [ ] Absence rule: `NO_CHARGE` from an empty lookup only at `age ≥ absence age` (second `ConfigBounds` key); null-charge `succeeded` intent stays `UNKNOWN`; job never refunds on a failed `createPurchase`; operator close-out in the runbook
+  - [x] Existing-pack check first; no-customer-row → `NO_CHARGE` (re-query the repository); `createdAfter = created_at − slack`; classification order as an invariant (a `requires_payment_method` intent never reaches `getRefundableAmount`)
+  - [x] Terminal rule after the key window; minimum age from a `ConfigBounds` key; resolved-captured runs `scheduleSubscriptionCardSync` and resolves the `stripe_refund_failures` row; transitions out of the `:154-186` catch
+  - [x] Absence rule: `NO_CHARGE` from an empty lookup only at `age ≥ absence age` (second `ConfigBounds` key); null-charge `succeeded` intent stays `UNKNOWN`; job never refunds on a failed `createPurchase`; operator close-out in the runbook
   - [ ] ITs: stalled original thread (A captures after the job's absence verdict and B is open); a CAS to `UNRECONCILED` that hits the index; crash between refund and outcome write; replay of `UNRECONCILED`; "not found" inside the minimum age stays `UNKNOWN`; partial refund
-  - [ ] Extend `StubPaymentGateway` (`src/test/.../config/StubPaymentGateway.java` — it never declines and `findChargeByIdempotencyKey` returns empty); mock the new repository in `SessionPackPaymentServiceTest`
+  - [x] Extend `StubPaymentGateway` (`src/test/.../config/StubPaymentGateway.java` — it never declines and `findChargeByIdempotencyKey` returns empty); mock the new repository in `SessionPackPaymentServiceTest`
         (`@InjectMocks`); add the new spies as **shared fields** in `AbstractIntegrationTest` (a per-class spy changes the context key; ceiling 17); backdate `created_at` via `commitWrite` (`ClockProvider` does not reach server threads)
-- [ ] Task 2: RS06 no-charge signal + frontend (AC1b)
-  - [ ] Pack-service subclass/code for no-charge; gateway decline code **unchanged** (`StripePaymentGatewayTest:865-872`)
-  - [ ] `SessionPackPurchasePage.vue`: read `errorMsg.errorKey` (422) and `errorMsg.message` (409/400); clear/keep rules per AC1b; i18n for the two new 409s; `:188` stops clearing on every `e?.response`
-  - [ ] **`SessionPackPurchasePageSpec.js:61-71` asserts the defect** and changes deliberately; add: key kept on an unknown outcome and on `attemptUnresolved`, cleared on the no-charge signal and on `idempotencyKeyReused`
-- [ ] Task 3: the job, the gauge and the diagnostics (AC3)
-  - [ ] One ShedLock job, 5-minute cadence, four duties each in its own `try/catch`; `lockAtMostFor` sized per `scheduler-lock-tuning.md`; non-`@Transactional`
-  - [ ] `OperationalBacklogMetrics` branch (`pack_attempts`) + a Grafana alert mirroring `grafana-alerts.yml :771` + the `monitoring.md` heading; run `AlertDocumentationParityTest`
-  - [ ] Log-first catch at `:144`; `[PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN] key=value` for the dashboard panel only
+- [x] Task 2: RS06 no-charge signal + frontend (AC1b)
+  - [x] Pack-service subclass/code for no-charge; gateway decline code **unchanged** (`StripePaymentGatewayTest:865-872`)
+  - [x] `SessionPackPurchasePage.vue`: read `errorMsg.errorKey` (422) and `errorMsg.message` (409/400); clear/keep rules per AC1b; i18n for the two new 409s; `:188` stops clearing on every `e?.response`
+  - [x] **`SessionPackPurchasePageSpec.js:61-71` asserts the defect** and changes deliberately; add: key kept on an unknown outcome and on `attemptUnresolved`, cleared on the no-charge signal and on `idempotencyKeyReused`
+- [x] Task 3: the job, the gauge and the diagnostics (AC3)
+  - [x] One ShedLock job, 5-minute cadence, four duties each in its own `try/catch`; `lockAtMostFor` sized per `scheduler-lock-tuning.md`; non-`@Transactional`
+  - [x] `OperationalBacklogMetrics` branch (`pack_attempts`) + a Grafana alert mirroring `grafana-alerts.yml :771` + the `monitoring.md` heading; run `AlertDocumentationParityTest`
+  - [x] Log-first catch at `:144`; `[PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN] key=value` for the dashboard panel only
 - [ ] Task 4: RS05 park-and-reapply (AC4, AC5)
-  - [ ] Migration for `payment.stripe_pending_subscription_events` (`UNIQUE(event_id)`, no FK)
-  - [ ] Park in `REQUIRES_NEW` on the routed pool via a separate bean, `ON CONFLICT DO NOTHING`; `handleEventAtomically` returns a signal; post-commit re-read in `processWebhook` (also when the park failed), `try/catch`; `DELETE … RETURNING` claim in the apply transaction
-  - [ ] Coach **and** player (`subscribePlayer:422-460`, `persistPlayerSubscription:489-`), `updated` **and** `deleted`; store extracted fields; drain after the `isEmpty()` check in its own `try/catch`
+  - [x] Migration for `payment.stripe_pending_subscription_events` (`UNIQUE(event_id)`, no FK)
+  - [x] Park in `REQUIRES_NEW` on the routed pool via a separate bean, `ON CONFLICT DO NOTHING`; `handleEventAtomically` returns a signal; post-commit re-read in `processWebhook` (also when the park failed), `try/catch`; `DELETE … RETURNING` claim in the apply transaction
+  - [x] Coach **and** player (`subscribePlayer:422-460`, `persistPlayerSubscription:489-`), `updated` **and** `deleted`; store extracted fields; drain after the `isEmpty()` check in its own `try/catch`
   - [ ] ITs: the AC4 interleaving (both orders — needs a hook on `PaymentCoachSubscriptionRepository.findByStripeSubscriptionId`); out-of-order parked events; deleted-then-older-update; a failed park does not trigger a Stripe retry; a throwing post-commit step leaves the park row for the job
   - [ ] Confirm `SubscriptionServiceStripeReconciliationIT :91/:112` pass **unchanged**
-- [ ] Task 5: RS07 superseded proration (AC6, AC7)
-  - [ ] Migration for `payment.subscription_upgrade_reconciliations` (FK-free, `latest_invoice_id`); `[SUBSCRIPTION_UPGRADE_UNGRANTED] key=value` at `error` **first**, metric, then a best-effort `REQUIRES_NEW` insert on the routed pool that cannot fail the request; tag into the `MoneyIntegrityEvent` regex and runbook
-  - [ ] `SubscriptionEntitlementIntegrityTest.item9…:562-568` verifies `never()).save(any())` on `paymentCoachSubscriptionRepository` only — a write to a different repository does not trip it; the realistic failure is an NPE from an un-mocked new dependency under `@InjectMocks`
-  - [ ] Keep `ALWAYS_INVOICE` + `ERROR_IF_INCOMPLETE` (`StripeClient.java:309-311`)
-- [ ] Task 6: RS09 declined-card revert (AC8, AC9)
-  - [ ] Conditional-update repository method with `@Modifying(flushAutomatically = true, clearAutomatically = true)` + `@Transactional`; skip when `attempted_card` is null; revert **before** writing `NO_CHARGE`; no revert on `UNKNOWN`/`UNRECONCILED`; first-time payer → null
-  - [ ] Tests: decline with X, retry with X succeeds, sync fires (correction 3); a first-time payer's retry fires the sync
-  - [ ] Remove the dead local `customer` at `:140` (assigned, never read)
-  - [ ] Completion Notes: the shipped UI never sends a card here; the `/save-payment-method` door and AC8(d)/(e) are out of scope
-- [ ] Task 7: RS08 pause date (AC10)
-  - [ ] `SessionPackDashboardPage.vue:313` → local midnight; refresh the comment at `:271`
-  - [ ] Add a regression test to `SessionPackDashboardPageSpec.js` (nothing existing changes; the assertion at `:180` checks the notify message, not the instant)
-  - [ ] Reuse the idiom at `AvailabilityManagerPage.vue:192` / `WeeklyCalendar.vue:79`; no shared util. The DST-aware `zonedMidnightMs` (`BookingRequestPage.vue:554`, page-local, docblock `:544-553`) is only needed for the coach-zone variant AC10 puts out of scope
+- [x] Task 5: RS07 superseded proration (AC6, AC7)
+  - [x] Migration for `payment.subscription_upgrade_reconciliations` (FK-free, `latest_invoice_id`); `[SUBSCRIPTION_UPGRADE_UNGRANTED] key=value` at `error` **first**, metric, then a best-effort `REQUIRES_NEW` insert on the routed pool that cannot fail the request; tag into the `MoneyIntegrityEvent` regex and runbook
+  - [x] `SubscriptionEntitlementIntegrityTest.item9…:562-568` verifies `never()).save(any())` on `paymentCoachSubscriptionRepository` only — a write to a different repository does not trip it; the realistic failure is an NPE from an un-mocked new dependency under `@InjectMocks`
+  - [x] Keep `ALWAYS_INVOICE` + `ERROR_IF_INCOMPLETE` (`StripeClient.java:309-311`)
+- [x] Task 6: RS09 declined-card revert (AC8, AC9)
+  - [x] Conditional-update repository method with `@Modifying(flushAutomatically = true, clearAutomatically = true)` + `@Transactional`; skip when `attempted_card` is null; revert **before** writing `NO_CHARGE`; no revert on `UNKNOWN`/`UNRECONCILED`; first-time payer → null
+  - [x] Tests: decline with X, retry with X succeeds, sync fires (correction 3); a first-time payer's retry fires the sync
+  - [x] Remove the dead local `customer` at `:140` (assigned, never read)
+  - [x] Completion Notes: the shipped UI never sends a card here; the `/save-payment-method` door and AC8(d)/(e) are out of scope
+- [x] Task 7: RS08 pause date (AC10)
+  - [x] `SessionPackDashboardPage.vue:313` → local midnight; refresh the comment at `:271`
+  - [x] Add a regression test to `SessionPackDashboardPageSpec.js` (nothing existing changes; the assertion at `:180` checks the notify message, not the instant)
+  - [x] Reuse the idiom at `AvailabilityManagerPage.vue:192` / `WeeklyCalendar.vue:79`; no shared util. The DST-aware `zonedMidnightMs` (`BookingRequestPage.vue:554`, page-local, docblock `:544-553`) is only needed for the coach-zone variant AC10 puts out of scope
 - [ ] Task 8: eval case promotion (AC11): rename file + `id`, then the post-merge `fix_merge` chore; ledger deletions and new entries (AC12)
-- [ ] Task 9: docs, config keys, registrations, erasure (AC13) — including the erasure null-out and its IT
+- [x] Task 9: docs, config keys, registrations, erasure (AC13) — including the erasure null-out and its IT
 - [ ] Task 10: `/pr-review` (AC14)
 
 ## Dev Notes
