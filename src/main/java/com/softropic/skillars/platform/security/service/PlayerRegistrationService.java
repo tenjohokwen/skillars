@@ -88,7 +88,8 @@ public class PlayerRegistrationService {
         }
         // Email or phone already on an account: answer exactly like a successful registration and
         // tell the existing account's owner instead (no enumeration oracle).
-        if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, "player",
+        if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, rateLimitingService,
+                "player",
                 req.email(), req.phone(), req.password())) {
             return;
         }

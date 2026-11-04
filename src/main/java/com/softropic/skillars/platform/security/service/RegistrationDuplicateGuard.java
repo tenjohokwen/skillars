@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.service;
 
+import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
@@ -9,6 +10,7 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import static net.logstash.logback.argument.StructuredArguments.kv;
 
@@ -33,6 +35,14 @@ final class RegistrationDuplicateGuard {
     // GdprErasureService's tombstone address shape: an erased account keeps its row but is no one's.
     private static final String ERASED_EMAIL_DOMAIN = "@erased.io";
 
+    // Per existing account, across all three flows and every IP: the register endpoints' own limits
+    // are per IP, so without this a pool of IPs could flood one inbox with notices (the resend path's
+    // per-email bucket guards the same thing). Exhaustion skips the notice silently; the response
+    // stays the same, so the limit is no oracle either.
+    static final String NOTICE_LIMIT_KEY = "registration_duplicate_notice";
+    static final long NOTICE_CAPACITY = 2;
+    static final long NOTICE_WINDOW_MINUTES = 60;
+
     private RegistrationDuplicateGuard() {}
 
     /**
@@ -41,10 +51,13 @@ final class RegistrationDuplicateGuard {
      *     anything; {@code false} if the caller should go on and create the account.
      */
     static boolean handledAsDuplicate(UserRepository userRepository, PasswordEncoder passwordEncoder,
-                                      ApplicationEventPublisher publisher, String flow,
+                                      ApplicationEventPublisher publisher, RateLimitingService rateLimitingService,
+                                      String flow,
                                       String email, String phone, String rawPassword) {
         String reason = "email";
-        Optional<User> existing = userRepository.findOneByEmail(email);
+        // login too: the legacy facade stored login as typed and email lowercased, and the new row's
+        // login (= email) would hit user_login_key, an error only an existing account produces.
+        Optional<User> existing = userRepository.findOneByEmail(email).or(() -> userRepository.findOneByLogin(email));
         if (existing.isEmpty() && phone != null && !phone.isBlank()) {
             reason = "phone";
             existing = userRepository.findOneByPhoneNumber(phone);
@@ -63,6 +76,10 @@ final class RegistrationDuplicateGuard {
 
         if (user.isLocked() && user.getEmail() != null && user.getEmail().endsWith(ERASED_EMAIL_DOMAIN)) {
             // A GDPR-erased tombstone: nobody receives mail there, so there is no one to tell.
+            return true;
+        }
+        if (!rateLimitingService.tryConsume(String.valueOf(user.getId()), NOTICE_LIMIT_KEY, NOTICE_CAPACITY,
+                NOTICE_WINDOW_MINUTES, TimeUnit.MINUTES)) {
             return true;
         }
         publisher.publishEvent(new RegistrationDuplicateAttemptEvent(
