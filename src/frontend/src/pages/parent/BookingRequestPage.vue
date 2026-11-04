@@ -464,16 +464,19 @@ function packIsUsable(p, start) {
 // (null) was always preselected: a family that had just bought a pack and submitted without touching
 // the radio was charged by card on the coach's accept, with its credits left unused.
 //
-// Only once the inputs are this player's and loaded: the store may still hold another child's packs
-// from an earlier page, and a failed bookings fetch would hide reservations.
-// `undefined` means "not known yet" (loading, or another player's packs): the watcher below then
-// leaves the selection alone. Returning null there would flip an already-preselected pack back to
-// "Per session" every time a list refreshes, and a submit in that moment would charge the card.
+// Only once this page has loaded its own packs and bookings for this player: the store may still hold
+// lists from an earlier page (another child's packs, or this child's before a pack was used up).
+// `undefined` means "not known": the watcher below then leaves the selection alone. That covers
+// loading, another player's packs, and a failed fetch. Returning null there would flip an
+// already-preselected pack back to "Per session" whenever a list refreshes or a refresh fails, and a
+// submit in that moment would charge the card. A failure before anything was preselected leaves the
+// initial "Per session"; a failure after keeps the pack, which the backend still checks on submit.
+const ownListsLoaded = ref(false)
 const defaultPackId = computed(() => {
+  if (!ownListsLoaded.value) return undefined
   if (bookingStore.packsLoading || bookingStore.bookingsLoading) return undefined
   if (String(bookingStore.sessionPacksPlayerId) !== String(playerId.value)) return undefined
-  // Reservations unknown (the bookings fetch failed): never a pack, by design.
-  if (bookingStore.bookingsError) return null
+  if (bookingStore.bookingsError || bookingStore.packsError) return undefined
   const start = selectedSlot.value ? Date.parse(selectedSlot.value.startDatetime) : null
   const usable = activePacksForCoach.value.filter((p) => packIsUsable(p, start))
   if (usable.length === 0) return null
@@ -928,6 +931,7 @@ onMounted(async () => {
   if (playerId.value) {
     await bookingStore.loadPlayerPacks(playerId.value)
   }
+  ownListsLoaded.value = true
   try {
     const res = await getBatchConfig()
     if (Number.isInteger(res.maxSize) && res.maxSize > 0) {
