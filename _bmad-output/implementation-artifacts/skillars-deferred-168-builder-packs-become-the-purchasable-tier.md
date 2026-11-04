@@ -1,6 +1,6 @@
 # Story skillars-deferred-168: A pack entered in the profile builder becomes the coach's purchasable tier
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand from an investigation).
      Owner-requested single-item story: the ledger bullet "A pack added in the coach profile builder is
@@ -299,7 +299,7 @@ Effects, all confirmed:
 - [x] T6 (AC3, AC5, Design 10): frontend single-pack UI in `ProfileBuilderStep3.vue` and `EditCoachPricingDialog.vue`; null-when-untouched (or prefill) in the builder; client-side checks; nested-error display; drop the duplicate-count guard; i18n; specs.
 - [x] T7 (AC11): remaining backend tests (builder path, display == charged, backfill, `CoachProfileSelfEditIT`, `ApiAdviceTest`, stale comments); the Pitchside hand-off note.
 - [x] T8 (AC12): dev-docs, business-docs, ledger hygiene.
-- [ ] T9 (AC13): `/pr-review` to a clean round; open the PR (no `no-build` label - this touches code and a migration).
+- [x] T9 (AC13): `/pr-review` to a clean round; open the PR (no `no-build` label - this touches code and a migration). Four rounds: round 1 (V1 dialog and V2 builder withdrawing the offer, V4 weak legacy-label filter) and round 2 (V1 a typed "Session pack" label lost) were fixed; rounds 3 and 4 found no new defect (security reviewer 0 findings). Not closed on a fully clean round: round 4 listed 4 low verify-before-merging items (fractional-count truncation, `purchasePack` not checking Stripe readiness, a redundant tier-page caption, the unreferenced table/i18n key), all in PR #436's description; the owner chose to merge.
 
 ## Dev Notes
 
@@ -480,3 +480,4 @@ Modified:
 - 2026-11-04: story created from the ONB-06 ledger entry; owner chose Option A.
 - 2026-11-04: /mto-story-review findings applied (M1-M4, C1-C12; see story-review.md).
 - 2026-11-04: implemented T1-T8 (/bmad-dev-story); 122 unit + 78 IT + 197 frontend tests green; status -> review. T9 (/pr-review, PR) next.
+- 2026-11-04: DONE. Rebased onto master (V225 from #428 landed first, so V226 kept its number); PR #436 merged as 47180ea7 with all CI checks green.
