@@ -3379,3 +3379,44 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **The coach completeness gate guards only `/coach/command-center`.**
   - **Cause:** the router's async check (`router/index.js:93`) matches that one path.
   - **Effect:** an incomplete coach (builder unfinished, profile unpublished) can open other coach pages, such as `/coach/availability`. Observed while writing AUTH-13. It may be intended (the Pitchside plan's C-11 describes the command-centre guard), but it is unconfirmed.
+
+## Deferred from: CI Trivy install workaround (2026-11-04)
+
+Source: the `/pr-review` round on the branch that replaced trivy-action's `get.trivy.dev` installer with a
+sha256-pinned GitHub-release download, after Aqua's host went NXDOMAIN and blocked every PR
+(`aquasecurity/setup-trivy#42`, `aquasecurity/trivy#11537`). Both reviewer arms independently raised the
+same consequence, which is the one item kept here.
+
+- **[CI, medium/security]** The image-CVE scanner version is now frozen in a workflow `env:` where no
+  automation can see it. Before the workaround, `trivy-action`'s own `version` input default (`'v0.70.0'`
+  at the pinned SHA) meant a Dependabot `github-actions` bump of trivy-action also moved the scanner;
+  `skip-setup-trivy: 'true'` cuts that link, because the `github-actions` ecosystem only rewrites `uses:`
+  refs and knows nothing of a version string in a step's `env:`. This is the repo's **only** CVE gate —
+  `ci.yml` runs no scan — so a frozen scanner means new advisory sources, package ecosystems and detection
+  fixes never reach it, while PRs keep passing. **Whoever bumps `aquasecurity/trivy-action` must bump
+  `TRIVY_VERSION` and `TRIVY_SHA256` in the same PR**, checksums from
+  `https://github.com/aquasecurity/trivy/releases/download/v<ver>/trivy_<ver>_checksums.txt`.
+  Two things bound the damage rather than removing it: the step's comment states the rule at the point of
+  use, and an aging pin eventually rejects a newer trivy-db schema, which blocks every PR instead of
+  degrading silently. Closes itself when the revert condition in that comment is met (get.trivy.dev
+  resolving again *and* an upstream release that no longer depends on it), since reverting restores the
+  Dependabot link.
+  - Reviewer claims checked and **not** kept: the same round proposed that a trivy-action bump could pair a
+    newer entrypoint with the old binary and fail on a removed CLI flag — refuted, the entrypoint builds
+    `cmd=("$TRIVY_CMD" "$scanType" "$scanRef")` and passes every option as a `TRIVY_*` environment
+    variable, so it passes no flags at all. Also proposed: that `0.70.0` might be a silent downgrade
+    (refuted — it is the action's own default at the pin), that the pinned digest or asset name might be
+    wrong (refuted — both verified against the upstream checksums file before commit), and that
+    `skip-setup-trivy` might not exist at the pin and would only warn (refuted — it is declared there and
+    gates the installer on `inputs.skip-setup-trivy == 'false'`).
+
+## Known defect in THIS file (2026-11-04)
+
+- **[docs, low]** The `## How to read this file` list is split in half. Commit `9d62060c` (PR #406) inserted
+  the `review-evals baseline real-sample` section *inside* that list: its heading was spliced onto the end
+  of the "Sections are not in chronological order" bullet at line 11 (so the heading is mid-bullet text and
+  renders as prose, leaving that whole RS03-RS11 section with no heading at all), and the bullet's own tail
+  now sits orphaned as a bogus `## Deferred from:` heading.` heading after the RS items, followed by the
+  remaining how-to-read bullets. Verified with `git log -L 11,11` on this file. Fixing it means moving the
+  inserted section out of the list and restoring one bullet — deliberately NOT done in the CI PR that found
+  it, to keep that diff to the workflow.
