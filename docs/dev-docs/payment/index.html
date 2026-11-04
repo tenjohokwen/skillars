@@ -333,7 +333,9 @@
       with reference = the pack id, settled on the pack ledger) and is revoked as
       <code>COACH_SUSPENDED</code>. The handler is a no-op if the coach was reinstated meanwhile.
       <code>purchasePack</code> refuses a coach who can't be booked before charging
-      (<code>BookingService.requireBookableCoachStatus</code>).</p>
+      (<code>BookingService.requireBookableCoachStatus</code>), and a coach who can't be paid
+      (<code>PaymentGateway.isCoachPaymentReady</code>, 422 <code>payment.coachStripeNotConfigured</code>) before it
+      writes anything: no attempt row, no Stripe customer, no card change (skillars-deferred-170).</p>
       <p><strong>Pack status</strong> (<code>SessionPackPaymentService.computeStatus</code>, shared by
       <code>CoachSoldPackQueryService</code>) is evaluated in the order <code>REVOKED</code> → <code>EXHAUSTED</code> →
       <code>FROZEN</code> → <code>PAUSED</code> → <code>EXPIRED</code> → <code>ACTIVE</code>. Revoked outranks exhausted

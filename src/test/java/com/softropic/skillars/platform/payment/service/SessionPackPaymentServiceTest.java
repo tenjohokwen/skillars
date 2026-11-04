@@ -80,6 +80,8 @@ class SessionPackPaymentServiceTest {
             new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
         coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
         lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        // skillars-deferred-170 AC3: ... and that the coach can be paid (an unstubbed mock would answer false).
+        lenient().when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
     }
 
     // ── fix/payment-pack-integrity ─────────────────────────────────────────────────────────────
@@ -100,6 +102,50 @@ class SessionPackPaymentServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
         verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
         verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    // ── skillars-deferred-170 AC3 ──────────────────────────────────────────────────────────────
+
+    /** A first-time payer of a coach with no usable Connect account: refused before the Stripe customer exists. */
+    @Test
+    void purchasePack_coachNotPaymentReady_firstTimePayer_refusedBeforeAnyWrite() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(false);
+        lenient().when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_test", UUID.randomUUID().toString()))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.coachStripeNotConfigured");
+        verify(paymentGateway, never()).createStripeCustomer(any());
+        verify(stripeCustomerRepository, never()).save(any());
+        verify(attemptRepository, never()).saveAndFlush(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+    }
+
+    /** A returning payer who sent a new card: the saved card is left as it was. */
+    @Test
+    void purchasePack_coachNotPaymentReady_returningPayerWithNewCard_cardUntouched() {
+        StripeCustomer customer = existingCustomerWithCard("pm_old");
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(false);
+        lenient().when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(customer));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.coachStripeNotConfigured");
+        assertThat(customer.getStripePaymentMethodId()).isEqualTo("pm_old");
+        verify(stripeCustomerRepository, never()).save(any());
+        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+        verify(attemptRepository, never()).saveAndFlush(any());
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
     }
 
     private StripeCustomer existingCustomerWithCard(String card) {

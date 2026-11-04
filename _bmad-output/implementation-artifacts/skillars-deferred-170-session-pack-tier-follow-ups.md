@@ -1,6 +1,6 @@
 # Story skillars-deferred-170: Session-pack tier follow-ups (drop the old table, tier caption, purchase readiness order, fractional counts)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand). Owner-requested bundle of the
      four follow-ups skillars-deferred-168 (PR #436, merged 47180ea7) left in deferred-work.md, section
@@ -314,10 +314,10 @@ D3's port constraint.
   spec with a local i18n instance; rewrite the `:110-119` test; mutation check.
 - [x] T3 (AC4): `StrictIntegerDeserializer` (`StdScalarDeserializer<Integer>`) + unit test; annotate both
   fields; WebMvc test for the tier POST, IT for step 3.
-- [ ] T4 (AC3, **after 169 merges**): rebase; add the readiness check in 169's new-attempt gate, before
+- [x] T4 (AC3, **after 169 merges**): rebase; add the readiness check in 169's new-attempt gate, before
   its attempt row; default `lenient()` stub in the three unit-test classes; unit test, service-level IT,
   WebMvc 422 test; purchase-page message + spec.
-- [ ] T5 (AC5, AC6): docs, ledger. *(AC1/AC2/AC4 parts done: their three ledger bullets deleted, the D3 bullet added, the AC4 doc lines written. Left for T4: the AC3 doc line in `docs/dev-docs/payment/index.html` and deleting the AC3 bullet.)*
+- [x] T5 (AC5, AC6): docs, ledger. *(AC1/AC2/AC4 parts done: their three ledger bullets deleted, the D3 bullet added, the AC4 doc lines written. Left for T4: the AC3 doc line in `docs/dev-docs/payment/index.html` and deleting the AC3 bullet.)*
 - [ ] T6 (AC7): `/pr-review`, PR.
 
 ## Dev Notes
@@ -369,6 +369,13 @@ Claude Opus 5.5 (claude-opus-5-5)
   files are still added by name.
 - `CoachProfileBuilderIT`'s first run failed only because the test client throws on a 4xx; rewritten to the IT's
   own `assertThatThrownBy(...HttpClientErrorException...)` pattern.
+- Rebase onto master after skillars-deferred-169 (#443): conflicts only in `sprint-status.yaml` (both sides kept),
+  `story-review.md` (this story's report kept: the file is overwritten per review), the provisioning checklist
+  (both entries kept) and the generated search index (rebuilt). The first IT run after the renumber failed with
+  Flyway "more than one migration with version 227": a stale `target/classes` copy of the old file, not a source
+  problem; deleted and re-run.
+- The first AC3 unit test used an attempt key shorter than `ATTEMPT_KEY_PATTERN` allows and so failed for the
+  wrong reason (400 `invalidIdempotencyKey`); switched to a UUID and re-checked red against the unfixed service.
 
 ### Completion Notes List
 
@@ -403,7 +410,34 @@ Claude Opus 5.5 (claude-opus-5-5)
   `StrictIntegerDeserializerTest` (8), `SessionPackPaymentResourceWebMvcTest` (27),
   `ProfileBuilderRequestValidationTest` (10), `CoachProfileBuilderIT` (49), Vitest 426. Docs: search index
   rebuilt, `check-docs` OK.
-- **AC3 not started:** skillars-deferred-169 is not on master (no PR yet). T4 waits for it (D2).
+- **AC3 (done, after 169 merged as #443).** `purchasePack` now checks `paymentGateway.isCoachPaymentReady` right
+  after `requireBookableCoachStatus`, inside 169's new-attempt gate: after the known-key replay lookup, before the
+  card snapshot and the attempt row. A replay of a known key skips it, as 169 designs. `charge()`'s own check stays
+  as the backstop (it now reaches the client as 169's `payment.noChargeMade`; not special-cased).
+  - `SessionPackPaymentServiceTest`: two new cases (first-time payer: no `createStripeCustomer`, no
+    `stripe_customers` save, no attempt row, no charge; returning payer with a new card: the saved card is
+    unchanged, no subscription card sync, no attempt row, no charge). Red against the unfixed service (the purchase
+    ran to the charge), green with it. Default `lenient()` "ready" stub added to its `@BeforeEach` and to
+    `PackPriceLockedOnPurchaseTest`'s. **Not** added to `SessionPackInputBoundsTest`: its one purchase test throws
+    on the payment-method format before any lookup, so the stub would be dead.
+  - `SessionPackPurchaseIT`: overrides `AbstractIntegrationTest`'s existing `@MockitoSpyBean PaymentGateway` (over
+    `StubPaymentGateway`) with `doReturn(false)` for this coach; no new context. Asserts the error code, no
+    `payment.stripe_customers` row, no `payment.session_pack_purchase_attempts` row, no `createStripeCustomer`.
+  - `SessionPackPaymentResourceWebMvcTest`: 422 with `errorMsg.errorKey = payment.coachStripeNotConfigured`.
+  - Purchase page: no logic change was needed. After 169, `purchaseFailureMessage` already translates any
+    `payment.*` key that has a `payment.error.*` message, and a 422 outside the "may have charged" codes already
+    falls into the definite-refusal branch (new key next time). The comment listing those refusals now names it.
+    `SessionPackPurchasePageSpec` gets one case mounted with the real en-US messages ("This coach has not
+    completed their payment setup yet", and a fresh key on the next try); a hand mutation disabling the
+    translated-key branch turned it red; restored.
+  - `PaymentApiAdvice`'s warn line now says "Booking or pack purchase blocked".
+- **AC5/AC6 (done).** Payment doc: one line on the purchase-time readiness check next to the bookable-status gate.
+  The AC3 ledger bullet is deleted; the D3 bullet stays.
+- **Tests run for AC3 and the rebase (targeted):** `MigrationConventionLintTest` + `SchemaAssumptionsTest` (31),
+  `SessionPackPaymentServiceTest` (54), `PackPriceLockedOnPurchaseTest` (2), `SessionPackInputBoundsTest` (5),
+  `BookingServiceTest` (186), `SessionPackPaymentResourceWebMvcTest` (28), `SessionPackPurchaseIT` (4),
+  `SessionPackIntegrityIT` (11), `CoachProfileBuilderIT` (49), Vitest `src/pages/parent` + `src/i18n` (199).
+  Docs: search index rebuilt, `check-docs` OK. CI is the full gate.
 
 ### File List
 
@@ -416,6 +450,13 @@ Claude Opus 5.5 (claude-opus-5-5)
 - `src/test/java/com/softropic/skillars/db/BuilderPackTierBackfillIT.java` (deleted)
 - `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java`
 - `src/test/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResourceWebMvcTest.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/api/PaymentApiAdvice.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/PackPriceLockedOnPurchaseTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPurchaseIT.java`
+- `src/frontend/src/pages/parent/SessionPackPurchasePage.vue` (comment only)
+- `src/frontend/src/pages/parent/__tests__/SessionPackPurchasePageSpec.js`
 - `src/frontend/src/pages/coach/CoachSessionPackTiersPage.vue`
 - `src/frontend/src/pages/coach/__tests__/CoachSessionPackTiersPageSpec.js`
 - `src/frontend/src/i18n/en-US/index.js`, `de-DE/index.js`, `fr-FR/index.js`
@@ -431,3 +472,5 @@ Claude Opus 5.5 (claude-opus-5-5)
   fixes listed in the header comment. Still ready-for-dev.
 - 2026-11-04: dev-story: AC1 (V227, owner-confirmed D1), AC2 and AC4 implemented with targeted tests; T5 partly; T4 (AC3)
   waits for skillars-deferred-169.
+- 2026-11-04: rebased onto master after skillars-deferred-169 (#443); the drop renumbered V227 -> V229. AC3, AC5 and
+  AC6 done; status -> review. T6 (/pr-review, PR) next.

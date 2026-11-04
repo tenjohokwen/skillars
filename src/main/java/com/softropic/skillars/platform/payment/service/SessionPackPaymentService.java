@@ -164,6 +164,11 @@ public class SessionPackPaymentService {
         CoachProfile coach = coachProfileRepository.findById(tier.getCoachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         BookingService.requireBookableCoachStatus(coach, Map.of("coach id", tier.getCoachId()));
+        // skillars-deferred-170 AC3: a coach without a usable Connect account is refused here, before the attempt row, the
+        // Stripe customer and the card write. charge() keeps its own check as the backstop.
+        if (!paymentGateway.isCoachPaymentReady(tier.getCoachId())) {
+            throw new PaymentGatewayException("payment.coachStripeNotConfigured");
+        }
 
         // 4. snapshot, then the attempt row (its own committed transaction; the partial unique index admits one open
         // attempt per parent). An absent header gets a server-minted key: no client dedup (today's behaviour), but the row

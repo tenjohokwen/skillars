@@ -352,6 +352,23 @@ class SessionPackPaymentResourceWebMvcTest {
             eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(), eq("3f2b8c1e-attempt"));
     }
 
+    /** skillars-deferred-170 AC3: a pack of a coach who cannot be paid answers 422 with the code the page translates. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_coachNotPaymentReady_returns422WithItsErrorKey() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        java.util.UUID packTierId = java.util.UUID.randomUUID();
+        when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                "payment.coachStripeNotConfigured"));
+
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("payment.coachStripeNotConfigured"));
+    }
+
     @Test
     @WithMockUser(roles = "PLAYER")
     void getMySessionPacks_playerRole_returns200() throws Exception {

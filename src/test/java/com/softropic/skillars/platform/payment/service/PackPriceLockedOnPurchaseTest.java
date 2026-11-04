@@ -60,6 +60,8 @@ class PackPriceLockedOnPurchaseTest {
             new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
         coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
         org.mockito.Mockito.lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        // skillars-deferred-170 AC3: and that the coach can be paid (an unstubbed mock would answer false).
+        org.mockito.Mockito.lenient().when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true);
         // skillars-deferred-169: every purchase inserts an attempt row first.
         org.mockito.Mockito.lenient().when(attemptRepository.saveAndFlush(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> {
             com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt a = inv.getArgument(0);
