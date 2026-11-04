@@ -1,6 +1,6 @@
 # Story skillars-deferred-168: A pack entered in the profile builder becomes the coach's purchasable tier
 
-Status: ready-for-dev
+Status: review
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand from an investigation).
      Owner-requested single-item story: the ledger bullet "A pack added in the coach profile builder is
@@ -291,14 +291,14 @@ Effects, all confirmed:
 
 ## Tasks / Subtasks
 
-- [ ] T1 (AC8, Design 2): add `CoachSessionPackPort` + `PackSpec` to `marketplace.contract`; add the payment adapter (JPA read, default-label -> null mapping); wire; confirm context starts; source-scan boundary test.
-- [ ] T2 (AC1-3, AC6, Design 3, 5): set-the-offer method in `SessionPackPaymentService` (REQUIRED; compare, replace, clear with `saveAndFlush`, default label); unit tests + both concurrency cases through HTTP.
-- [ ] T3 (AC1, AC3, AC5, Design 4, 6, 7): rework `CoachProfileService.saveStep3` to call the port; `ProfileBuilderStep3Request` (`@Size(max = 1) List<@NotNull @Valid ...>`, boxed `Integer`, bounds, label 200, per-session class-level constraint); shared or pinned constants; remove `SessionPackRepository` use.
-- [ ] T4 (AC4, AC9, Design 8): profile reads via the port in `getOwnProfile` and `getPublicProfile`; rewrite `CoachPublicProfileQueryCountIT`.
-- [ ] T5 (AC10, Design 11): pre-check legacy labels for contact details; backfill migration + lint + checklist line; delete `SessionPack`/`SessionPackRepository` and the `uq_session_pack` mapping; ledger bullet for the DROP.
-- [ ] T6 (AC3, AC5, Design 10): frontend single-pack UI in `ProfileBuilderStep3.vue` and `EditCoachPricingDialog.vue`; null-when-untouched (or prefill) in the builder; client-side checks; nested-error display; drop the duplicate-count guard; i18n; specs.
-- [ ] T7 (AC11): remaining backend tests (builder path, display == charged, backfill, `CoachProfileSelfEditIT`, `ApiAdviceTest`, stale comments); the Pitchside hand-off note.
-- [ ] T8 (AC12): dev-docs, business-docs, ledger hygiene.
+- [x] T1 (AC8, Design 2): add `CoachSessionPackPort` + `PackSpec` to `marketplace.contract`; add the payment adapter (JPA read, default-label -> null mapping); wire; confirm context starts; source-scan boundary test.
+- [x] T2 (AC1-3, AC6, Design 3, 5): set-the-offer method in `SessionPackPaymentService` (REQUIRED; compare, replace, clear with `saveAndFlush`, default label); unit tests + both concurrency cases through HTTP.
+- [x] T3 (AC1, AC3, AC5, Design 4, 6, 7): rework `CoachProfileService.saveStep3` to call the port; `ProfileBuilderStep3Request` (`@Size(max = 1) List<@NotNull @Valid ...>`, boxed `Integer`, bounds, label 200, per-session class-level constraint); shared or pinned constants; remove `SessionPackRepository` use.
+- [x] T4 (AC4, AC9, Design 8): profile reads via the port in `getOwnProfile` and `getPublicProfile`; rewrite `CoachPublicProfileQueryCountIT`.
+- [x] T5 (AC10, Design 11): pre-check legacy labels for contact details; backfill migration + lint + checklist line; delete `SessionPack`/`SessionPackRepository` and the `uq_session_pack` mapping; ledger bullet for the DROP.
+- [x] T6 (AC3, AC5, Design 10): frontend single-pack UI in `ProfileBuilderStep3.vue` and `EditCoachPricingDialog.vue`; null-when-untouched (or prefill) in the builder; client-side checks; nested-error display; drop the duplicate-count guard; i18n; specs.
+- [x] T7 (AC11): remaining backend tests (builder path, display == charged, backfill, `CoachProfileSelfEditIT`, `ApiAdviceTest`, stale comments); the Pitchside hand-off note.
+- [x] T8 (AC12): dev-docs, business-docs, ledger hygiene.
 - [ ] T9 (AC13): `/pr-review` to a clean round; open the PR (no `no-build` label - this touches code and a migration).
 
 ## Dev Notes
@@ -352,13 +352,120 @@ Backend: `platform/marketplace/{contract,service,repo}`, `platform/payment/{adap
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5), /bmad-dev-story, 2026-11-04.
+
 ### Debug Log References
+
+- Two local IT runs failed before any test started: Testcontainers' `postgres:17-alpine` timed out waiting for
+  "ready to accept connections" while the `skillars-e2e-*` stack held ~2.5 GB of the 3.8 GB Docker VM (environmental,
+  not a code failure). The third run, with that stack idle, was green.
+- One red-then-green in the new validation test: the test's own boundary was wrong (0.05 / 100 rounds to 0.00, not
+  0.01); corrected to 0.49 (rejected) / 0.50 (accepted).
+- The i18n template-key scan (`i18nTemplateKeyResolutionSpec.js`) flagged the two new `t(packErrorKeyNow)` call sites
+  and the shifted `CoachProfileBuilderPage.vue` line; its exception list was updated.
 
 ### Completion Notes List
 
+**Validation run (targeted, per docs/validation-strategy.md; no `mvn verify`):**
+- Backend unit (surefire, 122 tests, all green): `CoachProfileServiceTest` (23), `ProfileBuilderRequestValidationTest`
+  (10), `SessionPackOfferTest` (7, new), `SessionPackInputBoundsTest` (5), `SessionPackPaymentServiceTest` (29),
+  `ApiAdviceTest` (10), `MigrationConventionLintTest` (30), `MarketplaceDoesNotDependOnPaymentTest` (1, new),
+  `InfrastructureLayeringAuditTest` (1), `IntegrationTestConventionTest` (6).
+- Backend IT (failsafe, 78 tests, all green): `CoachProfileSelfEditIT` (20), `CoachProfileBuilderIT` (47),
+  `CoachPublicProfileQueryCountIT` (3, budget still 4), `BuilderPackTierBackfillIT` (5, new), `SessionPackPaymentServiceIT` (3).
+  Both AC6 race cases genuinely overlapped in this run: the log shows the existing-tier race failing on `@Version`
+  (`ObjectOptimisticLockingFailureException` -> 409 `generic.conflict`) and the first-pack race on
+  `idx_spt_one_active_per_coach` (-> 409 `payment.tierRaceConflict`); the tests assert any loser is a 409, one tier stays
+  active, and a lone winner's price and pack are what remain (the loser's pricing rolled back).
+- Frontend (Vitest, 26 files / 197 tests green): `ProfileBuilderStep3Spec`, `EditCoachPricingDialogSpec`, the i18n
+  parity and template-key specs, `CoachProfileBuilderPageSpec`, `src/utils`, `src/components/{profileBuilder,profile,marketplace}`.
+  Prettier clean on every touched frontend file. `node docs/dev-docs/tools/check-docs.mjs`: OK (26 pages, static).
+
+**What was built (by task):**
+- T1: `marketplace.contract.CoachSessionPackPort` (+ `PackSpec`) and `SessionPackLimits`; `payment.adapter.CoachSessionPackAdapter`
+  (JPA read; the default label reads back as null). A constructor-graph walk from `SessionPackPaymentService` found no path
+  back to `CoachProfileService`, so the adapter delegates to it directly (no extra service); the context starts (ITs green).
+  `CreateSessionPackTierRequest`'s constants now alias `SessionPackLimits` (payment -> marketplace, the allowed direction).
+- T2: `SessionPackPaymentService.replaceActiveOffer` (compare count / `compareTo` price / effective label; else `createTier`)
+  and `withdrawActiveOffer` (`saveAndFlush` deactivation). Both REQUIRED.
+- T3: `saveStep3` calls the port inside its transaction; `ProfileBuilderStep3Request` is
+  `@Size(max = 1) List<@NotNull @Valid SessionPackRequest>`, boxed `Integer` count 1..100, price 0.01..50000.00 with 2
+  decimals, label <= 200, and an `@AssertTrue isPerSessionPriceValid()` whose message is
+  `marketplace.packPerSessionPriceTooLow|...` (translated in all four `messages*.properties`).
+- T4: both profile reads use `findActivePack`; `CoachPublicProfileQueryCountIT` now seeds one active tier plus inactive
+  history rows and asserts the pack matches.
+- T5: `V226__backfill_builder_packs_into_session_pack_tiers.sql`; `SessionPack`/`SessionPackRepository` deleted; the
+  `uq_session_pack` `ApiAdvice` mapping removed; checklist line; ledger follow-ups.
+- T6: single-pack UI in both components, shared `src/utils/sessionPackForm.js` (client-side checks, request mapping,
+  nested-error lookup); the builder sends `sessionPacks: null` until the pack is touched; the dialog's duplicate-count
+  guard removed; the builder page banner shows a nested pack field error; i18n in en-US/de-DE/fr-FR.
+- T7: ITs above; the Pitchside hand-off is a ledger bullet (ONB-06 `test.fail` and `provisioner.ts:281`).
+- T8: dev-docs (marketplace, database, payment) + search index, business-docs coach Step 3, ledger.
+
+**Deviations from the story, each deliberate:**
+- **Fractional counts are still truncated server-side.** Design 6 assumed a boxed `Integer` makes Jackson reject 2.5; it
+  does not (`ACCEPT_FLOAT_AS_INT` applies to `Integer` too). Changing the global ObjectMapper is out of scope, so the
+  guard is client-side (both forms reject non-integers) and the record's Javadoc says so. The boxed type still turns a
+  missing count into a `@NotNull` violation instead of 0.
+- **Legacy label contact-detail check (Design 11).** UAT data could not be queried from here, so instead of an owner
+  decision the backfill substitutes the default label for any legacy label that looks like contact details (`@`, URL,
+  or a 7+ digit run). Recorded in the migration header and the checklist line.
+- **Story said an `ApiAdviceTest` case for `uq_session_pack` exists; it does not** (grep found none). Only the mapping was removed.
+- **i18n:** `auth.coach.step3PackDuplicateSessionCount` was replaced by the four new pack error keys (its only reference
+  was removed); `marketplace.duplicateSessionPackCount` (now unreferenced) is left for the DROP follow-up.
+- **Doc footer stamps were not bumped**: only the edited rows were verified, not whole pages.
+- **Ledger:** the ONB-06 section is replaced in this PR (so it disappears when the PR merges) by a
+  skillars-deferred-168 section with two follow-ups: the `DROP TABLE` (prepared in V226) and the Pitchside hand-off.
+
+**Merge-order constraint:** V226 assumes PR #428's V225 lands first. Flyway runs without out-of-order, so if this
+branch merges before #428, renumber (#428 would otherwise be rejected on any database already at V226).
+
+**Not done here:** T9 / AC13 (`/pr-review` to a clean round, then the PR). It runs on the committed branch after this
+workflow, as for skillars-deferred-167.
+
 ### File List
+
+New:
+- `src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachSessionPackPort.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/contract/SessionPackLimits.java`
+- `src/main/java/com/softropic/skillars/platform/payment/adapter/CoachSessionPackAdapter.java`
+- `src/main/resources/db/migration/V226__backfill_builder_packs_into_session_pack_tiers.sql`
+- `src/test/java/com/softropic/skillars/db/BuilderPackTierBackfillIT.java`
+- `src/test/java/com/softropic/skillars/platform/marketplace/MarketplaceDoesNotDependOnPaymentTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackOfferTest.java`
+- `src/frontend/src/utils/sessionPackForm.js`
+
+Deleted:
+- `src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPack.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/repo/SessionPackRepository.java`
+
+Modified:
+- `src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java`
+- `src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java`
+- `src/main/resources/i18n/messages.properties`, `messages_de.properties`, `messages_en.properties`, `messages_fr.properties`
+- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java`
+- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileSelfEditIT.java`
+- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachPublicProfileQueryCountIT.java`
+- `src/test/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderRequestValidationTest.java`
+- `src/test/java/com/softropic/skillars/platform/marketplace/service/CoachProfileServiceTest.java`
+- `src/frontend/src/components/profileBuilder/ProfileBuilderStep3.vue`
+- `src/frontend/src/components/profileBuilder/__tests__/ProfileBuilderStep3Spec.js`
+- `src/frontend/src/components/profile/EditCoachPricingDialog.vue`
+- `src/frontend/src/components/profile/__tests__/EditCoachPricingDialogSpec.js`
+- `src/frontend/src/pages/coach/CoachProfileBuilderPage.vue`
+- `src/frontend/src/i18n/en-US/index.js`, `de-DE/index.js`, `fr-FR/index.js`
+- `src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js`
+- `docs/dev-docs/marketplace/index.html`, `docs/dev-docs/database/index.html`, `docs/dev-docs/payment/index.html`,
+  `docs/dev-docs/assets/search-index.js`
+- `docs/business-docs/coach/index.html`
+- `docs/deployment/provisioning-checklist.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this story file
 
 ### Change Log
 
 - 2026-11-04: story created from the ONB-06 ledger entry; owner chose Option A.
 - 2026-11-04: /mto-story-review findings applied (M1-M4, C1-C12; see story-review.md).
+- 2026-11-04: implemented T1-T8 (/bmad-dev-story); 122 unit + 78 IT + 197 frontend tests green; status -> review. T9 (/pr-review, PR) next.
