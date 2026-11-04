@@ -8,8 +8,8 @@ import java.util.UUID;
  * skillars-deferred-168: the coach's one purchasable session pack, as the profile builder and the public
  * profile see it. The offer itself is the coach's active {@code payment.session_pack_tiers} row, so this
  * port is implemented in the payment module (marketplace takes no compile dependency on payment), exactly
- * like {@link CoachSubscriptionEntitlementPort}. Before this story the builder wrote a separate
- * {@code marketplace.session_packs} table that nothing could buy.
+ * like {@link CoachSubscriptionEntitlementPort}. Before this story the builder wrote its packs to a table
+ * of its own that nothing could buy (dropped by V227, skillars-deferred-170).
  */
 public interface CoachSessionPackPort {
 

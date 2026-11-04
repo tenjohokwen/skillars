@@ -435,6 +435,18 @@ class SessionPackPaymentResourceWebMvcTest {
     }
 
     @Test
+    @WithMockUser(roles = "COACH")
+    void createTier_fractionalSessionCount_returns400InsteadOfTruncating() throws Exception {
+        // skillars-deferred-170 AC4: Jackson's default ACCEPT_FLOAT_AS_INT used to bind 2.5 as 2.
+        mockMvc.perform(post("/api/payment/coaches/me/session-pack-tiers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"Half\",\"sessionCount\":2.5,\"totalPrice\":95.00}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("validation.badRequest"));
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
     @WithMockUser(roles = "PARENT")
     void savePaymentMethod_malformedId_returns400WithoutTouchingStripeOrService() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);

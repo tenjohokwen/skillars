@@ -393,9 +393,6 @@ export default {
   },
   marketplace: {
     sharedSlot: 'Votre coach a partagé ce créneau : {slot} (heure locale du coach)',
-    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
-    duplicateSessionPackCount:
-      'Ce nombre de séances est indiqué deux fois. Chaque pack doit avoir un nombre de séances différent.',
     // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws.
     stepOutOfOrder: "Veuillez d'abord terminer l'étape précédente.",
     profileNotFound: 'Profil de coach introuvable.',

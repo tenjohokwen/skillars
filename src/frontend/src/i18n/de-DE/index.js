@@ -919,9 +919,6 @@ export default {
   },
   marketplace: {
     sharedSlot: 'Ihr Coach hat diesen Termin geteilt: {slot} (Ortszeit des Coaches)',
-    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
-    duplicateSessionPackCount:
-      'Diese Paketgröße ist doppelt vorhanden. Jedes Sitzungspaket muss eine unterschiedliche Anzahl an Sitzungen haben.',
     // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws.
     stepOutOfOrder: 'Bitte schließen Sie zuerst den vorherigen Schritt ab.',
     profileNotFound: 'Coach-Profil nicht gefunden.',

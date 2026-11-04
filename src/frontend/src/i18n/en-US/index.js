@@ -389,15 +389,12 @@ export default {
   },
   marketplace: {
     sharedSlot: 'Your coach shared this time slot: {slot} (coach local time)',
-    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
-    duplicateSessionPackCount:
-      'That pack size is listed twice. Each session pack must have a different number of sessions.',
     // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws
     // (MarketplaceException errorCode -> ErrorDto.errorMsg.errorKey -> here, via useErrorHandler's
     // te(key) ? t(key) : rawMessage). One generic translated phrase per key, same tradeoff this
-    // codebase already accepts elsewhere (e.g. duplicateSessionPackCount above,
-    // booking.slotUnavailable): once translated, the backend's more specific per-call English
-    // message is not shown, in exchange for a correctly localized one.
+    // codebase already accepts elsewhere (e.g. booking.slotUnavailable): once translated, the
+    // backend's more specific per-call English message is not shown, in exchange for a correctly
+    // localized one.
     stepOutOfOrder: 'Please complete the previous step first.',
     profileNotFound: 'Coach profile not found.',
     alreadyPublished: 'Your profile is already published.',

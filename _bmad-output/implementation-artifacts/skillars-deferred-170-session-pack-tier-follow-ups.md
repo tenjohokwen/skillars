@@ -1,6 +1,6 @@
 # Story skillars-deferred-170: Session-pack tier follow-ups (drop the old table, tier caption, purchase readiness order, fractional counts)
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand). Owner-requested bundle of the
      four follow-ups skillars-deferred-168 (PR #436, merged 47180ea7) left in deferred-work.md, section
@@ -98,7 +98,7 @@ declined-card message bullet (PR #435, merged into `feature/pitchside`), and
 
 ## Decisions (defaults pinned here; the owner may overturn any at /mto-story-review)
 
-- **D1: drop the table now, not "a release later".** Rule 2 of `migration-conventions.md` protects an
+- **D1: drop the table now, not "a release later".** **OWNER CONFIRMED 2026-11-04.** Rule 2 of `migration-conventions.md` protects an
   old-release pod that still reads a table while a new release drops it. There has still never been a
   production deploy: `docs/deployment/migration-rebaseline.md:137` ("no production deploy has ever
   happened"), `runbook.md:691` ("prod is not live yet"), `provisioning-checklist.md:160-172`; no commit
