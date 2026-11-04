@@ -125,3 +125,32 @@ describe('SessionPackPurchasePage.vue — pack validity', () => {
     expect(wrapper.find('[data-test="pack-validity"]').exists()).toBe(false)
   })
 })
+
+describe('SessionPackPurchasePage.vue — what a failed purchase says', () => {
+  const apiFailure = (errorKey) => ({
+    response: { status: 422, data: { errorMsg: { errorKey, message: errorKey } } },
+  })
+
+  it('a refused card says so and offers to update the card; a new card clears it', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(apiFailure('payment.cardDeclined'))
+
+    await wrapper.vm.confirmPurchase()
+
+    expect(wrapper.vm.purchaseError).toBe('payment.error.cardDeclined')
+    expect(wrapper.vm.cardDeclined).toBe(true)
+    wrapper.vm.onCardSaved()
+    expect(wrapper.vm.purchaseError).toBe(null)
+    expect(wrapper.vm.cardDeclined).toBe(false)
+  })
+
+  it('any other failure (payment.lifecycleFailure) stays the generic message, never the raw code', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(apiFailure('payment.lifecycleFailure'))
+
+    await wrapper.vm.confirmPurchase()
+
+    expect(wrapper.vm.purchaseError).toBe('booking.packs.purchaseError')
+    expect(wrapper.vm.cardDeclined).toBe(false)
+  })
+})
