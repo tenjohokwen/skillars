@@ -372,17 +372,17 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 ### Completion Notes List
 
-- **AC1 (done).** `V227__drop_marketplace_session_packs.sql`, with D1 confirmed by the owner 2026-11-04. Header in
+- **AC1 (done).** `V229__drop_marketplace_session_packs.sql`, with D1 confirmed by the owner 2026-11-04. Header in
   V142's shape, `SET LOCAL lock_timeout`, marker `drop-prepared-in: V226`. Checked by hand that the lint goes red
   both with the marker removed (`DROP_WITHOUT_PRIOR_RELEASE_PREP`) and with the old Javadoc wording restored in
   `CoachSessionPackPort` (reference scan); neither failing state is committed. `BuilderPackTierBackfillIT` deleted.
   `marketplace.duplicateSessionPackCount` removed from all three locales and the en-US comment that named it
   reworded. The "table is gone" assertion went into `CoachProfileBuilderIT` (base context, already holds a
   `JdbcTemplate`) rather than `ShedLockConfigIT`, since it sits next to the deferred-168 pack test. Docs: database
-  table list, marketplace pack note, provisioning checklist (V226 entry corrected, new V227 entry, V226 and V227
-  added to the "prod is not live" list). **V227 is the next free number at this HEAD; skillars-deferred-169 also
-  claims V227+, so whichever merges second renumbers** (the lint checks the marker is below the file's version, so
-  V226 stays valid for any later number).
+  table list, marketplace pack note, provisioning checklist (V226 entry corrected, new V229 entry, V226 and V229
+  added to the "prod is not live" list). **Written as V227, renumbered V229 on the rebase onto master**, where
+  skillars-deferred-169 (#443) had taken V228 and V227 had gone to the registration template; the marker
+  `drop-prepared-in: V226` stays valid (the lint only checks it is below the file's version).
 - **AC2 (done).** `payment.sessionPack.tierLabel` (`'{label} — ...'`) became `tierSummary` (`'{count} sessions for
   €{price}'`) in three locales; `admin.coaches.tierLabel` untouched. Labelled tier: label heading + summary
   caption; label-less: summary heading, no caption; same in the history list. Sold-packs list: `soldPackName`
@@ -407,7 +407,7 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 ### File List
 
-- `src/main/resources/db/migration/V227__drop_marketplace_session_packs.sql` (new)
+- `src/main/resources/db/migration/V229__drop_marketplace_session_packs.sql` (new)
 - `src/main/java/com/softropic/skillars/infrastructure/validation/StrictIntegerDeserializer.java` (new)
 - `src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachSessionPackPort.java`
 - `src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java`

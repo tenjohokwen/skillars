@@ -364,7 +364,7 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
 
     @Test
     void theBuildersFormerPackTable_isGone() {
-        // skillars-deferred-170 AC1: V227 dropped marketplace.session_packs; the tier above is the only pack store.
+        // skillars-deferred-170 AC1: V229 dropped marketplace.session_packs; the tier above is the only pack store.
         Integer tables = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'marketplace' AND table_name = 'session_packs'",
             Integer.class);

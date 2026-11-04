@@ -157,9 +157,9 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226 and V227 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226 and V229 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
-  justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V227: a drop in
+  justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V229: a drop in
   the same release as its last reader's removal, not the release after). Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
 - [ ] **V226 turns builder packs into purchasable tiers, and discards the rest** (skillars-deferred-168). For each
@@ -169,7 +169,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   "N sessions"): legacy labels were never checked for contact details, so none is copied. The migration first makes
   `payment.session_pack_tiers.label` nullable (metadata-only). Every other builder pack is discarded (none was ever purchasable). Coaches who withdrew an offer, or
   who already sell one, are not touched, but their profile now shows their active tier, not their builder packs. On
-  UAT, tell coaches to check "My Session Pack Offer" after this deploy. `marketplace.session_packs` is dropped by V227
+  UAT, tell coaches to check "My Session Pack Offer" after this deploy. `marketplace.session_packs` is dropped by V229
   (below). This also relies on "prod is not live": the discard is not
   reversible except from the pre-deploy dump.
 - [ ] **V228 adds three tables with their code, not a release ahead** (skillars-deferred-169):
@@ -181,7 +181,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   (now also `[SUBSCRIPTION_UPGRADE_UNGRANTED]`) are loaded in Grafana, and that
   `skillars_backlog_oldest_age_seconds{backlog="pack_attempts"}` appears (absent while there is no open attempt is normal).
   A parent with an open attempt cannot buy any pack: the close-out SQL is in `monitoring.md` under `PackAttemptsUnresolved`.
-- [ ] **V227 drops `marketplace.session_packs`** (skillars-deferred-170). It ships in the same release window as
+- [ ] **V229 drops `marketplace.session_packs`** (skillars-deferred-170). It ships in the same release window as
   V226 rather than the release after (`migration-conventions.md` rule 2), by owner decision, because PROD has never
   been deployed. If PROD is live by the time this migration is released, hold it back a release. Any data a
   pre-deploy dump still needs from that table must be taken before this deploy.
