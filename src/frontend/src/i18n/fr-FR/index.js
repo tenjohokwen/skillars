@@ -2517,6 +2517,9 @@ export default {
       pauseSuccess: "Pack mis en pause — l'expiration a été prolongée en conséquence",
       alreadyPausedLabel: 'Le pack a déjà utilisé sa pause',
       purchaseError: "Échec de l'achat. Veuillez réessayer.",
+      purchasePending:
+        'Votre achat précédent est encore en cours de confirmation. Veuillez patienter quelques minutes puis réessayer.',
+      purchaseNotCompleted: "Le paiement n'a pas abouti. Veuillez réessayer.",
       noTierAvailable: "Ce coach n'a pas de pack de séances disponible à l'achat.",
     },
     completion: {

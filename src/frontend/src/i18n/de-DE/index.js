@@ -636,6 +636,9 @@ export default {
       pauseSuccess: 'Paket pausiert — Ablaufdatum entsprechend verlängert',
       alreadyPausedLabel: 'Paket hat seine Pause bereits genutzt',
       purchaseError: 'Kauf fehlgeschlagen. Bitte erneut versuchen.',
+      purchasePending:
+        'Ihr vorheriger Kauf wird noch bestätigt. Bitte warten Sie einige Minuten und versuchen Sie es erneut.',
+      purchaseNotCompleted: 'Die Zahlung ist nicht durchgegangen. Bitte erneut versuchen.',
       noTierAvailable: 'Dieser Trainer hat kein Sitzungspaket zum Kauf verfügbar.',
     },
     completion: {

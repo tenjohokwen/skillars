@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.contract.CoachSubscriptionResponse;
@@ -14,6 +15,8 @@ import com.softropic.skillars.platform.payment.contract.event.SubscriptionExpire
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.CoachSubscriptionChange;
 import com.softropic.skillars.platform.payment.repo.CoachSubscriptionChangeRepository;
+import com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEvent;
+import com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEventRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentCoachSubscriptionRepository;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscription;
@@ -31,6 +34,7 @@ import com.softropic.skillars.platform.payment.contract.StripeIdFormat;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Subscription;
 import com.stripe.param.SubscriptionListParams;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -43,6 +47,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -77,6 +82,10 @@ public class SubscriptionService {
     private final StripeWebhookService stripeWebhookService;
     private final PlayerProfileRepository playerProfileRepository;
     private final PaymentMethodSyncOutboxSupport paymentMethodSyncOutboxSupport;
+    // skillars-deferred-169: parked webhook events (AC4) and the unrecoverable-upgrade record (AC6).
+    private final StripePendingSubscriptionEventRepository pendingSubscriptionEventRepository;
+    private final PaymentRecoveryRecorder paymentRecoveryRecorder;
+    private final MeterRegistry meterRegistry;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
     @Autowired @Lazy
@@ -190,6 +199,7 @@ public class SubscriptionService {
                 cancelDuplicateSubscription(stripeSub.getId(), "COACH", coachId);
                 throw new PaymentGatewayException("payment.subscription.alreadyActive");
             }
+            drainParkedEventsQuietly(stripeSub.getId());
             return persisted.get();
         } finally {
             releaseSubscribeAttemptQuietly(() -> self.releaseCoachSubscribeAttempt(coachId, attemptKey), "COACH", coachId);
@@ -336,12 +346,33 @@ public class SubscriptionService {
         log.info("[COACH_PENDING_CHANGES_VOIDED coachId={} count={}]", coachId, voided);
     }
 
+    /**
+     * skillars-deferred-169 AC6: the proration was charged but the subscription was superseded, so the tier is NOT granted (granting it
+     * would re-grant a paid tier with no live subscription - PR #337). The endpoint keeps answering 204 (AC7). In order: (1) the
+     * error-level tag line, the alert source that works even if the insert fails, and a metric; (2) a best-effort durable row in a
+     * REQUIRES_NEW on the payment routed pool (the caller holds the subscription row lock; the table is FK-free so it cannot
+     * deadlock on it). Nothing here may fail the request: a thrown insert would roll back this transaction after Stripe has billed,
+     * and a client retry is a NEW upgrade key - a second proration.
+     */
+    private void recordUngrantedUpgrade(String kind, String subscriberRef, String stripeSubId, String targetTier,
+                                        Subscription updated) {
+        try {
+            String invoiceId = updated != null ? updated.getLatestInvoice() : null;
+            log.error("[SUBSCRIPTION_UPGRADE_UNGRANTED] kind={} subscriber={} stripeSubId={} targetTier={} invoiceId={}",
+                kind, subscriberRef, stripeSubId, targetTier, invoiceId);
+            meterRegistry.counter("payment.subscription.upgrade_ungranted", "kind", kind).increment();
+            paymentRecoveryRecorder.recordUngrantedUpgrade(kind, subscriberRef, stripeSubId, targetTier, invoiceId);
+        } catch (RuntimeException e) {
+            log.error("[SUBSCRIPTION_UPGRADE_RECORD_FAILED] kind={} subscriber={} stripeSubId={}", kind, subscriberRef, stripeSubId, e);
+        }
+    }
+
     @Transactional
     public void persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated) {
         PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
-            log.warn("[COACH_TIER_UPGRADE_SUPERSEDED coachId={} stripeSubId={}]", coachId, stripeSubId);
+            recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, newTier, updated);
             return;
         }
         coachSubscriptionChangeRepository.voidAllPendingForCoach(coachId, Instant.now());
@@ -453,6 +484,7 @@ public class SubscriptionService {
                 cancelDuplicateSubscription(stripeSub.getId(), "PLAYER", playerId);
                 throw new PaymentGatewayException("payment.subscription.alreadyActive");
             }
+            drainParkedEventsQuietly(stripeSub.getId());
             return persisted.get();
         } finally {
             releaseSubscribeAttemptQuietly(() -> self.releasePlayerSubscribeAttempt(playerId, attemptKey), "PLAYER", playerId);
@@ -575,7 +607,7 @@ public class SubscriptionService {
         PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
-            log.warn("[PLAYER_TIER_UPGRADE_SUPERSEDED playerId={} stripeSubId={}]", playerId, stripeSubId);
+            recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, newTier, updated);
             return;
         }
         playerSubscriptionChangeRepository.voidAllPendingForPlayer(playerId, Instant.now());
@@ -1207,6 +1239,117 @@ public class SubscriptionService {
     }
 
     // ─── Webhook Handler ──────────────────────────────────────────────────────────
+
+    // ─── skillars-deferred-169 AC4: parked subscription events ─────────────────────────────────────────────
+
+    /** Never fails the subscribe: the persist has committed and Stripe has billed. The job's drain recovers anything missed. */
+    private void drainParkedEventsQuietly(String stripeSubscriptionId) {
+        try {
+            drainParkedEvents(stripeSubscriptionId);
+        } catch (RuntimeException e) {
+            log.error("[STRIPE_WEBHOOK_PARKED_DRAIN_FAILED] the job's drain will retry: stripeSubId={}", stripeSubscriptionId, e);
+        }
+    }
+
+    private boolean hasLocalRow(String stripeSubscriptionId) {
+        return paymentCoachSubscriptionRepository.findByStripeSubscriptionId(stripeSubscriptionId).isPresent()
+            || paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(stripeSubscriptionId).isPresent();
+    }
+
+    /**
+     * Applies the parked events of one subscription, oldest {@code event_created} first, each in its own transaction (a failed apply
+     * restores its row and stops the drain so later events are not applied out of order), and stops after a {@code deleted}.
+     * NOT transactional: it runs after the link committed (never inside {@code persist*Subscription}, where an exception would roll
+     * back a persist after Stripe has billed).
+     */
+    public void drainParkedEvents(String stripeSubscriptionId) {
+        for (StripePendingSubscriptionEvent row : pendingSubscriptionEventRepository.findBySubscriptionOrdered(stripeSubscriptionId)) {
+            Boolean terminal;
+            try {
+                terminal = self.applyParkedEvent(row.getId());
+            } catch (RuntimeException e) {
+                log.error("[STRIPE_WEBHOOK_PARKED_APPLY_FAILED] row restored, stops this drain: rowId={} eventId={} stripeSubId={}",
+                    row.getId(), row.getEventId(), stripeSubscriptionId, e);
+                return;
+            }
+            if (Boolean.TRUE.equals(terminal)) {
+                return;
+            }
+        }
+    }
+
+    /**
+     * The claim and the apply share one transaction: a DELETE of the row, then the event through {@link #handleSubscriptionWebhook}
+     * (which runs the staleness guard for {@code updated}; a {@code deleted} is final whatever its order - deliberate). A failed
+     * apply rolls the delete back. Returns true when the applied event was a deletion; false when applied or already claimed.
+     */
+    @Transactional
+    public Boolean applyParkedEvent(Long rowId) {
+        StripePendingSubscriptionEvent row = pendingSubscriptionEventRepository.findById(rowId).orElse(null);
+        if (row == null || pendingSubscriptionEventRepository.claim(rowId) != 1) {
+            return false;
+        }
+        handleSubscriptionWebhook(row.getEventType(), row.getStripeSubscriptionId(), toDataMap(row.getEventCreated(),
+            row.getStatus(), row.getCurrentPeriodEnd(), row.getCancelAtPeriodEnd()));
+        // An `updated` carrying canceled / incomplete_expired is applied as a deletion (handleSubscriptionWebhook), so it ends the drain too.
+        return "customer.subscription.deleted".equals(row.getEventType())
+            || "canceled".equals(row.getStatus()) || "incomplete_expired".equals(row.getStatus());
+    }
+
+    private static Map<String, Object> toDataMap(Long eventCreated, String status, Long currentPeriodEnd, Boolean cancelAtPeriodEnd) {
+        Map<String, Object> data = new HashMap<>();
+        if (eventCreated != null) data.put("event_created", eventCreated);
+        if (currentPeriodEnd != null) data.put("current_period_end", currentPeriodEnd);
+        if (cancelAtPeriodEnd != null) data.put("cancel_at_period_end", cancelAtPeriodEnd);
+        if (status != null) data.put("status", status);
+        return data;
+    }
+
+    /**
+     * The webhook's post-commit step. If the signup has linked the row since the park: drain (the park row is claimed exactly once, by
+     * whichever of this, the signup's drain or the job gets there first); and if the park itself failed, apply the event directly.
+     */
+    public void applyParkedEventIfLinked(PaymentRecoveryRecorder.ParkedSubscriptionEvent parked) {
+        if (!hasLocalRow(parked.stripeSubscriptionId())) {
+            return;
+        }
+        if (parked.persisted()) {
+            drainParkedEvents(parked.stripeSubscriptionId());
+        } else {
+            self.handleSubscriptionWebhook(parked.eventType(), parked.stripeSubscriptionId(),
+                toDataMap(parked.eventCreated(), parked.status(), parked.currentPeriodEnd(), parked.cancelAtPeriodEnd()));
+        }
+    }
+
+    /** Job duty (c): drain parked events whose subscription is now linked. Each subscription in its own try/catch. */
+    public int drainLinkableParkedEvents() {
+        int drained = 0;
+        for (String subId : pendingSubscriptionEventRepository.findDistinctSubscriptionIds()) {
+            try {
+                if (hasLocalRow(subId)) {
+                    drainParkedEvents(subId);
+                    drained++;
+                }
+            } catch (RuntimeException e) {
+                log.error("[STRIPE_WEBHOOK_PARKED_DRAIN_FAILED] stripeSubId={}", subId, e);
+            }
+        }
+        return drained;
+    }
+
+    /**
+     * Job duty (d): purge parked events past the retention window. Never-linked rows exist by design (a duplicate subscription that
+     * {@code cancelDuplicateSubscription} cancelled was never linked), so a purge is info-level with a metric, not a warning.
+     */
+    public int purgeStaleParkedEvents() {
+        long days = configService.getBoundedLong(ConfigBounds.PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS);
+        int purged = pendingSubscriptionEventRepository.purgeOlderThan(Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS));
+        if (purged > 0) {
+            meterRegistry.counter("payment.subscription.parked_events_purged_unapplied").increment(purged);
+            log.info("Purged parked subscription events that never linked: count={} retentionDays={}", purged, days);
+        }
+        return purged;
+    }
 
     /**
      * fix/payment-subscription-entitlements: rows are read under lock; {@code data.event_created}

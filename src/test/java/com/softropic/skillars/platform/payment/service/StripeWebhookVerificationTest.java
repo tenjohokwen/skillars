@@ -40,6 +40,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,6 +61,7 @@ class StripeWebhookVerificationTest {
     @Mock StripeCustomerRepository stripeCustomerRepository;
     @Mock CoachProfileRepository coachProfileRepository;
     @Mock SubscriptionService subscriptionService;
+    @Mock PaymentRecoveryRecorder paymentRecoveryRecorder;
 
     // Story Deferred-76 AC7: a real registry, not a mock — Counter.builder(...).register(mock)
     // returns null, so counter-increment assertions need SimpleMeterRegistry (matches
@@ -84,6 +86,7 @@ class StripeWebhookVerificationTest {
         // subscriptionService is @Autowired @Lazy field injection, not constructor injection —
         // must be wired manually here, same reason as "self" above.
         ReflectionTestUtils.setField(webhookService, "subscriptionService", subscriptionService);
+        ReflectionTestUtils.setField(webhookService, "paymentRecoveryRecorder", paymentRecoveryRecorder);
         // Manually call @PostConstruct since this is a unit test without Spring to inject
         webhookService.initializeCounters();
     }
@@ -294,6 +297,89 @@ class StripeWebhookVerificationTest {
 
         verify(eventPublisher, never()).publishEvent(any(CoachSubscriptionOrphanedEvent.class));
         verify(stripeCustomerRepository, never()).findByStripeCustomerId(any());
+    }
+
+    // ── skillars-deferred-169 AC4: an event that races the signup is parked and re-applied, not dropped ──
+
+    @Test
+    void processWebhook_subscriptionUpdated_noLocalMatch_isParked_andReappliedAfterCommit() throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentRecoveryRecorder.parkSubscriptionEvent(any())).thenReturn(true);
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        org.mockito.ArgumentCaptor<PaymentRecoveryRecorder.ParkedSubscriptionEvent> parked =
+            org.mockito.ArgumentCaptor.forClass(PaymentRecoveryRecorder.ParkedSubscriptionEvent.class);
+        verify(paymentRecoveryRecorder).parkSubscriptionEvent(parked.capture());
+        org.assertj.core.api.Assertions.assertThat(parked.getValue().stripeSubscriptionId()).isEqualTo(STRIPE_SUB_ID);
+        org.assertj.core.api.Assertions.assertThat(parked.getValue().eventType()).isEqualTo("customer.subscription.updated");
+        // the post-commit re-read runs and is told the park row is durable
+        org.mockito.ArgumentCaptor<PaymentRecoveryRecorder.ParkedSubscriptionEvent> reapplied =
+            org.mockito.ArgumentCaptor.forClass(PaymentRecoveryRecorder.ParkedSubscriptionEvent.class);
+        verify(subscriptionService).applyParkedEventIfLinked(reapplied.capture());
+        org.assertj.core.api.Assertions.assertThat(reapplied.getValue().persisted()).isTrue();
+    }
+
+    @Test
+    void processWebhook_subscriptionDeleted_noLocalMatch_isParkedToo() throws Exception {
+        String payload = buildSubscriptionDeletedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "canceled");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentRecoveryRecorder.parkSubscriptionEvent(any())).thenReturn(true);
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(paymentRecoveryRecorder).parkSubscriptionEvent(argThat(p -> "customer.subscription.deleted".equals(p.eventType())));
+        verify(subscriptionService).applyParkedEventIfLinked(any());
+    }
+
+    @Test
+    void processWebhook_failedPark_stillRunsThePostCommitStep_withPersistedFalse_andDoesNotThrow() throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentRecoveryRecorder.parkSubscriptionEvent(any())).thenReturn(false);
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(subscriptionService).applyParkedEventIfLinked(argThat(p -> !p.persisted()));
+    }
+
+    @Test
+    void processWebhook_throwingPostCommitStep_doesNotFailTheWebhook() throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID)).thenReturn(Optional.empty());
+        when(paymentRecoveryRecorder.parkSubscriptionEvent(any())).thenReturn(true);
+        org.mockito.Mockito.doThrow(new IllegalStateException("boom")).when(subscriptionService).applyParkedEventIfLinked(any());
+
+        // Stripe would redeliver on a 500, insertIfAbsent would drop it as a duplicate, and it would never be re-applied: the
+        // committed park row and the job's drain recover it instead.
+        webhookService.processWebhook(payload, sigHeader);
+    }
+
+    @Test
+    void processWebhook_subscriptionUpdated_withLocalMatch_isNotParked() throws Exception {
+        String payload = buildSubscriptionUpdatedPayload(STRIPE_SUB_ID, STRIPE_CUSTOMER_ID, "active");
+        String sigHeader = buildStripeSignature(WEBHOOK_SECRET, payload);
+        when(webhookEventRepository.insertIfAbsent(any(), any())).thenReturn(1);
+        when(paymentCoachSubscriptionRepository.findByStripeSubscriptionId(STRIPE_SUB_ID))
+            .thenReturn(Optional.of(new com.softropic.skillars.platform.payment.repo.PaymentCoachSubscription()));
+
+        webhookService.processWebhook(payload, sigHeader);
+
+        verify(paymentRecoveryRecorder, never()).parkSubscriptionEvent(any());
+        verify(subscriptionService, never()).applyParkedEventIfLinked(any());
     }
 
     @Test

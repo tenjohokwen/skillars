@@ -58,11 +58,21 @@ class SessionPackPaymentServiceTest {
     @Mock RefundReconciliationService refundReconciliationService;
     @Mock SubscriptionService subscriptionService;
     @Mock com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
+    @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
+    @Mock com.softropic.skillars.platform.payment.repo.StripeRefundFailureRepository refundFailureRepository;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
     @BeforeEach
     void setUpLockRetryer() {
+        // skillars-deferred-169: every purchase inserts an attempt row first; the insert hands back the row with an id.
+        lenient().when(attemptRepository.saveAndFlush(any())).thenAnswer(inv -> {
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt a = inv.getArgument(0);
+            a.setId(1L);
+            a.setCreatedAt(Instant.now());
+            return a;
+        });
+        lenient().when(attemptRepository.transition(any(), any(), any(), any())).thenReturn(true);
         lenient().when(lockRetryer.withBoundedRetry(anyString(), any()))
             .thenAnswer(inv -> ((java.util.function.Supplier<?>) inv.getArgument(1)).get());
         // fix/payment-pack-integrity: purchasePack checks the tier's coach is bookable.
@@ -635,5 +645,382 @@ class SessionPackPaymentServiceTest {
         p.setExpiresAt(expiresAt);
         p.setPausedUntil(pausedUntil);
         return p;
+    }
+
+    // ── skillars-deferred-169: the attempt record (RS06), the card revert (RS09) and the resolver (AC2) ──────────
+
+    private static final String KEY = "attempt-key-0001";
+
+    private com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt attempt(
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status status, long ageMinutes) {
+        com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt a =
+            new com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt(
+                PARENT_ID, KEY, TIER_ID, PLAYER_ID, "pm_old", "pm_new", true);
+        a.setId(77L);
+        a.setStatus(status);
+        a.setCreatedAt(Instant.now().minus(ageMinutes, ChronoUnit.MINUTES));
+        return a;
+    }
+
+    private void stubGatesOnly() {
+        PlayerProfile player = new PlayerProfile();
+        player.setId(PLAYER_ID);
+        player.setUserId(PARENT_ID);
+        when(playerProfileRepository.findById(PLAYER_ID)).thenReturn(Optional.of(player));
+    }
+
+    private void minAgeAndAbsenceAge(long minAge, long absenceAge) {
+        lenient().when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PACK_ATTEMPT_MIN_AGE_MINUTES))
+            .thenReturn(minAge);
+        lenient().when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PACK_ATTEMPT_ABSENCE_AGE_MINUTES))
+            .thenReturn(absenceAge);
+    }
+
+    @Test
+    void purchasePack_cardDecline_marksNoCharge_revertsTheCardFirst_andSignalsNoChargeMade() {
+        SessionPackTier tier = makeActiveTier();
+        stubPurchaseWithExistingCustomer(tier, "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+            .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class)
+            .hasMessage("payment.noChargeMade");
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeCustomerRepository, attemptRepository);
+        order.verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+        order.verify(attemptRepository).transition(any(), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+        verify(subscriptionService, never()).savePaymentMethodAndScheduleSync(any(), any());
+    }
+
+    @Test
+    void purchasePack_aRefusedCard_keepsItsOwnCode_soTheUiCanOfferToUpdateTheCard_andIsStillNoCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+            .thenThrow(new PaymentGatewayException(PaymentGatewayException.CARD_DECLINED));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class)
+            .hasMessage("payment.cardDeclined");
+
+        verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+    }
+
+    @Test
+    void purchasePack_successAfterTheResolverWroteNoCharge_isAllowedToMoveNoChargeToSucceeded() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_test")).thenReturn(Optional.empty());
+
+        sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY);
+
+        // proof of capture beats a resolver's inference from absence (fourth review, H1)
+        verify(attemptRepository).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED),
+            eq("pi_test"), org.mockito.ArgumentMatchers.argThat(c -> c.contains(
+                com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE)));
+    }
+
+    @Test
+    void purchasePack_declineWithNoCardAttempted_doesNotTouchTheSavedCard() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+            .thenThrow(new PaymentGatewayException("payment.lifecycleFailure"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, null, KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_outcomeUnknown_marksUnknown_neverRevertsTheCard_andRethrows() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class);
+
+        verify(attemptRepository).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN), any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_unclassifiedRuntimeException_isUnknown_notLeftInProgress() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString())).thenThrow(new IllegalStateException("pool timeout"));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(IllegalStateException.class);
+
+        verify(attemptRepository).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN), any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void purchasePack_aSecondOpenAttemptOfTheParent_isRefusedBeforeAnyCardWriteOrCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException("uq_sppa_one_open_per_parent")).when(attemptRepository).saveAndFlush(any());
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY)).thenReturn(Optional.empty());
+        when(attemptRepository.findOpenByParentId(eq(PARENT_ID), any()))
+            .thenReturn(Optional.of(attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 3)));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.attemptUnresolved");
+
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    @Test
+    void purchasePack_concurrentSameKey_answersFromTheWinnerRow() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        org.mockito.Mockito.doThrow(new org.springframework.dao.DataIntegrityViolationException("uq_sppa_parent_key")).when(attemptRepository).saveAndFlush(any());
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.empty())
+            .thenReturn(Optional.of(attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 0)));
+        minAgeAndAbsenceAge(10, 30);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.attemptInProgress");
+    }
+
+    @Test
+    void replay_succeededAttempt_returnsTheRecordedPack_withoutCallingStripe() {
+        stubGatesOnly();
+        var a = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED, 60);
+        a.setPaymentIntentId("pi_done");
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY)).thenReturn(Optional.of(a));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        SessionPackPurchase pack = new SessionPackPurchase();
+        pack.setPlayerId(PLAYER_ID);
+        pack.setPackTierId(TIER_ID);
+        pack.setStripePaymentIntentId("pi_done");
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_done")).thenReturn(Optional.of(pack));
+
+        SessionPackPurchaseResponse response = sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY);
+
+        assertThat(response).isNotNull();
+        verifyNoStripeCalls();
+    }
+
+    @Test
+    void replay_afterTheTierWasDeactivated_stillAnswers_theGatesRunOnlyForNewAttempts() {
+        stubGatesOnly();
+        var a = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE, 60);
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY)).thenReturn(Optional.of(a));
+        SessionPackTier inactive = makeActiveTier();
+        inactive.setActive(false);
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(inactive));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class);
+    }
+
+    @Test
+    void replay_openAttemptYoungerThanTheMinimumAge_isRefusedAsInProgress() {
+        stubGatesOnly();
+        minAgeAndAbsenceAge(10, 30);
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.of(attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 2)));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .hasMessageContaining("payment.attemptInProgress");
+        verifyNoStripeCalls();
+    }
+
+    @Test
+    void replay_sameKeyDifferentPack_openRow_isAttemptUnresolved_terminalRow_isKeyReused() {
+        stubGatesOnly();
+        UUID otherTier = UUID.randomUUID();
+        when(attemptRepository.findByParentIdAndAttemptKey(PARENT_ID, KEY))
+            .thenReturn(Optional.of(attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 3)))
+            .thenReturn(Optional.of(attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED, 3)));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, otherTier, PLAYER_ID, "pm_new", KEY))
+            .hasMessageContaining("payment.attemptUnresolved");
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, otherTier, PLAYER_ID, "pm_new", KEY))
+            .hasMessageContaining("payment.idempotencyKeyReused");
+    }
+
+    private void verifyNoStripeCalls() {
+        verify(paymentGateway, never()).chargeAndCapture(any(), any(), any(), any(), any());
+        verify(paymentGateway, never()).findChargeByIdempotencyKey(any(), any(), any());
+        verify(paymentGateway, never()).getCaptureState(any());
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    // -- resolveAttempt (AC2) --
+
+    private void openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status status, long ageMinutes) {
+        var a = attempt(status, ageMinutes);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(a));
+        lenient().when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+    }
+
+    private com.softropic.skillars.platform.payment.contract.ChargeLookup lookup(String status) {
+        return new com.softropic.skillars.platform.payment.contract.ChargeLookup("pi_found", status, new BigDecimal("100.00"));
+    }
+
+    @Test
+    void resolve_nothingFound_insideTheAbsenceAge_staysOpen_pastIt_isNoCharge_andRevertsTheCard() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 15);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+
+        var young = sessionPackPaymentService.resolveAttempt(77L);
+        assertThat(young.status()).isEqualTo(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS);
+        verify(attemptRepository, never()).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+        verify(stripeCustomerRepository, never()).revertPaymentMethod(any(), any(), any());
+    }
+
+    @Test
+    void resolve_nothingFound_pastTheAbsenceAge_isNoCharge() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 45);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+
+        sessionPackPaymentService.resolveAttempt(77L);
+
+        verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+        verify(attemptRepository).transition(eq(77L), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+    }
+
+    @Test
+    void resolve_noCustomerRow_isAnAbsenceVerdict_soItNeedsTheAbsenceAgeToo() {
+        minAgeAndAbsenceAge(10, 30);
+        var a = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 15);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(a));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.empty());
+
+        sessionPackPaymentService.resolveAttempt(77L);
+
+        verify(attemptRepository, never()).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+        verify(paymentGateway, never()).findChargeByIdempotencyKey(any(), any(), any());
+    }
+
+    @Test
+    void resolve_failedLookup_staysOpen() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 120);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenThrow(new PaymentGatewayException("payment.chargeLookupFailed"));
+
+        var result = sessionPackPaymentService.resolveAttempt(77L);
+
+        assertThat(result.status().isOpen()).isTrue();
+        verify(attemptRepository, never()).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+    }
+
+    @Test
+    void resolve_foundButNotSucceeded_isNoCharge_andNeverReachesTheCaptureState() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("requires_payment_method")));
+
+        sessionPackPaymentService.resolveAttempt(77L);
+
+        verify(paymentGateway, never()).getCaptureState(any());
+        verify(attemptRepository).transition(eq(77L), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any());
+    }
+
+    @Test
+    void resolve_pendingIntent_staysUnknown() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("processing")));
+
+        var result = sessionPackPaymentService.resolveAttempt(77L);
+
+        assertThat(result.status()).isEqualTo(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN);
+        verify(paymentGateway, never()).getCaptureState(any());
+    }
+
+    @Test
+    void resolve_succeededAndFullyRefunded_isRefunded_createsNoPack() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNRECONCILED, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), new BigDecimal("100.00")));
+
+        sessionPackPaymentService.resolveAttempt(77L);
+
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(attemptRepository).transition(eq(77L), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.REFUNDED), eq("pi_found"), any());
+    }
+
+    @Test
+    void resolve_succeededWithAnUnreadableCharge_isNotTreatedAsRefunded_staysOpen() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(null, BigDecimal.ZERO));
+
+        var result = sessionPackPaymentService.resolveAttempt(77L);
+
+        assertThat(result.status().isOpen()).isTrue();
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verify(attemptRepository, never()).transition(any(), eq(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.REFUNDED), any(), any());
+    }
+
+    @Test
+    void resolve_capturedAndNotRefunded_createsThePackOnce_closesTheRefundFailure_andRunsTheCardSync() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNRECONCILED, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), BigDecimal.ZERO));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        var failure = new com.softropic.skillars.platform.payment.repo.StripeRefundFailure("pi_found", new BigDecimal("100.00"), PARENT_ID, TIER_ID, "x");
+        when(refundFailureRepository.findByPaymentIntentId("pi_found")).thenReturn(Optional.of(failure));
+
+        var result = sessionPackPaymentService.resolveAttempt(77L);
+
+        assertThat(result.status()).isEqualTo(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED);
+        verify(sessionPackPurchaseRepository).save(any());
+        assertThat(failure.getResolvedAt()).isNotNull();
+        verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_ID, "pm_new");
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    @Test
+    void resolve_createPurchaseFails_neverRefunds_staysOpenForTheNextCycle() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNRECONCILED, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), BigDecimal.ZERO));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenThrow(new IllegalStateException("db down"));
+
+        var result = sessionPackPaymentService.resolveAttempt(77L);
+
+        assertThat(result.status().isOpen()).isTrue();
+        verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    @Test
+    void resolve_existingPackForTheIntent_isAdopted_noSecondPack() {
+        minAgeAndAbsenceAge(10, 30);
+        var a = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN, 12);
+        a.setPaymentIntentId("pi_known");
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(a));
+        SessionPackPurchase pack = new SessionPackPurchase();
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_known")).thenReturn(Optional.of(pack));
+
+        var result = sessionPackPaymentService.resolveAttempt(77L);
+
+        assertThat(result.status()).isEqualTo(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED);
+        verify(sessionPackPurchaseRepository, never()).save(any());
+        verifyNoStripeCalls();
     }
 }

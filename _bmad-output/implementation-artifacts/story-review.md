@@ -1,164 +1,79 @@
-# Story review: skillars-deferred-168-builder-packs-become-the-purchasable-tier
+# Story review — skillars-deferred-169 (pass 4)
 
-- **Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-168-builder-packs-become-the-purchasable-tier.md` (status `ready-for-dev`)
+- **Story:** `skillars-deferred-169-stripe-retry-double-charge-webhook-ordering-and-card-save-fixes` (723 lines, `ready-for-dev`)
 - **Audit date:** 2026-11-04
-- **Real HEAD:** `a95109b6` "docs(ledger): Pitchside findings — blank booking slot labels, pack holders default to per-session, generic decline error, registration enumeration, completeness-gate scope (#429)", which equals `origin/master`. The worktree has three staged, uncommitted files: the story, `sprint-status.yaml` and `deferred-work.md`.
-- **What citations were checked against:** this HEAD, not any SHA the story itself names. Items on `feature/pitchside` were read from `origin/feature/pitchside`.
-- **Method:** four parallel read-only verification layers (citations, ledger and precedents, mechanistic claims, corner cases). Then I re-read the deciding lines of every High and Medium finding myself, trying to refute each one (Step 4b).
+- **Real HEAD:** `30e2c712 docs(story): simplify RS06 in skillars-deferred-169 after the third review` (master = `281b8433`). Every citation was checked against this HEAD, not any SHA the story quotes.
+- **Method:** four read-only layers, then my own adversarial re-check (Step 4b) of every finding against source.
 
-## 1. Citation verification (Layer 1, 25 items)
+## 1. Citation verification (Layer 1)
+About 200 `file:line` citations; none could not be located. Six drifted, all minor:
 
-19 MATCH, 6 DRIFTED, 0 CANNOT_LOCATE.
-
-| Citation in story | Verdict | Evidence or corrected location |
-|---|---|---|
-| `CoachProfileService.java:267` saveStep3 | MATCH | `:267 public ProfileBuilderStepResponse saveStep3(...)` |
-| `:290-301` delete, flush, re-insert | DRIFTED (minor) | `:291 deleteByCoachId`, `:292 flush`, `:301 saveAll`; line 290 is a comment |
-| `:285` `req.sessionPacks() != null`, "pack block :285-302" | DRIFTED | The check is at **`:287`** and the block is **`:287-302`**; `:285` is `coachPricingRepository.save(pricing)` |
-| `:403` getOwnProfile packs | MATCH | `sessionPackRepository.findByCoachId(...)` |
-| `:623` getPublicProfile packs | MATCH | Preceded by `:622 // (3) session packs` |
-| `EditCoachPricingDialog.vue:261` | DRIFTED (minor) | The call opens at **`:260`** `await saveProfileBuilderStep(3, {` |
-| `SessionPackPaymentService.java:296` createTier | MATCH | |
-| `:131-135` purchasePack bookable-coach gate | MATCH | `:135 BookingService.requireBookableCoachStatus(...)` |
-| `ProfileBuilderStep3Request` bounds and `@Size(max = 5)` | MATCH | `:23`, `:26-28` (but see M1: the nested bounds are not enforced) |
-| `V138:3910` idx_spt_one_active_per_coach | MATCH | |
-| `CreateSessionPackTierRequest` constants and annotations | MATCH | `:22`, `:24`, `:26`, `:27` |
-| Labels: varchar(100) nullable vs varchar(200) NOT NULL; `uq_session_pack` | MATCH | V138 `:1633`, `:2888`, `:1904` |
-| `CoachMarketplaceResource.java:78` | MATCH | |
-| `CoachPublicProfilePage.vue:611` / `:622` | MATCH | |
-| `SessionPackPurchasePage.vue:59` | MATCH | |
-| `provisioner.ts:260` (pitchside) extra tier POST | DRIFTED | The POST is at **`:281`**. `:260` is in the step-3 PUT, which also sends `:262 sessionPacks: pack ? [pack] : []` (see C9) |
-| `onboarding.spec.ts` ONB-06 `test.fail` | MATCH | `:109`, `:150` |
-| `docs/dev-docs/marketplace/index.html:126`, `:192` | MATCH | |
-| `provisioning-checklist.md:160` | MATCH | |
-| `migration-conventions.md` rule 2 and `drop-prepared-in` | MATCH, with a correction | `:58`, `:64`, `:70`. The rule lives in `src/test/java/com/softropic/skillars/db/MigrationLint.java:190-197` (it also requires no live `src/main` reference); `MigrationConventionLintTest` only runs it against fixtures |
-| `CoachPublicProfileQueryCountIT` four round trips | MATCH | `:58 EXPECTED_QUERY_COUNT = 4`; javadoc `:40-45` lists session packs as one of the queries |
-| `fk_spp_tier` | MATCH | V138 `:4518` |
-| `SessionPackPricingDisplay.vue` renders a list | MATCH | `:13 v-for` |
-| Builder and dialog allow a repeatable pack list | MATCH | No frontend cap; only the backend `@Size(max = 5)` |
-| Ledger ONB-06 section, and its `:287` citation | MATCH | `deferred-work.md:3344`. **The ledger's `:287` is CORRECT** (the pack check line). The story's Dev Note calling it drift (and saying `:267`) is wrong (see C12) |
-
-## 2. Ledger and precedent attribution (Layer 2, 12 items)
-
-| Claim | Sources checked | Verdict |
-|---|---|---|
-| ONB-06 section added by #421 as `8e7636a2` | ledger, `git log -S`, `git show` | CONFIRMED |
-| Story 2.1 (`4dd4b013`) created `marketplace.session_packs` | story file AC4 `:19`, commit (V26) | CONFIRMED |
-| Story 7.2 (`e9486e11`) created tiers without referencing session_packs; index from a review patch | story file, commit (V62), `git log -S` | CONFIRMED |
-| deferred-103: race → index → ApiAdvice 409 | story file AC1 `:89`, `SessionPackPaymentService:324-329`, `ApiAdvice:164-166` and `:193-195`, `SessionPackPaymentServiceIT:72` | CONFIRMED, but the IT does not prove a 409 and only races the first-tier case (see M3) |
-| deferred-151 replace UI | story file, `CoachSessionPackTiersPage.vue:194-205`, #265 | CONFIRMED (it also added "Withdraw offer", which matters for C2) |
-| "V181" protects old purchases' locked `pricePerSession` / amount charged | V181 header, `createPurchase :422` | PARTLY: V181 adds `amount_charged`; the locked `pricePerSession` is Story 7.2 (V62). V181 backfilled old rows from the then-current tier price |
-| PR #428 holds V225; expect V226+ | all 138 `origin/*` refs, `gh pr` | CONFIRMED (master tops out at V224; only #428 has V225) |
-| Port/adapter precedent; marketplace has no payment import | source grep, test grep | CONFIRMED. There is no module-edge test and no ArchUnit; `EmailTransportArchitectureTest` / `InfrastructureLayeringAuditTest` use a source scan |
-| "Known parallel-merge hotspots" (ledger, sprint-status, checklist) | repo docs, git log, private memory | PARTLY: only partly in repo docs. Memory lists the checklist and V-numbers, not the ledger or sprint-status. Harmless as advice |
-| "17-context cache budget" | `assert-context-count.sh:179`, `pr-build.yml:127`, `IntegrationTestConventionTest:109` | CONFIRMED |
-| Business docs say "up to five packs" | grep of `docs/business-docs`, `docs/dev-docs` | **WRONG**: they already say one active pack. Real targets: `docs/business-docs/coach/index.html:79`, `docs/dev-docs/marketplace/index.html:126`, `docs/dev-docs/database/index.html:72` |
-| The three one-active-rule precedents are real | combination of the above | CONFIRMED |
-
-## 3. Mechanistic claims (Layer 3, 12 items)
-
-| # | Claim | Evidence | Verdict |
+| Story location | Claim | Reality | Fix |
 |---|---|---|---|
-| 1 | `saveStep3` is `@Transactional` REQUIRED; a port call joins it | `CoachProfileService:266-267` (method-level, no propagation); resource `:131-136` is not transactional | TRUE |
-| 2 | `createTier` deactivates with saveAndFlush, inserts, never deletes, throws `payment.invalidPackTier` | `:295-330`; the insert is plain `save` | TRUE. Also: a null `totalPrice` NPEs in the guard (500), and a null label only fails at the column |
-| 3 | A tier rejection rolls back the pricing write and returns "the same 400, existing validation envelope" | rollback: inner REQUIRED marks rollback-only. Envelope: `ApiAdvice:132-136` gives `errorKey: generic.requestError`, `message: payment.invalidPackTier`; bean validation gives `validation.invalidData` + field errors (`:505-561`) | Rollback TRUE. **"Same envelope" FALSE** (see M2) |
-| 4 | Concurrent saves → index → 409 `payment.tierRaceConflict` | UUID id ⇒ the INSERT flushes at commit; JpaTransactionManager translates it to DataIntegrityViolationException, which `ApiAdvice:204-226` maps | TRUE only when no active tier exists yet |
-| 5 | The index decides a change race | `SessionPackTier:49 @Version`; the loser's `saveAndFlush` of the old row blocks on the row lock, then fails the version check, giving ObjectOptimisticLockingFailureException → `ApiAdvice:703-709` 409 `generic.conflict` | **PARTLY** (see M3). I reasoned this through but did not execute it |
-| 6 | purchasePack refuses a non-bookable coach (DRAFT) before charging | `:126-135`; `BookingService:587-596` allows only ACTIVE / REDUCED / PENDING_REVIEW | TRUE |
-| 7 | Query count unchanged; "verify, do not assume" | the tier derived query is one statement; but the IT seeds and asserts against `marketplace.session_packs` (`:152-153`, `:199-205`) | Count TRUE. **AC9 as worded ("still passes, no budget change") FALSE**: the IT must be rewritten (M4) |
-| 8 | `getOwnProfile` readOnly; a port read is safe | `:395` | TRUE |
-| 9 | `SessionPackDto` contract unchanged for the frontend | frontend reads `sessionCount`, `totalPrice`, `label` only | Shape TRUE; behaviour changes (C3, C4) |
-| 10 | Bean validation enforces the pack fields | `ProfileBuilderStep3Request:23` has no `@Valid` on the list or its elements; compare `ProfileBuilderStep4Request:19 List<@NotNull @Valid ...>` | **FALSE**: the most important finding (M1) |
-| 11 | Only the wizard and the dialog send step 3; no raw-SQL readers | `profileBuilder.store.js:72`, `EditCoachPricingDialog.vue:260`; raw SQL only in V138, the entity, the query-count IT | TRUE (plus the Pitchside provisioner, C9) |
-| 12 | Builder completeness / publish do not depend on packs | `validateAllStepsComplete :755-771`, `publishProfile :482-542` | TRUE (safe) |
+| AC8 | `getSavedPaymentMethod:367` | null guard is `:409` (Numbering already says so; AC8 not updated) | `:409` |
+| Dev Notes RS09 | "`:347`,`:361`,`:378` added by #436" | #436 added `:347`,`:361`; `:378` is old `:336` shifted +42 | reword |
+| Numbering | "unchanged at or before `:203`" | insertion hunk is `@@ -335,0 +336,42`; boundary is `:335` | reword |
+| Numbering | `createPurchase :414→:457` | old position `:415` | `:415` |
+| Dev Notes / Task 7 | `zonedMidnightMs` docblock `:542-551` | `:544-553` | fix |
+| AC6 | player `payment.subscription.notFound` `:575` | `:576` (`:575` is the lock query) | `:576` |
 
-## 4. Corner cases, false assumptions, missed flows (survived Step 4b)
+Numbering claims verified: V226 on master, V227 free on master and contested by three branches, #436 added exactly 42 lines in one hunk.
 
-### Must fix in the story before dev
+## 2. Ledger & precedent attribution (Layer 2)
+Almost all CONFIRMED (ledger RS05-RS09 at `deferred-work.md :338-342`; #337 `eea53ee9`; #362 `4db90562`; #436 `47180ea7`; deferred-170's text; eval cases 337/350/359/368 `fix_pr`+`fix_merge`; README/validate.py cites; routed-pool, REQUIRES_NEW and `@Modifying` precedents; Grafana lines `:638-648`, `:771`; `payments.json:1314`). Non-confirmed:
 
-- **M1 (High, AC5 / Design 6). Nested pack validation is off today.**
-  - `ProfileBuilderStep3Request.java:23` is `@Size(max = 5) List<SessionPackRequest>` with no `@Valid`. None of `@Positive`, `@DecimalMin`, `@Size(max=100)` or `@NoContactDetails` runs over HTTP. A pack label carrying contact details is accepted and shown publicly today.
-  - Any bound the story adds would be equally inert.
-  - `ProfileBuilderRequestValidationTest:56-61` validates the inner record directly, which hides this.
-  - Fix: `List<@NotNull @Valid SessionPackRequest>` (the step-4 precedent and its comment), tests through the outer request or HTTP, and a pre-backfill check of existing labels for contact details.
-  - Re-verified: I read the record myself.
-- **M2 (Medium, AC5). Two different 400s.**
-  - A `payment.invalidPackTier` rejection renders as `generic.requestError` with the raw reason as its message. Neither key has a translation, so the user sees the literal key.
-  - It is not the validation envelope AC5 promises.
-  - Fix: the adapter translates it into a marketplace field error on `sessionPacks` with an i18n entry, or AC5 accepts the different envelope.
-  - Note: `MarketplaceException` maps to 422, not 400.
-  - Re-verified: `ApiAdvice:132-136`.
-- **M3 (Medium, AC6). The concurrency expectation is wrong.**
-  - When a tier already exists, `@Version` decides the race (409 `generic.conflict`), not the index (409 `payment.tierRaceConflict`). The index decides only the first-tier race.
-  - Serialised saves both succeed, creating two successive rows, so "the loser gets a 409" is not guaranteed.
-  - The deferred-103 IT tolerates a commit-time `TransactionException`, which is not mapped (500), and never asserts a 409.
-  - Fix: restate AC6 as: exactly one active tier remains; any failure is a 409, never a 500; the loser's pricing write rolls back. Test both cases through MockMvc.
-  - Re-verified: `SessionPackTier:49`, `ApiAdvice:703-709`, IT `:92-101`.
-- **M4 (Medium, AC9 / T4). `CoachPublicProfileQueryCountIT` must be rewritten.**
-  - It seeds 2 then 4 `session_packs` rows and asserts parity against that table, so it fails as soon as reads move.
-  - Fix: seed one active tier plus inactive history rows, assert size 1, keep `EXPECTED_QUERY_COUNT = 4`. Keep the adapter read on JPA: a JdbcTemplate read would escape Hibernate statistics and pass falsely.
-  - Re-verified: IT `:152-153`, `:199-205`.
+| Claim | Verdict |
+|---|---|
+| `feature/pitchside-master-sync` is "local-only" | WRONG: `origin/feature/pitchside-master-sync` exists with the same V227 file. The V227 contest stands. |
+| AC12: "delete RS05-RS09 outright" | INCOMPLETE: the ledger entries themselves still say "corrected in place by the story's AC12/Task 8". Reword the ledger text when AC12 runs, or now. |
+| `charge_reconcile_after_minutes` is a "ConfigBounds key" | IMPRECISE: a string constant passed to `configService.getBoundedLong(...)` (`ChargeOutcomeReconciler :112`) with local bounds; not a `BoundedKey`. Values (10, 5-1440) match. |
 
-### Should fix in the story
+Not checked: "#436 added 42 lines" was verified by Layer 1; the 167 "table and code together" detail was not independently verified.
 
-- **C1 (High, Design 6 / AC4). Label bounds conflict.**
-  - The tier page allows 200-character labels; the builder and dialog cap at 100 (once M1 makes that real).
-  - The dialog always re-sends the pack from the profile (`EditCoachPricingDialog.vue:196-200`, `:263`), so a 101–200-character tier label makes every later pricing save fail, even a price-only change.
-  - Fix: one maximum on both paths (200 matches the column).
-- **C2 (Medium, Design 10). The backfill resurrects withdrawn offers.**
-  - "No active tier" includes coaches who pressed "Withdraw offer" (`deactivateTier`, `:337`).
-  - Fix:
-    - Backfill only coaches with no tier rows at all.
-    - Skip erased coaches (`coach_profiles.recap_data_erased_at`, V166).
-    - Pick the lowest-count valid row (`round(total/count, 2) > 0`, count ≤ 100, price ≤ 50000), because legacy rows were never validated (M1).
-    - Use `NULLIF(trim(label), '')` before applying the default.
-- **C3 (Medium, Design 5). The English default label overrides the localized fallback.**
-  - `SessionPackPricingDisplay.vue:47-48` shows translated "N sessions" when `label` is null. Storing "Session pack" replaces that in every locale.
-  - Fix: the read side maps the default constant back to null. The write round trip stays stable.
-- **C4 (Medium, Design 9 / G). Nested errors are invisible in the UI.**
-  - Field names like `sessionPacks[0].totalPrice` don't match the dialog's `hasFieldError('sessionPacks')`, and the dialog hides its banner for validation errors. The builder shows only a generic banner.
-  - Fix: add the tier page's client-side checks to both pack forms (integer count 1–100; price 0.01–50000 with at most 2 decimals; per-session floor), and map `sessionPacks[...]` errors to the pack slot.
-- **C5 (Medium, Design 4 / A). Stale or empty forms silently change the offer.**
-  - `ProfileBuilderStep3.vue:117` initialises `sessionPacks: []`, and the builder rail allows going back (`CoachProfileBuilderPage.vue:136 goToStep`). Re-submitting step 3 sends `[]`, which under Design 4 now withdraws a tier the coach created on the tier page.
-  - The dialog replaces the offer without the tier page's confirmation, and a stale second tab can resurrect a withdrawn offer.
-  - Fix: prefill step 3 from `getOwnProfile`, or send `sessionPacks: null` when the pack fields were untouched. Document the dialog's replace semantics.
-- **C6 (Low–Medium). Code and tests the story does not list.**
-  - `CoachProfileSelfEditIT:209` and `:238-263` (resubmission and duplicate-count tests, `marketplace.duplicateSessionPackCount`).
-  - The `uq_session_pack` mapping in `ApiAdvice:167-172` and its `ApiAdviceTest` case, which become dead.
-  - The dialog's duplicate-count guard (`:233-252`).
-  - `CoachProfileServiceTest` uses `@InjectMocks`, so the new port needs a `@Mock`.
-  - The stale "V62:58" comments in `SessionPackPaymentService:326` and the IT javadoc.
-- **C7 (Low, AC8). There is no ArchUnit.** Write the module-edge assertion as a source scan, after `InfrastructureLayeringAuditTest` / `EmailTransportArchitectureTest`.
-- **C8 (Low, Design 6). A fractional session count is truncated.** `sessionCount` is a primitive `int`, and Jackson's `ACCEPT_FLOAT_AS_INT` defaults on (no override found in `src/main`), so 2.5 becomes 2. Add an integer check on the frontend (C4) and consider a boxed `Integer` with `@NotNull`.
-- **C9 (Low, AC11 hand-off). Pitchside provisioner detail.**
-  - The step-3 PUT already sends the pack (`provisioner.ts:262`). After this story it creates the tier, and the extra POST at `:281` (not `:260`) churns a second row.
-  - The hand-off should delete the `:281` call.
-- **C10 (Low, AC7 wording).** Attribute the locked `pricePerSession` to Story 7.2 (V62), and `amount_charged` to V181.
-- **C11 (Low, AC12 wording).** Replace "business-docs say up to five packs" with the three real targets in section 2.
-- **C12 (Low, Dev Notes). False drift claim.** The note "ledger says `:287`; it is `:267`" is wrong; the ledger's `:287` is the pack check. Also correct `:285` to `:287` in Design 4.
+## 3. Mechanistic claims (Layer 3)
+HOLD: `purchasePack` non-transactional and its gate order; `chargeAndCapture :144` outside the try; the catch `:154-186`; sync early-return `:204` (correction 3 true); gateway pre-flight throws before any Stripe call; decline mapping; `isOutcomeUnknown` incl. `IdempotencyException`; `findChargeByIdempotencyKey` empty for both no-customer and not-found; 422 vs `errorMsg.message` wire contract; `handleEventAtomically` transaction scope; orphan paths; webhook 500 → duplicate on redelivery; routed-pool mechanics from a separate bean; `OperationalBacklogMetrics` shape (a new branch fits); `ConfigBounds` shapes; GDPR `:805`; AC6's FK-free `REQUIRES_NEW` insert cannot deadlock or poison the outer transaction.
+
+PARTIAL / WRONG (all re-read by me, all confirmed — see §4):
+- `getOrCreateStripeCustomer` writes only when the id is non-blank **only for an existing row**; the no-row branch stores whatever it is given (null or blank).
+- `handleSubscriptionWebhook` does **not** run `isStaleEvent` in the `deleted` branches (the story says "every branch").
+- The 409 wire contract silently depends on `generic.requestError` staying out of the message bundles.
+
+## 4. Findings that survived re-verification
+
+### HIGH
+**H1. A premature `NO_CHARGE` frees the index while the original request can still capture → second charge and second pack.** AC1 (CAS exception, line 194), AC2 (line 258), AC3.
+Trigger: attempt A is `IN_PROGRESS` and its thread is slow or hung past the 10-minute minimum age (the story itself sizes a legitimate request at 6-8 minutes, `PaymentConfig:56-60`, 2-4 sequential Stripe calls at ~2 min worst case each, so the margin is thin). The job or a same-key replay finds nothing at Stripe and, per AC2 line 258 sentence 1, writes `NO_CHARGE` — and AC8 runs the card **revert first**. The partial index is now free, the parent starts attempt B and is charged. A's thread then captures and uses the proof-of-capture exception (`NO_CHARGE → SUCCEEDED`) to create a second pack. Nothing refunds either charge. The CAS-to-`UNRECONCILED` variant can additionally **throw** on the partial unique index when B is open, leaving the row at `NO_CHARGE` where the gauge never sees it (the story only handles an UPDATE that affects no row).
+The root cause is that absence of a PaymentIntent is inferred while the originating request may be alive. Fix directions: infer `NO_CHARGE` from absence only past a much larger age (or the Stripe-key window), or keep an `IN_PROGRESS` row `IN_PROGRESS` unless a heartbeat/`updated_at` shows the thread is dead; and specify that a CAS that violates the index is caught and logged at `error`.
+
+### MEDIUM
+**M1. AC2 contradicts itself on "not found" (line 258).** Sentence 1: it "counts as `NO_CHARGE` only past the minimum age". Sentence 2: a row "stays `UNKNOWN`" until ~24 h plus a margin. The accepted cost (line 135, "minimum age plus one job cycle") assumes sentence 1; sentence 2 makes the terminal rule dead code under it, or blocks a lost-key parent for ~24 h under the other reading. A dev can implement either. Resolving H1 forces this choice.
+
+**M2. A parent can be blocked from every pack purchase indefinitely with no exit.** The index is on `parent_id` alone across `IN_PROGRESS/UNKNOWN/UNRECONCILED`. No exit when: (a) the job's AC2 "create the pack" step fails deterministically (specified only for the request-path catch `:154-186`; a copied compensating refund would refund a funded pack); (b) the Stripe lookup fails forever (deleted customer, `REFUND_TARGET_INVALID`) — the terminal rule requires a *successful* lookup; (c) a row genuinely needs a human — AC12 defers the reconciler and there is no operator close/abandon transition, so the remedy is hand-edited SQL. The block applies to every tier of every coach. Specify the job's create-failure path and an operator resolution (status transition or runbook step).
+
+**M3. A zero `getRefundableAmount` for a captured payment becomes `REFUNDED` with no pack.** `StripePaymentGateway.java :541-552` returns `ZERO` when `getLatestChargeObject()` is null. AC2 maps zero to `REFUNDED`, so a `succeeded` intent whose latest charge is not expanded yields captured money, no pack and no refund. Treat a null charge on a `succeeded` intent as a failed lookup (stay `UNKNOWN`), and add a test.
+
+**M4. Parked `deleted` events bypass the staleness check.** `handleSubscriptionDeleted` (`SubscriptionService :1272-1285`) never calls `isStaleEvent`, so a parked *older* `deleted` is applied over a newer applied `updated`; AC4's drain text says `handleSubscriptionWebhook` "already runs `isStaleEvent` … in every branch", which is false for `deleted`. State the intended behaviour (a delete is final regardless of order, or compare `event_created`) and test it.
+
+**M5. First-time payer with a null/blank payment method.** `getOrCreateStripeCustomer` (`:440-453`) stores the payment method unconditionally in the no-row branch, so "the card write is a no-op for the shipped UI" is true only for an existing customer. The `previous_card`/`attempted_card`/`customer_existed` semantics in AC1/AC8 should say so; a blank `""` is stored and passes `charge()`'s `== null` check.
+
+### LOW
+- **L1.** Keyless retries are refused 10-15 min after any timeout, and an unclassified pre-Stripe `RuntimeException` (pool timeout in `charge`'s `findById`, `:138-139`) is marked `UNKNOWN` although Stripe was never reached. Safe, but the cost is understated in line 135.
+- **L2.** A linked parked event that throws on every apply is retried every 5 minutes and, with "oldest first, stop", blocks later events for that subscription; duty (d) purges only never-linked rows and no alert covers it.
+- **L3.** `cancelDuplicateSubscription` (`:190,:453,:1522`) makes every lost subscribe race park an `updated`/`deleted` that is later purged unapplied with a `warn` and metric, which fires on an expected path. Tag or exclude it so the metric stays meaningful.
+- **L4.** A concurrent same-key insert and the open-per-parent violation are both `23505`; AC1a step 4 should say to re-read by `(parent_id, attempt_key)` first to tell them apart.
+- **L5.** The 409 wire contract relies on `generic.requestError` staying absent from the message bundles; pin it with a test.
+- **L6.** Story 170 cites 169's lines `:562-563` and `:200-207`, now about `:578-580` and `:217-231`. No behavioural conflict (170's readiness check sits after 169's replay lookup and before the insert).
 
 ## 5. What did not survive re-verification
-
-- **Circular-reference risk from the adapter calling `SessionPackPaymentService`** (Layer 4 #12). Speculative: no path back to `CoachProfileService` was found, and `allow-circular-references: false` would fail context start loudly, not silently. Downgraded to "confirm the context starts". This is not a finding.
-- **"The story's 'expect V226+' may be wrong"**. Killed: all remote refs checked, and only #428 carries V225.
-- **"The 17-context budget is threatened"**. Killed: the only web slice mocks the service; no full-context IT adds a mock set.
-- **"GDPR erasure gap from moving labels to tiers"**. Killed: neither pack table is touched by `GdprErasureService` today, so there is no new gap. A pre-existing non-erasure of pack labels is out of scope.
-- **"Hotspot list is fabricated"**. Downgraded: it is partly from private memory rather than the repo, but it is accurate advice, so no story change is needed.
+- Layer 4's "AC4 interleaving fails" and "failed apply loses the event" probes: the two-case argument at lines 298-299 holds under READ COMMITTED, and `DELETE … RETURNING` plus the apply share one transaction, so an apply failure restores the row. Dropped.
+- Layer 4's AC10 DST/west-of-UTC probes: local midnight tomorrow is always accepted and `formatDate` renders in local time. Dropped.
+- Layer 3's note that the refund-failed branch writes no tag: the `:157` `PACK_PURCHASE_RECORD_FAILED` tag covers it. Dropped.
+- Layer 1's "AC8 `:367` drift" is a stale AC8 cite, not a wrong Numbering claim — kept only as a minor drift.
+- Not verified: the "closed at seven rounds" claim for deferred-167 (Layer 4 could not glob the file); Stripe's idempotency behaviours (stated in the story as not exercised); primary pool size 25.
 
 ## 6. Recommendation
-
-The story's direction (Option A, port/adapter seam, set-the-offer semantics, deferred DROP) holds. Its precedents are real, and most citations are exact. It should not go to dev until these are edited in:
-
-1. **M1, nested `@Valid`.** HIGH confidence. I read the record and the step-4 precedent myself. Without it, every validation AC is inert.
-2. **M3 and M4, AC6 and AC9 rewording plus test changes.** HIGH confidence on M4 (IT lines re-read). MEDIUM-HIGH on M3: the `@Version` mechanism and the 409 mapping were re-read, but the lock-then-version-failure sequence was reasoned through, not executed.
-3. **M2, the error envelope.** HIGH confidence (handler re-read). The translation choice is a design decision for the owner or dev.
-4. **C1, C2, C5, which change behaviour coaches would notice.**
-   - C1: HIGH confidence.
-   - C2: HIGH on the withdraw case; the erased-coach exclusion is advisory.
-   - C5: HIGH that step 3 starts empty; MEDIUM on how often coaches revisit step 3.
-5. **C3, C4, C6–C12, wording and test-list corrections.** MEDIUM to HIGH. C8's Jackson default was not checked against the live ObjectMapper config beyond a grep.
-
-**Not independently re-checked by me in Step 4b:**
-- the Pitchside line numbers (Layer 1 only);
-- the docs targets in C11 (Layer 2 only);
-- `ReportGenerationService:193`, the other `getPublicProfile` caller (one extra query, no behaviour change; Layer 4 only).
+- Trend across passes: high-severity findings 6 → 3 → 4 → **1**. The simplification removed the structural defects; H1 is a residue of the "infer NO_CHARGE from absence" rule, not a new mechanism.
+- **H1 should be fixed before `/bmad-dev-story`** (one rule change in AC2, with M1's contradiction resolved by the same edit). M2-M5 are small spec additions. The citation and precedent fixes are mechanical.
+- Confidence: citations and precedents — high (each re-read). Mechanistic claims — high for those I re-read myself (L2/M3, M4, M5, M1 wording); the rest rest on Layer 3's quoted evidence. H1 is a reasoning chain over verified facts; its trigger needs a request exceeding the minimum age, which the story's own sizing makes plausible but rare.
+- A split is no longer indicated by the trend; it remains available (RS08 | RS06+RS09 | RS05+RS07).
+- The findings above were applied in the next revision of the story (see its Change Log).

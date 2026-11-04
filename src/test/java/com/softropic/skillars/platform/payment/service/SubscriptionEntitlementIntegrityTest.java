@@ -89,6 +89,9 @@ class SubscriptionEntitlementIntegrityTest {
     @Mock PessimisticLockRetryer lockRetryer;
     @Mock StripeWebhookService stripeWebhookService;
     @Mock PlayerProfileRepository playerProfileRepository;
+    @Mock com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEventRepository pendingSubscriptionEventRepository;
+    @Mock PaymentRecoveryRecorder paymentRecoveryRecorder;
+    @Mock io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     @InjectMocks SubscriptionService service;
 
@@ -565,6 +568,103 @@ class SubscriptionEntitlementIntegrityTest {
         service.persistCoachTierUpgrade(COACH_ID, SUB_ID, "ACADEMY", null);
 
         verify(paymentCoachSubscriptionRepository, never()).save(any());
+    }
+
+    // ─── skillars-deferred-169 AC6/AC7: a paid upgrade that cannot be granted is recorded, never silently dropped ──
+
+    @Test
+    void item9_supersededUpgrade_isRecordedWithItsInvoice_theTierIsNotGranted_andNoErrorSurfaces() {
+        coachSub.setStripeSubscriptionId("sub_other");
+        coachSub.setTier("SCOUT");
+        Subscription updated = org.mockito.Mockito.mock(Subscription.class);
+        when(updated.getLatestInvoice()).thenReturn("in_proration_1");
+        when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(org.mockito.Mockito.mock(io.micrometer.core.instrument.Counter.class));
+
+        service.persistCoachTierUpgrade(COACH_ID, SUB_ID, "ACADEMY", updated);
+
+        verify(paymentRecoveryRecorder).recordUngrantedUpgrade("COACH", String.valueOf(COACH_ID), SUB_ID, "ACADEMY", "in_proration_1");
+        assertThat(coachSub.getTier()).isEqualTo("SCOUT");
+        verify(paymentCoachSubscriptionRepository, never()).save(any());
+    }
+
+    @Test
+    void item9_supersededUpgrade_aFailingRecord_isSwallowed_theRequestStillSucceeds() {
+        coachSub.setStripeSubscriptionId("sub_other");
+        org.mockito.Mockito.doThrow(new IllegalStateException("db down")).when(paymentRecoveryRecorder)
+            .recordUngrantedUpgrade(any(), any(), any(), any(), any());
+
+        service.persistCoachTierUpgrade(COACH_ID, SUB_ID, "ACADEMY", null);
+
+        verify(paymentCoachSubscriptionRepository, never()).save(any());
+    }
+
+    // ─── skillars-deferred-169 AC4: parked subscription events are drained oldest-first, once ───────────────────
+
+    private com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEvent parkedRow(long id, String type) {
+        com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEvent row =
+            org.mockito.Mockito.mock(com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEvent.class);
+        when(row.getId()).thenReturn(id);
+        when(row.getEventId()).thenReturn("evt_" + id);
+        when(row.getEventType()).thenReturn(type);
+        when(row.getStripeSubscriptionId()).thenReturn(SUB_ID);
+        when(row.getEventCreated()).thenReturn(1_700_000_000L + id);
+        when(row.getStatus()).thenReturn("active");
+        return row;
+    }
+
+    @Test
+    void drain_appliesInOrder_andStopsAfterADeleted() {
+        var updated = parkedRow(1, "customer.subscription.updated");
+        var deleted = parkedRow(2, "customer.subscription.deleted");
+        var afterDelete = parkedRow(3, "customer.subscription.updated");
+        when(pendingSubscriptionEventRepository.findBySubscriptionOrdered(SUB_ID)).thenReturn(java.util.List.of(updated, deleted, afterDelete));
+        when(pendingSubscriptionEventRepository.findById(any())).thenAnswer(inv -> java.util.Optional.of(
+            java.util.List.of(updated, deleted, afterDelete).stream().filter(r -> r.getId().equals(inv.getArgument(0))).findFirst().orElseThrow()));
+        when(pendingSubscriptionEventRepository.claim(any())).thenReturn(1);
+
+        service.drainParkedEvents(SUB_ID);
+
+        verify(pendingSubscriptionEventRepository).claim(1L);
+        verify(pendingSubscriptionEventRepository).claim(2L);
+        verify(pendingSubscriptionEventRepository, never()).claim(3L);
+    }
+
+    @Test
+    void drain_stopsAfterAnUpdatedThatCarriesACanceledStatus_itIsADeletionToo() {
+        var canceled = parkedRow(1, "customer.subscription.updated");
+        when(canceled.getStatus()).thenReturn("canceled");
+        var later = parkedRow(2, "customer.subscription.updated");
+        when(pendingSubscriptionEventRepository.findBySubscriptionOrdered(SUB_ID)).thenReturn(java.util.List.of(canceled, later));
+        when(pendingSubscriptionEventRepository.findById(1L)).thenReturn(java.util.Optional.of(canceled));
+        when(pendingSubscriptionEventRepository.claim(1L)).thenReturn(1);
+
+        service.drainParkedEvents(SUB_ID);
+
+        verify(pendingSubscriptionEventRepository, never()).claim(2L);
+    }
+
+    @Test
+    void applyParkedEvent_aRowAnotherDrainerAlreadyClaimed_isNotAppliedAgain() {
+        var row = parkedRow(5, "customer.subscription.updated");
+        when(pendingSubscriptionEventRepository.findById(5L)).thenReturn(java.util.Optional.of(row));
+        when(pendingSubscriptionEventRepository.claim(5L)).thenReturn(0);
+
+        assertThat(service.applyParkedEvent(5L)).isFalse();
+
+        verify(paymentCoachSubscriptionRepository, never()).findByStripeSubscriptionIdForUpdate(any());
+    }
+
+    @Test
+    void drain_aFailingApply_stopsTheDrain_soLaterEventsAreNotAppliedOutOfOrder() {
+        var first = parkedRow(1, "customer.subscription.updated");
+        var second = parkedRow(2, "customer.subscription.updated");
+        when(pendingSubscriptionEventRepository.findBySubscriptionOrdered(SUB_ID)).thenReturn(java.util.List.of(first, second));
+        when(pendingSubscriptionEventRepository.findById(1L)).thenReturn(java.util.Optional.of(first));
+        when(pendingSubscriptionEventRepository.claim(1L)).thenThrow(new IllegalStateException("boom"));
+
+        service.drainParkedEvents(SUB_ID);
+
+        verify(pendingSubscriptionEventRepository, never()).claim(2L);
     }
 
     // ─── Item 11: upgrades charge now; failed charge is not granted ──────────────────────────────
