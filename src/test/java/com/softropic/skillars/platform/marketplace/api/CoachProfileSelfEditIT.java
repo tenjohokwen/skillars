@@ -309,6 +309,31 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void blankBuilderLabelIsStoredAsNull_butATypedSessionPackLabelIsKept() {
+        // /pr-review round 2 V1: "Session pack" used to be the stand-in for "no label", so a coach who typed it
+        // on the tier page saw it replaced by the "N sessions" fallback. No label is NULL now.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+
+        putStep3(cookies, 50.0, List.of(pack(5, 200.0, "  ")));
+        assertThat(tiersOfCoach()).singleElement().satisfies(t -> assertThat(t.get("label")).isNull());
+        assertThat(ownSessionPacks(cookies)).singleElement().satisfies(p -> assertThat(p.get("label")).isNull());
+
+        ResponseEntity<Map> created = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/payment/coaches/me/session-pack-tiers", HttpMethod.POST,
+            Map.of("label", "Session pack", "sessionCount", 8, "totalPrice", 300.0),
+            authenticatedHeaders(cookies), Map.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        assertThat(ownSessionPacks(cookies)).singleElement()
+            .satisfies(p -> assertThat(p.get("label")).isEqualTo("Session pack"));
+        // Re-sending exactly what the profile shows is not a change.
+        putStep3(cookies, 50.0, List.of(pack(8, 300.0, "Session pack")));
+        assertThat(tiersOfCoach()).hasSize(2);
+    }
+
+    @Test
     void publicProfilePack_isTheTierTheParentBuys() {
         // AC4: the profile's pack and the tier the purchase page loads (and purchasePack charges) are one row.
         String cookies = loginAndGetCookies(COACH_EMAIL);

@@ -2,7 +2,6 @@ package com.softropic.skillars.platform.payment.adapter;
 
 import com.softropic.skillars.platform.marketplace.contract.CoachSessionPackPort;
 import com.softropic.skillars.platform.marketplace.contract.SessionPackDto;
-import com.softropic.skillars.platform.marketplace.contract.SessionPackLimits;
 import com.softropic.skillars.platform.payment.repo.SessionPackTierRepository;
 import com.softropic.skillars.platform.payment.service.SessionPackPaymentService;
 import lombok.RequiredArgsConstructor;
@@ -30,7 +29,7 @@ public class CoachSessionPackAdapter implements CoachSessionPackPort {
                 tier.getSessionCount(),
                 tier.getTotalPrice(),
                 "EUR",
-                SessionPackLimits.DEFAULT_LABEL.equals(tier.getLabel()) ? null : tier.getLabel()));
+                tier.getLabel()));
     }
 
     @Override

@@ -18,13 +18,6 @@ public final class SessionPackLimits {
     /** Longest pack label, the width of {@code session_pack_tiers.label}. */
     public static final int MAX_LABEL_LENGTH = 200;
 
-    /**
-     * Stored as the tier label when the builder submits a pack without one ({@code session_pack_tiers.label}
-     * is NOT NULL). {@link CoachSessionPackPort#findActivePack} reads it back as {@code null}, so the profile
-     * keeps its localized "N sessions" fallback instead of showing this English phrase.
-     */
-    public static final String DEFAULT_LABEL = "Session pack";
-
     private SessionPackLimits() {
     }
 }

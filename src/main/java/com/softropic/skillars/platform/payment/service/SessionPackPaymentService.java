@@ -5,7 +5,6 @@ import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.service.BookingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
-import com.softropic.skillars.platform.marketplace.contract.SessionPackLimits;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.CreateSessionPackTierRequest;
@@ -347,15 +346,15 @@ public class SessionPackPaymentService {
      */
     @Transactional
     public void replaceActiveOffer(UUID coachId, int sessionCount, BigDecimal totalPrice, String label) {
-        String effectiveLabel = effectiveLabel(label);
+        String normalizedLabel = normalizeLabel(label);
         Optional<SessionPackTier> active = sessionPackTierRepository.findByCoachIdAndIsActiveTrue(coachId);
         if (active.isPresent()
                 && active.get().getSessionCount() == sessionCount
                 && active.get().getTotalPrice().compareTo(totalPrice) == 0
-                && active.get().getLabel().equals(effectiveLabel)) {
+                && java.util.Objects.equals(active.get().getLabel(), normalizedLabel)) {
             return;
         }
-        createTier(coachId, effectiveLabel, sessionCount, totalPrice);
+        createTier(coachId, normalizedLabel, sessionCount, totalPrice);
     }
 
     /** skillars-deferred-168: the "no pack" half of {@link #replaceActiveOffer}. */
@@ -368,9 +367,12 @@ public class SessionPackPaymentService {
             });
     }
 
-    /** A blank builder label becomes {@link SessionPackLimits#DEFAULT_LABEL}: the tier label is NOT NULL. */
-    static String effectiveLabel(String label) {
-        return label == null || label.isBlank() ? SessionPackLimits.DEFAULT_LABEL : label;
+    /**
+     * A blank builder label means "no label" and is stored as NULL, which readers show as their own localized
+     * "N sessions". A label the coach typed (including the words "Session pack") is kept exactly as typed.
+     */
+    static String normalizeLabel(String label) {
+        return label == null || label.isBlank() ? null : label;
     }
 
     @Transactional

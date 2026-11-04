@@ -94,7 +94,7 @@ class BuilderPackTierBackfillIT extends AbstractIntegrationTest {
         runBackfill();
 
         assertThat(tiersOf(coachId)).singleElement().satisfies(t -> {
-            assertThat(t.get("label")).isEqualTo("Session pack");
+            assertThat(t.get("label")).isNull();
             assertThat(t.get("session_count")).isEqualTo(5);
             assertThat((BigDecimal) t.get("total_price")).isEqualByComparingTo("200.00");
             assertThat((BigDecimal) t.get("price_per_session")).isEqualByComparingTo("40.00");
@@ -114,7 +114,7 @@ class BuilderPackTierBackfillIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void everyLegacyLabelBecomesTheDefault_noFreeTextIsCarriedOver() throws Exception {
+    void everyLegacyLabelBecomesNoLabel_noFreeTextIsCarriedOver() throws Exception {
         // pr-review V4: legacy builder labels were never checked for contact details, and a regex cannot catch
         // 'insta: coach_x' or 'name at gmail dot com', so none is copied into a public, purchasable tier.
         String[] labels = {
@@ -132,7 +132,7 @@ class BuilderPackTierBackfillIT extends AbstractIntegrationTest {
 
         for (UUID coachId : coaches) {
             assertThat(tiersOf(coachId)).singleElement()
-                .satisfies(t -> assertThat(t.get("label")).isEqualTo("Session pack"));
+                .satisfies(t -> assertThat(t.get("label")).isNull());
         }
     }
 

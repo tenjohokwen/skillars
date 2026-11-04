@@ -19,12 +19,14 @@
 --    rounds to more than 0.00 (chk_spt_price_per_session_positive).
 --  - price_per_session = round(total_price / session_count, 2), as SessionPackPaymentService.createTier
 --    computes it (HALF_UP; PostgreSQL's numeric round() rounds half away from zero, identical for positives).
---  - label: ALWAYS 'Session pack' (SessionPackLimits.DEFAULT_LABEL, which the profile reads back as "no label" and
---    renders as its own localized "N sessions"). The builder never ran @NoContactDetails on pack labels, and these
---    rows are about to become a public, purchasable offer on a platform that bans off-platform contact. A regex
---    cannot tell 'Season 10' from 'insta: coach_x' or 'name at gmail dot com', so no legacy free text is carried
---    over (skillars-deferred-168 /pr-review V4). A coach who wants a label sets one on the profile or the "My
---    Session Pack Offer" page, where it is validated.
+--  - label: NULL ("no label"; the profile shows its own localized "N sessions"). The builder never ran
+--    @NoContactDetails on pack labels, and these rows are about to become a public, purchasable offer on a
+--    platform that bans off-platform contact. A regex cannot tell 'Season 10' from 'insta: coach_x' or 'name at
+--    gmail dot com', so no legacy free text is carried over (skillars-deferred-168 /pr-review V4). A coach who
+--    wants a label sets one on the profile or the "My Session Pack Offer" page, where it is validated.
+--    session_pack_tiers.label was NOT NULL, so this migration first drops that constraint: since this story a pack
+--    set from the builder may have no label, and storing a stand-in string instead would be indistinguishable from
+--    a coach who typed that string (/pr-review round 2, V1). Widening a column to nullable is metadata-only.
 -- Everything else in session_packs (a coach's other packs, invalid rows) is discarded: it was never
 -- purchasable. The table itself stays for one release (migration-conventions.md rule 2: a DROP ships only
 -- in a release after the one that removed its last reader); the DROP is a filed follow-up in deferred-work.md.
@@ -34,15 +36,20 @@
 -- provisioning checklist); UAT coaches can re-enter a discarded pack on their "My Session Pack Offer" page.
 --
 -- Migration conventions (docs/deployment/migration-conventions.md):
---  - Additive only: inserts rows, no DDL, no UPDATE/DELETE of existing rows, no DROP.
+--  - Additive only: one metadata-only DROP NOT NULL on a label column nothing requires, then inserts; no
+--    UPDATE/DELETE of existing rows, no DROP of a table, column, index or constraint. Like V186-V224 it writes the
+--    widened column in the same release ("prod is not live").
 --  - Rule 7: purchases and the tier page write session_pack_tiers, so lock_timeout makes this fail fast
 --    instead of queueing behind a long transaction.
 SET LOCAL lock_timeout = '5s';
 
+ALTER TABLE payment.session_pack_tiers ALTER COLUMN label DROP NOT NULL;
+
+
 INSERT INTO payment.session_pack_tiers (coach_id, label, session_count, total_price, price_per_session, is_active)
 SELECT DISTINCT ON (sp.coach_id)
        sp.coach_id,
-       'Session pack',
+       NULL,
        sp.session_count,
        sp.total_price,
        round(sp.total_price / sp.session_count, 2),

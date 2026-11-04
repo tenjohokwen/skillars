@@ -1,7 +1,6 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.softropic.skillars.platform.config.service.ConfigService;
-import com.softropic.skillars.platform.marketplace.contract.SessionPackLimits;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
@@ -74,9 +73,9 @@ class SessionPackOfferTest {
     }
 
     @Test
-    void blankLabel_storedAsTheDefault_andThenCountsAsUnchanged() {
+    void blankLabel_isNoLabel_andThenCountsAsUnchanged() {
         when(sessionPackTierRepository.findByCoachIdAndIsActiveTrue(COACH_ID))
-            .thenReturn(Optional.of(tier(5, "180.00", SessionPackLimits.DEFAULT_LABEL)));
+            .thenReturn(Optional.of(tier(5, "180.00", null)));
 
         service.replaceActiveOffer(COACH_ID, 5, new BigDecimal("180"), "  ");
         service.replaceActiveOffer(COACH_ID, 5, new BigDecimal("180"), null);
@@ -105,7 +104,7 @@ class SessionPackOfferTest {
     }
 
     @Test
-    void firstPack_withoutLabel_createsATierWithTheDefaultLabel() {
+    void firstPack_withoutLabel_createsATierWithNoLabel() {
         when(sessionPackTierRepository.findByCoachIdAndIsActiveTrue(COACH_ID)).thenReturn(Optional.empty());
         when(sessionPackTierRepository.findAllByCoachIdAndIsActiveTrue(COACH_ID)).thenReturn(List.of());
         stubSave();
@@ -114,7 +113,22 @@ class SessionPackOfferTest {
 
         ArgumentCaptor<SessionPackTier> inserted = ArgumentCaptor.forClass(SessionPackTier.class);
         verify(sessionPackTierRepository).save(inserted.capture());
-        assertThat(inserted.getValue().getLabel()).isEqualTo(SessionPackLimits.DEFAULT_LABEL);
+        assertThat(inserted.getValue().getLabel()).isNull();
+    }
+
+    @Test
+    void aLabelTheCoachTypedIsKeptEvenWhenItReadsLikeADefault() {
+        // /pr-review V1: "Session pack" used to be the stand-in for "no label", so a coach who typed it lost it.
+        SessionPackTier old = tier(5, "180.00", null);
+        when(sessionPackTierRepository.findByCoachIdAndIsActiveTrue(COACH_ID)).thenReturn(Optional.of(old));
+        when(sessionPackTierRepository.findAllByCoachIdAndIsActiveTrue(COACH_ID)).thenReturn(List.of(old));
+        stubSave();
+
+        service.replaceActiveOffer(COACH_ID, 5, new BigDecimal("180"), "Session pack");
+
+        ArgumentCaptor<SessionPackTier> inserted = ArgumentCaptor.forClass(SessionPackTier.class);
+        verify(sessionPackTierRepository).save(inserted.capture());
+        assertThat(inserted.getValue().getLabel()).isEqualTo("Session pack");
     }
 
     @Test

@@ -14,8 +14,7 @@ import java.util.UUID;
 public interface CoachSessionPackPort {
 
     /**
-     * The coach's active offer, or empty when they have none. A label equal to
-     * {@link SessionPackLimits#DEFAULT_LABEL} comes back as {@code null}.
+     * The coach's active offer, or empty when they have none. The label is {@code null} when the coach set none.
      */
     Optional<SessionPackDto> findActivePack(UUID coachId);
 

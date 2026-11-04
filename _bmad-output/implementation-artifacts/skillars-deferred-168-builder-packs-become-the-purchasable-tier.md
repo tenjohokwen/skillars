@@ -408,9 +408,8 @@ Claude Opus 5.5 (claude-opus-5-5), /bmad-dev-story, 2026-11-04.
   guard is client-side (both forms reject non-integers) and the record's Javadoc says so. The boxed type still turns a
   missing count into a `@NotNull` violation instead of 0.
 - **Legacy labels (Design 11).** UAT data could not be queried from here, and /pr-review (V4) showed a regex cannot
-  catch 'insta: coach_x' or 'name at gmail dot com', so `V226` carries NO legacy label over: every backfilled tier is
-  labelled 'Session pack' (read back as no label, shown as the localized "N sessions"). Recorded in the migration
-  header and the checklist line.
+  catch 'insta: coach_x' or 'name at gmail dot com', so `V226` carries NO legacy label over: every backfilled tier has
+  no label (NULL, shown as the localized "N sessions"). Recorded in the migration header and the checklist line.
 - **Story said an `ApiAdviceTest` case for `uq_session_pack` exists; it does not** (grep found none). Only the mapping was removed.
 - **i18n:** `auth.coach.step3PackDuplicateSessionCount` was replaced by the four new pack error keys (its only reference
   was removed); `marketplace.duplicateSessionPackCount` (now unreferenced) is left for the DROP follow-up.
@@ -419,6 +418,12 @@ Claude Opus 5.5 (claude-opus-5-5), /bmad-dev-story, 2026-11-04.
   Edit-pricing dialog withdrawing the offer on a price-only save from a stale or pack-less form (V1) and the builder
   withdrawing it after an added-then-emptied row (V2). V3 (a Javadoc wording question; the ITs show both race cases
   are 409s) was left. V4 is the label change above.
+- **/pr-review round 2 fix (V1):** Design 5's default-label stand-in ("Session pack", read back as null) could not
+  tell a blank label from a coach who typed that phrase. `payment.session_pack_tiers.label` is now nullable (V226
+  starts with a metadata-only `DROP NOT NULL`); a blank builder label is stored as NULL, a typed label is kept as typed,
+  and `SessionPackLimits.DEFAULT_LABEL` is gone. The tier page titles a label-less tier with the same localized
+  "N sessions" fallback as the profile. This supersedes Design 5's default-constant wording. The other round-2
+  finding (fractional counts) is the known deviation above.
 - **Doc footer stamps were not bumped**: only the edited rows were verified, not whole pages.
 - **Ledger:** the ONB-06 section is replaced in this PR (so it disappears when the PR merges) by a
   skillars-deferred-168 section with two follow-ups: the `DROP TABLE` (prepared in V226) and the Pitchside hand-off.
