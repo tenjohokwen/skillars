@@ -171,8 +171,17 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "card title keyed by the current step config entry's titleKey",
   },
   {
-    at: 'src/pages/coach/CoachProfileBuilderPage.vue:112',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:118',
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
+  },
+  {
+    at: 'src/components/profileBuilder/ProfileBuilderStep3.vue:203',
+    reason:
+      'pack error keyed by packErrorKey (src/utils/sessionPackForm.js), one of five literal auth.coach.step3Pack* keys',
+  },
+  {
+    at: 'src/components/profile/EditCoachPricingDialog.vue:253',
+    reason: 'same packErrorKey-chosen pack error message as ProfileBuilderStep3',
   },
   {
     at: 'src/pages/coach/CoachCommandCenterPage.vue:891',

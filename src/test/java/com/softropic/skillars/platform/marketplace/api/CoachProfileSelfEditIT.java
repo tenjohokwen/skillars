@@ -205,63 +205,265 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
         assertThat(statusOfCoach()).isEqualTo("ACTIVE");
     }
 
+    // ---- skillars-deferred-168: the builder's pack IS the coach's purchasable tier ----
+
     @Test
-    void saveStep3_resubmittingSameSessionPackCount_doesNotViolateUniqueConstraint() {
-        // Same insert-before-delete hazard as saveStep2's ageGroups, for uq_session_pack
-        // (coach_id, session_count) — a coach editing a pack's price/label while keeping the same
-        // session count must not 400.
+    void saveStep3_onePack_becomesTheActiveTier_andTheOwnProfileShowsIt() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
         saveStep1(cookies);
         saveStep2(cookies);
-        httpTestClient.makeHttpRequest(
-            baseUrl() + PROFILE_BASE + "/steps/3",
-            HttpMethod.PUT,
-            Map.of("perSessionPrice", 50.0, "sessionPacks",
-                List.of(Map.of("sessionCount", 5, "totalPrice", 200.0, "label", "Starter"))),
-            authenticatedHeaders(cookies),
-            Map.class
-        );
 
-        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
-            baseUrl() + PROFILE_BASE + "/steps/3",
-            HttpMethod.PUT,
-            Map.of("perSessionPrice", 50.0, "sessionPacks",
-                List.of(Map.of("sessionCount", 5, "totalPrice", 180.0, "label", "Starter Discounted"))),
-            authenticatedHeaders(cookies),
-            Map.class
-        );
+        assertThat(putStep3(cookies, 40.0, List.of(pack(10, 380.0, "Season 10"))).getStatusCode())
+            .isEqualTo(HttpStatus.OK);
 
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> tiers = tiersOfCoach();
+        assertThat(tiers).singleElement().satisfies(t -> {
+            assertThat(t.get("is_active")).isEqualTo(true);
+            assertThat(t.get("session_count")).isEqualTo(10);
+            assertThat((java.math.BigDecimal) t.get("total_price")).isEqualByComparingTo("380");
+            assertThat((java.math.BigDecimal) t.get("price_per_session")).isEqualByComparingTo("38.00");
+            assertThat(t.get("label")).isEqualTo("Season 10");
+        });
+        assertThat(ownSessionPacks(cookies)).singleElement().satisfies(p -> {
+            assertThat(p.get("sessionCount")).isEqualTo(10);
+            assertThat(((Number) p.get("totalPrice")).doubleValue()).isEqualTo(380.0);
+            assertThat(p.get("label")).isEqualTo("Season 10");
+        });
     }
 
     @Test
-    void saveStep3_twoPacksWithSameSessionCount_returnsMappedDuplicateError() {
-        // Review audit item 2: EditCoachPricingDialog blocks duplicate session counts client-side,
-        // but that is not a backstop — this submits the duplicate directly, the way a second tab
-        // resubmitting a stale pack list or any direct API caller would. uq_session_pack
-        // (coach_id, session_count) rejects the second row of the SAME insert batch, which the
-        // flush-before-reinsert fix deliberately does not address (it only orders deletes before
-        // inserts). Unmapped this surfaced as an untranslated generic.dataError.
+    void saveStep3_unchangedPack_createsNoNewTier_aChangedOneReplacesIt() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
         saveStep1(cookies);
         saveStep2(cookies);
+        putStep3(cookies, 50.0, List.of(pack(5, 200.0, null)));
 
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+        // Unchanged (the blank label was stored as the default and reads back as null), price edit only.
+        putStep3(cookies, 55.0, List.of(pack(5, 200.0, "")));
+        assertThat(tiersOfCoach()).hasSize(1);
+        assertThat(ownSessionPacks(cookies)).singleElement().satisfies(p -> assertThat(p.get("label")).isNull());
+
+        putStep3(cookies, 55.0, List.of(pack(5, 180.0, "Starter")));
+        putStep3(cookies, 55.0, List.of(pack(5, 180.0, "Starter")));
+        List<Map<String, Object>> tiers = tiersOfCoach();
+        assertThat(tiers).hasSize(2);
+        assertThat(tiers).filteredOn(t -> Boolean.TRUE.equals(t.get("is_active"))).singleElement()
+            .satisfies(t -> assertThat(t.get("label")).isEqualTo("Starter"));
+    }
+
+    @Test
+    void saveStep3_emptyPackListWithdrawsTheOffer_nullLeavesItAlone() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        putStep3(cookies, 50.0, List.of(pack(5, 200.0, "Starter")));
+
+        saveStep3(cookies); // no sessionPacks key: the offer is untouched
+        assertThat(activeTierCount()).isEqualTo(1);
+
+        putStep3(cookies, 50.0, List.of());
+        assertThat(activeTierCount()).isZero();
+        assertThat(tiersOfCoach()).hasSize(1); // deactivated, never deleted
+        assertThat(ownSessionPacks(cookies)).isEmpty();
+    }
+
+    @Test
+    void saveStep3_invalidPacks_returnTheValidationEnvelope_andLeaveEverythingUnchanged() {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        putStep3(cookies, 50.0, List.of(pack(5, 200.0, "Starter")));
+
+        assertValidation400(cookies, List.of(pack(5, 200.0, "Starter"), pack(10, 350.0, null)), "sessionPacks");
+        assertValidation400(cookies, List.of(pack(5, 10.005, null)), "sessionPacks[0].totalPrice");
+        assertValidation400(cookies, List.of(pack(5, 50000.01, null)), "sessionPacks[0].totalPrice");
+        assertValidation400(cookies, List.of(pack(101, 500.0, null)), "sessionPacks[0].sessionCount");
+        assertValidation400(cookies, List.of(pack(5, 200.0, "call 0791 112 3456")), "sessionPacks[0].label");
+        assertValidation400(cookies, List.of(pack(100, 0.49, null)), "sessionPacks[0].perSessionPriceValid");
+
+        assertThat(tiersOfCoach()).singleElement().satisfies(t -> assertThat(t.get("label")).isEqualTo("Starter"));
+        assertThat(pricingOfCoach()).isEqualByComparingTo("50");
+    }
+
+    @Test
+    void saveStep3_resendingALongTierPageLabel_succeedsWithoutChurn() {
+        // AC4: the "My Session Pack Offer" page allows 200-character labels and the Edit pricing dialog re-sends
+        // whatever the profile shows. Before the bound was unified, that blocked every later pricing save.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+        String longLabel = "L".repeat(150);
+        ResponseEntity<Map> created = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/payment/coaches/me/session-pack-tiers", HttpMethod.POST,
+            Map.of("label", longLabel, "sessionCount", 8, "totalPrice", 300.0),
+            authenticatedHeaders(cookies), Map.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        assertThat(ownSessionPacks(cookies)).singleElement()
+            .satisfies(p -> assertThat(p.get("label")).isEqualTo(longLabel));
+        assertThat(putStep3(cookies, 60.0, List.of(pack(8, 300.0, longLabel))).getStatusCode())
+            .isEqualTo(HttpStatus.OK);
+        assertThat(tiersOfCoach()).hasSize(1);
+        assertThat(pricingOfCoach()).isEqualByComparingTo("60");
+    }
+
+    @Test
+    void publicProfilePack_isTheTierTheParentBuys() {
+        // AC4: the profile's pack and the tier the purchase page loads (and purchasePack charges) are one row.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveAllSteps(cookies);
+        putStep3(cookies, 40.0, List.of(pack(10, 380.0, "Season 10")));
+        publish(cookies);
+        assertThat(statusOfCoach()).isEqualTo("ACTIVE");
+        String coachUuid = jdbcTemplate.queryForObject(
+            "SELECT id::text FROM marketplace.coach_profiles WHERE user_id = ?", String.class, COACH_ID);
+
+        String parentCookies = loginAndGetCookies(PARENT_EMAIL);
+        ResponseEntity<Map> profile = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/marketplace/coaches/" + coachUuid, HttpMethod.GET, null,
+            authenticatedHeaders(parentCookies), Map.class);
+        ResponseEntity<Map> tier = httpTestClient.makeHttpRequest(
+            baseUrl() + "/api/payment/coaches/" + coachUuid + "/session-pack-tiers", HttpMethod.GET, null,
+            authenticatedHeaders(parentCookies), Map.class);
+
+        List<Map<String, Object>> packs = (List<Map<String, Object>>) profile.getBody().get("sessionPacks");
+        assertThat(packs).singleElement().satisfies(p -> {
+            assertThat(p.get("sessionCount")).isEqualTo(tier.getBody().get("sessionCount"));
+            assertThat(((Number) p.get("totalPrice")).doubleValue())
+                .isEqualTo(((Number) tier.getBody().get("totalPrice")).doubleValue());
+            assertThat(p.get("label")).isEqualTo(tier.getBody().get("label"));
+        });
+    }
+
+    @Test
+    void concurrentStep3Saves_firstPack_leaveOneActiveTier_andAnyLoserIsA409() throws Exception {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        saveStep3(cookies);
+
+        assertRaceInvariant(cookies);
+    }
+
+    @Test
+    void concurrentStep3Saves_existingTier_leaveOneActiveTier_andAnyLoserIsA409() throws Exception {
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+        putStep3(cookies, 50.0, List.of(pack(5, 200.0, "Starter")));
+
+        assertRaceInvariant(cookies);
+    }
+
+    /**
+     * AC6: two step-3 saves with different prices and packs, released together. Whether they really overlap is
+     * up to the scheduler; whatever happens, exactly one tier is active, nothing is a 500, and when one loses
+     * (409: payment.tierRaceConflict when no tier existed, generic.conflict from @Version when one did) its
+     * pricing write rolled back with it, so pricing and pack both belong to the winner.
+     */
+    private void assertRaceInvariant(String cookies) throws Exception {
+        record Outcome(double price, int count, int status, String body) {}
+        java.util.concurrent.CountDownLatch start = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            List<java.util.concurrent.Future<Outcome>> futures = new java.util.ArrayList<>();
+            for (double[] variant : new double[][] {{61.0, 7, 280.0}, {62.0, 9, 340.0}}) {
+                futures.add(pool.submit(() -> {
+                    start.await();
+                    try {
+                        ResponseEntity<Map> r = putStep3(cookies, variant[0],
+                            List.of(pack((int) variant[1], variant[2], null)));
+                        return new Outcome(variant[0], (int) variant[1], r.getStatusCode().value(), "");
+                    } catch (org.springframework.web.client.HttpStatusCodeException e) {
+                        return new Outcome(variant[0], (int) variant[1], e.getStatusCode().value(),
+                            e.getResponseBodyAsString());
+                    }
+                }));
+            }
+            start.countDown();
+            List<Outcome> outcomes = new java.util.ArrayList<>();
+            for (var f : futures) {
+                outcomes.add(f.get(60, java.util.concurrent.TimeUnit.SECONDS));
+            }
+
+            assertThat(outcomes).allSatisfy(o -> assertThat(o.status()).isIn(200, 409));
+            assertThat(outcomes).filteredOn(o -> o.status() == 409).allSatisfy(o ->
+                assertThat(o.body()).containsAnyOf("payment.tierRaceConflict", "generic.conflict"));
+            assertThat(activeTierCount()).isEqualTo(1);
+            List<Outcome> winners = outcomes.stream().filter(o -> o.status() == 200).toList();
+            assertThat(winners).isNotEmpty();
+            if (winners.size() == 1) {
+                assertThat(pricingOfCoach()).isEqualByComparingTo(String.valueOf(winners.get(0).price()));
+                assertThat(jdbcTemplate.queryForObject(
+                    "SELECT t.session_count FROM payment.session_pack_tiers t "
+                        + "JOIN marketplace.coach_profiles c ON c.id = t.coach_id WHERE c.user_id = ? AND t.is_active",
+                    Integer.class, COACH_ID)).isEqualTo(winners.get(0).count());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    private static Map<String, Object> pack(int count, double totalPrice, String label) {
+        Map<String, Object> pack = new java.util.HashMap<>();
+        pack.put("sessionCount", count);
+        pack.put("totalPrice", totalPrice);
+        pack.put("label", label);
+        return pack;
+    }
+
+    private ResponseEntity<Map> putStep3(String cookies, double perSessionPrice, List<Map<String, Object>> packs) {
+        return httpTestClient.makeHttpRequest(
             baseUrl() + PROFILE_BASE + "/steps/3",
             HttpMethod.PUT,
-            Map.of("perSessionPrice", 50.0, "sessionPacks", List.of(
-                Map.of("sessionCount", 5, "totalPrice", 200.0, "label", "Starter"),
-                Map.of("sessionCount", 5, "totalPrice", 180.0, "label", "Starter Again"))),
+            Map.of("perSessionPrice", perSessionPrice, "sessionPacks", packs),
             authenticatedHeaders(cookies),
-            Map.class))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
-                // the point of the mapping: a specific, translatable key rather than generic.dataError
-                assertThat(ex.getResponseBodyAsString())
-                    .contains("\"errorKey\":\"marketplace.duplicateSessionPackCount\"");
-            });
+            Map.class
+        );
+    }
+
+    private String errorBody(String cookies, List<Map<String, Object>> packs) {
+        try {
+            putStep3(cookies, 99.0, packs);
+        } catch (HttpClientErrorException e) {
+            assertThat(e.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+            return e.getResponseBodyAsString();
+        }
+        throw new AssertionError("expected a 400 for " + packs);
+    }
+
+    private void assertValidation400(String cookies, List<Map<String, Object>> packs, String field) {
+        assertThat(errorBody(cookies, packs))
+            .contains("\"errorKey\":\"validation.invalidData\"")
+            .contains("\"field\":\"" + field + "\"")
+            .doesNotContain("payment.invalidPackTier")
+            .doesNotContain("generic.requestError");
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> ownSessionPacks(String cookies) {
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE, HttpMethod.GET, null, authenticatedHeaders(cookies), Map.class);
+        return (List<Map<String, Object>>) response.getBody().get("sessionPacks");
+    }
+
+    private List<Map<String, Object>> tiersOfCoach() {
+        return jdbcTemplate.queryForList(
+            "SELECT t.* FROM payment.session_pack_tiers t JOIN marketplace.coach_profiles c ON c.id = t.coach_id "
+                + "WHERE c.user_id = ? ORDER BY t.created_at", COACH_ID);
+    }
+
+    private int activeTierCount() {
+        return jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.session_pack_tiers t JOIN marketplace.coach_profiles c ON c.id = t.coach_id "
+                + "WHERE c.user_id = ? AND t.is_active", Integer.class, COACH_ID);
+    }
+
+    private java.math.BigDecimal pricingOfCoach() {
+        return jdbcTemplate.queryForObject(
+            "SELECT p.per_session_price FROM marketplace.coach_pricing p JOIN marketplace.coach_profiles c "
+                + "ON c.id = p.coach_id WHERE c.user_id = ?", java.math.BigDecimal.class, COACH_ID);
     }
 
     @Test

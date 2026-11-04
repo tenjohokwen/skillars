@@ -3553,19 +3553,10 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 
   **RESOLVED 2026-11-03:** `95d4e9d6` cherry-picked to master on `fix/player-email-verify-network-error`; `feature/pitchside` already had it through #416.
 
-## Deferred from: Pitchside UI tests, spec ONB-06 (2026-11-03)
+## Deferred from: skillars-deferred-168 (builder packs become the purchasable tier, 2026-11-04)
 
-- **A pack added in the coach profile builder is advertised to parents but can't be bought.** **[PICKED UP skillars-deferred-168]**
-  - **Where the data goes:**
-    - Builder step 3 saves its packs to `marketplace.session_packs` (`CoachProfileService.saveStep3`, `CoachProfileService.java:287`).
-    - The public profile reads those rows. `coachHasPacks` (`CoachPublicProfilePage.vue:611`) turns on the parent's "Buy sessions" button (`showBuySessionsSecondary`, `:622`).
-    - The purchase page and the purchase itself read `payment.session_pack_tiers`. Only the coach's "My Session Pack Offer" page (`/coach/session-pack-tiers`) writes that table.
-    - Nothing copies builder packs into a tier, at publish time or later.
-  - **What a parent sees:** a coach who onboards through the wizard, adds a pack and finishes Stripe Connect shows "Buy sessions" to parents. Clicking it opens "This coach has no session pack available for purchase" (`booking.packs.noTierAvailable`, `SessionPackPurchasePage.vue:60`).
-  - **What the coach sees:** their own "My Session Pack Offer" page says "You have no active session pack offer", even though they just entered a pack.
-  - **Why tests missed it:** the Pitchside provisioner creates the tier with a separate `POST /payment/coaches/me/session-pack-tiers` after publishing (`e2e/packages/skillars-e2e/src/data/provisioner.ts:260`), which hides the gap.
-  - **The decision needed:** which table is the source of truth. Either publishing, or step 3 itself, creates the tier from the builder's pack, or the profile stops advertising builder-only packs.
-  - Found by the Pitchside spec ONB-06 (W2, on `feature/pitchside`). That spec is marked `test.fail` until this is fixed; remove the marker with the fix.
+- **Drop `marketplace.session_packs`.** Its last reader and writer (`SessionPack`, `SessionPackRepository`, `CoachProfileService.saveStep3`/`getOwnProfile`/`getPublicProfile`) were removed by skillars-deferred-168, and V226 copied the purchasable rows into `payment.session_pack_tiers`. `docs/deployment/migration-conventions.md` rule 2 allows the `DROP TABLE IF EXISTS marketplace.session_packs` only in a release after that one, with `-- migration-lint: drop-prepared-in: V226` immediately above it (`MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP`). Also drop the now-unused frontend i18n key `marketplace.duplicateSessionPackCount` in the same change, and update `docs/dev-docs/database/index.html:72`.
+- **Pitchside ONB-06 hand-off (on `feature/pitchside`).** Remove `test.fail(true, ...)` from ONB-06 (`e2e/packages/skillars-e2e/specs/onboarding/onboarding.spec.ts:150`) and delete the separate `POST /payment/coaches/me/session-pack-tiers` in the provisioner (`e2e/packages/skillars-e2e/src/data/provisioner.ts:281`): its step-3 PUT (`:262`) already sends the pack, which now creates the tier, so the extra POST only churns a second tier row and hides the path ONB-06 exists to cover.
 
 ## Deferred from: Pitchside UI tests, booking, payment and auth specs (2026-11-04)
 

@@ -161,6 +161,15 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
+- [ ] **V226 turns builder packs into purchasable tiers, and discards the rest** (skillars-deferred-168). For each
+  coach with `marketplace.session_packs` rows, no `payment.session_pack_tiers` row at all and no erasure tombstone, it
+  creates one active tier from their lowest-session-count pack that fits the tier bounds (1-100 sessions,
+  0.01-50,000.00, per-session share above 0.00). A blank label, or one that looks like contact details, becomes
+  "Session pack". Every other builder pack is discarded (none was ever purchasable). Coaches who withdrew an offer, or
+  who already sell one, are not touched, but their profile now shows their active tier, not their builder packs. On
+  UAT, tell coaches to check "My Session Pack Offer" after this deploy. `marketplace.session_packs` stays one release
+  and is then dropped (follow-up in `deferred-work.md`). This also relies on "prod is not live": the discard is not
+  reversible except from the pre-deploy dump.
 
 ---
 

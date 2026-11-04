@@ -44,7 +44,11 @@
             :label="t('auth.coach.step3PackSessions')"
             outlined
             type="number"
+            min="1"
+            :max="PACK_MAX_SESSION_COUNT"
+            step="1"
             dense
+            @update:model-value="onPackEdited"
           />
         </div>
         <div class="col-12 col-sm-4">
@@ -53,12 +57,23 @@
             :label="t('auth.coach.step3PackPrice')"
             outlined
             type="number"
+            min="0.01"
+            :max="PACK_MAX_TOTAL_PRICE"
+            step="0.01"
             dense
             prefix="€"
+            @update:model-value="onPackEdited"
           />
         </div>
         <div class="col-10 col-sm-3">
-          <q-input v-model="pack.label" :label="t('auth.coach.step3PackLabel')" outlined dense />
+          <q-input
+            v-model="pack.label"
+            :label="t('auth.coach.step3PackLabel')"
+            :maxlength="PACK_MAX_LABEL_LENGTH"
+            outlined
+            dense
+            @update:model-value="onPackEdited"
+          />
         </div>
         <div class="col-2 col-sm-1 flex items-center justify-end">
           <q-btn
@@ -73,7 +88,9 @@
       </div>
     </div>
 
+    <!-- skillars-deferred-168: one pack per coach - it becomes the offer families can buy. -->
     <q-btn
+      v-if="!form.sessionPacks.length"
       :label="t('auth.coach.step3AddPack')"
       class="btn-ghost"
       size="sm"
@@ -100,15 +117,28 @@
 <script setup>
 import { computed, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import {
+  PACK_MAX_LABEL_LENGTH,
+  PACK_MAX_SESSION_COUNT,
+  PACK_MAX_TOTAL_PRICE,
+  packErrorKey,
+  packsForRequest,
+} from 'src/utils/sessionPackForm'
 
 const { t } = useI18n()
 
 defineProps({ loading: Boolean })
 const emit = defineEmits(['submit'])
 
-// skillars-deferred-109 AC8.1: shown when submit() is blocked because a pack row was touched but
-// would not survive the sessionCount>0 && totalPrice>0 filter.
+// skillars-deferred-109 AC8.1 / skillars-deferred-168: shown when submit() is blocked because the pack
+// was touched but is not one the coach's offer can hold (see packErrorKey).
 const packError = ref('')
+
+// skillars-deferred-168: this screen always starts with no pack, and the builder's step rail lets a
+// coach come back to it. Sending [] would WITHDRAW an offer they set up meanwhile (here or on the
+// "My Session Pack Offer" page), so until the coach adds, edits or removes the pack the step sends
+// sessionPacks: null, which leaves the offer untouched.
+const packEdited = ref(false)
 
 const form = reactive({
   perSessionPrice: null,
@@ -146,10 +176,12 @@ const durationOptions = computed(() => {
 
 function addPack() {
   form.sessionPacks.push({ sessionCount: null, totalPrice: null, label: '' })
+  packEdited.value = true
 }
 
 function removePack(i) {
   form.sessionPacks.splice(i, 1)
+  packEdited.value = true
   // skillars-deferred-109 code review: packError is otherwise only cleared by a SUCCESSFUL submit,
   // so removing (or fixing) the offending row left the red message standing under a pack list that
   // no longer has anything wrong with it. Clearing on any pack edit keeps the message tied to the
@@ -157,49 +189,25 @@ function removePack(i) {
   packError.value = ''
 }
 
-// skillars-deferred-109 AC8.1: a row the coach TOUCHED — any of sessionCount / totalPrice is
-// non-null, or the label is non-blank — but that would silently drop out of the submit filter
-// (needs sessionCount>0 && totalPrice>0). A fully-empty row ({null, null, label:''}) is not
-// "touched" and is filtered without complaint.
-// skillars-deferred-109 code review: `!= null` alone is not "the coach entered something".
-// `v-model.number` on a type="number" q-input yields '' — NOT null — when the field is cleared
-// (Vue's looseToNumber returns the original string when parseFloat gives NaN). A coach who typed
-// 5 and then deleted it therefore left sessionCount === '', which `!= null` counted as touched
-// while `'' > 0` is false: a row that looks completely empty on screen blocked submit forever,
-// with the only escape being to notice the Remove button. Treat '' as untouched, like null.
-function packFieldEntered(v) {
-  return v != null && v !== ''
+function onPackEdited() {
+  packEdited.value = true
+  packError.value = ''
 }
-function packRowTouched(p) {
-  return (
-    packFieldEntered(p.sessionCount) ||
-    packFieldEntered(p.totalPrice) ||
-    (p.label != null && p.label.trim() !== '')
-  )
-}
-function packRowValid(p) {
-  return p.sessionCount > 0 && p.totalPrice > 0
-}
-const hasTouchedInvalidPack = computed(() =>
-  form.sessionPacks.some((p) => packRowTouched(p) && !packRowValid(p)),
-)
+
+const packErrorKeyNow = computed(() => form.sessionPacks.map(packErrorKey).find(Boolean) || null)
 
 function submit() {
   if (!form.perSessionPrice || form.perSessionPrice <= 0) return
-  // skillars-deferred-109 AC8.1: block rather than silently discard a half-filled pack row.
-  if (hasTouchedInvalidPack.value) {
-    packError.value = t('auth.coach.step3PackInvalid')
+  // skillars-deferred-109 AC8.1: block rather than silently discard a half-filled pack.
+  if (packErrorKeyNow.value) {
+    packError.value = t(packErrorKeyNow.value)
     return
   }
   packError.value = ''
   emit('submit', {
     perSessionPrice: form.perSessionPrice,
     sessionDurationMinutes: form.sessionDurationMinutes,
-    sessionPacks: form.sessionPacks.filter(packRowValid).map((p) => ({
-      sessionCount: p.sessionCount,
-      totalPrice: p.totalPrice,
-      label: p.label || null,
-    })),
+    sessionPacks: packEdited.value ? packsForRequest(form.sessionPacks) : null,
   })
 }
 </script>

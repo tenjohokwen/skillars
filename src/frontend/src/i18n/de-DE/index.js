@@ -107,9 +107,9 @@ export default {
       step3SessionDurationMinutes: '{minutes} Minuten',
       step3SessionDurationHelper:
         'Jeder buchbare Termin in Ihrem Kalender ist so lang. Lassen Sie den Plattform-Standard stehen, wenn Sie unsicher sind.',
-      step3SessionPacks: 'Einheitenpakete (optional)',
+      step3SessionPacks: 'Einheitenpaket (optional)',
       step3PackHelper:
-        'Optional: Bieten Sie vergünstigte Mehrfachpakete an. Familien können jederzeit einzelne Sitzungen zu Ihrem Preis pro Sitzung buchen.',
+        'Optional: Bieten Sie ein vergünstigtes Mehrfachpaket an. Familien können es auf Ihrem Profil kaufen; es ist dasselbe Angebot, das Sie unter „Mein Sitzungspaket-Angebot“ verwalten. Familien können jederzeit einzelne Sitzungen zu Ihrem Preis pro Sitzung buchen.',
       step3PackEmpty: 'Noch keine Pakete hinzugefügt.',
       step3AddPack: 'Paket hinzufügen',
       step3PackSessions: 'Einheiten',
@@ -117,9 +117,14 @@ export default {
       step3PackLabel: 'Bezeichnung',
       step3RemovePack: 'Paket entfernen',
       step3PackInvalid:
-        'Jedes Sitzungspaket braucht eine Sitzungsanzahl und einen Preis über 0 – oder entfernen Sie die Zeile.',
-      step3PackDuplicateSessionCount:
-        'Zwei oder mehr Pakete haben dieselbe Sitzungsanzahl — jedes Paket muss eine eindeutige Sitzungsanzahl haben.',
+        'Das Sitzungspaket braucht eine Sitzungsanzahl und einen Preis – oder entfernen Sie es.',
+      // skillars-deferred-168: the pack becomes the coach's purchasable tier, so its bounds are the tier's.
+      step3PackSessionCountError: 'Die Sitzungsanzahl muss eine ganze Zahl von 1 bis 100 sein.',
+      step3PackPriceError:
+        'Der Paketpreis muss zwischen 0,01 und 50.000 liegen und darf höchstens 2 Nachkommastellen haben.',
+      step3PackPerSessionError:
+        'Jede Einheit im Paket muss mindestens 0,01 kosten. Verringern Sie die Sitzungsanzahl oder erhöhen Sie den Preis.',
+      step3PackLabelTooLong: 'Die Paketbezeichnung darf höchstens 200 Zeichen lang sein.',
       step4Title: 'Verfügbarkeit',
       step4Short: 'Verfügbarkeit',
       step4AvailabilityWindows: 'Verfügbarkeitsfenster',
