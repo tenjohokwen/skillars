@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * measurement: it counts the JDBC statements one call prepares (Hibernate statistics, enabled
  * programmatically so no {@code @TestPropertySource} forks the shared context), and — the point —
  * proves the count is <strong>constant in profile size</strong>: doubling the specialties / age
- * groups / session packs / availability windows / media items does not add a single query.
+ * groups / availability windows / media items / session-pack history does not add a single query.
  *
  * <p><strong>Decision (AC11, revised by the skillars-deferred-91 code review, D9):</strong> the
  * measured count was 8 — above AC11's own "collapse if &gt; 4" threshold — and the original
@@ -41,7 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *   <li>profile + pricing (one ad-hoc {@code LEFT JOIN … ON}, one-to-one, no row multiplication)</li>
  *   <li>specialties + age groups + availability count + strike count (one homogeneous
  *       {@code (kind, value)} {@code UNION ALL})</li>
- *   <li>session packs</li>
+ *   <li>session packs: since skillars-deferred-168 the coach's one active {@code payment.session_pack_tiers}
+ *       row, through {@code CoachSessionPackPort}; inactive history rows must not be read</li>
  *   <li>media gallery</li>
  * </ol>
  *
@@ -95,6 +96,11 @@ class CoachPublicProfileQueryCountIT extends AbstractIntegrationTest {
                 coachId, COACH_USER_ID);
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_pricing (coach_id, per_session_price, currency) VALUES (?, 40.00, 'EUR')",
+                coachId);
+            // skillars-deferred-168: the profile's pack is the coach's one active tier.
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers (coach_id, label, session_count, total_price, "
+                + "price_per_session, is_active) VALUES (?, 'Season 10', 10, 380.00, 38.00, true)",
                 coachId);
             seedChildRows(2);
             return null;
@@ -150,7 +156,7 @@ class CoachPublicProfileQueryCountIT extends AbstractIntegrationTest {
         int expectedAgeGroups = jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM marketplace.coach_age_groups WHERE coach_id = ?", Integer.class, coachId);
         int expectedPacks = jdbcTemplate.queryForObject(
-            "SELECT COUNT(*) FROM marketplace.session_packs WHERE coach_id = ?", Integer.class, coachId);
+            "SELECT COUNT(*) FROM payment.session_pack_tiers WHERE coach_id = ? AND is_active", Integer.class, coachId);
         // getPublicProfile caps the gallery at 6 items.
         int expectedMedia = Math.min(6, jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM marketplace.coach_media WHERE coach_id = ?", Integer.class, coachId));
@@ -181,7 +187,12 @@ class CoachPublicProfileQueryCountIT extends AbstractIntegrationTest {
         assertThat(dto.reliabilityStrikeCount())
             .as("the 90-day strike count is now a COUNT(*) branch parsed from text")
             .isEqualTo(expectedStrikes);
-        assertThat(dto.sessionPacks()).hasSize(expectedPacks);
+        assertThat(expectedPacks).isEqualTo(1);
+        assertThat(dto.sessionPacks()).hasSize(expectedPacks).singleElement().satisfies(pack -> {
+            assertThat(pack.sessionCount()).isEqualTo(10);
+            assertThat(pack.totalPrice()).isEqualByComparingTo("380.00");
+            assertThat(pack.label()).isEqualTo("Season 10");
+        });
         assertThat(dto.mediaGallery()).hasSize(expectedMedia);
     }
 
@@ -199,10 +210,12 @@ class CoachPublicProfileQueryCountIT extends AbstractIntegrationTest {
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_specialties (coach_id, skill) VALUES (?, ?) ON CONFLICT DO NOTHING",
                 coachId, "SKILL_" + i);
+            // Withdrawn/replaced offers: history rows the profile must ignore (the partial unique index allows
+            // only one active row, so the pack itself cannot scale).
             jdbcTemplate.update(
-                "INSERT INTO marketplace.session_packs (coach_id, session_count, total_price, label) "
-                + "VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-                coachId, i + 2, (i + 2) * 35.0, "Pack " + i);
+                "INSERT INTO payment.session_pack_tiers (coach_id, label, session_count, total_price, "
+                + "price_per_session, is_active) VALUES (?, ?, ?, ?, ?, false)",
+                coachId, "Old pack " + i, i + 2, (i + 2) * 35.0, 35.0);
             jdbcTemplate.update(
                 "INSERT INTO marketplace.coach_availability_windows (coach_id, day_of_week, start_time, "
                 + "end_time, canonical_timezone) VALUES (?, ?, '09:00', '10:00', 'Europe/Berlin') ON CONFLICT DO NOTHING",

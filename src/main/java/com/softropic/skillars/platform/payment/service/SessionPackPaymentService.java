@@ -333,6 +333,48 @@ public class SessionPackPaymentService {
         return toTierResponse(saved);
     }
 
+    /**
+     * skillars-deferred-168: sets a coach's offer from the profile builder's step 3 (through
+     * {@code CoachSessionPackAdapter}). Joins the caller's transaction on purpose (REQUIRED, never
+     * REQUIRES_NEW): any failure here must roll back the pricing the same step wrote.
+     *
+     * <p>An unchanged pack writes nothing, so re-saving step 3 does not churn tier rows. A changed pack goes
+     * through {@link #createTier}, which deactivates the old row (purchases keep pointing at it) and inserts
+     * the new one. No pack withdraws the active offer. The deactivation is {@code saveAndFlush}, as in
+     * {@code createTier}, so a concurrent change of the same row fails here, inside the request, on its
+     * {@code @Version} check, rather than at commit.
+     */
+    @Transactional
+    public void replaceActiveOffer(UUID coachId, int sessionCount, BigDecimal totalPrice, String label) {
+        String normalizedLabel = normalizeLabel(label);
+        Optional<SessionPackTier> active = sessionPackTierRepository.findByCoachIdAndIsActiveTrue(coachId);
+        if (active.isPresent()
+                && active.get().getSessionCount() == sessionCount
+                && active.get().getTotalPrice().compareTo(totalPrice) == 0
+                && java.util.Objects.equals(active.get().getLabel(), normalizedLabel)) {
+            return;
+        }
+        createTier(coachId, normalizedLabel, sessionCount, totalPrice);
+    }
+
+    /** skillars-deferred-168: the "no pack" half of {@link #replaceActiveOffer}. */
+    @Transactional
+    public void withdrawActiveOffer(UUID coachId) {
+        sessionPackTierRepository.findAllByCoachIdAndIsActiveTrue(coachId)
+            .forEach(t -> {
+                t.setActive(false);
+                sessionPackTierRepository.saveAndFlush(t);
+            });
+    }
+
+    /**
+     * A blank builder label means "no label" and is stored as NULL, which readers show as their own localized
+     * "N sessions". A label the coach typed (including the words "Session pack") is kept exactly as typed.
+     */
+    static String normalizeLabel(String label) {
+        return label == null || label.isBlank() ? null : label;
+    }
+
     @Transactional
     public void deactivateTier(UUID coachId, UUID tierId) {
         SessionPackTier tier = sessionPackTierRepository.findById(tierId)

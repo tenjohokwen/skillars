@@ -112,7 +112,7 @@
       <tr><td><code>marketplace.api</code></td><td><code>CoachMarketplaceResource</code> (public search/profile + own tier) and <code>ProfileBuilderResource</code> (wizard, own profile, photo delete, gallery, timezone list).</td></tr>
       <tr><td><code>marketplace.service</code></td><td>Search, profile state machine and public-profile assembly, gallery, city/timezone validation, capability badges, a filestorage listener, and <code>PlayerProfileService</code> lookups.</td></tr>
       <tr><td><code>marketplace.repo</code></td><td>JPA entities and repositories under the <code>marketplace</code> schema, plus <code>CoachPublicProfileFactsRepository</code> (one <code>UNION ALL</code> query for public-profile facts).</td></tr>
-      <tr><td><code>marketplace.contract</code></td><td>DTOs/records, per-step request records, enums (<code>CoachProfileStatus</code>, <code>CoachSubscriptionTier</code>), <code>MarketplaceException</code>, <code>CoachProfileNotFoundException</code>, <code>CoachProfileMapper</code>, and the <code>CoachSubscriptionEntitlementPort</code> interface (implemented in <code>payment</code>).</td></tr>
+      <tr><td><code>marketplace.contract</code></td><td>DTOs/records, per-step request records, enums (<code>CoachProfileStatus</code>, <code>CoachSubscriptionTier</code>), <code>MarketplaceException</code>, <code>CoachProfileNotFoundException</code>, <code>CoachProfileMapper</code>, the <code>CoachSubscriptionEntitlementPort</code> and <code>CoachSessionPackPort</code> interfaces (implemented in <code>payment</code>), and <code>SessionPackLimits</code>, the pack bounds shared with payment's tier page.</td></tr>
       <tr><td><code>marketplace.config</code></td><td>Empty <code>MarketplaceConfig</code> placeholder.</td></tr>
     </table>
 
@@ -123,7 +123,7 @@
       <tr><td><code>CoachSpecialty</code></td><td><code>coach_specialties</code></td><td>One free-text <code>skill</code> per row (<code>uq_coach_specialty</code>).</td></tr>
       <tr><td><code>CoachAgeGroup</code></td><td><code>coach_age_groups</code></td><td>One <code>AgeTier</code> (from <code>security.contract</code>) per row (<code>uq_coach_age_group</code>).</td></tr>
       <tr><td><code>CoachPricing</code></td><td><code>coach_pricing</code></td><td>PK <code>coach_id</code>. <code>per_session_price</code>, currency (always <code>EUR</code>), optional <code>session_duration_minutes</code> (15–240; null = platform default <code>booking.session.defaultDurationMinutes</code>).</td></tr>
-      <tr><td><code>SessionPack</code></td><td><code>session_packs</code></td><td>Advertised bundles (N sessions for a total price + label), 0..5 per coach, <code>uq_session_pack (coach_id, session_count)</code>. Purchasable pack tiers live in <code>payment</code>.</td></tr>
+      <tr><td colspan="3">No pack entity since skillars-deferred-168. The coach's one pack is their active <code>payment.session_pack_tiers</code> row, read and written through <code>CoachSessionPackPort</code> (<code>payment.adapter.CoachSessionPackAdapter</code>), so what the profile advertises is what parents buy. The old <code>marketplace.session_packs</code> table has no reader or writer and is dropped by a later migration.</td></tr>
       <tr><td><code>CoachAvailabilityWindow</code></td><td><code>coach_availability_windows</code></td><td>Recurring weekly windows (day, start/end, timezone). At least one row = "available" on the public profile.</td></tr>
       <tr><td><code>CoachMediaItem</code></td><td><code>coach_media</code></td><td>Gallery entries (<code>file_url</code> = <code>coach_gallery/…</code> storage key or a legacy absolute URL, <code>media_type</code>, <code>display_order</code>). Written by <code>CoachGalleryService</code>; max 6.</td></tr>
       <tr><td><code>CoachSubscription</code></td><td><code>coach_subscriptions</code></td><td>PK <code>coach_id</code>; tier <code>SCOUT</code>/<code>INSTRUCTOR</code>/<code>ACADEMY</code>. A projection that <code>payment.SubscriptionService</code> syncs. A missing row reads as <code>SCOUT</code>, and a paid tier is only honoured while the payment-side subscription is entitled (see <code>getCoachSubscriptionTier</code>).</td></tr>
@@ -156,7 +156,7 @@
       <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/status</code></td><td>Wizard progress: status, last completed step, published flag.</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile</code></td><td>Own full profile (<code>CoachProfileSelfResponse</code>) for edit-dialog prefill; works for DRAFT.</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/timezones</code></td><td>Server-side IANA zone list for the Step 1 picker (~486 ids on JDK 17).</td><td><code>ROLE_COACH</code></td></tr>
-      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/{1..5}</code></td><td>1: identity, bio, city/district, languages, timezone. 2: specialties + age groups. 3: price, duration override, session packs. 4: weekly availability. 5: photo key.</td><td><code>ROLE_COACH</code></td></tr>
+      <tr><td>PUT</td><td><code>/api/marketplace/coaches/me/profile/steps/{1..5}</code></td><td>1: identity, bio, city/district, languages, timezone. 2: specialties + age groups. 3: price, duration override, and at most one session pack, which becomes the coach's purchasable tier (<code>sessionPacks</code>: <code>null</code> leaves it, <code>[]</code> withdraws it). 4: weekly availability. 5: photo key.</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>POST</td><td><code>/api/marketplace/coaches/me/profile/publish</code></td><td>Re-validate and flip <code>DRAFT</code> &rarr; <code>ACTIVE</code>.</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>DELETE</td><td><code>/api/marketplace/coaches/me/profile/photo</code></td><td>Soft-delete the photo object and clear <code>photoUrl</code> (idempotent).</td><td><code>ROLE_COACH</code></td></tr>
       <tr><td>GET</td><td><code>/api/marketplace/coaches/me/profile/gallery</code></td><td>Own gallery items (signed URLs).</td><td><code>ROLE_COACH</code></td></tr>
@@ -189,7 +189,7 @@
       <code>StorageObjectConfirmedEvent</code>), <code>security</code> (<code>AgeTier</code>, <code>SecurityUtil</code>,
       <code>PlayerProfileRepository</code>/<code>UserRepository</code>), <code>booking.contract.BookingError</code>
       (Step 4 suspended-coach error), <code>reviews</code> (<code>ReviewQueryService</code>,
-      <code>ReviewListResponse</code>) and <code>config.ConfigService</code>. <code>payment</code> is reached only through the <code>CoachSubscriptionEntitlementPort</code> interface marketplace owns (no compile dependency on payment). In the other direction, admin, booking,
+      <code>ReviewListResponse</code>) and <code>config.ConfigService</code>. <code>payment</code> is reached only through the <code>CoachSubscriptionEntitlementPort</code> and <code>CoachSessionPackPort</code> interfaces marketplace owns (no compile dependency on payment, guarded by <code>MarketplaceDoesNotDependOnPaymentTest</code>). In the other direction, admin, booking,
       development, messaging, payment, reviews, security, session and video all import marketplace classes —
       mostly <code>CoachProfileService</code>/<code>CoachProfileRepository</code>.</p>
     </div>
@@ -243,7 +243,7 @@ sequenceDiagram
   Resource->>Profile: getPublicProfile(coachId)
   Profile->>Repos: (1) profile LEFT JOIN pricing, status ACTIVE/REDUCED/PENDING_REVIEW
   Profile->>Repos: (2) facts UNION ALL: specialties, age groups, availability count, 90-day strikes
-  Profile->>Repos: (3) session packs, (4) media gallery (first 6)
+  Profile->>Repos: (3) active pack tier via CoachSessionPackPort, (4) media gallery (first 6)
   Profile->>Repos: sign photo key and gallery keys
   Profile-->>Resource: CoachProfileDto (reviews = null)
   Resource->>ReviewSvc: getFirstPageForCoach(coachId)
@@ -270,7 +270,7 @@ sequenceDiagram
   Coach->>Resource: PUT steps/2 (specialties, age groups)
   Resource->>Service: saveStep2() - requires displayName, delete + flush + reinsert
   Coach->>Resource: PUT steps/3 (price, duration, session packs)
-  Resource->>Service: saveStep3() - requires specialties and age groups
+  Resource->>Service: saveStep3() - requires specialties and age groups, sets the pack tier via CoachSessionPackPort
   Coach->>Resource: PUT steps/4 (weekly availability windows)
   Resource->>Service: saveStep4() - requires pricing, overlap check, lock, not SUSPENDED
   Coach->>Resource: PUT steps/5 (photo key)
