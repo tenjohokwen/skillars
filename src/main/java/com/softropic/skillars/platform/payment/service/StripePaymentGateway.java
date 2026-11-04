@@ -1,6 +1,7 @@
 package com.softropic.skillars.platform.payment.service;
 
 import com.stripe.exception.ApiConnectionException;
+import com.stripe.exception.CardException;
 import com.stripe.exception.IdempotencyException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.Charge;
@@ -44,6 +45,9 @@ import java.util.UUID;
 @Slf4j
 @RequiredArgsConstructor
 public class StripePaymentGateway implements PaymentGateway {
+
+    private static final String REQUIRES_ACTION = "requires_action";
+    private static final String REQUIRES_PAYMENT_METHOD = "requires_payment_method";
 
     private static final Duration IDEMPOTENCY_KEY_WINDOW = Duration.ofMinutes(1);
 
@@ -182,6 +186,14 @@ public class StripePaymentGateway implements PaymentGateway {
                     + "left for reconciliation", referenceId, idempotencyKey, e.getStatusCode(), e.getMessage());
                 throw new ChargeOutcomeUnknownException(idempotencyKey, e);
             }
+            if (e instanceof CardException card) {
+                // The card itself was refused (insufficient funds, expired, generic decline...): a routine
+                // customer outcome, not a platform fault, so WARN and a key the UI can act on. The decline
+                // code is logged, never returned (Stripe advises against revealing e.g. stolen_card).
+                log.warn("[STRIPE_CARD_DECLINED] referenceId={} code={} declineCode={}", referenceId,
+                    card.getCode(), card.getDeclineCode());
+                throw new PaymentGatewayException(PaymentGatewayException.CARD_DECLINED, e);
+            }
             log.error("Stripe charge failed: referenceId={} status={} error={}", referenceId, e.getStatusCode(),
                 e.getMessage());
             throw new PaymentGatewayException("payment.lifecycleFailure", e);
@@ -196,9 +208,12 @@ public class StripePaymentGateway implements PaymentGateway {
             throw new ChargeOutcomeUnknownException(idempotencyKey, null);
         }
         if (!ChargeLookup.SUCCEEDED.equals(status)) {
+            // An off-session charge cannot complete 3-D Secure, and requires_payment_method is Stripe's
+            // "this card was refused" after confirm: both are the card, as far as the payer is concerned.
+            boolean cardRefused = REQUIRES_ACTION.equals(status) || REQUIRES_PAYMENT_METHOD.equals(status);
             log.error("[STRIPE_CHARGE_NOT_SUCCEEDED] referenceId={} intentId={} status={} — nothing captured, "
                 + "treated as declined", referenceId, intent.getId(), status);
-            throw new PaymentGatewayException("payment.lifecycleFailure");
+            throw new PaymentGatewayException(cardRefused ? PaymentGatewayException.CARD_DECLINED : "payment.lifecycleFailure");
         }
         log.info("Stripe charge captured (platform account): referenceId={} intentId={}", referenceId, intent.getId());
         if (stripeCustomer != null) {

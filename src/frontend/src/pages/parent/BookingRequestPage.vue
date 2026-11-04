@@ -153,7 +153,12 @@
       <q-card v-if="activePacksForCoach.length > 0" flat bordered class="q-mb-md">
         <q-card-section>
           <div class="text-subtitle1 q-mb-sm">{{ t('booking.requests.selectPack') }}</div>
-          <q-option-group v-model="selectedPackId" :options="packOptions" color="primary" />
+          <q-option-group
+            v-model="selectedPackId"
+            :options="packOptions"
+            color="primary"
+            @update:model-value="packChoiceTouched = true"
+          />
         </q-card-section>
       </q-card>
 
@@ -391,16 +396,21 @@ const batchAtMax = computed(() => bookingStore.batchBasketSize >= maxBatchSize.v
 // booking request. Batch bookings don't carry a pack (Task 4 decision — credit-wallet/Stripe
 // only), so this selector only applies in single-booking mode.
 const selectedPackId = ref(null)
+// Only a list loaded for this page's player: after a child switch the store still holds the previous
+// child's packs until the reload lands (or for good, if it fails), and a pack picked from them would
+// be refused (packPlayerMismatch).
 const activePacksForCoach = computed(() =>
-  bookingStore.sessionPacks.filter(
-    (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
-  ),
+  String(bookingStore.sessionPacksPlayerId) !== String(playerId.value)
+    ? []
+    : bookingStore.sessionPacks.filter(
+        (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
+      ),
 )
 const activePackSessionTotal = computed(() =>
   activePacksForCoach.value.reduce((sum, p) => sum + (Number(p.sessionCount) || 0), 0),
 )
+// Packs first, "Per session" last: a family holding credits normally means to spend them.
 const packOptions = computed(() => [
-  { label: t('booking.packs.perSession'), value: null },
   ...activePacksForCoach.value.map((p) => ({
     label: t('booking.requests.packOptionLabel', {
       remaining: p.creditsRemaining,
@@ -408,7 +418,93 @@ const packOptions = computed(() => [
     }),
     value: p.id,
   })),
+  { label: t('booking.packs.perSession'), value: null },
 ])
+
+// Statuses in which a booking holds one of its pack's sessions (BookingRepository
+// .countOpenPackReservations). The pack list carries no reserved count, so this page derives a safe
+// upper bound from the family's own bookings (below).
+const PACK_RESERVING_STATUSES = ['REQUESTED', 'ACCEPTED', 'PAYMENT_PENDING']
+
+// The family's open bookings with this coach for this player. Every session reserved against one of
+// this coach's packs for this player is one of these, so "credits > this count" guarantees a free
+// session. It over-counts (per-session bookings are included), which only means falling back to
+// "Per session" when unsure — never preselecting a pack the backend would refuse.
+const openBookingsWithCoach = computed(
+  () =>
+    (bookingStore.parentBookings ?? []).filter(
+      (b) =>
+        String(b.coachId) === String(coachId) &&
+        String(b.playerId) === String(playerId.value) &&
+        PACK_RESERVING_STATUSES.includes(b.status),
+    ).length,
+)
+
+// A pack that can pay for a request starting at `start` (ms, or null before a slot is chosen):
+// a free session (see above), not past its expiry, and no scheduled pause covering the slot (a pack
+// whose pause lies ahead still reports ACTIVE; the backend refuses a slot inside [pausedFrom, pausedUntil)).
+function packIsUsable(p, start) {
+  if (!(Number(p.creditsRemaining) > openBookingsWithCoach.value)) return false
+  if (p.expiresAt && Date.parse(p.expiresAt) <= Date.now()) return false
+  if (p.pausedFrom && p.pausedUntil) {
+    const from = Date.parse(p.pausedFrom)
+    const until = Date.parse(p.pausedUntil)
+    // Unknown slot: a scheduled pause makes the pack an unsafe default.
+    if (start == null || (start >= from && start < until)) return false
+  }
+  return true
+}
+
+// The default payment choice. A family holding usable credits with this coach starts on a pack,
+// the soonest-expiring one, so its credits are not left to lapse first. Before this, "Per session"
+// (null) was always preselected: a family that had just bought a pack and submitted without touching
+// the radio was charged by card on the coach's accept, with its credits left unused.
+//
+// Only once this page has loaded its own packs and bookings for this player: the store may still hold
+// lists from an earlier page (another child's packs, or this child's before a pack was used up).
+// `undefined` means "not known": the watcher below then leaves the selection alone. That covers
+// loading, another player's packs, and a failed fetch. Returning null there would flip an
+// already-preselected pack back to "Per session" whenever a list refreshes or a refresh fails, and a
+// submit in that moment would charge the card. A failure before anything was preselected leaves the
+// initial "Per session"; a failure after keeps the pack, which the backend still checks on submit.
+const ownListsLoaded = ref(false)
+const defaultPackId = computed(() => {
+  if (!ownListsLoaded.value) return undefined
+  if (bookingStore.packsLoading || bookingStore.bookingsLoading) return undefined
+  if (String(bookingStore.sessionPacksPlayerId) !== String(playerId.value)) return undefined
+  if (bookingStore.bookingsError || bookingStore.packsError) return undefined
+  const start = selectedSlot.value ? Date.parse(selectedSlot.value.startDatetime) : null
+  const usable = activePacksForCoach.value.filter((p) => packIsUsable(p, start))
+  if (usable.length === 0) return null
+  const expiry = (p) => (p.expiresAt ? Date.parse(p.expiresAt) : Number.POSITIVE_INFINITY)
+  return [...usable].sort((a, b) => expiry(a) - expiry(b))[0].id
+})
+
+// Applied until the parent picks an option themselves, so a pack list that loads after mount still
+// sets the default, and a later reload never overrides an explicit choice (including "Per session").
+const packChoiceTouched = ref(false)
+watch(
+  defaultPackId,
+  (id) => {
+    if (id !== undefined && !packChoiceTouched.value) selectedPackId.value = id
+  },
+  { immediate: true },
+)
+
+// The header's child switcher changes playerStore.activePlayerId while this page stays mounted. A pack
+// chosen (or preselected) for the previous child is not this child's: the backend refuses it
+// (packPlayerMismatch). Clear the choice and load this child's packs; defaultPackId stays undefined
+// until they arrive (sessionPacksPlayerId still names the previous child), then sets the new default.
+// Reloaded on every change to a real id, even while onMounted's own load is in flight or before it
+// runs, including an id that arrives after mount (null to an id). The store keeps only the latest
+// call's response, so an earlier load cannot land last, and a duplicate of onMounted's load is
+// harmless.
+watch(playerId, async (id, previous) => {
+  if (String(id) === String(previous)) return
+  selectedPackId.value = null
+  packChoiceTouched.value = false
+  if (id) await bookingStore.loadPlayerPacks(id)
+})
 
 // fix/booking-price-and-excused-race: only an explicit false blocks — an unknown (null) state must not
 // disable booking; the backend refusal (booking.coachPricingUnavailable) is the real guard.
@@ -846,6 +942,7 @@ onMounted(async () => {
   if (playerId.value) {
     await bookingStore.loadPlayerPacks(playerId.value)
   }
+  ownListsLoaded.value = true
   try {
     const res = await getBatchConfig()
     if (Number.isInteger(res.maxSize) && res.maxSize > 0) {

@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -7,6 +9,12 @@ import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.PlayerOtpEmailEvent;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
+import com.softropic.skillars.platform.security.contract.PlayerRegistrationRequest;
+import com.softropic.skillars.platform.security.contract.event.PlayerVerificationEmailEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationPhoneInUseEvent;
+import com.softropic.skillars.platform.security.contract.exception.PlayerRegistrationException;
+import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.repo.AuthorityRepository;
 import com.softropic.skillars.platform.security.repo.EmailVerificationToken;
 import com.softropic.skillars.platform.security.repo.EmailVerificationTokenRepository;
@@ -21,15 +29,18 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -71,6 +82,188 @@ class PlayerRegistrationServiceTest {
         service = new PlayerRegistrationService(userRepository, authorityRepository, emailTokenRepository,
             otpTokenRepository, passwordEncoder, publisher, sanitizer, rateLimitingService, otpResendSupport,
             agePolicyService, verificationTokenService, OtpHasherTest.hasher(), configService);
+    }
+
+    // ── Neutral duplicate registration (no email/phone enumeration) ────────────────────────────
+
+    private PlayerRegistrationRequest buildRequest() {
+        return new PlayerRegistrationRequest(
+            "Jane", "Doe", "jane.doe@test.com", "password123", "+491701234567", LocalDate.of(1990, 1, 1), "en");
+    }
+
+    private static User existingAccount(Long id, String email) {
+        User user = new User();
+        user.setId(id);
+        user.setEmail(email);
+        user.setFirstName("Existing");
+        user.setLastName("Owner");
+        user.setLangKey("de");
+        return user;
+    }
+
+    private void assertNeutralNoCreate(User notified) {
+        assertNeutralNoCreate(notified, false);
+    }
+
+    private void assertNeutralNoCreate(User notified, boolean phoneMatch) {
+        verify(passwordEncoder).encode("password123");
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+        verifyNoInteractions(emailTokenRepository, authorityRepository);
+        verify(publisher, never()).publishEvent(any(PlayerVerificationEmailEvent.class));
+        verify(publisher).publishEvent(new RegistrationDuplicateAttemptEvent(
+            notified.getId(), notified.getEmail(), "Existing", "Owner", "de", phoneMatch));
+    }
+
+    private void allowNotice() {
+        when(rateLimitingService.tryConsume(anyString(), eq("registration_duplicate_notice"), eq(2L), eq(60L),
+            eq(TimeUnit.MINUTES))).thenReturn(true);
+    }
+
+    private void registrantNoticeAllowed(boolean allowed) {
+        when(rateLimitingService.tryConsume("jane.doe@test.com", "registration_phone_in_use_notice", 2L, 60L,
+            TimeUnit.MINUTES)).thenReturn(allowed);
+    }
+
+    private User phoneHolderOfTheRequestPhone() {
+        User phoneHolder = existingAccount(8L, "holder@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(phoneHolder));
+        return phoneHolder;
+    }
+
+    @Test
+    void registerPlayer_noticeLimitForThatAccountSpent_returnsNormallyWithoutANotice() {
+        // A pool of IPs must not flood one inbox: past the per-account limit the notice is skipped,
+        // and the response is still the neutral one.
+        User existing = existingAccount(7L, "taken@test.com");
+        when(userRepository.findOneByEmail(any())).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        verify(rateLimitingService).tryConsume("7", "registration_duplicate_notice", 2L, 60L, TimeUnit.MINUTES);
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+    }
+
+    @Test
+    void registerPlayer_emailIsAnExistingLogin_isTreatedAsTaken() {
+        // Legacy accounts keep login as typed and email lowercased; the new row's login would hit
+        // user_login_key, an error only an existing account produces.
+        allowNotice();
+        User existing = existingAccount(11L, "legacy@test.com");
+        when(userRepository.findOneByEmail(any())).thenReturn(Optional.empty());
+        when(userRepository.findOneByLogin(any())).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+        verify(publisher).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+    }
+
+    @Test
+    void registerPlayer_emailAlreadyRegistered_returnsNormallyAndNotifiesTheExistingAccount() {
+        allowNotice();
+        User existing = existingAccount(7L, "jane.doe@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(existing);
+        verify(userRepository, never()).findOneByPhoneNumber(any());
+        // An email match tells only the existing account: the typed address IS that account.
+        verify(publisher, never()).publishEvent(any(RegistrationPhoneInUseEvent.class));
+        verify(rateLimitingService, never()).tryConsume(anyString(), eq("registration_phone_in_use_notice"),
+            anyLong(), anyLong(), any());
+    }
+
+    @Test
+    void registerPlayer_phoneAlreadyRegistered_returnsNormallyAndNotifiesThePhoneHolderAndTheTypedAddress() {
+        // Phones are not verified at registration: the number may sit on someone else's account, so the
+        // registrant is told at the (new) address they typed, next to the phone holder's notice.
+        allowNotice();
+        registrantNoticeAllowed(true);
+        User phoneHolder = phoneHolderOfTheRequestPhone();
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(phoneHolder, true);
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
+    }
+
+    @Test
+    void registerPlayer_phoneMatch_registrantLimitSpent_stillNeutralAndTheHolderIsStillTold() {
+        allowNotice();
+        registrantNoticeAllowed(false);
+        User phoneHolder = phoneHolderOfTheRequestPhone();
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(phoneHolder, true);
+        verify(publisher, never()).publishEvent(any(RegistrationPhoneInUseEvent.class));
+    }
+
+    @Test
+    void registerPlayer_phoneMatch_holderLimitSpent_theRegistrantIsStillTold() {
+        // The two limits are independent: a spent per-account bucket must not silence the registrant.
+        when(rateLimitingService.tryConsume("8", "registration_duplicate_notice", 2L, 60L, TimeUnit.MINUTES))
+            .thenReturn(false);
+        registrantNoticeAllowed(true);
+        phoneHolderOfTheRequestPhone();
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+    }
+
+    @Test
+    void registerPlayer_newEmailAndPhone_createsTheUserAndSendsOnlyTheVerificationEmail() {
+        stubCreatePath();
+
+        service.registerPlayer(buildRequest());
+
+        verify(userRepository).findOneByPhoneNumber("+491701234567");
+        verify(userRepository).save(any(User.class));
+        verify(emailTokenRepository).save(any(EmailVerificationToken.class));
+        verify(publisher).publishEvent(any(PlayerVerificationEmailEvent.class));
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+    }
+
+    // The pre-checks found nothing but a concurrent registration won the race to the insert (and
+    // the insert happened to flush inside the try): the narrow race keeps the explicit error.
+    @Test
+    void registerPlayer_uniqueViolationRace_throwsEmailInUse() {
+        stubCreatePath();
+        when(userRepository.save(any(User.class)))
+            .thenThrow(new DataIntegrityViolationException("could not execute statement"));
+
+        assertThatThrownBy(() -> service.registerPlayer(buildRequest()))
+            .isInstanceOfSatisfying(PlayerRegistrationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.emailInUse"));
+
+        verify(emailTokenRepository, never()).save(any());
+    }
+
+    private void stubCreatePath() {
+        when(sanitizer.sanitize(any()))
+            .thenAnswer(inv -> new ContactDetailSanitizer.SanitizerResult(inv.getArgument(0), false));
+        when(authorityRepository.findOneByName(any())).thenReturn(Optional.of(new Authority()));
+        when(passwordEncoder.encode(any())).thenReturn("hashed");
+    }
+
+    @Test
+    void registerPlayer_minor_stillRejectedFirst_beforeAnyAccountLookup() {
+        when(agePolicyService.isMinor(any(LocalDate.class))).thenReturn(true);
+
+        assertThatThrownBy(() -> service.registerPlayer(buildRequest()))
+            .isInstanceOfSatisfying(PlayerRegistrationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.playerMustBeAdult"));
+
+        verifyNoInteractions(userRepository, passwordEncoder, publisher);
     }
 
     private EmailVerificationToken buildToken(UUID token) {

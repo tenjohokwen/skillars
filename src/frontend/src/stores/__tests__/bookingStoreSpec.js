@@ -471,6 +471,25 @@ describe('booking.store — coach-request ordering + batch-accept guards (deferr
       expect(store.packsLoading).toBe(false)
     })
   })
+
+  describe('loadPlayerPacks keeps only the latest call', () => {
+    it("an earlier child's slower response does not replace the later child's list", async () => {
+      let resolveFirst
+      getMySessionPacks
+        .mockImplementationOnce(() => new Promise((r) => (resolveFirst = r)))
+        .mockResolvedValueOnce([{ purchaseId: 'b1', playerId: 6, remainingSessions: 3 }])
+      const store = useBookingStore()
+
+      const first = store.loadPlayerPacks('5')
+      await store.loadPlayerPacks('6')
+      resolveFirst([{ purchaseId: 'a1', playerId: 5, remainingSessions: 2 }])
+      await first
+
+      expect(store.sessionPacksPlayerId).toBe('6')
+      expect(store.sessionPacks.map((p) => p.id)).toEqual(['b1'])
+      expect(store.packsLoading).toBe(false)
+    })
+  })
 })
 
 describe('booking.store — loadAvailability coachPriced (fix/booking-price-and-excused-race)', () => {
