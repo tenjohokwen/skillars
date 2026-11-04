@@ -105,7 +105,8 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
     // ── Neutral duplicate registration: no email/phone enumeration ──────────────────────────────
     // A registration whose email or phone already belongs to an account gets exactly the response a
     // successful registration gets (200, empty body); nothing is created, and the existing account's
-    // owner receives a CREATION_DUP notice through the notification outbox instead.
+    // owner receives a CREATION_DUP notice through the notification outbox instead. On a phone-only match
+    // the address typed on the form also gets a REGISTRATION_PHONE_IN_USE notice.
 
     @Test
     void registerParent_duplicateEmail_returnsTheSameResponseAsASuccessAndNotifiesTheOwner() {
@@ -154,11 +155,20 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
             .singleElement()
             .satisfies(e -> assertThat(e.recipients()).extracting(Recipient::getEmail)
                 .containsExactly(existingAccountEmail));
-        if (attemptedEmail != null) {
+        if (attemptedEmail == null) {
+            // Email match: the typed address IS the existing account; no phone-in-use mail at all.
             assertThat(testMailManager.getEnvelopes().values())
-                .as("nothing (no verification email) goes to the address on the rejected form")
-                .noneMatch(e -> e.recipients().stream().anyMatch(r -> attemptedEmail.equals(r.getEmail())));
+                .noneMatch(e -> e.emailTemplate() == EmailTemplate.REGISTRATION_PHONE_IN_USE);
+            return;
         }
+        // Phone match (the email was new): the address on the rejected form gets exactly one mail, the
+        // REGISTRATION_PHONE_IN_USE notice (phones are unverified, so it may be the number's real owner),
+        // and never a verification email.
+        assertThat(testMailManager.getEnvelopes().values())
+            .filteredOn(e -> e.recipients().stream().anyMatch(r -> attemptedEmail.equals(r.getEmail())))
+            .as("only the phone-in-use notice goes to the address on the rejected form")
+            .singleElement()
+            .satisfies(e -> assertThat(e.emailTemplate()).isEqualTo(EmailTemplate.REGISTRATION_PHONE_IN_USE));
     }
 
     @Test

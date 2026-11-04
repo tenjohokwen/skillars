@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.registration_phone_in_use.title}">We couldn't create your Skillars account</title>
+</head>
+<body>
+    <!-- No first name: the registrant has no account, and the typed name is not echoed to an unverified address. -->
+    <p th:text="#{email.registration_phone_in_use.greeting}">Hello,</p>
+
+    <p th:text="#{email.registration_phone_in_use.text1}">We couldn't create your account: this phone number is already linked to a Skillars account.</p>
+
+    <p th:text="#{email.registration_phone_in_use.loginText}">If that account is yours, you can log in here:</p>
+    <p>
+        <a th:href="${map.baseUrl} + '/#/login'"
+           th:text="#{email.registration_phone_in_use.loginLink}">Log in to your account</a>
+    </p>
+
+    <p th:text="#{email.registration_phone_in_use.forgotText}">If you forgot its password, you can reset it here:</p>
+    <p>
+        <a th:href="${map.baseUrl} + '/#/forgot-password'"
+           th:text="#{email.registration_phone_in_use.resetLink}">Reset your password</a>
+    </p>
+
+    <p th:text="#{email.registration_phone_in_use.otherwise}">If it is not yours, register again with a different phone number, or contact support and quote the help code below.</p>
+
+    <hr/>
+    <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>
+</body>
+</html>

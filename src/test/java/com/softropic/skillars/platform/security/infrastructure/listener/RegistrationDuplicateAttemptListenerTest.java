@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.notification.contract.EmailTemplate;
 import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationPhoneInUseEvent;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -103,6 +104,54 @@ class RegistrationDuplicateAttemptListenerTest {
             listenerLogger.addAppender(logCapture);
             assertThatCode(() -> listener.onDuplicateAttempt(
                 new RegistrationDuplicateAttemptEvent(7L, "owner@example.com", "Grace", "Hopper", "de")))
+                .doesNotThrowAnyException();
+        } finally {
+            listenerLogger.detachAppender(logCapture);
+        }
+
+        assertThat(logCapture.list)
+            .anySatisfy(e -> assertThat(e.getMessage()).contains("Failed to prepare/publish notification"));
+    }
+
+    @Test
+    void onPhoneInUse_happyPath_enqueuesPhoneInUseToTheTypedAddress_withoutAName() {
+        listener.onPhoneInUse(new RegistrationPhoneInUseEvent("newcomer@example.com", "fr"));
+
+        verify(notificationOutboxSupport).enqueueEmail(eq(EmailTemplate.REGISTRATION_PHONE_IN_USE),
+            recipientCaptor.capture(), dataCaptor.capture(), sendIdCaptor.capture());
+        Recipient recipient = recipientCaptor.getValue();
+        assertThat(recipient.getEmail()).isEqualTo("newcomer@example.com");
+        assertThat(recipient.getLangKey()).isEqualTo("fr");
+        assertThat(recipient.getFirstname()).isNull();
+        assertThat(recipient.getLastname()).isNull();
+
+        assertThat(dataCaptor.getValue()).containsOnlyKeys("baseUrl", "helpCode");
+        assertThat(dataCaptor.getValue()).containsEntry("baseUrl", "https://app.skillars.test");
+        assertThat((String) dataCaptor.getValue().get("helpCode")).isNotBlank();
+        assertThat(sendIdCaptor.getValue()).matches(UUID_PATTERN);
+    }
+
+    @Test
+    void onPhoneInUse_blankAddress_earlyReturns_doesNotEnqueue() {
+        assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent(" ", "en")))
+            .doesNotThrowAnyException();
+        assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent(null, "en")))
+            .doesNotThrowAnyException();
+
+        verifyNoInteractions(notificationOutboxSupport);
+    }
+
+    @Test
+    void onPhoneInUse_enqueueThrows_caughtAndLogged_doesNotPropagate() {
+        doThrow(new IllegalStateException("boom")).when(notificationOutboxSupport)
+            .enqueueEmail(any(), any(), anyMap(), anyString());
+
+        Logger listenerLogger = (Logger) LoggerFactory.getLogger(RegistrationDuplicateAttemptListener.class);
+        ListAppender<ILoggingEvent> logCapture = new ListAppender<>();
+        logCapture.start();
+        try {
+            listenerLogger.addAppender(logCapture);
+            assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent("newcomer@example.com", "en")))
                 .doesNotThrowAnyException();
         } finally {
             listenerLogger.detachAppender(logCapture);
