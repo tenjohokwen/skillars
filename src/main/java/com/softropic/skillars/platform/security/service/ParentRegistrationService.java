@@ -76,8 +76,11 @@ public class ParentRegistrationService {
 
     @RateLimited(key = "parent_register", capacity = 3, duration = 60)
     public void registerParent(ParentRegistrationRequest req) {
-        if (userRepository.findOneByEmail(req.email()).isPresent()) {
-            throw new ParentRegistrationException("security.emailInUse", "Email already registered");
+        // Email or phone already on an account: answer exactly like a successful registration and
+        // tell the existing account's owner instead (no enumeration oracle).
+        if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, "parent",
+                req.email(), req.phone(), req.password())) {
+            return;
         }
 
         String sanitizedFirst = sanitizer.sanitize(req.firstName()).sanitized();
@@ -111,6 +114,10 @@ public class ParentRegistrationService {
             // the three constraint-name precedents this method's catch block now follows.
             userRepository.saveAndFlush(user);
         } catch (DataIntegrityViolationException ex) {
+            // Only reachable on a race: a concurrent registration took this email or phone between
+            // the duplicate pre-check above and this insert. Rare enough to keep the explicit error
+            // rather than the neutral path (the transaction is rollback-only here anyway, so a
+            // duplicate notice could not commit).
             if (isPhoneUniqueViolation(ex)) {
                 throw new ParentRegistrationException("security.phoneInUse", "Phone number already registered");
             }

@@ -4,9 +4,12 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.service.OtpHasher;
 import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
+import com.softropic.skillars.utils.TestMailManager;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +61,9 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
     private HttpTestClient httpTestClient;
 
     @Autowired
+    private TestMailManager testMailManager;
+
+    @Autowired
     private RegistrationVerificationTokenService verificationTokenService;
 
     @Autowired
@@ -85,6 +91,65 @@ class PlayerRegistrationResourceIT extends AbstractIntegrationTest {
         assertThat(user.get("skillars_role")).isEqualTo("PLAYER");
         assertThat(user.get("verification_status")).isEqualTo("UNVERIFIED");
         assertThat(user.get("activated")).isEqualTo(false);
+    }
+
+    // ── Neutral duplicate registration: no email/phone enumeration ──────────────────────────────
+    // A registration whose email or phone already belongs to an account gets exactly the response a
+    // successful registration gets (200, empty body); nothing is created, and the existing account's
+    // owner receives a CREATION_DUP notice through the notification outbox instead.
+
+    @Test
+    void registerPlayer_duplicateEmail_returnsTheSameResponseAsASuccessAndNotifiesTheOwner() {
+        ResponseEntity<String> first = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(TEST_EMAIL), jsonHeaders(), String.class);
+        testMailManager.clear();
+
+        ResponseEntity<String> duplicate = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(TEST_EMAIL), jsonHeaders(), String.class);
+
+        assertThat(duplicate.getStatusCode()).isEqualTo(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(duplicate.getBody()).isEqualTo(first.getBody());
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.email_verification_tokens evt JOIN main.\"user\" u ON u.id = evt.user_id "
+                + "WHERE u.email = ?", Integer.class, TEST_EMAIL))
+            .as("the duplicate attempt must not issue a second verification token")
+            .isEqualTo(1);
+        assertCreationDupSentTo(TEST_EMAIL, null);
+    }
+
+    @Test
+    void registerPlayer_duplicatePhone_returnsTheSameResponseAsASuccessAndNotifiesThePhoneHolder() {
+        ResponseEntity<String> first = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(TEST_EMAIL), jsonHeaders(), String.class);
+        testMailManager.clear();
+
+        // A new email, but the same phone as registrationBody(TEST_EMAIL).
+        ResponseEntity<String> duplicate = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody("second.player@skillars.com"), jsonHeaders(),
+            String.class);
+
+        assertThat(duplicate.getStatusCode()).isEqualTo(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(duplicate.getBody()).isEqualTo(first.getBody());
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.\"user\" WHERE email = ?", Integer.class, "second.player@skillars.com"))
+            .as("the duplicate-phone attempt must not have created a user row")
+            .isZero();
+        assertCreationDupSentTo(TEST_EMAIL, "second.player@skillars.com");
+    }
+
+    private void assertCreationDupSentTo(String existingAccountEmail, String attemptedEmail) {
+        // Under the test profile the outbox drains synchronously after commit, so the envelope is here.
+        assertThat(testMailManager.getEnvelopes().values())
+            .filteredOn(e -> e.emailTemplate() == EmailTemplate.CREATION_DUP)
+            .as("exactly one CREATION_DUP notice, to the existing account")
+            .singleElement()
+            .satisfies(e -> assertThat(e.recipients()).extracting(Recipient::getEmail)
+                .containsExactly(existingAccountEmail));
+        if (attemptedEmail != null) {
+            assertThat(testMailManager.getEnvelopes().values())
+                .as("nothing (no verification email) goes to the address on the rejected form")
+                .noneMatch(e -> e.recipients().stream().anyMatch(r -> attemptedEmail.equals(r.getEmail())));
+        }
     }
 
     // skillars-deferred-138 AC2: the seeded platform config (V139) has
