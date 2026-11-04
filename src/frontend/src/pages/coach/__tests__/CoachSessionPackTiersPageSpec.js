@@ -7,6 +7,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises, DOMWrapper } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
+import { createI18n } from 'vue-i18n'
+import enUS from 'src/i18n/en-US'
 
 const { notifyMock } = vi.hoisted(() => ({ notifyMock: vi.fn() }))
 vi.mock('quasar', async (importOriginal) => {
@@ -107,16 +109,107 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     expect(wrapper.find('[data-test="tier-validity"]').exists()).toBe(false)
   })
 
-  it('titles a label-less tier (set from the profile builder) with the localized "N sessions" fallback', () => {
-    const wrapper = mountPage([
-      { ...ACTIVE_TIER, label: null },
-      { ...OLD_TIER, label: null },
-    ])
+  // skillars-deferred-170 AC2: each tier names itself once. These mount with the real en-US messages: the
+  // global test i18n has none, so it renders bare keys and would hide a {label} repeated in the caption.
+  describe('naming each tier once (real messages)', () => {
+    function mountWithMessages(state) {
+      const i18n = createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } })
+      const pinia = createTestingPinia({
+        createSpy: vi.fn,
+        initialState: { payment: { sessionPackTiers: [], loading: {}, error: {}, ...state } },
+      })
+      const wrapper = mount(CoachSessionPackTiersPage, {
+        global: { plugins: [pinia, i18n] },
+        attachTo: document.body,
+      })
+      mounted.push(wrapper)
+      return wrapper
+    }
 
-    const text = wrapper.text()
-    expect(text).toContain('marketplace.sessionsFallbackLabel')
-    expect(text).not.toContain('null')
-    // Mutation: render {{ activeTier.label }} directly -> an empty title -> RED.
+    function occurrences(text, part) {
+      return text.split(part).length - 1
+    }
+
+    it('heads a labelled tier with its label, captions it with the summary, and never repeats the label', () => {
+      const wrapper = mountWithMessages({
+        sessionPackTiers: [
+          { ...ACTIVE_TIER, label: 'Season 10', sessionCount: 10, totalPrice: 380 },
+          { ...OLD_TIER, label: 'Starter 5', sessionCount: 5, totalPrice: 200 },
+        ],
+      })
+
+      const text = wrapper.text()
+      expect(text).toContain('10 sessions for €380')
+      expect(text).toContain('5 sessions for €200')
+      // Mutation: restore a caption that interpolates the label ('{label} — ...') -> 2 occurrences -> RED.
+      expect(occurrences(text, 'Season 10')).toBe(1)
+      expect(occurrences(text, 'Starter 5')).toBe(1)
+    })
+
+    it('heads a label-less tier (set from the profile builder) with the summary alone, with no second line', () => {
+      const wrapper = mountWithMessages({
+        sessionPackTiers: [
+          { ...ACTIVE_TIER, label: null, sessionCount: 5, totalPrice: 200 },
+          { ...OLD_TIER, label: null, sessionCount: 3, totalPrice: 120 },
+        ],
+      })
+
+      const text = wrapper.text()
+      expect(occurrences(text, '5 sessions for €200')).toBe(1)
+      expect(occurrences(text, '3 sessions for €120')).toBe(1)
+      expect(text).not.toContain('5 sessions —')
+      expect(text).not.toContain('null')
+    })
+
+    it('names a sold pack from a label-less tier by its size instead of a dash', () => {
+      const wrapper = mountWithMessages({
+        soldPacks: [
+          {
+            purchaseId: 'p-9',
+            buyerName: 'Pat Parent',
+            playerId: 7,
+            playerName: 'Mia',
+            tierLabel: null,
+            sessionCount: 5,
+            remainingSessions: 3,
+            expiresAt: '2026-11-05T00:00:00Z',
+            extendedAt: null,
+            status: 'ACTIVE',
+            expiringSoon: false,
+            extendable: false,
+          },
+        ],
+      })
+
+      const row = wrapper.find('[data-test="sold-pack"]')
+      expect(row.text()).toContain('5 sessions ·')
+      expect(row.text()).not.toContain('—')
+    })
+
+    it('keeps the dash for a sold pack whose tier row is gone (sessionCount 0)', () => {
+      const wrapper = mountWithMessages({
+        soldPacks: [
+          {
+            purchaseId: 'p-10',
+            buyerName: 'Mia',
+            playerId: 7,
+            playerName: 'Mia',
+            tierLabel: null,
+            sessionCount: 0,
+            remainingSessions: 0,
+            expiresAt: '2026-11-05T00:00:00Z',
+            extendedAt: null,
+            status: 'ACTIVE',
+            expiringSoon: false,
+            extendable: false,
+          },
+        ],
+      })
+
+      const row = wrapper.find('[data-test="sold-pack"]').text()
+      expect(row).toContain('— ·')
+      expect(row).not.toContain('0 sessions ·')
+    })
   })
 
   it('has no withdraw control when there is no active tier', () => {

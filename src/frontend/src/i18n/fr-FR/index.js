@@ -2040,7 +2040,7 @@ export default {
       coachPackSessionsReserved:
         "Le pack de séances de la famille n'a plus de séance libre pour une autre réservation.",
       extendSuccess: "Votre pack de séances a été prolongé jusqu'au {date}",
-      tierLabel: '{label} — {count} séances pour {price} €',
+      tierSummary: '{count} séances pour {price} €',
       noActiveTier: "Ce coach n'a aucun pack de séances actif disponible.",
     },
     card: {

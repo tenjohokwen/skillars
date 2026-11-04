@@ -1617,7 +1617,7 @@ export default {
       coachPackSessionsReserved:
         'Das Sitzungspaket der Familie hat keine freie Sitzung mehr für eine weitere Buchung.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',
-      tierLabel: '{label} — {count} Sitzungen für €{price}',
+      tierSummary: '{count} Sitzungen für €{price}',
       noActiveTier: 'Dieser Coach hat kein aktives Sitzungspaket verfügbar.',
     },
     card: {

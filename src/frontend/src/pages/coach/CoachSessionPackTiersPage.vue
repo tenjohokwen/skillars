@@ -27,14 +27,8 @@
           <div class="text-subtitle1 q-mb-sm">{{ t('payment.myTiers.currentOffer') }}</div>
           <div v-if="activeTier" class="glass-card q-pa-md tier-card">
             <div class="text-body1 text-weight-bold">{{ tierName(activeTier) }}</div>
-            <div class="text-body2" style="color: var(--text-secondary)">
-              {{
-                t('payment.sessionPack.tierLabel', {
-                  label: tierName(activeTier),
-                  count: activeTier.sessionCount,
-                  price: activeTier.totalPrice,
-                })
-              }}
+            <div v-if="activeTier.label" class="text-body2" style="color: var(--text-secondary)">
+              {{ tierSummary(activeTier) }}
             </div>
             <div
               v-if="activeTier.validityDays"
@@ -75,15 +69,7 @@
             <q-item v-for="tier in history" :key="tier.packTierId" class="history-item">
               <q-item-section>
                 <q-item-label>{{ tierName(tier) }}</q-item-label>
-                <q-item-label caption>
-                  {{
-                    t('payment.sessionPack.tierLabel', {
-                      label: tierName(tier),
-                      count: tier.sessionCount,
-                      price: tier.totalPrice,
-                    })
-                  }}
-                </q-item-label>
+                <q-item-label v-if="tier.label" caption>{{ tierSummary(tier) }}</q-item-label>
               </q-item-section>
             </q-item>
           </q-list>
@@ -132,7 +118,7 @@
                     {{ t('payment.myTiers.boughtBy', { name: pack.buyerName }) }}
                   </q-item-label>
                   <q-item-label caption>
-                    {{ pack.tierLabel || '—' }} ·
+                    {{ soldPackName(pack) }} ·
                     {{
                       t('payment.myTiers.sessionsRemaining', {
                         remaining: pack.remainingSessions,
@@ -354,10 +340,24 @@ function loadSoldPacks(page) {
   return paymentStore.fetchSoldPacks(page)
 }
 
-// skillars-deferred-168: a pack set from the profile builder may have no label (null); show the same
-// localized "N sessions" the public profile falls back to.
+// skillars-deferred-170 AC2: a tier names itself once. A labelled tier is headed by its label and captioned
+// with this summary; a label-less one (set from the profile builder, skillars-deferred-168) is headed by the
+// summary and has no caption.
+function tierSummary(tier) {
+  return t('payment.sessionPack.tierSummary', { count: tier.sessionCount, price: tier.totalPrice })
+}
+
 function tierName(tier) {
-  return tier.label || t('marketplace.sessionsFallbackLabel', { count: tier.sessionCount })
+  return tier.label || tierSummary(tier)
+}
+
+// A sold pack from a label-less tier is named by its size, like the public profile does. sessionCount is 0
+// only when the tier row is gone (CoachSoldPackQueryService), and "0 sessions" would be wrong.
+function soldPackName(pack) {
+  if (pack.tierLabel) return pack.tierLabel
+  return pack.sessionCount
+    ? t('marketplace.sessionsFallbackLabel', { count: pack.sessionCount })
+    : '—'
 }
 
 function formatDate(iso) {

@@ -2390,7 +2390,7 @@ export default {
       coachPackSessionsReserved:
         'The family’s session pack has no free sessions left for another booking.',
       extendSuccess: 'Your session pack has been extended to {date}',
-      tierLabel: '{label} — {count} sessions for €{price}',
+      tierSummary: '{count} sessions for €{price}',
       noActiveTier: 'This coach has no active session pack available.',
     },
     card: {
