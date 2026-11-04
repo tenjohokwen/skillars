@@ -153,4 +153,13 @@ describe('errorHandler — translatedErrorMessage', () => {
     expect(msg).toBe(NETWORK_EN)
     expect(msg).not.toContain('Request failed')
   })
+
+  it('a bare status (gateway 502 HTML, empty 400) gets the user-facing fallback, not the status key', () => {
+    const gateway = translatedErrorMessage(axiosError({ status: 502, data: '<html>' }), t, te)
+    expect(gateway).toBe(i18n.global.t('error.generic'))
+    expect(gateway).not.toBe(i18n.global.t('error.unknown'))
+    const badRequest = translatedErrorMessage(axiosError({ status: 400, data: '' }), t, te)
+    expect(badRequest).toBe(i18n.global.t('error.badRequest'))
+    expect(badRequest).not.toBe(i18n.global.t('validation.badRequest'))
+  })
 })
