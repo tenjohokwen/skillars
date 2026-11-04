@@ -3546,3 +3546,89 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Messaging calls never pass the `role` disambiguator.** `MessagingResource.resolveRole` accepts `?role=`, and the new `reportMessage`/`reportConversation` wrappers accept it, but no call on `MessagingPage.vue` (pre-existing list/send included) passes it, so a dual-role user can't act under their second role.
 - **Admin dispute detail polish.** `AdminDisputesPage.vue` renders `raisedByRole` and `bookingStatus` as raw enum values and hardcodes "€" for every amount.
 - **Coach-side dispute action is reachable only for COMPLETED bookings.** `BookingService.getCoachWeekSchedule` fetches only `CONFIRMED, UPCOMING, REQUESTED, IN_PROGRESS, COMPLETED_PENDING_CONFIRMATION, COMPLETED`, so `CoachCommandCenterPage`'s `DisputeAction` never renders for the CANCELLED*/NO_SHOW_* statuses `DisputeService.ELIGIBLE_STATUSES` allows (a coach cannot dispute a player no-show). Owner decision 2026-10-27: accept; parents cover every eligible status. Fix needs a coach-facing list of cancelled/no-show bookings, not a widened week schedule.
+
+## Deferred from: Pitchside UI tests, spec REG-03 (2026-11-03)
+
+- **Adult players can't finish email verification: the verify page shows "Network error".** `playerRegistrationApi` uses the `api` axios instance, whose response interceptor already returns the body (`boot/axios.js:142`). `PlayerEmailVerifyPage.vue:75` then destructures `response.data` from that body, which is `undefined`, so a `TypeError` lands in its `catch`, which `setError` shows as "Network error". The server has verified the account (200), but the player never reaches `/login?verified=true` (or `/player/verify-phone` when the phone OTP is on). The coach and parent verify pages use plain `axios` and are unaffected. `PlayerEmailVerifyPageSpec.js` mocks `{ data: {...} }`, which matches the bug, so the unit suite stays green. A sweep of every `api`-instance caller found no other `.data` read on an unwrapped body. Found by the Pitchside spec REG-03. Fixed in commit `95d4e9d6` (the page plus a spec that resolves the body and fails against the old code), which is in PR #416 into `feature/pitchside`, not master. Fix on master by cherry-picking `95d4e9d6`.
+
+  **RESOLVED 2026-11-03:** `95d4e9d6` cherry-picked to master on `fix/player-email-verify-network-error`; `feature/pitchside` already had it through #416.
+
+## Deferred from: Pitchside UI tests, spec ONB-06 (2026-11-03)
+
+- **A pack added in the coach profile builder is advertised to parents but can't be bought.**
+  - **Where the data goes:**
+    - Builder step 3 saves its packs to `marketplace.session_packs` (`CoachProfileService.saveStep3`, `CoachProfileService.java:287`).
+    - The public profile reads those rows. `coachHasPacks` (`CoachPublicProfilePage.vue:611`) turns on the parent's "Buy sessions" button (`showBuySessionsSecondary`, `:622`).
+    - The purchase page and the purchase itself read `payment.session_pack_tiers`. Only the coach's "My Session Pack Offer" page (`/coach/session-pack-tiers`) writes that table.
+    - Nothing copies builder packs into a tier, at publish time or later.
+  - **What a parent sees:** a coach who onboards through the wizard, adds a pack and finishes Stripe Connect shows "Buy sessions" to parents. Clicking it opens "This coach has no session pack available for purchase" (`booking.packs.noTierAvailable`, `SessionPackPurchasePage.vue:60`).
+  - **What the coach sees:** their own "My Session Pack Offer" page says "You have no active session pack offer", even though they just entered a pack.
+  - **Why tests missed it:** the Pitchside provisioner creates the tier with a separate `POST /payment/coaches/me/session-pack-tiers` after publishing (`e2e/packages/skillars-e2e/src/data/provisioner.ts:260`), which hides the gap.
+  - **The decision needed:** which table is the source of truth. Either publishing, or step 3 itself, creates the tier from the builder's pack, or the profile stops advertising builder-only packs.
+  - Found by the Pitchside spec ONB-06 (W2, on `feature/pitchside`). That spec is marked `test.fail` until this is fixed; remove the marker with the fix.
+
+## Deferred from: Pitchside UI tests, booking, payment and auth specs (2026-11-04)
+
+- **Booking slot labels render blank on the request-booking page (live on master).**
+  - **Cause:** `BookingRequestPage.formatInZone` (`BookingRequestPage.vue:467`) combines `dateStyle`/`timeStyle` with `timeZoneName` (`:473`). ECMA-402 forbids that, and every engine throws "Invalid option" (Chrome 156, Firefox, Safari, Node). The UTC fallback (`:483`) uses the same options and throws too.
+  - **Effect:** every slot row renders with no text, so parents pick from blank rows.
+  - **Why tests missed it:** the page's own spec assumed Chrome accepted the options and skipped rendering the labels.
+  - **Fix:** `e51b84f1` on `feature/pitchside` (PR #425) uses explicit date and time components and adds a Vitest case that fails against the old code. It can be cherry-picked to master on its own.
+  - Found by the Pitchside spec BKG-04.
+- **A family holding pack credits gets "Per session" preselected, and is charged by card.**
+  - **Cause:** `selectedPackId` starts as `null` (`BookingRequestPage.vue:393`), and "Per session" is the first option (`:403`), even when the family holds credits with this coach.
+  - **Effect:** a parent who submits with the default is charged per session when the coach accepts, and the credits go unused. Reproduced on the E2E stack: 2 charges, credits still 5/5.
+  - **The decision needed:** whether holding credits should preselect the pack.
+  - BKG-01 and BKG-11 choose the pack explicitly until this is decided.
+- **A declined card shows only "Purchase failed. Please try again."**
+  - **Cause:** `StripePaymentGateway` turns a card error into the catch-all `payment.lifecycleFailure` (`StripePaymentGateway.java:187`, `:201`), and `PaymentApiAdvice` returns that as a 422 `ErrorDto`. `SessionPackPurchasePage` then reads `e.response.data.message` (`SessionPackPurchasePage.vue:189`), which `ErrorDto` never has (its text is under `errorMsg`). This is the same mistake fixed on the profile builder in deferred-140 AC3.3.
+  - **Effect:** every purchase failure shows the generic text, and the existing "card was declined" copy (`subscription.errors.paymentDeclined`) is never reached.
+  - **No money impact:** no pack is created and nothing is captured. PAY-06 asserts the current behaviour.
+- **Registration discloses whether an email or phone number is already registered.**
+  - **Cause:** all three registration services throw `security.emailInUse` (for example `CoachRegistrationService.java:75`, `:104`), and each register page shows "This email is already registered." (`auth.*.emailInUse`; the phone number gets `phoneInUse`).
+  - **Effect:** anyone can test whether an address has an account. Elsewhere the app defends against this deliberately (the resend banner, D8 above).
+  - **The decision needed:** whether registration should hide it. If it should, the Pitchside plan's REG-08 is the regression test, and it is not written yet.
+- **The coach completeness gate guards only `/coach/command-center`.**
+  - **Cause:** the router's async check (`router/index.js:93`) matches that one path.
+  - **Effect:** an incomplete coach (builder unfinished, profile unpublished) can open other coach pages, such as `/coach/availability`. Observed while writing AUTH-13. It may be intended (the Pitchside plan's C-11 describes the command-centre guard), but it is unconfirmed.
+
+## Deferred from: CI Trivy install workaround (2026-11-04)
+
+Source: the `/pr-review` round on the branch that replaced trivy-action's `get.trivy.dev` installer with a
+sha256-pinned GitHub-release download, after Aqua's host went NXDOMAIN and blocked every PR
+(`aquasecurity/setup-trivy#42`, `aquasecurity/trivy#11537`). Both reviewer arms independently raised the
+same consequence, which is the one item kept here.
+
+- **[CI, medium/security]** The image-CVE scanner version is now frozen in a workflow `env:` where no
+  automation can see it. Before the workaround, `trivy-action`'s own `version` input default (`'v0.70.0'`
+  at the pinned SHA) meant a Dependabot `github-actions` bump of trivy-action also moved the scanner;
+  `skip-setup-trivy: 'true'` cuts that link, because the `github-actions` ecosystem only rewrites `uses:`
+  refs and knows nothing of a version string in a step's `env:`. This is the repo's **only** CVE gate —
+  `ci.yml` runs no scan — so a frozen scanner means new advisory sources, package ecosystems and detection
+  fixes never reach it, while PRs keep passing. **Whoever bumps `aquasecurity/trivy-action` must bump
+  `TRIVY_VERSION` and `TRIVY_SHA256` in the same PR**, checksums from
+  `https://github.com/aquasecurity/trivy/releases/download/v<ver>/trivy_<ver>_checksums.txt`.
+  Two things bound the damage rather than removing it: the step's comment states the rule at the point of
+  use, and an aging pin eventually rejects a newer trivy-db schema, which blocks every PR instead of
+  degrading silently. Closes itself when the revert condition in that comment is met (get.trivy.dev
+  resolving again *and* an upstream release that no longer depends on it), since reverting restores the
+  Dependabot link.
+  - Reviewer claims checked and **not** kept: the same round proposed that a trivy-action bump could pair a
+    newer entrypoint with the old binary and fail on a removed CLI flag — refuted, the entrypoint builds
+    `cmd=("$TRIVY_CMD" "$scanType" "$scanRef")` and passes every option as a `TRIVY_*` environment
+    variable, so it passes no flags at all. Also proposed: that `0.70.0` might be a silent downgrade
+    (refuted — it is the action's own default at the pin), that the pinned digest or asset name might be
+    wrong (refuted — both verified against the upstream checksums file before commit), and that
+    `skip-setup-trivy` might not exist at the pin and would only warn (refuted — it is declared there and
+    gates the installer on `inputs.skip-setup-trivy == 'false'`).
+
+## Known defect in THIS file (2026-11-04)
+
+- **[docs, low]** The `## How to read this file` list is split in half. Commit `9d62060c` (PR #406) inserted
+  the `review-evals baseline real-sample` section *inside* that list: its heading was spliced onto the end
+  of the "Sections are not in chronological order" bullet at line 11 (so the heading is mid-bullet text and
+  renders as prose, leaving that whole RS03-RS11 section with no heading at all), and the bullet's own tail
+  now sits orphaned as a bogus `## Deferred from:` heading.` heading after the RS items, followed by the
+  remaining how-to-read bullets. Verified with `git log -L 11,11` on this file. Fixing it means moving the
+  inserted section out of the list and restoring one bullet — deliberately NOT done in the CI PR that found
+  it, to keep that diff to the workflow.
