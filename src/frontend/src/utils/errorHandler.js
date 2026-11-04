@@ -192,6 +192,21 @@ export function getErrorMessage(error) {
 }
 
 /**
+ * The user-facing text for an API error, from a component's own i18n: the backend's errorKey when this
+ * bundle translates it, else parseApiError's message (already translated for network and server errors).
+ * For call sites that used to read response.data.message, which ErrorDto never has.
+ *
+ * @param {Error} error - Axios error object
+ * @param {Function} t - the component's useI18n() t
+ * @param {Function} te - the component's useI18n() te
+ * @returns {string} Error message
+ */
+export function translatedErrorMessage(error, t, te) {
+  const parsed = parseApiError(error)
+  return parsed.errorKey && te(parsed.errorKey) ? t(parsed.errorKey) : parsed.message
+}
+
+/**
  * Get help code for support reference.
  *
  * @param {Error} error - Axios error object
