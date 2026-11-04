@@ -39,6 +39,9 @@ services:
       - APP_FRONTEND_URL=${E2E_BASE_URL:-http://localhost:9990}
       # Required to boot; test-shaped placeholders only (the guard rejects live keys outside prod).
       - APP_PAYMENT_STRIPE_API_KEY=sk_test_e2e_placeholder
+      # Without a publishable key the card form shows "card payments unavailable" before loading
+      # Stripe.js; Stripe.js itself is always the stub (src/stubs/stripe.ts), so this never reaches Stripe.
+      - APP_PAYMENT_STRIPE_PUBLISHABLE_KEY=pk_test_e2e_placeholder
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=e2e-webhook-signing-secret
       - JWT_SIGNING_KEY=ZTJlLW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1lMmUtc3VpdGUtb25seSEhIQ==

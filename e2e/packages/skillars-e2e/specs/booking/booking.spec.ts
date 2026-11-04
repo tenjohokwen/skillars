@@ -19,6 +19,20 @@ const confirmed = new RegExp(
   `^(${t('booking.requests.statusConfirmed')}|${t('booking.requests.statusUpcoming')})$`,
 )
 
+/**
+ * Submit the request paying with the family's pack. Waits for the page to preselect the pack: a
+ * submit sent before the packs load books per session and charges the card instead.
+ */
+async function requestWithPack(request: BookingRequestScreen, sessions: number): Promise<void> {
+  await request.waitReady()
+  await expect(
+    request.packOption(
+      t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
+    ),
+  ).toBeChecked()
+  await request.submit().click()
+}
+
 test.describe('F · Booking lifecycle', () => {
   test(
     'a parent with credits requests a slot, the coach accepts, and both sides see it confirmed',
@@ -189,7 +203,7 @@ test.describe('F · Booking lifecycle', () => {
     },
   )
   test(
-    'the bookings list shows the coach, the child and the time, and the pack shows the credit held',
+    'the bookings list shows the coach, the child and the time, and a request spends no pack credit yet',
     scenario({
       id: 'BKG-14',
       priority: 'P0',
@@ -213,7 +227,7 @@ test.describe('F · Booking lifecycle', () => {
         slot,
       )
       await profile.primaryCta().click()
-      await (await new BookingRequestScreen(family.page, suite).waitReady()).submit().click()
+      await requestWithPack(new BookingRequestScreen(family.page, suite), sessions)
 
       const bookings = await new ParentBookingsScreen(family.page, suite).waitReady()
       const booking = bookings.booking(coachName)
@@ -224,12 +238,13 @@ test.describe('F · Booking lifecycle', () => {
       )
       await expect(bookings.status(booking)).toHaveText(t('booking.requests.statusRequested'))
       // The list itself carries no credit count; the pack dashboard is where remaining credits
-      // show, and it already counts the one this request holds.
+      // show. A request paid with the pack holds no credit yet: it is spent when the coach accepts
+      // (BKG-01), so the pack still reads full.
       const packs = await new PacksDashboardScreen(family.page, suite).open({
         playerId: child.playerId,
       })
       await expect(packs.credits(packs.card(coachName))).toHaveText(
-        t('booking.packs.creditsRemainingLabel', { remaining: sessions - 1, total: sessions }),
+        t('booking.packs.creditsRemainingLabel', { remaining: sessions, total: sessions }),
       )
     },
   )
@@ -258,7 +273,7 @@ test.describe('F · Booking lifecycle', () => {
         nextWeekSlot(4, '14:00'),
       )
       await profile.primaryCta().click()
-      await (await new BookingRequestScreen(family.page, suite).waitReady()).submit().click()
+      await requestWithPack(new BookingRequestScreen(family.page, suite), sessions)
       await new ParentBookingsScreen(family.page, suite).waitReady()
       const coachSide = await actor(asRole(coach))
       const inbox = await new CoachRequestsScreen(coachSide.page, suite).open()
@@ -269,9 +284,13 @@ test.describe('F · Booking lifecycle', () => {
       await provision.moveBookingStart(parent, coach, 3)
       const since = new Date(Date.now() - 5_000)
 
-      const bookings = await new ParentBookingsScreen(family.page, suite).open()
+      // A reload, not open(): the family page is already on the bookings route, where a hash-only
+      // navigation keeps the list it loaded before the coach accepted and the start moved.
+      await family.page.reload()
+      const bookings = await new ParentBookingsScreen(family.page, suite).waitReady()
       const booking = bookings.booking(coachName)
       await expect(bookings.status(booking)).toHaveText(confirmed)
+      await expect(bookings.cancel(booking)).toBeVisible()
       await bookings.cancel(booking).click()
       // The dialog states the 24h rule, and that a reschedule does not reset it.
       await expect(bookings.cancelDialogBody()).toHaveText(t('booking.cancel.dialogBody'))
