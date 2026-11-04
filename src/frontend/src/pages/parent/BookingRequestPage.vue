@@ -396,10 +396,15 @@ const batchAtMax = computed(() => bookingStore.batchBasketSize >= maxBatchSize.v
 // booking request. Batch bookings don't carry a pack (Task 4 decision — credit-wallet/Stripe
 // only), so this selector only applies in single-booking mode.
 const selectedPackId = ref(null)
+// Only a list loaded for this page's player: after a child switch the store still holds the previous
+// child's packs until the reload lands (or for good, if it fails), and a pack picked from them would
+// be refused (packPlayerMismatch).
 const activePacksForCoach = computed(() =>
-  bookingStore.sessionPacks.filter(
-    (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
-  ),
+  String(bookingStore.sessionPacksPlayerId) !== String(playerId.value)
+    ? []
+    : bookingStore.sessionPacks.filter(
+        (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
+      ),
 )
 const activePackSessionTotal = computed(() =>
   activePacksForCoach.value.reduce((sum, p) => sum + (Number(p.sessionCount) || 0), 0),
@@ -490,11 +495,14 @@ watch(
 // chosen (or preselected) for the previous child is not this child's: the backend refuses it
 // (packPlayerMismatch). Clear the choice and load this child's packs; defaultPackId stays undefined
 // until they arrive (sessionPacksPlayerId still names the previous child), then sets the new default.
+// Reloaded on any switch between two players, even while onMounted's own load is in flight: the
+// store keeps only the latest call's response, so that earlier load cannot land last. A first
+// resolution (a self-registered player's id arriving, null to an id) is onMounted's to load.
 watch(playerId, async (id, previous) => {
   if (String(id) === String(previous)) return
   selectedPackId.value = null
   packChoiceTouched.value = false
-  if (ownListsLoaded.value && id) await bookingStore.loadPlayerPacks(id)
+  if (id && previous) await bookingStore.loadPlayerPacks(id)
 })
 
 // fix/booking-price-and-excused-race: only an explicit false blocks — an unknown (null) state must not
