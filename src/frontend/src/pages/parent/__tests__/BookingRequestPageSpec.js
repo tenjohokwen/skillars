@@ -587,6 +587,79 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     expect(wrapper.vm.selectedPackId).toBe('p1')
   })
 
+  it("lists left in the store by an earlier page are not the default before this page's own load", async () => {
+    // The coach profile page leaves this player's packs and bookings in the store. A pack used up
+    // since then must not be preselected while this page is still loading its own lists.
+    let finishAvailability
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1')],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      {
+        ...renderPage,
+        beforeMount: (pinia) => {
+          useBookingStore(pinia).loadAvailability.mockImplementation(
+            () => new Promise((resolve) => (finishAvailability = resolve)),
+          )
+        },
+      },
+    )
+    expect(wrapper.vm.selectedPackId).toBe(null)
+    finishAvailability()
+    await flushPromises()
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+  })
+
+  it('a failed bookings or packs fetch never changes the selection', async () => {
+    const { wrapper, bookingStore } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1')],
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+    // A later refresh fails: the shown pack stays (the backend still checks it on submit). Before,
+    // the default turned null and an untouched selection fell back to per session, charging the card.
+    bookingStore.bookingsError = new Error('boom')
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+    bookingStore.packsError = 'boom'
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+  })
+
+  it('reservations unknown on load (bookings fetch failed): no pack is preselected', async () => {
+    const { wrapper } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1')],
+        bookingsError: new Error('boom'),
+      },
+      '5',
+      undefined,
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe(null)
+  })
+
   it("another child's packs still in the store are never the default", async () => {
     const { wrapper } = await mountPage(
       {
