@@ -1,6 +1,6 @@
 # Story skillars-deferred-169: Stripe retry double-charge, webhook ordering, superseded proration, card-save and pause-date fixes
 
-Status: in-progress
+Status: review
 
 ## Story
 
@@ -675,13 +675,67 @@ RS08's `SessionPackDashboardPage.vue` (`routes.js:127`) is a different file and 
 
 ### Agent Model Used
 
-Claude Opus 5 (`claude-opus-5`)
+Claude Sonnet 5.5 (`claude-sonnet-5-5`) implemented; the story was drafted and reviewed with Claude Opus 5.
 
 ### Debug Log References
 
-### Completion Notes List
+`mvn` runs used `-DskipFrontend=true` (the frontend build otherwise runs on every `-Dtest`).
+
+### Completion Notes (2026-11-04)
+- **Implemented:** RS06 (attempt table `V228`, partial unique index, CAS status writes, resolver, `PaymentRecoveryJob`, `pack_attempts` backlog gauge + `PackAttemptsUnresolved` alert, `payment.noChargeMade`), RS09 (conditional card revert), RS05 (park in `REQUIRES_NEW` on the routed pool, post-commit re-read, drain after link, job drain), RS07 (`[SUBSCRIPTION_UPGRADE_UNGRANTED]` + best-effort FK-free row), RS08 (local-midnight pause date), client key rules, docs, config keys, GDPR null-out of the card columns.
+- **Renumbered:** migration is `V228`, not `V227`: the pitchside cherry-pick (#441) took `V227` while this branch was open. `skillars-deferred-170` renumbers after this.
+- **Merged #441 semantics:** the gateway now throws `payment.cardDeclined` for a refused card; `PackNoChargeException` keeps that code (still proof of no charge) so the UI's "update your card" banner works, and the client clears its key on it.
+- **Fourth-review additions implemented:** the absence age (`payment.packAttempt.absenceAgeMinutes`, default 30) for every absence verdict; `getCaptureState` so a null charge object is never read as REFUNDED; the job never refunds; operator close-out SQL in the runbook; request-path proof-of-capture CAS (`NO_CHARGE` may move to `SUCCEEDED`/`UNRECONCILED`/`REFUNDED`).
+- **/pr-review:** two rounds (see ledger RS05c, RS06e, RS09d for what was filed rather than fixed).
+- **NOT run locally (CI is the gate):** `PackPurchaseAttemptIT` (repository-level: the index, CAS, purge, GDPR null-out, and that parked events / ungranted-upgrade rows commit independently of a rolled-back caller) and the whole failsafe suite. **Not written:** the full-stack ITs listed unchecked in Tasks 1, 1b and 4 (concurrent HTTP requests, stalled-thread interleaving, the AC4 interleaving with a repository hook) and the unchanged-run confirmation of `SubscriptionServiceStripeReconciliationIT`; they remain open.
+- **Deliberately out of scope (AC9):** the `/save-payment-method` door (ledger RS09b); the shipped UI never sends a card on the pack-purchase endpoint, so the revert protects direct API clients only.
+- **Post-merge chores:** promote the RS09 eval draft `pending-card-default-before-charge.yaml` (needs the PR number: rename without `pending-`, `id` = filename, `fix_pr` = PR), then after the squash merge add `fix_merge` and drop `input_rev`.
 
 ### File List
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/implementation-artifacts/skillars-deferred-169-stripe-retry-double-charge-webhook-ordering-and-card-save-fixes.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `deploy/lgtm/grafana-alerts.yml`
+- `docs/deployment/monitoring.md`
+- `docs/deployment/provisioning-checklist.md`
+- `docs/dev-docs/assets/search-index.js`
+- `docs/dev-docs/payment/index.html`
+- `src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js`
+- `src/frontend/src/i18n/de-DE/index.js`
+- `src/frontend/src/i18n/en-US/index.js`
+- `src/frontend/src/i18n/fr-FR/index.js`
+- `src/frontend/src/pages/parent/SessionPackDashboardPage.vue`
+- `src/frontend/src/pages/parent/SessionPackPurchasePage.vue`
+- `src/frontend/src/pages/parent/__tests__/SessionPackDashboardPageSpec.js`
+- `src/frontend/src/pages/parent/__tests__/SessionPackPurchasePageSpec.js`
+- `src/main/java/com/softropic/skillars/infrastructure/persistence/OperationalBacklogMetrics.java`
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java`
+- `src/main/java/com/softropic/skillars/platform/payment/contract/CaptureState.java`
+- `src/main/java/com/softropic/skillars/platform/payment/contract/PaymentGateway.java`
+- `src/main/java/com/softropic/skillars/platform/payment/contract/exception/PackNoChargeException.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseAttempt.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseAttemptRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/StripePendingSubscriptionEvent.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/StripePendingSubscriptionEventRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SubscriptionUpgradeReconciliation.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SubscriptionUpgradeReconciliationRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/PaymentRecoveryJob.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/PaymentRecoveryRecorder.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerErasureOutboxSupport.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java`
+- `src/main/resources/db/migration/V228__pack_purchase_attempts_pending_sub_events_upgrade_reconciliations.sql`
+- `src/test/java/com/softropic/skillars/config/StubPaymentGateway.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/PackPurchaseAttemptIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/PaymentRecoveryJobTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/StripeCustomerErasureOutboxSupportTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/StripePaymentGatewayTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/StripeWebhookVerificationTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionEntitlementIntegrityTest.java`
 
 ### Change Log
 
@@ -741,3 +795,4 @@ Claude Opus 5 (`claude-opus-5`)
   the 24 h terminal rule is gone (it also contradicted the "only past the minimum age" sentence, M1); a proof-of-capture CAS that violates the index is caught and logged. **M2:** exits for an unresolvable row (job never refunds, operator SQL close-out in the runbook).
   **M3:** a zero `getRefundableAmount` no longer means `REFUNDED` (pack-path method, null charge stays `UNKNOWN`). **M4:** a parked `deleted` skips `isStaleEvent` by design. **M5:** a first-time payer's row stores the card as given; revert skips null **or blank**.
   **Also:** same-key vs open-per-parent `23505` told apart by re-reading; accepted-cost wording; six citation drifts; pitchside branch is not local-only; ledger entries say "deleted outright"; low findings filed in AC12. **No fifth review is planned.**
+- 2026-11-04 — **implemented** (status `review`): backend `V228`, `PaymentRecoveryJob`, recorder bean, gateway `getCaptureState`, frontend key rules and pause date, docs, ledger, two `/pr-review` rounds. See Dev Agent Record.
