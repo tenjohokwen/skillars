@@ -495,14 +495,15 @@ watch(
 // chosen (or preselected) for the previous child is not this child's: the backend refuses it
 // (packPlayerMismatch). Clear the choice and load this child's packs; defaultPackId stays undefined
 // until they arrive (sessionPacksPlayerId still names the previous child), then sets the new default.
-// Reloaded on any switch between two players, even while onMounted's own load is in flight: the
-// store keeps only the latest call's response, so that earlier load cannot land last. A first
-// resolution (a self-registered player's id arriving, null to an id) is onMounted's to load.
+// Reloaded on every change to a real id, even while onMounted's own load is in flight or before it
+// runs, including an id that arrives after mount (null to an id). The store keeps only the latest
+// call's response, so an earlier load cannot land last, and a duplicate of onMounted's load is
+// harmless.
 watch(playerId, async (id, previous) => {
   if (String(id) === String(previous)) return
   selectedPackId.value = null
   packChoiceTouched.value = false
-  if (id && previous) await bookingStore.loadPlayerPacks(id)
+  if (id) await bookingStore.loadPlayerPacks(id)
 })
 
 // fix/booking-price-and-excused-race: only an explicit false blocks — an unknown (null) state must not

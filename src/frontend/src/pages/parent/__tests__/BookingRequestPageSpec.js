@@ -605,6 +605,22 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     await flushPromises()
   })
 
+  it("a child id that arrives after mount loads that child's packs", async () => {
+    const { wrapper, bookingStore } = await mountPage(
+      { computedSlots: [SLOT], coachTimezone: 'UTC', coachPriced: true, sessionPacks: [] },
+      'abc',
+      { activePlayerId: null },
+      'PARENT',
+      renderPage,
+    )
+    expect(bookingStore.loadPlayerPacks).not.toHaveBeenCalled()
+
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    usePlayerStore(wrapper.vm.$pinia).activePlayerId = '5'
+    await flushPromises()
+    expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith('5')
+  })
+
   it('a pack whose credits are all held by open bookings with this coach is not preselected', async () => {
     // The pack list has no reserved count; an open booking for this player with this coach may hold
     // a session, so 2 credits with 2 open bookings is not a safe default (the backend would answer
