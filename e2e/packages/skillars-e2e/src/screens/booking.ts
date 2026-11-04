@@ -21,13 +21,8 @@ export class BookingRequestScreen extends Screen {
   ownSlots = () => this.tid('booking-slot-own')
   noSlots = () => this.tid('booking-no-slots')
   packSelect = () => this.tid('booking-pack-select')
-  /**
-   * Pay with the held pack. The page defaults to "Per session" even when the family holds credits,
-   * so a spec that means to spend a credit must choose the pack. `label` is the option's text
-   * (booking.requests.packOptionLabel through t()).
-   */
-  choosePack = (label: string) =>
-    this.packSelect().getByRole('radio', { name: label, exact: true }).click()
+  /** The payment option `label` (booking.requests.packOptionLabel or booking.packs.perSession). */
+  packOption = (label: string) => this.packSelect().getByRole('radio', { name: label, exact: true })
   perSessionInfo = () => this.tid('per-session-info')
   paymentCard = () => this.tid('payment-card')
   notes = () => this.tid('booking-notes')
