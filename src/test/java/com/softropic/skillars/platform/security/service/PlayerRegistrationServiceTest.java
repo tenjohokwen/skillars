@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.config.service.ConfigService;
@@ -108,8 +110,45 @@ class PlayerRegistrationServiceTest {
             notified.getId(), notified.getEmail(), "Existing", "Owner", "de"));
     }
 
+    private void allowNotice() {
+        when(rateLimitingService.tryConsume(anyString(), eq("registration_duplicate_notice"), eq(2L), eq(60L),
+            eq(TimeUnit.MINUTES))).thenReturn(true);
+    }
+
+    @Test
+    void registerPlayer_noticeLimitForThatAccountSpent_returnsNormallyWithoutANotice() {
+        // A pool of IPs must not flood one inbox: past the per-account limit the notice is skipped,
+        // and the response is still the neutral one.
+        User existing = existingAccount(7L, "taken@test.com");
+        when(userRepository.findOneByEmail(any())).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        verify(rateLimitingService).tryConsume("7", "registration_duplicate_notice", 2L, 60L, TimeUnit.MINUTES);
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+    }
+
+    @Test
+    void registerPlayer_emailIsAnExistingLogin_isTreatedAsTaken() {
+        // Legacy accounts keep login as typed and email lowercased; the new row's login would hit
+        // user_login_key, an error only an existing account produces.
+        allowNotice();
+        User existing = existingAccount(11L, "legacy@test.com");
+        when(userRepository.findOneByEmail(any())).thenReturn(Optional.empty());
+        when(userRepository.findOneByLogin(any())).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
+
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+        verify(publisher).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+    }
+
     @Test
     void registerPlayer_emailAlreadyRegistered_returnsNormallyAndNotifiesTheExistingAccount() {
+        allowNotice();
         User existing = existingAccount(7L, "jane.doe@test.com");
         when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.of(existing));
 
@@ -121,6 +160,7 @@ class PlayerRegistrationServiceTest {
 
     @Test
     void registerPlayer_phoneAlreadyRegistered_returnsNormallyAndNotifiesThePhoneHolder() {
+        allowNotice();
         User phoneHolder = existingAccount(8L, "holder@test.com");
         when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
         when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(phoneHolder));
