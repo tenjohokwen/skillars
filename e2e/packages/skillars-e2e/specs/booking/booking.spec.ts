@@ -46,9 +46,12 @@ test.describe('F · Booking lifecycle', () => {
       await expect(profile.credits()).toBeVisible()
       await profile.primaryCta().click()
       const request = await new BookingRequestScreen(family.page, suite).waitReady()
-      await request.choosePack(
-        t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
-      )
+      // A family holding credits starts on its pack (no card entry), not on "Per session".
+      await expect(
+        request.packOption(
+          t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
+        ),
+      ).toBeChecked()
       await expect(request.paymentCard()).toHaveCount(0)
       await expect(request.submit()).toBeEnabled()
       await request.submit().click()
@@ -153,9 +156,12 @@ test.describe('F · Booking lifecycle', () => {
       )
       await profile.primaryCta().click()
       const request = await new BookingRequestScreen(family.page, suite).waitReady()
-      await request.choosePack(
-        t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
-      )
+      // A family holding credits starts on its pack (no card entry), not on "Per session".
+      await expect(
+        request.packOption(
+          t('booking.requests.packOptionLabel', { remaining: sessions, total: sessions }),
+        ),
+      ).toBeChecked()
       await request.submit().click()
       const bookings = await new ParentBookingsScreen(family.page, suite).waitReady()
       await expect(bookings.status(bookings.booking(coachName))).toHaveText(
