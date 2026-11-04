@@ -184,7 +184,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'same packErrorKey-chosen pack error message as ProfileBuilderStep3',
   },
   {
-    at: 'src/utils/errorHandler.js:206',
+    at: 'src/utils/errorHandler.js:209',
     reason:
       'translatedErrorMessage: t() on a server-supplied errorKey, guarded by te() on the same line',
   },
