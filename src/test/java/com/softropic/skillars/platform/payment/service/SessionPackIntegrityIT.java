@@ -115,21 +115,14 @@ class SessionPackIntegrityIT extends BasePaymentIT {
     }
 
     /**
-     * A concurrent double-submit: the second delivery misses the first pack on its pre-check, loses the insert
-     * to the V195 unique index — and must return the winner, NOT refund the charge the winner's pack holds.
+     * A double-submit of the same key: since skillars-deferred-169 the second delivery is answered from the attempt row
+     * (SUCCEEDED), which holds the winner's PaymentIntent - it never reaches Stripe, never creates a second pack and never
+     * refunds the charge the winner's pack holds. (The V195 unique-index loss on a lost insert is covered by the unit test
+     * and by recordFailsAfterCapture below.)
      */
     @Test
-    void doubleSubmitLosingTheInsert_returnsTheWinner_neverRefundsIt() {
+    void doubleSubmit_isAnsweredFromTheAttemptRow_returnsTheWinner_neverRefundsIt() {
         SessionPackPurchaseResponse winner = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0002");
-        // The spy wraps a Spring Data proxy (no callable real method): the first lookup (the pre-check) misses,
-        // the later one (after the insert lost) reads the table directly.
-        AtomicInteger lookups = new AtomicInteger();
-        doAnswer(inv -> lookups.getAndIncrement() == 0
-            ? Optional.empty()
-            : jdbcTemplate.queryForList("SELECT purchase_id FROM payment.session_pack_purchases "
-                    + "WHERE stripe_payment_intent_id = ?", UUID.class, (String) inv.getArgument(0))
-                .stream().findFirst().flatMap(sessionPackPurchaseRepository::findById))
-            .when(sessionPackPurchaseRepository).findByStripePaymentIntentId(anyString());
 
         SessionPackPurchaseResponse loser = sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_x", "attempt-key-0002");
 
