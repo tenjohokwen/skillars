@@ -304,9 +304,16 @@ public final class MigrationLint {
      * {@code ALTER TABLE t DROP obsolete_col} — both legal, both the identical hazard as their
      * {@code COLUMN}-qualified spellings — evaded {@link Rule#DROP_WITHOUT_IF_EXISTS},
      * {@link Rule#DROP_WITHOUT_PRIOR_RELEASE_PREP} and {@link Rule#BARE_DROP_NO_HEADER} outright.
+     *
+     * <p>skillars-deferred-168: {@code ALTER COLUMN c DROP NOT NULL}, {@code DROP DEFAULT},
+     * {@code DROP IDENTITY} and {@code DROP EXPRESSION} change a column and remove nothing, but the
+     * optional {@code COLUMN} keyword made them read as "drop a column named NOT/DEFAULT/...". Excluded by
+     * lookahead; {@code DROP COLUMN default} still falls back to matching the word {@code COLUMN}, so a real
+     * drop of a column with such a name stays flagged.
      */
     private static final Pattern DROP_COLUMN_CLAUSE = Pattern.compile(
-        "(?is)\\bDROP\\s+(?:COLUMN\\s+)?(?:(IF\\s+EXISTS)\\s+)?(?!TABLE\\b)(?!INDEX\\b)(?!CONSTRAINT\\b)([\\w\"]+)");
+        "(?is)\\bDROP\\s+(?:COLUMN\\s+)?(?:(IF\\s+EXISTS)\\s+)?(?!TABLE\\b)(?!INDEX\\b)(?!CONSTRAINT\\b)"
+            + "(?!NOT\\s+NULL\\b)(?!DEFAULT\\b)(?!IDENTITY\\b)(?!EXPRESSION\\b)([\\w\"]+)");
     private static final Pattern DROP_TABLE_KEYWORD = Pattern.compile("(?is)\\bDROP\\s+TABLE\\b");
     private static final Pattern DROP_TABLE_PREFIX =
         Pattern.compile("(?is)\\bDROP\\s+TABLE\\s+(?:IF\\s+EXISTS\\s+)?");

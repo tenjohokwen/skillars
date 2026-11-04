@@ -1,0 +1,138 @@
+{
+  "arm": "security",
+  "case": "242-logout-race-and-cookie-id",
+  "findings": [
+    {
+      "category": "security",
+      "description": "When a used refresh token is presented within 30s of its rotatedAt, refresh() looks up the user's newest unused token (findFirstByUserIdAndUsedFalse...) and rotates it for the caller, issuing a fresh JWT and refresh cookie. An attacker who captured the victim's refresh cookie (network, logs, proxy) and replays it within 30s of any rotation silently receives the live successor session instead of triggering the markAllUsedByUserId revocation; because each rotation restarts a 30s window, attacker and victim can ping-pong rotations indefinitely and theft is never detected. The lookup is also not scoped to the presented token's chain, so a stale tab can seize and rotate a different device's newest token.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AuthService.refresh / REFRESH_GRACE_WINDOW",
+      "title": "30s refresh grace window hands the live session token to anyone replaying a rotated token, defeating reuse detection",
+      "verification": "Confirm no additional device/session binding exists on RefreshToken (no parent-token or session-id column linking chains)."
+    },
+    {
+      "category": "security",
+      "description": "logout() revokes only the exact token hash from the cookie and filters it with !t.isUsed(). If a POST /api/auth/refresh carrying the same token is processed just before the logout request (second tab, in-flight call at click time), refresh marks the old token used and mints a successor, and logout then finds the presented token already used and revokes nothing \u2014 the successor refresh token stays valid for its full TTL and the racing refresh response's Set-Cookie can re-place it in the browser after logout's cookie clears. The user sees a successful logout (204) on a shared machine while the session remains resumable. Logout also cannot revoke the whole chain because tokens are not linked and it never calls markAllUsedByUserId.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "AuthService.logout",
+      "title": "Logout skips an already-rotated token, so a concurrent refresh leaves a valid session after logout",
+      "verification": "Reproduce by firing POST /api/auth/refresh and POST /api/auth/logout concurrently with the same cookie; check whether the successor token still refreshes afterwards."
+    },
+    {
+      "category": "security",
+      "description": "AuthService is class-level @Transactional and recordAttempt() does a plain repository save inside the same transaction that immediately throws BadCredentialsException (a RuntimeException), so Spring rolls the LoginAttempt insert back on every failed login. countByIdentifierAndAttemptedAtAfter therefore always sees zero recorded failures and the 5-attempts/15-minutes lockout never engages, allowing unlimited password brute force / credential stuffing against any account, including parent and admin accounts. The codebase knows the pattern \u2014 markAllUsedByUserId uses REQUIRES_NEW for exactly this reason \u2014 but recordAttempt does not; the only rate-limit integration test is commented out and seeded rows via jdbcTemplate, masking the defect.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "AuthService.login / recordAttempt",
+      "title": "Failed login attempts are rolled back with the BadCredentialsException \u2014 the login rate limiter can never trip",
+      "verification": "Run a failed login against a real datasource and confirm no row lands in login_attempt; confirm no @Transactional(noRollbackFor=...) or REQUIRES_NEW wrapper exists on the save path."
+    },
+    {
+      "category": "security",
+      "description": "Even if the rollback defect were fixed, the attempt counter is keyed per (email, client IP), so an attacker rotating source IPs gets maxAttempts fresh guesses per IP against one account and never trips the limit \u2014 exactly the one-account-from-many-IPs attack the limiter must stop. The IP comes from httpReq.getRemoteAddr() behind a reverse proxy: if forwarded headers are honoured the attacker controls the key via X-Forwarded-For; if not, all clients share the proxy IP and any 5 wrong guesses by anyone lock out the targeted email for everyone.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AuthService.login (identifier derivation)",
+      "title": "Login rate limit keyed on SHA-256(email|IP) permits distributed brute force on a single account",
+      "verification": "Check server.forward-headers-strategy / ForwardedHeaderFilter configuration in prod profiles to determine which failure mode applies."
+    },
+    {
+      "category": "security",
+      "description": "completePasswordReset only swaps the password hash; it never calls RefreshTokenRepository.markAllUsedByUserId or touches live sessions, and AuthService.refresh re-issues credentials without any password-change-timestamp check. An attacker holding a victim's refresh cookie keeps full access after the victim resets their password, and because each rotation grants a fresh full TTL the stolen session is effectively immortal. Resetting the password is the exact remediation a compromised user is told to perform, and it has no effect here.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/PasswordResetService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "PasswordResetService.completePasswordReset",
+      "title": "Password reset does not revoke outstanding refresh tokens, so a stolen session survives the victim's reset",
+      "verification": "Also check the authenticated change-password and email-change paths (UserAdminService / account resource) for the same missing revocation."
+    },
+    {
+      "category": "security",
+      "description": "The guard reads meta.requiresCoach, meta.role === 'PARENT', meta.role === 'PLAYER' and meta.roles, but routes.js declares /coach/revenue and /coach/bookings/:bookingId/receipt with meta.role: 'COACH' (a value the guard never checks) and /parent/player/:playerId/subscription with meta.requiresParent: true (a key the guard never reads). Any authenticated player, parent or coach can direct-navigate to these sibling-inconsistent routes and render the pages; their coach-revenue and subscription API calls will be whatever the backend allows. This is exactly the guard/meta drift pattern between sibling routes that has shipped before.",
+      "file": "src/frontend/src/router/index.js",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "Router.beforeEach vs routes.js meta keys",
+      "title": "Router guard never enforces meta.role 'COACH' or meta.requiresParent \u2014 three routes open to any authenticated role",
+      "verification": "Confirm the backend endpoints these pages call (revenue dashboard, coach receipt, player subscription) all carry role-correct @PreAuthorize so the exposure stays UI-only."
+    },
+    {
+      "category": "security",
+      "description": "handleLogout races authStore.logout() (which itself swallows all errors) against a 3s timer and then clears local state and navigates to /login regardless of whether POST /api/auth/logout ever reached the server. JavaScript cannot delete the HttpOnly refresh-token cookie, so on a stalled or offline logout the cookie stays in the browser and the token stays unrevoked server-side: the next person at a shared machine gets a logged-out-looking UI but one POST /api/auth/refresh away from the full session. The same gap exists in useSession.js's handleLogout, which shares LOGOUT_BACKEND_WAIT_MS.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "handleLogout / LOGOUT_BACKEND_WAIT_MS",
+      "title": "Client logout proceeds after a 3-second timeout, leaving a valid HttpOnly refresh cookie behind a logged-out UI",
+      "verification": "Confirm no retry/queue exists for a failed logout call (e.g. a beforeunload or next-boot retry) in sessionManager.js or App.vue."
+    },
+    {
+      "category": "security",
+      "description": "The admin section declares only requiresAuth, and the guard has no admin branch at all, so any authenticated coach, parent or player can direct-navigate to /admin/health-dashboard and render the admin page shell; its data calls should 403 at the backend but the asymmetry with every other role-gated sibling section means future admin routes added here ship unguarded by default. The non-HttpOnly skp cookie also lets any user self-label as ADMIN for the SPA, though that only changes their own UI.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "routes '/admin' > 'health-dashboard'",
+      "title": "/admin route subtree gated only by requiresAuth \u2014 no admin role check exists in the guard or meta",
+      "verification": "Confirm the health-dashboard backend endpoints are HAS_ADMIN_ROLE-guarded."
+    },
+    {
+      "category": "logic",
+      "description": "Both login() and refresh() compute role as skillarsRole != null ? name() : \"ADMIN\". SkillarsRole has no LTD_ADMIN or USER value, so a legacy ROLE_USER or limited ROLE_LTD_ADMIN account that authenticates here is reported to the SPA as full ADMIN: authStore.isAdmin becomes true, routeForRole lands them on /admin/health-dashboard, and the admin nav renders. The limited-tier distinction the back office depends on is erased in all client-side state; backend @PreAuthorize remains the only thing separating LTD_ADMIN from full admin actions.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "AuthService.login / refresh role fallback",
+      "title": "Users with null skillarsRole (legacy ROLE_USER, ROLE_LTD_ADMIN) are labeled \"ADMIN\" in the skp cookie and LoginResponse",
+      "verification": "Confirm LTD_ADMIN and legacy USER accounts actually log in through /api/auth/login (vs. a separate admin login flow) by checking AdminLoginResource and user provisioning."
+    },
+    {
+      "category": "security",
+      "description": "No controller in src/main maps under /api/v1/emails, yet the prefix is permitAll'd with a /** wildcard \u2014 the exact pattern the file's own skillars-deferred-91 comment says must be anchored because a future controller under a public prefix ships unauthenticated with no review step. Any later email-related endpoint (resend, tracking, unsubscribe) added under this path would be anonymous and, being mail-sending, an unthrottled spam vector.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "PUBLIC_ENDPOINTS (\"/api/v1/emails/**\")",
+      "title": "Dead permitAll wildcard /api/v1/emails/** matches no controller and will silently expose any future one",
+      "verification": "Grep for programmatic mappings (RouterFunction, HandlerMapping beans) to rule out a non-annotation handler under /api/v1/emails before removing."
+    },
+    {
+      "category": "security",
+      "description": "The actuator mapping secures /manage/** to ADMIN, but /manage/prometheus is then added to ALL_UNRESTRICTED, so any guest who can reach the app origin can scrape the full Prometheus registry: per-URI request counts and latencies (revealing internal endpoint paths and usage patterns), JVM/build details, and any business counters registered via @Observed (e.g. security.auth login/refresh rates useful for timing attacks). Multi-instance deployments usually scrape over an internal network, not the public listener.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "PUBLIC_MGMT_ENDPOINTS",
+      "title": "/manage/prometheus exposed unauthenticated via PUBLIC_MGMT_ENDPOINTS",
+      "verification": "Confirm the reverse proxy does not already block /manage/* externally, and confirm the security config gives the public list precedence over the /manage/** ADMIN mapping."
+    },
+    {
+      "category": "security",
+      "description": "For an unknown email, login() throws before ever calling passwordEncoder.matches, while a known email pays the full bcrypt cost (~50-100ms); the response-time difference is reliably measurable and lets an attacker enumerate which emails have accounts (parents and coaches of children) despite the identical 'Invalid credentials' message. There is no dummy-hash comparison on the unknown-user path.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Login timing distinguishes existing from non-existing accounts",
+      "verification": "Measure response-time delta between unknown-email and wrong-password requests against a deployed instance to confirm the gap exceeds network jitter."
+    },
+    {
+      "category": "security",
+      "description": "login() enforces isActivated() and BASIC_VERIFIED, but refresh() loads the user and mints a new JWT and refresh token with no account-state checks, so keeping a deactivated, locked or unverified account out depends entirely on every deactivation path remembering to revoke refresh tokens. GdprErasureService does call markAllUsedByUserId, but the UserErasedEventListener remediation backstop (which exists precisely for the case where erasure left the account active) clears only persistentTokens and not refresh tokens \u2014 a user it remediates can keep refreshing forever. Any future suspension/deactivation feature that only flips the flag will silently fail to end sessions.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R13",
+      "severity": "low",
+      "symbol": "AuthService.refresh",
+      "title": "refresh() re-issues credentials without re-checking activated/locked/verification state",
+      "verification": "Check whether coach suspension (CoachSuspensionIT's feature) flips any User-level flag or relies solely on module-level checks, and whether the JWT filter's hasDbRefreshTokenExpired path re-validates accountNonLocked between refreshes."
+    }
+  ],
+  "input_rev": "9923ffb024799b1fe7b98324191481ec3a74acb5",
+  "model": null
+}

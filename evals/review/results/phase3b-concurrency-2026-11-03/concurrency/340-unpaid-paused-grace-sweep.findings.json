@@ -1,0 +1,108 @@
+{
+  "arm": "concurrency",
+  "case": "340-unpaid-paused-grace-sweep",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "assertCanSubscribe runs on a row loaded by plain findByCoachId with no lock, and the claim on the row happens only later in persistCoachSubscription. If request B passes assertCanSubscribe between request A's check and A's persist commit (the window spans A's full Stripe round-trip), both call createSubscription with fresh per-attempt idempotency keys, and with payment_behavior=error_if_incomplete both subscriptions charge the customer's card for the first period at create time. B's persist then sees isOtherLiveSubscription and calls cancelStripeSubscriptionQuietly, but cancelSubscriptionImmediately uses bare SubscriptionCancelParams with no proration/refund, so the duplicate first-period charge is kept: the customer is charged twice for one period.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "SubscriptionService.subscribeCoach / subscribePlayer / cancelStripeSubscriptionQuietly",
+      "title": "Concurrent subscribes both charge the first invoice; duplicate is cancelled without refund",
+      "verification": "Confirm Stripe's immediate cancel does not auto-credit the just-paid first invoice (it does not by default), and check whether any upstream claim (unique constraint or status flip before the Stripe call) exists outside the diff."
+    },
+    {
+      "category": "concurrency",
+      "description": "The Stripe subscription is created (and charged, via error_if_incomplete) before persistCoachSubscription runs. If the instance restarts or the persist transaction fails between the Stripe call and the commit, no local row references the new subscription. On retry, assertCanSubscribe passes (stripeSubscriptionId is still null locally) and createSubscription is called with a fresh 'sub-create-' + UUID idempotency key \u2014 the old customer+price key that would have replayed the first response was deliberately removed \u2014 so a second billing subscription is created. The first keeps billing monthly with no local link; the isEmpty duplicate-cancel only fires when the local row holds another live id, which it never did. The persistCoachSubscription orElseThrow(notFound) path similarly throws away a charged subscription without cancelling it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "SubscriptionService.subscribeCoach / createPaidStripeSubscription / persistCoachSubscription",
+      "title": "Restart or persist failure after Stripe create, then retry, creates a second live billing subscription",
+      "verification": "Check whether StripeSubscriptionReconciliationScheduler (outside the diff) actively cancels Stripe subscriptions with no matching local row, or only alerts \u2014 the cancelStripeSubscriptionQuietly comment says 'orphan alert', suggesting alert-only."
+    },
+    {
+      "category": "concurrency",
+      "description": "Phase 1 confirms PAST_DUE under lock and commits, releasing the lock; the Stripe cancel happens afterwards, outside any transaction. If Stripe's final invoice retry succeeds (or the invoice.paid webhook commits, setting the row ACTIVE and clearing pastDueSince) between phase 1 and the cancel call, cancelSubscriptionImmediately still cancels: its retrieve-first guard only skips 'canceled'/'incomplete_expired', not a recovered 'active' subscription. Phase 2's GraceTarget.matches then deliberately revokes even though invoice.paid raced in (per its own javadoc), because the stripeSubscriptionId still matches. Net result: the customer paid the outstanding invoice and the subscription is immediately cancelled and revoked with no refund.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "SubscriptionService.checkPastDueGracePeriod / GraceTarget.matches / StripeClient.cancelSubscriptionImmediately",
+      "title": "Grace sweep cancels a subscription whose outstanding invoice was just paid, keeping the money",
+      "verification": "Confirm whether the webhook-lag window (Stripe payment success to local invoice.paid processing) plus the sweep cadence makes this reachable in practice; the GraceTarget javadoc shows the interleaving was seen and accepted rather than guarded."
+    },
+    {
+      "category": "concurrency",
+      "description": "applyCoachChange phase 1 verifies the change is pending under the subscription row lock, then commits and releases the lock before calling updateSubscriptionTier. If the user concurrently re-selects their current tier or upgrades (restoreCoachPriceAndVoidDowngrade restores the Stripe price and voids the change \u2014 or the upgrade charges an immediate proration and sets the upgrade price) between phase 1's commit and the applicator's Stripe call, the applicator then moves the Stripe price to the voided change's downgrade target anyway; phase 2 re-checks and finds the change voided, so nothing local is written. End state: Stripe bills the downgrade price while the local/marketplace tier stays at the kept (or upgraded, already-proration-charged) tier, and since tier is never synced from Stripe price ('no priceId\u2192tier map'), the drift is permanent.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "SubscriptionService.applyCoachChange / applyPlayerChange / syncStripePriceForChange",
+      "title": "Applicator's Stripe price sync is not atomic with its pending-change check; a concurrent void leaves Stripe billing the downgraded price",
+      "verification": "Needs the daily applicator to overlap a user tier-change request on the same subscription; confirm there is no Stripe-price-to-local-tier reconciliation elsewhere."
+    },
+    {
+      "category": "concurrency",
+      "description": "changeCoachTier charges the upgrade proration at Stripe (ALWAYS_INVOICE + error_if_incomplete, so money moves on success) and only then calls persistCoachTierUpgrade, which re-reads under lock and, if the row's stripeSubscriptionId no longer matches (e.g. a customer.subscription.deleted webhook revoked the row between the Stripe charge and the persist), logs SUPERSEDED and returns without saving and without refunding. The method is void, so the caller returns success to the user: the proration invoice was paid, the tier was never granted anywhere, and nothing refunds or retries it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "SubscriptionService.persistCoachTierUpgrade / persistPlayerTierUpgrade",
+      "title": "Superseded guard in persistCoachTierUpgrade silently discards a completed proration charge",
+      "verification": "Confirm the deleted-webhook-between-charge-and-persist interleaving is the only way the id changes while status was billing-healthy at the pre-check; either way the charged invoice is dropped on this branch."
+    },
+    {
+      "category": "concurrency",
+      "description": "The sweep loads findAll() in one transaction, then processes each row in its own transaction using the entity's tier/status as read at batch-load time \u2014 unlike checkPastDueGracePeriod and applyPendingChanges, it never re-reads under lock. If an invoice.paid webhook commits between the batch load and the item's turn (the loop now spans every coach row, so minutes on a large table), setting the row ACTIVE and syncing the marketplace projection to the paid tier, the sweep still computes effectiveCoachTier from the stale UNPAID/PAST_DUE snapshot and forces the marketplace projection back to SCOUT. The just-recovered, paying coach serves SCOUT until the next sweep run corrects it (the read-side entitlement gate can only downgrade a projection, never restore one).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "SubscriptionService.reconcileMarketplaceTiers",
+      "title": "reconcileMarketplaceTiers writes from stale batch-loaded status, undoing a concurrent invoice.paid recovery",
+      "verification": "Check the sweep's schedule interval to size the wrong-tier window; confirm nothing re-reads the payment row inside the per-item transactionTemplate block."
+    },
+    {
+      "category": "concurrency",
+      "description": "The downgrade branch calls updateStripePrice (price moves to the lower tier at Stripe immediately) and then persistCoachTierDowngrade in a separate transaction. If that transaction fails or the instance restarts between the two steps, Stripe bills the lower price while the local tier, marketplace projection, and entitlement all stay at the higher tier with no pending change row to apply later. Because tier is never derived from the Stripe price, no sweep ever detects or corrects this: the coach keeps paid-tier entitlements indefinitely while paying the lower price. The restore path (restoreCoachPriceAndVoidDowngrade) has the mirror-image gap: Stripe price restored, then the void runs in a separate transaction whose failure leaves the pending change alive for the applicator to re-apply a downgrade the user cancelled.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "SubscriptionService.changeCoachTier / persistCoachTierDowngrade (and player equivalents)",
+      "title": "Downgrade moves the Stripe price before the local change row exists; a failure between them is never reconciled",
+      "verification": "Confirm no Stripe\u2192payment reconciliation compares subscription item price against the stored tier."
+    },
+    {
+      "category": "database",
+      "description": "normalizeStripeStatus's default branch persists stripeStatus.toUpperCase() for anything not in the switch, but V197's chk_pcs_status/chk_pps_status enumerate exactly seven values. All of Stripe's current subscription statuses are mapped today, so this is latent, but the moment Stripe introduces a new status, handleSubscriptionUpdated writes it, the CHECK rejects it, handleSubscriptionWebhook rolls back (including the idempotency row), and Stripe redelivers the event forever \u2014 the exact constraint-drift loop the migration comment says this PR was fixing for unpaid/paused/incomplete.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "SubscriptionService.normalizeStripeStatus (default branch) / V197 chk_pcs_status, chk_pps_status",
+      "title": "Unmapped future Stripe status violates the widened CHECK and loops webhook delivery",
+      "verification": "Confirm there is no dead-letter/skip path for repeatedly failing webhook events."
+    },
+    {
+      "category": "concurrency",
+      "description": "invoice.paid, invoice.payment_failed and customer.subscription.updated all compare against and advance the same lastStripeEventAt. At renewal Stripe emits an invoice.paid and a customer.subscription.updated with created timestamps that can differ by a second in either order; if invoice.paid (which never touches currentPeriodEnd) is processed first and the updated event's created is one second earlier, isStaleEvent drops it, losing the new current_period_end and cancel_at_period_end. A downgrade scheduled afterward then uses the previous period end as effectiveAt, applying a period early.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "SubscriptionService.isStaleEvent / handleInvoicePaid / handleSubscriptionUpdated",
+      "title": "Single lastStripeEventAt watermark across event types can drop a non-stale subscription.updated carrying the new period end",
+      "verification": "Check real Stripe event created-timestamp ordering at renewal; if updated.created is always >= invoice.paid.created the window closes."
+    },
+    {
+      "category": "logic",
+      "description": "A subscription Stripe pauses (e.g. a trial ending without a payment method) is persisted as PAUSED: it is non-entitled, tier changes throw notActive, and assertCanSubscribe throws updatePaymentMethod \u2014 whose message ('your current subscription has an unpaid invoice') is wrong for a pause, and nothing in the diff resumes a paused Stripe subscription. The grace sweep only selects PAST_DUE rows and invoice.paid only fires if Stripe generates an invoice, so a paused user is locked out of any paid tier in-app until a Stripe-side manual resume or deletion event arrives.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "SubscriptionService.assertCanSubscribe / requireBillingHealthy",
+      "title": "PAUSED is a dead-end: not entitled, blocks re-subscribe with a misleading error, and no recovery path exists",
+      "verification": "Check whether Stripe trial/pause collection settings are enabled for this account; if pause_collection is never used the state is unreachable."
+    }
+  ],
+  "input_rev": "eea53ee9a61245dadeffcb003e2722793d7cba90",
+  "model": null
+}

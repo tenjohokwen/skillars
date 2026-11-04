@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -34,14 +35,43 @@ public class AuthCleanupService {
      * job's own hourly cron rather than copying the {@code PT2M} used by 5-minute-{@code fixedDelay}
      * siblings — {@code PT1M} is a defensive floor against a pathological fast-fail-refire, well
      * clear of the hourly cadence.
+     *
+     * <p><strong>skillars-deferred-167 (AC9): deliberately NOT {@code @Transactional}, and the catch is
+     * why.</strong> This method used to carry a plain {@code @Transactional}, which made a lost deadlock impossible to
+     * contain here: {@code deleteExpiredTokens} is itself {@code @Modifying @Transactional}, so it joined
+     * this method's transaction, and a {@code DELETE} killed by PostgreSQL (SQLSTATE 40P01) marked that
+     * shared transaction rollback-only. A {@code try/catch} in this body would then still have failed at
+     * the outer commit with {@code UnexpectedRollbackException} — it would have changed the exception, not
+     * contained it — and PostgreSQL has in any case already aborted the transaction, so nothing further
+     * could have run inside it. With no transaction here, the repository method is its own transaction
+     * boundary: it rolls itself back and throws, and this catch runs with no transaction to poison.
+     *
+     * <p>{@code @SchedulerLock} must stay outermost, which it does — ShedLock's advisor is ordered ahead of
+     * the transaction advisor application-wide ({@code AsyncConfig}), and
+     * {@code SchedulerLockTransactionOrderingIT} asserts the lock survives on this method even though the
+     * transaction no longer does. Dropping the lock would let a second node sweep concurrently.
+     *
+     * <p>A lost deadlock costs this run and nothing more: the next hourly tick deletes the same rows, and
+     * the sweep is a single idempotent statement. Logged at {@code warn} rather than swallowed, because a
+     * recurring one means the ordering below stopped holding.
      */
     @Scheduled(cron = "0 0 * * * *")
-    @Transactional
     @SchedulerLock(name = "AuthCleanupService_purgeExpiredRefreshTokens",
                    lockAtMostFor = "PT10M", lockAtLeastFor = "PT1M")
     public void purgeExpiredRefreshTokens() {
-        refreshTokenRepository.deleteExpiredTokens();
-        log.debug("Purged expired refresh tokens");
+        try {
+            refreshTokenRepository.deleteExpiredTokens();
+            log.debug("Purged expired refresh tokens");
+        } catch (PessimisticLockingFailureException e) {
+            // 40P01 (deadlock victim) and 55P03 (lock not available) both land here. The writer that can
+            // still cycle with this sweep is a bulk revoke-all over one user's rows (markAllUsedByUserId /
+            // markAllRevokedByUserId), which is unordered by nature. The chain walks are ordered the same
+            // way this sweep now is, so they should not — but see deleteExpiredTokens' javadoc for the one
+            // residual (the ON DELETE SET NULL action can touch an unexpired predecessor outside the
+            // ordered set), which is unreachable in production rather than impossible by construction.
+            log.warn("Expired-refresh-token sweep lost a lock contest and skipped this run; "
+                + "the next hourly run retries the same rows", e);
+        }
     }
 
     // Retain 24 hours of attempts so rate-limit windows (15 min) have margin;

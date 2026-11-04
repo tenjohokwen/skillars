@@ -108,20 +108,23 @@ export default {
       step3SessionDurationMinutes: '{minutes} minutes',
       step3SessionDurationHelper:
         'Every bookable slot in your calendar will be this long. Leave it on the platform default if you are not sure.',
-      step3SessionPacks: 'Session Packs (optional)',
+      step3SessionPacks: 'Session Pack (optional)',
       step3PackHelper:
-        'Optional: offer discounted multi-session packages. Families can always book single sessions at your per-session price.',
+        'Optional: offer one discounted multi-session pack. It is the pack families can buy from your profile, and the same offer you manage under My Session Pack Offer. Families can always book single sessions at your per-session price.',
       step3PackEmpty: 'No packs added yet.',
       step3AddPack: 'Add Pack',
       step3PackSessions: 'Sessions',
       step3PackPrice: 'Price (EUR)',
       step3PackLabel: 'Label',
       step3RemovePack: 'Remove pack',
-      step3PackInvalid:
-        'Each session pack needs a session count and a price above 0, or remove the row.',
-      // skillars-deferred-139 review Patch 6
-      step3PackDuplicateSessionCount:
-        'Two or more packs have the same session count — each pack must have a unique session count.',
+      step3PackInvalid: 'The session pack needs a session count and a price, or remove it.',
+      // skillars-deferred-168: the pack becomes the coach's purchasable tier, so its bounds are the tier's.
+      step3PackSessionCountError: 'The number of sessions must be a whole number from 1 to 100.',
+      step3PackPriceError:
+        'The pack price must be between 0.01 and 50,000 with at most 2 decimal places.',
+      step3PackPerSessionError:
+        'Each session in the pack must cost at least 0.01. Lower the number of sessions or raise the price.',
+      step3PackLabelTooLong: 'The pack label can be at most 200 characters.',
       step4Title: 'Availability',
       step4Short: 'Availability',
       step4AvailabilityWindows: 'Availability Windows',

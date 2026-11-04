@@ -1,0 +1,83 @@
+{
+  "arm": "control",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "checks": [],
+  "judge_cost_usd": 0.256175,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions the batch idempotency key lacking an attempt-specific component or Stripe replaying a prior PaymentIntent.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 (single path) and R2 (batch path) together describe exactly the catch-all StripeException-to-decline defect with money possibly captured and no reconciliation.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 states charge returns the intent id without checking status, so processing/requires_action intents are recorded as CAPTURED and the booking confirmed unpaid.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R3 describes the same defect: persistPaymentSuccess failure rolls back the listener transaction, losing the captured intent id with no compensation on the single-booking path.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "partial",
+        "note": "R4 targets the same batch-level deduction design in onBatchBookingAccepted but describes the inverse inconsistency (deduction rolled back while per-booking settles stay committed) rather than the stranded pre-charge debit and non-attributable per-booking credit.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions card shares below Stripe's per-currency minimum in CreditCardSplit or the quote service.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding mentions missing Stripe SDK timeout/retry configuration in PaymentConfig.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding touches SubscriptionService double-subscribe or the unrefunded loser invoice.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F9",
+        "match": "none",
+        "note": "No reported finding covers the chunked-transfer bypass of the webhook body size check.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F10",
+        "match": "none",
+        "note": "No reported finding covers the superseded-subscription branch silently dropping a paid tier upgrade.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

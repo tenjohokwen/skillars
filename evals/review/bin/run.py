@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Run a reviewer arm over review-eval cases and store its findings.
 
-  run.py <run-id> --arm control|blind-hunter [--cases id,id,...] [--parallel N]
-         [--model M] [--effort E] [--max-turns N]
+  run.py <run-id> --arm control|blind-hunter|security [--cases id,...|--subset <category>]
+         [--parallel N] [--model M] [--effort E] [--max-turns N]
+
+--subset <category> runs the cases that carry that category plus a fixed five-case precision
+sample (PRECISION_SAMPLE): about half of a full run, for scoring a specialist arm.
 
 Writes evals/review/results/<run-id>/<arm>/<case>.findings.json (committed) and
 evals/review/results/<run-id>/<arm>/raw/<case>.json (git-ignored session metadata).
 
 Arms:
-  control       one plain prompt. Diff cases: the diff is inlined, no tools. Snapshot cases:
+  control       the .claude/agents/general-reviewer.md agent (one plain prompt). Diff cases: the diff is inlined, no tools. Snapshot cases:
                 the reviewer runs inside the exported tree with Read/Grep/Glob and the scope
                 list inlined.
   blind-hunter  the Blind Hunter layer prompt from the mto-code-review skill. Always
                 tool-less: diff cases inline the diff; snapshot cases inline the scoped files.
+  security      the .claude/agents/security-reviewer.md agent, run like control (tools on
+                snapshots). Reports security defects only, by design.
 
 Both arms run FROM the export directory with --setting-sources project, so neither the repo's
 nor ~/.claude skills are loaded. See evals/review/README.md.
@@ -22,9 +27,48 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _common import *  # noqa
 
 ARMS = {
-    "control":      {"prompt": "reviewer-control.md",      "snapshot_mode": "tools"},
+    "control":      {"agent": "general-reviewer",          "snapshot_mode": "tools"},
     "blind-hunter": {"prompt": "reviewer-blind-hunter.md", "snapshot_mode": "inline"},
+    # Specialised reviewers are real Claude Code agents under .claude/agents/; the arm uses
+    # the agent file's body as its prompt so what is measured is what runs in a session.
+    "security":     {"agent": "security-reviewer",         "snapshot_mode": "tools"},
+    # A "concurrency" arm was rejected after results/phase3b-concurrency-2026-11-03 (one net
+    # finding, -18 precision, 5x cost); its prompt is in git history. Re-add only with an eval run.
 }
+
+# Fixed precision sample for --subset runs: cases with few or no findings in any single
+# category, so a specialist arm is measured for noise on code outside its remit too.
+PRECISION_SAMPLE = ["353-agreed-price-null-fallback", "368-pack-status-badges",
+                    "385-pack-tier-and-payment-method-input-bounds", "333-cancel-emails-and-uncaptured-refunds",
+                    "307-frontend-links-and-tus"]
+
+def subset_case_ids(category):
+    """Cases carrying at least one expected finding of `category`, plus PRECISION_SAMPLE."""
+    ids = [cid for cid in promoted_case_ids()
+           if any(e.get("category") == category for e in load_case(cid)["expected_findings"])]
+    return sorted(set(ids) | set(PRECISION_SAMPLE))
+
+def arm_template(arm):
+    spec = ARMS[arm]
+    if "prompt" in spec:
+        return read_prompt(spec["prompt"])
+    # A staging copy (SKILLARS_REVIEW_EVALS_DIR) may carry an edited agent under agents/; the
+    # committed one under .claude/agents/ is the default, so an eval can measure a prompt edit
+    # before it lands.
+    candidates = [os.path.join(EVALS, "agents", f"{spec['agent']}.md"),
+                  os.path.join(ROOT, ".claude", "agents", f"{spec['agent']}.md")]
+    path = next((c for c in candidates if os.path.exists(c)), None)
+    if path is None:
+        raise FileNotFoundError(f"agent file for arm '{arm}' not found; looked at: {', '.join(candidates)}")
+    stale = os.path.join(EVALS, "prompts", "reviewer-control.md")
+    if arm == "control" and os.path.exists(stale):
+        log(f"WARNING: {stale} is no longer read; the control arm is {path}. Move the edit to "
+            f"{candidates[0]} or delete the stale file.")
+    with open(path) as fh:
+        body = fh.read()
+    if body.startswith("---"):
+        body = body.split("---", 2)[2]  # strip the agent frontmatter
+    return body.strip() + "\n\n{{MODE_INSTRUCTIONS}}\n\n{{INPUT}}"
 INLINE_CAP = 400_000  # bytes of inlined source before we refuse rather than truncate silently
 SCHEMA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "findings.schema.json")
 
@@ -46,7 +90,7 @@ def filter_diff(diff):
 
 def build(case, arm, work):
     kind = case["kind"]
-    tpl = read_prompt(ARMS[arm]["prompt"])
+    tpl = arm_template(arm)
     if kind == "introducing-diff":
         with open(os.path.join(work, "input.diff")) as fh:
             diff = filter_diff(fh.read())
@@ -67,7 +111,7 @@ def build(case, arm, work):
     if ARMS[arm]["snapshot_mode"] == "tools":
         prompt = tpl.replace("{{MODE_INSTRUCTIONS}}", read_prompt("mode-snapshot-tools.md")).replace(
             "{{INPUT}}", "\n".join(f"- {p}" for p in scope))
-        return prompt, tree, "Read,Grep,Glob", 80
+        return prompt, tree, "Read,Grep,Glob", ARMS[arm].get("max_turns", 80)
     parts, total = [], 0
     for p in scope:
         fp = os.path.join(tree, p)
@@ -126,12 +170,19 @@ def main():
     ap.add_argument("run_id")
     ap.add_argument("--arm", required=True, choices=sorted(ARMS))
     ap.add_argument("--cases", help="comma-separated case ids (default: all promoted)")
+    ap.add_argument("--subset", help="category: run its cases plus the fixed precision sample")
     ap.add_argument("--parallel", type=int, default=3)
     ap.add_argument("--model")
     ap.add_argument("--effort")
     ap.add_argument("--max-turns", type=int)
     a = ap.parse_args()
-    ids = a.cases.split(",") if a.cases else promoted_case_ids()
+    if a.cases:
+        ids = a.cases.split(",")
+    elif a.subset:
+        ids = subset_case_ids(a.subset)
+        log(f"subset '{a.subset}': {len(ids)} cases: {', '.join(ids)}")
+    else:
+        ids = promoted_case_ids()
     write_json(os.path.join(RESULTS, a.run_id, "run.json"),
                {"run_id": a.run_id, "model": a.model, "effort": a.effort, "arms": sorted(ARMS)})
     def guarded(c):

@@ -1,0 +1,58 @@
+{
+  "arm": "concurrency",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "charge() (StripePaymentGateway.java:139-144) maps every StripeException to a single PaymentGatewayException(\"payment.lifecycleFailure\"), with no outcome-unknown classification \u2014 unlike refund() in the same class, which treats ApiConnectionException / status 0 / 409 / 5xx as 'may have executed'. If PaymentIntent.create times out or returns 5xx after Stripe actually captured the charge, handleCreditBasedBooking's catch (PaymentLifecycleService.java:254-259) calls persistPaymentFailure, whose loadOrCreate picks up the committed CAPTURE_PENDING reservation row and overwrites it to CHARGE_FAILED with creditDebited=0/stripeCharged=0, transitions the booking to DECLINED and notifies the parent nothing was charged. The batch path (PaymentLifecycleService.java:389-403) does the same for every reserved booking and additionally reverses the credit deduction. The parent's card is charged while the only durable record says no money moved \u2014 and because the row is now terminal CHARGE_FAILED rather than CAPTURE_PENDING, PaymentPendingSweeper's CAPTURE_UNCONFIRMED escalation can never fire, so nothing is ever reconciled; the never-re-charge guard in abortSettle protects exactly this window on a crash, but the timeout path bypasses it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.charge / PaymentLifecycleService.handleCreditBasedBooking / onBatchBookingAccepted",
+      "title": "Unknown-outcome Stripe charge is recorded as CHARGE_FAILED, overwriting the CAPTURE_PENDING reservation",
+      "verification": "Confirm no reconciliation job scans Stripe PaymentIntents (by transfer_group / referenceId metadata) against CHARGE_FAILED booking_payments rows; grep for consumers of 'payment.lifecycleFailure' that distinguish outcome-unknown. Also confirm the Stripe SDK's built-in retry (same idempotency key) does not fully eliminate the exhausted-retries/5xx case \u2014 it does not."
+    },
+    {
+      "category": "database",
+      "description": "The BOOKING_DEDUCTION ledger entry (line 380, via writeLedgerEntry, @Transactional REQUIRED) joins the listener's REQUIRES_NEW transaction, which only commits after the whole settle loop; each confirmCreditBatchPayment (line 434) commits immediately in perBookingTx (REQUIRES_NEW, a second connection). If the JVM dies \u2014 e.g. a deploy's SIGTERM after the 8s graceful-drain window \u2014 between the first confirm's commit and the outer commit, the CAPTURED booking_payments rows recording creditDebited>0 and the CONFIRMED bookings survive while the wallet debit rolls back: the parent keeps both the credit and the sessions, and nothing detects it (no CAPTURE_PENDING rows remain for the confirmed bookings, so the sweeper sees nothing). The same crash after a failed confirm's declineBatchBookingAfterCharge (REQUIRES_NEW, committed) refunds the parent a credit share that was never debited. Contrast the single-booking path, where persistPaymentSuccess writes ledger + payment row + transition in one transaction precisely to avoid this.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "onBatchBookingAccepted",
+      "title": "Batch credit deduction commits in the outer transaction while per-booking CAPTURED confirms commit in REQUIRES_NEW \u2014 a restart loses the debit but keeps the sessions",
+      "verification": "Confirm CreditWalletService.writeLedgerEntry is plain @Transactional (REQUIRED \u2014 verified in CreditWalletService.java:191-194) and that no outbox or reconciliation compares the sum of CAPTURED creditDebited per batch against BOOKING_DEDUCTION ledger rows for the batchId."
+    },
+    {
+      "category": "concurrency",
+      "description": "The sweep loads all PaymentCoachSubscription rows in one transaction (line 1009) and then, in each per-row transaction, computes the entitled tier from that detached snapshot's tier/status without re-reading the payment row under any lock (lines 1015-1037); syncMarketplaceTier locks only coach_profiles. If persistCoachTierUpgrade commits tier=ACADEMY (and syncs the projection) between the batch load and that coach's iteration, the sweep compares the projection (ACADEMY) against the stale expectation (INSTRUCTOR), declares a mismatch, and overwrites the projection back to INSTRUCTOR \u2014 a lost update that downgrades the coach's marketplace entitlement until the next sweep run or the next entitlement-changing event. The same shape applies to a concurrent revoke (projection forced back up to a paid tier the coach just lost).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "reconcileMarketplaceTiers",
+      "title": "reconcileMarketplaceTiers writes the marketplace projection from a stale pre-sweep snapshot, reverting a concurrently committed tier change",
+      "verification": "Confirm the scheduler cadence for reconcileMarketplaceTiers (the longer the interval, the longer the wrong tier persists) and that CoachSubscription has no @Version that would reject the stale write \u2014 CoachSubscriptionRepository.findByCoachId takes no lock."
+    },
+    {
+      "category": "concurrency",
+      "description": "The guard reads stripe_customers.stripePaymentMethodId (lines 608-614) and only then issues the Stripe updates, with nothing serialising two syncs for the same user. If a user saves card A then card B in quick succession: instance 1 claims sync-A and passes the check before card B's save commits, then stalls; instance 2 claims sync-B, completes, and sets B as every subscription's default_payment_method; instance 1 resumes and sets A. The database says B is the saved card while Stripe renews against the replaced card A indefinitely \u2014 no later event re-runs the sync, so it never converges; if A is subsequently detached or expires, renewals fail into dunning/PAST_DUE for a user who did update their card. The per-key idempotency (sub-pm-{subId}-{pmId}) only dedupes replays of the same card, not the A/B interleaving.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "syncPaymentMethodToSubscriptions",
+      "title": "Payment-method sync outbox: superseded-card check is not atomic with the Stripe writes, so two syncs on two instances can leave Stripe billing the replaced card",
+      "verification": "Check PaymentMethodSyncOutboxHandler / the outbox claim mechanism: if it processes rows for the same aggregate strictly serially and in enqueue order across instances (e.g. per-user partitioning or a user-level lock), the interleaving is closed and this is not a finding."
+    },
+    {
+      "category": "edge-case",
+      "description": "Both helpers (lines 1480-1496) do an unlocked findByCoachId/findByPlayerId and insert on miss, with no upsert and no catch. Two concurrent first requests for the same coach (e.g. GET /subscription racing POST /subscribe, or a double-fired page load) both miss the read before either insert commits; the loser's transaction dies on the coach_id/player_id unique constraint and the request surfaces a 500 from what is otherwise a read endpoint (getCoachSubscription is @Transactional around the create). Harm is bounded to one failed request \u2014 the constraint itself prevents a duplicate row \u2014 but the path has no retry or on-conflict handling.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "findOrCreateCoachSubscription",
+      "title": "findOrCreateCoachSubscription / findOrCreatePlayerSubscription race two first-touch requests into a unique-constraint failure",
+      "verification": "Confirm the unique index on payment.coach_subscriptions(coach_id) and payment.player_subscriptions(player_id) exists in the Flyway migrations (the entity declares unique=true but DDL is migration-managed), and that no controller-level advice retries DataIntegrityViolationException here."
+    }
+  ],
+  "input_rev": "97f527f111a70dd0fdc2e50cd093fa65b8d9060e",
+  "model": null
+}

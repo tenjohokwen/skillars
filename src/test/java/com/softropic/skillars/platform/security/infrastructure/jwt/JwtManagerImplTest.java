@@ -270,7 +270,7 @@ public class JwtManagerImplTest {
 
             // 5. Call jwtManager.createLoginToken
             // createLoginToken generates a new opfSeed internally, so we don't provide one.
-            jwtManager.createLoginToken(mockResponse, principal);
+            jwtManager.createLoginToken(mockResponse, principal, null);
 
             final String jwt = extractCookie(mockResponse, JWT_COOKIE_NAME);
             final Claims claims = claimsExtractor.extractClaims(jwt);
@@ -317,7 +317,7 @@ public class JwtManagerImplTest {
         Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_ADMIN"));
         Principal principal = createPrincipal(authorities);
 
-        jwtManager.createLoginToken(mockResponse, principal);
+        jwtManager.createLoginToken(mockResponse, principal, null);
 
         String adminCookie = extractCookie(mockResponse, ADMIN_COOKIE);
         assertThat(adminCookie).isEqualTo("admin");
@@ -344,7 +344,7 @@ public class JwtManagerImplTest {
                 .businessId("bus123")
                 .build();
 
-        jwtManager.createLoginToken(mockResponse, principal);
+        jwtManager.createLoginToken(mockResponse, principal, null);
 
         assertThat(extractCookie(mockResponse, USER_COOKIE)).isEqualTo(BLANK_DISPLAY_NAME_SENTINEL);
     }
@@ -538,7 +538,7 @@ public class JwtManagerImplTest {
         Set<SimpleGrantedAuthority> authorities = Set.of(new SimpleGrantedAuthority("ROLE_RENEWER"));
         Principal principal = createPrincipal(authorities);
 
-        jwtManager.renewLoginToken(mockResponse, principal);
+        jwtManager.renewLoginToken(mockResponse, principal, null);
 
         final String jwt = extractCookie(mockResponse, JWT_COOKIE_NAME);
         final Claims claims = claimsExtractor.extractClaims(jwt);

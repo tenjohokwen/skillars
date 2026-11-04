@@ -54,7 +54,11 @@
                   :label="t('auth.coach.step3PackSessions')"
                   outlined
                   type="number"
+                  min="1"
+                  :max="PACK_MAX_SESSION_COUNT"
+                  step="1"
                   dense
+                  @update:model-value="packError = ''"
                 />
               </div>
               <div class="col-12 col-sm-4">
@@ -63,16 +67,22 @@
                   :label="t('auth.coach.step3PackPrice')"
                   outlined
                   type="number"
+                  min="0.01"
+                  :max="PACK_MAX_TOTAL_PRICE"
+                  step="0.01"
                   dense
                   prefix="€"
+                  @update:model-value="packError = ''"
                 />
               </div>
               <div class="col-10 col-sm-3">
                 <q-input
                   v-model="pack.label"
                   :label="t('auth.coach.step3PackLabel')"
+                  :maxlength="PACK_MAX_LABEL_LENGTH"
                   outlined
                   dense
+                  @update:model-value="packError = ''"
                 />
               </div>
               <div class="col-2 col-sm-1 flex items-center justify-end">
@@ -88,7 +98,11 @@
             </div>
           </div>
 
+          <!-- skillars-deferred-168: one pack per coach - it is the offer families buy, the same one the
+               "My Session Pack Offer" page edits. Saving here replaces it without that page's
+               confirmation step; a stale second tab can therefore replace or restore it. -->
           <q-btn
+            v-if="!form.sessionPacks.length"
             :label="t('auth.coach.step3AddPack')"
             class="btn-ghost"
             size="sm"
@@ -99,8 +113,8 @@
           />
 
           <div v-if="packError" class="text-negative text-caption q-mt-sm">{{ packError }}</div>
-          <div v-else-if="hasFieldError('sessionPacks')" class="text-negative text-caption q-mt-sm">
-            {{ getFieldError('sessionPacks') }}
+          <div v-else-if="packFieldError" class="text-negative text-caption q-mt-sm">
+            {{ packFieldError }}
           </div>
 
           <q-banner
@@ -136,6 +150,14 @@ import { useI18n } from 'vue-i18n'
 import { useQuasar } from 'quasar'
 import { saveProfileBuilderStep } from 'src/api/marketplace.api'
 import { useErrorHandler } from 'src/composables/useErrorHandler'
+import {
+  PACK_MAX_LABEL_LENGTH,
+  PACK_MAX_SESSION_COUNT,
+  PACK_MAX_TOTAL_PRICE,
+  packErrorKey,
+  packServerError,
+  packsPayload,
+} from 'src/utils/sessionPackForm'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -155,7 +177,12 @@ const {
   helpCode,
   hasFieldError,
   getFieldError,
+  fieldErrors,
 } = useErrorHandler()
+
+// skillars-deferred-168: bean validation reports the pack's fields as sessionPacks[0].totalPrice etc.,
+// which an exact hasFieldError('sessionPacks') never matched, so a rejected pack showed nothing.
+const packFieldError = computed(() => packServerError(fieldErrors.value))
 
 const dialogVisible = computed({
   get: () => props.modelValue,
@@ -170,6 +197,10 @@ const form = reactive({
   sessionDurationMinutes: null,
   sessionPacks: [],
 })
+// skillars-deferred-168: the pack list the form started with. A save sends the pack list only if the coach
+// changed it (see packsPayload), so a price-only save never touches the offer, even when this form loaded
+// stale or without the pack.
+let initialPacks = []
 
 const DURATION_CHOICES = [30, 45, 60, 90, 120]
 const durationOptions = computed(() => {
@@ -198,6 +229,7 @@ watch(
         totalPrice: p.totalPrice,
         label: p.label || '',
       }))
+      initialPacks = form.sessionPacks.map((p) => ({ ...p }))
     }
   },
   { immediate: true },
@@ -212,31 +244,7 @@ function removePack(i) {
   packError.value = ''
 }
 
-function packFieldEntered(v) {
-  return v != null && v !== ''
-}
-function packRowTouched(p) {
-  return (
-    packFieldEntered(p.sessionCount) ||
-    packFieldEntered(p.totalPrice) ||
-    (p.label != null && p.label.trim() !== '')
-  )
-}
-function packRowValid(p) {
-  return p.sessionCount > 0 && p.totalPrice > 0
-}
-const hasTouchedInvalidPack = computed(() =>
-  form.sessionPacks.some((p) => packRowTouched(p) && !packRowValid(p)),
-)
-
-// skillars-deferred-139 review Patch 6: marketplace.coach_session_packs has a real
-// uq_session_pack (coach_id, session_count) constraint — without this check, two packs sharing a
-// session count reach the backend and surface as an unattributed generic.dataError instead of a
-// clear, attributable validation message.
-const hasDuplicateSessionCount = computed(() => {
-  const counts = form.sessionPacks.filter(packRowValid).map((p) => p.sessionCount)
-  return new Set(counts).size !== counts.length
-})
+const packErrorKeyNow = computed(() => form.sessionPacks.map(packErrorKey).find(Boolean) || null)
 
 function close() {
   clearError()
@@ -246,12 +254,8 @@ function close() {
 async function handleSubmit() {
   clearError()
   if (!form.perSessionPrice || form.perSessionPrice <= 0) return
-  if (hasTouchedInvalidPack.value) {
-    packError.value = t('auth.coach.step3PackInvalid')
-    return
-  }
-  if (hasDuplicateSessionCount.value) {
-    packError.value = t('auth.coach.step3PackDuplicateSessionCount')
+  if (packErrorKeyNow.value) {
+    packError.value = t(packErrorKeyNow.value)
     return
   }
   packError.value = ''
@@ -260,11 +264,8 @@ async function handleSubmit() {
     await saveProfileBuilderStep(3, {
       perSessionPrice: form.perSessionPrice,
       sessionDurationMinutes: form.sessionDurationMinutes,
-      sessionPacks: form.sessionPacks.filter(packRowValid).map((p) => ({
-        sessionCount: p.sessionCount,
-        totalPrice: p.totalPrice,
-        label: p.label || null,
-      })),
+      // null unless the coach changed the pack; [] only when they removed the pack they were shown.
+      sessionPacks: packsPayload(initialPacks, form.sessionPacks),
     })
 
     $q.notify({ type: 'positive', message: t('success.infoChanged') })

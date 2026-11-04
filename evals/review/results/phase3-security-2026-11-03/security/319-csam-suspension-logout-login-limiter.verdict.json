@@ -1,0 +1,140 @@
+{
+  "arm": "security",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "UserProfileService.changePassword/updateUserEmail themselves perform no revocation (no RefreshTokenRepository injected, no securitySessionInvalidatedAt stamp) and only publish AccountChangeEvent, but the finding's verification caveat requires checking AccountChangeEvent listeners (AccountManagementFacade or other @EventListener handlers for PASSWORD_CHANGED/EMAIL_CHANGED), which are not in the provided file; a listener could perform the revocation.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "AdminUserResource.reactivateUser and unlockLogin do use the uniform @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE) with no stricter annotation, but whether that SpEL includes ROLE_LTD_ADMIN, whether a full-admin-only constant exists, and whether AdminUserService gates by caller tier all depend on SecurityConstants.java, AdminUserService.java, and the other admin resources named in the verification caveat \u2014 none of which are shown.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "refuted",
+      "note": "The per-JVM ConcurrentHashMap mechanism in RateLimitingService.tryConsume is real, but the finding's trigger \u2014 \"the multi-instance deployment\" \u2014 is contradicted by the class javadoc's \"Deliberately out of scope\" paragraph, which states the app runs a single instance today (confirmed against the docker-compose stack) and that cluster-safety is to be revisited only if horizontally scaled. The verification caveat (RateLimitingAspect key construction, @RateLimited call sites) is moot because the premise fails, though those files are not shown here.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "confirmed",
+      "note": "Verification caveat holds: the REFRESH_GRACE_WINDOW branch in AuthService.refresh has no counter or cap \u2014 its only gate is rotatedAt within 30s. A used token presented in-window is reassigned to the newest unused successor (findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc) and falls through to full rotation, issuing the caller a new valid session; markAllUsedByUserId only fires outside the window or when no live successor exists, so alternating attacker/victim refreshes within 30s sustain both chains indefinitely.",
+      "reported_id": "R10"
+    },
+    {
+      "check": "confirmed",
+      "note": "In AuthService.login, findOneByLogin(...).orElseThrow throws BadCredentialsException for an unknown email before passwordEncoder.matches is reached, while a known-email/wrong-password request runs the full bcrypt comparison; both paths otherwise do only the cheap recordAttempt insert, so no dummy-hash or constant-time guard offsets the delta. The exact magnitude of the delta would need the live measurement the finding proposes, but the structural timing oracle is present.",
+      "reported_id": "R11"
+    },
+    {
+      "check": "undetermined",
+      "note": "updateUserEmail does swap email and login immediately on password match and publishes an EMAIL_CHANGED event with no token or pending-email state in this file; but the finding's caveat requires AccountManagementFacade.changeEmail and any confirmation-token flow elsewhere, which are not shown, so whether the endpoint reaches this method in a single unverified request cannot be settled here.",
+      "reported_id": "R12"
+    }
+  ],
+  "judge_cost_usd": 1.4801250000000001,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "Same defect: listener resolves profile-UUID ownerId via login/email lookup so no CSAM suspension ever lands, failure only logged.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same mechanism and consequence: SUSPENDED is write-only, no lock/token revocation/session stamp, ensureAccountIsLive and Principal ignore it, login check gated on phone-otp-required flag.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "Identifies both halves: /api/logout never revokes the refresh token and, with CSRF disabled, matches any HTTP method.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R7 covers per-JVM Guava caches (per-instance, reset on restart) as the only limiter on /authenticate; R6 states the DB limiter never consults LoginAttemptsService, jointly covering the independent-budget split.",
+        "reported_ids": [
+          "R7",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "Same defect: guard has no branch for meta.role 'COACH', so coach/revenue and the receipt route are only login-gated.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions otpEnabled, toggle2fa, or unenforced 2FA.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding touches ShadowAccountService.linkAdditionalParent; R13 concerns the frontend create-player route, a different issue.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding addresses Retry-After being derived from the oldest attempt row regardless of the lock window.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] UserProfileService.changePassword/updateUserEmail themselves perform no revocation (no RefreshTokenRepository injected, no securitySessionInvalidatedAt stamp) and only publish AccountChangeEvent, but the finding's verification caveat requires checking AccountChangeEvent listeners (AccountManagementFacade or other @EventListener handlers for PASSWORD_CHANGED/EMAIL_CHANGED), which are not in the provided file; a listener could perform the revocation. | pass-1: Password/email change without refresh-token revocation or session invalidation is a concrete session-fixation-after-compromise defect not in the key.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] AdminUserResource.reactivateUser and unlockLogin do use the uniform @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE) with no stricter annotation, but whether that SpEL includes ROLE_LTD_ADMIN, whether a full-admin-only constant exists, and whether AdminUserService gates by caller tier all depend on SecurityConstants.java, AdminUserService.java, and the other admin resources named in the verification caveat \u2014 none of which are shown. | pass-1: Concrete trigger: HAS_ADMIN_ROLE includes ROLE_LTD_ADMIN, letting the limited tier reactivate suspended accounts and clear login locks; distinct from the AdminLoginResource non-finding.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check refuted] The per-JVM ConcurrentHashMap mechanism in RateLimitingService.tryConsume is real, but the finding's trigger \u2014 \"the multi-instance deployment\" \u2014 is contradicted by the class javadoc's \"Deliberately out of scope\" paragraph, which states the app runs a single instance today (confirmed against the docker-compose stack) and that cluster-safety is to be revisited only if horizontally scaled. The verification caveat (RateLimitingAspect key construction, @RateLimited call sites) is moot because the premise fails, though those files are not shown here. | pass-1: Per-instance Bucket4j buckets in a multi-instance deployment multiply mail/upload quotas and reset on restart; concrete trigger stated, distinct service from F4.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] Verification caveat holds: the REFRESH_GRACE_WINDOW branch in AuthService.refresh has no counter or cap \u2014 its only gate is rotatedAt within 30s. A used token presented in-window is reassigned to the newest unused successor (findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc) and falls through to full rotation, issuing the caller a new valid session; markAllUsedByUserId only fires outside the window or when no live successor exists, so alternating attacker/victim refreshes within 30s sustain both chains indefinitely. | pass-1: Concrete trigger: replaying a stolen refresh token within the 30s grace window mints a parallel valid chain and never trips markAllUsedByUserId theft detection.",
+        "reported_id": "R10",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] In AuthService.login, findOneByLogin(...).orElseThrow throws BadCredentialsException for an unknown email before passwordEncoder.matches is reached, while a known-email/wrong-password request runs the full bcrypt comparison; both paths otherwise do only the cheap recordAttempt insert, so no dummy-hash or constant-time guard offsets the delta. The exact magnitude of the delta would need the live measurement the finding proposes, but the structural timing oracle is present. | pass-1: Concrete timing oracle: unknown login skips bcrypt while wrong password runs it, enabling account enumeration on /api/auth/login.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] updateUserEmail does swap email and login immediately on password match and publishes an EMAIL_CHANGED event with no token or pending-email state in this file; but the finding's caveat requires AccountManagementFacade.changeEmail and any confirmation-token flow elsewhere, which are not shown, so whether the endpoint reaches this method in a single unverified request cannot be settled here. | pass-1: Email+login swap immediately on password match with no confirmation round-trip to the new address is a concrete account-takeover/misdirection vector.",
+        "reported_id": "R12",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Reviewer concedes the backend HAS_PARENT_ROLE blocks submission; exposing a non-functional UI page has no stated security consequence.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

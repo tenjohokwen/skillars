@@ -1,0 +1,90 @@
+{
+  "arm": "control",
+  "case": "386-messaging-contact-detail-hardening",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "Verified the caveat: in redactPhoneLikeSequences, PHONE_PATTERN matches any 8\u201316 char digit run (e.g. \"20230415001\") and PHONE_DIGIT_RUN (\\d{5,}) then triggers redaction, so sanitize(\"License 20230415001\") returns the marker. The comment's exemption only holds for dash/dot-separated references; compact dates and license/booking numbers with a 5+ digit run are redacted as described.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "The trigger exists: handleReviewSubmitted does `body.substring(0, maxInputChars)` with no surrogate back-off. But per the finding's own caveat, confirmation needs (1) the review-body length validation (if body is capped \u2264 2000 chars the branch is unreachable) and (2) GeminiClient.evaluate's serialization of a lone surrogate (mangle vs. throw) \u2014 neither is in this file.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "undetermined",
+      "note": "The trigger is real in this file: getMessages caps lastReadAt only via findOldestPendingCreatedAtFromOthers (comment confirms PENDING-only intent) while toMessageDto also hides UNDER_REVIEW content. But the consequence depends on code not shown: the JPQL of findOldestPendingCreatedAtFromOthers and countUnreadPerConversation, and AdminMessageService's approval path (the finding's own verification caveat), none of which are available here.",
+      "reported_id": "R8"
+    }
+  ],
+  "judge_cost_usd": 0.8482299999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R1 (grouped phone formats below the 5-digit-run threshold) and R2 (fullwidth/non-ASCII digits) identify sanitizer bypasses in the same class, but cover only phone fragments and none of the email obfuscation, bare domains, social handles, or spelled-out digits that make up the expected defect.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses persisting/delivering messages before the moderation verdict or the lack of parent-oversight distinction in sendMessage.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 and R6 together identify the single non-recursive replace reassembling the delimiter in both GeminiModerationService and ReviewModerationService, with the same prompt-injection consequence.",
+        "reported_ids": [
+          "R5",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding mentions missing rate limits on sendMessage or the sanitize-preview oracle endpoint.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions suspended or locked users retaining messaging access.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R4 identifies the same unversioned full-row save in getMessages and sendMessage overwriting a concurrently committed BLOCKED status, including the lastMessageAt/last-read clobbering.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] Verified the caveat: in redactPhoneLikeSequences, PHONE_PATTERN matches any 8\u201316 char digit run (e.g. \"20230415001\") and PHONE_DIGIT_RUN (\\d{5,}) then triggers redaction, so sanitize(\"License 20230415001\") returns the marker. The comment's exemption only holds for dash/dot-separated references; compact dates and license/booking numbers with a 5+ digit run are redacted as described. | pass-1: Concrete trigger given (compact dates/license numbers with 8+ digit-ish chars containing a 5-digit run get redacted, corrupting legitimate text); a false-positive defect not listed in the answer key.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The trigger exists: handleReviewSubmitted does `body.substring(0, maxInputChars)` with no surrogate back-off. But per the finding's own caveat, confirmation needs (1) the review-body length validation (if body is capped \u2264 2000 chars the branch is unreachable) and (2) GeminiClient.evaluate's serialization of a lone surrogate (mangle vs. throw) \u2014 neither is in this file. | pass-1: Concrete trigger: substring truncation in ReviewModerationService lacks the surrogate back-off GeminiModerationService has, so an emoji at the 2000-char boundary leaves a lone high surrogate causing a mangled prompt or GEMINI_FAILURE; not in the answer key.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The trigger is real in this file: getMessages caps lastReadAt only via findOldestPendingCreatedAtFromOthers (comment confirms PENDING-only intent) while toMessageDto also hides UNDER_REVIEW content. But the consequence depends on code not shown: the JPQL of findOldestPendingCreatedAtFromOthers and countUnreadPerConversation, and AdminMessageService's approval path (the finding's own verification caveat), none of which are available here. | pass-1: Concrete trigger: read cap in getMessages only excludes PENDING, so lastReadAt advances past hidden UNDER_REVIEW messages, which never appear unread after admin approval; not in the answer key.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

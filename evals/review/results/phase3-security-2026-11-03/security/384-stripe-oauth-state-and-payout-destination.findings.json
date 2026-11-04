@@ -1,0 +1,48 @@
+{
+  "arm": "security",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "findings": [
+    {
+      "category": "security",
+      "description": "generateOnboardingUrl sets the OAuth state to coachId.toString() and handleOAuthCallback's only check is coachId.toString().equals(state) \u2014 the coach's profile UUID, which is public via GET /api/marketplace/coaches/{coachId}. Authentication is a JWT in a SameSite=Lax httpOnly cookie and the callback is a GET, so a cross-site top-level navigation is authenticated. An attacker authorizes their own Stripe account against the platform's public client_id with state set to the victim's coach UUID, intercepts the resulting callback URL (code=ac_..., state=victimCoachId), and gets the logged-in victim coach to open it; the state check passes, the code exchanges to the attacker's Stripe account, and upsertCoachStripeAccount rebinds the victim's payouts so every later transferToCoach (which resolves the current stripeAccountId) pays the attacker. State is also not single-use and no per-session nonce is stored anywhere.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "handleOAuthCallback / StripeOnboardingService.generateOnboardingUrl",
+      "title": "Stripe OAuth state is the coach's public UUID, enabling CSRF replacement of the payout destination",
+      "verification": "Confirm GET /api/marketplace/coaches/{coachId} (CoachMarketplaceResource) is reachable without authentication or by any user, and that the JWT cookie set by JwtManagerImpl (CookieUtil default SameSite=Lax) is what JWTAuthorizationFilter/TokenValidatorImpl authenticates the callback with; reproduce by invoking the callback with a code obtained for a different Stripe account and state equal to the session coach's id."
+    },
+    {
+      "category": "security",
+      "description": "upsertCoachStripeAccount overwrites stripeAccountId for the coach with no re-authentication step, no notification to the coach, and no cooling-off period before money flows to the new account; it also clears the deauthorized sentinel. Per the StripePaymentGateway comments, CoachPayoutHoldRecoveryService automatically re-drives HOLD payouts once the (new) account can receive transfers, so anyone who triggers one callback in a coach's session \u2014 via the state CSRF or a momentarily unlocked device \u2014 redirects both future payouts and the already-accrued held balance to a different Stripe account without the coach ever being told. The only artifact is a log line.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "upsertCoachStripeAccount",
+      "title": "Payout destination replaced silently on reconnect, with held payouts auto-redirected to the new account",
+      "verification": "Check whether any notification/email is sent on stripe account change (grep for callers of upsertCoachStripeAccount and for a payout-destination-changed notification), and confirm CoachPayoutHoldRecoveryService re-enqueues HOLD payouts on the new account's account.updated/onboarding-complete without operator review."
+    },
+    {
+      "category": "security",
+      "description": "The 30-second gate on live Account.retrieve calls in getStripeStatus lives in a ConcurrentHashMap, so in the multi-instance deployment behind the reverse proxy each instance grants its own sync: a coach scripting GET /api/payment/coaches/me/stripe/status gets N retrieves per 30 seconds instead of one. tryAcquireStatusSync also clears the entire map once it exceeds 10,000 entries, resetting every coach's throttle at once. The Stripe API rate limit is shared platform-wide, so sustained abuse pressures the same budget charges and payout transfers use.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "lastStatusSyncAttempt / tryAcquireStatusSync",
+      "title": "Per-JVM in-memory throttle on Stripe status sync; cleared wholesale at 10,000 entries",
+      "verification": "Confirm there is no shared (DB/Redis) limiter in front of this endpoint and that the status endpoint is load-balanced across instances; the code comment itself calls it 'per instance, in memory: a soft guard'."
+    },
+    {
+      "category": "concurrency",
+      "description": "handle runs inside the outbox REQUIRES_NEW transaction and calls paymentGateway.transferToCoach \u2014 which performs a listTransfersByGroup plus a createTransfer against Stripe, with SDK-level retries \u2014 after taking findByIdForUpdate (PESSIMISTIC_WRITE on coach_payouts) and isFrozenForShare (FOR SHARE on the freeze row), with debt rows locked by planOffset. During Stripe latency or an outage, each in-flight payout pins a DB connection and blocks DisputeService.reconcileCoachPayout and admin reinstatement on those locks for the full call duration; a drain of many payouts can exhaust the pool and stall dispute resolution platform-wide.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "handle",
+      "title": "Stripe transfer executes while holding the payout row, freeze row, and debt-row locks",
+      "verification": "Check the Stripe SDK connect/read timeout and maxNetworkRetries configured for StripeClient and the outbox drain concurrency; the blocking window is timeout \u00d7 (1 + retries) per payout."
+    }
+  ],
+  "input_rev": "c9c10fa6262f6e0413171c942ab24504061c587f",
+  "model": null
+}

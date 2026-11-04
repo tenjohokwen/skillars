@@ -1,0 +1,97 @@
+{
+  "arm": "security",
+  "case": "376-completion-dispute-integrity",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "resolveDispute/dismissDispute do use @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE) with no further role check in this file, but the HAS_ADMIN_ROLE expression in SecurityConstants, the money-moving behavior of DisputeService.resolveDispute, and the intended scope of ROLE_LTD_ADMIN are all defined in code not provided, so the finding cannot be confirmed or refuted from this file alone.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "raiseDispute does load the booking via plain findById with no row or advisory lock, matching the finding's premise, but the consequence depends on code not shown: CoachPayoutAdjustmentService.freezeForDispute (no-op vs. pre-emptive freeze when no payout row exists), CoachPayoutOutboxSupport.enqueuePayout (serialization of its existsOpenDisputeForBooking check), and CoachPayoutTransferHandler lines 75-116 (whether release re-checks open disputes) \u2014 none of those files are provided.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "resolveDispute persists `dispute.setCreditAmount(clawback == null ? creditAmount : null)` \u2014 the raw request parameter \u2014 while the actually-credited amount lives in the local `credited` variable (ZERO for NO_ACTION, `remaining` for FULL_CREDIT); the NO_ACTION branch is empty with no creditAmount validation, so a stray value is stored verbatim, and DisputeResolvedEvent correctly uses `credited`, masking the mismatch exactly as described.",
+      "reported_id": "R6"
+    }
+  ],
+  "judge_cost_usd": 1.04036,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 identifies the same defect: COMPLETED_PENDING_CONFIRMATION is in neither ELIGIBLE_STATUSES nor LIVE_STATUSES, so a parent cannot dispute a quick-complete and the sweeper/timeout pays the coach.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions recordNoShowCoach or the NO_SHOW_COACH transition being unavailable after quick-complete.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 describes the same mechanism (no minimum elapsed time between Start and End, LIVE wrap-up derived) and the same consequence (completion and payout with no parent confirmation window).",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding covers confirmCompletion transitioning before loading SessionCompletionData and failing with 404.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers excused-reason coach cancels after start avoiding the no-show strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers parent late-cancel refunds producing no coach strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding covers the one-open-dispute-per-booking blocking or unlimited re-raising; R4 and R5 concern different dispute defects.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] resolveDispute/dismissDispute do use @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE) with no further role check in this file, but the HAS_ADMIN_ROLE expression in SecurityConstants, the money-moving behavior of DisputeService.resolveDispute, and the intended scope of ROLE_LTD_ADMIN are all defined in code not provided, so the finding cannot be confirmed or refuted from this file alone. | pass-1: Concrete trigger: HAS_ADMIN_ROLE expression admits ROLE_LTD_ADMIN to resolve/dismiss endpoints that move wallet credits and coach payouts, contradicting the stated read/moderation role model.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Same root cause as R1: HAS_ADMIN_ROLE admitting ROLE_LTD_ADMIN to a money-moving write endpoint, just a different endpoint with bounded impact.",
+        "reported_id": "R2",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "[v2 check undetermined] raiseDispute does load the booking via plain findById with no row or advisory lock, matching the finding's premise, but the consequence depends on code not shown: CoachPayoutAdjustmentService.freezeForDispute (no-op vs. pre-emptive freeze when no payout row exists), CoachPayoutOutboxSupport.enqueuePayout (serialization of its existsOpenDisputeForBooking check), and CoachPayoutTransferHandler lines 75-116 (whether release re-checks open disputes) \u2014 none of those files are provided. | pass-1: Concrete race described: unlocked booking read in raiseDispute vs existsOpenDisputeForBooking check in enqueuePayout, with the transfer handler re-checking only freeze flags, so an open dispute can fail to freeze the payout.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] resolveDispute persists `dispute.setCreditAmount(clawback == null ? creditAmount : null)` \u2014 the raw request parameter \u2014 while the actually-credited amount lives in the local `credited` variable (ZERO for NO_ACTION, `remaining` for FULL_CREDIT); the NO_ACTION branch is empty with no creditAmount validation, so a stray value is stored verbatim, and DisputeResolvedEvent correctly uses `credited`, masking the mismatch exactly as described. | pass-1: Concrete trigger: resolveDispute persists the request's creditAmount verbatim (e.g. NO_ACTION with creditAmount=100, or null on FULL_CREDIT), making the stored audit value disagree with the actual ledger credit.",
+        "reported_id": "R6",
+        "verdict": "real"
+      }
+    ]
+  }
+}

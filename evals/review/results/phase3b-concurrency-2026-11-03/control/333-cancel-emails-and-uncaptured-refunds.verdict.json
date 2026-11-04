@@ -1,0 +1,74 @@
+{
+  "arm": "control",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "onBookingCancelledDueToPause does enqueue event.getCoachEmail() with no null/blank guard (unlike e.g. onBookingCancelledByParent), but the claimed consequence hinges on NotificationOutboxSupport.enqueueEmail accepting a blank address and on resolveCoachEmail returning \"\" \u2014 neither is in this file, and the finding's verification caveat requires checking enqueueEmail.",
+      "reported_id": "R8"
+    }
+  ],
+  "judge_cost_usd": 0.59581,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R5 identifies the same four missing lowerCamel template files resolved by EmailContentRenderer, with render failure and no notification; the FAILED-vs-retry-until-expiry nuance does not change the defect.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R6 identifies PACK_PAUSED resolving to packPaused while only sessionPackPaused.html exists, with the same every-send render failure.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 covers the wallet-refund branch and R2 the pack-session restore branch of refunding an uncaptured ACCEPTED booking on coach cancel; together they fully cover the expected defect including the missing captured check/flag.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R3 identifies resolveSessionPrice using current coach pricing instead of the captured booking_payments amount across coach cancel, no-show, and parent cancel, noting resolveAmountPaid is only used on the admin path.",
+        "reported_ids": [
+          "R3"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Trigger requires a coach_pricing row to be deleted after a booking already exists, a speculative data-corruption state rather than a reachable defect.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "A design/content complaint about data maps for templates that do not even exist; no concrete incorrect behaviour is triggered.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] onBookingCancelledDueToPause does enqueue event.getCoachEmail() with no null/blank guard (unlike e.g. onBookingCancelledByParent), but the claimed consequence hinges on NotificationOutboxSupport.enqueueEmail accepting a blank address and on resolveCoachEmail returning \"\" \u2014 neither is in this file, and the finding's verification caveat requires checking enqueueEmail. | pass-1: Concrete trigger: missing coach profile makes resolveCoachEmail return \"\", and unlike every sibling handler this one enqueues without a blank guard, persisting an envelope that fails at send.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Requires a CONFIRMED (captured-whitelisted) booking with neither a booking_payments row nor a coach_pricing row, a speculative state; the ZERO/refundEligible fallback is described as feeding manual reconciliation.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "arm": "concurrency",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "handle()'s try block visibly skips paymentGateway.transferToCoach when toTransfer.signum() == 0 and commits RELEASED with stripeTransferId = null, matching the described mechanics; but confirming the double-count requires StripePaymentGateway.findExistingTransfer (guard located only inside transferToCoach?), CoachPayoutDebtService.planOffset/recordDebt (can debt >= net appear between drives?), and the absence of a reconciliation job \u2014 none of which are in the provided file, and the session's file tools are disabled so the verification caveat could not be run.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "This file confirms the setup: upsertCoachStripeAccount stamps lastEventCreatedAt with a raw truncated server-clock connectedAt (no skew pad, unlike pollSnapshotTime), and getStripeStatus/resyncCompleteAccounts skip deauthorized rows, so a wrong sentinel wouldn't heal. But the decisive staleness comparison lives in handleAccountDeauthorized/applyDeauthorization (CoachStripeAccountStatusApplier / webhook handler), which is not shown \u2014 whether an event with created == or > the marker is accepted, and any other guards there, cannot be checked; production clock-skew is also runtime state.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "In-file mechanics confirmed: handleConnectEventAtomically commits the insertIfAbsent dedup row even when handleAccountDeauthorized's ifPresentOrElse else-branch (log-only, STRIPE_ACCOUNT_DEAUTHORIZED_UNKNOWN) matches no account, so redeliveries are dropped as duplicates. But the finding's required verification \u2014 that CoachStripeAccountStatusApplier.applyDeauthorization is the sole setter of TRANSFERS_DEAUTHORIZED, that no sweeper re-processes stripe_webhook_events, and the transferReadiness/outbox consequences \u2014 depends on code outside this file, which was not provided.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "upsertCoachStripeAccount (StripeOnboardingService.java, findById(coachId) branch) indeed has no guard against another coach row holding the same stripeAccountId, and handleOAuthCallback does consume the OAuth code before persisting; but the finding hinges on the V138 unique index idx_csa_stripe_account_id and on whether fk_csa_coach cascades on coach re-registration, neither of which (migration, entity, FK DDL) is in the provided file.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "handle() holds findByIdForUpdate's PESSIMISTIC_WRITE, the FOR SHARE freeze lock, and the debt-row locks across the synchronous paymentGateway.transferToCoach call inside one REQUIRES_NEW transaction, and its own EC-4 comment confirms DisputeService.reconcileCoachPayout contends for the same row lock. Exact Stripe timeouts (StripeClient/PaymentConfig) are not in this file, but that only affects stall duration, not the mechanism.",
+      "reported_id": "R6"
+    }
+  ],
+  "judge_cost_usd": 1.600493,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect (state = public coachId, callback accepts it) with the same attack: attacker's code + victim's coachId routes the victim's payouts to the attacker.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding raises the lack of notification or cooling-off when upsertCoachStripeAccount silently replaces an existing payout account; R1 only uses the overwrite as the F1 attack's payoff.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] handle()'s try block visibly skips paymentGateway.transferToCoach when toTransfer.signum() == 0 and commits RELEASED with stripeTransferId = null, matching the described mechanics; but confirming the double-count requires StripePaymentGateway.findExistingTransfer (guard located only inside transferToCoach?), CoachPayoutDebtService.planOffset/recordDebt (can debt >= net appear between drives?), and the absence of a reconciliation job \u2014 none of which are in the provided file, and the session's file tools are disabled so the verification caveat could not be run. | pass-1: Concrete interleaving: lost-response transfer rolls back, debt recorded, retry's toTransfer==0 path skips findExistingTransfer guard and marks RELEASED with null transfer id, double-counting the orphaned transfer against debt.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] This file confirms the setup: upsertCoachStripeAccount stamps lastEventCreatedAt with a raw truncated server-clock connectedAt (no skew pad, unlike pollSnapshotTime), and getStripeStatus/resyncCompleteAccounts skip deauthorized rows, so a wrong sentinel wouldn't heal. But the decisive staleness comparison lives in handleAccountDeauthorized/applyDeauthorization (CoachStripeAccountStatusApplier / webhook handler), which is not shown \u2014 whether an event with created == or > the marker is accepted, and any other guards there, cannot be checked; production clock-skew is also runtime state. | pass-1: Concrete trigger: deauth-then-reconnect of the same acct within the second-truncation/skew window lets the late deauthorized event pass the staleness check and permanently flag a live connection, with no healing path.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] In-file mechanics confirmed: handleConnectEventAtomically commits the insertIfAbsent dedup row even when handleAccountDeauthorized's ifPresentOrElse else-branch (log-only, STRIPE_ACCOUNT_DEAUTHORIZED_UNKNOWN) matches no account, so redeliveries are dropped as duplicates. But the finding's required verification \u2014 that CoachStripeAccountStatusApplier.applyDeauthorization is the sole setter of TRANSFERS_DEAUTHORIZED, that no sweeper re-processes stripe_webhook_events, and the transferReadiness/outbox consequences \u2014 depends on code outside this file, which was not provided. | pass-1: Concrete trigger: deauthorized webhook arriving before the OAuth upsert commits is recorded as processed by the dedup insert, redeliveries are dropped, and no other path sets the deauthorized sentinel, leaving payouts stuck retrying.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] upsertCoachStripeAccount (StripeOnboardingService.java, findById(coachId) branch) indeed has no guard against another coach row holding the same stripeAccountId, and handleOAuthCallback does consume the OAuth code before persisting; but the finding hinges on the V138 unique index idx_csa_stripe_account_id and on whether fk_csa_coach cascades on coach re-registration, neither of which (migration, entity, FK DDL) is in the provided file. | pass-1: Concrete trigger: same stripe_account_id on a second coach row violates the unique index after the single-use OAuth code is consumed, making the callback deterministically fail on retry with the connection unrecordable.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] handle() holds findByIdForUpdate's PESSIMISTIC_WRITE, the FOR SHARE freeze lock, and the debt-row locks across the synchronous paymentGateway.transferToCoach call inside one REQUIRES_NEW transaction, and its own EC-4 comment confirms DisputeService.reconcileCoachPayout contends for the same row lock. Exact Stripe timeouts (StripeClient/PaymentConfig) are not in this file, but that only affects stall duration, not the mechanism. | pass-1: Concrete mechanism: PESSIMISTIC_WRITE/FOR SHARE/FOR UPDATE locks held across synchronous Stripe network calls stall dispute resolution and reinstatement for the SDK timeout, contradicting the repository's short-contention assumption.",
+        "reported_id": "R6",
+        "verdict": "real"
+      }
+    ]
+  }
+}

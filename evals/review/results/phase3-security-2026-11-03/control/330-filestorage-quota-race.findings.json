@@ -1,0 +1,38 @@
+{
+  "arm": "control",
+  "case": "330-filestorage-quota-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "confirmUpload reads `sumSizeBytesByOwnerId(ownerId)` outside any transaction and outside any lock. It then inserts the row in a separate `transactionTemplate.execute`. An owner can sign several uploads for different keys (each sign passes the quota check on its own) and PUT them, then fire the confirms in parallel. Every confirm reads the same pre-insert usage, every one passes `usage + contentLength <= quota`, and every one inserts, so the stored total can reach N times the remaining quota. Nothing serialises per-owner inserts: there is no row lock on an owner/quota row, no advisory lock, no SERIALIZABLE isolation, and no DB constraint on the total. The unique index on `key` only stops the same key being confirmed twice, not different keys.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "FileStorageService.confirmUpload / FileStorageObjectRepository.sumSizeBytesByOwnerId",
+      "title": "Quota check in confirmUpload is check-then-act with no lock, so concurrent confirms can exceed the owner's quota",
+      "verification": "Run two or more concurrent confirmUpload calls for different generated keys of the same owner whose combined size is over the remaining quota. Both succeed, and sumSizeBytesByOwnerId afterwards is above getQuota().getDefaultBytes()."
+    },
+    {
+      "category": "concurrency",
+      "description": "signUpload checks the quota against confirmed rows only. Signed uploads that are still pending reserve nothing, so any number of presigned PUT URLs can be issued while usage is just under the limit. All of those objects land in the bucket whether or not confirm later rejects them, and no FSO row is ever created for the rejected ones, so the soft-delete/physical-delete scheduler never cleans them up. The result is unaccounted storage. The real enforcement depends on the racy confirm check described above.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "FileStorageService.signUpload",
+      "title": "Sign-time quota check is advisory only and races the same way",
+      "verification": "Check whether a bucket lifecycle rule or a sweeper removes objects under generated keys that never got an FSO row. If not, rejected or unconfirmed uploads stay in the bucket forever."
+    },
+    {
+      "category": "edge-case",
+      "description": "softDelete calls `fso.getCreatedBy().equals(currentUserLogin)`. `created_by` is a nullable column that V147 added afterwards, so a row inserted without auditing populating it (pre-V147 rows, or rows written by StorageMigrationService/batch contexts with no auditor) has a null createdBy. Deleting such a row throws a NullPointerException, which surfaces as a 500 instead of a clean authorisation result. The check also uses the login (createdBy) while every other ownership check in this class uses ownerId (business id), so an admin-migrated object can never be deleted by its recorded owner.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "FileStorageService.softDelete",
+      "title": "softDelete authorises on createdBy, which can be null and does not match ownerId",
+      "verification": "Check whether any file_storage_objects rows have created_by IS NULL, and what AuditorAware returns in the StorageMigrationService context."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

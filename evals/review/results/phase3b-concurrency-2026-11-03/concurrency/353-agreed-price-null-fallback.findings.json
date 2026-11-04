@@ -1,0 +1,88 @@
+{
+  "arm": "concurrency",
+  "case": "353-agreed-price-null-fallback",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "createBatch and createBookingRequest store agreed_price = NULL when the coach has no pricing row, and the quote the parent reviewed shows \u20ac0 (batch.totalAmount is 0). NULL also means 'pre-V192 legacy row', and for NULL both resolveSessionPrice and batchBookingPrice fall back to the coach's CURRENT coach_pricing row. Sequence: parent requests while the coach is unpriced (sees \u20ac0) \u2192 coach inserts a \u20ac80 pricing row \u2192 coach accepts \u2192 the parent's saved card is charged \u20ac80 per session with no consent step anywhere. The fallback meant for legacy rows reopens, for new unpriced requests, exactly the re-pricing hole the PR claims to close; the schema cannot distinguish the two NULL meanings.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "BookingService.resolveSessionPrice / PaymentLifecycleService.batchBookingPrice / V192__booking_agreed_price.sql",
+      "title": "NULL agreed_price on a post-V192 booking charges the coach's current price the parent never saw",
+      "verification": "Confirm there is no step where the parent re-approves the price between the coach creating a pricing row and accept/settle; check whether any UI blocks requesting an unpriced coach."
+    },
+    {
+      "category": "concurrency",
+      "description": "acceptOneBooking calls resolveSessionPrice as a pre-accept check and discards the value; onBatchBookingAccepted runs after the accept commits and independently re-reads coach_pricing via batchBookingPrice for any booking with agreed_price NULL. If a coach re-price commits between the accept transaction's read and the settlement's read, the booking is charged a price the accept never validated; if the pricing row is deleted in that window, the 'unpriced' backstop auto-declines a booking the coach just accepted. The agreed-price lock is absent exactly where the fallback applies, and neither read takes a lock on the pricing row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "BookingBatchService.acceptOneBooking / PaymentLifecycleService.batchBookingPrice",
+      "title": "Batch NULL-price booking: accept-time price validation and settle-time price are two unlocked reads",
+      "verification": "Check whether onBatchBookingAccepted is only reachable for batches whose bookings all carry agreed_price (i.e., whether legacy NULL rows can appear in a batch at all)."
+    },
+    {
+      "category": "concurrency",
+      "description": "The settle loop's catch assumes the per-booking settle transaction rolled back. If that transaction committed but the call still threw (commit acknowledgement lost on the connection, or any failure surfacing after commit inside the try), the booking is CONFIRMED and its row CAPTURED \u2014 yet declineBatchBookingAfterChargeTransactional does loadOrCreate plus an unconditional save, rewriting the CAPTURED row to REFUNDED_TO_CREDIT, firing PAYMENT_FAILED at a CONFIRMED booking (rejected and merely reported), and enqueuing a full refund. Net result: the session is delivered, the money is returned, and the row drops out of revenue (only CAPTURED counts). There is no conditional UPDATE ... WHERE status = 'CAPTURE_PENDING' with an affected-row check.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "declineBatchBookingAfterChargeTransactional",
+      "title": "declineBatchBookingAfterCharge overwrites the payment row with no status guard \u2014 a committed CAPTURED settle can be rewritten to REFUNDED_TO_CREDIT and refunded",
+      "verification": "Confirm settleOneCreditBooking and the PAYMENT_CAPTURED transition share one transaction, and whether transitionOrReport's rejection of PAYMENT_FAILED from CONFIRMED rolls the REQUIRES_NEW decline back or only logs."
+    },
+    {
+      "category": "concurrency",
+      "description": "BatchPaymentQuoteService.quote and createBatch read coach_pricing in separate transactions, and CreateBookingRequest carries no expected-price field, so a coach re-price committing between the preview and the request locks (and at accept charges) a figure the parent never reviewed \u2014 the PR's own claim that 'the figure a parent reviews cannot drift from the one they are charged' is only true within one transaction. The single-booking comment says the read happens 'under the coach row lock taken above', but that is a coach_profiles row lock; an UPDATE on coach_pricing is only serialized by it if the re-pricing endpoint also locks the coach_profiles row.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingBatchService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "BookingBatchService.createBatch / BookingService.createBookingRequest",
+      "title": "No serialization or client echo between the price the parent reviews and the price locked at request",
+      "verification": "Check whether the coach re-pricing path takes the coach_profiles FOR UPDATE lock, and whether any request DTO echoes the quoted price for server-side comparison."
+    },
+    {
+      "category": "concurrency",
+      "description": "The settled-elsewhere branch refunds the batch share as a BOOKING_REFUND keyed by bookingId, relying on uq_pcl_booking_refund for idempotency, while the booking itself remains CONFIRMED (its row was settled by another path). If the parent later cancels that confirmed booking, the cancellation path inserts another BOOKING_REFUND for the same bookingId: the unique constraint either silently deduplicates it (the parent loses a refund they are owed) or, if the outbox drain treats the violation as a retryable failure, that delivery loops forever. Two legitimate refund operations share one idempotency key.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "refundBatchShareToCredit / enqueueBookingRefund",
+      "title": "uq_pcl_booking_refund conflates a batch-share refund with a later legitimate cancellation refund for the same booking",
+      "verification": "Check the columns of uq_pcl_booking_refund on parent_credit_ledger and how the outbox drain handles a unique-constraint violation (skip-as-done vs retry)."
+    },
+    {
+      "category": "logic",
+      "description": "The non-pack duplicate gets agreedPrice = currentCoachPrice(original.getCoachId()) rather than original.getAgreedPrice(). If the duplicate (a reschedule proposal) can proceed to accept and charge without a fresh parent approval of the new figure, a coach can raise their price and then duplicate an existing \u20ac50 booking to charge \u20ac80 \u2014 the price lock is defeated on the reschedule path by the party it was meant to constrain. Additionally, currentCoachPrice can return NULL here (coach unpriced at duplication), producing a post-V192 NULL row that later charges whatever the coach's price becomes (finding 1).",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "BookingDuplicationService (duplicate creation)",
+      "title": "Duplication locks the coach's current price, not the original booking's agreed price",
+      "verification": "Confirm whether the duplicated booking requires a new parent acceptance of its price before the coach can accept and trigger settlement."
+    },
+    {
+      "category": "database",
+      "description": "Old instances still settle via coachPricingRepository.findByCoachId(...).orElse(ZERO), ignoring agreed_price. During any mixed-version window, a booking created on a new instance with a locked price but accepted/settled on an old instance is charged the coach's current price (or zero with no pricing row), reopening the fixed bug. Correct today only because the migration notes say prod is not live; the pattern (first write shipped with the widening, new-reader/old-reader divergence) will not survive rolling deploys once it is.",
+      "file": "src/main/resources/db/migration/V192__booking_agreed_price.sql",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "V192 / old PaymentLifecycleService settle path",
+      "title": "Mixed-version rolling deploy settles agreed-price bookings at the current price again",
+      "verification": "Confirm deployment is still big-bang/non-live when this ships; otherwise the settle fallback needs to ship one release before any instance writes agreed_price."
+    },
+    {
+      "category": "database",
+      "description": "V192 drops chk_bp_status and re-adds it as 'V138's 5 values + REFUNDED_TO_CREDIT'. The enum class notes the constraint has been widened piecemeal (V62, V94, V124); if any migration or concurrent branch between V138 and V192 added a status, V192 silently removes it \u2014 existing rows then fail the validating scan at deploy, or post-merge writes hit a 23514 CHECK violation that, on a webhook/outbox path, loops the delivery. The MERGE NOTE acknowledges the risk but nothing enforces the re-union.",
+      "file": "src/main/resources/db/migration/V192__booking_agreed_price.sql",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "chk_bp_status DROP CONSTRAINT / ADD CONSTRAINT",
+      "title": "chk_bp_status rebuilt as a hardcoded union can drop a value added between V138 and V192",
+      "verification": "Grep migrations V139\u2013V191 for chk_bp_status and diff the live constraint's value list against the six literals in V192 before merging."
+    }
+  ],
+  "input_rev": "e60141fc480a55e75e8a5e45bace201999da07f7",
+  "model": null
+}

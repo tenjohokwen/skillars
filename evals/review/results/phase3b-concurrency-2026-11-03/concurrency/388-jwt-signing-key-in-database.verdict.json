@@ -1,0 +1,45 @@
+{
+  "arm": "concurrency",
+  "case": "388-jwt-signing-key-in-database",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "SecretService.fetchSecret does call findOneByVersionAndBusId with no status filter (unlike fetchLatestActiveSecretAsBytes, which filters on EntityStatus.ACTIVE), so the in-file trigger holds; but the consequence depends on JwtConfiguration/JwtSecretService caching the secret for the process lifetime and on SecurityAdviceFilter/JwtUtil never re-reading or checking status \u2014 none of that code is shown, and the finding's own verification step requires it.",
+      "reported_id": "R2"
+    }
+  ],
+  "judge_cost_usd": 0.24614999999999998,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect (derivePassword = reversed busId+version constants, BasicTextEncryptor) with the same consequence: anyone with table/backup read access can decrypt the HS512 key and forge JWTs.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses that fetchSecret never calls getSecretBytes, making the bootstrap runner's fail-at-startup guard for undecryptable rows unreachable.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] SecretService.fetchSecret does call findOneByVersionAndBusId with no status filter (unlike fetchLatestActiveSecretAsBytes, which filters on EntityStatus.ACTIVE), so the in-file trigger holds; but the consequence depends on JwtConfiguration/JwtSecretService caching the secret for the process lifetime and on SecurityAdviceFilter/JwtUtil never re-reading or checking status \u2014 none of that code is shown, and the finding's own verification step requires it. | pass-1: Concrete trigger: fetchSecret filters only (version, busId) and the entity is cached for process lifetime, so setting the sec row INACTIVE/BLOCKED never stops signing/verification \u2014 a real revocation defect not in the key.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The reporter admits fetchLatestActiveSecretAsBytes has no callers in src/main/java, so the cross-instance divergence scenario has no concrete trigger today.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,128 @@
+{
+  "arm": "concurrency",
+  "case": "307-player-ownership-guards",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "The idempotency key is \"sub-create-\" + stripeCustomerId + priceId; the Stripe customer is per parent user (stripeCustomerRepository.findById(callerUserId)) and the playerId is not in the key. If a parent subscribes child A to PRO/yearly and then child B to the same tier within Stripe's 24h idempotency window, the second Subscription.create replays child A's response: no second subscription or charge is created, yet persistPlayerSubscription stores child A's stripeSubscriptionId on child B's row and marks it ACTIVE. Child B gets paid-tier access with no billing, and two payment.player_subscriptions rows now share one stripe_subscription_id (no unique constraint on that column), so findByStripeSubscriptionId in every webhook handler throws IncorrectResultSizeDataAccessException and that subscription's webhooks fail and are redelivered forever. The same key also wrongly replays a dead subscription on a coach who cancels and re-subscribes to the same tier within 24h.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "createSubscription / SubscriptionService.subscribePlayer",
+      "title": "Stripe idempotency key collides across two children of the same parent, replaying the first subscription for the second",
+      "verification": "Confirm payment.stripe_customers keys one customer per parent user and that no unique index exists on player_subscriptions.stripe_subscription_id; reproduce by two subscribePlayer calls with different playerId, same tier/interval, same parent."
+    },
+    {
+      "category": "concurrency",
+      "description": "The batch transaction loads PAST_DUE subscriptions and commits (releasing any locks); each per-item transactionTemplate block then calls save() on the detached entity with no re-read, no conditional UPDATE ... WHERE status='PAST_DUE', and no @Version on PaymentCoachSubscription/PaymentPlayerSubscription. If the coach pays and a customer.subscription.updated webhook commits status=ACTIVE and a new currentPeriodEnd between the batch load and that item's save, the merge writes every column from the stale snapshot: status back to CANCELLED, tier to SCOUT, the webhook's periodEnd lost. Stripe keeps billing the live subscription while the local tier is SCOUT, and since handleSubscriptionUpdated never syncs tier, nothing ever restores it \u2014 the coach pays for a tier they no longer have.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "checkPastDueGracePeriod",
+      "title": "checkPastDueGracePeriod saves a detached subscription loaded in an earlier transaction, reverting a concurrent payment-recovery webhook",
+      "verification": "Confirm PaymentCoachSubscription/PaymentPlayerSubscription have no @Version (they do not in the current source) and that no code path re-derives tier from Stripe."
+    },
+    {
+      "category": "concurrency",
+      "description": "findPendingForScheduler's FOR UPDATE SKIP LOCKED locks are released when the batch-load transaction commits; the per-item transaction never re-reads the change row. If the coach upgrades between batch load and item processing (changeCoachTier bills the new tier at Stripe, persistCoachTierUpgrade voids the pending downgrade and commits), the scheduler's item transaction still applies the stale detached change: tier is set to the old downgrade target and syncMarketplaceTier propagates it, while saving the detached change merges voided_at back to NULL. The inverse interleaving is also broken: voidPendingCoachDowngrade uses FOR UPDATE SKIP LOCKED, so while the scheduler's batch load holds the row lock the void silently finds nothing and the upgrade proceeds un-voided \u2014 either way Stripe bills the upgraded price while the local and marketplace tier show the downgrade. The player loop has the identical shape.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "applyPendingChanges / voidPendingCoachDowngrade",
+      "title": "applyPendingChanges applies a scheduled downgrade that a concurrent tier upgrade already voided, and resets its voided_at",
+      "verification": "Confirm the per-item lambda uses the captured `change` object without re-querying applied/voided_at inside its own transaction (SubscriptionService.java:504-516, 530-547)."
+    },
+    {
+      "category": "concurrency",
+      "description": "stripeClient.createSubscription runs outside any transaction and charges the parent immediately; persistPlayerSubscription then commits the stripeSubscriptionId in a separate transaction. If that commit fails (instance crash between the Stripe return and the commit, connection loss, serialization failure), the live Stripe subscription keeps billing while the local row (created earlier by findOrCreatePlayerSubscription in its own committed transaction, default status ACTIVE but stripeSubscriptionId null) records nothing. Unlike the coach path, nothing reconciles players: reconcileStripeSubscriptions resolves orphans via resolveCoachAndAlertIfOrphaned only, and every webhook for the orphan misses findByStripeSubscriptionId \u2014 the parent is billed indefinitely and invisibly. The coach path has the same window but at least gets a daily alert-only sweep.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "subscribePlayer / persistPlayerSubscription",
+      "title": "subscribePlayer charges Stripe before the local persist with no healing if the persist fails",
+      "verification": "Confirm StripeWebhookService.resolveCoachAndAlertIfOrphaned has no player-side equivalent and that no webhook handler creates a player subscription row for an unknown stripeSubscriptionId."
+    },
+    {
+      "category": "concurrency",
+      "description": "subscribeCoach/subscribePlayer call Stripe first and persist the stripeSubscriptionId afterwards in a separate transaction. Stripe can emit customer.subscription.updated or invoice.payment_failed for the new subscription (e.g. first charge declined) before persistCoachSubscription/persistPlayerSubscription commits; on another instance handleSubscriptionUpdated/handleInvoicePaymentFailed do findByStripeSubscriptionId(...).ifPresent(...), find nothing, and the delivery completes successfully. The PAST_DUE transition is lost: the local row then commits with the status from the create response, pastDueSince is never set, and checkPastDueGracePeriod never downgrades \u2014 the account keeps its paid tier without paying until Stripe eventually sends subscription.deleted weeks later.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "handleSubscriptionWebhook / handleSubscriptionUpdated",
+      "title": "Subscription webhooks arriving before the local persist commits are acknowledged and permanently dropped",
+      "verification": "Check StripeWebhookService: whether an event whose subscription id matches no local row is persisted for retry or acked with 2xx; if there is a webhook event outbox with retries, this window closes and the finding is void."
+    },
+    {
+      "category": "concurrency",
+      "description": "The handler copies status/periodEnd/cancelAtPeriodEnd from the event payload without comparing the Stripe event timestamp against the row's state. With webhooks arriving in any order and more than once (as this system assumes), a customer.subscription.updated carrying status=active that was emitted before a payment failure can be delivered after invoice.payment_failed has set PAST_DUE: the row flips back to ACTIVE while pastDueSince stays set. checkPastDueGracePeriod filters on status='PAST_DUE', so the grace-period downgrade never fires and the account keeps its tier unpaid until subscription.deleted arrives.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "handleSubscriptionUpdated",
+      "title": "handleSubscriptionUpdated applies redelivered/out-of-order webhooks with no ordering guard, reviving a PAST_DUE subscription",
+      "verification": "Confirm the Stripe webhook dispatcher does not already dedupe/order events by event.created before calling handleSubscriptionWebhook."
+    },
+    {
+      "category": "concurrency",
+      "description": "homework_completions is development data erased by GdprErasureService (group 3, homeworkCompletionRepository.deleteAllByPlayerId), and the codebase's own design (DevelopmentDataErasureGuard, V151) requires every writer to take the player_profiles row lock so erasure either sees the marker or deletes what the writer wrote. markComplete takes no lock and never checks developmentDataErasedAt: if its INSERT flushes while the erasure transaction's DELETE has already run (READ COMMITTED \u2014 the delete cannot see the uncommitted insert), both commit and the completion row survives the erasure. Worse, since erasure never deletes homework_assignments, the parent can call markComplete at any time after the erasure committed and create brand-new development data for an erased child, with the assignment FK still satisfied.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R7",
+      "severity": "high",
+      "symbol": "markComplete",
+      "title": "markComplete inserts a homework completion without the erasure guard, so child data survives or follows a GDPR erasure",
+      "verification": "Confirm GdprErasureService deletes homework_completions but not homework_assignments (grep shows no homeworkAssignmentRepository call in it), and that no erasure check exists anywhere on the markComplete call path."
+    },
+    {
+      "category": "database",
+      "description": "Two concurrent markComplete requests both pass existsByAssignmentId before either commits; the second's saveAndFlush blocks on uq_homework_completion and throws DataIntegrityViolationException when the first commits. The catch is inside the same @Transactional method, but Hibernate has already marked the session rollback-only (and PostgreSQL has aborted the transaction), so the proxy's commit throws UnexpectedRollbackException and the parent gets a 500 for an operation that is supposed to be idempotent. handleBookingCompleted in the same class deliberately places the identical catch outside the per-drill transaction for exactly this reason.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "markComplete",
+      "title": "markComplete swallows the duplicate-key exception inside its own transaction, turning an idempotent double-tap into a 500",
+      "verification": "Integration test: two concurrent completions of one assignment; the loser should surface UnexpectedRollbackException at the controller."
+    },
+    {
+      "category": "concurrency",
+      "description": "BookingCompletedEvent is published via the in-memory ApplicationEventPublisher inside the booking-completion transaction (BookingCompletionService:244/374/509, QuickCompleteTimeoutService:67), not through the durable outbox. The listener runs AFTER_COMMIT on the taskExecutor: if the instance restarts, crashes, or the executor queue is dropped on shutdown between the booking's COMPLETE commit and the listener's per-drill inserts, the homework assignments (and the downstream HomeworkAssignedEvent/timeline entry) are never created, and no sweeper re-derives them from session_completion_data's homeworkDrillIds. The booking is COMPLETED, so nothing re-fires the event.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "handleBookingCompleted",
+      "title": "Homework assignment rides a non-durable AFTER_COMMIT @Async event; a restart in the window loses it permanently",
+      "verification": "Confirm there is no outbox/replay mechanism republishing BookingCompletedEvent after restart and no scheduled job that backfills homework_assignments from session_completion_data."
+    },
+    {
+      "category": "concurrency",
+      "description": "subscribeToEvents loads the video (state read at T0) and only then does VideoSseService.subscribe add the emitter to the emitters map (T1). If a state transition commits between T0 and T1, its AFTER_COMMIT onStatusChanged push iterates the emitter list (or removes it entirely for a terminal state) before the new emitter is added: the client receives only the stale initial status and no follow-up. For a terminal transition (e.g. PROCESSING\u2192READY) the client shows the old state for the full 5-minute SSE timeout; subscribe never re-reads the state after registration to close the gap.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "subscribeToEvents / VideoSseService.subscribe",
+      "title": "SSE subscribe reads video state before registering the emitter, so a transition in the gap is never delivered",
+      "verification": "Confirm no re-check of the DB state occurs after emitters.computeIfAbsent(...).add(emitter) in VideoSseService.subscribe (lines 35-48)."
+    },
+    {
+      "category": "logic",
+      "description": "For a coach-owned video (ownerId is a coach-profile UUID string), the NumberFormatException branch falls back to ownerId.equals(securityUtil.getCurrentUserName()). getCurrentUserName() returns UserDetails.getUsername(), which VideoAccessGuard's own class Javadoc documents as the email that 'does NOT match either ownerId format'. The comparison is therefore always false: a coach can never subscribe to their own upload's SSE events or poll /status, getting OperationNotAllowedException on every attempt, while VideoAccessGuard.isOwner resolves the same check correctly via coachProfileService.getCoachIdByUserId. Fail-closed, so no access leak \u2014 but the owner-facing status endpoints are dead for all coach videos.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R11",
+      "severity": "medium",
+      "symbol": "isCurrentUserOwner",
+      "title": "VideoEventResource coach-owner check compares the coach-profile UUID to the username (email), denying coaches their own videos",
+      "verification": "Confirm Principal.getUsername() is the email (JWT subject) and that no other code path authorizes coaches on these two endpoints."
+    },
+    {
+      "category": "concurrency",
+      "description": "getCoachSubscription and getPlayerSubscription (GET endpoints) create the row on first access. Two concurrent first requests both see no row and both insert; uq_pcs_coach_id/uq_pps_player_id rejects the second with an uncaught DataIntegrityViolationException, returning a 500 from a read endpoint. In subscribeCoach/subscribePlayer the same helper runs outside any transaction (the save commits via the repository's own transaction), so the losing request fails before reaching Stripe \u2014 annoying but not money-moving.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "findOrCreateCoachSubscription / findOrCreatePlayerSubscription",
+      "title": "find-or-create subscription rows race on first concurrent reads, surfacing an uncaught unique violation",
+      "verification": "Confirm no catch/retry wraps these saves and that the GET controllers surface DataIntegrityViolationException as 500."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}

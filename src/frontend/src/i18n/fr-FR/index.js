@@ -332,9 +332,9 @@ export default {
       step3SessionDurationMinutes: '{minutes} minutes',
       step3SessionDurationHelper:
         'Chaque créneau réservable de votre calendrier aura cette durée. Laissez la valeur par défaut si vous hésitez.',
-      step3SessionPacks: 'Packs de séances (facultatif)',
+      step3SessionPacks: 'Pack de séances (facultatif)',
       step3PackHelper:
-        'Facultatif : proposez des forfaits multi-séances à prix réduit. Les familles peuvent toujours réserver des séances à l’unité à votre tarif par séance.',
+        'Facultatif : proposez un forfait multi-séances à prix réduit. C’est le pack que les familles peuvent acheter depuis votre profil, et la même offre que vous gérez dans Mon offre de pack de séances. Les familles peuvent toujours réserver des séances à l’unité à votre tarif par séance.',
       step3PackEmpty: 'Aucun pack ajouté pour le moment.',
       step3AddPack: 'Ajouter un pack',
       step3PackSessions: 'Séances',
@@ -342,9 +342,14 @@ export default {
       step3PackLabel: 'Libellé',
       step3RemovePack: 'Supprimer le pack',
       step3PackInvalid:
-        'Chaque pack de séances doit avoir un nombre de séances et un prix supérieurs à 0, ou supprimez la ligne.',
-      step3PackDuplicateSessionCount:
-        'Deux packs ou plus ont le même nombre de séances — chaque pack doit avoir un nombre de séances unique.',
+        'Le pack de séances doit avoir un nombre de séances et un prix, ou supprimez-le.',
+      // skillars-deferred-168: the pack becomes the coach's purchasable tier, so its bounds are the tier's.
+      step3PackSessionCountError: 'Le nombre de séances doit être un nombre entier de 1 à 100.',
+      step3PackPriceError:
+        'Le prix du pack doit être compris entre 0,01 et 50 000, avec au plus 2 décimales.',
+      step3PackPerSessionError:
+        'Chaque séance du pack doit coûter au moins 0,01. Réduisez le nombre de séances ou augmentez le prix.',
+      step3PackLabelTooLong: 'Le libellé du pack peut contenir au plus 200 caractères.',
       step4Title: 'Disponibilité',
       step4Short: 'Disponibilité',
       step4AvailabilityWindows: 'Créneaux de disponibilité',

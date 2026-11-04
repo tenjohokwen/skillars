@@ -1,0 +1,108 @@
+{
+  "arm": "control",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "checkLimited runs inside AuthService.login's transaction, so the connection is already checked out when claim() starts retrying pg_try_advisory_xact_lock every 50ms for up to CLAIM_WAIT (2s). An unauthenticated attacker can send a steady stream of parallel POST /api/auth/login requests with the same (login, ip). One request holds the lock through its bcrypt check while every other request sleeps in Thread.sleep and keeps its connection. That can occupy the whole Hikari pool and starve every other endpoint. This is the exact hazard LoginAttemptRepository.tryAcquireIdentifierLock's Javadoc says the TRY lock avoids ('a burst \u2026 could drain the pool'), and AuthService.login's comment says a concurrent attempt is 'refused with 429 instead of queued'. The loop reintroduces queuing.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "LoginRateLimiter.claim / checkLimited",
+      "title": "Login lock wait loop holds a pooled DB connection for up to 2s per request, so a same-key burst can use up the connection pool",
+      "verification": "Load test: set the pool size to N, send more than N concurrent wrong-password logins for one email from one IP, and call an unrelated endpoint at the same time; it should block or time out on connection acquisition."
+    },
+    {
+      "category": "logic",
+      "description": "registerCoach/registerParent/registerPlayer call user.setLogin(req.email()) and user.setEmail(req.email()) without normalising case, and User.setLogin does not lower-case either. AuthService.login does userRepository.findOneByLogin(email.toLowerCase()). The schema has no citext or lower() index, so an account registered as 'Alice@Example.com' is never found: every login returns 401 'Invalid credentials' and records a rate-limit failure. Because the duplicate-email check compares the exact string, a second account for 'alice@example.com' can also be registered.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "CoachRegistrationService.registerCoach (same in PlayerRegistrationService.registerPlayer, ParentRegistrationService.registerParent)",
+      "title": "Coach/Player registration stores the login with its original case, but login looks it up lower-cased, so those users can never sign in",
+      "verification": "Register a coach with a mixed-case email, verify it, then call POST /api/auth/login with the same email. Also confirm the user.login column is plain varchar."
+    },
+    {
+      "category": "logic",
+      "description": "registerAccount sets userDTO.setLogin(userDTO.getEmail()) and toUser copies it into user.login unchanged, while user.email is lower-cased. A user who registers with 'Bob@X.com' gets login='Bob@X.com'. AuthService.login looks up findOneByLogin('bob@x.com'), so the user can never authenticate. The duplicate check (findUserByEmailOrLogin with lower-cased values) also misses the mixed-case login.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.registerAccount / toUser",
+      "title": "Legacy registerAccount stores the login as the raw-case email while lower-casing the email field",
+      "verification": "Register via POST /v1/account/register with a mixed-case email, activate it, then try POST /api/auth/login."
+    },
+    {
+      "category": "database",
+      "description": "User ids are app-assigned @Tsid, so userRepository.save(user) only queues the INSERT. ParentRegistrationService's own comment explains that a constraint violation then surfaces at commit, outside the try/catch. Two concurrent registrations with the same email can both pass the findOneByEmail check, or one can reuse an existing phone (user_phone_key). The violation then escapes as a raw DataIntegrityViolationException at commit instead of security.emailInUse/phoneInUse. A phone collision is never mapped to phoneInUse for coaches or players at all.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/PlayerRegistrationService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "PlayerRegistrationService.registerPlayer, CoachRegistrationService.registerCoach",
+      "title": "Coach/Player registration uses save() instead of saveAndFlush(), so the duplicate-email/phone catch never fires",
+      "verification": "Register two coaches or players with different emails but the same phone (or race two identical emails). Observe the generic 409/500 instead of the mapped registration error."
+    },
+    {
+      "category": "logic",
+      "description": "When a used token is presented within 30s of rotation, the code picks findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId). That is the newest live token for the whole user, not the rotated token's own successor. If the user is logged in on a second device whose token is newer, that device's token gets rotated and marked used. When the second device next refreshes (outside the grace window), its cookie is a used token, so 'Token reuse detected \u2014 all sessions revoked' logs the user out everywhere. The same branch also gives anyone replaying a stolen just-rotated token a fresh session.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "AuthService.refresh (grace-window branch)",
+      "title": "Refresh grace window hands the caller another device's live refresh token, which later triggers revoking every session",
+      "verification": "Log in on device A, then on device B. Refresh A twice within 30s using A's old cookie, wait more than 30s, then refresh B. Expect a 401 and all sessions revoked."
+    },
+    {
+      "category": "edge-case",
+      "description": "ChangePasswordDto.dob has only @Past, not @NotNull. If the email/login match a user, prepareForPasswordReset calls changePasswordDto.getDob().equals(...) and throws an NPE. If they don't match, the orElseThrow builds Map.of(..., \"dob\", null), and Map.of rejects nulls with an NPE. Either way the client gets a 500 instead of PWD_RESET_REJECTED. The two paths also fail differently, which reveals whether the email/login pair exists.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "AccountManagementFacade.sendPasswordResetMail / PasswordResetService.prepareForPasswordReset",
+      "title": "Password-reset init throws NullPointerException when dob is omitted",
+      "verification": "POST /v1/account/reset_password/init with valid loginId/currentEmail and no dob."
+    },
+    {
+      "category": "security",
+      "description": "generateActivationKey returns randomNumeric(10), about 33 bits. POST /v1/account/activate (UserRegistrationService.activateUser \u2192 findInactivatedByActivationKey) has no @RateLimited, and the key has no expiry. Every guess is tested against all pending accounts at once. An attacker who registers accounts under other people's email addresses, or who just sweeps the key space, can activate accounts without access to the mailbox. The reset key has the same 10-digit space, but it at least has an expiry and a per-IP limit.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "RandomUtil.generateActivationKey / AccountResource.activateAccount",
+      "title": "Account activation key is a 10-digit numeric code checked by an unthrottled, non-expiring endpoint",
+      "verification": "Check whether any global or filter-level rate limit covers /v1/account/activate (AppEndpoints / RateLimitingService config), and whether the activation key has an expiry anywhere."
+    },
+    {
+      "category": "security",
+      "description": "When findOneByLogin returns empty, the method records a failure and throws immediately. For an existing login it first runs passwordEncoder.matches (bcrypt cost 10, about 100ms). The difference in response time lets an attacker enumerate registered emails even though both cases return the same 'Invalid credentials' message.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "AuthService.login",
+      "title": "Unknown-login path skips bcrypt, so response time shows which emails have accounts",
+      "verification": "Time POST /api/auth/login for a known and an unknown email; expect a gap of roughly 100ms."
+    },
+    {
+      "category": "security",
+      "description": "The per-OTP bucket is tryConsume(..., \"parent_otp_verify\", 10, 10, MINUTES), while the Coach and Player services, which the class otherwise mirrors, use 5. Each resend issues a new OTP id and so a fresh bucket, which doubles the brute-force budget against the 6-digit parent OTP compared with the other roles.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "ParentRegistrationService.verifyPhone",
+      "title": "Parent OTP verification allows twice the guess budget of coach/player",
+      "verification": "Confirm whether 10 is intentional (no comment says so); compare with the Coach/Player values at the same call site."
+    },
+    {
+      "category": "security",
+      "description": "The identifier is SHA-256(login|full IP string), and there is no per-account cap. An attacker on an IPv6 /64 can rotate source addresses and get a fresh 5-attempt budget on each one, so a single host can brute-force one account's password without limit. Also, non-canonical IPv6 text forms of the same address (for example zero-compressed vs expanded) hash to different keys.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "LoginRateLimiter.identifier / canonicaliseIp",
+      "title": "Per-(login, IP) key with exact-address IPv6 matching lets one host bypass the login limit",
+      "verification": "Check what getRemoteAddr returns behind Traefik/RemoteIpValve for IPv6 clients, and whether any per-account cap exists elsewhere."
+    }
+  ],
+  "input_rev": "fa62da9dc634130b1031b01e4ddc0cda668c2cb1",
+  "model": null
+}

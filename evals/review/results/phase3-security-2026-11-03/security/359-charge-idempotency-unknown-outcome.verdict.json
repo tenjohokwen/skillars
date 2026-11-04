@@ -1,0 +1,103 @@
+{
+  "arm": "security",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "checks": [
+    {
+      "check": "refuted",
+      "note": "The verification caveat fails: stripe-java's Webhook.Signature.verifyHeader computes the expected HMAC via SecretKeySpec, which throws IllegalArgumentException(\"Empty key\") for a blank secret; verifyHeader catches this and throws SignatureVerificationException, which StripeWebhookService.verifySignature converts to WebhookSignatureException. With a blank webhook-secret the platform endpoint therefore rejects every delivery (forged or genuine) rather than accepting HMAC(key=\"\")-signed events; the missing explicit blank check in processWebhook is only a consistency gap versus processConnectWebhook, not a forgery vulnerability.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "BatchPaymentQuoteService.quote does hardcode \"EUR\" (line 39), but the claimed mismatch depends on StripePaymentGateway.resolveCurrency() reading platform.payment.currency, and that gateway code is not shown, so whether the charge currency can differ cannot be settled from this file.",
+      "reported_id": "R6"
+    }
+  ],
+  "judge_cost_usd": 0.7520150000000001,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding describes the batch idempotency key colliding across two settlements; R1 only mentions the minute bucket blocking re-drive, a different consequence.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 (single path) and R2 (batch path) together describe exactly the all-StripeException-as-decline defect with the charged-but-declined consequence.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "Nothing reported mentions returning intent.getId() without checking PaymentIntent status.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding covers the missing compensation when persistPaymentSuccess fails after a successful capture on the single-booking path.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "partial",
+        "note": "R5 identifies the batch-level deduction committing in a different transaction than per-booking settles, but describes the opposite crash direction (deduction rolls back) and misses the stranded-credit and per-booking attribution consequences.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "Nothing reported about card shares below Stripe's minimum charge.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding about missing Stripe SDK connect/read timeouts or retry limits.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding about the subscribe double-click race creating two paid subscriptions.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F9",
+        "match": "full",
+        "note": "R4 describes the same Content-Length==-1 chunked bypass of the 1 MB cap on the unauthenticated webhook endpoint.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F10",
+        "match": "none",
+        "note": "No reported finding about persistCoachTierUpgrade/persistPlayerTierUpgrade silently dropping a paid proration upgrade when superseded.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check refuted] The verification caveat fails: stripe-java's Webhook.Signature.verifyHeader computes the expected HMAC via SecretKeySpec, which throws IllegalArgumentException(\"Empty key\") for a blank secret; verifyHeader catches this and throws SignatureVerificationException, which StripeWebhookService.verifySignature converts to WebhookSignatureException. With a blank webhook-secret the platform endpoint therefore rejects every delivery (forged or genuine) rather than accepting HMAC(key=\"\")-signed events; the missing explicit blank check in processWebhook is only a consistency gap versus processConnectWebhook, not a forgery vulnerability. | pass-1: Concrete trigger: webhook-secret defaults to blank, only the API key is validated at startup, and processWebhook passes the blank secret to constructEvent, letting anyone forge HMAC-signed events; the Connect path's explicit fail-closed check shows the gap is real.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] BatchPaymentQuoteService.quote does hardcode \"EUR\" (line 39), but the claimed mismatch depends on StripePaymentGateway.resolveCurrency() reading platform.payment.currency, and that gateway code is not shown, so whether the charge currency can differ cannot be settled from this file. | pass-1: Concrete trigger: quote() returns literal \"EUR\" while the charge uses platform.payment.currency, so any non-EUR configuration shows parents a quote in the wrong currency.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

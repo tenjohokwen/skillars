@@ -1,0 +1,48 @@
+{
+  "arm": "control",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The in-file math matches the finding: cutNet persists the reduced netAmount, so a second applyRefund dividing by the original parentPrice compounds (80\u219240\u219220), while the RELEASED branch would reverse 40 each time. But the finding's own verification caveat \u2014 that DisputeService/ChargeDisputeWebhookService can send a second refund against the same payout with the original price as denominator \u2014 depends on caller code not shown, as does whether enqueueReversal/getEffectiveNetAmount make the released path actually reach 0.",
+      "reported_id": "R4"
+    }
+  ],
+  "judge_cost_usd": 0.43339000000000005,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 describes the same deletion-and-re-enqueue of the zero-net NOTHING_CHARGED pack row, double allocation, and a later session skipped as PACK_FULLY_ALLOCATED; severity differs but defect and consequence are identical.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 covers the listener enqueueing a pack restore without an expiry check and R2 covers the missing packExpired computation/field in cancelBookingAsParent and its event; jointly they identify the full defect and its consequence.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] The in-file math matches the finding: cutNet persists the reduced netAmount, so a second applyRefund dividing by the original parentPrice compounds (80\u219240\u219220), while the RELEASED branch would reverse 40 each time. But the finding's own verification caveat \u2014 that DisputeService/ChargeDisputeWebhookService can send a second refund against the same payout with the original price as denominator \u2014 depends on caller code not shown, as does whether enqueueReversal/getEffectiveNetAmount make the released path actually reach 0. | pass-1: Concrete worked trigger: successive refunds divide the already-cut net by the original parentPrice, yielding a different coach outcome for unreleased vs released payouts (20 vs 0 in the stated example), contradicting the timing-invariance contract.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The over-reversal race only exists if CoachPayoutReversalHandler fails to re-cap against the current effective net, which the reporter explicitly has not read; the trigger is contingent on unexamined code.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

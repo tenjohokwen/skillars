@@ -1,0 +1,58 @@
+{
+  "arm": "control",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "A pack booking can take place after its pack expires (deductSession deliberately skips the expiry check). When the parent cancels such a booking with enough notice (or after the coach never started it), the listener always calls enqueuePackRestore, because neither cancelBookingAsParent nor BookingCancelledByParentEvent records whether the pack has expired. The session goes back into a pack that can no longer be booked, so the parent gets nothing back. Every other cancel path (coach, admin, coach no-show, pause) sends an expired pack to enqueueWalletRefund / allocateSessionRefund instead. As a result the parent loses the session's value, and the pack ledger never records the session as settled.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "RefundEnqueueListener.onBookingCancelledByParent",
+      "title": "Refund-eligible parent cancel on an expired pack restores a worthless session instead of refunding money",
+      "verification": "PackSessionService.deductSession says the policy is 'book within validity; session may take place later', and findActivePacks filters expiresAt > now, so the restored unit cannot be used. Compare BookingCancelledByCoachEvent.isWalletRefund/isPackRestore, which do check expiry."
+    },
+    {
+      "category": "logic",
+      "description": "cancelBookingAsCoach, recordNoShowCoach, cancelBookingAsAdmin and cancelDueToPause all look up the pack's expiresAt under the booking lock and pass packExpired in their events. cancelBookingAsParent does not, and BookingCancelledByParentEvent has no field for it. A captured, refund-eligible cancel of a booking on an expired pack is therefore treated as a pack restore. sessionPrice is also never set to the pack share, so even a corrected listener could not refund the right amount from this event.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "BookingService.cancelBookingAsParent / BookingCancelledByParentEvent",
+      "title": "cancelBookingAsParent never computes packExpired, so the parent-cancel event cannot route expired-pack refunds",
+      "verification": "Compare BookingService lines 1160-1227 with lines 1289-1310 (coach path), and check the event's fields."
+    },
+    {
+      "category": "database",
+      "description": "If a pack's per-session share rounds to 0.00 (amount_charged under one cent per session), allocatePackShare still calls recordPayoutAllocation (payoutSessionsAllocated++). enqueuePayout then writes a CANCELLED/NOTHING_CHARGED row with net 0. On UPHOLD_COACH, payInFull deletes that row because net <= 0 and calls enqueuePayout again, which allocates the pack a second time for the same booking. settledSessions then over-counts, so the pack's last-session remainder is taken early and a later real session can be refused as PACK_FULLY_ALLOCATED.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "CoachPayoutAdjustmentService.payInFull",
+      "title": "payInFull deletes a zero-net pack payout and re-allocates, settling the same pack session twice",
+      "verification": "Check whether a pack with amount_charged/session_count < 0.01 can exist (no DB check constraint), and that nothing un-records the payout allocation when the row is deleted (there is no releasePayoutAllocation)."
+    },
+    {
+      "category": "logic",
+      "description": "The coach's share is net \u00d7 refund / parentPrice, using row.getNetAmount(). Once a payout is cut by cutNet, a later refund is applied to the reduced net but still divided by the original price that DisputeService passes. Example: price 100, net 80, two 50 refunds. If the payout is unreleased, net goes 80 \u2192 40 \u2192 20, so the coach keeps 20 although the parent got everything back. If the payout is released, each reversal is 40 and the coach keeps 0. This breaks the class's promise of the same outcome regardless of timing.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "CoachPayoutAdjustmentService.applyRefund",
+      "title": "Successive partial refunds on an unreleased payout cut the coach less than on a released one",
+      "verification": "Confirm that more than one refund (for example a dispute PARTIAL_CREDIT plus a CHARGEBACK_LOST, or several disputes) can hit the same booking's payout. ChargeDisputeWebhookService passes the already-cut gross as the denominator, which partly hides this on that path."
+    },
+    {
+      "category": "concurrency",
+      "description": "For a RELEASED payout, each call caps the reversal at getEffectiveNetAmount() (net minus reversed_amount). reversed_amount only rises when CoachPayoutReversalHandler runs. If two refunds land before the outbox drains (for example a lost card dispute and an in-app dispute resolution), each enqueues up to the full remaining net, and together they can exceed what the coach was paid. A partially reversed row whose status becomes REVERSED or REVERSAL_FAILED also falls through to 'no coach-side action', so a later refund leaves the coach's remaining share with the coach.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "CoachPayoutAdjustmentService.applyRefund (RELEASED branch)",
+      "title": "Reversal cap ignores reversals that are queued but not yet processed",
+      "verification": "Read CoachPayoutReversalHandler to see whether it re-caps the amount against the current effective net, and which status it sets after a partial reversal."
+    }
+  ],
+  "input_rev": "dd2ec9c7cb2879b65b1d34d94fb75a69dfe2d5e4",
+  "model": null
+}

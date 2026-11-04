@@ -1,0 +1,98 @@
+{
+  "arm": "control",
+  "case": "333-cancel-emails-and-uncaptured-refunds",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "BookingStateMachine allows CANCEL_COACH from ACCEPTED, which is before payment is captured. cancelBookingAsCoach never checks whether payment was captured, and BookingCancelledByCoachEvent has no captured or refund-eligible flag. So when a coach cancels an ACCEPTED non-pack booking, RefundEnqueueListener unconditionally enqueues a BOOKING_REFUND of sessionPrice to the parent's wallet. The parent is credited for a session they never paid for. The parent and admin paths both whitelist CONFIRMED/UPCOMING to prevent exactly this.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "RefundEnqueueListener.onBookingCancelledByCoach / BookingService.cancelBookingAsCoach",
+      "title": "Coach cancellation of an unpaid ACCEPTED booking enqueues a full wallet refund for money never taken",
+      "verification": "Coach accepts a booking (status ACCEPTED, no booking_payments CAPTURED row), then calls cancelBookingAsCoach. A BOOKING_REFUND outbox row for the parent appears."
+    },
+    {
+      "category": "logic",
+      "description": "Pack sessions are only deducted at settle/capture (as the admin-cancel comment in this class says). onBookingCancelledByCoach still calls packSessionService.restoreSession for any pack booking whose pack has not expired, and the event's status can be ACCEPTED (pre-capture). The pack then gains an extra session. If the pack has expired, RefundEnqueueListener instead pays out the per-session price in wallet credit for a session that was never consumed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "CancellationRefundService.onBookingCancelledByCoach",
+      "title": "Coach cancellation of an unpaid pack booking restores a pack session that was never deducted (or refunds an expired pack session)",
+      "verification": "Confirm in PaymentLifecycleService that the pack deduction happens at capture. Then have a coach cancel an ACCEPTED pack booking and watch remaining sessions go up by one (or a refund row appear if the pack has expired)."
+    },
+    {
+      "category": "logic",
+      "description": "For non-pack bookings, the sessionPrice that RefundEnqueueListener refunds comes from coachPricingRepository's current per-session price. The booking_payments amount (creditDebited + stripeCharged) is not used. If the coach re-prices between capture and cancellation, the parent is over- or under-refunded. resolveAmountPaid's own Javadoc says the current price 'is wrong once the coach has re-priced', and it is used only on the admin path.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "BookingService.cancelBookingAsCoach / recordNoShowCoach / cancelBookingAsParent (resolveSessionPrice)",
+      "title": "Coach cancel / no-show / parent cancel refund the coach's current price, not the amount actually paid",
+      "verification": "Capture a booking at 50, change coach_pricing to 80, then have the coach cancel. The BOOKING_REFUND amount is 80."
+    },
+    {
+      "category": "edge-case",
+      "description": "resolveSessionPrice is called unconditionally before the transition. For a non-pack booking whose coach_pricing row is missing (or whose pack purchase row is missing), it throws ResourceNotFoundException. The coach then cannot cancel at all, even an unpaid ACCEPTED booking. recordNoShowCoach and cancelBookingAsParent have the same pre-transition dependency.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "BookingService.cancelBookingAsCoach",
+      "title": "Coach cancellation is blocked when the coach has no pricing row, even when nothing needs refunding",
+      "verification": "Delete the coach_pricing row for a coach that has an ACCEPTED booking, then call cancelBookingAsCoach. It returns 404 instead of cancelling."
+    },
+    {
+      "category": "logic",
+      "description": "EmailContentRenderer resolves templates as mails/<lowerCamel(name)>.html. mails/ has no bookingCancelledByParent.html, bookingCancelledByCoach.html, coachNoShow.html or playerNoShow.html, but BookingEmailListener enqueues all four. Every one of these notifications fails to render at send time (TemplateInputException) and is marked FAILED. The parent is never told the coach cancelled or no-showed, and the coach is never told of a parent cancellation or player no-show.",
+      "file": "src/main/resources/mails/",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "EmailTemplate.BOOKING_CANCELLED_BY_PARENT / BOOKING_CANCELLED_BY_COACH / COACH_NO_SHOW / PLAYER_NO_SHOW",
+      "title": "No Thymeleaf templates exist for BOOKING_CANCELLED_BY_PARENT, BOOKING_CANCELLED_BY_COACH, COACH_NO_SHOW, PLAYER_NO_SHOW",
+      "verification": "Trigger cancelBookingAsCoach and check the envelope_entity row for BOOKING_CANCELLED_BY_COACH. It should be FAILED with 'Error resolving template [bookingCancelledByCoach]'."
+    },
+    {
+      "category": "logic",
+      "description": "The renderer derives the template file from the enum name: PACK_PAUSED becomes 'packPaused'. The only matching file is mails/sessionPackPaused.html. Every pack-paused email that SessionPackEmailListener enqueues therefore fails to render, and parents are never told their pack was paused. COACH_VISIBILITY_REDUCED similarly has no coachVisibilityReduced.html.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "EmailTemplate.PACK_PAUSED",
+      "title": "PACK_PAUSED resolves to a non-existent template 'packPaused' (file is sessionPackPaused.html)",
+      "verification": "Pause a pack and inspect the envelope_entity row for PACK_PAUSED. Alternatively, confirm with Glob that mails/packPaused.html does not exist."
+    },
+    {
+      "category": "logic",
+      "description": "Unlike onBookingCancelledByAdmin, these handlers put only requestedStartTime and canonicalTimezone in the data map. There is no refundType, no refundAmount and no coach name. Whatever template is added cannot say whether a pack session was restored, credit was refunded, or nothing was charged. Given the refund logic above, it cannot be accurate in the unpaid ACCEPTED case either.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "BookingEmailListener.onBookingCancelledByCoach / onCoachNoShow",
+      "title": "Coach-cancel and no-show emails carry no refund information, so the parent can't tell what happened to their money",
+      "verification": "Inspect the data map in these two handlers, compared with onBookingCancelledByAdmin."
+    },
+    {
+      "category": "edge-case",
+      "description": "Every sibling handler skips null or blank addresses, but this one enqueues with event.getCoachEmail() unchecked. resolveCoachEmail returns \"\" when the coach profile is missing. That produces an outbox email row with an empty recipient, which fails at send time and pollutes the FAILED/retry queue.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "BookingEmailListener.onBookingCancelledDueToPause",
+      "title": "onBookingCancelledDueToPause has no blank-email guard",
+      "verification": "Check whether NotificationOutboxSupport.enqueueEmail rejects an empty address. If it does not, an envelope with an empty 'to' gets persisted."
+    },
+    {
+      "category": "edge-case",
+      "description": "When resolveAmountPaid finds neither a payment row nor a price, it returns BigDecimal.ZERO with refundEligible=true. isWalletRefund() is then true, so the parent receives 'You have been fully refunded: 0.00 has been credited'. A zero-value BOOKING_REFUND is also enqueued. The email misstates the refund while the real amount is still waiting for manual reconciliation.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "BookingEmailListener.onBookingCancelledByAdmin",
+      "title": "Admin cancellation email can claim 'fully refunded: 0.00' when the paid amount can't be resolved",
+      "verification": "Admin-cancel a CONFIRMED booking that has no booking_payments row and no coach_pricing row, then render the resulting email."
+    }
+  ],
+  "input_rev": "7a9508836b55c97e28b9bfb96fb985c16aff0573",
+  "model": null
+}

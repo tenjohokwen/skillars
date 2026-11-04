@@ -1,0 +1,147 @@
+{
+  "arm": "control",
+  "case": "337-subscription-entitlement-integrity",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "reconcileOneStripeSubscription returns early only on paymentCoachSubscriptionRepository.findByStripeSubscriptionId and never checks paymentPlayerSubscriptionRepository.findByStripeSubscriptionId (which exists \u2014 see handleSubscriptionUpdated), so live player subscriptions reach the coach-only resolveCoachAndAlertIfOrphaned chain. The caveat holds: StripeCustomer is keyed by user id and shared \u2014 subscribeCoach and subscribePlayer both load stripeCustomerRepository.findById(userId), with no guard against one user holding both roles.",
+      "reported_id": "R15"
+    }
+  ],
+  "judge_cost_usd": 1.03268,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R7 identifies pending changes surviving cancellation/grace expiry and applyPendingChanges re-granting a paid tier without a status check \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R6 identifies the default allow_incomplete behaviour plus unconditional tier persistence granting paid entitlement on a declined/incomplete first payment.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R14 covers resolvePlayerTierKey ignoring status and R6 explicitly names both CoachProfileService.getCoachSubscriptionTier and the quota reader as status-blind; jointly they cover F3.",
+        "reported_ids": [
+          "R6",
+          "R14"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 states downgrades only insert a change row and applyPendingChanges never calls Stripe, so billing stays at the old higher price \u2014 identical defect.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R10 identifies changeCoachTier/changePlayerTier allowing tier changes on PAST_DUE/CANCELLED rows with a lingering stripeSubscriptionId, same place and consequence.",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R2 covers both halves: grace expiry never cancels Stripe (continued billing) and re-subscribe on the CANCELLED row creates a second orphaned Stripe subscription.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R3 states pastDueSince is only set when null and never reset on recovery, so a later failure is cancelled with near-zero grace \u2014 identical.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "partial",
+        "note": "R13 covers only the missing event-ordering guard fragment; the CHECK-constraint violation/webhook retry loop for unmapped statuses and the missing invoice.paid handler are not reported.",
+        "reported_ids": [
+          "R13"
+        ]
+      },
+      {
+        "expected_id": "F9",
+        "match": "full",
+        "note": "R11 identifies entities loaded before the Stripe call being merged by @Transactional persist with no @Version, silently reverting concurrent webhook updates \u2014 same defect.",
+        "reported_ids": [
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F10",
+        "match": "full",
+        "note": "R4 identifies the sub-create-{customer}-{price} key replaying stale responses within 24h (plus the sibling-sharing variant), same root cause and consequence.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F11",
+        "match": "none",
+        "note": "No reported finding mentions CREATE_PRORATIONS deferring the upgrade charge to the next invoice or the upgrade-then-cancel escape.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F12",
+        "match": "none",
+        "note": "No reported finding covers the subscription.updated event arriving before persistCoachSubscription being acknowledged via the race-grace suppression and permanently lost; R12/R13 describe different races.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F13",
+        "match": "full",
+        "note": "R5 reproduces the unnormalised tier defect exactly: valueOf throws outside the PessimisticLockingFailureException catch, rollback after Stripe charge, and the player 'pro' fallback-quota case.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: locks released when the batch load commits, user upgrades (voiding the change) before the per-item apply, which still writes the stale toTier and merges voided_at back to null \u2014 a genuine concurrency defect distinct from F1.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: double-click creates two pending change rows, LIMIT 1 voids only one and SKIP LOCKED can void none, so a stale downgrade later applies \u2014 not in the key.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: two concurrent subscribes with different tiers (different idempotency keys) both pass the unlocked alreadyActive check, leaving an orphaned billing Stripe subscription \u2014 distinct from the sequential re-subscribe in F6.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] reconcileOneStripeSubscription returns early only on paymentCoachSubscriptionRepository.findByStripeSubscriptionId and never checks paymentPlayerSubscriptionRepository.findByStripeSubscriptionId (which exists \u2014 see handleSubscriptionUpdated), so live player subscriptions reach the coach-only resolveCoachAndAlertIfOrphaned chain. The caveat holds: StripeCustomer is keyed by user id and shared \u2014 subscribeCoach and subscribePlayer both load stripeCustomerRepository.findById(userId), with no guard against one user holding both roles. | pass-1: Concrete trigger: a user who is both coach and parent shares one StripeCustomer, so each live player subscription raises a recurring false SUBSCRIPTION_ORPHANED alert once the coach row ages past the grace window.",
+        "reported_id": "R15",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: two concurrent first requests both miss the find-then-insert, and the unique coach_id/player_id constraint turns one into an unhandled DataIntegrityViolationException.",
+        "reported_id": "R16",
+        "verdict": "real"
+      }
+    ]
+  }
+}

@@ -44,23 +44,28 @@ import static org.assertj.core.api.Assertions.assertThat;
  * via an uncaught {@code UnexpectedRollbackException} at commit).
  *
  * <p><strong>skillars-deferred-120 AC3 restores the advisor-ordering assertion below</strong> —
- * {@code UserAdminService.removeNotActivatedUsers} and {@code AuthCleanupService}'s two methods
- * legitimately stack both {@code @SchedulerLock} and {@code @Transactional} (none of the three has
- * the booking schedulers' batch-wide-shared-transaction shape: {@code UserAdminService} is
- * {@code NOT_SUPPORTED} around a loop that already isolates each delete in its own
- * {@code REQUIRES_NEW}, and both {@code AuthCleanupService} methods are single bulk statements), per
- * this class's own prior instruction to do exactly that rather than resurrect the absence-only
- * comment. {@link #authCleanupServicePurgeExpiredRefreshTokens_shedLockAdvisorIsOutsideTheTransactionAdvisor()}
- * exercises it against {@code AuthCleanupService.purgeExpiredRefreshTokens} (plain
- * {@code @Transactional}, the REQUIRED-propagation shape the original assertion below was written
- * for); {@link #userAdminServiceRemoveNotActivatedUsers_shedLockAdvisorIsOutsideTheTransactionAdvisor()}
- * covers the distinct {@code NOT_SUPPORTED}-propagation shape this class's own extensive Javadoc
- * argues is equally safe — added by code review 2026-09-17 (Patch #9) after an earlier draft
- * asserted "one representative is enough" while leaving that specific, at-length-argued
- * combination untested, which assertion (3) below (pointcut-matches-this-method) exists
- * specifically to guard. {@code AuthCleanupService.purgeOldLoginAttempts} is not given its own
- * test: it shares {@code purgeExpiredRefreshTokens}'s exact shape (plain {@code @Transactional},
- * same class, same {@code AsyncConfig}-wide advisor ordering) rather than a distinct one.
+ * {@code UserAdminService.removeNotActivatedUsers} and
+ * {@code AuthCleanupService.purgeOldLoginAttempts} legitimately stack both {@code @SchedulerLock} and
+ * {@code @Transactional} (neither has the booking schedulers' batch-wide-shared-transaction shape:
+ * {@code UserAdminService} is {@code NOT_SUPPORTED} around a loop that already isolates each delete in
+ * its own {@code REQUIRES_NEW}, and {@code purgeOldLoginAttempts} is a single bulk statement), per this
+ * class's own prior instruction to do exactly that rather than resurrect the absence-only comment.
+ * {@link #userAdminServiceRemoveNotActivatedUsers_shedLockAdvisorIsOutsideTheTransactionAdvisor()}
+ * covers the {@code NOT_SUPPORTED}-propagation shape this class's own extensive Javadoc argues is
+ * equally safe — added by code review 2026-09-17 (Patch #9) after an earlier draft asserted "one
+ * representative is enough" while leaving that specific, at-length-argued combination untested, which
+ * assertion (3) below (pointcut-matches-this-method) exists specifically to guard.
+ *
+ * <p><strong>skillars-deferred-167 AC9 changed what this class asserts about
+ * {@code AuthCleanupService.purgeExpiredRefreshTokens}.</strong> That method no longer stacks the two
+ * annotations: its {@code @Transactional} was removed so a lost deadlock could be caught, because
+ * {@code deleteExpiredTokens} is itself {@code @Modifying @Transactional} and a deadlocked DELETE would
+ * otherwise mark the shared transaction rollback-only and die at the outer commit regardless of any
+ * {@code try/catch}. It is therefore pinned by {@link #assertNotTransactional} via
+ * {@link #authCleanupServicePurgeExpiredRefreshTokens_isNotTransactional_soALostDeadlockCanBeCaught()},
+ * not by {@link #assertShedLockOutermost}. Do not restore {@code @Transactional} to it on the strength
+ * of its sibling's shape: {@code purgeOldLoginAttempts} keeps the stacked shape and is the one this
+ * class's stacked-annotation reasoning now refers to.
  *
  * <p>Reuses {@link AbstractIntegrationTest}'s context verbatim (no {@code @MockitoBean} /
  * {@code @TestPropertySource} / extra config) so the CI context count is unchanged.
@@ -152,37 +157,60 @@ class SchedulerLockTransactionOrderingIT extends AbstractIntegrationTest {
     }
 
     /**
-     * skillars-deferred-120 AC3 Finding 2 — restores the advisor-ordering assertion this class's own
-     * Javadoc instructed reintroducing "if a future scheduler legitimately needs to stack both
-     * annotations again". {@code purgeExpiredRefreshTokens} keeps its existing plain
-     * {@code @Transactional} alongside the new {@code @SchedulerLock} (safe here: a single bulk
-     * statement, not a batch-wide transaction one item's exception could roll back) — uses {@link
-     * #assertShedLockOutermost}'s three-assertion shape below (code review 2026-09-17, Patch #14:
-     * an earlier draft of this Javadoc pointed at
-     * {@code bookingExpiryScheduler_shedLockAdvisorIsOutsideTheTransactionAdvisor}, a method that no
-     * longer exists in this file — it was renamed to {@code
-     * bookingExpiryScheduler_isNotTransactional_soOneRacedBookingCannotRollBackTheBatch} by
-     * {@code skillars-deferred-118} and now uses {@link #assertNotTransactional}, not this helper).
+     * skillars-deferred-167 AC9 — this method USED to stack {@code @Transactional} with
+     * {@code @SchedulerLock} and was pinned by {@link #assertShedLockOutermost}. The transaction was
+     * removed deliberately, so the assertion flips to {@link #assertNotTransactional}: what matters now is
+     * that the transaction stays gone and the lock stays.
+     *
+     * <p>Why it had to go: {@code RefreshTokenRepository.deleteExpiredTokens} is itself
+     * {@code @Modifying @Transactional}, so under a transactional caller it joined that transaction, and a
+     * {@code DELETE} chosen as a PostgreSQL deadlock victim (40P01) marked the shared transaction
+     * rollback-only. The {@code try/catch} AC9 requires was therefore impossible to honour from inside the
+     * method — the body would catch the deadlock and then still die at the outer commit with
+     * {@code UnexpectedRollbackException}. With no transaction on the scheduled method, the repository
+     * method is its own boundary and the catch has nothing poisoned to commit.
+     *
+     * <p>{@code assertShedLockOutermost} stays in this class for the schedulers that legitimately stack
+     * both (see {@code userAdminServiceRemoveNotActivatedUsers_*}); it is not dead.
      */
     @Test
-    void authCleanupServicePurgeExpiredRefreshTokens_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
-        assertShedLockOutermost(authCleanupService, "purgeExpiredRefreshTokens");
+    void authCleanupServicePurgeExpiredRefreshTokens_isNotTransactional_soALostDeadlockCanBeCaught() {
+        assertNotTransactional(authCleanupService, "purgeExpiredRefreshTokens", """
+            AuthCleanupService.purgeExpiredRefreshTokens must NOT be @Transactional \
+            (skillars-deferred-167 AC9). deleteExpiredTokens is itself @Modifying @Transactional, so a \
+            transactional caller shares its transaction; a deadlocked DELETE then marks that transaction \
+            rollback-only and the method's own try/catch cannot contain it — the outer commit throws \
+            UnexpectedRollbackException instead. The repository method owns the boundary.""");
     }
 
     /**
-     * skillars-deferred-120 code review (2026-09-17, Patch #9) — the restored assertion above only
-     * covered {@code AuthCleanupService}'s plain {@code @Transactional} (REQUIRED) shape; this
-     * story's own Javadoc on {@code UserAdminService.removeNotActivatedUsers} argues at length that
-     * stacking {@code @SchedulerLock} with {@code @Transactional(propagation = NOT_SUPPORTED)} is
-     * equally safe, but left that distinct combination untested. Covers it directly rather than
-     * relying on "the advisor ordering is `AsyncConfig`-wide, not per-bean" as a substitute —
-     * {@link #assertShedLockOutermost}'s own assertion (3) exists specifically to catch
+     * skillars-deferred-120 code review (2026-09-17, Patch #9) — covers the
+     * {@code @Transactional(propagation = NOT_SUPPORTED)} shape, which {@code UserAdminService
+     * .removeNotActivatedUsers}'s own Javadoc argues at length is equally safe to stack with
+     * {@code @SchedulerLock} but which was left untested. Covered directly rather than by appeal to "the
+     * advisor ordering is {@code AsyncConfig}-wide, not per-bean", because
+     * {@link #assertShedLockOutermost}'s assertion (3) exists specifically to catch
      * {@code @Transactional}/{@code @SchedulerLock} moving to (or missing from) a particular method,
      * which a per-bean argument alone does not verify.
      */
     @Test
     void userAdminServiceRemoveNotActivatedUsers_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
         assertShedLockOutermost(userAdminService, "removeNotActivatedUsers");
+    }
+
+    /**
+     * skillars-deferred-167 AC9 left this gap and round 7 of that story's review found it: the plain
+     * {@code @Transactional} (REQUIRED) shape used to be pinned via
+     * {@code AuthCleanupService.purgeExpiredRefreshTokens}, and AC9 removed that method's
+     * {@code @Transactional} so a lost deadlock could be caught — taking the REQUIRED-propagation
+     * ordering guard with it, since the only other covered method is {@code NOT_SUPPORTED}.
+     * {@code purgeOldLoginAttempts} is the same class's remaining stacked method and keeps that shape, so
+     * the guard moves here rather than disappearing. Without it, a regression in the
+     * {@code AsyncConfig}-wide advisor ordering would be caught for one propagation and not the other.
+     */
+    @Test
+    void authCleanupServicePurgeOldLoginAttempts_shedLockAdvisorIsOutsideTheTransactionAdvisor() {
+        assertShedLockOutermost(authCleanupService, "purgeOldLoginAttempts");
     }
 
     /**

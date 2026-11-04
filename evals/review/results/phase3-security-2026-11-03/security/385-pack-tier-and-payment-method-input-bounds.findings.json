@@ -1,0 +1,58 @@
+{
+  "arm": "security",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "findings": [
+    {
+      "category": "security",
+      "description": "SavedPaymentMethodRequest.paymentMethodId is only @NotBlank and PurchaseSessionPackRequest.paymentMethodId has no constraint at all; neither enforces a pm_ prefix, charset, or length. Any parent/player/coach can POST /api/payment/save-payment-method (or /session-packs/purchase) with an arbitrary multi-kilobyte string, which is persisted verbatim into the unbounded varchar stripe_customers.stripe_payment_method_id (the sibling stripe_customer_id column has a 'cus_%' CHECK; this one has none) and into the durable payment-method-sync outbox payload. Downstream, StripeClient.updateSubscriptionDefaultPaymentMethod builds the Stripe idempotency key as \"sub-pm-\" + subscriptionId + \"-\" + paymentMethodId, so an id longer than ~200 chars exceeds Stripe's 255-char idempotency-key limit and the sync fails as a permanent InvalidRequestException the outbox never retries; every other consumer (pack charge, subscribe, invoice retry) sends the garbage to Stripe and fails.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/SavedPaymentMethodRequest.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "SavedPaymentMethodRequest.paymentMethodId / PurchaseSessionPackRequest.paymentMethodId",
+      "title": "paymentMethodId accepted and persisted with no length or format validation",
+      "verification": "Confirm Stripe's 255-char idempotency key limit applies in the pinned stripe-java 28.4.0, and check whether any servlet-level body/field limit otherwise bounds the string."
+    },
+    {
+      "category": "security",
+      "description": "POST /save-payment-method stores whatever id the client sends without calling Stripe to confirm the payment method is attached to the caller's customer (subscribeCoach's comment explicitly assumes the SetupIntent flow guaranteed attachment, but nothing enforces it). getSavedPaymentMethod then calls PaymentMethod.retrieve(id) with the platform secret key, which can fetch any payment method in the platform Stripe account. A user who obtains another customer's pm_ id (log leak, support tooling, client bug) saves it and reads back that card's brand, last4 and expiry month/year via GET /api/payment/payment-method.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "savePaymentMethod / SessionPackPaymentService.getSavedPaymentMethod",
+      "title": "Saved payment method never verified as attached to the caller's Stripe customer; GET /payment-method can read any pm in the platform account",
+      "verification": "Confirm stripe-java PaymentMethod.retrieve(id) returns payment methods attached to other customers in the same account (it does for the account-level secret key), and that no validator elsewhere checks pm ownership before savePaymentMethodAndScheduleSync."
+    },
+    {
+      "category": "edge-case",
+      "description": "sessionCount has @Min(1) but no @Max; totalPrice has @DecimalMin(\"0.01\") but no maximum and no @Digits. A coach posting sessionCount=300, totalPrice=1.00 yields pricePerSession=0.00, which only fails at the DB CHECK chk_spt_price_per_session_positive and is mapped by ApiAdvice to a misleading 409; totalPrice >= 10^8 overflows numeric(10,2) into a 500; a value like 1.00 with sessionCount=200 rounds HALF_UP to pricePerSession=0.01, so the tier advertised to parents shows a per-session price whose sum (2.00) exceeds the 1.00 actually charged; and totalPrice above Stripe's ~999,999.99 charge maximum creates a tier whose every purchase fails at Stripe after validation passed. Nothing bounds these before the DB/Stripe layer.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "CreateSessionPackTierRequest / SessionPackPaymentService.createTier",
+      "title": "CreateSessionPackTierRequest has no upper bounds on sessionCount or totalPrice and no scale constraint",
+      "verification": "Confirm ApiAdvice maps DataIntegrityViolationException from the CHECK to 409 as the createTier comment states, and check the SessionPackTierResponse pricePerSession is displayed to buyers in the frontend purchase dialog."
+    },
+    {
+      "category": "security",
+      "description": "The codebase has a @RateLimited aspect (infrastructure.security.RateLimitingAspect) but no payment endpoint uses it. A self-registered ROLE_PLAYER can loop POST /api/payment/setup-intent to mint unlimited SetupIntent client secrets (each confirmable directly against Stripe with a stolen card), POST /save-payment-method to rotate cards, and POST /session-packs/purchase where each attempt issues an off-session PaymentIntent against the saved card. There is no per-account or per-IP cap on any of these, so stolen-card lists can be validated through the platform's Stripe account, incurring decline fees and risking Stripe account suspension.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "createSetupIntent / savePaymentMethod / purchaseSessionPack",
+      "title": "No rate limiting on setup-intent, save-payment-method or pack purchase \u2014 platform usable as a card-testing oracle",
+      "verification": "Confirm no reverse-proxy or filter-level rate limit covers /api/payment/** (SecurityConfiguration and any gateway config), and that RateLimitingAspect is annotation-driven only."
+    },
+    {
+      "category": "logic",
+      "description": "purchasePack is deliberately non-transactional, and getOrCreateStripeCustomer saves the request's paymentMethodId over the existing stripe_customers default in its own committed transaction before paymentGateway.chargeAndCapture runs. If the new card declines or is invalid, the purchase fails but the overwrite persists; scheduleSubscriptionCardSync runs only on the success path, and syncPaymentMethodToSubscriptions' superseded-check now drops any in-flight sync of the previous good card. Every later off-session charge for that payer \u2014 booking accepts via StripePaymentGateway.charge, which reads the saved card, and subscribeCoach/subscribePlayer \u2014 uses the dead card and fails until the user manually re-saves one.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "purchasePack / getOrCreateStripeCustomer",
+      "title": "Failed pack purchase permanently overwrites the payer's saved default card before the charge",
+      "verification": "Confirm repository save outside a transaction commits immediately (default Spring Data transactional save) and that booking accept charges read stripe_customers.stripe_payment_method_id via StripePaymentGateway.charge, as shown at StripePaymentGateway.java:136."
+    }
+  ],
+  "input_rev": "980eff338df64b0b3704c756c53a9c5db56c3224",
+  "model": null
+}

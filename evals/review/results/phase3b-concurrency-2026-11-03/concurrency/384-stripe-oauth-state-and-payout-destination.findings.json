@@ -1,0 +1,68 @@
+{
+  "arm": "concurrency",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "findings": [
+    {
+      "category": "security",
+      "description": "generateOnboardingUrl sets state = coachId.toString(), and the callback's P18 check only requires state to equal the authenticated coach's id \u2014 a value the attacker chooses and can learn, since coach profile UUIDs are public (CoachMarketplaceResource GET /{coachId}). An attacker starts their own Stripe OAuth flow for their own Stripe account, captures the returned code without finishing the callback, and gets a logged-in victim coach to open /api/payment/coaches/me/stripe/callback?code=<attackerCode>&state=<victimCoachId> (a top-level GET navigation, which SameSite=Lax session cookies accompany). The check passes, the code is exchanged, and upsertCoachStripeAccount writes the attacker's acct_ id as the victim's payout destination; every subsequent CoachPayoutTransferHandler run resolves the transfer destination from that row and pays the attacker. A real anti-CSRF state must be an unguessable per-flow nonce bound to the session, which this is not.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/StripeOnboardingResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripeOnboardingResource.handleOAuthCallback",
+      "title": "OAuth state is the public coachId, so the CSRF account-linking check defends nothing",
+      "verification": "Confirm the session/auth cookie is sent on a top-level GET to the backend callback (it must be, or Stripe's own redirect could not authenticate), and that there is no additional nonce store I did not find (grep for the state parameter being generated anywhere other than StripeOnboardingService.generateOnboardingUrl line 78)."
+    },
+    {
+      "category": "concurrency",
+      "description": "StripePaymentGateway.findExistingTransfer (the defense against a transfer whose DB commit failed) only runs inside transferToCoach, and handle() calls transferToCoach only when toTransfer.signum() > 0. Interleaving: attempt 1 plans offset1 < net, createTransfer for net-offset1 succeeds at Stripe but the response is lost or the REQUIRES_NEW commit fails, so the row rolls back to PENDING_RELEASE; before the outbox re-drive, a reversal-failure path records a new coach_payout_debts row (CoachPayoutDebtService.recordDebt) so outstanding >= net. Attempt 2's planOffset returns offset == net, toTransfer = 0, the gateway is never called \u2014 bypassing exactly the DESTINATION/AMOUNT-mismatch HOLD that was built for this scenario \u2014 and the row commits RELEASED with stripeTransferId = null and debtOffsetAmount = net. The coach keeps the orphaned attempt-1 transfer AND the full net is marked as having repaid their debt (money counted twice), and the orphan can never be reversed because no transfer id was recorded on the row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "CoachPayoutTransferHandler.handle",
+      "title": "toTransfer == 0 path skips the adopt-existing-transfer guard, double-counting a lost-response transfer",
+      "verification": "Confirm no reconciliation job scans Stripe transfers by transfer_group for RELEASED rows with stripeTransferId null; I found none. Confirm recordDebt can run for the same coach between two drives of this handler (it runs under other bookings' payout-row locks, not this one's)."
+    },
+    {
+      "category": "concurrency",
+      "description": "The upsert stamps last_event_created_at with the raw server-clock connect time (truncated to seconds), while the fetch path budgets 30s of server-vs-Stripe clock skew (FETCH_SNAPSHOT_SKEW_ALLOWANCE) as realistic. If a coach deauthorizes acct_X and reconnects the same acct_X within that skew (or within the same wall-clock second, thanks to the truncation), the account.application.deauthorized event's Stripe-side created lands >= the stored marker. When the webhook is delivered after the upsert commits, handleAccountDeauthorized finds the row (same stripe_account_id) and applyDeauthorization's staleness check passes, setting the 'deauthorized' sentinel on a connection that is actually live. Nothing heals it: getStripeStatus skips the Stripe sync for deauthorized rows, findConnectedByStatusAfter excludes them from the daily resync, and transferReadiness returns NOT_READY \u2014 every payout for the coach goes to HOLD until they reconnect yet again.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "StripeOnboardingService.upsertCoachStripeAccount",
+      "title": "Reconnect marker has no clock-skew allowance: a late deauthorized event re-disconnects a live reconnection",
+      "verification": "Confirm Stripe delivers account.application.deauthorized with at-least-once semantics and arbitrary delay (it does), and check whether production server clocks are NTP-tight enough that only the same-second truncation window remains."
+    },
+    {
+      "category": "concurrency",
+      "description": "handleConnectEventAtomically inserts the event id into stripe_webhook_events and processes in the same transaction; when handleAccountDeauthorized's findByStripeAccountId finds no row (the OAuth callback's upsert on another instance has not committed yet), the event is logged as UNKNOWN and the dedup record still commits, so Stripe's redeliveries are dropped as duplicates. For account.updated the post-callback syncAccountFromStripe fetch compensates, but only the webhook ever sets the TRANSFERS_DEAUTHORIZED sentinel \u2014 a fetch of a revoked account just throws a permission error and is swallowed. Result: the row stays PENDING on acct_X, transferReadiness classifies payouts as retryable ACCOUNT_PENDING, and the outbox re-drives to [OUTBOX_STUCK] instead of the intended non-retryable HOLD with its PAYOUT_HELD alert. The window (deauthorization landing between the token exchange and the upsert commit) is sub-second, hence low.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "StripeWebhookService.handleConnectEventAtomically",
+      "title": "Deauthorized webhook arriving before the OAuth upsert commits is consumed by the dedup insert and lost forever",
+      "verification": "Confirm no other code path sets TRANSFERS_DEAUTHORIZED (grep shows only CoachStripeAccountStatusApplier.applyDeauthorization) and that stripe_webhook_events has no sweeper that re-processes recorded-but-unmatched events."
+    },
+    {
+      "category": "database",
+      "description": "upsertCoachStripeAccount is keyed on coach_id (findById), but idx_csa_stripe_account_id (V138 baseline, line 3862) is UNIQUE on stripe_account_id. If the connected account id already sits on a different coach row \u2014 a coach who re-registered under a new coachId while the old row survives, or two coach profiles connecting one Stripe account (including two concurrent first-connects that both pass the findById-empty check) \u2014 the insert/update fails at commit with a unique violation. The ordering defect: the Stripe OAuth code was exchanged (connection established, code consumed) before the local persist, so the callback 500s, the redirect to the settings page never happens, and a retry deterministically re-fails the same way \u2014 the platform-to-Stripe connection exists but can never be recorded, and payouts keep resolving against the stale or missing row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeOnboardingService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "StripeOnboardingService.handleOAuthCallback",
+      "title": "OAuth upsert can violate the unique stripe_account_id index after the single-use code is already consumed",
+      "verification": "Check whether coach re-registration deletes or cascades payment.coach_stripe_accounts rows (fk_csa_coach), and whether any support tooling can clear an orphaned row; if deletion is guaranteed, this is unreachable."
+    },
+    {
+      "category": "performance",
+      "description": "handle() takes PESSIMISTIC_WRITE on the coach_payouts row (findByIdForUpdate), FOR SHARE on the coach's freeze row, and FOR UPDATE on all the coach's open debt rows, then performs up to two synchronous Stripe calls (listTransfersByGroup and createTransfer, each bounded only by the SDK's network timeout, ~80s by default) before committing. CoachPayoutRepository's comment justifies the blocking no-NOWAIT lock on the grounds that 'the only contenders are a drain no-op'ing a frozen row and a dispute resolution, both short' \u2014 but the drain making a transfer is not short. A dispute resolution (DisputeService.reconcileCoachPayout) or an admin reinstatement (blocked behind the FOR SHARE freeze lock) can stall for the full Stripe timeout behind one slow transfer, holding its own transaction's locks and connection meanwhile. Correct today only while Stripe latency stays low; no wrong state, hence low.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutTransferHandler.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "CoachPayoutTransferHandler.handle",
+      "title": "Payout row lock held across Stripe network calls, contradicting the repository's 'both short' contention assumption",
+      "verification": "Check the configured Stripe SDK connect/read timeouts in StripeClient/PaymentConfig and whether DisputeService's transaction holds other hot locks while waiting on this row."
+    }
+  ],
+  "input_rev": "c9c10fa6262f6e0413171c942ab24504061c587f",
+  "model": null
+}

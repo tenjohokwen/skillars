@@ -1,0 +1,68 @@
+{
+  "arm": "security",
+  "case": "376-completion-dispute-integrity",
+  "findings": [
+    {
+      "category": "security",
+      "description": "POST /api/admin/disputes/{id}/resolve and /dismiss are guarded by HAS_ADMIN_ROLE, which is \"hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')\". DisputeService.resolveDispute moves real money: FULL_CREDIT/PARTIAL_CREDIT write wallet DISPUTE_CREDIT entries, UPHOLD_COACH claws back the payer's refund and enqueues Stripe payout top-ups, and every resolution cuts, reverses or releases the coach payout. A ROLE_LTD_ADMIN account \u2014 defined as a limited reads-and-moderation tier \u2014 can therefore credit a colluding parent the full session price or pay a colluding coach in full. No full-admin-only expression exists anywhere in SecurityConstants, and no other filter restricts LTD_ADMIN writes.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminDisputeResource.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "resolveDispute / dismissDispute (@PreAuthorize SecurityConstants.HAS_ADMIN_ROLE)",
+      "title": "Dispute resolve/dismiss admit ROLE_LTD_ADMIN, letting the read-only admin tier move money",
+      "verification": "Confirm with the owners that ROLE_LTD_ADMIN is intended to be reads/moderation only (as the role model states); grep confirms SecurityConstants has no HAS_FULL_ADMIN_ROLE and no code path anywhere distinguishes ROLE_ADMIN from ROLE_LTD_ADMIN for write actions."
+    },
+    {
+      "category": "security",
+      "description": "POST /api/admin/bookings/{id}/force-complete uses HAS_ADMIN_ROLE, so a ROLE_LTD_ADMIN account can force-complete any COMPLETED_PENDING_CONFIRMATION booking. forceCompleteWithPlaceholderData publishes BookingCompletedEvent, and CoachPayoutEnqueueListener enqueues the coach payout BEFORE_COMMIT \u2014 money movement for a session nobody confirmed, triggered by the tier that is supposed to be read/moderation only. Impact is bounded because StuckCompletionSweeperService would eventually force-complete the same bookings, but the limited admin chooses the timing and target.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminBookingResource.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "forceComplete (@PreAuthorize SecurityConstants.HAS_ADMIN_ROLE) -> BookingCompletionService.forceCompleteWithPlaceholderData",
+      "title": "Admin force-complete admits ROLE_LTD_ADMIN and releases the coach payout",
+      "verification": "Same role-model confirmation as the dispute-resolve finding; verify StuckCompletionSweeperService's own selection criteria match what the admin endpoint can reach."
+    },
+    {
+      "category": "security",
+      "description": "The H1 fix derives the wrap-up mode server-side so a quick-complete cannot claim LIVE, but LIVE only requires that the coach pressed Start (allowed the moment requestedStartTime passes) and ended the session themselves \u2014 with no minimum elapsed time. A coach who never coaches can press Start, immediately call endSession, and submit the wrap-up: the server derives LIVE, the booking goes COMPLETED and the payout is enqueued at once, with no parent confirmation window. This reproduces the exact outcome the fix removed for quick-complete (completion and payment for a session that never happened), leaving the parent only the reactive 14-day dispute path against the 48h payout hold.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "submitWrapUp (mode derivation: liveStartedAt != null && autoEndedAt == null)",
+      "title": "Coach can bypass the parent-confirmation window by pressing Start then End back-to-back",
+      "verification": "Confirm there is no other guard (e.g., minimum session duration or end-time check) between START and COMPLETE_PENDING; BookingStateMachine and endSession show none."
+    },
+    {
+      "category": "logic",
+      "description": "bookingQuickCompleteConfirm.html tells the parent to \"confirm or dispute this session\" within 24 hours, and BookingStateMachine models DISPUTE from COMPLETED_PENDING_CONFIRMATION \u2014 but raiseDispute lists that status in neither ELIGIBLE_STATUSES nor LIVE_STATUSES, so a dispute attempt during the confirmation window fails with NOT_ELIGIBLE. A parent who follows the email, is refused, and gives up has the session auto-confirmed by QuickCompleteTimeoutService and the coach paid; contesting requires knowing to return after completion and dispute within the 48h payout hold.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "raiseDispute / ELIGIBLE_STATUSES / LIVE_STATUSES",
+      "title": "Parent told to 'confirm or dispute' a quick-complete cannot actually raise a dispute during the window",
+      "verification": "Confirm the frontend dispute entry point is also status-gated the same way; the backend refusal is verifiable directly from the status lists."
+    },
+    {
+      "category": "concurrency",
+      "description": "raiseDispute reads the booking without a row lock, so a parent disputing an IN_PROGRESS/PAUSED session can race the coach's LIVE submitWrapUp commit: the dispute transaction sees the pre-commit live status and finds no coach_payouts row (freezeForDispute is a no-op), while the completion transaction's enqueuePayout checks existsOpenDisputeForBooking before the dispute commits and creates the payout PENDING_RELEASE with a transfer enqueued. CoachPayoutTransferHandler re-checks only the row's own freeze flags and the safety hold at release time \u2014 not open disputes \u2014 so after the 48h hold the transfer goes to the coach with the dispute still open, degrading recovery to a Stripe reversal that can fail (REVERSAL_FAILED coach debt).",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "raiseDispute -> CoachPayoutAdjustmentService.freezeForDispute vs CoachPayoutOutboxSupport.enqueuePayout",
+      "title": "Dispute raised concurrently with session completion leaves the payout unfrozen and it releases while the dispute is open",
+      "verification": "Confirm no serialization exists between the two paths (raiseDispute takes neither the booking row lock nor any advisory lock); confirmed CoachPayoutTransferHandler lines 75-116 re-check flags and safety hold only."
+    },
+    {
+      "category": "logic",
+      "description": "dispute.setCreditAmount(creditAmount) records the request value verbatim: a NO_ACTION resolution submitted with a stray creditAmount records a credit that was never issued, and a FULL_CREDIT records null while the computed remainder was actually credited. The admin dispute detail (AdminDisputeDetailDto.creditAmount) and the wallet ledger then disagree, so the audit record of a money-moving action is wrong; the raiser's notification uses the correct 'credited' value, masking the skew.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "resolveDispute (dispute.setCreditAmount)",
+      "title": "resolveDispute stores the submitted creditAmount, not what was actually credited",
+      "verification": "Trigger by POSTing resolve with resolution=NO_ACTION and creditAmount=100, then fetch the admin dispute detail and compare with the parent_credit_ledger rows for the booking."
+    }
+  ],
+  "input_rev": "ec997389b69f9ad84b0fbf5020d725fed5caca54",
+  "model": null
+}

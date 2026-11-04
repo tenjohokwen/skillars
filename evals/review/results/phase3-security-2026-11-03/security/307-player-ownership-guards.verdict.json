@@ -1,0 +1,62 @@
+{
+  "arm": "security",
+  "case": "307-player-ownership-guards",
+  "checks": [],
+  "judge_cost_usd": 0.187355,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 identifies the same defect: HAS_PARENT_ROLE plus findByIdAndParentId lock a self-registered player out of completing their own homework.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions the swallowed DataIntegrityViolationException leaving the transaction rollback-only.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 reports the same ROLE_USER-only guards causing 403 for ROLE_PLAYER on initiate/quotas/my.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 covers the user-id-as-profile-id lookup and resolveCurrentOwnerId id-space bug; R2 covers the same bug in VideoAccessGuard.isOwner \u2014 jointly the full defect and consequences.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R6 covers the coach UUID-vs-username comparison causing 403 on /status and /events; R2 notes the same businessId Long-branch id-space bug in isCurrentUserOwner.",
+        "reported_ids": [
+          "R6",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R5 identifies the same HAS_PARENT_ROLE gating on subscribe/change-tier/cancel despite the service's self-owned branch.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

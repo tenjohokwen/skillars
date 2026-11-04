@@ -107,6 +107,18 @@ describe('CoachSessionPackTiersPage.vue (deferred-151 AC2)', () => {
     expect(wrapper.find('[data-testid="tier-validity"]').exists()).toBe(false)
   })
 
+  it('titles a label-less tier (set from the profile builder) with the localized "N sessions" fallback', () => {
+    const wrapper = mountPage([
+      { ...ACTIVE_TIER, label: null },
+      { ...OLD_TIER, label: null },
+    ])
+
+    const text = wrapper.text()
+    expect(text).toContain('marketplace.sessionsFallbackLabel')
+    expect(text).not.toContain('null')
+    // Mutation: render {{ activeTier.label }} directly -> an empty title -> RED.
+  })
+
   it('has no withdraw control when there is no active tier', () => {
     const wrapper = mountPage([])
     expect(wrapper.text()).not.toContain('payment.myTiers.withdrawOffer')

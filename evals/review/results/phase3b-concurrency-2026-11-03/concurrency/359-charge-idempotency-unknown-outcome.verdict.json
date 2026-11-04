@@ -1,0 +1,110 @@
+{
+  "arm": "concurrency",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "reconcileMarketplaceTiers computes entitledTier from the detached findAll() snapshot (sub.getTier()/getStatus()) and never re-reads the payment row in the per-row transaction, so a persistCoachTierUpgrade/revoke committing after the batch load is overwritten by syncMarketplaceTier, which locks only coach_profiles and writes unconditionally. A @Version on CoachSubscription would not help \u2014 the sweep reads the projection fresh in-transaction, so the stale-tier save carries a current version; cadence only affects how long the wrong tier persists.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "Within this file the finding reads syncPaymentMethodToSubscriptions correctly: the superseded-card guard (stripeCustomerRepository.findById at the method top) is a plain unlocked read, nothing here serialises two syncs for one user, and the per-attempt UUID idempotency keys don't close the A/B interleaving. But the finding's own verification caveat turns on PaymentMethodSyncOutboxHandler / PaymentMethodSyncOutboxSupport's claim mechanism (per-user serial, in-order processing would refute it), and that code is not provided.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "findOrCreateCoachSubscription/findOrCreatePlayerSubscription do the unguarded find-then-save with no catch or retry, inside @Transactional getCoachSubscription/getPlayerSubscription, exactly as described. But the finding's verification caveat \u2014 that the unique index on payment.coach_subscriptions(coach_id)/payment.player_subscriptions(player_id) exists in the Flyway migrations and that no advice retries DataIntegrityViolationException \u2014 cannot be checked from this file alone; the migrations and controller advice are not provided.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 2.8619899999999996,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions the batch idempotency key lacking an attempt component or Stripe replaying a prior PaymentIntent.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the same blanket StripeException-to-decline mapping in charge() causing a captured charge to be recorded as failed with no reconciliation, contrasting the refund path's unknown-outcome handling.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding notes that charge() returns the intent id without checking PaymentIntent status (requires_action/processing).",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "R2 cites the single-booking path only as a correct contrast; nothing reports the missing compensation / unpersisted intent id after a failed settle in handleCreditBasedBooking.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "partial",
+        "note": "R2 targets the same batch-level single BOOKING_DEDUCTION in onBatchBookingAccepted and its misalignment with per-booking REQUIRES_NEW outcomes, but reads the mechanism differently (debit rolls back vs. stranded) and misses the debit-before-charge ordering and the per-booking-attribution point.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers card shares below Stripe's minimum charge in CreditCardSplit/BatchPaymentQuoteService.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding covers the missing Stripe SDK timeout/retry configuration in PaymentConfig.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding covers the subscribe double-click race creating two paid Stripe subscriptions.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F9",
+        "match": "none",
+        "note": "No reported finding covers the chunked-transfer bypass of the webhook Content-Length check.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F10",
+        "match": "none",
+        "note": "R3 concerns the reconcile sweep's stale snapshot, not the superseded warn-and-return branch in persistCoachTierUpgrade that silently drops a paid proration upgrade.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] reconcileMarketplaceTiers computes entitledTier from the detached findAll() snapshot (sub.getTier()/getStatus()) and never re-reads the payment row in the per-row transaction, so a persistCoachTierUpgrade/revoke committing after the batch load is overwritten by syncMarketplaceTier, which locks only coach_profiles and writes unconditionally. A @Version on CoachSubscription would not help \u2014 the sweep reads the projection fresh in-transaction, so the stale-tier save carries a current version; cadence only affects how long the wrong tier persists. | pass-1: Concrete lost-update race: tier computed from a detached pre-sweep snapshot is written over a concurrently committed upgrade/revoke with no lock or version check, downgrading the projection until the next sweep.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] Within this file the finding reads syncPaymentMethodToSubscriptions correctly: the superseded-card guard (stripeCustomerRepository.findById at the method top) is a plain unlocked read, nothing here serialises two syncs for one user, and the per-attempt UUID idempotency keys don't close the A/B interleaving. But the finding's own verification caveat turns on PaymentMethodSyncOutboxHandler / PaymentMethodSyncOutboxSupport's claim mechanism (per-user serial, in-order processing would refute it), and that code is not provided. | pass-1: Concrete interleaving: two outbox syncs for cards A then B with no per-user serialisation can finish B-then-A, leaving Stripe defaulting to the replaced card with no converging event; per-key idempotency does not cover cross-key ordering.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] findOrCreateCoachSubscription/findOrCreatePlayerSubscription do the unguarded find-then-save with no catch or retry, inside @Transactional getCoachSubscription/getPlayerSubscription, exactly as described. But the finding's verification caveat \u2014 that the unique index on payment.coach_subscriptions(coach_id)/payment.player_subscriptions(player_id) exists in the Flyway migrations and that no advice retries DataIntegrityViolationException \u2014 cannot be checked from this file alone; the migrations and controller advice are not provided. | pass-1: Concrete first-touch race: unlocked find-then-insert with no upsert/retry makes two concurrent first requests fail one of them on the unique constraint, a 500 on a read endpoint.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

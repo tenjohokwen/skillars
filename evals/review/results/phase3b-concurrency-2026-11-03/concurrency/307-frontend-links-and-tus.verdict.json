@@ -1,0 +1,147 @@
+{
+  "arm": "concurrency",
+  "case": "307-frontend-links-and-tus",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "handleOAuthCallback's P18 check (line 68) indeed accepts any state equal to the coach's UUID with no nonce, but confirming the exploit requires StripeOnboardingService.generateOnboardingUrl (to verify state is the bare coachId), routes.js/CoachPublicProfilePage (to verify coachIds are public), and the auth mechanism (cookie vs bearer) \u2014 none shown here.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "StripeOnboardingService.handleOAuthCallback does run the OAuth exchange outside the @Transactional upsert, so the race window exists, but the claimed consequence depends on StripeWebhookService.java (the account.updated branch with findByStripeAccountId(...).ifPresent(...) and its 2xx acknowledgement), which was not provided and could not be read in this session.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "AccountManagementFacade.sendMail (publisher.publishEvent(envelope), ~line 207) does publish the Envelope purely in-memory with no persistence, matching the producer-side claim; but the loss window depends on MailManager.sendEmailFromTemplate's AFTER_COMMIT/async persistence timing and EmailRetryScheduler's query, neither of which is in the provided code, and the verification caveat cannot be run.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "generateReport commits the row as PENDING_UPLOAD (saveAndFlush) and hands pdfBytes only to an AFTER_COMMIT @Async(\"reportExecutor\") listener (onReportGenerated), which is the sole transition out of PENDING_UPLOAD; a restart in that window strands the row, listReports filters to READY only, and the handler's own Javadoc confirms no retry \u2014 the finding's grep found no sweeper, consistent with this file.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "AccountManagementFacade.registerAccount indeed does an unguarded find-then-insert (findUserByEmailOrLogin line 131, persistUser line 151) with no catch, but the finding's consequence depends on whether UserRegistrationService.createUser (or a global exception handler) catches DataIntegrityViolationException and reroutes to the user-exists path \u2014 that code is not provided, so the 500/anti-enumeration claim cannot be settled from this file.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "startUpload re-reads props.drill.id for updateDrillVideoState after `await runTusUpload(...)`, with no captured id, no watch on props.drill, and abort only in onUnmounted; the comment above the useDrillVideoPlayback call confirms the panel is reused without remount as props.drill swaps, so a mid-upload drill switch marks the new drill hasVideo:true.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The in-file mechanism holds: onMounted is the sole call site of fetchVideoUploadEligibility, gated on props.drill?.libraryType === 'PRIVATE', with no watch on props.drill, and the useDrillVideoPlayback comment confirms the panel is reused without remount. But the finding's verification caveat \u2014 that DrillLibraryPage/SessionBuilderPage mounts the panel with drill=null before selection \u2014 and whether canUploadVideo is set elsewhere in session.store depend on files not shown here.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "undetermined",
+      "note": "EmailRegistrationStrategy.sendEmail (line ~146) does derive the Envelope's final constructor arg and helpCode from ShortCode.shortenInt(UUID.randomUUID().hashCode()), so the identifier space is at most 2^32 (hashCode returns int) \u2014 the trigger is real. But the claimed consequence (MailManager treating this as the dedup key and overwriting a prior envelope's status/recipients on collision) depends on MailManager, Envelope, ShortCode.shortenInt, and the envelope_entity.send_id constraint, none of which are shown here.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "undetermined",
+      "note": "ReportGenerationService.saveBranding shows the exact find-or-new-then-save pattern described (findById(coachId).orElseGet(CoachBranding::new) then save, assigned ID, no lock), but the finding's verification caveat requires CoachBranding (@Id/@Version) and CoachBrandingRepository (possible overridden save or ON CONFLICT upsert), neither of which is provided, so the race cannot be confirmed or refuted from this file alone.",
+      "reported_id": "R9"
+    }
+  ],
+  "judge_cost_usd": 2.593615,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions dead booking/report email links built on the backend origin; R3/R4 touch the same classes but about async durability, not URLs.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding raises the ${baseurl}:${server.port}=localhost problem in activation/reset/account-change emails; R8 is in the same files but about sendId collisions.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "R1 and R2 cover the Stripe callback but neither mentions the relative, hash-less callbackSuccessUrl redirect landing on a 404.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding notes the dropped TUS authorisation fields / unauthenticated Bunny upload; R6 and R7 are different DrillDetailPanel defects.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions the nonexistent route names coach-dashboard/marketplace or the /upgrade path.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers BookingRequestPage gating the pack tracker on !isPlayer.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] handleOAuthCallback's P18 check (line 68) indeed accepts any state equal to the coach's UUID with no nonce, but confirming the exploit requires StripeOnboardingService.generateOnboardingUrl (to verify state is the bare coachId), routes.js/CoachPublicProfilePage (to verify coachIds are public), and the auth mechanism (cookie vs bearer) \u2014 none shown here. | pass-1: Concrete OAuth account-linking CSRF: state is the publicly exposed coachId, so a lured callback with an attacker code overwrites the victim's stripeAccountId; trigger and consequence fully specified.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] StripeOnboardingService.handleOAuthCallback does run the OAuth exchange outside the @Transactional upsert, so the race window exists, but the claimed consequence depends on StripeWebhookService.java (the account.updated branch with findByStripeAccountId(...).ifPresent(...) and its 2xx acknowledgement), which was not provided and could not be read in this session. | pass-1: Concrete race: account.updated webhook handled via ifPresent before the OAuth upsert commits is acknowledged and discarded, leaving the coach PENDING with no re-poll.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] AccountManagementFacade.sendMail (publisher.publishEvent(envelope), ~line 207) does publish the Envelope purely in-memory with no persistence, matching the producer-side claim; but the loss window depends on MailManager.sendEmailFromTemplate's AFTER_COMMIT/async persistence timing and EmailRetryScheduler's query, neither of which is in the provided code, and the verification caveat cannot be run. | pass-1: Concrete durability gap: EnvelopeEntity is persisted only at the end of the AFTER_COMMIT async send, so a restart between commit and send loses activation/reset emails with nothing for the retry scheduler to re-drive.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] generateReport commits the row as PENDING_UPLOAD (saveAndFlush) and hands pdfBytes only to an AFTER_COMMIT @Async(\"reportExecutor\") listener (onReportGenerated), which is the sole transition out of PENDING_UPLOAD; a restart in that window strands the row, listReports filters to READY only, and the handler's own Javadoc confirms no retry \u2014 the finding's grep found no sweeper, consistent with this file. | pass-1: Concrete: PDF bytes live only in the AFTER_COMMIT event; a restart before the async upload strands the row in PENDING_UPLOAD with no sweeper querying that status.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] AccountManagementFacade.registerAccount indeed does an unguarded find-then-insert (findUserByEmailOrLogin line 131, persistUser line 151) with no catch, but the finding's consequence depends on whether UserRegistrationService.createUser (or a global exception handler) catches DataIntegrityViolationException and reroutes to the user-exists path \u2014 that code is not provided, so the 500/anti-enumeration claim cannot be settled from this file. | pass-1: Concrete find-then-insert race on unique email/login constraints turning a concurrent duplicate registration into an uncaught DataIntegrityViolation 500 instead of the user-exists flow.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] startUpload re-reads props.drill.id for updateDrillVideoState after `await runTusUpload(...)`, with no captured id, no watch on props.drill, and abort only in onUnmounted; the comment above the useDrillVideoPlayback call confirms the panel is reused without remount as props.drill swaps, so a mid-upload drill switch marks the new drill hasVideo:true. | pass-1: Concrete stale-prop race: props.drill.id is re-read after the long await, so a drill swap mid-upload marks the wrong drill hasVideo and invites a destructive re-initiate on the original.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The in-file mechanism holds: onMounted is the sole call site of fetchVideoUploadEligibility, gated on props.drill?.libraryType === 'PRIVATE', with no watch on props.drill, and the useDrillVideoPlayback comment confirms the panel is reused without remount. But the finding's verification caveat \u2014 that DrillLibraryPage/SessionBuilderPage mounts the panel with drill=null before selection \u2014 and whether canUploadVideo is set elsewhere in session.store depend on files not shown here. | pass-1: Concrete: eligibility is fetched only in onMounted when the then-current drill is PRIVATE, and the panel is reused without remount, so the upload UI stays hidden for later PRIVATE drills.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] EmailRegistrationStrategy.sendEmail (line ~146) does derive the Envelope's final constructor arg and helpCode from ShortCode.shortenInt(UUID.randomUUID().hashCode()), so the identifier space is at most 2^32 (hashCode returns int) \u2014 the trigger is real. But the claimed consequence (MailManager treating this as the dedup key and overwriting a prior envelope's status/recipients on collision) depends on MailManager, Envelope, ShortCode.shortenInt, and the envelope_entity.send_id constraint, none of which are shown here. | pass-1: Concrete: sendId drawn from a \u22642^32 space is the cluster-wide envelope idempotency key, so a birthday collision (~65k sends) overwrites an unrelated envelope's status and kills its retry.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] ReportGenerationService.saveBranding shows the exact find-or-new-then-save pattern described (findById(coachId).orElseGet(CoachBranding::new) then save, assigned ID, no lock), but the finding's verification caveat requires CoachBranding (@Id/@Version) and CoachBrandingRepository (possible overridden save or ON CONFLICT upsert), neither of which is provided, so the race cannot be confirmed or refuted from this file alone. | pass-1: Concrete find-or-new-then-save race on the coach_branding PK: two concurrent first saves both insert and the loser 500s on the PK violation.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Depends on an unverified multi-instance/no-sticky-sessions deployment assumption the finding itself calls latent; no concrete trigger from the text alone.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

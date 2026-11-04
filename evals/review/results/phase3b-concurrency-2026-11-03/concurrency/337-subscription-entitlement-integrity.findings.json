@@ -1,0 +1,148 @@
+{
+  "arm": "concurrency",
+  "case": "337-subscription-entitlement-integrity",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "createSubscription derives its Stripe idempotency key as \"sub-create-\" + stripeCustomerId + \"-\" + priceId (StripeClient.java:147). subscribePlayer resolves the Stripe customer from the parent's callerUserId, so a parent who subscribes child A to PRO/YEARLY and then child B to the same tier within Stripe's 24h idempotency window sends an identical request under the identical key: Stripe replays child A's subscription instead of creating a second one. persistPlayerSubscription then stores the same stripeSubscriptionId on both player rows (payment.player_subscriptions has no unique constraint on stripe_subscription_id, only uq_pps_player_id) \u2014 child B is entitled with nothing billed, and every subsequent webhook for that subscription makes findByStripeSubscriptionId return two rows, throwing IncorrectResultSizeDataAccessException, rolling back the idempotency insert and looping the delivery for both children.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripeClient.createSubscription / SubscriptionService.subscribePlayer",
+      "title": "Two sibling player subscriptions share one Stripe idempotency key, replaying a single subscription for both",
+      "verification": "Confirm Stripe replays identical requests under the same idempotency key (it does per Stripe docs); confirmed V138__baseline_schema.sql defines no unique index on payment.player_subscriptions.stripe_subscription_id."
+    },
+    {
+      "category": "concurrency",
+      "description": "subscribeCoach reads the subscription row (line 128) and checks ACTIVE+stripeSubscriptionId!=null with no lock, claim marker, or conditional update; the row is only written later in self.persistCoachSubscription's separate transaction (line 166), after the Stripe call. Two concurrent requests (two tabs, or a quick tier re-selection) both pass the guard before either persists. If they pick different tiers the priceIds differ, so the sub-create-{customer}-{price} idempotency key does not deduplicate: Stripe creates two live subscriptions, both billing. The second persist overwrites stripeSubscriptionId, so the first subscription keeps charging the coach with no local reference and its webhooks fall into the orphan branch. Same shape in subscribePlayer (lines 324-361).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "SubscriptionService.subscribeCoach",
+      "title": "Double-submit of subscribeCoach/subscribePlayer with different tiers creates two live Stripe subscriptions",
+      "verification": "Check whether any controller-level or frontend claim marker serializes subscribe requests per coach; none is visible in this service."
+    },
+    {
+      "category": "concurrency",
+      "description": "The create key sub-create-{customerId}-{priceId} contains no attempt or subscription discriminator. handleSubscriptionDeleted deliberately sets status=CANCELLED and nulls stripeSubscriptionId, which makes the coach/player eligible to subscribe again. If the deletion happened within 24h of the original creation (e.g. Stripe voids an incomplete subscription after 23h, or an immediate cancellation), the resubscribe to the same tier sends an identical request under the same key and Stripe replays the original creation response \u2014 the id and status of the now-dead subscription. persistCoachSubscription/persistPlayerSubscription then record an ACTIVE/TRIALLING entitlement linked to a subscription that no longer exists at Stripe, so no money is ever collected and no future webhook will correct it (the subscription is already deleted).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "StripeClient.createSubscription",
+      "title": "Resubscribe within 24h of a cancellation replays the dead Stripe subscription via the stable create key",
+      "verification": "Confirm Stripe's 24h idempotency replay window and that the replayed response carries the creation-time status; confirm no other guard prevents resubscribing to the same priceId within 24h."
+    },
+    {
+      "category": "database",
+      "description": "normalizeStripeStatus maps only active/past_due/canceled/trialing and passes anything else through as toUpperCase() (line 965), but V138's chk_pcs_status/chk_pps_status allow only ACTIVE/PAST_DUE/CANCELLED/TRIALLING (and the column is varchar(16), which INCOMPLETE_EXPIRED also exceeds). Two triggers: (1) createSubscription returns status 'incomplete' when the first invoice payment requires action/fails \u2014 persistCoachSubscription's save then violates the CHECK and rolls back AFTER the Stripe subscription was created, leaving a billing object with no local stripeSubscriptionId link; (2) a customer.subscription.updated webhook carrying 'unpaid'/'paused'/'incomplete' hits the same CHECK inside handleEventAtomically, rolling back the insertIfAbsent idempotency row, so Stripe redelivers and every delivery 500s indefinitely.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "SubscriptionService.normalizeStripeStatus",
+      "title": "Unmapped Stripe statuses violate chk_pcs_status/chk_pps_status, orphaning paid subscriptions and looping webhook deliveries",
+      "verification": "Confirm the Stripe account's payment_behavior settings can produce 'incomplete'/'unpaid'/'paused' subscriptions (default allow_incomplete/dunning settings do)."
+    },
+    {
+      "category": "concurrency",
+      "description": "PaymentCoachSubscription and PaymentPlayerSubscription have no @Version and no @DynamicUpdate, and every change/cancel flow reads the row in a non-transactional method, makes a multi-second Stripe call, then merges the detached entity in a new transaction (e.g. changeCoachTier reads at line 204, calls Stripe at 229, saves at 247), writing every column from memory. If an invoice.payment_failed webhook commits status=PAST_DUE and pastDueSince between the read and the save, the merge reverts status to ACTIVE and pastDueSince to null \u2014 the grace-period checker then never sees the delinquency and the coach keeps a paid tier without paying. The same window exists in persistCoachCancellation/persistPlayerCancellation (overwriting a concurrent webhook's status/currentPeriodEnd with the pre-Stripe-call snapshot).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "high",
+      "symbol": "persistCoachTierUpgrade / persistCoachCancellation / persistPlayerTierUpgrade / persistPlayerCancellation",
+      "title": "No @Version on subscription entities: detached full-row merge across the Stripe call silently reverts concurrent webhook writes",
+      "verification": "Confirmed: no @Version field in either entity file; no lock or conditional UPDATE on any of these paths."
+    },
+    {
+      "category": "concurrency",
+      "description": "The batch-load transaction (line 500) takes FOR UPDATE SKIP LOCKED on the change rows but commits immediately, releasing the locks before any per-item work (the code comment admits this and claims @SchedulerLock closes the gap \u2014 it only prevents sibling scheduler instances, not user requests). Interleaving A: after the batch commit, a coach upgrades \u2014 Stripe is updated to the new price, persistCoachTierUpgrade voids the pending change and sets the new tier, commits; the scheduler's per-item transaction then runs with the stale detached change, sets tier=change.getToTier() (the downgrade target), re-syncs marketplace, and its merge of the change row even resets voidedAt to null. Interleaving B: if the upgrade instead runs while the batch-load tx still holds the locks, voidPendingCoachDowngrade's findPendingForCoach uses SKIP LOCKED and silently finds nothing, so the void never happens and the scheduler later applies the downgrade over the committed upgrade. Either way Stripe bills the upgraded price while local and marketplace tier show the downgrade. Same shape for players.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R6",
+      "severity": "high",
+      "symbol": "SubscriptionService.applyPendingChanges / voidPendingCoachDowngrade",
+      "title": "applyPendingChanges applies a stale downgrade over a concurrent upgrade; SKIP LOCKED makes the race two-sided",
+      "verification": "Confirmed @SchedulerLock exists on SubscriptionChangeApplicator; it does not serialize against changeCoachTier/changePlayerTier requests."
+    },
+    {
+      "category": "logic",
+      "description": "applyPendingChanges changes only the local tier (lines 506-516) \u2014 no stripeClient.updateSubscriptionTier call exists anywhere in the downgrade lifecycle (persistCoachTierDowngrade only writes a change row), so after an ACADEMY\u2192INSTRUCTOR (or \u2192SCOUT) downgrade takes effect, Stripe continues billing the old higher price every cycle while the entitlement is the lower tier. checkPastDueGracePeriod likewise sets tier=SCOUT/status=CANCELLED locally (lines 573-578) without cancelling the Stripe subscription; Stripe keeps dunning and, if it later collects, customer.subscription.updated sets the row back to ACTIVE but the tier stays SCOUT (the webhook deliberately never syncs tier) \u2014 the coach is charged the full tier price with SCOUT entitlement indefinitely.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R7",
+      "severity": "high",
+      "symbol": "applyPendingChanges / checkPastDueGracePeriod",
+      "title": "Scheduled downgrades and grace-period cancellations never perform the corresponding Stripe-side change",
+      "verification": "Grep confirmed stripeClient is not referenced in either scheduled method or in persistCoachTierDowngrade/persistPlayerTierDowngrade."
+    },
+    {
+      "category": "logic",
+      "description": "The guard at line 129 only rejects when status is ACTIVE/TRIALLING, so a coach whose row is PAST_DUE but who still has a live, dunning Stripe subscription passes it. Subscribing to a different tier creates a second live Stripe subscription (different priceId, different idempotency key), and persistCoachSubscription overwrites stripeSubscriptionId with the new one \u2014 the first subscription keeps retrying collection with no local reference (its webhooks hit the orphan branch), and once the card is fixed Stripe collects on both: a double charge the app can no longer see or cancel. Same gap in subscribePlayer (line 325).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R8",
+      "severity": "high",
+      "symbol": "SubscriptionService.subscribeCoach",
+      "title": "subscribeCoach allows a PAST_DUE coach to create a second live Stripe subscription and orphan the first",
+      "verification": "Confirm Stripe dunning keeps a past_due subscription collectable; check whether any controller-level guard rejects subscribe while PAST_DUE \u2014 none in this service."
+    },
+    {
+      "category": "concurrency",
+      "description": "The batch-load transaction (line 567) selects PAST_DUE rows with no lock; the per-item transaction (line 573) then saves the detached entity without re-reading or re-checking its status. If a customer.subscription.updated webhook commits status=ACTIVE (payment recovered) between the batch load and the per-item save, the full-row merge of the stale snapshot writes tier=SCOUT, status=CANCELLED over it \u2014 and also reverts the webhook's currentPeriodEnd. A paying, recovered coach is downgraded and marked cancelled while Stripe keeps billing. The player loop (line 591) has the identical shape. Unlike applyPendingChanges, the per-item block does not even re-read the subscription row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "SubscriptionService.checkPastDueGracePeriod",
+      "title": "checkPastDueGracePeriod saves a stale pre-recovery snapshot, cancelling a subscription that just recovered",
+      "verification": "Confirm no FOR UPDATE variant of findByStatusAndPastDueSinceBefore exists and that the per-item block saves the batch-loaded instance (it does \u2014 `sub` from the outer list)."
+    },
+    {
+      "category": "concurrency",
+      "description": "subscribeCoach calls Stripe, then links stripeSubscriptionId in a later transaction (persistCoachSubscription, which can stall on syncMarketplaceTier's coach_profiles lock with bounded retry). A customer.subscription.updated for the new subscription delivered inside that window finds no row by stripeSubscriptionId, takes the orphan branch (line 224-227), and returns normally \u2014 handleEventAtomically commits the insertIfAbsent idempotency row, so the event is acknowledged and never redelivered. The status transition it carried (e.g. incomplete\u2192active or trialing\u2192active) is lost: the local row commits with the creation-time status and, if that status is not ACTIVE/TRIALLING, getEffectiveCoachTier returns SCOUT while Stripe bills, until some unrelated later event happens to arrive. SUBSCRIBE_RACE_GRACE_WINDOW only suppresses the alert, not the loss. handleSubscriptionDeleted (line 316) has the same consume-and-ack orphan branch.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeWebhookService.java",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "StripeWebhookService.handleSubscriptionUpdated",
+      "title": "Webhook orphan branch permanently consumes subscription events that arrive before the local row is linked",
+      "verification": "Confirm no sweep reapplies missed status transitions \u2014 reconcileStripeSubscriptions is alert-only by design."
+    },
+    {
+      "category": "concurrency",
+      "description": "The sweep loads all ACTIVE/TRIALLING payment rows in one transaction (line 628), then in each per-item transaction compares the marketplace projection against the DETACHED row's tier without re-reading payment.coach_subscriptions (line 635-649). If a customer.subscription.deleted webhook (or grace-period downgrade) commits between the batch load and the per-item transaction \u2014 setting the payment tier to SCOUT and syncing marketplace to SCOUT \u2014 the sweep sees marketplace=SCOUT vs stale payment tier=INSTRUCTOR, declares a mismatch, and syncMarketplaceTier writes the paid tier back: a cancelled, non-paying coach regains the paid marketplace tier until the next nightly run. The coach_profiles lock inside syncMarketplaceTier is taken only after the decision was made from stale data.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R11",
+      "severity": "medium",
+      "symbol": "SubscriptionService.reconcileMarketplaceTiers",
+      "title": "reconcileMarketplaceTiers re-escalates marketplace tier from a stale batch-loaded payment row",
+      "verification": "Confirm the per-item lambda uses the outer `sub` (it does) and never re-fetches the payment row after taking the profile lock."
+    },
+    {
+      "category": "concurrency",
+      "description": "handleAccountUpdated defends against Stripe's out-of-order delivery with lastEventCreatedAt (StripeWebhookService.java:178), but handleSubscriptionUpdated/handleInvoicePaymentFailed apply whatever snapshot arrives. If Stripe delivers a delayed customer.subscription.updated carrying status 'past_due' after the newer 'active' event was already applied, the row flips back to PAST_DUE \u2014 and because pastDueSince is never cleared on recovery, the stale timestamp from the earlier genuine delinquency already predates the grace cutoff, so the nightly checkPastDueGracePeriod immediately cancels and downgrades a healthy, paying subscription.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R12",
+      "severity": "medium",
+      "symbol": "SubscriptionService.handleSubscriptionUpdated",
+      "title": "Subscription webhooks have no event-ordering guard, unlike the sibling account.updated handler",
+      "verification": "Confirm payment.coach_subscriptions/player_subscriptions carry no last-event-created column (V138 shows none) and that event.getCreated() is discarded on the subscription path (buildSubDataMap omits it)."
+    },
+    {
+      "category": "logic",
+      "description": "handleInvoicePaymentFailed sets pastDueSince only when null (line 813, 'do not overwrite on repeated failures'), and handleSubscriptionUpdated never nulls it when status returns to ACTIVE. Sequence: payment fails (PAST_DUE, pastDueSince=T0), payment recovers (ACTIVE, pastDueSince still T0), months later a second payment fails \u2014 the guard sees pastDueSince non-null and keeps T0. That night checkPastDueGracePeriod finds status=PAST_DUE with pastDueSince=T0 already far past the grace cutoff and immediately sets CANCELLED/SCOUT (or ATHLETE) on day one of the new delinquency, instead of granting the configured grace window \u2014 while Stripe is still dunning and may collect (see the no-Stripe-cancel finding for the resulting billed-without-entitlement state).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R13",
+      "severity": "medium",
+      "symbol": "SubscriptionService.handleInvoicePaymentFailed",
+      "title": "pastDueSince is never cleared on recovery, so a second payment failure skips the entire grace period",
+      "verification": "Grep confirmed no code path sets pastDueSince back to null."
+    },
+    {
+      "category": "edge-case",
+      "description": "Both helpers do findBy \u2192 orElseGet(save) with no upsert or constraint-violation handling. Two concurrent first requests for the same coach/player (e.g. getCoachSubscription and subscribeCoach, or two instances behind the proxy) both see no row and both insert; uq_pcs_coach_id/uq_pps_player_id rejects one with a DataIntegrityViolationException surfacing as a 500 instead of a retry. No data corruption (the constraint holds), but a read endpoint (getCoachSubscription is a query) can fail on a timing collision \u2014 and notably performs a write at all.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R14",
+      "severity": "low",
+      "symbol": "findOrCreateCoachSubscription / findOrCreatePlayerSubscription",
+      "title": "findOrCreate subscription races to insert: concurrent first-touch requests collide on the unique constraint",
+      "verification": "Confirm no global exception mapper retries unique-violation on these paths."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

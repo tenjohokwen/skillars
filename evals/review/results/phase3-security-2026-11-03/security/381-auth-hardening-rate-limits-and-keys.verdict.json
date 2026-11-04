@@ -1,0 +1,146 @@
+{
+  "arm": "security",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "PasswordResetService.completePasswordReset indeed only encodes the password and calls user.completePasswordReset with no revocation call in this file, but the verdict depends on code not shown: the User.completePasswordReset entity method (could publish a domain event) and any event listeners/callers (finishPasswordReset, RefreshTokenRepository consumers) that might revoke tokens out-of-band.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "The grace-window branch of AuthService.refresh reassigns `token` via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc (account-wide, no lineage to the presented token) and falls through to the normal rotation path, issuing a new JWT and refresh cookie to the stale-token presenter with no reuse revocation \u2014 markAllUsedByUserId/invalidateSessionsForUser fire only in the orElseGet and the outside-grace else branch. The verification caveat (SPA refresh cadence) is not determinable from this file, but it only affects how long the ping-pong persists, not the code-level mechanism.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "confirmed",
+      "note": "Both AuthService.login and AuthService.refresh compute `String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : \"ADMIN\"` and write it into the LoginResponse and SkillarsProfileCookie; no guard blocks null-role users \u2014 ensureAccountIsLive checks only activated/locked/SUSPENDED, and login()'s phone-OTP verification gate is itself skipped when skillarsRole is null. The downstream SPA-trust and registration claims rest on code outside this file, but the described trigger produces the described ADMIN labelling exactly as stated.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "undetermined",
+      "note": "UserProfileService.updateUserEmail does set email and login immediately after only a password + old-email check, with no in-file pending/confirm state. But the finding's verification caveat \u2014 that no confirm-link flow exists in ProfileResource.updateEmail or AccountManagementFacade.changeEmail \u2014 cannot be checked, as neither file is shown; the facade could gate this call behind a new-address confirmation.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "undetermined",
+      "note": "resendRegistrationLink does gate only on activationDate==null plus passwordResetService.isPasswordMatch with no per-account failure recording, but the finding's verification caveat \u2014 that @RateLimited state is the in-memory RateLimitingService (per-IP, per-instance) \u2014 cannot be checked: the RateLimited aspect/RateLimitingService and PasswordResetService.isPasswordMatch implementations are not in the provided file.",
+      "reported_id": "R10"
+    },
+    {
+      "check": "undetermined",
+      "note": "Binding mechanics are real: registerLinkResend has no @RequestBody/@RequestParam so login/password bind from request parameters, and AccountResource lacks @Validated so @NotNull is unenforced. But the claimed NPE path is a misread \u2014 the method returns Success with an empty Map.of(), not Map.of(\"login\", login); a null login just flows into accountManagementFacade.resendRegistrationLink. The log-exposure consequence depends on the verification caveat (SPA client behavior, LoggingFilter/proxy query-string logging), none of which is in this file.",
+      "reported_id": "R11"
+    },
+    {
+      "check": "undetermined",
+      "note": "AppEndpoints.PUBLIC_MGMT_ENDPOINTS does contain \"/manage/prometheus\" and the static block adds it to ALL_UNRESTRICTED, but confirming public exposure requires SecurityConfiguration (does it permitAll() these lists, and is that rule ordered before the /manage/** ROLE_ADMIN rule from SECURED_MAPPINGS?) plus the reverse-proxy config named in the finding's verification caveat \u2014 none of which is shown.",
+      "reported_id": "R12"
+    }
+  ],
+  "judge_cost_usd": 1.6878399999999998,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding addresses the DB-backed LoginRateLimiter keying on (login, IP); R13 only mentions the budget in passing while describing timing enumeration.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies the same 10-digit numeric reset/activation keys in RandomUtil with the same brute-force-to-takeover consequence, including global key lookup.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 identifies the missing @RateLimited on AccountResource.activateAccount enabling unbounded activation-key guessing.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R4 identifies the per-JVM in-memory tryConsume budgets on the phone OTP verify path, with the same consequence that restarts/multiple instances leave the OTP guessable beyond the intended attempt cap.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R13 identifies the same bcrypt-skip timing difference in AuthService.login enabling account enumeration.",
+        "reported_ids": [
+          "R13"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R9 identifies the same differential response from sendPasswordResetMail enabling account-existence enumeration, additionally noting the DOB oracle and PII echo.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R5 identifies the per-IP-only @RateLimited keying on resendVerificationEmail with no per-target limit, allowing multi-IP mail flooding of one address.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding mentions the activate.security flag or the permit-all fallback in SecurityConfiguration.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] PasswordResetService.completePasswordReset indeed only encodes the password and calls user.completePasswordReset with no revocation call in this file, but the verdict depends on code not shown: the User.completePasswordReset entity method (could publish a domain event) and any event listeners/callers (finishPasswordReset, RefreshTokenRepository consumers) that might revoke tokens out-of-band. | pass-1: Concrete trigger stated: completePasswordReset writes the new hash without calling the existing refresh-token/session revocation methods, leaving stolen refresh tokens valid after a recovery reset.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] The grace-window branch of AuthService.refresh reassigns `token` via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc (account-wide, no lineage to the presented token) and falls through to the normal rotation path, issuing a new JWT and refresh cookie to the stale-token presenter with no reuse revocation \u2014 markAllUsedByUserId/invalidateSessionsForUser fire only in the orElseGet and the outside-grace else branch. The verification caveat (SPA refresh cadence) is not determinable from this file, but it only affects how long the ping-pong persists, not the code-level mechanism. | pass-1: Concrete trigger stated: reuse within the 30s grace window returns the account's newest unused token instead of flagging theft, so alternating refreshes sustain a parallel attacker session indefinitely.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] Both AuthService.login and AuthService.refresh compute `String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : \"ADMIN\"` and write it into the LoginResponse and SkillarsProfileCookie; no guard blocks null-role users \u2014 ensureAccountIsLive checks only activated/locked/SUSPENDED, and login()'s phone-OTP verification gate is itself skipped when skillarsRole is null. The downstream SPA-trust and registration claims rest on code outside this file, but the described trigger produces the described ADMIN labelling exactly as stated. | pass-1: Concrete trigger stated: null skillarsRole falls back to the string \"ADMIN\" in the login response and skp cookie, which the SPA's admin route gate trusts, exposing the full admin UI to self-registered users.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] UserProfileService.updateUserEmail does set email and login immediately after only a password + old-email check, with no in-file pending/confirm state. But the finding's verification caveat \u2014 that no confirm-link flow exists in ProfileResource.updateEmail or AccountManagementFacade.changeEmail \u2014 cannot be checked, as neither file is shown; the facade could gate this call behind a new-address confirmation. | pass-1: Concrete trigger stated: updateUserEmail switches login and email to an unverified attacker-supplied address in one password-gated call, hijacking the account's recovery channel.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] resendRegistrationLink does gate only on activationDate==null plus passwordResetService.isPasswordMatch with no per-account failure recording, but the finding's verification caveat \u2014 that @RateLimited state is the in-memory RateLimitingService (per-IP, per-instance) \u2014 cannot be checked: the RateLimited aspect/RateLimitingService and PasswordResetService.isPasswordMatch implementations are not in the provided file. | pass-1: Concrete trigger stated: resendRegistrationLink runs passwordEncoder.matches outside the LoginAttempt limiter with only an in-memory per-IP bucket, giving an unthrottled password-verification oracle for unactivated accounts.",
+        "reported_id": "R10",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] Binding mechanics are real: registerLinkResend has no @RequestBody/@RequestParam so login/password bind from request parameters, and AccountResource lacks @Validated so @NotNull is unenforced. But the claimed NPE path is a misread \u2014 the method returns Success with an empty Map.of(), not Map.of(\"login\", login); a null login just flows into accountManagementFacade.resendRegistrationLink. The log-exposure consequence depends on the verification caveat (SPA client behavior, LoggingFilter/proxy query-string logging), none of which is in this file. | pass-1: Concrete trigger stated: login/password bound as request parameters (credential leakage into logs) and missing @Validated so a null login reaches Map.of and throws NPE as a 500.",
+        "reported_id": "R11",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] AppEndpoints.PUBLIC_MGMT_ENDPOINTS does contain \"/manage/prometheus\" and the static block adds it to ALL_UNRESTRICTED, but confirming public exposure requires SecurityConfiguration (does it permitAll() these lists, and is that rule ordered before the /manage/** ROLE_ADMIN rule from SECURED_MAPPINGS?) plus the reverse-proxy config named in the finding's verification caveat \u2014 none of which is shown. | pass-1: Concrete trigger stated: /manage/prometheus is in PUBLIC_MGMT_ENDPOINTS and permitAll'd, so any unauthenticated client can scrape the full metrics registry.",
+        "reported_id": "R12",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

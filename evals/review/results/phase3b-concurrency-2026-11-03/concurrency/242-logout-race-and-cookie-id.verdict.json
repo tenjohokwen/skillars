@@ -1,0 +1,103 @@
+{
+  "arm": "concurrency",
+  "case": "242-logout-race-and-cookie-id",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "Class-level @Transactional on AuthService has no noRollbackFor; recordAttempt (private, unannotated) saves the LoginAttempt and both callers in login() then throw BadCredentialsException (a RuntimeException) from the same transaction, rolling back the insert. Verification caveat checked: no REQUIRES_NEW or noRollbackFor on any shown path into loginAttemptRepository.save, so countByIdentifierAndAttemptedAtAfter never sees failed attempts and the lockout cannot engage.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "AuthService.logout filters on !t.isUsed() and only touches the presented token; markAllUsedByUserId is called only from refresh's theft branches, never from logout, so a refresh that commits first leaves its successor token (newRt, used=false, full TTL) valid after logout. The opposite interleaving also fails as described: RefreshToken is @Version-ed (refresh catches ObjectOptimisticLockingFailureException), so logout's save errors and revokes nothing. Frontend Promise.race overlap could not be checked (no file tools), but the server-side revocation gap is fully shown in this file.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "routes.js confirms the player-subscription route (name 'player-subscription', ~line 203) uses meta `requiresParent: true` instead of `role: 'PARENT'`, but whether that key is ignored depends on router/index.js, which is not shown \u2014 and the heavy use of `requiresCoach: true` on coach routes suggests the guard may handle `requires*` keys, contradicting the finding's claim. The finding's own verification caveat (backend authorization of the subscription endpoints) is also unverifiable from this file.",
+      "reported_id": "R9"
+    }
+  ],
+  "judge_cost_usd": 1.197844,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R5 identifies the same defect: destroySession runs after the awaited logout call, the cleared user cookie trips sessionManager's teardown branch, firing a false session:expired that drives App.vue into a duplicate logout and expired redirect.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions buildRedirectQuery or the deliberate-logout redirect param replaying the previous account's URL.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "R9 concerns a different route (parent subscription / requiresParent meta); nothing reported targets coach/profile-builder's missing requiresCoach.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding addresses the hand-built skp cookie emitting the Long id as an unquoted JSON number and precision loss in hydrateFromCookie.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions /manage/health/smoke or PUBLIC_MGMT_ENDPOINTS.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] Class-level @Transactional on AuthService has no noRollbackFor; recordAttempt (private, unannotated) saves the LoginAttempt and both callers in login() then throw BadCredentialsException (a RuntimeException) from the same transaction, rolling back the insert. Verification caveat checked: no REQUIRES_NEW or noRollbackFor on any shown path into loginAttemptRepository.save, so countByIdentifierAndAttemptedAtAfter never sees failed attempts and the lockout cannot engage. | pass-1: Concrete trigger: recordAttempt's insert and the BadCredentialsException throw share the class-level @Transactional, so the rollback erases the attempt and lockout never engages.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] AuthService.logout filters on !t.isUsed() and only touches the presented token; markAllUsedByUserId is called only from refresh's theft branches, never from logout, so a refresh that commits first leaves its successor token (newRt, used=false, full TTL) valid after logout. The opposite interleaving also fails as described: RefreshToken is @Version-ed (refresh catches ObjectOptimisticLockingFailureException), so logout's save errors and revokes nothing. Frontend Promise.race overlap could not be checked (no file tools), but the server-side revocation gap is fully shown in this file. | pass-1: Concrete interleaving: logout's .filter(!isUsed) no-ops when a concurrent refresh marks the token used first, leaving the successor token valid for its full TTL.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: optimistic-lock loser's clearAuthCookies Max-Age=0 response deletes the winner's freshly rotated cookies in the shared jar when applied second.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete sequence: grace branch consumes the successor and mints T3; out-of-order Set-Cookie leaves the browser holding used T2, whose next refresh triggers markAllUsedByUserId full revocation.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: logout response stalled past the 3s race budget arrives after a fresh login and its unconditional Max-Age=0 clears delete the new session's cookies.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete count-then-insert race: N parallel failures all read a sub-cap count before any insert commits, exceeding the lockout cap; genuine even though currently masked by R1.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: findFirstByIdentifierOrderByAttemptedAtAsc lacks a window filter, so stale attempts clamp retryAfterSeconds to 1 while the count-based block still returns 429.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] routes.js confirms the player-subscription route (name 'player-subscription', ~line 203) uses meta `requiresParent: true` instead of `role: 'PARENT'`, but whether that key is ignored depends on router/index.js, which is not shown \u2014 and the heavy use of `requiresCoach: true` on coach routes suggests the guard may handle `requires*` keys, contradicting the finding's claim. The finding's own verification caveat (backend authorization of the subscription endpoints) is also unverifiable from this file. | pass-1: Concrete trigger: router/index.js gates parents only via meta.role === 'PARENT' and never reads requiresParent, so the subscription route has no client-side role gate; distinct from F3's route.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

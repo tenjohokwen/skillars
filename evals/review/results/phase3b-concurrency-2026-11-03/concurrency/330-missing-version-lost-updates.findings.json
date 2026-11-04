@@ -1,0 +1,58 @@
+{
+  "arm": "concurrency",
+  "case": "330-missing-version-lost-updates",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "eraseTransactional loads the CoachProfile via an unlocked findByUserId(userId), mutates bio/city/district/photoUrl, and calls save(cp); CoachProfile has no @Version and no @DynamicUpdate, so the UPDATE that flushes at the coach_branding native query (which auto-flushes) or at outer commit rewrites every column, status included, from the stale snapshot. If AdminCoachEnforcementService.suspendCoach (or ReliabilityStrikeService, or updateRatingAggregate) commits a status/rating change between that read and the flush \u2014 a wide window, since the outer transaction runs the entire REQUIRES_NEW recap scrub (with lock_timeout waits up to 120s configurable), message deletes and review deletes in between \u2014 the GDPR UPDATE waits on the released row lock and then silently writes the pre-suspension status (e.g. ACTIVE) back over SUSPENDED. The code comment at the read deliberately forgoes the row lock (to avoid self-deadlocking markRecapDataErased) and acknowledges only the orphaned-photo-blob residual, not this status lost-update, even though every other full-row CoachProfile writer in the codebase (saveStep1, saveStep4, deletePhoto, publishProfile) takes findByIdForUpdate + refresh for exactly this reason.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "GdprErasureService.eraseTransactional (COACH branch, coachProfileRepository.save(cp))",
+      "title": "GDPR coach erasure's unlocked full-row CoachProfile save can revert a concurrent suspension",
+      "verification": "Confirm nothing between findByUserId and the outer commit refreshes cp or re-locks the row, and that suspendCoach/suspendCoachForSafetyHold can commit while a GDPR erasure transaction for the same coach is open (nothing serializes them \u2014 the GDPR path never calls findByIdForUpdate on coach_profiles)."
+    },
+    {
+      "category": "logic",
+      "description": "When the COACH recap scrub or the PLAYER/PARENT development-data deletion is skipped for contention, eraseTransactional sets request.setStatus(\"FAILED\") and completedAt directly and commits \u2014 but never sets failedAt (only markFailedStatusUpdate and eraseChildTransactional's skip path do). retryFailedErasures selects candidates with findByRequestTypeAndStatusAndFailedAtBeforeAndRetryCountLessThan, and a NULL failed_at never satisfies 'failed_at < graceDeadline', so a first-attempt skip produces a FAILED row the daily sweep can never match. The surviving data \u2014 a coach's session-recap text, timeline metadata and report rows, or a child's development data \u2014 is therefore never automatically re-erased, while roughly a dozen comments in this file (Decision 1(a), the skip-and-alert catch blocks) assert the daily GdprErasureRetryScheduler re-drives exactly this case. eraseChildTransactional sets failedAt on its identical skip path, confirming the omission in eraseTransactional is a defect rather than a design choice; only the OPEN AdminAlert remains as a manual backstop.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "GdprErasureService.eraseTransactional (terminal status write, ~line 789) / retryFailedErasures",
+      "title": "Skipped erasure marks the request FAILED without failedAt, so retryFailedErasures never re-drives it",
+      "verification": "Confirm GdprErasureRetryScheduler calls retryFailedErasures and that no other sweep or admin action selects FAILED rows with NULL failed_at; confirm the derived query compiles to 'failed_at < ?' (NULL excluded) rather than a null-tolerant predicate."
+    },
+    {
+      "category": "concurrency",
+      "description": "updatePhotoUrlByUserId is an unconditional single-column UPDATE with no guard on erasure state. If a coach's photo-upload confirm transaction is in flight when eraseTransactional commits photoUrl = NULL and marks the GDPR request COMPLETED, the listener's UPDATE (which blocked on the erasure's row lock) then commits the new key on top: the erased profile carries a live photo of the erased person, its blob is never enqueued to the deletion outbox (the erasure only enqueued the key it read), and nothing ever re-scrubs it because the request is COMPLETED and retryFailedErasures only re-drives FAILED rows. The inline comment in eraseTransactional accepts only the opposite ordering (listener commits before the erasure's flush \u2014 photo unlinked but blob orphaned); this ordering, where the coach's photo both survives in storage and is re-linked on the profile, is not covered by any guard such as a WHERE clause on the erasure tombstone.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "CoachProfilePhotoEventListener.onStorageConfirmed / CoachProfileRepository.updatePhotoUrlByUserId",
+      "title": "Photo-confirm listener racing GDPR erasure re-links a photo to an erased coach profile",
+      "verification": "Confirm StorageObjectConfirmedEvent can fire for a coach_profile key while a GDPR erasure for the same user is in flight (upload confirm is user-initiated and its transaction is independent of the erasure), and that no later process rechecks photo_url against recap_data_erased_at or user.locked."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two independent triggers leave a DRAFT/SAVED plan stranded on a terminal booking with no sweeper to heal it. (1) createSession reads the booking snapshot (CONFIRMED) and inserts the Session in the same transaction; if the booking transitions to COMPLETED after that read and markCompletedByBookingId's conditional UPDATE runs before createSession's INSERT commits, the UPDATE matches 0 rows (logged debug and dropped), and the plan committed moments later stays DRAFT forever against a COMPLETED booking. (2) Both transition listeners are in-memory Spring AFTER_COMMIT events \u2014 handleBookingCompleted additionally @Async \u2014 so a crash or deploy restart between the booking's commit and the listener's REQUIRES_NEW transaction silently drops the transition; unlike the codebase's durable-outbox paths, there is no retry and no reconciliation job. In both cases the wrong state is an open session plan whose status never reaches COMPLETED/CANCELLED, skewing the SAVED/COMPLETED focus-thread window queries and leaving a plan that reads as editable-looking state on a finished booking.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "SessionPlanService.createSession / handleBookingCompleted / handleBookingTerminalNonCompletion",
+      "title": "Session-plan completion/cancellation transition can be permanently lost (insert-after-event race and non-durable AFTER_COMMIT listeners)",
+      "verification": "Confirm no scheduled job reconciles session.sessions status against booking status (grep for a sweeper over sessions with status IN ('DRAFT','SAVED') joined to terminal bookings), and that BookingCompletedEvent/BookingStatusChangedEvent are plain ApplicationEvents, not outbox-backed."
+    },
+    {
+      "category": "database",
+      "description": "Session's id is GenerationType.UUID, assigned in memory, so sessionRepository.save() performs persist without flushing; the INSERT executes at the class-level @Transactional commit, after the method (and its try/catch) has returned. On a double submit where both requests pass existsByBookingId before either commits, the second transaction's INSERT blocks on uq_sessions_booking_id until the first commits, then raises the unique violation at commit time \u2014 outside the catch \u2014 so the client receives a raw commit-time DataIntegrityViolationException (500) instead of the mapped SESSION_ALREADY_EXISTS error the catch was written to produce. Data integrity is protected by the unique index; only the intended idempotent error mapping is broken.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "SessionPlanService.createSession (catch DataIntegrityViolationException around sessionRepository.save)",
+      "title": "createSession's duplicate-plan catch is dead: the INSERT flushes at commit, outside the try",
+      "verification": "Confirm nothing in buildResponse/toResponseMap triggers an auto-flush whose query space includes session.sessions (drillLibraryService.toResponse queries only drill tables), and that no saveAndFlush or explicit flush runs between save and method return."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

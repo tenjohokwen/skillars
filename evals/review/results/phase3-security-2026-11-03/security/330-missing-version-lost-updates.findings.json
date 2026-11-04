@@ -1,0 +1,58 @@
+{
+  "arm": "security",
+  "case": "330-missing-version-lost-updates",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "Every skip path in eraseTransactional (COACH recap-scrub contention, PLAYER-branch CHILD_CONTENDED/CHILD_DELETE_LOCK_TIMEOUT/cumulative-budget/booking-lock catches, and a PARENT-loop child skip) sets the `skipped` flag and writes `request.setStatus(\"FAILED\")` plus completedAt at the end of the method, but never calls setFailedAt. GdprErasureRetryScheduler's sweep selects via findByRequestTypeAndStatusAndFailedAtBeforeAndRetryCountLessThan, and a row with NULL failed_at can never satisfy `failedAt < cutoff`, so these requests are permanently invisible to the re-drive. The surviving personal data (a coach's recap text and reports, or a player/child's development data) is retained indefinitely while the inline comments and the raised admin alert both claim the daily scheduler will re-run it. eraseChildTransactional and markFailedStatusUpdate both stamp failedAt on the equivalent paths, confirming the query depends on it.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "eraseTransactional",
+      "title": "Skipped erasures marked FAILED without failedAt are never picked up by the retry scheduler",
+      "verification": "Confirm GdprErasureRetryScheduler calls retryFailedErasures with no other selection path, and that no DB default or trigger populates gdpr_requests.failed_at."
+    },
+    {
+      "category": "security",
+      "description": "A parent who erases their whole account (and a self-registered PLAYER who erases theirs) goes through the two-argument deletePlayerDevelopmentData overload, which passes scrubProfileIdentity=false; the only writer of ERASED_PLAYER_NAME and the DOB coarsening is the single-child eraseChildTransactional path. The request completes COMPLETED, yet every child's real name and exact date of birth remain in main.player_profiles indefinitely (the PLAYER-branch comment claiming 'the profile row is anonymised ... by the erasure above' is false \u2014 only main.user is anonymised). Worse, the sticky developmentDataErasedAt tombstone set by that run means eraseParentChildren's re-drive filter (developmentDataErasedAt == null) excludes those children forever, so no retry can ever scrub the identity fields. This is retained children's identity data after an Article 17 request.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "eraseParentChildren / deletePlayerDevelopmentData(playerId, lockTimeoutSeconds)",
+      "title": "Parent-account and player-account erasure never scrubs player_profiles name and date of birth",
+      "verification": "Grep for any other writer of PlayerProfile.setName / setDateOfBirth on an erasure path; I found only the scrubProfileIdentity branch in deletePlayerDevelopmentDataInDedicatedPool."
+    },
+    {
+      "category": "security",
+      "description": "The COACH branch nulls bio, city, district and photoUrl but never clears displayName and never changes CoachProfileStatus, and no listener of UserErasedEvent or AccountDeletionRequestedEvent touches the marketplace profile (listeners exist only in notification, security and video modules; nothing in the codebase writes DEACTIVATED). After a coach's erasure completes, CoachProfileService.getPublicProfile (ACTIVE/REDUCED/PENDING_REVIEW) and findIdsByLanguage (ACTIVE/REDUCED) keep returning the erased coach's real name, languages, specialties, pricing, session packs and availability to any anonymous visitor, and the coach stays listed in search. GdprRequestService.requestErasure only blocks on bookings live at request time, so parents can also submit new booking requests against the locked, unresponsive account afterwards.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "eraseTransactional (COACH branch)",
+      "title": "GDPR-erased coach's public profile stays ACTIVE and keeps serving their real display name",
+      "verification": "Confirm the booking-request path has no independent check that the coach's underlying user account is locked/activated."
+    },
+    {
+      "category": "security",
+      "description": "saveStep5 accepts any string starting with coach_profile/{userId}/ and writes it to photo_url without checking FileStorageService.findActiveObject or assertOwnership \u2014 the helpers the storage module provides precisely so a domain module does not 'trust what the client declared'. A coach can obtain a presigned PUT URL, upload arbitrary bytes (any content type, any size the bucket accepts), skip the confirm endpoint whose HeadObject call performs the content-type and size verification, and link the key directly via Step 5. getPublicProfile.resolvePhotoUrl then signs a download URL for the unvalidated object and serves it to every profile visitor. The normal confirm-event path (CoachProfilePhotoEventListener) guarantees a validated object; this direct path does not.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "saveStep5",
+      "title": "saveStep5 links a profile photo by key prefix only, bypassing confirm-time content validation",
+      "verification": "Confirm signedDownloadUrl signs a key without requiring a confirmed FileStorageObject row, and that confirmUpload's HeadObject check is the only content-type/size validation for the coach_profile slot."
+    },
+    {
+      "category": "concurrency",
+      "description": "The COACH branch deliberately reads the CoachProfile without the row lock (to avoid self-deadlock with the REQUIRES_NEW recap scrub) and then flushes a full-row UPDATE at the outer commit; CoachProfile has no @Version or @DynamicUpdate. An AdminCoachEnforcementService.suspendCoach that commits between that unlocked read and the erasure's outer commit is silently overwritten back to the pre-suspension status. Because erasure itself never deactivates the profile (see the ACTIVE-profile finding), the reverted suspension leaves the profile publicly visible. The inline comment acknowledges only the narrower photo-blob residual, not the status revert.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "eraseTransactional (coachProfileRepository.save(cp))",
+      "title": "Coach-erasure full-row save of an unlocked CoachProfile snapshot can revert a concurrent admin suspension",
+      "verification": "Confirm suspendCoach's lock-then-write commits are not otherwise serialized against the erasure transaction (the erasure comment itself states it takes no coach_profiles lock)."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

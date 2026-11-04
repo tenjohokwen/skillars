@@ -187,6 +187,67 @@ jobs:
       - name: Assert git-provenance (AC6)
         run: .github/scripts/assert-git-provenance.sh skillars-app:pr-${{ github.event.pull_request.number }} ${{ github.sha }}
 
+      # trivy-action calls aquasecurity/setup-trivy unless `skip-setup-trivy` is set, and that
+      # installer downloads the tarball from Aqua's own redirector `https://get.trivy.dev/trivy`
+      # -- NOT from GitHub releases. That host went NXDOMAIN on 2026-11-03 and every PR's
+      # docker-image job started failing with `exit code 6`: contrib/install.sh is `#!/bin/sh` +
+      # `set -e` and fetches via `code=$(curl ...)`, so curl's exit 6 ("couldn't resolve host")
+      # surfaces as the step's own exit code -- before any image is scanned, with every later step
+      # including `Run Trivy` reported as skipped. Upstream: aquasecurity/setup-trivy#42 and
+      # aquasecurity/trivy#11537, both open with no fixed release at the time of this change.
+      # The tell, if this ever recurs: `found version: <v>` followed ~40ms later by exit 6, where a
+      # healthy install takes ~1.2s between those two lines. Diagnose with
+      # `dig +short @1.1.1.1 get.trivy.dev` -- query a public resolver, not your own, because a
+      # local cache can still serve the dead record and make the host look healthy.
+      #
+      # Installing from the GitHub release removes the single-vendor DNS dependency outright: one
+      # dead record in a domain this project does not control could otherwise block every PR here.
+      # The version matches what the action was already resolving (0.70.0), so the scanner itself
+      # is unchanged. The tarball is sha256-pinned deliberately -- this binary is what vets our
+      # image, so an unpinned download would put a supply-chain hole in the gate itself.
+      #
+      # KNOWN COST OF THIS WORKAROUND -- read before approving a Dependabot PR that bumps
+      # trivy-action. Dependabot watches `github-actions` (.github/dependabot.yml), so it proposes
+      # trivy-action bumps, and until now such a bump also moved the scanner: the action's own
+      # `version` input defaults to the Trivy release it was built against ('v0.70.0' at the pin
+      # below, which is why TRIVY_VERSION here is 0.70.0 and the scanner is genuinely unchanged by
+      # this commit -- not a downgrade). With `skip-setup-trivy: 'true'` that link is cut. A future
+      # trivy-action bump will merge green while the scanner stays at whatever TRIVY_VERSION says,
+      # and nothing in this repo will propose moving it. That matters because this is the ONLY CVE
+      # gate here -- ci.yml runs no scan at all -- so a frozen scanner means new analyzer and
+      # detection fixes never reach it. **TRIVY_VERSION must therefore be bumped by hand**, in the
+      # same PR as any trivy-action bump. Tracked in deferred-work.md so it does not rest on
+      # someone reading this comment.
+      #
+      # The forcing function, if nobody revisits this voluntarily: trivy-db publishes a DB schema
+      # version, and a Trivy client refuses a DB whose schema it does not know. So an indefinitely
+      # frozen scanner does not fail quietly forever -- eventually it rejects the DB and blocks
+      # every PR outright, since `docker-image` is a required check in
+      # .github/rulesets/no-direct-push.json with `bypass_actors: []` (nobody can bypass it, not
+      # even an admin). Treat a sudden DB-schema error here as "the pin aged out", not a new bug.
+      #
+      # Revert condition: when get.trivy.dev resolves again AND upstream ships a release that no
+      # longer depends on it, this step and the `skip-setup-trivy` input below can both go -- which
+      # also restores the Dependabot link above, and is the main reason to bother reverting. Until
+      # then, bumping TRIVY_VERSION also means updating TRIVY_SHA256 from
+      # https://github.com/aquasecurity/trivy/releases/download/v<ver>/trivy_<ver>_checksums.txt
+      - name: Install Trivy from its GitHub release
+        env:
+          TRIVY_VERSION: '0.70.0'
+          TRIVY_SHA256: '8b4376d5d6befe5c24d503f10ff136d9e0c49f9127a4279fd110b727929a5aa9'
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          curl -fsSL --retry 3 --retry-delay 2 -o "${workdir}/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  ${workdir}/trivy.tar.gz" | sha256sum -c -
+          tar -xzf "${workdir}/trivy.tar.gz" -C "${workdir}" trivy
+          install -d "${HOME}/.local/bin"
+          install -m 0755 "${workdir}/trivy" "${HOME}/.local/bin/trivy"
+          rm -rf "${workdir}"
+          echo "${HOME}/.local/bin" >> "$GITHUB_PATH"
+          "${HOME}/.local/bin/trivy" --version
+
       - name: Scan image for vulnerabilities
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
@@ -195,6 +256,10 @@ jobs:
           severity: CRITICAL,HIGH
           exit-code: '1'
           trivyignores: .trivyignore
+          # The action resolves its binary as `TRIVY_CMD="${TRIVY_CMD:-trivy}"` from PATH, which
+          # the step above populates. Without this input the action would still reach for
+          # get.trivy.dev and fail there before the scan.
+          skip-setup-trivy: 'true'
 
   # skillars-deferred-92 AC1. The AC names ci.yml, but ci.yml's own comment records that "the
   # enforcement gates live in pr-build, which is where regressions should be caught" — a gate that

@@ -1,0 +1,127 @@
+{
+  "arm": "control",
+  "case": "319-csam-suspension-logout-login-limiter",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "UserProfileService.updateUserEmail does call u.setLogin(newEmail) with no lowercasing or uniqueness check, so the trigger is real; but the consequences depend on AuthService.login's lowercased lookup and the unique constraints in V138__baseline_schema.sql, neither of which is accessible in this session (file-search tools disabled), so the verification caveat could not be run.",
+      "reported_id": "R10"
+    }
+  ],
+  "judge_cost_usd": 0.642963,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same profile-id-vs-login/email lookup failure; R2 covers F1's 'only logged, no alert' consequence.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R3 covers the missing lock/token revocation and unenforced SUSPENDED status; R4 covers the flag-gated login check \u2014 jointly the full defect.",
+        "reported_ids": [
+          "R3",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding mentions /api/logout, refresh-token non-revocation there, or the any-method CSRF logout.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "R12/R13 concern LoginAttemptsService but neither describes the independent in-memory vs DB budgets or restart/multi-instance reset.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "R15 is about the guard's error handling, not the missing COACH meta.role enforcement.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding addresses the otpEnabled flag never being enforced at login.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding addresses linkAdditionalParent's missing ownership/consent check.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "Same defect: oldest row overall (not window-filtered) yields a Retry-After clamped to 1 second while the lock persists.",
+        "reported_ids": [
+          "R7"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Matches the listed non-finding: count-then-insert in AuthService.login is not atomic, known and left unfixed by PR 319.",
+        "reported_id": "R5",
+        "verdict": "non_finding"
+      },
+      {
+        "note": "Concrete trigger: rate-limit key is SHA-256(email|ip) and subjectHash is never enforced, so IP rotation gives unlimited per-account guesses.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: unknown-email path skips BCrypt entirely, creating a timing oracle the legacy path deliberately prevents.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: changePassword neither marks refresh tokens used nor stamps securitySessionInvalidatedAt, leaving stolen sessions alive.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] UserProfileService.updateUserEmail does call u.setLogin(newEmail) with no lowercasing or uniqueness check, so the trigger is real; but the consequences depend on AuthService.login's lowercased lookup and the unique constraints in V138__baseline_schema.sql, neither of which is accessible in this session (file-search tools disabled), so the verification caveat could not be run. | pass-1: Concrete trigger: setLogin(newEmail) stores mixed case while login lookup lowercases, locking the user out; no uniqueness check before commit.",
+        "reported_id": "R10",
+        "verdict": "unverified"
+      },
+      {
+        "note": "NPE and password-oracle depend on whether the DTO allows null emails and whether ApiAdvice serialises the context map, neither establishable from the report.",
+        "reported_id": "R11",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Concrete trigger: caches built without maximumSize and get() stores an entry per probe, so rotating client ids/IPs grows the heap unboundedly (30-day blacklist retention).",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: cache keys use the username as typed while admin unlock passes the stored lowercase login, so invalidation misses mixed-case keys.",
+        "reported_id": "R13",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: existsByUserId check-then-insert race makes the second concurrent request fail on uq_pp_user_id with an unhandled 500.",
+        "reported_id": "R14",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: loadStatus swallows errors leaving status unset, so !isComplete redirects a completed coach to the profile builder on any transient failure.",
+        "reported_id": "R15",
+        "verdict": "real"
+      }
+    ]
+  }
+}

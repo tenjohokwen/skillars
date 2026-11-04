@@ -1,0 +1,38 @@
+{
+  "arm": "control",
+  "case": "353-excused-cancel-cap-race",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "Each coach cancellation runs this listener in its own REQUIRES_NEW transaction: it inserts its history row, then counts excused rows in the window. Nothing serialises the check per coach (no coach-row lock or advisory lock). So when one coach cancels two bookings at the same time with excused reasons (two parallel POSTs to cancelBookingAsCoach), under PostgreSQL READ COMMITTED neither transaction sees the other's uncommitted row. Example with max=3 and 2 prior excused cancellations: both transactions count 3, 3 > 3 is false, neither issues COACH_CANCELLATION_EXCUSED_LIMIT, and the coach ends up with 4 excused cancellations in the window and no strike. Sending cancellations in parallel bursts lets a coach get past the anti-loophole cap again and again.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "onBookingCancelledByCoach / exceedsExcusedCancellationCap",
+      "title": "Excused-cancellation cap can be bypassed by concurrent coach cancellations (count-then-decide race, no lock)",
+      "verification": "Run two cancelBookingAsCoach calls in parallel for the same coach and different bookings, both with reason HEALTH_MEDICAL, with maxPerWindow\u22121 excused history rows already present. No COACH_CANCELLATION_EXCUSED_LIMIT strike is written. Locking the coach row (e.g. coachProfileRepository.findByIdForUpdate) before the count would settle it."
+    },
+    {
+      "category": "edge-case",
+      "description": "issueStrikeSafely only catches PessimisticLockingFailureException. ReliabilityStrikeService.issue can also throw ResourceNotFoundException (coach profile missing), a DataAccessException from the strike insert, or a config error. Any of these crosses the REQUIRES_NEW boundary and rolls back the listener transaction, which also removes the cancellation-history row saved just before. That contradicts the comment 'Always record cancellation history', and because this is an AFTER_COMMIT listener, Spring only logs the exception. The record is lost with no retry, and later excused-cap counts come out too low.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "issueStrikeSafely",
+      "title": "Cancellation history is silently lost when strike issuance fails with anything other than PessimisticLockingFailureException",
+      "verification": "Make reliabilityStrikeService.issue throw a RuntimeException (e.g. a coach_profile row missing or an insert constraint failure) during a coach cancellation, then check that payment.coach_cancellation_history has no row for that booking."
+    },
+    {
+      "category": "database",
+      "description": "saveCancellationHistory inserts without first checking findByBookingId, and payment.coach_cancellation_history (V138 baseline) has only a primary key on id, with no unique constraint on booking_id. If BookingCancelledByCoachEvent is handled twice for the same booking, two history rows are written. The windowed count then counts the booking twice, which can push a coach over the excused cap and issue an unjustified COACH_CANCELLATION_EXCUSED_LIMIT strike (plus a second strike via issue()).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/CoachCancellationHistoryRepository.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "countByCoachIdAndCancelReasonInAndCreatedAtAfter",
+      "title": "No uniqueness on booking_id in cancellation history: a redelivered or duplicate event double-counts toward the excused cap",
+      "verification": "Check whether any path (event replay, a retry wrapper, or a second publisher) can deliver BookingCancelledByCoachEvent more than once per booking. In the code reviewed there is only one publisher (BookingService.cancelBookingAsCoach, line 1259), so this is latent unless such a path exists."
+    }
+  ],
+  "input_rev": "783845c71730318ab777657e2c55a9c5714feece",
+  "model": null
+}

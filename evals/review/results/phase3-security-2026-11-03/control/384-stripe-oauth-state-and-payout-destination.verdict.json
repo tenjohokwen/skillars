@@ -1,0 +1,57 @@
+{
+  "arm": "control",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "handle does recompute toTransfer via coachPayoutDebtService.planOffset on every attempt and routes any non-retryable CoachPayoutTransferException to HOLD (the catch comment even names TRANSFER_*_MISMATCH), but neither CoachPayoutDebtService.planOffset (can the offset change between attempts?) nor the PaymentGateway implementation's findExistingTransfer/AMOUNT_MISMATCH behavior is shown, and the finding depends on both.",
+      "reported_id": "R6"
+    }
+  ],
+  "judge_cost_usd": 0.36887000000000003,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 describes the same CSRF: state is the public coach UUID, attacker pre-authorizes own Stripe account and lures victim to callback, redirecting payouts.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies the silent, immediate stripeAccountId overwrite in upsertCoachStripeAccount with no notification/audit, sending pending payouts to the new account.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: second coach linking an already-linked Stripe account hits the unique index, uncaught DataIntegrityViolationException on a browser redirect after the one-time code is spent.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: PaymentGatewayException from the code exchange is uncaught, so the Stripe browser redirect shows a raw backend error instead of the stripe_error redirect path.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: two concurrent first-time callbacks both pass findById and insert; the loser fails on the primary key with an unhandled error after consuming its OAuth code.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] handle does recompute toTransfer via coachPayoutDebtService.planOffset on every attempt and routes any non-retryable CoachPayoutTransferException to HOLD (the catch comment even names TRANSFER_*_MISMATCH), but neither CoachPayoutDebtService.planOffset (can the offset change between attempts?) nor the PaymentGateway implementation's findExistingTransfer/AMOUNT_MISMATCH behavior is shown, and the finding depends on both. | pass-1: Concrete trigger: transfer succeeds, transaction rolls back, outbox retry recomputes planOffset to a different amount, findExistingTransfer raises non-retryable AMOUNT_MISMATCH parking a paid payout in HOLD.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}
