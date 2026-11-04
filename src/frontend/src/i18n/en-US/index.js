@@ -2010,7 +2010,8 @@ export default {
       pauseSuccess: 'Pack paused — expiry extended accordingly',
       alreadyPausedLabel: 'Pack already used its pause',
       purchaseError: 'Purchase failed. Please try again.',
-      purchasePending: 'Your previous purchase is still being confirmed. Please wait a few minutes and try again.',
+      purchasePending:
+        'Your previous purchase is still being confirmed. Please wait a few minutes and try again.',
       purchaseNotCompleted: 'The payment did not go through. Please try again.',
       noTierAvailable: 'This coach has no session pack available for purchase.',
     },

@@ -58,7 +58,9 @@ describe('SessionPackPurchasePage.vue — purchase attempt key', () => {
     expect(second).toBe(first)
   })
 
-  const gatewayError = (errorKey) => ({ response: { status: 422, data: { errorMsg: { errorKey, message: errorKey } } } })
+  const gatewayError = (errorKey) => ({
+    response: { status: 422, data: { errorMsg: { errorKey, message: errorKey } } },
+  })
   const statusError = (status, message) => ({
     response: { status, data: { errorMsg: { errorKey: 'generic.requestError', message } } },
   })

@@ -409,6 +409,9 @@
         <tr><td>CoachPayoutFreeze</td><td>coach_payout_freezes</td><td>One row per coach whose payouts are frozen by a CSAM safety hold (V186). Active while <code>lifted_at</code> is null; an admin reinstatement lifts it.</td></tr>
         <tr><td>CashOutReconciliation</td><td>cash_out_reconciliations</td><td>One row per credit cash-out (V186), written <code>PENDING</code> in the same transaction as the wallet debit, then <code>COMPLETED</code> / <code>REVERSED</code> / <code>UNKNOWN</code> (operator: <code>RESOLVED</code>). Its Stripe key is always <code>cashout-{cashOutId}</code>.</td></tr>
         <tr><td>StripeRefundFailure</td><td>stripe_refund_failures</td><td>A durable record for when a pack purchase's compensating refund could not be issued (unique per <code>payment_intent_id</code>; <code>attempts</code>, <code>resolved_at</code>). An operator refunds manually.</td></tr>
+        <tr><td>SessionPackPurchaseAttempt</td><td>session_pack_purchase_attempts</td><td>One row per pack purchase attempt, written before the charge (V228): <code>attempt_key</code> (the client's <code>Idempotency-Key</code>, or a server-minted UUID), the <code>previous_card</code>/<code>attempted_card</code> snapshot, <code>status</code> (<code>IN_PROGRESS</code>, <code>SUCCEEDED</code>, <code>NO_CHARGE</code>, <code>REFUNDED</code>, <code>UNKNOWN</code>, <code>UNRECONCILED</code>). A partial unique index on <code>(parent_id)</code> over the three open statuses is the concurrency control: one open attempt per parent. Status writes are compare-and-set.</td></tr>
+        <tr><td>StripePendingSubscriptionEvent</td><td>stripe_pending_subscription_events</td><td>A <code>customer.subscription.updated|deleted</code> that found no local subscription row (it raced the signup) and was parked with its extracted fields. No FK. Claimed with a single-row <code>DELETE</code> in the same transaction as the apply.</td></tr>
+        <tr><td>SubscriptionUpgradeReconciliation</td><td>subscription_upgrade_reconciliations</td><td>A paid upgrade proration that could not be granted because the subscription was superseded. FK-free on purpose. An operator refunds or grants by hand and stamps <code>resolved_at</code>.</td></tr>
         <tr><td>CoachCancellationHistory</td><td>coach_cancellation_history</td><td>Audit trail of every coach-initiated cancellation and its reason, whether or not a strike was issued.</td></tr>
       </tbody>
     </table>
@@ -556,12 +559,13 @@
     </table>
 
     <h3 id="scheduled-jobs">Scheduled jobs</h3>
-    <p>All ten are ShedLock-guarded (<code>@SchedulerLock</code>), and each processes one row per transaction so a single bad row can't abort the run.</p>
+    <p>All eleven are ShedLock-guarded (<code>@SchedulerLock</code>), and each processes one row per transaction so a single bad row can't abort the run.</p>
     <table>
       <thead><tr><th>Class</th><th>Schedule</th><th>Lock name</th><th>Does</th></tr></thead>
       <tbody>
         <tr><td>PaymentPendingSweeper</td><td>every 15 min (fixedDelay)</td><td>PaymentPendingSweeper_sweep (PT30M)</td><td>Recovers stuck <code>PAYMENT_PENDING</code> bookings older than <code>booking.payment_pending_sweep_grace_minutes</code> (default 120, bounded 15–10080).</td></tr>
         <tr><td>ChargeOutcomeReconciler</td><td>every 10 min (fixedDelay)</td><td>ChargeOutcomeReconciler_reconcile (PT20M)</td><td>Resolves <code>CAPTURE_PENDING</code> reservations with a charge key older than <code>booking.payment.charge_reconcile_after_minutes</code> (default 10) by asking Stripe for the PaymentIntent: settle, decline, or wait. Keyset-paged, at most 1000 rows per run, one Stripe lookup per key.</td></tr>
+        <tr><td>PaymentRecoveryJob</td><td>every 5 min (fixedDelay)</td><td>PaymentRecoveryJob_run (PT10M)</td><td>Four isolated duties: resolves open <code>session_pack_purchase_attempts</code> older than <code>payment.packAttempt.minAgeMinutes</code> from Stripe (never refunds), purges terminal attempts, drains parked subscription webhook events whose subscription is now linked, purges parked events past retention.</td></tr>
         <tr><td>CashOutReconciliationService</td><td>every 15 min (fixedDelay)</td><td>CashOutReconciliationService_recheck (PT30M)</td><td>Retries the refund of an <code>UNKNOWN</code> cash-out, or of a <code>PENDING</code> one older than 15 min (its request died), under the original <code>cashout-{id}</code> key, up to 15 rows per run. Stops at 23h (Stripe prunes keys after ~24h) and escalates anything still open to <code>UNKNOWN</code> for a human.</td></tr>
         <tr><td>SessionPackForfeitureScheduler</td><td>every 60 min (fixedDelay)</td><td>SessionPackForfeitureScheduler_expire (PT15M)</td><td>Forfeits expired packs that still have sessions, keyset-paged by purchase id (200 per page). Re-fetches each pack and re-checks it first, because an extend or pause may have committed since the page was read.</td></tr>
         <tr><td>SessionPackExpiryNotifier</td><td>08:00 daily</td><td>SessionPackExpiryNotifier_warn (PT15M)</td><td>Sends the 14-day expiry warning: stamps <code>expiryWarnedAt</code> and publishes the event in the same transaction.</td></tr>
@@ -676,6 +680,9 @@ sequenceDiagram
       <code>transfer.*</code>, ...) is ignored (logged at DEBUG).
     </p>
 
+    <h3 id="pack-purchase-attempts-and-parked-webhook-events">Pack purchase attempts and parked webhook events (skillars-deferred-169)</h3>
+    <p><strong>Pack purchase.</strong> <code>purchasePack</code> is deliberately not transactional (no connection is held across Stripe). Order: security gates; a same-key lookup (answered before the tier and coach gates, so a captured payment can still be resolved after the tier is deactivated); the tier/coach gates for a new attempt; the snapshot and the attempt row in its own committed transaction; the card write; the charge. A second purchase by the same parent while one attempt is open fails the insert on the partial unique index and gets <code>409 payment.attemptInProgress</code> or <code>payment.attemptUnresolved</code>. A decline marks the row <code>NO_CHARGE</code>, restores the previous saved card (a conditional <code>UPDATE ... WHERE stripe_payment_method_id = :attempted</code>) and answers <code>payment.noChargeMade</code> (or <code>payment.cardDeclined</code>); a timeout or an unclassified exception marks it <code>UNKNOWN</code>. An open attempt is resolved only by a replay of its own key or by <code>PaymentRecoveryJob</code>, from Stripe: an empty lookup counts as no charge only at <code>payment.packAttempt.absenceAgeMinutes</code>, and the resolver never refunds. <code>PackAttemptsUnresolved</code> (the <code>pack_attempts</code> backlog gauge) tells an operator when the job cannot close a row.</p>
+    <p><strong>Webhook ordering.</strong> A <code>customer.subscription.updated|deleted</code> whose subscription is not linked yet is parked by <code>PaymentRecoveryRecorder</code> in a <code>REQUIRES_NEW</code> transaction on the payment routed pool, which commits before the webhook's own transaction. After that transaction commits, <code>processWebhook</code> re-reads for the local row and drains. The signup drains after <code>persist*Subscription</code> commits, and the job drains what is left. Either the park commit precedes the signup's drain read, or the signup's link commit precedes the webhook's re-read: never neither.</p>
     <h3 id="booking-settlement-reserve-then-charge-the-platform-account">Booking settlement: reserve, then charge the platform account</h3>
     <pre class="mermaid">
 sequenceDiagram
@@ -1059,7 +1066,7 @@ sequenceDiagram
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>110dd0db</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>63a16559</code> (2026-11-04).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>
