@@ -318,7 +318,7 @@ D3's port constraint.
   its attempt row; default `lenient()` stub in the three unit-test classes; unit test, service-level IT,
   WebMvc 422 test; purchase-page message + spec.
 - [x] T5 (AC5, AC6): docs, ledger. *(AC1/AC2/AC4 parts done: their three ledger bullets deleted, the D3 bullet added, the AC4 doc lines written. Left for T4: the AC3 doc line in `docs/dev-docs/payment/index.html` and deleting the AC3 bullet.)*
-- [ ] T6 (AC7): `/pr-review`, PR.
+- [x] T6 (AC7): `/pr-review`, PR.
 
 ## Dev Notes
 
@@ -474,3 +474,5 @@ Claude Opus 5.5 (claude-opus-5-5)
   waits for skillars-deferred-169.
 - 2026-11-04: rebased onto master after skillars-deferred-169 (#443); the drop renumbered V227 -> V229. AC3, AC5 and
   AC6 done; status -> review. T6 (/pr-review, PR) next.
+- 2026-11-04: rebased onto master `ac493f1a` (#445, ledger only); /pr-review at `ff67a4d7`: general and security
+  reviewers both clean (0 findings). PR #446 opened.
