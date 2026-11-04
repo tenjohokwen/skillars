@@ -137,6 +137,9 @@ const hasCard = computed(() => paymentStore.savedPaymentMethod?.hasCard ?? false
 
 function onCardSaved() {
   addCardDialog.value = false
+  // A new card is a different purchase only when the last answer proved nothing was charged: while an earlier
+  // attempt is unresolved the key must stay, or the retry could charge twice (skillars-deferred-169).
+  if (!keyHeldForUnresolved) attemptKey = null
 }
 
 // A player+coach pair can now have multiple simultaneously-active packs — show the
@@ -162,8 +165,22 @@ function formatPrice(value) {
 
 // One key per purchase attempt (sent as Idempotency-Key): a double-click or a retry after a lost
 // response replays the same charge instead of buying a second pack. Kept across a retry that never got
-// an answer; a fresh one is minted once the server has answered (success or a definite failure).
+// a DEFINITE answer (a network error, a 5xx, "still being confirmed", any outcome that may have charged);
+// cleared on success and on a definite no-charge answer (skillars-deferred-169). The server's one-open-attempt-per-parent
+// index is the safety guarantee; these rules are UX.
 let attemptKey = null
+// True while the last answer left the outcome unknown, so a card save or pack change must not mint a new key.
+let keyHeldForUnresolved = false
+
+// A PaymentGatewayException (422) carries its code in errorMsg.errorKey; a ResponseStatusException (400/409) carries it
+// in errorMsg.message (errorKey is the generic 'generic.requestError').
+function errorCode(e) {
+  const msg = e?.response?.data?.errorMsg
+  return msg?.errorKey === 'generic.requestError' ? msg?.message : (msg?.errorKey ?? msg?.message)
+}
+
+const KEY_CLEARING_CODES = ['payment.noChargeMade', 'payment.invalidIdempotencyKey', 'payment.idempotencyKeyReused']
+const STILL_CONFIRMING_CODES = ['payment.attemptInProgress', 'payment.attemptUnresolved']
 
 function newAttemptKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
@@ -172,7 +189,7 @@ function newAttemptKey() {
 
 // A different pack choice is a different purchase.
 watch(selected, () => {
-  attemptKey = null
+  if (!keyHeldForUnresolved) attemptKey = null
 })
 
 async function confirmPurchase() {
@@ -183,10 +200,24 @@ async function confirmPurchase() {
   try {
     await bookingStore.purchasePack(playerId, selected.value, undefined, attemptKey)
     attemptKey = null
+    keyHeldForUnresolved = false
     router.back()
   } catch (e) {
-    if (e?.response) attemptKey = null
-    purchaseError.value = e?.response?.data?.message ?? t('booking.packs.purchaseError')
+    const code = errorCode(e)
+    if (KEY_CLEARING_CODES.includes(code)) {
+      attemptKey = null
+      keyHeldForUnresolved = false
+    } else {
+      keyHeldForUnresolved = true
+    }
+    if (STILL_CONFIRMING_CODES.includes(code)) {
+      purchaseError.value = t('booking.packs.purchasePending')
+    } else if (code === 'payment.noChargeMade') {
+      // Also returned for a charge that was refunded: never say "nothing was charged".
+      purchaseError.value = t('booking.packs.purchaseNotCompleted')
+    } else {
+      purchaseError.value = t('booking.packs.purchaseError')
+    }
   } finally {
     purchasing.value = false
   }

@@ -180,6 +180,30 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     expect(notifyMock).toHaveBeenCalledWith({ message, type: 'negative' })
   })
 
+  // skillars-deferred-169 (RS08): the picked day is sent as its LOCAL midnight, not UTC midnight. West of UTC the old UTC midnight
+  // was the previous evening, so the earliest offered date was refused or the pause began a day early.
+  it('sends the picked day as local midnight, not UTC midnight (west of UTC)', async () => {
+    const tz = process.env.TZ
+    process.env.TZ = 'America/New_York'
+    try {
+      const wrapper = await mountPage([BASE])
+      const { useBookingStore } = await import('src/stores/booking.store')
+      const store = useBookingStore()
+      store.initiatePausePack.mockResolvedValue({ pauseApplied: false, conflicts: [] })
+      const setup = wrapper.vm.$.setupState
+      setup.openPauseDialog(BASE)
+      setup.pauseForm.startDate = '2099-01-01'
+      await setup.submitPause()
+      await flushPromises()
+      const sent = store.initiatePausePack.mock.calls[0][1]
+      expect(sent).toBe(new Date(2099, 0, 1).toISOString())
+      expect(sent).toBe('2099-01-01T05:00:00.000Z')
+    } finally {
+      if (tz === undefined) delete process.env.TZ
+      else process.env.TZ = tz
+    }
+  })
+
   // fix/audit3-booking-scheduling-integrity: a booking mid-settlement (PAYMENT_PENDING) inside the pause
   // window blocks the pause; it is explained as "payment still processing", not as the 24h-notice rule.
   it('a PAYMENT_PENDING conflict blocks the pause with its own explanation', async () => {

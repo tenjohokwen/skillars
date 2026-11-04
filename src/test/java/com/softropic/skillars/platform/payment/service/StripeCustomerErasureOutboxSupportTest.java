@@ -25,9 +25,10 @@ class StripeCustomerErasureOutboxSupportTest {
 
     @Mock StripeCustomerRepository stripeCustomerRepository;
     @Mock OutboxService outboxService;
+    @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository packAttemptRepository;
 
     private StripeCustomerErasureOutboxSupport support() {
-        return new StripeCustomerErasureOutboxSupport(stripeCustomerRepository, outboxService, new ObjectMapper());
+        return new StripeCustomerErasureOutboxSupport(stripeCustomerRepository, packAttemptRepository, outboxService, new ObjectMapper());
     }
 
     @Test
@@ -58,5 +59,14 @@ class StripeCustomerErasureOutboxSupportTest {
 
         verify(outboxService, never()).enqueue(anyString(), anyString());
         verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    @Test
+    void nullsThePackAttemptCardIdsEvenWhenNoStripeCustomerRowExists() {
+        when(stripeCustomerRepository.findById(9L)).thenReturn(Optional.empty());
+
+        support().scheduleErasure(9L);
+
+        org.mockito.Mockito.verify(packAttemptRepository).nullCardsForParent(9L);
     }
 }
