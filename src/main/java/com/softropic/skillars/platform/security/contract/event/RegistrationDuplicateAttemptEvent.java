@@ -6,7 +6,10 @@ package com.softropic.skillars.platform.security.contract.event;
  * successful registration (no enumeration oracle) and publish this event instead, so the existing
  * account's owner is told by email ({@code EmailTemplate.CREATION_DUP}).
  *
- * <p>Every field describes the EXISTING account, never the registration request.
+ * <p>Every field describes the EXISTING account, never the registration request, except
+ * {@code phoneMatch}: {@code true} when only the phone number matched (the request used a different
+ * email address), so the notice can say so instead of "a request using this address".
  */
 public record RegistrationDuplicateAttemptEvent(
-    Long existingUserId, String toAddress, String firstName, String lastName, String langKey) {}
+    Long existingUserId, String toAddress, String firstName, String lastName, String langKey,
+    boolean phoneMatch) {}

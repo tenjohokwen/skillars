@@ -97,7 +97,7 @@ final class RegistrationDuplicateGuard {
         log.info("[REGISTRATION_DUPLICATE_ATTEMPT] registration matched an existing account",
             kv("flow", flow), kv("reason", reason), kv("userId", user.getId()));
 
-        notifyExistingAccount(publisher, rateLimitingService, user);
+        notifyExistingAccount(publisher, rateLimitingService, user, "phone".equals(reason));
         if ("phone".equals(reason)) {
             // Independent of the existing-account notice: sent even when that one was skipped (its
             // limit, or an erased tombstone, though erasure clears the phone today).
@@ -107,7 +107,8 @@ final class RegistrationDuplicateGuard {
     }
 
     private static void notifyExistingAccount(ApplicationEventPublisher publisher,
-                                              RateLimitingService rateLimitingService, User user) {
+                                              RateLimitingService rateLimitingService, User user,
+                                              boolean phoneMatch) {
         if (user.isLocked() && user.getEmail() != null && user.getEmail().endsWith(ERASED_EMAIL_DOMAIN)) {
             // A GDPR-erased tombstone: nobody receives mail there, so there is no one to tell.
             return;
@@ -117,7 +118,7 @@ final class RegistrationDuplicateGuard {
             return;
         }
         publisher.publishEvent(new RegistrationDuplicateAttemptEvent(
-            user.getId(), user.getEmail(), user.getFirstName(), user.getLastName(), user.getLangKey()));
+            user.getId(), user.getEmail(), user.getFirstName(), user.getLastName(), user.getLangKey(), phoneMatch));
     }
 
     private static void notifyRegistrant(ApplicationEventPublisher publisher, RateLimitingService rateLimitingService,

@@ -65,7 +65,7 @@ class RegistrationDuplicateAttemptListenerTest {
     @Test
     void onDuplicateAttempt_happyPath_enqueuesCreationDupToTheExistingAccount() {
         listener.onDuplicateAttempt(
-            new RegistrationDuplicateAttemptEvent(7L, "owner@example.com", "Grace", "Hopper", "de"));
+            new RegistrationDuplicateAttemptEvent(7L, "owner@example.com", "Grace", "Hopper", "de", false));
 
         verify(notificationOutboxSupport).enqueueEmail(eq(EmailTemplate.CREATION_DUP), recipientCaptor.capture(),
             dataCaptor.capture(), sendIdCaptor.capture());
@@ -75,7 +75,8 @@ class RegistrationDuplicateAttemptListenerTest {
         assertThat(recipient.getLastname()).isEqualTo("Hopper");
         assertThat(recipient.getLangKey()).isEqualTo("de");
 
-        assertThat(dataCaptor.getValue()).containsOnlyKeys("baseUrl", "helpCode");
+        assertThat(dataCaptor.getValue()).containsOnlyKeys("baseUrl", "helpCode", "phoneMatch");
+        assertThat(dataCaptor.getValue()).containsEntry("phoneMatch", false);
         assertThat(dataCaptor.getValue()).containsEntry("baseUrl", "https://app.skillars.test");
         assertThat(dataCaptor.getValue().get("helpCode")).isInstanceOf(String.class);
         assertThat((String) dataCaptor.getValue().get("helpCode")).isNotBlank();
@@ -83,11 +84,21 @@ class RegistrationDuplicateAttemptListenerTest {
     }
 
     @Test
+    void onDuplicateAttempt_phoneMatch_isPassedToTheTemplate() {
+        listener.onDuplicateAttempt(
+            new RegistrationDuplicateAttemptEvent(7L, "owner@example.com", "Grace", "Hopper", "de", true));
+
+        verify(notificationOutboxSupport).enqueueEmail(eq(EmailTemplate.CREATION_DUP), recipientCaptor.capture(),
+            dataCaptor.capture(), sendIdCaptor.capture());
+        assertThat(dataCaptor.getValue()).containsEntry("phoneMatch", true);
+    }
+
+    @Test
     void onDuplicateAttempt_blankAddress_earlyReturns_doesNotEnqueue() {
         assertThatCode(() -> listener.onDuplicateAttempt(
-            new RegistrationDuplicateAttemptEvent(7L, " ", "Grace", "Hopper", "de"))).doesNotThrowAnyException();
+            new RegistrationDuplicateAttemptEvent(7L, " ", "Grace", "Hopper", "de", false))).doesNotThrowAnyException();
         assertThatCode(() -> listener.onDuplicateAttempt(
-            new RegistrationDuplicateAttemptEvent(7L, null, "Grace", "Hopper", "de"))).doesNotThrowAnyException();
+            new RegistrationDuplicateAttemptEvent(7L, null, "Grace", "Hopper", "de", false))).doesNotThrowAnyException();
 
         verifyNoInteractions(notificationOutboxSupport);
     }
@@ -103,7 +114,7 @@ class RegistrationDuplicateAttemptListenerTest {
         try {
             listenerLogger.addAppender(logCapture);
             assertThatCode(() -> listener.onDuplicateAttempt(
-                new RegistrationDuplicateAttemptEvent(7L, "owner@example.com", "Grace", "Hopper", "de")))
+                new RegistrationDuplicateAttemptEvent(7L, "owner@example.com", "Grace", "Hopper", "de", false)))
                 .doesNotThrowAnyException();
         } finally {
             listenerLogger.detachAppender(logCapture);

@@ -102,13 +102,17 @@ class PlayerRegistrationServiceTest {
     }
 
     private void assertNeutralNoCreate(User notified) {
+        assertNeutralNoCreate(notified, false);
+    }
+
+    private void assertNeutralNoCreate(User notified, boolean phoneMatch) {
         verify(passwordEncoder).encode("password123");
         verify(userRepository, never()).save(any(User.class));
         verify(userRepository, never()).saveAndFlush(any(User.class));
         verifyNoInteractions(emailTokenRepository, authorityRepository);
         verify(publisher, never()).publishEvent(any(PlayerVerificationEmailEvent.class));
         verify(publisher).publishEvent(new RegistrationDuplicateAttemptEvent(
-            notified.getId(), notified.getEmail(), "Existing", "Owner", "de"));
+            notified.getId(), notified.getEmail(), "Existing", "Owner", "de", phoneMatch));
     }
 
     private void allowNotice() {
@@ -185,7 +189,7 @@ class PlayerRegistrationServiceTest {
 
         assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
 
-        assertNeutralNoCreate(phoneHolder);
+        assertNeutralNoCreate(phoneHolder, true);
         verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
     }
 
@@ -197,7 +201,7 @@ class PlayerRegistrationServiceTest {
 
         assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
 
-        assertNeutralNoCreate(phoneHolder);
+        assertNeutralNoCreate(phoneHolder, true);
         verify(publisher, never()).publishEvent(any(RegistrationPhoneInUseEvent.class));
     }
 
