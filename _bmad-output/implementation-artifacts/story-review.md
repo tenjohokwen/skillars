@@ -1,117 +1,164 @@
-# Story review: skillars-deferred-167-per-session-jwt-revocation-and-refresh-chain-follow-ups
+# Story review: skillars-deferred-168-builder-packs-become-the-purchasable-tier
 
-Audit date 2026-11-03. Real HEAD at review time: `b3b0d647 skillars-deferred-167: record the five owner decisions and create the story`
-(source files are unchanged since `21e72013`). Every citation below was checked against this HEAD, not against any
-SHA the story states. Static review only: nothing was executed, so every runtime claim rests on reading code.
+- **Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-168-builder-packs-become-the-purchasable-tier.md` (status `ready-for-dev`)
+- **Audit date:** 2026-11-04
+- **Real HEAD:** `a95109b6` "docs(ledger): Pitchside findings — blank booking slot labels, pack holders default to per-session, generic decline error, registration enumeration, completeness-gate scope (#429)", which equals `origin/master`. The worktree has three staged, uncommitted files: the story, `sprint-status.yaml` and `deferred-work.md`.
+- **What citations were checked against:** this HEAD, not any SHA the story itself names. Items on `feature/pitchside` were read from `origin/feature/pitchside`.
+- **Method:** four parallel read-only verification layers (citations, ledger and precedents, mechanistic claims, corner cases). Then I re-read the deciding lines of every High and Medium finding myself, trying to refute each one (Step 4b).
 
-Layers: 1 citations (66 checked), 2 ledger/precedent attributions (12), 3 mechanistic claims (8 groups), 4 corner cases (9 hypotheses).
-Step 4b: I re-read the cited lines myself for the findings that change the design (H1, H2, H3, the clock hook).
+## 1. Citation verification (Layer 1, 25 items)
 
-## 1. Citation verification
+19 MATCH, 6 DRIFTED, 0 CANNOT_LOCATE.
 
-62 of 66 MATCH. Real non-matches:
-
-| citation | verdict | correct location |
+| Citation in story | Verdict | Evidence or corrected location |
 |---|---|---|
-| `JWTAuthorizationFilter` "comment at `:228-246`" | DRIFTED | comment is `:224-241`; `:242-247` is code |
-| `AuthService` window test "`:485`" | DRIFTED | `:487-488` (`:485` is the comment above it) |
-| `AuthService` `used` branch "`:332-344`" | DRIFTED (minor) | `:333-345` |
-| `JwtManagerImpl:77` "carried over by hand" | PARTIAL | `:77` is the read; the value reaches the claims as an argument to `toClaims` at `:79` |
+| `CoachProfileService.java:267` saveStep3 | MATCH | `:267 public ProfileBuilderStepResponse saveStep3(...)` |
+| `:290-301` delete, flush, re-insert | DRIFTED (minor) | `:291 deleteByCoachId`, `:292 flush`, `:301 saveAll`; line 290 is a comment |
+| `:285` `req.sessionPacks() != null`, "pack block :285-302" | DRIFTED | The check is at **`:287`** and the block is **`:287-302`**; `:285` is `coachPricingRepository.save(pricing)` |
+| `:403` getOwnProfile packs | MATCH | `sessionPackRepository.findByCoachId(...)` |
+| `:623` getPublicProfile packs | MATCH | Preceded by `:622 // (3) session packs` |
+| `EditCoachPricingDialog.vue:261` | DRIFTED (minor) | The call opens at **`:260`** `await saveProfileBuilderStep(3, {` |
+| `SessionPackPaymentService.java:296` createTier | MATCH | |
+| `:131-135` purchasePack bookable-coach gate | MATCH | `:135 BookingService.requireBookableCoachStatus(...)` |
+| `ProfileBuilderStep3Request` bounds and `@Size(max = 5)` | MATCH | `:23`, `:26-28` (but see M1: the nested bounds are not enforced) |
+| `V138:3910` idx_spt_one_active_per_coach | MATCH | |
+| `CreateSessionPackTierRequest` constants and annotations | MATCH | `:22`, `:24`, `:26`, `:27` |
+| Labels: varchar(100) nullable vs varchar(200) NOT NULL; `uq_session_pack` | MATCH | V138 `:1633`, `:2888`, `:1904` |
+| `CoachMarketplaceResource.java:78` | MATCH | |
+| `CoachPublicProfilePage.vue:611` / `:622` | MATCH | |
+| `SessionPackPurchasePage.vue:59` | MATCH | |
+| `provisioner.ts:260` (pitchside) extra tier POST | DRIFTED | The POST is at **`:281`**. `:260` is in the step-3 PUT, which also sends `:262 sessionPacks: pack ? [pack] : []` (see C9) |
+| `onboarding.spec.ts` ONB-06 `test.fail` | MATCH | `:109`, `:150` |
+| `docs/dev-docs/marketplace/index.html:126`, `:192` | MATCH | |
+| `provisioning-checklist.md:160` | MATCH | |
+| `migration-conventions.md` rule 2 and `drop-prepared-in` | MATCH, with a correction | `:58`, `:64`, `:70`. The rule lives in `src/test/java/com/softropic/skillars/db/MigrationLint.java:190-197` (it also requires no live `src/main` reference); `MigrationConventionLintTest` only runs it against fixtures |
+| `CoachPublicProfileQueryCountIT` four round trips | MATCH | `:58 EXPECTED_QUERY_COUNT = 4`; javadoc `:40-45` lists session packs as one of the queries |
+| `fk_spp_tier` | MATCH | V138 `:4518` |
+| `SessionPackPricingDisplay.vue` renders a list | MATCH | `:13 v-for` |
+| Builder and dialog allow a repeatable pack list | MATCH | No frontend cap; only the backend `@Size(max = 5)` |
+| Ledger ONB-06 section, and its `:287` citation | MATCH | `deferred-work.md:3344`. **The ledger's `:287` is CORRECT** (the pack check line). The story's Dev Note calling it drift (and saying `:267`) is wrong (see C12) |
 
-Everything else (the V224 text, `UserRepository` propagation, `User.java:166-167`, all `AuthResourceIT` helper lines,
-`assert-context-count.sh`/`pr-build.yml:127`, the context-key constants) matches.
+## 2. Ledger and precedent attribution (Layer 2, 12 items)
 
-## 2. Ledger and precedent attribution
-
-| claim | sources checked | verdict |
+| Claim | Sources checked | Verdict |
 |---|---|---|
-| 144 AC8 removed the per-request refresh_tokens query | code comment `JWTAuthorizationFilter:224-241`, `GdprErasureIT:401`, `JWTAuthorizationFilterTest:171`; no ledger entry; `git log --grep` empty | CONFIRMED (code and tests only) |
-| 166 AC3 (revoked replay never revokes all) | ledger, `AuthService` `Revoked`, `f0ad7706` body | CONFIRMED |
-| `isBeforeSessionEpoch` javadoc names the three callers | `AuthService:~392-403` | CONFIRMED, and it must be rewritten by AC8 |
-| #413 rounds 2 and 3 found defects from the prior round's fix | `f0ad7706` body, 166 story | CONFIRMED |
-| 5 s `lock.timeout` added then removed | `f0ad7706` body, ledger | CONFIRMED |
-| "#413 hung an IT phase 19 minutes on a `REQUIRES_NEW` revoke of a row the caller already wrote" | 166 story, commit body | PARTLY: the rows were locked by the walk, not written |
-| "five items filed by the reviewer arms" | ledger | PARTLY: the VALIDATE item was filed by #413's author, not the arms |
-| every decision is recorded in the ledger, "do not re-litigate" | ledger `:71` | **MISATTRIBUTED for AC7**: the ledger still says "measure the window from the chain's live end", the opposite of AC7. The re-decision exists only in chat. Fixed in the ledger as part of this review |
-| "the merge-hotspots note in `deferred-work.md`" | ledger, repo-wide grep | **NOT SUPPORTED**: no such note. Real support: renumber commits `0621d23f`, `dce987cb`, `67d7f945` and `docs/dev-docs/README.md` (search-index is generated) |
-| `GdprErasureService` revokes, never stamps the epoch | `:810`, grep of the file | CONFIRMED |
-| V224 promises the VALIDATE; V225 is the first executed one | V224 header, `provisioning-checklist:684`, `V145:49` is a comment | CONFIRMED |
+| ONB-06 section added by #421 as `8e7636a2` | ledger, `git log -S`, `git show` | CONFIRMED |
+| Story 2.1 (`4dd4b013`) created `marketplace.session_packs` | story file AC4 `:19`, commit (V26) | CONFIRMED |
+| Story 7.2 (`e9486e11`) created tiers without referencing session_packs; index from a review patch | story file, commit (V62), `git log -S` | CONFIRMED |
+| deferred-103: race → index → ApiAdvice 409 | story file AC1 `:89`, `SessionPackPaymentService:324-329`, `ApiAdvice:164-166` and `:193-195`, `SessionPackPaymentServiceIT:72` | CONFIRMED, but the IT does not prove a 409 and only races the first-tier case (see M3) |
+| deferred-151 replace UI | story file, `CoachSessionPackTiersPage.vue:194-205`, #265 | CONFIRMED (it also added "Withdraw offer", which matters for C2) |
+| "V181" protects old purchases' locked `pricePerSession` / amount charged | V181 header, `createPurchase :422` | PARTLY: V181 adds `amount_charged`; the locked `pricePerSession` is Story 7.2 (V62). V181 backfilled old rows from the then-current tier price |
+| PR #428 holds V225; expect V226+ | all 138 `origin/*` refs, `gh pr` | CONFIRMED (master tops out at V224; only #428 has V225) |
+| Port/adapter precedent; marketplace has no payment import | source grep, test grep | CONFIRMED. There is no module-edge test and no ArchUnit; `EmailTransportArchitectureTest` / `InfrastructureLayeringAuditTest` use a source scan |
+| "Known parallel-merge hotspots" (ledger, sprint-status, checklist) | repo docs, git log, private memory | PARTLY: only partly in repo docs. Memory lists the checklist and V-numbers, not the ledger or sprint-status. Harmless as advice |
+| "17-context cache budget" | `assert-context-count.sh:179`, `pr-build.yml:127`, `IntegrationTestConventionTest:109` | CONFIRMED |
+| Business docs say "up to five packs" | grep of `docs/business-docs`, `docs/dev-docs` | **WRONG**: they already say one active pack. Real targets: `docs/business-docs/coach/index.html:79`, `docs/dev-docs/marketplace/index.html:126`, `docs/dev-docs/database/index.html:72` |
+| The three one-active-rule precedents are real | combination of the above | CONFIRMED |
 
-## 3. Mechanistic claims
+## 3. Mechanistic claims (Layer 3, 12 items)
 
-- **`extendTtlOfToken` rebuilds the map** (`JwtManagerImpl:79`, `:87-90`): CONFIRMED. A new claim must be forwarded by hand.
-- **`SESSION_ID` is the browser session id** (`TokenValidatorImpl:39-42`, `JWTAuthorizationFilter:201-202`): CONFIRMED. A second consumer exists at `JwtManagerImpl:184`.
-- **DB branch vs fast path** (`TokenValidatorImpl:48-54`, filter `:206-221`, `:222-248`): CONFIRMED.
-- **"live end's `createdAt` is the same instant as `rotatedAt`": WRONG.** `now` is taken at `AuthService:308`, before the lock wait; the successor's `createdAt` is set by `@PrePersist` at `saveAndFlush` (`RefreshToken:42-47`). `createdAt = rotatedAt + rotation latency`. The AC7 correction survives (the window is keyed on `presented.getRotatedAt()` either way) but the sentence must be reworded.
-- **Transaction boundary of `refresh`** (`:204`, `:215`): CONFIRMED. All revokes and throws run after the template.
-- **Concurrent-refresh divergence** (`:341` onward rotates the live end, chain goes A0 to A1 to A2): CONFIRMED.
-- **AC8 reorder**: the swap works because a surviving successor was inserted before the revoke committed, so its `createdAt` precedes an epoch computed afterwards. It does **not** make the window fully closed: `decideAndRotate` reads the user with a plain `findById` (`:322`), which does not block on the suspender's lock, and multi-node clock skew can invert the comparison. The javadoc rewrite must not claim closure.
-- **AC9 fix**: an ascending-id native delete does remove the cycle against the chain walks. It does not cover `markAllUsedByUserId`/`markAllRevokedByUserId`, which are unordered bulk UPDATEs (the `AuthService:225-229` comment already names them as a deadlock source).
-- **AC10 (nothing consults `refresh_tokens` on the reauth branch)**: CONFIRMED.
+| # | Claim | Evidence | Verdict |
+|---|---|---|---|
+| 1 | `saveStep3` is `@Transactional` REQUIRED; a port call joins it | `CoachProfileService:266-267` (method-level, no propagation); resource `:131-136` is not transactional | TRUE |
+| 2 | `createTier` deactivates with saveAndFlush, inserts, never deletes, throws `payment.invalidPackTier` | `:295-330`; the insert is plain `save` | TRUE. Also: a null `totalPrice` NPEs in the guard (500), and a null label only fails at the column |
+| 3 | A tier rejection rolls back the pricing write and returns "the same 400, existing validation envelope" | rollback: inner REQUIRED marks rollback-only. Envelope: `ApiAdvice:132-136` gives `errorKey: generic.requestError`, `message: payment.invalidPackTier`; bean validation gives `validation.invalidData` + field errors (`:505-561`) | Rollback TRUE. **"Same envelope" FALSE** (see M2) |
+| 4 | Concurrent saves → index → 409 `payment.tierRaceConflict` | UUID id ⇒ the INSERT flushes at commit; JpaTransactionManager translates it to DataIntegrityViolationException, which `ApiAdvice:204-226` maps | TRUE only when no active tier exists yet |
+| 5 | The index decides a change race | `SessionPackTier:49 @Version`; the loser's `saveAndFlush` of the old row blocks on the row lock, then fails the version check, giving ObjectOptimisticLockingFailureException → `ApiAdvice:703-709` 409 `generic.conflict` | **PARTLY** (see M3). I reasoned this through but did not execute it |
+| 6 | purchasePack refuses a non-bookable coach (DRAFT) before charging | `:126-135`; `BookingService:587-596` allows only ACTIVE / REDUCED / PENDING_REVIEW | TRUE |
+| 7 | Query count unchanged; "verify, do not assume" | the tier derived query is one statement; but the IT seeds and asserts against `marketplace.session_packs` (`:152-153`, `:199-205`) | Count TRUE. **AC9 as worded ("still passes, no budget change") FALSE**: the IT must be rewritten (M4) |
+| 8 | `getOwnProfile` readOnly; a port read is safe | `:395` | TRUE |
+| 9 | `SessionPackDto` contract unchanged for the frontend | frontend reads `sessionCount`, `totalPrice`, `label` only | Shape TRUE; behaviour changes (C3, C4) |
+| 10 | Bean validation enforces the pack fields | `ProfileBuilderStep3Request:23` has no `@Valid` on the list or its elements; compare `ProfileBuilderStep4Request:19 List<@NotNull @Valid ...>` | **FALSE**: the most important finding (M1) |
+| 11 | Only the wizard and the dialog send step 3; no raw-SQL readers | `profileBuilder.store.js:72`, `EditCoachPricingDialog.vue:260`; raw SQL only in V138, the entity, the query-count IT | TRUE (plus the Pitchside provisioner, C9) |
+| 12 | Builder completeness / publish do not depend on packs | `validateAllStepsComplete :755-771`, `publishProfile :482-542` | TRUE (safe) |
 
-## 4. Findings that survived re-verification
+## 4. Corner cases, false assumptions, missed flows (survived Step 4b)
 
-**H1 (high). AC7 gives up the canonical theft signal, and the story, and my own option text, said it did not.**
-`decideAndRotate:333-339` plus `resolveGraceSuccessor:482-490`: a used token whose chain has a live end but whose rotation is
-outside 30 s returns `none()`, so the outcome is `Reuse` and `markAllUsedByUserId` + `invalidateSessionsForUser` run
-(`:274-275`). That is exactly what happens when an attacker rotates a stolen refresh token first and the victim later presents
-the stale cookie. After AC7 the victim gets a 401, the attacker's chain stays live for up to 7 days, and nothing is logged.
-When I offered this option I described it as "no weakening of theft detection". That was wrong. What remains detected: a
-replay when no live end exists. What is lost: replay of a rotated token against a still-live chain after 30 s.
-Required: state the loss in AC7 and `docs/session-refresh-mechanism.md`, and log at `warn` / count a metric (no DB write needed).
-Exposure note: the SPA never calls `POST /api/auth/refresh`, so only API or mobile clients are affected today.
+### Must fix in the story before dev
 
-**H2 (high). The `rtkn` derivation in AC3 is dead code, and null ids propagate forever.**
-Row creation is only `AuthService:146` (login) and `:362` (rotation). Pre-V225 rows have a null `session_id` and AC1 forbids a
-backfill, so deriving from the cookie's row yields null for exactly the sessions the bullet says it helps. Worse, AC2 says
-rotation copies the predecessor's id, so a pre-V225 chain stays null **through every rotation**: a continuously refreshing
-API client never acquires an id. Also the story misstates the uncovered attacker: a post-deploy `potc` already carries the
-claim, so a thief with only that `potc` is covered; the uncovered thief holds a **pre-deploy** `potc`.
-Fix: drop the derivation; in `decideAndRotate`, mint a fresh id when the predecessor's is null; the next `createLoginToken`
-then carries it. The fail-closed flip can follow one `REFRESH_TOKEN_TTL` (7 days) after deploy. This also removes the
-second query (the story's "exactly one query" in AC4 contradicts the derivation), the new repository dependency the filter
-javadoc says `renewLoginToken` does not have (`:83`), and the unchecked cross-chain pairing of a `potc` with a different `rtkn`.
+- **M1 (High, AC5 / Design 6). Nested pack validation is off today.**
+  - `ProfileBuilderStep3Request.java:23` is `@Size(max = 5) List<SessionPackRequest>` with no `@Valid`. None of `@Positive`, `@DecimalMin`, `@Size(max=100)` or `@NoContactDetails` runs over HTTP. A pack label carrying contact details is accepted and shown publicly today.
+  - Any bound the story adds would be equally inert.
+  - `ProfileBuilderRequestValidationTest:56-61` validates the inner record directly, which hides this.
+  - Fix: `List<@NotNull @Valid SessionPackRequest>` (the step-4 precedent and its comment), tests through the outer request or HTTP, and a pre-backfill check of existing labels for contact details.
+  - Re-verified: I read the record myself.
+- **M2 (Medium, AC5). Two different 400s.**
+  - A `payment.invalidPackTier` rejection renders as `generic.requestError` with the raw reason as its message. Neither key has a translation, so the user sees the literal key.
+  - It is not the validation envelope AC5 promises.
+  - Fix: the adapter translates it into a marketplace field error on `sessionPacks` with an i18n entry, or AC5 accepts the different envelope.
+  - Note: `MarketplaceException` maps to 422, not 400.
+  - Re-verified: `ApiAdvice:132-136`.
+- **M3 (Medium, AC6). The concurrency expectation is wrong.**
+  - When a tier already exists, `@Version` decides the race (409 `generic.conflict`), not the index (409 `payment.tierRaceConflict`). The index decides only the first-tier race.
+  - Serialised saves both succeed, creating two successive rows, so "the loser gets a 409" is not guaranteed.
+  - The deferred-103 IT tolerates a commit-time `TransactionException`, which is not mapped (500), and never asserts a 409.
+  - Fix: restate AC6 as: exactly one active tier remains; any failure is a 409, never a 500; the loser's pricing write rolls back. Test both cases through MockMvc.
+  - Re-verified: `SessionPackTier:49`, `ApiAdvice:703-709`, IT `:92-101`.
+- **M4 (Medium, AC9 / T4). `CoachPublicProfileQueryCountIT` must be rewritten.**
+  - It seeds 2 then 4 `session_packs` rows and asserts parity against that table, so it fails as soon as reads move.
+  - Fix: seed one active tier plus inactive history rows, assert size 1, keep `EXPECTED_QUERY_COUNT = 4`. Keep the adapter read on JPA: a JdbcTemplate read would escape Hibernate statistics and pass falsely.
+  - Re-verified: IT `:152-153`, `:199-205`.
 
-**H3 (high if implemented as written). AC9's "log at warn" cannot work inside the current method.**
-`purgeExpiredRefreshTokens` is `@Transactional` (`AuthCleanupService:38-45`) and `deleteExpiredTokens` is itself
-`@Modifying @Transactional` (`RefreshTokenRepository:233-235`) so it joins that transaction. A deadlock thrown through the
-participating proxy marks the transaction rollback-only; a catch in the body then still ends in `UnexpectedRollbackException`
-from the outer commit, and Postgres has already aborted the transaction. The catch must sit outside the transaction (a
-non-transactional wrapper, or a `TransactionTemplate` inside the lock). I verified the annotations, not the runtime behaviour.
-AC9 should also require a real test of the ordered delete including the `ON DELETE SET NULL` path, which nothing exercises.
+### Should fix in the story
 
-**M2 (medium). Plumbing is larger than Tasks 3 and 4 say.** `LoginTokenManager.createLoginToken/renewLoginToken` have no
-parameter for an id, the `Rotated` record carries none, `toClaims` is called from `JwtManagerImpl:45,58,79`, and
-`JWTAuthorizationFilterTest:471,503` verify exact `renewLoginToken(response, principal)` arguments. AC2's "predecessor's id"
-is ambiguous in a grace redirect: the row rotated is the live end (`token`), not `presented`.
-
-**M4 (low-medium). V225 holds `ACCESS EXCLUSIVE` across the index build and the validation scan.** One Flyway transaction,
-so `ADD COLUMN`'s lock is held through `CREATE INDEX` and `VALIDATE`, which defeats rule 3's stated reason for validating in
-a *later* migration. The lint does not look for this. Acceptable on a small, not-yet-live table; say so in the migration.
-
-**Test hook (medium). The story's clock instructions do not work for HTTP ITs.** `ClockProvider` is a `ThreadLocal`
-(`ClockProvider.java`) and the embedded server handles requests on its own thread (`AuthResourceIT:391-401` says so).
-AC6/AC7/AC10 tests must change state through `commitWrite` (`rotated_at`, `expires_at`) or hand-build a JWT as `:402-415` does.
-
-**AC8 reactivate half is probably unnecessary.** Suspend already marks every token used and stamps a monotonic epoch that
-is never cleared, so pre-suspension tokens and JWTs stay refused after reactivation. Once the statements are swapped, the
-only token a revoke-on-reactivate could still catch is a race successor that is already refused. The ledger entry claimed
-otherwise. This is a re-read of the same lines, not an executed test; it deserves an IT before the owner decides to keep the work.
+- **C1 (High, Design 6 / AC4). Label bounds conflict.**
+  - The tier page allows 200-character labels; the builder and dialog cap at 100 (once M1 makes that real).
+  - The dialog always re-sends the pack from the profile (`EditCoachPricingDialog.vue:196-200`, `:263`), so a 101–200-character tier label makes every later pricing save fail, even a price-only change.
+  - Fix: one maximum on both paths (200 matches the column).
+- **C2 (Medium, Design 10). The backfill resurrects withdrawn offers.**
+  - "No active tier" includes coaches who pressed "Withdraw offer" (`deactivateTier`, `:337`).
+  - Fix:
+    - Backfill only coaches with no tier rows at all.
+    - Skip erased coaches (`coach_profiles.recap_data_erased_at`, V166).
+    - Pick the lowest-count valid row (`round(total/count, 2) > 0`, count ≤ 100, price ≤ 50000), because legacy rows were never validated (M1).
+    - Use `NULLIF(trim(label), '')` before applying the default.
+- **C3 (Medium, Design 5). The English default label overrides the localized fallback.**
+  - `SessionPackPricingDisplay.vue:47-48` shows translated "N sessions" when `label` is null. Storing "Session pack" replaces that in every locale.
+  - Fix: the read side maps the default constant back to null. The write round trip stays stable.
+- **C4 (Medium, Design 9 / G). Nested errors are invisible in the UI.**
+  - Field names like `sessionPacks[0].totalPrice` don't match the dialog's `hasFieldError('sessionPacks')`, and the dialog hides its banner for validation errors. The builder shows only a generic banner.
+  - Fix: add the tier page's client-side checks to both pack forms (integer count 1–100; price 0.01–50000 with at most 2 decimals; per-session floor), and map `sessionPacks[...]` errors to the pack slot.
+- **C5 (Medium, Design 4 / A). Stale or empty forms silently change the offer.**
+  - `ProfileBuilderStep3.vue:117` initialises `sessionPacks: []`, and the builder rail allows going back (`CoachProfileBuilderPage.vue:136 goToStep`). Re-submitting step 3 sends `[]`, which under Design 4 now withdraws a tier the coach created on the tier page.
+  - The dialog replaces the offer without the tier page's confirmation, and a stale second tab can resurrect a withdrawn offer.
+  - Fix: prefill step 3 from `getOwnProfile`, or send `sessionPacks: null` when the pack fields were untouched. Document the dialog's replace semantics.
+- **C6 (Low–Medium). Code and tests the story does not list.**
+  - `CoachProfileSelfEditIT:209` and `:238-263` (resubmission and duplicate-count tests, `marketplace.duplicateSessionPackCount`).
+  - The `uq_session_pack` mapping in `ApiAdvice:167-172` and its `ApiAdviceTest` case, which become dead.
+  - The dialog's duplicate-count guard (`:233-252`).
+  - `CoachProfileServiceTest` uses `@InjectMocks`, so the new port needs a `@Mock`.
+  - The stale "V62:58" comments in `SessionPackPaymentService:326` and the IT javadoc.
+- **C7 (Low, AC8). There is no ArchUnit.** Write the module-edge assertion as a source scan, after `InfrastructureLayeringAuditTest` / `EmailTransportArchitectureTest`.
+- **C8 (Low, Design 6). A fractional session count is truncated.** `sessionCount` is a primitive `int`, and Jackson's `ACCEPT_FLOAT_AS_INT` defaults on (no override found in `src/main`), so 2.5 becomes 2. Add an integer check on the frontend (C4) and consider a boxed `Integer` with `@NotNull`.
+- **C9 (Low, AC11 hand-off). Pitchside provisioner detail.**
+  - The step-3 PUT already sends the pack (`provisioner.ts:262`). After this story it creates the tier, and the extra POST at `:281` (not `:260`) churns a second row.
+  - The hand-off should delete the `:281` call.
+- **C10 (Low, AC7 wording).** Attribute the locked `pricePerSession` to Story 7.2 (V62), and `amount_charged` to V181.
+- **C11 (Low, AC12 wording).** Replace "business-docs say up to five packs" with the three real targets in section 2.
+- **C12 (Low, Dev Notes). False drift claim.** The note "ledger says `:287`; it is `:267`" is wrong; the ledger's `:287` is the pack check. Also correct `:285` to `:287` in Design 4.
 
 ## 5. What did not survive re-verification
 
-- Layer 1 rows 30 and 56 were flagged DRIFTED by the agent itself while noting the content was correct: dropped.
-- Layer 4 M3 (`expires_at > now()` ignoring `ClockProvider`): downgraded to a nit. In HTTP ITs `ClockProvider` already falls back to the system clock on the server thread, so a DB `now()` and `Instant.now()` agree; it only matters for unit tests. A `:now` parameter is still the cleaner shape.
-- "Mid-rotation moment with zero live rows": dismissed; rotation is one transaction.
-- Orphan `replaced_by_id` breaking `VALIDATE`: dismissed; `ON DELETE SET NULL` applies even to a `NOT VALID` FK and ids are written only from flushed successors.
-- `NativeModifyingVersionAuditTest` rejecting the native delete: dismissed; it skips statements starting with `DELETE`.
-- Layer 4's claim that the reactivate "authorisation hole" is real: not accepted, see above.
+- **Circular-reference risk from the adapter calling `SessionPackPaymentService`** (Layer 4 #12). Speculative: no path back to `CoachProfileService` was found, and `allow-circular-references: false` would fail context start loudly, not silently. Downgraded to "confirm the context starts". This is not a finding.
+- **"The story's 'expect V226+' may be wrong"**. Killed: all remote refs checked, and only #428 carries V225.
+- **"The 17-context budget is threatened"**. Killed: the only web slice mocks the service; no full-context IT adds a mock set.
+- **"GDPR erasure gap from moving labels to tiers"**. Killed: neither pack table is touched by `GdprErasureService` today, so there is no new gap. A pre-existing non-erasure of pack labels is out of scope.
+- **"Hotspot list is fabricated"**. Downgraded: it is partly from private memory rather than the repo, but it is accurate advice, so no story change is needed.
 
-## 6. Recommendation (per claim, not a blanket score)
+## 6. Recommendation
 
-- High confidence, re-read by me: H1, H2, H3, the clock hook, the `createdAt`/`rotatedAt` correction, the ledger contradiction.
-- Medium confidence, from agent reports and unrun: M2 (a grep-able omission), M4, the AC8 reactivate redundancy, the rollback-only mechanics in H3.
-- Not independently re-checked: `NativeModifyingVersionAuditTest`'s logic, Layer 4's SSE timeout claim, cross-node clock skew.
-- Not re-checked at all: whether `session_id uuid` fits the project's id conventions beyond one precedent (`admin.gdpr_requests`).
+The story's direction (Option A, port/adapter seam, set-the-offer semantics, deferred DROP) holds. Its precedents are real, and most citations are exact. It should not go to dev until these are edited in:
 
-Do not run `dev-story` until H1 (an owner decision, below) and H2/H3 are folded into the ACs.
+1. **M1, nested `@Valid`.** HIGH confidence. I read the record and the step-4 precedent myself. Without it, every validation AC is inert.
+2. **M3 and M4, AC6 and AC9 rewording plus test changes.** HIGH confidence on M4 (IT lines re-read). MEDIUM-HIGH on M3: the `@Version` mechanism and the 409 mapping were re-read, but the lock-then-version-failure sequence was reasoned through, not executed.
+3. **M2, the error envelope.** HIGH confidence (handler re-read). The translation choice is a design decision for the owner or dev.
+4. **C1, C2, C5, which change behaviour coaches would notice.**
+   - C1: HIGH confidence.
+   - C2: HIGH on the withdraw case; the erased-coach exclusion is advisory.
+   - C5: HIGH that step 3 starts empty; MEDIUM on how often coaches revisit step 3.
+5. **C3, C4, C6–C12, wording and test-list corrections.** MEDIUM to HIGH. C8's Jackson default was not checked against the live ObjectMapper config beyond a grep.
+
+**Not independently re-checked by me in Step 4b:**
+- the Pitchside line numbers (Layer 1 only);
+- the docs targets in C11 (Layer 2 only);
+- `ReportGenerationService:193`, the other `getPublicProfile` caller (one extra query, no behaviour change; Layer 4 only).

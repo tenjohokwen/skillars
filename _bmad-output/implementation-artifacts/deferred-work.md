@@ -3555,7 +3555,7 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 
 ## Deferred from: Pitchside UI tests, spec ONB-06 (2026-11-03)
 
-- **A pack added in the coach profile builder is advertised to parents but can't be bought.**
+- **A pack added in the coach profile builder is advertised to parents but can't be bought.** **[PICKED UP skillars-deferred-168]**
   - **Where the data goes:**
     - Builder step 3 saves its packs to `marketplace.session_packs` (`CoachProfileService.saveStep3`, `CoachProfileService.java:287`).
     - The public profile reads those rows. `coachHasPacks` (`CoachPublicProfilePage.vue:611`) turns on the parent's "Buy sessions" button (`showBuySessionsSecondary`, `:622`).
