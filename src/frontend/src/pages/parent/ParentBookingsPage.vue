@@ -47,7 +47,7 @@
           <q-item-label class="text-weight-bold" data-testid="parent-booking-coach">{{
             booking.coachDisplayName
           }}</q-item-label>
-          <q-item-label caption
+          <q-item-label caption data-testid="parent-booking-player"
             >{{ t('player.nameLabel', 'Player') }}: {{ booking.playerName }}</q-item-label
           >
           <q-item-label caption data-testid="parent-booking-time">{{
@@ -189,6 +189,7 @@
             :label="t('booking.cancel.cta')"
             :loading="cancelingId === booking.id"
             @click="openCancelDialog(booking)"
+            data-testid="parent-booking-cancel-btn"
             class="q-mt-xs self-start"
           />
 
@@ -397,11 +398,11 @@
 
     <!-- Cancel confirmation dialog -->
     <q-dialog v-model="cancelDialogOpen">
-      <q-card style="min-width: 320px">
+      <q-card style="min-width: 320px" data-testid="cancel-booking-dialog">
         <q-card-section>
           <div class="text-h6">{{ t('booking.cancel.dialogTitle') }}</div>
         </q-card-section>
-        <q-card-section>
+        <q-card-section data-testid="cancel-booking-body">
           {{ t('booking.cancel.dialogBody') }}
         </q-card-section>
         <q-card-actions align="right">
@@ -410,6 +411,7 @@
             unelevated
             color="primary"
             :label="t('booking.cancel.confirm')"
+            data-testid="cancel-booking-confirm"
             @click="submitCancelBooking"
           />
         </q-card-actions>

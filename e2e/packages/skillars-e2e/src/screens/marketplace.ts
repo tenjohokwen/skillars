@@ -36,6 +36,9 @@ export class PackPurchaseScreen extends Screen {
   noPack = () => this.tid('pack-none')
   addCardBanner = () => this.tid('purchase-add-card-banner')
   addCard = () => this.tid('purchase-add-card-btn')
+  /** The inline add-card dialog and, inside it, the card form's save button. */
+  cardDialog = () => this.tid('purchase-card-dialog')
+  saveCard = () => this.tid('payment-card-save-btn')
   confirm = () => this.tid('purchase-confirm')
   error = () => this.tid('purchase-error')
   /** Offered in the error banner when the card was declined. */

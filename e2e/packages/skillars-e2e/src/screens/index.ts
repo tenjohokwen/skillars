@@ -23,6 +23,35 @@ export class ParentDashboardScreen extends Screen {
   childCards = () => this.tid('child-card')
 }
 
+/** A parent adds a child. Under 18, a scroll-gated, versioned consent box appears. */
+export class CreatePlayerScreen extends Screen {
+  readonly route = R.createPlayer
+  readonly readyTestId = 'create-player-title'
+  name = () => this.tid('create-player-name-input')
+  dateOfBirth = () => this.tid('create-player-dob-input')
+  position = () => this.tid('create-player-position-select')
+  ageTier = () => this.tid('create-player-age-tier')
+  consent = () => this.tid('create-player-consent')
+  consentScrollBox = () => this.tid('create-player-consent-scroll-box')
+  consentCheckbox = () => this.tid('create-player-consent-checkbox')
+  submit = () => this.tid('create-player-submit-btn')
+  error = () => this.tid('create-player-error')
+
+  /** `label` is the option's visible text (resolve it through `t()`). */
+  async choosePosition(label: string): Promise<void> {
+    await this.position().click()
+    await this.page.getByRole('option', { name: label, exact: true }).click()
+  }
+}
+
+/** Where a limited admin lands on a full-admin route (S-28). */
+export class AdminRequiredScreen extends Screen {
+  readonly route = R.adminRequiresAdministrator
+  readonly readyTestId = 'admin-required-title'
+  message = () => this.tid('admin-required-message')
+  back = () => this.tid('admin-required-back-btn')
+}
+
 export class CoachPublicProfileScreen extends Screen {
   readonly route = R.coachProfile
   readonly readyTestId = 'coach-primary-cta'
@@ -41,6 +70,7 @@ export class CoachPublicProfileScreen extends Screen {
   packs = () => this.tid('coach-profile-packs')
   /** A parent's remaining credits with this coach (only once they hold or held a pack). */
   credits = () => this.tid('coach-profile-credits')
+  reviews = () => this.tid('coach-profile-review')
 
   /** Open the profile through a coach's shared-slot link; its CTAs carry the slot onwards. */
   async openWithSlot(coachId: string, slot: string): Promise<this> {

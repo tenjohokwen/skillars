@@ -135,7 +135,12 @@
             {{ t('marketplace.noReviewsYet') }}
           </div>
           <template v-else>
-            <div v-for="review in reviews" :key="review.reviewId" class="review-item q-mb-md">
+            <div
+              v-for="review in reviews"
+              :key="review.reviewId"
+              class="review-item q-mb-md"
+              data-testid="coach-profile-review"
+            >
               <div class="row items-center q-gutter-sm q-mb-xs">
                 <q-rating :model-value="review.rating" readonly size="16px" color="amber" />
                 <span class="text-caption" style="color: var(--text-secondary)">
@@ -154,7 +159,12 @@
                   :review-id="review.reviewId"
                 />
               </div>
-              <div v-if="review.body" class="text-body2" style="color: var(--text-primary)">
+              <div
+                v-if="review.body"
+                class="text-body2"
+                style="color: var(--text-primary)"
+                data-testid="coach-profile-review-body"
+              >
                 {{ review.body }}
               </div>
               <div v-if="review.coachResponseBody?.trim()" class="coach-response q-mt-sm q-pa-sm">

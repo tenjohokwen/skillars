@@ -1,10 +1,13 @@
 import { expect, scenario, test } from '../../src/app.js'
+import { asRole } from '../../src/data/accounts.js'
 import { VERIFY_TOKEN } from '../../src/data/provisioner.js'
 import { t } from '../../src/i18n.js'
 import { R, REGISTRATION } from '../../src/routes.js'
 import {
+  CreatePlayerScreen,
   EmailPendingScreen,
   LoginScreen,
+  ParentDashboardScreen,
   PlayerBuilderScreen,
   RegisterScreen,
   scrollToEnd,
@@ -266,4 +269,51 @@ test.describe('B · Registration & verification', () => {
       },
     )
   }
+
+  test(
+    'a parent adds a child under 18 only after reading and ticking the versioned consent',
+    scenario({
+      id: 'REG-19',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@parent', '@registration'],
+    }),
+    async ({ actor, suite, provision, clock }) => {
+      const parent = await provision.parent({ childAges: [] })
+      const { page } = await actor(asRole(parent))
+      const create = await new CreatePlayerScreen(page, suite).open()
+      const name = `Kid ${provision.uniqueCity()}`
+      await create.name().fill(name)
+      await create.choosePosition(t('player.positions.MIDFIELDER'))
+
+      // An adult date of birth asks for no consent...
+      await create.dateOfBirth().fill(clock.dateOfBirthForAge(19).toISODate())
+      await expect(create.ageTier()).toHaveText(t('player.ageTiers.ADULT'))
+      await expect(create.consent()).toHaveCount(0)
+
+      // ...a minor's does, and holds submit until the box is ticked. The checkbox enables once the
+      // policy is scrolled to its end (or at once, when the text fits without scrolling).
+      await create.dateOfBirth().fill(clock.dateOfBirthForAge(11).toISODate())
+      await expect(create.ageTier()).toHaveText(t('player.ageTiers.AGE_10_12'))
+      await expect(create.consent()).toBeVisible()
+      await expect(create.submit()).toBeDisabled()
+      await scrollToEnd(create.consentScrollBox())
+      await expect(create.consentCheckbox()).not.toHaveAttribute('aria-disabled', 'true')
+      await create.consentCheckbox().click()
+      await expect(create.submit()).toBeEnabled()
+
+      // The request records the consent and the policy version it was given against.
+      const created = page.waitForRequest(
+        (r) => r.method() === 'POST' && new URL(r.url()).pathname === '/api/security/players',
+      )
+      await create.submit().click()
+      expect((await created).postDataJSON()).toMatchObject({
+        name,
+        parentConsent: true,
+        consentPolicyVersion: '1.0',
+      })
+      const dashboard = await new ParentDashboardScreen(page, suite).waitReady()
+      await expect(dashboard.childCards().filter({ hasText: name })).toHaveCount(1)
+    },
+  )
 })

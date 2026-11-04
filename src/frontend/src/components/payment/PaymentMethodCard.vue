@@ -19,7 +19,7 @@
     <template v-else>
       <div v-if="savedCard?.hasCard && !editing" class="row items-center q-gutter-sm">
         <q-icon name="mdi-credit-card-outline" size="sm" color="primary" />
-        <span class="text-body2">
+        <span class="text-body2" data-testid="payment-card-saved">
           {{
             savedCard.brand
               ? t('payment.card.savedLabel', {
@@ -59,6 +59,7 @@
             :label="t('payment.card.save')"
             :loading="saving"
             :disable="!elementsReady"
+            data-testid="payment-card-save-btn"
             @click="submit"
           />
           <q-btn

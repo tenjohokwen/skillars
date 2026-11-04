@@ -89,4 +89,33 @@ test.describe('D · Marketplace & discovery', () => {
       await expect(profile.packs()).toContainText('Starter 5')
     },
   )
+
+  test(
+    'a coach with reviews shows the aggregate rating and the reviews, to a guest',
+    scenario({
+      id: 'MKT-09',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@guest', '@marketplace', '@reviews'],
+    }),
+    async ({ page, suite, provision, baseline }) => {
+      // A fresh coach, so no other spec sees its rating. Two approved reviews, 4 and 5 stars, by two
+      // distinct authors (one review per author and coach).
+      const coach = await provision.coach()
+      const bodies = ['Great with young players.', 'Clear drills and good feedback.']
+      await provision.seedApprovedReviews(coach, [
+        { author: await baseline('parent'), rating: 4, body: bodies[0]! },
+        { author: await baseline('player'), rating: 5, body: bodies[1]! },
+      ])
+
+      const profile = await new CoachPublicProfileScreen(page, suite).open({
+        coachId: coach.coachId!,
+      })
+      await expect(profile.rating()).toHaveText('4.5 (2)')
+      await expect(profile.reviews()).toHaveCount(2)
+      for (const body of bodies) {
+        await expect(profile.reviews().filter({ hasText: body })).toHaveCount(1)
+      }
+    },
+  )
 })

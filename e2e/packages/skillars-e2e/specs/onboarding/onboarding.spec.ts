@@ -147,6 +147,48 @@ test.describe('C · Coach onboarding', () => {
       )
     },
   )
+
+  test(
+    'a coach cannot pass the pricing step without a per-session price, pack or no pack',
+    scenario({
+      id: 'ONB-07',
+      priority: 'P0',
+      type: 'neg',
+      tags: ['@regression', '@coach', '@onboarding'],
+    }),
+    async ({ page, suite, provision }) => {
+      // Revised plan row: a coach with neither price nor pack can't exist, because step 3 requires
+      // the per-session price (perSessionPrice is @NotNull server-side too). So the unbookable coach
+      // the old row described is unreachable, and what is left to assert is the gate itself.
+      test.slow()
+      const { builder } = await startBuilder(page, suite, provision)
+      await fillStep1(builder, 'No Price Coaching')
+      await builder.chooseTimezone('Europe/Berlin')
+      await builder.next().click()
+      await builder.chooseSpecialties('Fitness')
+      await builder.ageGroup('13-17').click()
+      await builder.next().click()
+      await expect(builder.stepIndicator()).toHaveText(stepOf(3))
+
+      const step3Saves: string[] = []
+      page.on('request', (r) => {
+        if (r.method() === 'PUT' && r.url().endsWith('/steps/3')) step3Saves.push(r.url())
+      })
+      // No price and no pack: Next stays on step 3 and saves nothing.
+      await builder.next().click()
+      await expect(builder.stepIndicator()).toHaveText(stepOf(3))
+      // Even with a complete pack, the price is still required.
+      await builder.addPackRow({ sessionCount: 5, totalPrice: 200, label: 'Five' })
+      await builder.perSessionPrice().fill('40')
+      await builder.perSessionPrice().fill('')
+      // The price field's own rule message (Quasar may put the test id on the inner <input>, which
+      // holds no text, so match the message itself; it is the only field on the step in error).
+      await expect(page.getByText(t('validation.required'), { exact: true })).toBeVisible()
+      await builder.next().click()
+      await expect(builder.stepIndicator()).toHaveText(stepOf(3))
+      expect(step3Saves).toEqual([])
+    },
+  )
 })
 
 test.describe('C · Coach onboarding — browser in a zone the server lacks', () => {

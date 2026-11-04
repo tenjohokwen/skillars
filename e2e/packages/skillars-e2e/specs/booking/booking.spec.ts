@@ -189,6 +189,116 @@ test.describe('F · Booking lifecycle', () => {
     },
   )
   test(
+    'the bookings list shows the coach, the child and the time, and the pack shows the credit held',
+    scenario({
+      id: 'BKG-14',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@parent', '@booking'],
+    }),
+    async ({ actor, suite, provision }) => {
+      test.slow()
+      const zone = 'Europe/Berlin'
+      const coachName = `${provision.uniqueCity()} Coaching`
+      const coach = await provision.coach({ displayName: coachName, timezone: zone })
+      const parent = await provision.parent()
+      await provision.saveCard(parent)
+      const sessions = await provision.buyPack(parent, coach)
+      const child = parent.children[0]!
+      const slot = nextWeekSlot(2, '15:00')
+
+      const family = await actor(asRole(parent))
+      const profile = await new CoachPublicProfileScreen(family.page, suite).openWithSlot(
+        coach.coachId!,
+        slot,
+      )
+      await profile.primaryCta().click()
+      await (await new BookingRequestScreen(family.page, suite).waitReady()).submit().click()
+
+      const bookings = await new ParentBookingsScreen(family.page, suite).waitReady()
+      const booking = bookings.booking(coachName)
+      await expect(booking).toHaveCount(1)
+      await expect(bookings.player(booking)).toContainText(child.name)
+      await expect(bookings.time(booking)).toHaveText(
+        await zonedLabel(family.page, slotInstant(slot, zone), zone, false),
+      )
+      await expect(bookings.status(booking)).toHaveText(t('booking.requests.statusRequested'))
+      // The list itself carries no credit count; the pack dashboard is where remaining credits
+      // show, and it already counts the one this request holds.
+      const packs = await new PacksDashboardScreen(family.page, suite).open({
+        playerId: child.playerId,
+      })
+      await expect(packs.credits(packs.card(coachName))).toHaveText(
+        t('booking.packs.creditsRemainingLabel', { remaining: sessions - 1, total: sessions }),
+      )
+    },
+  )
+
+  test(
+    'a parent cancelling inside 24h is told the rule, forfeits the session, and is emailed why',
+    scenario({
+      id: 'BKG-19',
+      priority: 'P0',
+      type: 'edge',
+      tags: ['@regression', '@parent', '@coach', '@booking', '@money'],
+    }),
+    async ({ actor, suite, provision, mail }) => {
+      test.slow()
+      const coachName = `${provision.uniqueCity()} Coaching`
+      const coach = await provision.coach({ displayName: coachName })
+      const parent = await provision.parent()
+      await provision.saveCard(parent)
+      const sessions = await provision.buyPack(parent, coach)
+      const child = parent.children[0]!
+
+      // A confirmed pack booking for next week...
+      const family = await actor(asRole(parent))
+      const profile = await new CoachPublicProfileScreen(family.page, suite).openWithSlot(
+        coach.coachId!,
+        nextWeekSlot(4, '14:00'),
+      )
+      await profile.primaryCta().click()
+      await (await new BookingRequestScreen(family.page, suite).waitReady()).submit().click()
+      await new ParentBookingsScreen(family.page, suite).waitReady()
+      const coachSide = await actor(asRole(coach))
+      const inbox = await new CoachRequestsScreen(coachSide.page, suite).open()
+      await inbox.accept(inbox.request(child.name)).click()
+      await expect(inbox.request(child.name)).toHaveCount(0)
+
+      // ...that now starts in three hours: well inside the 24h notice, and not yet started.
+      await provision.moveBookingStart(parent, coach, 3)
+      const since = new Date(Date.now() - 5_000)
+
+      const bookings = await new ParentBookingsScreen(family.page, suite).open()
+      const booking = bookings.booking(coachName)
+      await expect(bookings.status(booking)).toHaveText(confirmed)
+      await bookings.cancel(booking).click()
+      // The dialog states the 24h rule, and that a reschedule does not reset it.
+      await expect(bookings.cancelDialogBody()).toHaveText(t('booking.cancel.dialogBody'))
+      await bookings.confirmCancel().click()
+      await expect(bookings.cancelDialog()).toHaveCount(0)
+      await expect(bookings.status(booking)).toHaveText(t('booking.requests.statusCancelledParent'))
+
+      // Forfeited: the pack credit stays spent, and no refund is charged back to the card.
+      const packs = await new PacksDashboardScreen(family.page, suite).open({
+        playerId: child.playerId,
+      })
+      await expect(packs.credits(packs.card(coachName))).toHaveText(
+        t('booking.packs.creditsRemainingLabel', { remaining: sessions - 1, total: sessions }),
+      )
+      expect(await chargesFor(parent.userId)).toBe(1)
+      // The family is told no refund is due (SESSION_FORFEITED_LATE_CANCEL).
+      const notice = await mail.waitForMessage({
+        to: parent.email,
+        subjectMatches: /no refund/i,
+        since,
+        timeoutMs: 60_000,
+      })
+      expect(notice.subject).toMatch(/no refund/i)
+    },
+  )
+
+  test(
     'only published availability is offered: inside the windows, never outside them',
     scenario({
       id: 'BKG-03',
