@@ -115,7 +115,7 @@ class RegistrationDuplicateAttemptListenerTest {
 
     @Test
     void onPhoneInUse_happyPath_enqueuesPhoneInUseToTheTypedAddress_withoutAName() {
-        listener.onPhoneInUse(new RegistrationPhoneInUseEvent("newcomer@example.com", "fr"));
+        listener.onPhoneInUse(new RegistrationPhoneInUseEvent("newcomer@example.com", "fr", 8L));
 
         verify(notificationOutboxSupport).enqueueEmail(eq(EmailTemplate.REGISTRATION_PHONE_IN_USE),
             recipientCaptor.capture(), dataCaptor.capture(), sendIdCaptor.capture());
@@ -133,9 +133,9 @@ class RegistrationDuplicateAttemptListenerTest {
 
     @Test
     void onPhoneInUse_blankAddress_earlyReturns_doesNotEnqueue() {
-        assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent(" ", "en")))
+        assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent(" ", "en", 8L)))
             .doesNotThrowAnyException();
-        assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent(null, "en")))
+        assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent(null, "en", 8L)))
             .doesNotThrowAnyException();
 
         verifyNoInteractions(notificationOutboxSupport);
@@ -151,7 +151,7 @@ class RegistrationDuplicateAttemptListenerTest {
         logCapture.start();
         try {
             listenerLogger.addAppender(logCapture);
-            assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent("newcomer@example.com", "en")))
+            assertThatCode(() -> listener.onPhoneInUse(new RegistrationPhoneInUseEvent("newcomer@example.com", "en", 8L)))
                 .doesNotThrowAnyException();
         } finally {
             listenerLogger.detachAppender(logCapture);

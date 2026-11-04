@@ -89,6 +89,11 @@ final class RegistrationDuplicateGuard {
         passwordEncoder.encode(rawPassword);
 
         User user = existing.get();
+        if ("phone".equals(reason) && user.getEmail() != null && user.getEmail().equalsIgnoreCase(email)) {
+            // The lookups are exact-case; the same address in other letters is an email match, and its
+            // owner must not be told "we couldn't create your account" about their own number.
+            reason = "email";
+        }
         log.info("[REGISTRATION_DUPLICATE_ATTEMPT] registration matched an existing account",
             kv("flow", flow), kv("reason", reason), kv("userId", user.getId()));
 
@@ -96,7 +101,7 @@ final class RegistrationDuplicateGuard {
         if ("phone".equals(reason)) {
             // Independent of the existing-account notice: sent even when that one was skipped (its
             // limit, or an erased tombstone, though erasure clears the phone today).
-            notifyRegistrant(publisher, rateLimitingService, email, langKey);
+            notifyRegistrant(publisher, rateLimitingService, email, langKey, user.getId());
         }
         return true;
     }
@@ -116,7 +121,7 @@ final class RegistrationDuplicateGuard {
     }
 
     private static void notifyRegistrant(ApplicationEventPublisher publisher, RateLimitingService rateLimitingService,
-                                         String email, String langKey) {
+                                         String email, String langKey, Long phoneHolderUserId) {
         if (email == null || email.isBlank()) {
             return;
         }
@@ -125,6 +130,6 @@ final class RegistrationDuplicateGuard {
             return;
         }
         String lang = langKey != null && !langKey.isBlank() ? langKey : "en";
-        publisher.publishEvent(new RegistrationPhoneInUseEvent(email, lang));
+        publisher.publishEvent(new RegistrationPhoneInUseEvent(email, lang, phoneHolderUserId));
     }
 }
