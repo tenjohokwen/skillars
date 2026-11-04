@@ -3354,3 +3354,28 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
   - **Why tests missed it:** the Pitchside provisioner creates the tier with a separate `POST /payment/coaches/me/session-pack-tiers` after publishing (`e2e/packages/skillars-e2e/src/data/provisioner.ts:260`), which hides the gap.
   - **The decision needed:** which table is the source of truth. Either publishing, or step 3 itself, creates the tier from the builder's pack, or the profile stops advertising builder-only packs.
   - Found by the Pitchside spec ONB-06 (W2, on `feature/pitchside`). That spec is marked `test.fail` until this is fixed; remove the marker with the fix.
+
+## Deferred from: Pitchside UI tests, booking, payment and auth specs (2026-11-04)
+
+- **Booking slot labels render blank on the request-booking page (live on master).**
+  - **Cause:** `BookingRequestPage.formatInZone` (`BookingRequestPage.vue:467`) combines `dateStyle`/`timeStyle` with `timeZoneName` (`:473`). ECMA-402 forbids that, and every engine throws "Invalid option" (Chrome 156, Firefox, Safari, Node). The UTC fallback (`:483`) uses the same options and throws too.
+  - **Effect:** every slot row renders with no text, so parents pick from blank rows.
+  - **Why tests missed it:** the page's own spec assumed Chrome accepted the options and skipped rendering the labels.
+  - **Fix:** `e51b84f1` on `feature/pitchside` (PR #425) uses explicit date and time components and adds a Vitest case that fails against the old code. It can be cherry-picked to master on its own.
+  - Found by the Pitchside spec BKG-04.
+- **A family holding pack credits gets "Per session" preselected, and is charged by card.**
+  - **Cause:** `selectedPackId` starts as `null` (`BookingRequestPage.vue:393`), and "Per session" is the first option (`:403`), even when the family holds credits with this coach.
+  - **Effect:** a parent who submits with the default is charged per session when the coach accepts, and the credits go unused. Reproduced on the E2E stack: 2 charges, credits still 5/5.
+  - **The decision needed:** whether holding credits should preselect the pack.
+  - BKG-01 and BKG-11 choose the pack explicitly until this is decided.
+- **A declined card shows only "Purchase failed. Please try again."**
+  - **Cause:** `StripePaymentGateway` turns a card error into the catch-all `payment.lifecycleFailure` (`StripePaymentGateway.java:187`, `:201`), and `PaymentApiAdvice` returns that as a 422 `ErrorDto`. `SessionPackPurchasePage` then reads `e.response.data.message` (`SessionPackPurchasePage.vue:189`), which `ErrorDto` never has (its text is under `errorMsg`). This is the same mistake fixed on the profile builder in deferred-140 AC3.3.
+  - **Effect:** every purchase failure shows the generic text, and the existing "card was declined" copy (`subscription.errors.paymentDeclined`) is never reached.
+  - **No money impact:** no pack is created and nothing is captured. PAY-06 asserts the current behaviour.
+- **Registration discloses whether an email or phone number is already registered.**
+  - **Cause:** all three registration services throw `security.emailInUse` (for example `CoachRegistrationService.java:75`, `:104`), and each register page shows "This email is already registered." (`auth.*.emailInUse`; the phone number gets `phoneInUse`).
+  - **Effect:** anyone can test whether an address has an account. Elsewhere the app defends against this deliberately (the resend banner, D8 above).
+  - **The decision needed:** whether registration should hide it. If it should, the Pitchside plan's REG-08 is the regression test, and it is not written yet.
+- **The coach completeness gate guards only `/coach/command-center`.**
+  - **Cause:** the router's async check (`router/index.js:93`) matches that one path.
+  - **Effect:** an incomplete coach (builder unfinished, profile unpublished) can open other coach pages, such as `/coach/availability`. Observed while writing AUTH-13. It may be intended (the Pitchside plan's C-11 describes the command-centre guard), but it is unconfirmed.
