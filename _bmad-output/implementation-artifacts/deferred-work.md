@@ -8,7 +8,18 @@ One bullet = one open item. Grouped by the review that raised it; the heading ca
 - **This is a list of open work only.** Items are deleted outright once they are implemented — this file is
   not a history of what was fixed. Absence of an item does not mean it was never raised; check git history
   of this file (or the `skillars-deferred-*.md` stories) for what has been closed.
-- **Sections are not in chronological order.** Read the date in each `## Deferred from: review-evals baseline real-sample, owner-verified (2026-11-03)
+- **Sections are not in chronological order.** Read the date in each `## Deferred from:` heading.
+- **Item ids (`D1`, `W3`, `Def12`, `AD4`…) are only unique within their section.** They are the ids the
+  original review used; they repeat across sections and are not global identifiers.
+- **`**[AUDIT <date>: …]**` annotations are the only re-verified claims in this file.** Everything else
+  — especially any "will be fixed in Story X" / "Epic Y owns this" phrasing — records what was believed at
+  review time and has **not** been re-checked. Several such promises turned out to be unkept (see below).
+  Verify against the code before trusting an unannotated forward-reference.
+- **Keep both tracking files small.** `sprint-status.yaml` retains only the latest 5 `# prior last_updated`
+  comment lines (skillars-deferred-161); history lives in git. Don't re-grow it.
+- **File paths and line numbers age fast.** They were accurate at the review date in the heading.
+
+## Deferred from: review-evals baseline real-sample, owner-verified (2026-11-03)
 
 Source: `evals/review/results/baseline-2026-11-02/real-sample.md`. The AI reviewer arms reported these outside the
 eval answer key, the judge called them real, and the owner confirmed each against the code at the input revision
@@ -331,17 +342,6 @@ the alternatives and stay queued behind it.
 - RS09 [medium/logic] The parent's saved default card is overwritten before the charge, so a declined card stays saved and the subscription sync is skipped later. getOrCreateStripeCustomer saves the new paymentMethodId to stripe_customers before chargeAndCapture. Owner: same defect as S17 — one draft case; HEAD identical. [`SessionPackPaymentService.java` `purchasePack / getOrCreateStripeCustomer` (also S17: SessionPackPaymentService.java); input rev `b123c73de463`; sample S13]
 - RS10 [high/concurrency] Saving the whole Conversation row can undo a concurrent BLOCKED status (report is lost). Conversation has no @Version and no @DynamicUpdate, so each save() writes every column. Owner: no @Version anywhere; getMessages/sendMessage still full-row save at HEAD. [`MessagingService.java` `getMessages / sendMessage (transactionTemplate block)`; input rev `a4b3ed40c542`; sample S18]
 - RS11 [medium/database] AlertRule update deletes the old rule before saving the new one in separate transactions, so a failed save loses the rule. update() is not @Transactional. Owner: no @Transactional/@Valid at HEAD; delete commits before failing save. [`AlertRuleAdminResource.java` `AlertRuleAdminResource.update`; input rev `4899534f12a1`; sample S20]
-
-## Deferred from:` heading.
-- **Item ids (`D1`, `W3`, `Def12`, `AD4`…) are only unique within their section.** They are the ids the
-  original review used; they repeat across sections and are not global identifiers.
-- **`**[AUDIT <date>: …]**` annotations are the only re-verified claims in this file.** Everything else
-  — especially any "will be fixed in Story X" / "Epic Y owns this" phrasing — records what was believed at
-  review time and has **not** been re-checked. Several such promises turned out to be unkept (see below).
-  Verify against the code before trusting an unannotated forward-reference.
-- **Keep both tracking files small.** `sprint-status.yaml` retains only the latest 5 `# prior last_updated`
-  comment lines (skillars-deferred-161); history lives in git. Don't re-grow it.
-- **File paths and line numbers age fast.** They were accurate at the review date in the heading.
 
 ## Last audit: 2026-09-15 (full-file re-audit + premature-prune correction)
 
@@ -3622,13 +3622,3 @@ same consequence, which is the one item kept here.
     `skip-setup-trivy` might not exist at the pin and would only warn (refuted — it is declared there and
     gates the installer on `inputs.skip-setup-trivy == 'false'`).
 
-## Known defect in THIS file (2026-11-04)
-
-- **[docs, low]** The `## How to read this file` list is split in half. Commit `9d62060c` (PR #406) inserted
-  the `review-evals baseline real-sample` section *inside* that list: its heading was spliced onto the end
-  of the "Sections are not in chronological order" bullet at line 11 (so the heading is mid-bullet text and
-  renders as prose, leaving that whole RS03-RS11 section with no heading at all), and the bullet's own tail
-  now sits orphaned as a bogus `## Deferred from:` heading.` heading after the RS items, followed by the
-  remaining how-to-read bullets. Verified with `git log -L 11,11` on this file. Fixing it means moving the
-  inserted section out of the list and restoring one bullet — deliberately NOT done in the CI PR that found
-  it, to keep that diff to the workflow.
