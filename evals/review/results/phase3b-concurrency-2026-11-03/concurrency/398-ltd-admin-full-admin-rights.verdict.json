@@ -1,0 +1,59 @@
+{
+  "arm": "concurrency",
+  "case": "398-ltd-admin-full-admin-rights",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "AlertRuleAdminResource.update does findById \u2192 deleteById \u2192 save with no @Transactional, and the jakarta.persistence imports confirm Spring Data JPA 3.x where deleteById silently no-ops on a missing row \u2014 so concurrent PUTs both insert fresh rows with new generated ids (builder never sets id), and a retry on the old id hits the orElseThrow EntityNotFoundException despite the update having succeeded.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "deleteUserInTransaction shows exactly the described pattern \u2014 unlocked findOneByLogin, !isActivated check, unconditional userRepository.delete(user), and its own javadoc admits the TOCTOU window is narrowed, not closed \u2014 but the finding's verification caveat (delete emits plain DELETE WHERE id=? and User has no @Version) depends on User.java and UserRepository.java, which are not shown; a @Version field would make the DELETE version-conditional and block deletion of a concurrently activated row.",
+      "reported_id": "R3"
+    }
+  ],
+  "judge_cost_usd": 0.7404949999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions ROLE_LTD_ADMIN, HAS_ADMIN_ROLE, or any admin-tier authorization issue.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R4 identifies the same HAS_ANY_ROLE guard on deleteUserInformation, same consequence (any authenticated role can delete any user), and same latent/no-caller status.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 covers the non-transactional delete-then-save with unvalidated body losing the rule and silencing alerting; R2 covers the remaining fragment that each successful PUT replaces the resource id.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] AlertRuleAdminResource.update does findById \u2192 deleteById \u2192 save with no @Transactional, and the jakarta.persistence imports confirm Spring Data JPA 3.x where deleteById silently no-ops on a missing row \u2014 so concurrent PUTs both insert fresh rows with new generated ids (builder never sets id), and a retry on the old id hits the orElseThrow EntityNotFoundException despite the update having succeeded. | pass-1: Beyond the id-change fragment matched to F3, it states a distinct concrete race: two concurrent PUTs both pass findById, Spring Data 3 deleteById is a no-op on a missing row, and with no unique index on metric_name both saves insert, yielding two live rules and double notifications.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] deleteUserInTransaction shows exactly the described pattern \u2014 unlocked findOneByLogin, !isActivated check, unconditional userRepository.delete(user), and its own javadoc admits the TOCTOU window is narrowed, not closed \u2014 but the finding's verification caveat (delete emits plain DELETE WHERE id=? and User has no @Version) depends on User.java and UserRepository.java, which are not shown; a @Version field would make the DELETE version-conditional and block deletion of a concurrently activated row. | pass-1: Concrete TOCTOU trigger: unlocked findOneByLogin re-read then unconditional DELETE with no activated predicate or affected-row check, so an activation committing in the window (or holding the row lock) is followed by deletion of the freshly activated account.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

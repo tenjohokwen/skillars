@@ -1,0 +1,88 @@
+{
+  "arm": "security",
+  "case": "318-cashout-money-integrity",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "processCashOut reads the balance via creditWalletService.getBalance() and then writes the CASH_OUT_DEBIT and STRIPE_FEE_DEBIT rows via two separate writeLedgerEntry transactions, instead of calling CreditWalletService.debitForCashOut \u2014 the Isolation.SERIALIZABLE check-and-debit method that exists for this purpose and has no caller. A parent who submits a cash-out of their full balance concurrently with a credit-paid booking (or a second cash-out request) has both paths pass their balance checks against the same stale sum; both debits commit, the wallet goes negative, and the parent extracts both a Stripe refund and the credit-funded booking from the same money. This also holds across the multiple deployed instances \u2014 there is no lock of any kind.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out balance check is non-atomic; the SERIALIZABLE debitForCashOut is bypassed (dead code)",
+      "verification": "Grep confirms debitForCashOut has no production caller. Check V138__baseline_schema.sql: chk_ledger_amount_sign constrains per-row sign only; confirm there is no constraint or trigger preventing a negative per-parent sum, and check whether the booking credit-spend path (BookingPaymentPersistenceService/PaymentLifecycleService) does its own serializable balance check \u2014 even if it does, the cash-out side alone is unguarded."
+    },
+    {
+      "category": "logic",
+      "description": "For a requested cash-out R with fee F, the service writes ledger debits totalling R + F (lines 47\u201350) but refunds only R \u2212 F to the card (netAmount, line 41/53). The fee is therefore collected twice: once as the STRIPE_FEE_DEBIT ledger row and once by shrinking the refund. Additionally the eligibility check only requires balance \u2265 R, not R + F, so any parent cashing out their full balance (which the frontend explicitly allows: the button enables when cashoutAmount == balance) ends with a negative wallet of \u2212F. Concrete: balance \u20ac100, fee 2.5% + \u20ac0.25 \u2192 ledger debited \u20ac102.75, card receives \u20ac97.25, \u20ac5.50 of the parent's value vanishes and the wallet reads \u2212\u20ac2.75.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Stripe fee debited from the wallet AND deducted from the payout \u2014 parent charged the fee twice and wallet driven negative",
+      "verification": "Compare with debitForCashOut (same R + F debit) and whatever design doc defines the fee model; whichever side is intended, R + F out of the wallet against R \u2212 F paid out cannot both be right. Reproduce with a full-balance cash-out and read the ledger sum afterwards."
+    },
+    {
+      "category": "logic",
+      "description": "The refund key is derived solely from the PaymentIntent id, but CashOutService calls refund() against stripeCustomers.lastPaymentIntentId, which stays constant between the parent's charges. A parent who cashes out \u20ac50 and then cashes out \u20ac50 again the same day (within Stripe's ~24h idempotency window) hits the same key with identical params: Stripe replays the first Refund and returns success, processCashOut completes normally, the ledger is debited a second time, and no second payout is ever sent \u2014 the credit is destroyed silently. A second cash-out of a different amount instead gets a Stripe idempotency_error (same key, different params), so any second cash-out within 24h either silently eats money or always fails. The key also collides with SessionPackPaymentService's compensating refund when both target the same PI.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.refund",
+      "title": "Refund idempotency key refund-{paymentIntentId} makes a second same-amount cash-out silently debit the wallet without paying out",
+      "verification": "Confirm Stripe's documented idempotency behavior (24h retention; same key + different params \u2192 idempotency_error; same key + same params \u2192 replayed response) against the pinned stripe-java version, and that lastPaymentIntentId is not updated by the cash-out itself (it is only written in chargeAndCapture)."
+    },
+    {
+      "category": "logic",
+      "description": "The charge key is pi-{packTierId}-{parentId}-{60s bucket}, and packTierId repeats across all of a parent's purchases of that tier. A parent who submits the purchase endpoint twice within the same 60-second bucket (double-click, retry, or a deliberate scripted second POST) sends identical params under the same key: Stripe replays the original PaymentIntent and returns the same intent id, both calls proceed to createPurchase, and two full SessionPackPurchase rows (each with the tier's complete sessionCount and a fresh 60-day expiry) are persisted against one charge. The parent receives double the sessions for one payment; the coach is later paid per-session out of money collected once.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Duplicate session-pack purchase within the 60s idempotency bucket grants a second pack without a second charge",
+      "verification": "Check V138/migrations for a unique constraint on session_pack_purchases.stripe_payment_intent_id (none is visible in the entity); if absent the second row commits. For truly concurrent requests Stripe returns a 409 in-flight idempotency conflict, but a sequential second request inside the same bucket replays cleanly \u2014 reproduce with two POSTs a few seconds apart."
+    },
+    {
+      "category": "logic",
+      "description": "The payout mechanism is a partial refund against the parent's most recent PaymentIntent, but wallet credit accrues independently of that charge (booking refunds, dispute credits). A parent with \u20ac200 of credit whose last charge was a \u20ac30 booking has every cash-out above ~\u20ac30 rejected by Stripe (refund exceeds charge) after the ledger has already been debited; the compensation then reverses it, so the parent simply can never cash out. The headroom is also consumed by any prior cash-out or pack-compensation refund against the same PI. The refund additionally lands on whichever card funded that last charge, which may differ from the parent's current saved payment method.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out payout is a refund of whatever lastPaymentIntentId holds, capping cash-outs at the last charge's refundable amount",
+      "verification": "Confirm Stripe rejects refunds exceeding the charge's remaining refundable amount with a StripeException (it does \u2014 amount_too_large), making the trigger a plain failed cash-out whenever balance > last charge."
+    },
+    {
+      "category": "edge-case",
+      "description": "A network timeout on the refund call surfaces as an ApiConnectionException (a StripeException), which StripePaymentGateway wraps in PaymentGatewayException; processCashOut then writes CASH_OUT_REVERSAL entries restoring the full requested amount plus fee. If Stripe actually processed the refund before the connection dropped, the parent receives the payout on their card AND gets the credit back, and can cash out the restored credit again later (a different amount or >24h later avoids the idempotency replay), extracting the money twice. Unlike the pack-purchase path there is no stripe_refund_failures reconciliation record for an operator to reconcile the ambiguous outcome.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Ambiguous Stripe refund failure (timeout) restores wallet credit even when the refund was executed \u2014 double payout",
+      "verification": "Confirm no webhook (charge.refunded) or reconciliation job cross-checks CASH_OUT_REVERSAL entries against refunds that actually settled at Stripe."
+    },
+    {
+      "category": "database",
+      "description": "processCashOut is not transactional; each writeLedgerEntry call commits independently (REQUIRED propagation, cross-bean call). A crash or exception between the CASH_OUT_DEBIT and STRIPE_FEE_DEBIT writes, or between the two CASH_OUT_REVERSAL compensation writes, leaves the wallet in a half-debited state with no record to recover from. Likewise a JVM crash during the Stripe refund call leaves the parent fully debited with no refund issued and nothing persisted for an operator \u2014 the pack-purchase path writes a stripe_refund_failures row for exactly this case, the cash-out path writes nothing.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out debit, and its compensation, are two separate transactions with no durable failure record",
+      "verification": "Confirm writeLedgerEntry's @Transactional is plain REQUIRED and that no outbox/saga wraps processCashOut at the controller or an aspect level."
+    },
+    {
+      "category": "logic",
+      "description": "getAdminOverview derives totalCommissionCollected as totalGrossVolume \u00d7 the current platform.commission.rate config value, although per the B-1 design the commission rate is stamped into booking_payments.commission_rate at capture precisely so it is never re-read. After any rate change the admin report misstates commission for all historical periods. totalStripeFees similarly applies the card fee rate to the full gross including the credit_debited portion, which never touched Stripe \u2014 overstating fees whenever credit paid part of a booking. Reporting-only, but these figures feed admin financial decisions.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "RevenueReportingService.getAdminOverview",
+      "title": "Admin finance overview recomputes commission and Stripe fees from current config rates over historical volume",
+      "verification": "Confirm booking_payments.commission_rate exists and is populated (BookingPaymentPersistenceService per the StripePaymentGateway Javadoc) and that no summed-stamped-commission query exists that getAdminOverview should be using."
+    }
+  ],
+  "input_rev": "8661a41e51611978823b1d3c6688c524a449d7e3",
+  "model": null
+}

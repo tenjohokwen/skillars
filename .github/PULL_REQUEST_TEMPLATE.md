@@ -7,6 +7,7 @@
 ## Checklist
 
 - [ ] Tests added or updated for the change; targeted tests pass locally.
+- [ ] `/pr-review` ran on the final commit and its findings were fixed or consciously deferred (docs-only PRs: `no-build` label instead).
 - [ ] No new Spring test context (reuse an existing IT base).
 - [ ] If this changes a flow documented in `docs/dev-docs`, I updated the page and its "verified against" stamp.
 

@@ -1,0 +1,93 @@
+{
+  "arm": "control",
+  "case": "351-paused-subscription-card-sync",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "updateSubscriptionDefaultPaymentMethod builds a deterministic key \"sub-pm-\"+subscriptionId+\"-\"+paymentMethodId for sub.update, so an A\u2192B\u2192A switch within 24h reuses the first call's key with identical params and Stripe replays the cached response, leaving default_payment_method on B. The sibling payLatestOpenInvoice in the same diff uses a per-attempt key precisely to avoid this replay.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "syncPaymentMethod indeed only logs a paid retry (no local status/pastDueSince update) and GraceTarget.matches checks only local status and subscription ID, but the body of cancelAtStripeForGrace \u2014 the symbol the verification caveat says to check for a Stripe-side status/invoice check before cancelling \u2014 is outside the diff hunks, so whether the cancellation actually proceeds for a just-paid subscription cannot be settled from this code.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "checkPastDueGracePeriod now sweeps GRACE_STATUSES (incl. UNPAID) via findByStatusInAndPastDueSinceBefore, and startMissingGraceClocks only resets rows where pastDueSince == null; the status-update helper (~line 1218) never cleared pastDueSince on PAST_DUE\u2192UNPAID (only BILLING_HEALTHY clears it), so pre-existing UNPAID rows with an old stamp are cancelled on the first run. Whether any such rows exist in production (the finding's verification step) can't be checked from the diff.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "confirmed",
+      "note": "syncPaymentMethod's only guard is `stripeSubId == null || \"CANCELLED\".equals(status)`, with no Stripe-side state check, so stale/terminal rows hit updateSubscriptionDefaultPaymentMethod and fall into the error-logging catch; INCOMPLETE is a real local status (present in RECOVERABLE_ON_PAYMENT) yet is absent from RETRY_ON_NEW_PAYMENT_METHOD, so it gets the default card but no invoice retry. Only the INCOMPLETE_EXPIRED example depends on a status mapping not shown in the diff.",
+      "reported_id": "R9"
+    }
+  ],
+  "judge_cost_usd": 1.136115,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect: syncPaymentMethod never resumes a PAUSED subscription, so the user is cancelled by the grace sweep despite adding a card.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R5 points at the same silent exception-swallowing in savePaymentMethod/syncPaymentMethod but frames it as missing user feedback, not the synchronous-call/no-durable-retry architecture problem.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding addresses the lack of distinction between retryable and permanent Stripe failures in syncPaymentMethod.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] updateSubscriptionDefaultPaymentMethod builds a deterministic key \"sub-pm-\"+subscriptionId+\"-\"+paymentMethodId for sub.update, so an A\u2192B\u2192A switch within 24h reuses the first call's key with identical params and Stripe replays the cached response, leaving default_payment_method on B. The sibling payLatestOpenInvoice in the same diff uses a per-attempt key precisely to avoid this replay. | pass-1: Fixed idempotency key sub-pm-{subId}-{pmId} causes an A\u2192B\u2192A card change within 24h to replay the cached first call, leaving the subscription on card B \u2014 concrete trigger stated.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] syncPaymentMethod indeed only logs a paid retry (no local status/pastDueSince update) and GraceTarget.matches checks only local status and subscription ID, but the body of cancelAtStripeForGrace \u2014 the symbol the verification caveat says to check for a Stripe-side status/invoice check before cancelling \u2014 is outside the diff hunks, so whether the cancellation actually proceeds for a just-paid subscription cannot be settled from this code. | pass-1: Successful payLatestOpenInvoice leaves the local row PAST_DUE/UNPAID until the webhook arrives, so the sweep can cancel a just-paid subscription \u2014 concrete race with a stated trigger.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Depends on speculative Stripe behavior ('may stay in draft', 'may be a newer open one'); no verifiable concrete trigger from the text alone.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "Role-gating gap is inferred from test coverage, not shown; whether a read-only role sees the banner or Stripe accepts the card is left unverified.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "Hinges on unverified data-model assumptions (co-parents, shared Stripe customers); the reviewer itself cannot state whether the scenario exists.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] checkPastDueGracePeriod now sweeps GRACE_STATUSES (incl. UNPAID) via findByStatusInAndPastDueSinceBefore, and startMissingGraceClocks only resets rows where pastDueSince == null; the status-update helper (~line 1218) never cleared pastDueSince on PAST_DUE\u2192UNPAID (only BILLING_HEALTHY clears it), so pre-existing UNPAID rows with an old stamp are cancelled on the first run. Whether any such rows exist in production (the finding's verification step) can't be checked from the diff. | pass-1: Concrete rollout defect: pre-existing UNPAID rows with stale pastDueSince match findByStatusInAndPastDueSinceBefore on the first sweep and are cancelled with no grace, since startMissingGraceClocks only resets null clocks.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] syncPaymentMethod's only guard is `stripeSubId == null || \"CANCELLED\".equals(status)`, with no Stripe-side state check, so stale/terminal rows hit updateSubscriptionDefaultPaymentMethod and fall into the error-logging catch; INCOMPLETE is a real local status (present in RECOVERABLE_ON_PAYMENT) yet is absent from RETRY_ON_NEW_PAYMENT_METHOD, so it gets the default card but no invoice retry. Only the INCOMPLETE_EXPIRED example depends on a status mapping not shown in the diff. | pass-1: Only CANCELLED/null are skipped, so INCOMPLETE_EXPIRED rows trigger a Stripe update that is rejected on every card save, and INCOMPLETE rows get no payment attempt \u2014 concrete trigger stated.",
+        "reported_id": "R9",
+        "verdict": "real"
+      }
+    ]
+  }
+}

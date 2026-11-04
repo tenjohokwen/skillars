@@ -1,0 +1,39 @@
+id: refresh-grace-window-account-wide
+kind: pre-fix-snapshot
+fix_pr: 413
+fix_merge: f0ad7706
+confidence: high
+scope:
+  - src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java
+  - src/main/java/com/softropic/skillars/platform/security/repo/RefreshToken.java
+summary: The refresh grace window redirects a stale token to the account's newest live token instead of its own successor
+expected_findings:
+  - id: F1
+    title: Refresh grace window hands the caller another session's live token, then triggers mass revocation
+    category: logic
+    severity: high
+    description: >
+      In AuthService.refresh a used token presented within REFRESH_GRACE_WINDOW (30 s) of its rotatedAt
+      is "redirected" via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc(ownerId, now),
+      which returns the newest unused token of the whole account; RefreshToken has no successor or
+      family column tying a rotated token to its replacement. With two devices, A refreshes (T0 to T1)
+      and B logs in within 30 s (T2); a stale request still carrying T0 is given T2 and rotates it to
+      T3, so B's cookie now holds a used token. B's next refresh, past the window, takes the theft
+      branch and markAllUsedByUserId plus invalidateSessionsForUser log out every session of the user.
+      The same lookup lets anyone replaying a just-rotated token within 30 s obtain a fresh credential
+      for whichever session is newest.
+    anchors:
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: refresh
+      - file: src/main/java/com/softropic/skillars/platform/security/service/AuthService.java
+        symbol: REFRESH_GRACE_WINDOW
+      - file: src/main/java/com/softropic/skillars/platform/security/repo/RefreshTokenRepository.java
+        symbol: findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc
+source: results/baseline-2026-11-02/real-sample.md S03 and S15, owner-verified 2026-11-03
+notes: >
+  Fixed by PR #413 (skillars-deferred-166); `fix_merge` is added in a follow-up commit once the squash
+  sha exists, and `input_rev` is dropped then. Until that lands, validate.py reads a numeric fix_pr with
+  a pinned input_rev and no fix_merge as "fix PR open, not merged". S03 saw it at 651ed1effc04 (319 input) and S15 at fa62da9dc634 (381 input);
+  the refresh method and the lookup are identical at both, so the case is pinned to the later one.
+  Both sample items name the same anchor (AuthService.refresh).

@@ -171,7 +171,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: "card title keyed by the current step config entry's titleKey",
   },
   {
-    at: 'src/pages/coach/CoachProfileBuilderPage.vue:120',
+    at: 'src/pages/coach/CoachProfileBuilderPage.vue:126',
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
@@ -183,6 +183,15 @@ const DYNAMIC_KEY_CALL_SITES = [
     at: 'src/pages/parent/SessionPackPurchasePage.vue:183',
     reason:
       't() on payment.error.<code> for a server-supplied payment.* errorKey, after a te() probe',
+  },
+  {
+    at: 'src/components/profileBuilder/ProfileBuilderStep3.vue:219',
+    reason:
+      'pack error keyed by packErrorKey (src/utils/sessionPackForm.js), one of five literal auth.coach.step3Pack* keys',
+  },
+  {
+    at: 'src/components/profile/EditCoachPricingDialog.vue:258',
+    reason: 'same packErrorKey-chosen pack error message as ProfileBuilderStep3',
   },
   {
     at: 'src/pages/coach/CoachCommandCenterPage.vue:891',

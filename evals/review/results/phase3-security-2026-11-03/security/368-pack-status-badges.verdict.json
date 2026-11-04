@@ -1,0 +1,66 @@
+{
+  "arm": "security",
+  "case": "368-pack-status-badges",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "In purchasePack's catch block, a successful compensating refund (`paymentGateway.refund(..., \"refund-\" + paymentIntentId)`) persists nothing \u2014 recordReconciliation runs only when the refund throws \u2014 so a client retry with the same attemptKey rebuilds the identical Stripe idempotency key, replays the refunded PaymentIntent (per the method's own javadoc contract), finds no row via findByStripePaymentIntentId, and createPurchase saves a full-remainingSessions pack with no refund/status check anywhere on that path. The claims about ChargeDisputeWebhookService and RefundReconciliationService are outside this file, but the granting mechanism itself is confirmed here.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "getOrCreateStripeCustomer saves the new paymentMethodId onto the existing stripe_customers row (setStripePaymentMethodId + save) before paymentGateway.chargeAndCapture, and purchasePack is non-transactional so the save auto-commits; on a declined charge the exception propagates with no restore of previousCard, which is only used in scheduleSubscriptionCardSync on the success path. chargeAndCapture takes no paymentMethodId argument, consistent with the gateway reading the card from the committed row.",
+      "reported_id": "R2"
+    }
+  ],
+  "judge_cost_usd": 0.8153349999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R4 states computeStatus ignores disputeFrozenAt/revokedAt so frozen packs report ACTIVE to parent dashboard and coach sold-pack list; same defect and consequence (R4's EXHAUSTED detail for revoked packs is a minor variation).",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R3 identifies the badge logic matching status==='ACTIVE' && isPaused while the server returns PAUSED, causing paused packs to fall through to the green Active badge and suppressing the pause CTA.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R4 explicitly notes pausePackTransactional lacks a dispute-frozen check and extendPack checks neither disputeFrozenAt nor revokedAt, allowing pause of a frozen pack and extend of a revoked one.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding mentions the UTC-midnight parsing of the pause start date or the pauseStartInPast rejection for users west of UTC.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] In purchasePack's catch block, a successful compensating refund (`paymentGateway.refund(..., \"refund-\" + paymentIntentId)`) persists nothing \u2014 recordReconciliation runs only when the refund throws \u2014 so a client retry with the same attemptKey rebuilds the identical Stripe idempotency key, replays the refunded PaymentIntent (per the method's own javadoc contract), finds no row via findByStripePaymentIntentId, and createPurchase saves a full-remainingSessions pack with no refund/status check anywhere on that path. The claims about ChargeDisputeWebhookService and RefundReconciliationService are outside this file, but the granting mechanism itself is confirmed here. | pass-1: Concrete trigger stated: createPurchase failure after capture issues a compensating refund, then an idempotent retry replays the refunded intent, finds no purchase row, and creates a fully funded pack; webhook/reconciliation explicitly skip app-prefixed refunds.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] getOrCreateStripeCustomer saves the new paymentMethodId onto the existing stripe_customers row (setStripePaymentMethodId + save) before paymentGateway.chargeAndCapture, and purchasePack is non-transactional so the save auto-commits; on a declined charge the exception propagates with no restore of previousCard, which is only used in scheduleSubscriptionCardSync on the success path. chargeAndCapture takes no paymentMethodId argument, consistent with the gateway reading the card from the committed row. | pass-1: Concrete trigger stated: getOrCreateStripeCustomer persists the new paymentMethodId before chargeAndCapture outside any transaction, so a declined card permanently replaces the working saved default used by subsequent off-session charges.",
+        "reported_id": "R2",
+        "verdict": "real"
+      }
+    ]
+  }
+}

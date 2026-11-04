@@ -1,0 +1,102 @@
+{
+  "arm": "concurrency",
+  "case": "382-upload-content-verification",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "reconfirm's guard is time-only (uploadConfirmedAt within uploadTtlSeconds), so a within-window replay of an older key does republish StorageObjectConfirmedEvent \u2014 the trigger is real in this file \u2014 but the claimed consequence depends on CoachProfilePhotoEventListener.onStorageConfirmed/updatePhotoUrlByUserId (whether it overwrites unconditionally) and on deletePhoto's transaction/locking, neither shown here; the deployed uploadTtlSeconds value (claimed 600s) is also in config not shown.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "confirmUpload validates only head.contentType, head.contentLength and eTag non-blankness; persistConfirmed stores request.checksum() verbatim and toConfirmUploadResponse/findActiveObject surface it via formatChecksum as \"sha256:<hex>\", with signUpload's presigned PUT binding only contentType (no x-amz-checksum). The verification caveat (ReplicatedStorageService/outbox handlers) is moot for the surfaced claim: ConfirmUploadResponse returns the unverified value before any outbox job runs, and replication is conditionally enabled anyway.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "The file confirms saveStep2/saveStep3 do deleteByCoachId+flush+saveAll with only an unlocked requireProfile, while saveStep1/saveStep4/deletePhoto/publishProfile all take findByIdForUpdate \u2014 the asymmetry is real. But the finding's own verification caveat (no controller-level per-user serialization in front of the profile-builder endpoints) cannot be checked: only this service file was provided, so the controller/filter layer is missing.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "The trigger is real in this file: deletePhoto's catch (AuthorizationException) block falls through to profile.setPhotoUrl(null) + save, and the post-refresh null-check makes retries no-ops, so the FSO row is orphaned without soft-deletion. But the consequence (permanent quota leak, replay eligibility) depends on FileStorageService.softDelete's throw ordering, sumSizeBytesByOwnerId, and the finding's own required sweeper check in the filestorage module \u2014 none of that code is available here, so the verification caveat cannot be run.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "confirmUpload does publish StorageObjectConfirmedEvent in-memory after transactionTemplate.execute commits (outbox is used only for replication in persistConfirmed), and reconfirm re-publishes only within uploadTtlSeconds \u2014 the mechanism is as described. But the finding's permanence claim hinges on its verification caveat (no reconciliation job re-linking coach_profile FSOs outside the event path), which lives in code outside this file and is not shown.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 2.22085,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "partial",
+        "note": "R1 points at confirmUpload's HEAD-only validation and the consequence of serving unvalidated content, but its mechanism is re-PUT swap after confirm, not that declared content type is never checked against the actual bytes.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions that a rejected confirm leaves the already-PUT object in the bucket uncounted and uncleaned.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "partial",
+        "note": "R4 cites application/octet-stream and .bin in the global allow-list but only as an enabler of the photo-path issue, not as a defect defeating the allow-list itself.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding covers signUpload accepting arbitrary entity strings with ownership checked only for OWNER_BOUND_ENTITIES.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R4 states saveStep5 checks only the string prefix and never verifies a confirmed, owned, non-deleted image object, with the same consequence of a non-image or nonexistent key becoming the public photo.",
+        "reported_ids": [
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] reconfirm's guard is time-only (uploadConfirmedAt within uploadTtlSeconds), so a within-window replay of an older key does republish StorageObjectConfirmedEvent \u2014 the trigger is real in this file \u2014 but the claimed consequence depends on CoachProfilePhotoEventListener.onStorageConfirmed/updatePhotoUrlByUserId (whether it overwrites unconditionally) and on deletePhoto's transaction/locking, neither shown here; the deployed uploadTtlSeconds value (claimed 600s) is also in config not shown. | pass-1: Concrete trigger: a duplicate confirm of photo A within the 600s reconfirm window after confirming photo B re-fires the listener and reverts/resurrects photoUrl, including to a soft-deleted object.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] confirmUpload validates only head.contentType, head.contentLength and eTag non-blankness; persistConfirmed stores request.checksum() verbatim and toConfirmUploadResponse/findActiveObject surface it via formatChecksum as \"sha256:<hex>\", with signUpload's presigned PUT binding only contentType (no x-amz-checksum). The verification caveat (ReplicatedStorageService/outbox handlers) is moot for the surfaced claim: ConfirmUploadResponse returns the unverified value before any outbox job runs, and replication is conditionally enabled anyway. | pass-1: Concrete trigger: the client-declared checksum is only format-checked, never compared to the stored object, yet is persisted and surfaced as 'sha256:' \u2014 an attacker-controlled value presented as verified integrity data.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The file confirms saveStep2/saveStep3 do deleteByCoachId+flush+saveAll with only an unlocked requireProfile, while saveStep1/saveStep4/deletePhoto/publishProfile all take findByIdForUpdate \u2014 the asymmetry is real. But the finding's own verification caveat (no controller-level per-user serialization in front of the profile-builder endpoints) cannot be checked: only this service file was provided, so the controller/filter layer is missing. | pass-1: Concrete trigger: concurrent saveStep2/saveStep3 delete-then-reinsert without the row lock sibling steps take, yielding merged unions or unique-constraint 500s instead of replace semantics.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The trigger is real in this file: deletePhoto's catch (AuthorizationException) block falls through to profile.setPhotoUrl(null) + save, and the post-refresh null-check makes retries no-ops, so the FSO row is orphaned without soft-deletion. But the consequence (permanent quota leak, replay eligibility) depends on FileStorageService.softDelete's throw ordering, sumSizeBytesByOwnerId, and the finding's own required sweeper check in the filestorage module \u2014 none of that code is available here, so the verification caveat cannot be run. | pass-1: Concrete trigger: softDelete throwing AuthorizationException before softDeleteByKey leaves the FSO row live with photoUrl cleared, permanently counting against quota with no user-reachable deletion path.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] confirmUpload does publish StorageObjectConfirmedEvent in-memory after transactionTemplate.execute commits (outbox is used only for replication in persistConfirmed), and reconfirm re-publishes only within uploadTtlSeconds \u2014 the mechanism is as described. But the finding's permanence claim hinges on its verification caveat (no reconciliation job re-linking coach_profile FSOs outside the event path), which lives in code outside this file and is not shown. | pass-1: Concrete trigger: crash between the FSO commit and the non-durable in-memory event publish leaves a quota-charged upload unlinked, and the reconfirm healing path expires after 600s.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

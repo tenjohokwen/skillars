@@ -1,0 +1,58 @@
+{
+  "arm": "security",
+  "case": "353-agreed-price-null-fallback",
+  "findings": [
+    {
+      "category": "security",
+      "description": "A parent who requests a booking (or batch) while the coach has no coach_pricing row gets agreed_price = NULL and a \u20ac0 quote/batch total. The coach then inserts any per_session_price and accepts: resolveSessionPrice's and batchBookingPrice's fallback resolve the current price, the accept pre-check passes, and PaymentLifecycleService auto-charges the parent's saved card an amount the parent never saw. The in-code claim that 'accept then fails unless the coach has priced by then' only holds when no price exists at accept; a price set after the request is charged silently, because NULL cannot distinguish a pre-V192 legacy row (intended fallback) from a request made unpriced (counterparty-controlled amount).",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "BookingService.resolveSessionPrice / PaymentLifecycleService.batchBookingPrice",
+      "title": "NULL agreed_price falls back to coach's current price, letting a coach price a booking after the request and charge it",
+      "verification": "Confirm createBookingRequest/createBatch succeed when the coach has no pricing row (the batch path explicitly does, storing totalAmount 0), and that acceptBooking/acceptOneBooking perform no parent re-consent on price. Reproduce: request from unpriced coach, INSERT coach_pricing at an arbitrary amount, accept, observe booking_payments charged at that amount."
+    },
+    {
+      "category": "security",
+      "description": "A non-pack duplicate sets agreedPrice = currentCoachPrice(original.getCoachId()) rather than original.getAgreedPrice(). A coach can raise their price and then propose a reschedule/duplicate of a booking the parent agreed at the old price; the duplicate locks and settles at the raised price. This defeats the PR's own invariant ('a coach re-pricing before accepting cannot change it') on the duplication path.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingDuplicationService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "BookingDuplicationService (duplicate creation, packId == null branch)",
+      "title": "Booking duplication locks the coach's current price instead of inheriting the original booking's agreed price",
+      "verification": "Check who triggers duplication and whether the parent must explicitly re-confirm the duplicate with the new price displayed before it can be accepted and charged; if acceptance of the proposal does not surface the re-read price, the coach unilaterally re-prices an agreed booking."
+    },
+    {
+      "category": "database",
+      "description": "refundBatchShareToCredit enqueues a BOOKING_REFUND keyed by bookingId for a booking that was settled elsewhere and remains CONFIRMED. If uq_pcl_booking_refund is one-BOOKING_REFUND-per-booking (as the decline path's idempotency comment implies), a later legitimate cancellation refund of that same confirmed booking inserts a second BOOKING_REFUND for the same bookingId and hits the constraint \u2014 one of the two refunds fails or is silently dropped. Conversely, if the constraint does not cover the outbox-drained insert, refundBatchShareToCredit, which changes no payment-row state, double-credits on batch-event redelivery.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BookingPaymentPersistenceService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "refundBatchShareToCredit / declineBatchBookingAfterCharge",
+      "title": "Batch-share refunds rely on uq_pcl_booking_refund in a way that can collide with, or fail to cover, other refunds for the same booking",
+      "verification": "Read the uq_pcl_booking_refund definition and the outbox consumer's conflict handling, plus the cancellation-refund insert for parent_credit_ledger; check whether a conflict is swallowed (refund lost) or thrown (cancel fails), and whether refundBatchShareToCredit has any replay guard besides the constraint."
+    },
+    {
+      "category": "edge-case",
+      "description": "When declineBatchBookingAfterCharge throws, the charged booking is left as a CAPTURE_PENDING reservation for PaymentPendingSweeper, but that reserved row records the whole price under stripe_charged with zero credit_debited \u2014 explicitly 'a reconciliation hint, not an accurate record'. If the sweeper's abandonment path refunds from those columns, the credit share is refunded to the card (or, if the sweeper does not refund at all, the parent's money sits behind a log line asking for manual reconciliation).",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "onBatchBookingAccepted settle loop / declineBatchBookingAfterCharge failure branch",
+      "title": "If the decline-after-charge transaction fails, the parent's charged money is parked on a reserved row whose amounts are wrong for the sweeper",
+      "verification": "Read PaymentPendingSweeper's handling of a charged-then-stuck batch booking: whether CAPTURE_ABANDONED triggers any refund, and from which columns it computes the amounts."
+    },
+    {
+      "category": "edge-case",
+      "description": "The quote previews the coach's current price, and createBatch independently re-reads and locks the current price; nothing binds the two. A coach price change between the parent's quote and submission locks and later charges a price the parent did not review, despite the documented invariant that the reviewed figure cannot drift from the charged one. The PR narrows the old quote-to-accept window to quote-to-create but does not close it, and the same applies to the single-booking createBookingRequest.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/BatchPaymentQuoteService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "BatchPaymentQuoteService.quote / BookingBatchService.createBatch",
+      "title": "Client never echoes the reviewed price, so the quote-to-createBatch window still charges an unreviewed figure",
+      "verification": "Check whether the batch-creation and single-booking request DTOs carry an expected price (or quote token) that the server validates against the price it locks."
+    }
+  ],
+  "input_rev": "e60141fc480a55e75e8a5e45bace201999da07f7",
+  "model": null
+}

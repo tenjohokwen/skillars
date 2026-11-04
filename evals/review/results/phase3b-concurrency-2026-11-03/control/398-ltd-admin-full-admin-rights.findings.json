@@ -1,0 +1,106 @@
+{
+  "arm": "control",
+  "case": "398-ltd-admin-full-admin-rights",
+  "findings": [
+    {
+      "category": "security",
+      "description": "HAS_ADMIN_ROLE is defined as \"hasRole('ROLE_ADMIN') or hasRole('ROLE_LTD_ADMIN')\", and every audited admin resource is gated only by that expression. ROLE_LTD_ADMIN is meant to be the limited operator-agent role (the seed data calls it \"admin with limited role. All operator agents should have this role\", and the bootstrap runner deliberately never grants it alongside ADMIN). In practice an LTD_ADMIN can call every endpoint ROLE_ADMIN can, except the one surface that was hand-hardened (AdminSafeguardingResource.FULL_ADMIN_ONLY). Nothing in the role model restricts the limited role.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/security/SecurityConstants.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "HAS_ADMIN_ROLE",
+      "title": "HAS_ADMIN_ROLE admits ROLE_LTD_ADMIN, so the limited admin role gets full admin rights on every admin endpoint",
+      "verification": "Log in with an account holding only ROLE_LTD_ADMIN, call any of the endpoints listed in the related findings, and confirm it gets 2xx instead of 403. The existing @WithMockUser(roles=\"LTD_ADMIN\") tests in AdminVideoResourceWebMvcTest and SesCutoverPreflightResourceWebMvcTest show what is currently expected."
+    },
+    {
+      "category": "security",
+      "description": "The whole class is @PreAuthorize(HAS_ADMIN_ROLE), so a ROLE_LTD_ADMIN operator can POST /api/admin/payment/coaches/{coachId}/payouts/release-held. That puts a coach's HOLD payouts back on the release path and queues Stripe transfers. This replaces a runbook DB update that only a full operator would run, and the call is recorded with the hard-coded actor \"ADMIN\" rather than the caller's id. A limited agent can release funds that were held for fraud or dispute reasons, and the audit trail will not say who did it. The same gate also exposes platform-wide revenue reports (/overview) and per-coach revenue to the limited role.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "AdminFinanceResource.releaseHeldPayouts",
+      "title": "Limited admin can release held coach payouts (money movement)",
+      "verification": "Confirm with the product owner whether payout release and revenue reporting should be ROLE_ADMIN only. Then check that coachPayoutHoldRecoveryService.redriveHeld records no caller identity beyond the \"ADMIN\" literal."
+    },
+    {
+      "category": "security",
+      "description": "PUT /api/config/values/{key} is gated by HAS_ADMIN_ROLE, so a ROLE_LTD_ADMIN can change any platform config key, including unseeded HAS_CODE_DEFAULT keys. These keys include the review windows, the coach.safeguarding.* validity and retention settings, and booking parameters. The safeguarding data itself is ROLE_ADMIN only, yet the limited role can still shorten coach.safeguarding.uploadRetentionDays or validityYears through this endpoint. That bypasses the restriction placed on that data.",
+      "file": "src/main/java/com/softropic/skillars/platform/config/api/ConfigResource.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "ConfigResource.updateValue",
+      "title": "Limited admin can rewrite any platform config value"
+    },
+    {
+      "category": "security",
+      "description": "GET /api/admin/gdpr/requests is open to ROLE_LTD_ADMIN through HAS_ADMIN_ROLE. Every limited operator agent can therefore read the full GDPR export and erasure request queue and its requester details. The codebase already keeps comparably sensitive personal data (safeguarding certificates) at ROLE_ADMIN only.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminGdprResource.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AdminGdprResource.listRequests",
+      "title": "Limited admin can list GDPR requests (personal data of data subjects)",
+      "verification": "Check what AdminGdprRequestDto exposes (email, name, request type) and whether GDPR access is supposed to be limited to full admins or a DPO."
+    },
+    {
+      "category": "security",
+      "description": "Account suspend and reactivate (with an optional cascade that cancels upcoming bookings) are open to ROLE_LTD_ADMIN, and so is failed-login unlock, which clears the brute-force lockout on any non-admin account. AdminCoachEnforcementResource (suspend or reinstate a coach, delete strikes, set the verification tier to FEATURED) uses the same gate. A limited agent can reverse enforcement decisions or re-enable a brute-force target. The service-level guard stops actions on ADMIN or LTD_ADMIN target accounts, but it does not distinguish the caller's role.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/api/AdminUserResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "AdminUserResource.suspendUser / reactivateUser / unlockLogin",
+      "title": "Limited admin can suspend/reactivate users, unlock login rate limits, and run coach enforcement",
+      "verification": "Confirm the intended permission matrix for ROLE_LTD_ADMIN. If these operations were meant to need full admin, an LTD_ADMIN call succeeding today confirms the defect."
+    },
+    {
+      "category": "security",
+      "description": "DELETE /api/video/admin/videos/{videoId} is irreversible and is gated by HAS_ADMIN_ROLE, so any operator agent with ROLE_LTD_ADMIN can destroy customer video content. AdminModerationResource.resolvePaymentAlert, which closes chargeback and unreversed-payout alerts, and AdminDisputeResource.resolveDispute, which issues credits up to the remaining booking value, also accept the limited role. The existing AdminVideoResourceWebMvcTest even asserts that LTD_ADMIN is allowed.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/AdminVideoResource.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "AdminVideoResource.deleteVideo",
+      "title": "Limited admin can permanently delete videos and resolve payment-integrity alerts",
+      "verification": "Check AdminVideoResourceWebMvcTest at line 152 to see which operation it asserts LTD_ADMIN may perform, and confirm with the product owner whether destructive and financial actions should be ROLE_ADMIN only."
+    },
+    {
+      "category": "database",
+      "description": "update() is not @Transactional. alertRuleRepository.deleteById(id) commits in its own repository transaction, and save() runs afterwards in a separate one. The request is not validated (@Valid is absent and there are no constraints), so a PUT with a null metricName, a null threshold, or a threshold above the precision(10,4) range breaks the NOT NULL or numeric constraint on save. The original rule has already been deleted, so it is lost and alerting for that metric stops silently. Even when the save succeeds, the rule gets a new generated id, so PUT /{id} changes the resource's id.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "AlertRuleAdminResource.update",
+      "title": "AlertRule update deletes the old rule before saving the new one in separate transactions, so a failed save loses the rule"
+    },
+    {
+      "category": "edge-case",
+      "description": "The Javadoc says threshold is a ratio in [0.0, 1.0] and metricName is one of FAILURE_RATE, FRAUD_SPIKE_RATE or CALLBACK_ANOMALY, but nothing enforces either. A threshold of 5, a negative or zero windowSeconds, an unknown metricName, or an unknown notificationChannel is saved and loaded into the live cache. The result is a rule that can never fire, or that fires on every evaluation, or a 500 when the threshold overflows the column.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "AlertRuleAdminResource.create",
+      "title": "AlertRule create/update accept unvalidated thresholds and window sizes",
+      "verification": "Read the AlertRuleCache and evaluator code to see how windowSeconds <= 0 and unknown metric or channel names are handled at evaluation time."
+    },
+    {
+      "category": "security",
+      "description": "The method is guarded by HAS_ANY_ROLE (user, coach, parent and player roles included) and deletes the user whose login is passed in. It does not check that the login belongs to the caller or that the caller is an admin. If any controller or listener ever routes a request-supplied login here, a parent or player can hard-delete arbitrary accounts, including admins. It is a hard delete with no cascade or soft-delete handling, so FK failures or orphaned data can also follow.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "UserAdminService.deleteUserInformation",
+      "title": "deleteUserInformation lets any authenticated user delete any account by login",
+      "verification": "No main-code caller exists today (grep only finds the definition), so the defect is latent. Check whether any frontend, API or planned endpoint is expected to call it."
+    },
+    {
+      "category": "security",
+      "description": "lockUserAccount is gated by HAS_ADMIN_ROLE and locks whatever login is passed in, without the privileged-target check that AdminUserService applies (never act on ADMIN or LTD_ADMIN accounts, or on yourself). A ROLE_LTD_ADMIN caller, or an admin by mistake, can lock a ROLE_ADMIN account, including their own, and AuthService then refuses login or refresh for it.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/UserAdminService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "UserAdminService.lockUserAccount",
+      "title": "lockUserAccount lets a limited admin lock full-admin accounts",
+      "verification": "Main code has no caller today; only UserServiceIT calls it. The defect is latent until the method is wired to an endpoint."
+    }
+  ],
+  "input_rev": "4899534f12a1f87d89f49267522293609eb0a8d7",
+  "model": null
+}

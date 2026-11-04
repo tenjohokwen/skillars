@@ -1,0 +1,101 @@
+{
+  "arm": "security",
+  "case": "351-paused-subscription-card-sync",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The diff confirms savePaymentMethod now calls subscriptionService.syncPaymentMethodToSubscriptions(parentId, request.paymentMethodId()) best-effort before returning 204, but the body of SubscriptionService.syncPaymentMethodToSubscriptions (the alleged payLatestOpenInvoice charge with a fresh 'inv-retry-' UUID idempotency key) is not in the hunks, and the verification step \u2014 whether any rate-limit filter guards /api/payment/save-payment-method and whether its state is shared across instances \u2014 cannot be checked from this file alone.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "syncPaymentMethod demonstrably discards the payLatestOpenInvoice result (only logs invoice.getStatus()), and isGraceExpired/GraceTarget.matches use only local state \u2014 but the per-row sweep bodies and cancelAtStripeForGrace are outside the diff, and the latter could check Stripe-side status before cancelling, which would prevent the described consequence; those unshown bodies are needed to settle it.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "updateSubscriptionDefaultPaymentMethod builds RequestOptions with the fixed key \"sub-pm-\" + subscriptionId + \"-\" + paymentMethodId, so re-selecting a prior card within Stripe's 24h window replays the cached first response (server-side semantics, independent of stripe-java version) and the update never executes; no guard or key rotation exists, and payLatestOpenInvoice's javadoc confirms the team knows fixed keys replay for 24h.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "payLatestOpenInvoice does pay only sub.getLatestInvoice() when open, confirming the trigger, but the consequence depends on the invoice.paid handler (RECOVERABLE_ON_PAYMENT / ACTIVE restore) and Stripe's treatment of older invoices on an UNPAID subscription \u2014 neither is in the shown diff.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The backend half is real: savePaymentMethod unconditionally calls subscriptionService.syncPaymentMethodToSubscriptions (comment confirms it retries a past-due invoice). But the finding's required verification \u2014 that other PaymentMethodCard mount points omit subscriptionNote while hitting this endpoint \u2014 needs frontend code and the SubscriptionService body, neither of which is in the provided diff.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "undetermined",
+      "note": "StripeClient.updateSubscriptionDefaultPaymentMethod does concatenate paymentMethodId unvalidated into the \"sub-pm-\" idempotency key, but the finding's consequence depends on the SavePaymentMethod DTO (possible @Pattern/@Size on paymentMethodId), the upstream savePaymentMethod flow that stores the id, and the swallowing catch/204 return \u2014 none of which are in the provided hunks.",
+      "reported_id": "R8"
+    }
+  ],
+  "judge_cost_usd": 0.9952650000000001,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 identifies the same defect: PAUSED excluded from RETRY_ON_NEW_PAYMENT_METHOD, no resume call exists, and the grace sweep cancels the subscription despite the saved card.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses running the Stripe sync synchronously in the save-card request without durable retry; R2 concerns a different defect (webhook dependence for local recovery).",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding distinguishes transient vs permanent StripeException handling in syncPaymentMethod's catch blocks.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] The diff confirms savePaymentMethod now calls subscriptionService.syncPaymentMethodToSubscriptions(parentId, request.paymentMethodId()) best-effort before returning 204, but the body of SubscriptionService.syncPaymentMethodToSubscriptions (the alleged payLatestOpenInvoice charge with a fresh 'inv-retry-' UUID idempotency key) is not in the hunks, and the verification step \u2014 whether any rate-limit filter guards /api/payment/save-payment-method and whether its state is shared across instances \u2014 cannot be checked from this file alone. | pass-1: Concrete trigger: repeated POSTs with different stolen-card ids each run payLatestOpenInvoice under a fresh per-attempt idempotency key, giving a card-validation oracle with real charge attempts.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] syncPaymentMethod demonstrably discards the payLatestOpenInvoice result (only logs invoice.getStatus()), and isGraceExpired/GraceTarget.matches use only local state \u2014 but the per-row sweep bodies and cancelAtStripeForGrace are outside the diff, and the latter could check Stripe-side status before cancelling, which would prevent the described consequence; those unshown bodies are needed to settle it. | pass-1: Concrete trigger: syncPaymentMethod discards the paid-invoice result, so a dropped/delayed invoice.paid webhook before the 03:00 sweep lets checkPastDueGracePeriod cancel a subscription the user just paid.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] updateSubscriptionDefaultPaymentMethod builds RequestOptions with the fixed key \"sub-pm-\" + subscriptionId + \"-\" + paymentMethodId, so re-selecting a prior card within Stripe's 24h window replays the cached first response (server-side semantics, independent of stripe-java version) and the update never executes; no guard or key rotation exists, and payLatestOpenInvoice's javadoc confirms the team knows fixed keys replay for 24h. | pass-1: Concrete trigger: fixed 'sub-pm-' key means saving card A, then B, then A again within 24h replays the cached response and leaves default_payment_method on card B for future renewals.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Self-defeating speculation: the finding itself notes Stripe rejects a payment method not attached to the subscription's customer, so the harm requires a hypothetical misconfiguration.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] payLatestOpenInvoice does pay only sub.getLatestInvoice() when open, confirming the trigger, but the consequence depends on the invoice.paid handler (RECOVERABLE_ON_PAYMENT / ACTIVE restore) and Stripe's treatment of older invoices on an UNPAID subscription \u2014 neither is in the shown diff. | pass-1: Concrete trigger: multiple open invoices accumulate under UNPAID, payLatestOpenInvoice settles only the newest, and invoice.paid restores ACTIVE locally while older debt remains uncollected.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The backend half is real: savePaymentMethod unconditionally calls subscriptionService.syncPaymentMethodToSubscriptions (comment confirms it retries a past-due invoice). But the finding's required verification \u2014 that other PaymentMethodCard mount points omit subscriptionNote while hitting this endpoint \u2014 needs frontend code and the SubscriptionService body, neither of which is in the provided diff. | pass-1: Concrete trigger: the backend retry runs on every save-payment-method call but the subscriptionNote disclosure only appears on the two subscription pages, so saving a card elsewhere produces an undisclosed immediate charge.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] StripeClient.updateSubscriptionDefaultPaymentMethod does concatenate paymentMethodId unvalidated into the \"sub-pm-\" idempotency key, but the finding's consequence depends on the SavePaymentMethod DTO (possible @Pattern/@Size on paymentMethodId), the upstream savePaymentMethod flow that stores the id, and the swallowing catch/204 return \u2014 none of which are in the provided hunks. | pass-1: Concrete trigger: an over-255-char paymentMethodId is stored on the StripeCustomer row, breaks the idempotency key, and the Stripe error is swallowed while the endpoint returns 204, leaving junk persisted.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

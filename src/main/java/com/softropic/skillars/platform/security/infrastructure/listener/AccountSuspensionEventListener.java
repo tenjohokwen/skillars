@@ -93,10 +93,15 @@ public class AccountSuspensionEventListener {
         user.getPersistentTokens().clear();
         userRepository.saveAndFlush(user);
 
-        // ClockProvider, not Instant.now(): JWT SESSION_ISSUED_AT claims are minted from the same clock.
-        userRepository.invalidateSessionsForUserInCurrentTransaction(userId, Instant.now(ClockProvider.getClock()));
+        // skillars-deferred-167 (AC8): revoke BEFORE the epoch stamp. Stamping first left a window in
+        // which a racing refresh's successor carried a created_at after the epoch and so passed
+        // AuthService.isBeforeSessionEpoch; stamping after means any survivor predates the epoch and is
+        // refused. Free to reorder: the revoke is REQUIRES_NEW on refresh_tokens, the stamp is MANDATORY on
+        // the user row, so they commit independently and touch different rows.
         // REQUIRES_NEW on refresh_tokens rows this transaction has not touched: no self-deadlock.
         refreshTokenRepository.markAllUsedByUserId(userId);
+        // ClockProvider, not Instant.now(): JWT SESSION_ISSUED_AT claims are minted from the same clock.
+        userRepository.invalidateSessionsForUserInCurrentTransaction(userId, Instant.now(ClockProvider.getClock()));
 
         // Durable audit link: suspension ← CSAM scan. A dedicated account_suspension_audits
         // table is Story 10 scope; at minimum log at ERROR level so it appears in audit trail.

@@ -94,3 +94,6 @@ tmp/
 # SIBLING of the checkout, not a child, so `git clean -fdx` inside the checkout cannot reach it.
 # This entry is kept as defence-in-depth against a stray ./data/ ever appearing in the repo root.
 /data/
+
+# local /pr-review records and diffs (keyed by commit; the gh-pr-create hook reads them)
+.pr-review/

@@ -1,0 +1,78 @@
+{
+  "arm": "concurrency",
+  "case": "376-completion-dispute-integrity",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "DisputeService.dismissDispute confirms the premise: no UNSETTLED_STATUSES guard (only the RESOLVED/DISMISSED 409), and clearDisputeFreeze runs in the dismiss transaction with no later code path revisiting the payout. But the consequence hinges on CoachPayoutAdjustmentService.clearDisputeFreeze no-opping on a missing row, CoachPayoutOutboxSupport.enqueuePayout's BEFORE_COMMIT unlocked existsOpenDisputeForBooking read (CoachPayoutRepository.java:246-250), and StalePayoutAlertScheduler not releasing FROZEN payouts \u2014 none of that code was provided, so the finding's own verification caveat cannot be run.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "DisputeService confirms the plumbing: paidForSession falls back to coachPayoutRepository.findGrossAmountByBookingId for pack-funded bookings and resolveDispute passes that value to remainingRefundable and to reconcileCoachPayout as the applyRefund denominator. But the finding hinges on findGrossAmountByBookingId selecting the live grossAmount column and on CoachPayoutAdjustmentService.cutNet reducing that column on a pending payout \u2014 both live in CoachPayoutRepository.java and CoachPayoutAdjustmentService.java, which were not provided, so the verification caveat cannot be completed.",
+      "reported_id": "R2"
+    }
+  ],
+  "judge_cost_usd": 0.9049849999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding addresses the inability to dispute a COMPLETED_PENDING_CONFIRMATION booking after quick-complete.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding covers quick-complete blocking the parent's NO_SHOW_COACH report.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding covers endSession allowing immediate completion and payout without parent confirmation.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding covers confirmCompletion transitioning before loading SessionCompletionData and 404ing.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding covers excused-reason coach cancels after start avoiding a strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding covers refund-eligible parent late cancel producing no coach no-show strike.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding covers the one-open-dispute lockout or unlimited re-raising; R2 only mentions sequential disputes incidentally while describing a pricing defect.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] DisputeService.dismissDispute confirms the premise: no UNSETTLED_STATUSES guard (only the RESOLVED/DISMISSED 409), and clearDisputeFreeze runs in the dismiss transaction with no later code path revisiting the payout. But the consequence hinges on CoachPayoutAdjustmentService.clearDisputeFreeze no-opping on a missing row, CoachPayoutOutboxSupport.enqueuePayout's BEFORE_COMMIT unlocked existsOpenDisputeForBooking read (CoachPayoutRepository.java:246-250), and StalePayoutAlertScheduler not releasing FROZEN payouts \u2014 none of that code was provided, so the finding's own verification caveat cannot be run. | pass-1: Concrete interleaving: dismissDispute (allowed on unsettled bookings) commits while a completion's BEFORE_COMMIT enqueuePayout still reads the OPEN dispute under READ COMMITTED, inserting a FROZEN payout that clearDisputeFreeze already missed, with no path to unfreeze \u2014 a specific, triggerable race not in the answer key.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] DisputeService confirms the plumbing: paidForSession falls back to coachPayoutRepository.findGrossAmountByBookingId for pack-funded bookings and resolveDispute passes that value to remainingRefundable and to reconcileCoachPayout as the applyRefund denominator. But the finding hinges on findGrossAmountByBookingId selecting the live grossAmount column and on CoachPayoutAdjustmentService.cutNet reducing that column on a pending payout \u2014 both live in CoachPayoutRepository.java and CoachPayoutAdjustmentService.java, which were not provided, so the verification caveat cannot be completed. | pass-1: Concrete trigger: two sequential disputes with partial credits on a pack-funded booking; the second prices from the live grossAmount already reduced by cutNet, miscapping the parent's credit and inflating coachShareOfRefund \u2014 a specific arithmetic defect not in the answer key.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

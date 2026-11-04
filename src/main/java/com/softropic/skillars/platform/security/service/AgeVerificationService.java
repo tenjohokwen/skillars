@@ -260,9 +260,14 @@ public class AgeVerificationService {
         user.lock();
         user.getPersistentTokens().clear();
         userRepository.saveAndFlush(user);
+        // skillars-deferred-167 (AC8): revoke BEFORE the epoch stamp. Stamping first left a window in
+        // which a racing refresh's successor carried a created_at after the epoch and so passed
+        // AuthService.isBeforeSessionEpoch; stamping after means any survivor predates the epoch and is
+        // refused. Free to reorder: the revoke is REQUIRES_NEW on refresh_tokens, the stamp is MANDATORY on
+        // the user row, so they commit independently and touch different rows.
+        refreshTokenRepository.markAllUsedByUserId(user.getId());
         userRepository.invalidateSessionsForUserInCurrentTransaction(
             user.getId(), Instant.now(ClockProvider.getClock()));
-        refreshTokenRepository.markAllUsedByUserId(user.getId());
     }
 
     private int attemptsRemaining(Long userId) {

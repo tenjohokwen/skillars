@@ -1,0 +1,109 @@
+{
+  "arm": "control",
+  "case": "340-unpaid-paused-grace-sweep",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "createPaidStripeSubscription passes \"sub-create-\" + UUID.randomUUID() per call, and on a lost-response retry assertCanSubscribe/isOtherLiveSubscription only check the local row, which the orphaned first subscription never reached \u2014 so a second subscription is created and charged. Per the caveat: the reconciler itself isn't shown, but cancelStripeSubscriptionQuietly's comment calls it an \"orphan alert,\" indicating alert-only, and the duplicate charge occurs regardless.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "After a SCOUT downgrade, persistCoachCancellation voids all pending change rows, so changeCoachTier's newRank==currentRank branch (gated on pendingDowngrade) is a total no-op with no Stripe call, and persistCoachTierUpgrade never clears cancelAtPeriodEnd locally or at Stripe. No call in this file sends cancel_at_period_end=false; the one path that clears it (persistCoachSubscription) is blocked by assertCanSubscribe throwing alreadyActive while the row is still ACTIVE. Only caveat: an upgrade could incidentally clear the flag if StripeClient.updateSubscriptionTier (not shown) did so, but the re-select path is broken regardless.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The adapter's isPaidTierEntitled (lines 19\u201323) does map any existing row through SubscriptionEntitlement.isEntitled and defaults to true only when no row exists, consistent with the finding's premise \u2014 but the required verification (default status persisted by findOrCreateCoachSubscription, whether admin-provisioned coaches get payment rows, and reconcileMarketplaceTiers' findAll/SCOUT overwrite) depends on SubscriptionService, SubscriptionEntitlement, and repository code not shown.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "confirmed",
+      "note": "applyCoachChange has no free-tier branch (unlike changeCoachTier, which maps a SCOUT target to cancelCoachSubscription): syncStripePriceForChange returns true when plan.priceId() is null, so phase 2 applies the SCOUT tier locally while the Stripe subscription is never updated or cancelled. The verification caveat (DB query for pending to_tier='SCOUT' rows and the unset SCOUT priceId config) could not be run here, but the code itself treats SCOUT as the unpriced free tier, so the defect is real whenever such legacy rows exist.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "undetermined",
+      "note": "The diff only shows confirmSubscribe's catch switched to subscriptionErrorI18nKey; handleChangeTier and its catch block are not in the provided hunks, so whether it still shows the generic tierChange error cannot be verified from this code.",
+      "reported_id": "R12"
+    }
+  ],
+  "judge_cost_usd": 3.04862,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect: checkPastDueGracePeriod sweeps only PAST_DUE while UNPAID/PAUSED now persist, so the Stripe subscription is never cancelled and the row never closed \u2014 same place, mechanism, and consequence.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] createPaidStripeSubscription passes \"sub-create-\" + UUID.randomUUID() per call, and on a lost-response retry assertCanSubscribe/isOtherLiveSubscription only check the local row, which the orphaned first subscription never reached \u2014 so a second subscription is created and charged. Per the caveat: the reconciler itself isn't shown, but cancelStripeSubscriptionQuietly's comment calls it an \"orphan alert,\" indicating alert-only, and the duplicate charge occurs regardless. | pass-1: Concrete trigger: Stripe create succeeds but response is lost, retry uses a fresh random idempotency key and creates a second charged subscription that was never persisted.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete interleaving given: two concurrent tier changes with no lock and only a stripeSubscriptionId re-check can leave Stripe billing one price while the stored tier is another.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: pending downgrade is voided and Stripe price restored before the upgrade charge, so a declined CardException leaves the downgrade silently cancelled at the higher price.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete trigger: SUPERSEDED re-read causes persist to return normally after the Stripe price change/proration charge already happened, reporting success without granting the tier or reversing Stripe.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] After a SCOUT downgrade, persistCoachCancellation voids all pending change rows, so changeCoachTier's newRank==currentRank branch (gated on pendingDowngrade) is a total no-op with no Stripe call, and persistCoachTierUpgrade never clears cancelAtPeriodEnd locally or at Stripe. No call in this file sends cancel_at_period_end=false; the one path that clears it (persistCoachSubscription) is blocked by assertCanSubscribe throwing alreadyActive while the row is still ACTIVE. Only caveat: an upgrade could incidentally clear the flag if StripeClient.updateSubscriptionTier (not shown) did so, but the re-select path is broken regardless. | pass-1: Concrete trigger: SCOUT downgrade sets cancel_at_period_end=true and no subsequent upgrade or re-selection path clears it, so the subscription ends at period end even after a paid upgrade.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The adapter's isPaidTierEntitled (lines 19\u201323) does map any existing row through SubscriptionEntitlement.isEntitled and defaults to true only when no row exists, consistent with the finding's premise \u2014 but the required verification (default status persisted by findOrCreateCoachSubscription, whether admin-provisioned coaches get payment rows, and reconcileMarketplaceTiers' findAll/SCOUT overwrite) depends on SubscriptionService, SubscriptionEntitlement, and repository code not shown. | pass-1: Concrete trigger: any subscribe attempt (even declined) creates a payment row, making isEntitled false, and the now-unfiltered reconcile overwrites the admin-provisioned marketplace tier with SCOUT.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Hinges on Stripe 'may still emit' invoice.payment_failed for a rejected error_if_incomplete update \u2014 speculative Stripe behavior, no verified trigger.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] applyCoachChange has no free-tier branch (unlike changeCoachTier, which maps a SCOUT target to cancelCoachSubscription): syncStripePriceForChange returns true when plan.priceId() is null, so phase 2 applies the SCOUT tier locally while the Stripe subscription is never updated or cancelled. The verification caveat (DB query for pending to_tier='SCOUT' rows and the unset SCOUT priceId config) could not be run here, but the code itself treats SCOUT as the unpriced free tier, so the defect is real whenever such legacy rows exist. | pass-1: Concrete trigger: pre-existing pending change rows targeting SCOUT hit a null priceId, get applied locally only, and Stripe keeps billing the paid price.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "Reporter only says the helpers 'appear to' return stored tier and defers to inspecting bodies outside the diff \u2014 a verify-X claim with no established trigger.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "Concrete trigger: Stripe event timestamps have one-second resolution and the guard rejects only strictly-older events, so same-second out-of-order delivery lets stale state (PAST_DUE) win.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The diff only shows confirmSubscribe's catch switched to subscriptionErrorI18nKey; handleChangeTier and its catch block are not in the provided hunks, so whether it still shows the generic tierChange error cannot be verified from this code. | pass-1: Concrete trigger grounded in the diff: only confirmSubscribe was switched to subscriptionErrorI18nKey, so backend notActive/paymentDeclined rejections on player tier change still render the generic error.",
+        "reported_id": "R12",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Conditional on 'if the template renders via t(...)' and whether keys exist \u2014 speculative, no verified rendering path or missing key identified.",
+        "reported_id": "R13",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

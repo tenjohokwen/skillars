@@ -1,0 +1,38 @@
+{
+  "arm": "security",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "A parent cancels a CONFIRMED/UPCOMING pack-funded booking with more than 24 hours' notice (or after start+grace when the coach never pressed Start), and the pack's expiresAt has already passed \u2014 the normal situation for a session booked near the end of a pack. cancelBookingAsParent never reads the pack's expiry, BookingCancelledByParentEvent carries no packExpiredAtCancellation field, and onBookingCancelledByParent therefore enqueues a PACK_SESSION_RESTORE whenever sessionPackPurchaseId != null && refundEligible. The session is restored onto a pack that createBookingRequest rejects with payment.packExpired, so the parent can never use it, and the session is never settled on the pack's money ledger \u2014 the per-session share reaches neither the parent nor the coach and stays with the platform. Every sibling path (BookingCancelledByCoachEvent, CoachNoShowEvent, BookingCancelledByAdminEvent, BookingCancelledDueToPauseEvent) computes packExpiredAtCancellation and routes the expired-pack case to allocateSessionRefund + a wallet credit instead.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "RefundEnqueueListener.onBookingCancelledByParent (with BookingService.cancelBookingAsParent and BookingCancelledByParentEvent)",
+      "title": "Parent cancellation of an expired-pack booking restores a worthless session instead of refunding the money",
+      "verification": "Confirm PackSessionRestoreOutboxHandler applies the restore without any expiry check of its own; the enqueue side (PackRestoreOutboxSupport) carries no expiry information to check against."
+    },
+    {
+      "category": "concurrency",
+      "description": "For a RELEASED payout, applyRefund caps the reversal at row.getEffectiveNetAmount(), but enqueueReversal only writes an outbox message \u2014 the coach_payouts row stays RELEASED and its effective net is unchanged until CoachPayoutReversalHandler processes the message. If an in-app dispute is resolved with a refund and a Stripe card dispute on the same funding charge then closes lost (or vice versa) before the first reversal message is drained, the second applyRefund computes its cap against the still-unreduced effective net and enqueues a second reversal; together the two reversals can exceed the coach's net for the booking. The row lock both callers take does not prevent this because the pending reversal is invisible in the locked row.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachPayoutAdjustmentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "CoachPayoutAdjustmentService.applyRefund",
+      "title": "Two refund sources on one booking can each enqueue a full-size payout reversal, clawing back more than the coach's net",
+      "verification": "Read CoachPayoutReversalHandler to confirm effectiveNetAmount (or a reversed-amount column) is only reduced when the handler processes the message, and confirm DisputeService and ChargeDisputeWebhookService can both reach applyRefund for the same booking's payout."
+    },
+    {
+      "category": "edge-case",
+      "description": "resolveAmountPaid computes bp.getCreditDebited().add(bp.getStripeCharged()) with no null guards, while CoachPayoutOutboxSupport.enqueuePayout explicitly null-guards exactly these two booking_payments columns, implying rows with nulls exist. A CAPTURED row with a null creditDebited or stripeCharged throws NullPointerException, which fails cancelBookingAsParent, cancelBookingAsCoach, recordNoShowCoach and cancelDueToPause for that booking with a 500 \u2014 the parent cannot cancel or report a coach no-show at all (cancelBookingAsAdmin survives via resolveAmountPaidOrZero but records a 0 refund).",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "BookingService.resolveAmountPaid",
+      "title": "resolveAmountPaid NPEs on a CAPTURED payment row with a null amount component, blocking every cancellation/refund path for that booking",
+      "verification": "Check whether the booking_payments write path (capture settle) can commit a CAPTURED row with either column null \u2014 the null guards in CoachPayoutOutboxSupport.enqueuePayout:142-143 suggest it can."
+    }
+  ],
+  "input_rev": "dd2ec9c7cb2879b65b1d34d94fb75a69dfe2d5e4",
+  "model": null
+}

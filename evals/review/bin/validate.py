@@ -71,13 +71,25 @@ def check(path):
             p(f"missing key '{k}'")
     if c.get("confidence") not in CONF:
         p(f"confidence '{c.get('confidence')}' not in {sorted(CONF)}")
-    pending = str(c.get("fix_pr")) == "pending"
     fix_merge = str(c.get("fix_merge") or "")
     pinned = str(c.get("input_rev") or "")
+    # A case is "unmerged" while no fix has landed: either no fix exists at all (fix_pr: pending) or
+    # the fix PR is open but not squashed yet, so its merge sha cannot exist to be named. Both pin
+    # input_rev instead. skillars-deferred-166 added the second form: the fix PR itself has to set
+    # fix_pr to its own number and still validate, and fix_merge arrives in a follow-up commit.
+    #
+    # KNOWN LIMIT, deliberate: nothing here can tell "PR open" from "PR merged and the fix_merge
+    # follow-up was forgotten", because both look like a numeric fix_pr with no fix_merge. The shape
+    # check above at least rejects a typo'd fix_pr instead of silently treating the case as pending.
+    # Closing the gap properly needs the PR's state, which this script has no access to; a periodic
+    # `gh pr view` sweep over cases with a numeric fix_pr and no fix_merge would be the way.
+    fix_pr = c.get("fix_pr")
+    if not (str(fix_pr) == "pending" or isinstance(fix_pr, int)):
+        p(f"fix_pr must be 'pending' or a PR number, got {fix_pr!r}")
+    pending = str(fix_pr) == "pending" or (not fix_merge and bool(pinned))
     if pending:
-        # Open bug: no fix exists yet, so the input revision is pinned explicitly.
         if not pinned:
-            p("fix_pr: pending requires input_rev")
+            p("a case with no fix_merge requires input_rev (fix_pr: pending, or a PR not yet merged)")
         elif not rev_ok(pinned):
             p(f"input_rev {pinned} does not resolve")
     else:

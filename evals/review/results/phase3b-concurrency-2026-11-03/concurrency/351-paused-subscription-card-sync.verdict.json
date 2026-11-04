@@ -1,0 +1,83 @@
+{
+  "arm": "concurrency",
+  "case": "351-paused-subscription-card-sync",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The diff confirms syncPaymentMethod retries the invoice with no local lock/write (so GraceTarget.matches and the FOR UPDATE re-read cannot block it), but the finding's required verification \u2014 that cancelAtStripeForGrace/cancelSubscriptionImmediately null stripeSubscriptionId without voiding the open invoice at Stripe, and that the invoice.paid handler acks on a findByStripeSubscriptionId miss \u2014 depends on method bodies, the webhook handler, and SubscriptionLifecycleIT, none of which are in the shown hunks.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "updateSubscriptionDefaultPaymentMethod builds its idempotency key as \"sub-pm-\" + subscriptionId + paymentMethodId with no per-attempt component, so re-setting a previously used card within Stripe's 24h window sends an identical request and Stripe replays the cached response without executing the update, leaving the old default in place. Stripe's documented semantics (24h key retention, replay of original response for identical requests) match the finding's caveat.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "payLatestOpenInvoice does pay only sub.getLatestInvoice() with no loop over other open invoices, but the claimed consequence depends on the invoice.paid handler and RECOVERABLE_ON_PAYMENT set, which are not in these hunks; whether ACTIVE is restored and pastDueSince cleared without re-checking the subscription's Stripe status cannot be verified here.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "The hunk shows save(existing) then syncPaymentMethodToSubscriptions(parentId, request.paymentMethodId()) with no visible lock, but the finding's verification requires confirming no per-user serialization exists anywhere: the top of savePaymentMethod, the StripeCustomer entity (possible @Version), and SubscriptionService.syncPaymentMethodToSubscriptions are not in the diff, so a lock or claim there cannot be ruled out.",
+      "reported_id": "R5"
+    }
+  ],
+  "judge_cost_usd": 0.804665,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 identifies the same defect (saving a card never resumes a PAUSED subscription, no Stripe resume call exists) with the same consequence of the grace sweep cancelling it.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R6 captures the swallowed-exception/silent-204 fragment of F2 but misses the architectural core: synchronous Stripe calls inside the save-card request with no durable retry/outbox.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding addresses the lack of distinction between retryable and permanent Stripe failures in the catch handling.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] The diff confirms syncPaymentMethod retries the invoice with no local lock/write (so GraceTarget.matches and the FOR UPDATE re-read cannot block it), but the finding's required verification \u2014 that cancelAtStripeForGrace/cancelSubscriptionImmediately null stripeSubscriptionId without voiding the open invoice at Stripe, and that the invoice.paid handler acks on a findByStripeSubscriptionId miss \u2014 depends on method bodies, the webhook handler, and SubscriptionLifecycleIT, none of which are in the shown hunks. | pass-1: Concrete unlocked race: grace sweep cancels and nulls stripeSubscriptionId between sync's status read and invoice.pay (or before the invoice.paid webhook), so the customer pays an invoice for a subscription that stays cancelled.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] updateSubscriptionDefaultPaymentMethod builds its idempotency key as \"sub-pm-\" + subscriptionId + paymentMethodId with no per-attempt component, so re-setting a previously used card within Stripe's 24h window sends an identical request and Stripe replays the cached response without executing the update, leaving the old default in place. Stripe's documented semantics (24h key retention, replay of original response for identical requests) match the finding's caveat. | pass-1: Concrete trigger: idempotency key derived only from (subscription, payment method) replays the cached first 'set A' response on an A\u2192B\u2192A switch within Stripe's 24h window, leaving Stripe charging card B while the DB records A.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] payLatestOpenInvoice does pay only sub.getLatestInvoice() with no loop over other open invoices, but the claimed consequence depends on the invoice.paid handler and RECOVERABLE_ON_PAYMENT set, which are not in these hunks; whether ACTIVE is restored and pastDueSince cleared without re-checking the subscription's Stripe status cannot be verified here. | pass-1: Concrete trigger: UNPAID subscriptions accumulate multiple open invoices but payLatestOpenInvoice pays only latest_invoice, and invoice.paid restores ACTIVE and clears pastDueSince while older invoices remain unpaid, diverging local and Stripe state.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The hunk shows save(existing) then syncPaymentMethodToSubscriptions(parentId, request.paymentMethodId()) with no visible lock, but the finding's verification requires confirming no per-user serialization exists anywhere: the top of savePaymentMethod, the StripeCustomer entity (possible @Version), and SubscriptionService.syncPaymentMethodToSubscriptions are not in the diff, so a lock or claim there cannot be ruled out. | pass-1: Concrete trigger: two concurrent saves with no per-user serialization can commit DB rows in order A,B while Stripe default updates land B,A, leaving a persistent mismatch between the saved card and the card actually charged.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Self-admittedly contingent on whether savePaymentMethod is @Transactional, a fact the diff does not show; no concrete verified trigger.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

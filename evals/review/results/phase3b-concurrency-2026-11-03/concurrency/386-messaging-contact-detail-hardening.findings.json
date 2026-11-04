@@ -1,0 +1,74 @@
+{
+  "arm": "concurrency",
+  "case": "386-messaging-contact-detail-hardening",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "getMessages loads the Conversation with a plain findById (line 249) and saves it at line 265 only to bump a last-read timestamp. Conversation extends BaseEntity, which has no @Version, and the entity has no @DynamicUpdate, so the save issues Hibernate's static UPDATE writing every column from the in-memory snapshot. If MessagingReportService.reportConversation commits status=BLOCKED between the read at line 249 and the save at line 265 \u2014 a window spanning the page query, the pending-clamp query and policy lookups, on an endpoint hit on every thread open/poll \u2014 the UPDATE writes the stale ACTIVE back, silently un-blocking a conversation a party just reported for child safety, and sendMessage will accept new messages into it.",
+      "file": "src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "MessagingService.getMessages",
+      "title": "getMessages full-row save of unversioned Conversation reverts a concurrently committed BLOCKED status",
+      "verification": "Confirm no other mechanism serializes these writers (no trigger or RLS on messaging.conversations); confirmed already: BaseEntity.java has no @Version field and Conversation.java has no @DynamicUpdate."
+    },
+    {
+      "category": "concurrency",
+      "description": "The TransactionTemplate block re-reads the Conversation (line 217) and re-checks BLOCKED, which only guards the pre-transaction window. If reportConversation commits BLOCKED between that unlocked re-read and the inner commit (line 239), sendMessage's flush waits on the row lock, then its full-row UPDATE (setLastMessageAt dirties the entity; no @Version, no @DynamicUpdate) writes the stale status=ACTIVE back. Result: the safety block is reverted AND the new message is inserted into the conversation that had just been blocked. The code comment claims the re-check closes this race; it only narrows it, and the full-row write makes the loss active rather than passive.",
+      "file": "src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "MessagingService.sendMessage",
+      "title": "sendMessage's inner-transaction BLOCKED re-check still loses to a BLOCKED committed before its own flush"
+    },
+    {
+      "category": "concurrency",
+      "description": "Because the save at line 265 writes all Conversation columns from memory with no lock or version, two parties reading the same thread concurrently revert each other's committed markers: coach's getMessages loads the row, parent's getMessages commits parentLastReadAt, then coach's save writes the stale (older) parentLastReadAt back, so countUnreadPerConversation re-counts messages the parent already read. The same save also reverts a lastMessageAt committed by a concurrent sendMessage inner transaction, breaking conversation-list ordering and the lastMessageAt shown in summaries.",
+      "file": "src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "MessagingService.getMessages",
+      "title": "Concurrent getMessages/sendMessage callers clobber each other's conversation read markers and lastMessageAt"
+    },
+    {
+      "category": "concurrency",
+      "description": "reportMessage reads the Message with plain findById (line 53), checks status, sets UNDER_REVIEW and save()s (lines 65\u201368) \u2014 no PESSIMISTIC_WRITE, and Message has no @Version or @DynamicUpdate, so the flush writes every column. If the sender's softDeleteMessage commits deletedAt under its row lock between that read and reportMessage's commit, the full-row UPDATE writes deleted_at=NULL back, resurrecting a message the sender deleted (exactly the state ModerationResultApplier's own guard comment warns corrupts the sweeper and admin queue). The same stale write overwrites a BLOCKED committed by ModerationResultApplier/admin with UNDER_REVIEW, or nulls the deliveredAt of a just-APPROVED message. softDeleteMessage, applyResult and the sweeper all take findByIdForUpdate; this is the one Message writer that bypasses that discipline.",
+      "file": "src/main/java/com/softropic/skillars/platform/messaging/service/MessagingReportService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "MessagingReportService.reportMessage",
+      "title": "reportMessage's unlocked read-then-save of Message resurrects soft-deleted messages and reverts committed verdicts"
+    },
+    {
+      "category": "database",
+      "description": "Both methods guard double submits with an exists-check plus a try/catch around repository.save() mapping the unique violation (uq_message_reports_message_reporter / uq_conversation_reports_conv_reporter) to ALREADY_REPORTED (409). But ids come from @Tsid, generated in memory, so persist() defers the INSERT to the commit-time flush; nothing between save() and the method return forces a flush (the report event listeners also defer their inserts \u2014 AdminAlertEventListener's own comment documents this exact gotcha). Two clicks of the report button that both pass the exists-check therefore have the second one's constraint violation thrown from the @Transactional proxy's commit, outside both try blocks and unhandled by MessagingApiAdvice \u2014 the user gets a raw 500 instead of the designed 409. ConversationCreationHelper uses saveAndFlush for precisely this reason; these two call sites do not.",
+      "file": "src/main/java/com/softropic/skillars/platform/messaging/service/MessagingReportService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "MessagingReportService.reportMessage / reportConversation",
+      "title": "Duplicate-report DataIntegrityViolationException is caught around save() but raised at commit, producing a 500 instead of 409",
+      "verification": "Confirm @Tsid is a pre-insert in-memory generator (hypersistence-utils) and that no JPQL/native query runs between save() and commit in either method that would trigger an auto-flush inside the try block."
+    },
+    {
+      "category": "concurrency",
+      "description": "sendMessage stamps createdAt=Instant.now() inside its inner transaction (line 226) and commits some time later. If that commit lands after the reader's page query (line 254) and findOldestPendingCreatedAtFromOthers (line 260) but the stamped createdAt precedes the reader's readUpTo taken at line 259, the reader writes lastReadAt past a message it never saw: the row was in neither the page nor the PENDING-clamp result because it was uncommitted at query time. Once the message is APPROVED, countUnread (createdAt > lastReadAt) never counts it, so it silently never surfaces as unread \u2014 defeating the exact invariant the minusNanos clamp was built to protect. Clock skew between instances behind the proxy widens the window.",
+      "file": "src/main/java/com/softropic/skillars/platform/messaging/service/MessagingService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "MessagingService.getMessages",
+      "title": "getMessages read-marker clamp misses a message committed between the reader's queries and its lastReadAt write"
+    },
+    {
+      "category": "concurrency",
+      "description": "Two ReviewModerationService.handleReviewSubmitted listeners approving different reviews of the same coach each hold a FOR UPDATE lock only on their own review row, so nothing serializes them per coach. Under READ COMMITTED, transaction A's computeAggregates cannot see B's uncommitted APPROVED review and vice versa; both then run updateRatingAggregate on the coach row, and whichever commits last overwrites the aggregate with a reviewCount/averageRating computed without the other transaction's review. Both reviews are APPROVED in the DB but the published rating is wrong until some later event happens to recompute that coach. The version bump in updateRatingAggregate protects against stale entity saves, not against this read-compute-write skew.",
+      "file": "src/main/java/com/softropic/skillars/platform/reviews/service/CoachRatingService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "CoachRatingService.recompute",
+      "title": "CoachRatingService.recompute write skew: concurrent verdicts for the same coach commit an aggregate missing a review",
+      "verification": "Confirm no advisory lock or coach-row lock serializes recompute callers (also check AdminReviewService.approveReview/blockReview and ReviewFlagService.flag, which share this path)."
+    }
+  ],
+  "input_rev": "a4b3ed40c5421456ba4926f09fd869e38bbbf3cc",
+  "model": null
+}

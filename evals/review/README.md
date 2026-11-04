@@ -110,8 +110,15 @@ notes: anything a future curator should know
 
 **Open-bug cases.** A defect found by a reviewer and confirmed by a human before any fix
 exists (see `results/*/real-sample.md`) is still a case: set `fix_pr: pending`, omit
-`fix_merge`, and pin `input_rev:` to the commit the reviewer saw. When the fix merges,
-replace `pending` with the PR number, add `fix_merge`, drop `input_rev`.
+`fix_merge`, and pin `input_rev:` to the commit the reviewer saw.
+
+Closing one takes two steps, because a squash merge's sha does not exist until it happens:
+
+1. **In the fix PR**, set `fix_pr` to the PR number, keep `input_rev`, and promote the file
+   to `cases/` without the `pending-` prefix (the `id` must equal the filename). The
+   validator accepts a numeric `fix_pr` with a pinned `input_rev` and no `fix_merge` as
+   "fix PR open, not merged".
+2. **After the squash merge**, add `fix_merge: <squash sha>` and drop `input_rev`.
 
 Rules for `expected_findings`:
 
@@ -122,6 +129,34 @@ Rules for `expected_findings`:
 - `anchors` use paths as they exist at the input revision, not at HEAD.
 - Do not leak the fix. "Missing idempotency key" is a finding; "should add
   `Idempotency-Key` header like PR #359 did" is the answer sheet.
+
+## How this fits the dev lifecycle
+
+1. **Before a PR, run `/pr-review`** on the branch (skill in `.claude/skills/pr-review/`). It
+   fans out the measured reviewer agents (`.claude/agents/general-reviewer.md` and
+   `security-reviewer.md`) over the branch diff as parallel subagents, merges and filters
+   their findings with the rules the evals established, writes `.pr-review/<HEAD sha>.md`
+   (git-ignored) and presents what to fix. Re-run after every new commit; the record is
+   keyed to the commit.
+2. **`gh pr create` is gated** by `.claude/hooks/require-pr-review.sh` (wired in
+   `.claude/settings.json`): no record for HEAD, no PR. A branch whose changed files are
+   all on the CI classifier's non-code allowlist passes automatically (decided from git, not
+   from the command text); starting the command with `PR_REVIEW_SKIP=1` skips deliberately
+   and visibly. The hook fails closed when it cannot parse the command or resolve HEAD, and
+   matches only a real invocation at a command boundary, not the phrase inside text.
+3. **Change a reviewer only with an eval run.** The agents' bodies are the arms the runner
+   measures, so a prompt edit is a reviewer change: run the arm over the promoted cases,
+   judge, build the scorecard, and compare with the previous run in `results/` before
+   merging the edit. To measure an edit before it lands, point `SKILLARS_REVIEW_EVALS_DIR`
+   at a staging copy that carries the edited agent as `agents/<name>.md`; the runner reads
+   that before the committed `.claude/agents/<name>.md`. The acceptance rule is in "Arms"
+   below.
+4. **Grow the dataset from real bugs.** A merged fix PR that closes a defect an earlier PR
+   shipped is a new case (see "Adding a case"). A reviewer finding the judge calls `real`
+   and a human confirms is a new `pending` case or an added expected finding, and the
+   fix PR later flips `pending` to its number.
+
+None of this runs in CI. Everything is the developer's own Claude Code login.
 
 ## Running a baseline
 
@@ -135,7 +170,10 @@ evals/review/bin/scorecard.py $RUN                  # writes results/$RUN/scorec
 ```
 
 Runs resume: a case whose findings (or verdict) file already exists is skipped, so a
-run interrupted halfway is restarted with the same command. `--parallel N` (default 3)
+run interrupted halfway is restarted with the same command. A specialist arm is scored with
+`--subset <category>` (its cases plus a fixed five-case precision sample, about half the
+cost of a full run); `control` needs no re-review when nothing about it changed: copy its
+findings and verdicts from the previous run into the new run directory and compare there. `--parallel N` (default 3)
 bounds concurrent `claude -p` processes. `--model` and `--effort` pass through to the
 reviewer and are recorded in `results/<run-id>/run.json`.
 
@@ -145,10 +183,18 @@ reviewer and are recorded in `results/<run-id>/run.json`.
 |---|---|---|---|
 | `control` | one plain review prompt, no layers | diff inlined, no tools | runs inside the exported tree with Read/Grep/Glob; scope list inlined |
 | `blind-hunter` | the Blind Hunter layer from `mto-code-review` | diff inlined, no tools | scoped files inlined, no tools |
+| `security` | the `.claude/agents/security-reviewer.md` agent | diff inlined, no tools | Read/Grep/Glob inside the tree; scope list inlined |
 
-`control` is the floor every later reviewer must beat. Specialised reviewers (phase 3)
-are added as further arms and kept only if they raise recall in their category without
-dropping overall precision below `control`.
+A `concurrency` arm was tried and rejected (`results/phase3b-concurrency-2026-11-03/NOTES.md`:
+one net finding, 18 points of precision lost, five times the cost); its prompt is in git history.
+
+`control` is the floor every later reviewer must beat. Specialised reviewers are real
+Claude Code agents under `.claude/agents/`; an arm uses the agent file's body as its prompt
+(frontmatter stripped, input-mode fragment and input appended), so what is measured is
+exactly what runs in an interactive session. A specialised arm reports only its own kind
+of defect by design, so judge it on two numbers: recall in its category must rise over
+`control`, and its own precision must not fall below `control`'s. Compare arms only within
+one run (same cases, same judge version).
 
 ### Scoring
 

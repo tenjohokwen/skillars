@@ -62,14 +62,16 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
     expect(synthetic).toEqual({ value: 75, label: '75' })
   })
 
-  it('submit emits the selected sessionDurationMinutes verbatim and filters incomplete packs', () => {
+  it('submit emits the selected sessionDurationMinutes verbatim and the one pack', () => {
     const wrapper = mountStep3()
     wrapper.vm.form.perSessionPrice = 40
     wrapper.vm.form.sessionDurationMinutes = 90
-    wrapper.vm.form.sessionPacks = [
-      { sessionCount: 5, totalPrice: 180, label: 'Starter' },
-      { sessionCount: null, totalPrice: null, label: '' }, // incomplete → dropped
-    ]
+    wrapper.vm.addPack()
+    Object.assign(wrapper.vm.form.sessionPacks[0], {
+      sessionCount: 5,
+      totalPrice: 180,
+      label: 'Starter',
+    })
 
     wrapper.vm.submit()
 
@@ -89,31 +91,136 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
   })
 
   // -------------------------------------------------------------------------
-  // skillars-deferred-109 AC8 (deferred-work.md:1884-1890).
+  // skillars-deferred-168: the pack is the coach's one purchasable offer.
   // -------------------------------------------------------------------------
-  describe('AC8.1 — a touched-but-invalid pack row blocks submit instead of being silently dropped', () => {
-    const cases = [
-      ['sessionCount only', { sessionCount: 5, totalPrice: null, label: '' }],
-      ['sessionCount with zero price', { sessionCount: 5, totalPrice: 0, label: '' }],
-      ['negative sessionCount', { sessionCount: -1, totalPrice: 20, label: '' }],
-      ['label only', { sessionCount: null, totalPrice: null, label: 'Starter' }],
+  describe('deferred-168 — one pack, sent only when the coach touched it', () => {
+    it('an untouched pack section sends sessionPacks: null, so revisiting step 3 never withdraws an offer', () => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+
+      wrapper.vm.submit()
+
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
+      // Mutation: send packsForRequest(form.sessionPacks) unconditionally → [] → RED.
+    })
+
+    it('adding then removing the pack sends null, never a withdrawal (V2)', () => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+      wrapper.vm.addPack()
+      wrapper.vm.removePack(0)
+
+      wrapper.vm.submit()
+
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
+    })
+
+    it('an added but empty pack is not sent, does not block and does not withdraw an offer (V2)', () => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+      wrapper.vm.addPack()
+
+      wrapper.vm.submit()
+
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
+      expect(wrapper.vm.packError).toBe('')
+    })
+
+    it('offers "Add pack" only while there is no pack', async () => {
+      const wrapper = mount(ProfileBuilderStep3, { props: {} })
+      mounted.push(wrapper)
+      const addLabel = 'auth.coach.step3AddPack'
+      expect(wrapper.text()).toContain(addLabel)
+
+      wrapper.vm.addPack()
+      await wrapper.vm.$nextTick()
+
+      expect(wrapper.text()).not.toContain(addLabel)
+    })
+
+    const blocked = [
+      [
+        'sessionCount only',
+        { sessionCount: 5, totalPrice: null, label: '' },
+        'auth.coach.step3PackInvalid',
+      ],
+      [
+        'label only',
+        { sessionCount: null, totalPrice: null, label: 'Starter' },
+        'auth.coach.step3PackInvalid',
+      ],
+      [
+        'zero price',
+        { sessionCount: 5, totalPrice: 0, label: '' },
+        'auth.coach.step3PackPriceError',
+      ],
+      [
+        'negative sessionCount',
+        { sessionCount: -1, totalPrice: 20, label: '' },
+        'auth.coach.step3PackSessionCountError',
+      ],
+      [
+        'fractional sessionCount',
+        { sessionCount: 2.5, totalPrice: 20, label: '' },
+        'auth.coach.step3PackSessionCountError',
+      ],
+      [
+        'more than 100 sessions',
+        { sessionCount: 101, totalPrice: 2000, label: '' },
+        'auth.coach.step3PackSessionCountError',
+      ],
+      [
+        'three decimals',
+        { sessionCount: 5, totalPrice: 10.005, label: '' },
+        'auth.coach.step3PackPriceError',
+      ],
+      [
+        'over 50,000',
+        { sessionCount: 5, totalPrice: 50000.01, label: '' },
+        'auth.coach.step3PackPriceError',
+      ],
+      [
+        'per-session share rounds to 0.00',
+        { sessionCount: 100, totalPrice: 0.49, label: '' },
+        'auth.coach.step3PackPerSessionError',
+      ],
+      [
+        'label over 200 characters',
+        { sessionCount: 5, totalPrice: 200, label: 'x'.repeat(201) },
+        'auth.coach.step3PackLabelTooLong',
+      ],
     ]
-    for (const [name, row] of cases) {
-      it(`blocks and shows a message: ${name}`, () => {
+    for (const [name, pack, key] of blocked) {
+      it(`blocks with a specific message: ${name}`, () => {
         const wrapper = mountStep3()
         wrapper.vm.form.perSessionPrice = 40
-        wrapper.vm.form.sessionPacks = [row]
+        wrapper.vm.addPack()
+        Object.assign(wrapper.vm.form.sessionPacks[0], pack)
 
         wrapper.vm.submit()
 
         expect(wrapper.emitted('submit')).toBeUndefined()
-        expect(wrapper.vm.packError).toBe('auth.coach.step3PackInvalid')
+        expect(wrapper.vm.packError).toBe(key)
       })
     }
 
+    it('the tier bounds themselves are accepted', () => {
+      const wrapper = mountStep3()
+      wrapper.vm.form.perSessionPrice = 40
+      wrapper.vm.addPack()
+      Object.assign(wrapper.vm.form.sessionPacks[0], {
+        sessionCount: 100,
+        totalPrice: 50000,
+        label: 'x'.repeat(200),
+      })
+
+      wrapper.vm.submit()
+
+      expect(wrapper.emitted('submit')).toHaveLength(1)
+    })
+
     // skillars-deferred-109 code review: `v-model.number` on a cleared type="number" input yields
-    // '' — not null — so the original `!= null` test counted a visually EMPTY row as touched and
-    // blocked submit with no way to recover by editing.
+    // '' — not null — so a visually EMPTY pack must not count as touched.
     it.each([
       [
         'sessionCount cleared to an empty string',
@@ -121,23 +228,23 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
       ],
       ['totalPrice cleared to an empty string', { sessionCount: null, totalPrice: '', label: '' }],
       ['both cleared to empty strings', { sessionCount: '', totalPrice: '', label: '' }],
-    ])('a row whose numeric fields were cleared is NOT touched: %s', (_name, row) => {
+    ])('a pack whose numeric fields were cleared is NOT touched: %s', (_name, pack) => {
       const wrapper = mountStep3()
       wrapper.vm.form.perSessionPrice = 40
-      wrapper.vm.form.sessionPacks = [{ sessionCount: 5, totalPrice: 180, label: 'Starter' }, row]
+      wrapper.vm.addPack()
+      Object.assign(wrapper.vm.form.sessionPacks[0], pack)
 
       wrapper.vm.submit()
 
-      expect(wrapper.emitted('submit')).toBeDefined()
+      expect(wrapper.emitted('submit')[0][0].sessionPacks).toBeNull()
       expect(wrapper.vm.packError).toBe('')
-      // Mutation: revert packRowTouched to `p.sessionCount != null || p.totalPrice != null` → '' is
-      // counted as touched, submit is blocked and packError is set → RED.
     })
 
     it('removePack clears a standing packError', () => {
       const wrapper = mountStep3()
       wrapper.vm.form.perSessionPrice = 40
-      wrapper.vm.form.sessionPacks = [{ sessionCount: 5, totalPrice: null, label: '' }]
+      wrapper.vm.addPack()
+      wrapper.vm.form.sessionPacks[0].sessionCount = 5
 
       wrapper.vm.submit()
       expect(wrapper.vm.packError).toBe('auth.coach.step3PackInvalid')
@@ -145,28 +252,7 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
       wrapper.vm.removePack(0)
 
       expect(wrapper.vm.packError).toBe('')
-      // Mutation: drop `packError.value = ''` from removePack → the message survives the removal of
-      // the only offending row → RED.
     })
-
-    it('a fully-empty row alongside a valid one is filtered silently — submit still emits', () => {
-      const wrapper = mountStep3()
-      wrapper.vm.form.perSessionPrice = 40
-      wrapper.vm.form.sessionPacks = [
-        { sessionCount: 5, totalPrice: 180, label: 'Starter' },
-        { sessionCount: null, totalPrice: null, label: '' },
-      ]
-
-      wrapper.vm.submit()
-
-      const emitted = wrapper.emitted('submit')
-      expect(emitted).toHaveLength(1)
-      expect(emitted[0][0].sessionPacks).toEqual([
-        { sessionCount: 5, totalPrice: 180, label: 'Starter' },
-      ])
-    })
-    // Mutation: remove the `if (hasTouchedInvalidPack.value) { … return }` guard from submit() →
-    // the four touched-but-invalid cases emit with the rows silently absent → RED.
   })
 
   it('AC8.2 — durationOptions coerces a string current value: no duplicate synthetic 60', async () => {

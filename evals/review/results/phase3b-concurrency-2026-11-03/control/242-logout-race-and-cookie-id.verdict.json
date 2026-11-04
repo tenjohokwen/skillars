@@ -1,0 +1,118 @@
+{
+  "arm": "control",
+  "case": "242-logout-race-and-cookie-id",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "AuthService.login's class-level @Transactional has no noRollbackFor, and recordAttempt's loginAttemptRepository.save precedes a thrown BadCredentialsException (RuntimeException) in the same transaction, so rollback of the LoginAttempt row follows under default Spring Data propagation (REQUIRED). But the finding's own verification point \u2014 that LoginAttemptRepository.save has no REQUIRES_NEW override or self-committing custom implementation \u2014 cannot be checked, as the repository interface is not shown; that file is needed to confirm.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "AuthService.login's retryAfterSeconds does use findFirstByIdentifierOrderByAttemptedAtAsc with no windowStart filter, and Math.max clamps a stale row's result to 1s \u2014 but the consequence only occurs if rows older than lock-window-minutes survive, which depends on AuthCleanupService's purge cutoff; that class is not in the provided code, so the finding's required verification cannot be completed.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "AuthService.logout only marks the cookie's own token and skips it via .filter(t -> !t.isUsed()); it never calls markAllUsedByUserId or finds the successor, so the newRt row created by a concurrent refresh() stays used=false for its full TTL \u2014 and refresh()'s REFRESH_GRACE_WINDOW branch will even redeem that successor for a holder of the stale cookie within 30s.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "The grace branch in AuthService.refresh reassigns `token` via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc (user-scoped, no link to the rotated token) and falls through to setUsed(true)/rotation, so another session's token can be consumed; that session's later refresh then hits markAllUsedByUserId. Caveat: CreatedAtDesc ordering means this only misfires when the other device created its token after the replayer's rotation (within the 30s window), not in every dual-session case.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "handleLogout's Promise.race on LOGOUT_BACKEND_WAIT_MS is real and the pending POST /api/auth/logout does survive the SPA navigation, but the claimed consequence depends on code not shown: the backend logout handler's Set-Cookie max-age=0 behavior (JwtManagerImpl/auth controller) and the client-set `skp` cookie, which is never referenced in MainLayout.vue. The finding's own verification step is a runtime proxy test that cannot be settled from this file.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "logout clears skp once before awaiting authApi.skillarsLogout with no re-clear, and hydrateFromCookie does restore userId/role from skp \u2014 consistent with the finding \u2014 but the exploit chain depends on the axios refresh interceptor (or server Set-Cookie on refresh) rewriting skp and on App.vue calling hydrateFromCookie at boot, neither of which is in the provided file.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "Within MainLayout.vue the mechanics hold: selfPlayerId is set only in onMounted (gated on authStore.isPlayer) and handleLogout resets playerStore but never the local selfPlayerId ref. However, the consequence depends on MainLayout being one persistent instance across /login and app routes \u2014 that's determined by the router config (and by whether pushLoginOrHardNavigate's hard-navigation fallback fires), neither of which is shown.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 1.751745,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions destroySession ordering, the sessionManager tick, or the spurious session:expired event; R5 is at the same function but describes a different defect (server session surviving the timeout).",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R8 identifies buildRedirectQuery unconditionally setting redirect on deliberate logout and the same consequence: next account replays previous user's role-specific URL and hits guard bounce/403.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "Nothing reported touches routes.js or the missing requiresCoach meta on coach/profile-builder.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding concerns the skp cookie emitting the Long id as an unquoted JSON number or precision loss; R6 mentions skp only for a cookie-restore race.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "Nothing reported concerns AppEndpoints.PUBLIC_MGMT_ENDPOINTS or /manage/health/smoke being behind auth.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] AuthService.login's class-level @Transactional has no noRollbackFor, and recordAttempt's loginAttemptRepository.save precedes a thrown BadCredentialsException (RuntimeException) in the same transaction, so rollback of the LoginAttempt row follows under default Spring Data propagation (REQUIRED). But the finding's own verification point \u2014 that LoginAttemptRepository.save has no REQUIRES_NEW override or self-committing custom implementation \u2014 cannot be checked, as the repository interface is not shown; that file is needed to confirm. | pass-1: Concrete trigger: class-level @Transactional rolls back the recordAttempt save when BadCredentialsException (RuntimeException) is thrown, so attempt count never accumulates and rate limiting never fires.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] AuthService.login's retryAfterSeconds does use findFirstByIdentifierOrderByAttemptedAtAsc with no windowStart filter, and Math.max clamps a stale row's result to 1s \u2014 but the consequence only occurs if rows older than lock-window-minutes survive, which depends on AuthCleanupService's purge cutoff; that class is not in the provided code, so the finding's required verification cannot be completed. | pass-1: Concrete trigger: findFirstByIdentifierOrderByAttemptedAtAsc ignores windowStart, so a stale old row makes Retry-After clamp to 1s while the lock is still active.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] AuthService.logout only marks the cookie's own token and skips it via .filter(t -> !t.isUsed()); it never calls markAllUsedByUserId or finds the successor, so the newRt row created by a concurrent refresh() stays used=false for its full TTL \u2014 and refresh()'s REFRESH_GRACE_WINDOW branch will even redeem that successor for a holder of the stale cookie within 30s. | pass-1: Concrete trigger: concurrent refresh rotates the token, logout's .filter(!isUsed) then no-ops, leaving the successor refresh token valid and possibly re-setting cookies after logout.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] The grace branch in AuthService.refresh reassigns `token` via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc (user-scoped, no link to the rotated token) and falls through to setUsed(true)/rotation, so another session's token can be consumed; that session's later refresh then hits markAllUsedByUserId. Caveat: CreatedAtDesc ordering means this only misfires when the other device created its token after the replayer's rotation (within the 30s window), not in every dual-session case. | pass-1: Concrete trigger: grace-window successor lookup picks the user's newest unused token across all sessions, consuming another device's token and later firing reuse-detection that revokes every session.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] handleLogout's Promise.race on LOGOUT_BACKEND_WAIT_MS is real and the pending POST /api/auth/logout does survive the SPA navigation, but the claimed consequence depends on code not shown: the backend logout handler's Set-Cookie max-age=0 behavior (JwtManagerImpl/auth controller) and the client-set `skp` cookie, which is never referenced in MainLayout.vue. The finding's own verification step is a runtime proxy test that cannot be settled from this file. | pass-1: Concrete trigger: Promise.race abandons a pending /logout whose late Set-Cookie max-age=0 response deletes a subsequently created session's cookies; distinct from F1's sessionManager mechanism.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] logout clears skp once before awaiting authApi.skillarsLogout with no re-clear, and hydrateFromCookie does restore userId/role from skp \u2014 consistent with the finding \u2014 but the exploit chain depends on the axios refresh interceptor (or server Set-Cookie on refresh) rewriting skp and on App.vue calling hydrateFromCookie at boot, neither of which is in the provided file. | pass-1: Concrete trigger: skp is cleared once before the backend call, so an in-flight refresh response rewrites it and hydrateFromCookie treats the logged-out user as authenticated on next boot.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] Within MainLayout.vue the mechanics hold: selfPlayerId is set only in onMounted (gated on authStore.isPlayer) and handleLogout resets playerStore but never the local selfPlayerId ref. However, the consequence depends on MainLayout being one persistent instance across /login and app routes \u2014 that's determined by the router config (and by whether pushLoginOrHardNavigate's hard-navigation fallback fires), neither of which is shown. | pass-1: Concrete trigger: persistent MainLayout's local selfPlayerId ref is set only in onMounted and never reset on logout, so player B's packs link points at player A's id.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "arm": "concurrency",
+  "case": "355-pack-double-settle-expired-parent-cancel",
+  "checks": [],
+  "judge_cost_usd": 0.081245,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions CoachPayoutAdjustmentService.payInFull or re-enqueueing settled pack payouts.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 identifies the same defect: onBookingCancelledByParent lacks a pack-expiry check so an expired pack gets a restored session instead of a wallet refund, matching location and consequence.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

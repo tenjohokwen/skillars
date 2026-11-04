@@ -1,0 +1,171 @@
+{
+  "arm": "security",
+  "case": "307-frontend-links-and-tus",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "handleOAuthCallback's state check (P18 block) is confirmed weak \u2014 it only compares state to the victim's own predictable coachId with no nonce or single-use enforcement \u2014 but the exploit depends on JWTAuthorizationFilter/RequestMetadataProvider accepting cookie-only auth on this GET and on StripeOnboardingService.handleOAuthCallback/upsertCoachStripeAccount overwriting an existing stripeAccountId, none of which is in the shown file.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "Router.beforeEach in index.js confirmably has no meta.role === 'COACH' branch and rolesMeta only reads plural meta.roles, so a role: 'COACH'-only route would be unguarded; but routes.js (to confirm /coach/revenue and the receipt route use role: 'COACH' rather than requiresCoach) and the backend @PreAuthorize scoping named in the verification caveat are not shown.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "RateLimitingService.buckets (line 62) is indeed a per-JVM ConcurrentHashMap with no cross-instance coordination, so the consequence follows if replicas > 1 \u2014 but the finding's verification caveat (replica count / sticky routing) can't be settled here: the class Javadoc claims single-instance per docker-compose while the finding claims a multi-instance system brief, and neither artifact is shown.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "AccountManagementFacade confirms sendPasswordResetMail/changeEmail/resendRegistrationLink are @RateLimited with no visible per-target-account throttle, but the finding hinges on RateLimitingAspect keying buckets by client IP with an 'unknown' fallback; that aspect's code (and the EmailRegistrationStrategy paths) is not provided, so the IP-only-keying claim cannot be verified or refuted from this file.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "PasswordResetService.completePasswordReset indeed performs no revocation and injects no token/JWT collaborator, but the claimed consequence (old sessions staying valid) depends on User.completePasswordReset, JwtManagerImpl, and the token-validation path, none of which were provided \u2014 a credentials-updated-timestamp check there would refute the finding and cannot be excluded from this file alone.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "confirmed",
+      "note": "updateUserEmail sets u.setEmail(newEmail) and u.setLogin(newEmail) immediately after a password + old-email check, with the AccountChangeEvent deliberately routed to capturedOldEmail only \u2014 so the change is applied without any proof of control of the new address, and no revocation or uniqueness pre-check appears in the method. The caveat's DB-constraint/HTTP-status and pending-state checks concern secondary details outside this file and don't affect the core consequence.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "confirmed",
+      "note": "registerAccount calls findUserByEmailOrLogin using only userDTO.getEmail()/getLogin() before the else branch sets login = phone; with blank email and login the lookup runs as (null, null) and the phone column is never checked, so notifyUserExists is skipped and persistUser is attempted with login = phone. The verification caveat (users.login constraint, ApiAdvice rendering) only decides which of the finding's two stated outcomes \u2014 enumeration oracle or duplicate account \u2014 occurs, both of which it already claims disjunctively.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "undetermined",
+      "note": "sendPasswordResetMail does return a shortCode on success and throw OperationNotAllowedException(PWD_RESET_REJECTED) on empty Optional, so a facade-level response divergence exists; but the claimed email+login+DOB filter and valid-outstanding-key rejection are inside PasswordResetService.prepareForPasswordReset/canInitiatePasswordReset, and the HTTP rendering of the exception is in an unshown handler \u2014 both required by the verification caveat and absent from this file.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "undetermined",
+      "note": "DrillUploadService.initiateUpload validates and reserves only the client-declared req.fileSizeBytes and returns resp.signedUploadUrl() unmodified, confirming the trigger; but the finding's consequence depends on UploadCredentials.java's signature scope, videoService.initializeUpload, and the webhook/upload-confirm handler (whether it reconciles provider-reported size and invalidates TUS writes after READY) \u2014 none of which are in this file.",
+      "reported_id": "R10"
+    },
+    {
+      "check": "confirmed",
+      "note": "VideoTypeConstraints.validate rejects negative durations but applies the cap only under `durationSeconds > 0 && durationSeconds > maxDuration`, so durationSeconds=0 bypasses the configured max entirely. Per the verification caveat, no post-upload duration re-check exists in this file; one could exist in unshown webhook/processing code, but none is visible.",
+      "reported_id": "R11"
+    },
+    {
+      "check": "confirmed",
+      "note": "registerAccount's exists branch only calls strategy.notifyUserExists, while the new-user branch synchronously runs persistUser \u2192 userRegistrationService.createUser(toUser(userDTO), userDTO.getPassword()) plus publishEvent and notifyNewUser, all in the same @Transactional request; no dummy-hash, delay, or other timing-equalization code exists anywhere in the file despite the Javadoc's \"timing-safe comparison\" claim. The raw password passed to createUser and its immediately-used return confirm encoding/persistence happen in-request; only the exact bcrypt cost lives in UserRegistrationService (not shown), but the branch work asymmetry the finding describes is visible as stated.",
+      "reported_id": "R12"
+    }
+  ],
+  "judge_cost_usd": 2.29192,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding mentions BookingEmailListener bookingsUrl or ReportGenerationService reportsPageUrl dead links.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding flags ${baseurl}:${server.port} resolving to localhost in activation/reset/account-change emails.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "R1 covers Stripe CSRF state, not the relative sendRedirect to a non-SPA path; nothing reports the redirect defect.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "R10 touches the same initiate response but describes size-binding, not the dropped TUS authorization fields that break uploads.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R13 (coach-dashboard), R14 (marketplace) and R15 (/upgrade) jointly cover all broken route targets with the same consequences.",
+        "reported_ids": [
+          "R13",
+          "R14",
+          "R15"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions BookingRequestPage gating pack loading on !authStore.isPlayer.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] handleOAuthCallback's state check (P18 block) is confirmed weak \u2014 it only compares state to the victim's own predictable coachId with no nonce or single-use enforcement \u2014 but the exploit depends on JWTAuthorizationFilter/RequestMetadataProvider accepting cookie-only auth on this GET and on StripeOnboardingService.handleOAuthCallback/upsertCoachStripeAccount overwriting an existing stripeAccountId, none of which is in the shown file. | pass-1: Concrete CSRF: predictable coachId state plus cookie-authenticated state-changing GET lets an attacker's Stripe code overwrite the victim's stripeAccountId.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] Router.beforeEach in index.js confirmably has no meta.role === 'COACH' branch and rolesMeta only reads plural meta.roles, so a role: 'COACH'-only route would be unguarded; but routes.js (to confirm /coach/revenue and the receipt route use role: 'COACH' rather than requiresCoach) and the backend @PreAuthorize scoping named in the verification caveat are not shown. | pass-1: Concrete guard gap: no branch reads meta.role === 'COACH', so /coach/revenue and the receipt route are reachable by any authenticated user.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] RateLimitingService.buckets (line 62) is indeed a per-JVM ConcurrentHashMap with no cross-instance coordination, so the consequence follows if replicas > 1 \u2014 but the finding's verification caveat (replica count / sticky routing) can't be settled here: the class Javadoc claims single-instance per docker-compose while the finding claims a multi-instance system brief, and neither artifact is shown. | pass-1: Per-JVM Bucket4j state multiplies every limit by replica count in the stated multi-instance deployment; trigger (spread requests across instances) is concrete.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] AccountManagementFacade confirms sendPasswordResetMail/changeEmail/resendRegistrationLink are @RateLimited with no visible per-target-account throttle, but the finding hinges on RateLimitingAspect keying buckets by client IP with an 'unknown' fallback; that aspect's code (and the EmailRegistrationStrategy paths) is not provided, so the IP-only-keying claim cannot be verified or refuted from this file. | pass-1: IP-only keying gives a concrete mailbox-flood and reset-key-rotation abuse via IP rotation, plus shared 'unknown' bucket DoS.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "A ~2^33 keyspace behind per-IP finish limits and key expiry makes online guessing impractical; the exploit is speculative.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] PasswordResetService.completePasswordReset indeed performs no revocation and injects no token/JWT collaborator, but the claimed consequence (old sessions staying valid) depends on User.completePasswordReset, JwtManagerImpl, and the token-validation path, none of which were provided \u2014 a credentials-updated-timestamp check there would refute the finding and cannot be excluded from this file alone. | pass-1: Password reset leaving all existing sessions and refresh tokens valid is a concrete defect defeating compromise recovery.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] updateUserEmail sets u.setEmail(newEmail) and u.setLogin(newEmail) immediately after a password + old-email check, with the AccountChangeEvent deliberately routed to capturedOldEmail only \u2014 so the change is applied without any proof of control of the new address, and no revocation or uniqueness pre-check appears in the method. The caveat's DB-constraint/HTTP-status and pending-state checks concern secondary details outside this file and don't affect the core consequence. | pass-1: Email change applied immediately without verifying the new address, contradicting the Javadoc, with concrete account-recovery hijack/lockout consequences.",
+        "reported_id": "R7",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] registerAccount calls findUserByEmailOrLogin using only userDTO.getEmail()/getLogin() before the else branch sets login = phone; with blank email and login the lookup runs as (null, null) and the phone column is never checked, so notifyUserExists is skipped and persistUser is attempted with login = phone. The verification caveat (users.login constraint, ApiAdvice rendering) only decides which of the finding's two stated outcomes \u2014 enumeration oracle or duplicate account \u2014 occurs, both of which it already claims disjunctively. | pass-1: Duplicate lookup on raw email/login before login=phone normalization concretely skips the anti-enumeration path for phone registrations.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] sendPasswordResetMail does return a shortCode on success and throw OperationNotAllowedException(PWD_RESET_REJECTED) on empty Optional, so a facade-level response divergence exists; but the claimed email+login+DOB filter and valid-outstanding-key rejection are inside PasswordResetService.prepareForPasswordReset/canInitiatePasswordReset, and the HTTP rendering of the exception is in an unshown handler \u2014 both required by the verification caveat and absent from this file. | pass-1: Success-vs-PWD_RESET_REJECTED response difference is a concrete oracle for account existence and date-of-birth brute-forcing.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] DrillUploadService.initiateUpload validates and reserves only the client-declared req.fileSizeBytes and returns resp.signedUploadUrl() unmodified, confirming the trigger; but the finding's consequence depends on UploadCredentials.java's signature scope, videoService.initializeUpload, and the webhook/upload-confirm handler (whether it reconciles provider-reported size and invalidates TUS writes after READY) \u2014 none of which are in this file. | pass-1: Signature covers only libraryId/apiKey/expire/videoId, so declaring a tiny fileSizeBytes then TUS-uploading a larger file concretely bypasses quota and size caps.",
+        "reported_id": "R10",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] VideoTypeConstraints.validate rejects negative durations but applies the cap only under `durationSeconds > 0 && durationSeconds > maxDuration`, so durationSeconds=0 bypasses the configured max entirely. Per the verification caveat, no post-upload duration re-check exists in this file; one could exist in unshown webhook/processing code, but none is visible. | pass-1: validate's 'durationSeconds > 0 &&' guard means sending 0 (which the frontend itself does on metadata failure) concretely skips the duration cap.",
+        "reported_id": "R11",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] registerAccount's exists branch only calls strategy.notifyUserExists, while the new-user branch synchronously runs persistUser \u2192 userRegistrationService.createUser(toUser(userDTO), userDTO.getPassword()) plus publishEvent and notifyNewUser, all in the same @Transactional request; no dummy-hash, delay, or other timing-equalization code exists anywhere in the file despite the Javadoc's \"timing-safe comparison\" claim. The raw password passed to createUser and its immediately-used return confirm encoding/persistence happen in-request; only the exact bcrypt cost lives in UserRegistrationService (not shown), but the branch work asymmetry the finding describes is visible as stated. | pass-1: Exists path skips the bcrypt hash the new-user path runs, a measurable timing gap contradicting the explicit timing-safe claim.",
+        "reported_id": "R12",
+        "verdict": "real"
+      }
+    ]
+  }
+}

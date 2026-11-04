@@ -1,0 +1,130 @@
+{
+  "arm": "concurrency",
+  "case": "318-cashout-money-integrity",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The file confirms the mechanics: processCashOut has no @Transactional, the two writeLedgerEntry debits commit before paymentGateway.refund, and the catch-block compensation only covers a thrown PaymentGatewayException, not a crash. But the finding's claim that nothing re-drives orphaned debits requires the mandated repo-wide check (grep for CASH_OUT in outbox handlers, scheduled jobs, RefundReconciliationService), and that code is not available here.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "StripePaymentGateway.chargeAndCapture does load StripeCustomer (line 83), call Stripe, then save() the whole entity (line 121) with no re-read, so the lost-update mechanism is plausible \u2014 but the outcome hinges on StripeCustomer.java (presence/absence of @Version or @DynamicUpdate) and SessionPackPaymentResource's concurrent card-save path, neither of which is provided here.",
+      "reported_id": "R7"
+    },
+    {
+      "check": "undetermined",
+      "note": "purchasePack/createPurchase indeed insert unconditionally with no lookup by stripePaymentIntentId, matching the finding at the service layer. But the verification caveat cannot be run: V138__baseline_schema.sql (unique index on stripe_payment_intent_id), the PaymentGateway.chargeAndCapture idempotency-bucket implementation, and the purchase controller are not available in this session (file search tools disabled, only this file provided), so the double-pack consequence cannot be confirmed or refuted.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "undetermined",
+      "note": "In-file the mechanics hold: purchasePack is non-transactional, chargeAndCapture completes before createPurchase persists, and the refund/reconciliation path exists only in the in-process catch block, so a crash in between leaves no DB trace. But the finding's own caveat \u2014 whether a webhook handler reconciles session_pack_purchases from payment_intent.succeeded \u2014 cannot be checked: search tools are disabled and only this file was provided.",
+      "reported_id": "R9"
+    },
+    {
+      "check": "undetermined",
+      "note": "The unguarded check-then-insert race in getOrCreateStripeCustomer is real (findById/orElseGet/save with no transaction or lock around the Stripe call), but whether the loser's save merge-updates (overwrite) or persist-fails on the parent_id primary key depends on the StripeCustomer entity mapping (@Version field or Persistable.isNew override), which is not shown here \u2014 exactly the finding's own verification caveat.",
+      "reported_id": "R11"
+    }
+  ],
+  "judge_cost_usd": 1.647632,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same non-atomic read-then-debit across separate transactions, the concurrent overdraw consequence, and the uncalled SERIALIZABLE debitForCashOut.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R5 states the wallet is debited requested+fee while the card receives requested\u2212fee, charging the fee twice and overdrawing by \u2212fee.",
+        "reported_ids": [
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 identifies the fixed refund-{paymentIntentId} key replaying the first refund on a second cash-out while the wallet is debited again, including the pack-refund collision.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R4 covers every StripeException (including connection errors where the refund succeeded) triggering compensation that double-pays; R6 covers the two reversal writes committing in separate transactions leaving a half-restored wallet.",
+        "reported_ids": [
+          "R4",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions the frontend reading err.response.data.message versus the backend's errorMsg/helpCode ErrorDto fields.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "partial",
+        "note": "R12 catches commission recomputed from gross \u00d7 live rate but misses the gross composition issues (credit/pack-funded and refunded bookings included, pack sales excluded) and the Stripe-fee estimate applied to non-card gross.",
+        "reported_ids": [
+          "R12"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "none",
+        "note": "No reported finding addresses sumTotalCashOuts counting CASH_OUT_DEBIT rows whose refunds were reversed.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F8",
+        "match": "none",
+        "note": "No reported finding addresses getCoachRevenueSummary subtracting an estimated Stripe fee the coach never pays under separate charges and transfers.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] The file confirms the mechanics: processCashOut has no @Transactional, the two writeLedgerEntry debits commit before paymentGateway.refund, and the catch-block compensation only covers a thrown PaymentGatewayException, not a crash. But the finding's claim that nothing re-drives orphaned debits requires the mandated repo-wide check (grep for CASH_OUT in outbox handlers, scheduled jobs, RefundReconciliationService), and that code is not available here. | pass-1: Concrete trigger: process death between the debit commits and the refund call leaves the parent debited with no refund and no reconciliation record; distinct crash-safety defect not in the key.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] StripePaymentGateway.chargeAndCapture does load StripeCustomer (line 83), call Stripe, then save() the whole entity (line 121) with no re-read, so the lost-update mechanism is plausible \u2014 but the outcome hinges on StripeCustomer.java (presence/absence of @Version or @DynamicUpdate) and SessionPackPaymentResource's concurrent card-save path, neither of which is provided here. | pass-1: Concrete trigger: full-row save of StripeCustomer (no @Version/@DynamicUpdate) after a long Stripe call writes back a stale stripePaymentMethodId over a concurrent card update.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] purchasePack/createPurchase indeed insert unconditionally with no lookup by stripePaymentIntentId, matching the finding at the service layer. But the verification caveat cannot be run: V138__baseline_schema.sql (unique index on stripe_payment_intent_id), the PaymentGateway.chargeAndCapture idempotency-bucket implementation, and the purchase controller are not available in this session (file search tools disabled, only this file provided), so the double-pack consequence cannot be confirmed or refuted. | pass-1: Concrete trigger: double submit within the 60s bucket replays the same PaymentIntent but createPurchase inserts unconditionally with no unique index on stripe_payment_intent_id, yielding two packs for one charge.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] In-file the mechanics hold: purchasePack is non-transactional, chargeAndCapture completes before createPurchase persists, and the refund/reconciliation path exists only in the in-process catch block, so a crash in between leaves no DB trace. But the finding's own caveat \u2014 whether a webhook handler reconciles session_pack_purchases from payment_intent.succeeded \u2014 cannot be checked: search tools are disabled and only this file was provided. | pass-1: Concrete trigger: crash between the Stripe capture and createPurchase commit leaves a charge with no purchase row, no refund, and no stripe_refund_failures record, since compensation only runs when createPurchase throws.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The described double-debit on retry flows through the same refund-{PI} idempotency-key collision already reported and matched as R3; the missing-token framing adds no distinct defect.",
+        "reported_id": "R10",
+        "verdict": "duplicate"
+      },
+      {
+        "note": "[v2 check undetermined] The unguarded check-then-insert race in getOrCreateStripeCustomer is real (findById/orElseGet/save with no transaction or lock around the Stripe call), but whether the loser's save merge-updates (overwrite) or persist-fails on the parent_id primary key depends on the StripeCustomer entity mapping (@Version field or Persistable.isNew override), which is not shown here \u2014 exactly the finding's own verification caveat. | pass-1: Concrete trigger: two concurrent first purchases both create Stripe customers; the loser's save merge-updates the row, orphaning the winner's customer id that the first charge references.",
+        "reported_id": "R11",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

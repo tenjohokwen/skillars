@@ -1,0 +1,75 @@
+{
+  "arm": "control",
+  "case": "307-player-ownership-guards",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "The per-drill loop in handleBookingCompleted catches only DataIntegrityViolationException; any other exception from perDrillTx.execute (erasure-guard lock, saveAndFlush, transient DB error) escapes the loop, the finally publishes only already-committed drills, and the @Async void AFTER_COMMIT listener drops the exception with no retry. The NOWAIT internals of isErasedUnderLock aren't shown, but the verdict doesn't depend on them \u2014 any non-duplicate-key failure suffices.",
+      "reported_id": "R8"
+    }
+  ],
+  "judge_cost_usd": 0.542335,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R6 identifies both the HAS_PARENT_ROLE gate and the findByIdAndParentId ownership lookup locking out self-registered players from completing homework.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R7 describes the same mechanism: swallowed DataIntegrityViolationException after flush marks the transaction rollback-only, yielding UnexpectedRollbackException/500 instead of idempotent 200.",
+        "reported_ids": [
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R2 states the same role mismatch: ROLE_PLAYER accounts get 403 on /player/uploads/initiate, /my and /quotas/me because only ROLE_USER (and ROLE_COACH) are admitted.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 covers the VideoResource side (user id used as PlayerProfile id \u2192 profile lookup 403, wrong id space for quotas/lists) and R4 covers VideoAccessGuard.isOwner never matching a player's own video; together they cover the full defect.",
+        "reported_ids": [
+          "R1",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R3 identifies the same isCurrentUserOwner bug: coach UUID compared to username so coaches get 403 on /events and /status, and the Long branch fails for self-registered players.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R5 identifies the HAS_PARENT_ROLE gate on subscribe/changeTier/cancel contradicting the service's self-ownership acceptance, so players can read but not mutate their subscription.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] The per-drill loop in handleBookingCompleted catches only DataIntegrityViolationException; any other exception from perDrillTx.execute (erasure-guard lock, saveAndFlush, transient DB error) escapes the loop, the finally publishes only already-committed drills, and the @Async void AFTER_COMMIT listener drops the exception with no retry. The NOWAIT internals of isErasedUnderLock aren't shown, but the verdict doesn't depend on them \u2014 any non-duplicate-key failure suffices. | pass-1: Concrete trigger stated: only DataIntegrityViolationException is caught per drill, so a PessimisticLockingFailureException (NOWAIT) or transient DB error on an earlier drill escapes the loop and the @Async handler silently drops it, leaving remaining drills unassigned with no retry path; not covered by the answer key or non-findings.",
+        "reported_id": "R8",
+        "verdict": "real"
+      }
+    ]
+  }
+}

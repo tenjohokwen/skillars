@@ -1,0 +1,87 @@
+{
+  "arm": "control",
+  "case": "307-player-ownership-guards",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "`Principal.instanceFrom` sets businessId to `user.getId()` (Principal.java:181), and a self-registered player's profile is a separate row whose `user_id` points to that account (PlayerProfile.userId). `currentPlayerProfileId()` still returns `requireCurrentUserId()` and calls `playerProfileRepository.findById(userId)`, so the upload lookup finds no profile and returns 403. `/my` and `/quotas/me` use the user id as ownerId, but uploads (and VideoAccessGuard's parent-link check) key on the profile id, so the list and quota are always empty or wrong. The comments saying \"businessId = PlayerProfile.id\" contradict how the Principal is actually built.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "initiatePlayerUpload / resolveCurrentOwnerId / currentPlayerProfileId",
+      "title": "Player video endpoints use the account's user id as if it were the PlayerProfile id, so self-registered players can't upload or see their own videos",
+      "verification": "Confirmed from Principal.instanceFrom and ShadowAccountService.createSelfOwnedPlayerProfile, which stores userId on a new profile with its own TSID. It would only work if a user id happened to equal some profile id, and in that case the upload would be written to a stranger's profile."
+    },
+    {
+      "category": "security",
+      "description": "PlayerRegistrationService gives new players only the `ROLE_PLAYER` authority. `@PreAuthorize(\"hasAnyRole('ROLE_USER')\")` on `/player/uploads/initiate`, and `hasAnyRole('ROLE_USER','ROLE_COACH')` on `/my` and `/quotas/me`, therefore return 403 for every real player. Generic ROLE_USER accounts that have no player profile are the only ones let in, so the HOMEWORK upload flow is unreachable for its intended users.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoResource.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "initiatePlayerUpload, getMyQuota, getMyVideos",
+      "title": "Player upload endpoint requires ROLE_USER, but self-registered players only get ROLE_PLAYER",
+      "verification": "Check whether ROLE_PLAYER users are also given ROLE_USER anywhere else (for example a role hierarchy bean). PlayerRegistrationService:96 assigns only ROLE_PLAYER."
+    },
+    {
+      "category": "logic",
+      "description": "For coach videos, ownerId is the coach profile UUID, but the fallback compares it to `securityUtil.getCurrentUserName()`, which returns the email (VideoAccessGuard's own javadoc says this never matches). So a coach calling `/api/video/{id}/events` or `/status` on their own DRILL_DEMO/COACH_REVIEW upload always gets MISSING_RIGHTS, and the upload-progress UI can't track processing. For player videos, it compares businessId (user id) with ownerId (profile id), so self-registered players are denied too, and parents/admins allowed by VideoAccessGuard are never allowed here.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/api/VideoEventResource.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "isCurrentUserOwner",
+      "title": "Video event/status ownership check compares a coach video's profile UUID with the caller's username (email), so coaches are always denied",
+      "verification": "Upload a video as a coach and call GET /api/video/{id}/status. It returns 403."
+    },
+    {
+      "category": "logic",
+      "description": "`isOwner` compares the caller's businessId (user id) with a player video's ownerId, which is `PlayerProfile.id` (written as `String.valueOf(profile.getId())` in VideoResource). For a self-registered adult player these ids are different, and there is no ParentPlayerLink, so `canPlay` and `canDelete` throw PlaybackDenied/DeletionNotAuthorised when the player tries to play or delete their own HOMEWORK video. The owner check needs to resolve the profile through `findByUserId`, the way PlayerOwnershipGuard does.",
+      "file": "src/main/java/com/softropic/skillars/platform/video/service/VideoAccessGuard.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "isOwner / getCurrentUserLongId",
+      "title": "VideoAccessGuard owner check never matches a self-registered player's own video",
+      "verification": "Confirm that ownerId values for HOMEWORK videos in the `video` table are player_profiles.id values, not user ids."
+    },
+    {
+      "category": "logic",
+      "description": "`getMyPlayerSubscription` now uses `playerOwnershipGuard`, which accepts self-owned profiles, and `SubscriptionService.assertPlayerOwnership` also accepts `existsByIdAndUserId`. But the three mutating endpoints are still gated by `HAS_PARENT_ROLE`, which a ROLE_PLAYER account doesn't have. An adult player who opens their subscription page and clicks subscribe, upgrade or cancel gets 403, so they can't stop a paid subscription themselves. These endpoints contradict the skillars-deferred-147 intent and the service's own ownership rules.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SubscriptionResource.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "subscribePlayer / changePlayerTier / cancelPlayerSubscription",
+      "title": "Self-registered players can view their own subscription but can't subscribe, change tier or cancel",
+      "verification": "Log in as a self-registered ROLE_PLAYER and call DELETE /api/payment/subscriptions/player?playerId=<own>. It returns 403."
+    },
+    {
+      "category": "logic",
+      "description": "The GET endpoint uses `playerOwnershipGuard`, which now admits self-owned players. `POST /homework/{id}/complete` requires `HAS_PARENT_ROLE`, and the service checks ownership with `findByIdAndParentId(playerId, callerId)`, which is always empty when `parent_id` is null. An adult player sees their Locker Room drills but gets 403 (or a 404 'Assignment not found' if they had the role) when completing them, so completion status never updates for them.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/api/HomeworkResource.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "markComplete",
+      "title": "Homework completion is parent-only, so a self-registered player can list homework but never mark it complete"
+    },
+    {
+      "category": "concurrency",
+      "description": "Two simultaneous completes (for example a double-click) both pass `existsByAssignmentId`. The loser's `saveAndFlush` throws DataIntegrityViolationException from the repository proxy, whose transactional interceptor marks the shared outer transaction rollback-only before the catch swallows it. When `markComplete`'s @Transactional tries to commit, it throws UnexpectedRollbackException, so the client gets a 500 despite the 'idempotent, ignore' comment. The failed flush also leaves the Hibernate session in an undefined state.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "markComplete",
+      "title": "Concurrent duplicate markComplete returns 500 instead of the intended idempotent 200",
+      "verification": "Integration-test two parallel markComplete calls on the same assignment and check the second response status."
+    },
+    {
+      "category": "edge-case",
+      "description": "Only DataIntegrityViolationException is caught per drill. If `erasureGuard.isErasedUnderLock` hits NOWAIT lock contention (PessimisticLockingFailureException) or any transient DB error on drill 1, the exception escapes the loop. The @Async handler drops it after the finally block, so drill 2 is never assigned. A replayed event is the only way to recover, and nothing triggers one.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/HomeworkAssignmentService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "handleBookingCompleted",
+      "title": "An exception other than duplicate-key in a per-drill transaction aborts the remaining homework drills with no retry",
+      "verification": "Check whether isErasedUnderLock uses findByIdForUpdate (NOWAIT) without its own retry, and whether any DLQ or retry wraps this @Async listener."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}
