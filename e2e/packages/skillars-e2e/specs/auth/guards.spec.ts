@@ -1,7 +1,12 @@
 import { expect, scenario, test } from '../../src/app.js'
 import { asRole } from '../../src/data/accounts.js'
 import { R } from '../../src/routes.js'
-import { LoginScreen, logOutViaUserMenu, ParentDashboardScreen } from '../../src/screens/index.js'
+import {
+  AvailabilityScreen,
+  LoginScreen,
+  logOutViaUserMenu,
+  ParentDashboardScreen,
+} from '../../src/screens/index.js'
 import { waitForSettledRoute } from 'pitchside-core'
 
 test.describe('A · Auth & session — guards and logout', () => {
@@ -66,7 +71,7 @@ test.describe('A · Auth & session — guards and logout', () => {
   )
 
   test(
-    'an incomplete coach is held at the profile builder: direct URL, in-app navigation, back and forward',
+    'an incomplete coach is held at the builder from the command centre (direct URL, in-app, back and forward), and set-up pages stay open',
     scenario({
       id: 'AUTH-13',
       priority: 'P0',
@@ -95,6 +100,12 @@ test.describe('A · Auth & session — guards and logout', () => {
       // And forward again re-runs the guard.
       await page.goForward()
       expect(await settled((route) => route !== R.commandCentre)).not.toBe(R.commandCentre)
+      // The gate covers the command centre only, by decision (2026-11-04): set-up pages such as
+      // availability stay open so a coach can prepare while finishing the profile. An unpublished
+      // coach cannot be booked, so nothing reachable here is live. A change to this is deliberate.
+      await page.goto(suite.routing.toUrl(R.availability))
+      expect(await settled(R.availability)).toBe(R.availability)
+      await new AvailabilityScreen(page, suite).waitReady()
     },
   )
 })

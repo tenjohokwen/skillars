@@ -68,7 +68,7 @@ public final class NotificationCatalog {
         return switch (template) {
             // ── Account / security: transactional, email only (the user may not even be logged in) ──
             case NONE, SES_CUTOVER_PREFLIGHT, VIDEO_MODERATION_ADMIN_ALERT -> emailOnly(NotificationCategory.SYSTEM);
-            case ACTIVATION, CREATION_DUP, PASSWORD_RESET, SEND_OTP,
+            case ACTIVATION, CREATION_DUP, REGISTRATION_PHONE_IN_USE, PASSWORD_RESET, SEND_OTP,
                  COACH_EMAIL_VERIFY, COACH_OTP, PARENT_EMAIL_VERIFY, PARENT_OTP,
                  PLAYER_EMAIL_VERIFY, PLAYER_OTP, EMAIL_CHANGE, PROFILE_CHANGE ->
                 emailOnly(NotificationCategory.ACCOUNT);

@@ -193,4 +193,77 @@ test.describe('B · Registration & verification', () => {
       await expect(register.submit()).toBeDisabled()
     },
   )
+
+  for (const taken of ['email', 'phone'] as const) {
+    test(
+      `registering with ${taken === 'email' ? 'an email address' : 'a phone number'} that already has an account looks like a fresh registration`,
+      scenario({
+        id: 'REG-08',
+        priority: 'P0',
+        type: 'neg',
+        tags: ['@regression', '@guest', '@registration', '@privacy'],
+      }),
+      async ({ page, suite, mail, provision, clock }) => {
+        // Enumeration: the form must not tell a stranger whether an address or number is on the
+        // platform. The owner of the existing account is told instead, by email.
+        test.slow()
+        const existing = await provision.registerAndVerify('player', {
+          dateOfBirth: clock.dateOfBirthForAge(30).toISODate(),
+        })
+        const fresh = provision.identity('player')
+        const attempt =
+          taken === 'email'
+            ? { ...fresh, email: existing.email }
+            : { ...fresh, phone: existing.phone }
+
+        const register = await new RegisterScreen(page, suite, 'player').open()
+        await register.fillDetails({
+          ...attempt,
+          dateOfBirth: clock.dateOfBirthForAge(25).toISODate(),
+        })
+        await register.tos().click()
+        await register.privacy().click()
+        const since = new Date(Date.now() - 2_000)
+        await register.submit().click()
+
+        // The same next step as REG-03, and no error on the form.
+        const pending = await new EmailPendingScreen(page, suite, 'player').waitReady()
+        await expect(pending.body()).toContainText(attempt.email)
+        await expect(register.error()).toBeHidden()
+
+        const notice = await mail.waitForMessage({
+          to: existing.email,
+          subjectMatches: /duplicate/i,
+          since,
+          timeoutMs: 30_000,
+        })
+        expect(notice.links().some((link) => link.includes('/forgot-password'))).toBe(true)
+        if (taken === 'phone') {
+          // The person on the form is told too, at the address they typed: a number held by
+          // someone else (it is not verified at registration) must not leave them waiting.
+          const told = await mail.waitForMessage({
+            to: attempt.email,
+            subjectMatches: /couldn't create/i,
+            since,
+            timeoutMs: 30_000,
+          })
+          expect(told.links().some((link) => link.includes('/forgot-password'))).toBe(true)
+        }
+        if (taken === 'phone') {
+          // Nothing was created: no verification mail goes to the (fresh) address on the form. The
+          // notices are enqueued in the same transaction a verification mail would be, so it has
+          // arrived by now. (Not checked for a taken email: that address is the existing account's,
+          // and its own verification mail from provisioning can land late.)
+          await expect(
+            mail.waitForMessage({
+              to: attempt.email,
+              subjectMatches: /verify/i,
+              since,
+              timeoutMs: 3_000,
+            }),
+          ).rejects.toThrow()
+        }
+      },
+    )
+  }
 })

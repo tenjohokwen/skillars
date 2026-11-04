@@ -64,6 +64,16 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     Optional<User> findOneByEmail(final String email);
 
+    /**
+     * The account holding {@code phone}, matched on the raw number only. {@code User.phone} is the
+     * embedded {@code PhoneNumber} whose {@code phone} attribute maps to the {@code main."user".phone}
+     * column, and the {@code user_phone_key} UNIQUE constraint is on that column alone (not on
+     * {@code iso2_country}), so this is exactly the collision that constraint would reject: at most
+     * one row. Used by the registration services' neutral duplicate-registration path.
+     */
+    @Query("select u from User u where u.phone.phone = :phone")
+    Optional<User> findOneByPhoneNumber(@Param("phone") String phone);
+
     //EntityGraphType.FETCH treats all unlisted attributes as LAZY, overriding the @ElementCollection(fetch = EAGER)
     //annotation on the addresses field. DO NOT add "addresses" to "attributePaths". I will lead to a cartesian product
     @EntityGraph(type = EntityGraph.EntityGraphType.FETCH, attributePaths = {"authorities"})
