@@ -464,24 +464,26 @@ function toggleBatchMode() {
 
 // timeZoneName is deliberate: these instants are rendered in the coach's zone, not the parent's,
 // so an unlabelled "3:00 PM" would read as local time to a parent in another zone.
+// Explicit components, never dateStyle/timeStyle: ECMA-402 forbids combining those with
+// timeZoneName, and every engine (Chrome, Firefox, Safari, Node) throws "Invalid option" for it,
+// which left every slot row blank. The components below render what medium/short did.
+const SLOT_FORMAT = {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  timeZoneName: 'short',
+}
+
 function formatInZone(date, timeZone) {
   try {
-    return new Intl.DateTimeFormat(locale.value, {
-      timeZone,
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZoneName: 'short',
-    }).format(date)
+    return new Intl.DateTimeFormat(locale.value, { ...SLOT_FORMAT, timeZone }).format(date)
   } catch {
     // Intl.DateTimeFormat throws RangeError on an unrecognized zone. Nothing validates
     // coach_profiles.canonical_timezone as a real IANA zone, so fall back rather than let a
     // throw inside a v-for label abort the render of the entire slot list.
-    return new Intl.DateTimeFormat(locale.value, {
-      timeZone: 'UTC',
-      dateStyle: 'medium',
-      timeStyle: 'short',
-      timeZoneName: 'short',
-    }).format(date)
+    return new Intl.DateTimeFormat(locale.value, { ...SLOT_FORMAT, timeZone: 'UTC' }).format(date)
   }
 }
 

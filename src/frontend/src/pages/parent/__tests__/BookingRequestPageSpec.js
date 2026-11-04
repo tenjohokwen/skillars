@@ -10,11 +10,10 @@
 // (coachId mismatch) and canSubmit is permanently false (submit() early-returns).
 //
 // Trimming (recorded per the story's scope note): shallow mount + assert via wrapper.vm, no
-// rendered-text assertions. formatSlot/formatInZone use `dateStyle` + `timeZoneName` together,
-// which Chrome accepts but Node's Intl.DateTimeFormat (the happy-dom env's Intl) rejects with
-// "Invalid option : option" — a full mount would throw inside the slot-label render. No
-// production seam added; the regression surface (slotRows mapping + submit payload) is fully
-// reachable through wrapper.vm.
+// rendered-text assertions. (This note used to say formatInZone's `dateStyle` + `timeZoneName`
+// worked in Chrome and only failed in Node. It failed everywhere: ECMA-402 forbids the combination,
+// and every slot row rendered blank in real browsers. Found by the Pitchside UI spec BKG-04; the
+// "slot labels" test below now formats through the component.)
 //
 // Mutation check (run both ways, see Dev Agent Record):
 //   - slotRows: `sortKey: Date.parse(slot.startDatetime)` → `slot.startTime` — the "slotRows has
@@ -243,6 +242,22 @@ describe('BookingRequestPage.vue — slot/timezone regression (deferred-108 AC2)
   // CommonConfig.longToStringModule specifically so JS never represents it as a Number) silently
   // rounds and still passes the finite/positive check, so the corrupted value reached the
   // booking-submit write path undetected.
+  it('slot labels are written in the coach zone with its zone name, and an unknown zone falls back to UTC', async () => {
+    // 15:00Z on 10 March 2026 is 16:00 in Berlin (CET, UTC+1). The old dateStyle + timeZoneName
+    // options threw here, as they did in every browser, leaving each slot row blank.
+    const { wrapper, bookingStore } = await mountPage({
+      computedSlots: [SLOT],
+      coachTimezone: 'Europe/Berlin',
+    })
+    const berlin = wrapper.vm.formatSlot(SLOT.startDatetime)
+    expect(berlin).toMatch(/4:00\sPM/)
+    expect(berlin).toMatch(/GMT\+1|CET/)
+    expect(berlin).toContain('2026')
+
+    bookingStore.coachTimezone = 'Not/AZone'
+    expect(wrapper.vm.formatSlot(SLOT.startDatetime)).toMatch(/3:00\sPM.*UTC/)
+  })
+
   describe('playerId precision from route.query (deferred-148 AC1)', () => {
     const LARGE_PLAYER_ID = '893573203704173564'
     const CORRUPTED_PLAYER_ID = '893573203704173600'
