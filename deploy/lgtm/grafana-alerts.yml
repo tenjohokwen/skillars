@@ -645,7 +645,7 @@ groups:
             relativeTimeRange: { from: 900, to: 0 }
             datasourceUid: Loki
             model:
-              expr: 'sum(count_over_time({app="skillars"} |~ "\\[(SETTLE_FAILED_AFTER_CHARGE|CHARGE_RECONCILE_AMOUNT_MISMATCH|CHARGE_RECONCILE_SETTLE_FAILED|COACH_PAYOUT_TRANSFER_MISMATCH|COACH_PAYOUT_ENQUEUE_FAILED|CREDIT_WALLET_REFUND_ENQUEUE_FAILED|REFUND_AMOUNT_UNKNOWN|ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN|PACK_PURCHASE_UNRECONCILED|PACK_PURCHASE_RECORD_FAILED|STRIPE_INTENT_RECORD_FAILED)\\]" [15m]))'
+              expr: 'sum(count_over_time({app="skillars"} |~ "\\[(SETTLE_FAILED_AFTER_CHARGE|CHARGE_RECONCILE_AMOUNT_MISMATCH|CHARGE_RECONCILE_SETTLE_FAILED|COACH_PAYOUT_TRANSFER_MISMATCH|COACH_PAYOUT_ENQUEUE_FAILED|CREDIT_WALLET_REFUND_ENQUEUE_FAILED|REFUND_AMOUNT_UNKNOWN|ADMIN_CANCEL_REFUND_AMOUNT_UNKNOWN|PACK_PURCHASE_UNRECONCILED|PACK_PURCHASE_RECORD_FAILED|STRIPE_INTENT_RECORD_FAILED|SUBSCRIPTION_UPGRADE_UNGRANTED)\\]" [15m]))'
               queryType: instant
               refId: A
           - refId: C
@@ -785,6 +785,37 @@ groups:
         annotations:
           summary: 'A cash-out refund outcome has been unknown for over an hour'
           runbook: 'docs/deployment/monitoring.md#cashoutsunresolved'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: high
+
+      - uid: pack_attempts_unresolved
+        title: PackAttemptsUnresolved
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="pack_attempts"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [3600] }
+        for: 0s
+        annotations:
+          summary: 'A session-pack purchase attempt has been unresolved for over an hour'
+          runbook: 'docs/deployment/monitoring.md#packattemptsunresolved'
           dashboard: /d/skillars-payments
         labels:
           severity: high

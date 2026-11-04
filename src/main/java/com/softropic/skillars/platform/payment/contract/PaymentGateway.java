@@ -106,6 +106,12 @@ public interface PaymentGateway {
      */
     BigDecimal getRefundableAmount(String stripePaymentIntentId);
 
+    /**
+     * skillars-deferred-169 AC2: captured and refunded amounts of the PaymentIntent's latest charge; {@link CaptureState#unreadable()}
+     * when Stripe returned no charge object. Same failure codes as {@link #getRefundableAmount}.
+     */
+    CaptureState getCaptureState(String stripePaymentIntentId);
+
     /** Error code of a refundable-amount lookup that will never succeed (see {@link #getRefundableAmount}). */
     String REFUND_TARGET_INVALID = "payment.refundTargetInvalid";
 

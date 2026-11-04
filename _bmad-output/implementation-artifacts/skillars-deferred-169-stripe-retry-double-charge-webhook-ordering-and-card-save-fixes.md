@@ -1,6 +1,6 @@
 # Story skillars-deferred-169: Stripe retry double-charge, webhook ordering, superseded proration, card-save and pause-date fixes
 
-Status: ready-for-dev
+Status: in-progress
 
 ## Story
 

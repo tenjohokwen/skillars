@@ -1,0 +1,92 @@
+package com.softropic.skillars.platform.payment.service;
+
+import com.softropic.skillars.infrastructure.config.DataSourceConfig;
+import com.softropic.skillars.infrastructure.config.RoutingDataSourceContext;
+import com.softropic.skillars.platform.payment.repo.StripePendingSubscriptionEventRepository;
+import com.softropic.skillars.platform.payment.repo.SubscriptionUpgradeReconciliation;
+import com.softropic.skillars.platform.payment.repo.SubscriptionUpgradeReconciliationRepository;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * skillars-deferred-169 AC4/AC6: best-effort durable writes that must commit INDEPENDENTLY of the caller's transaction, on the
+ * payment {@code REQUIRES_NEW} routed pool (the caller already holds a connection from the primary pool, and ~25 concurrent
+ * webhooks could otherwise exhaust it). A separate bean on purpose: {@code REQUIRES_NEW} is silently ignored on in-class
+ * self-invocation (see {@code OutboxService}, {@code PendingProviderAssetTracker}). The public methods are NOT transactional: they
+ * select the routed pool BEFORE the proxy of the inner method opens its connection, exactly as
+ * {@code BookingPaymentPersistenceService.reserveCapture} does. Every failure is logged and swallowed - a bookkeeping write must
+ * never fail the webhook or the upgrade request that already moved money.
+ *
+ * <p>FK-free target tables, on purpose: an FK to the subscription row would block on the {@code FOR UPDATE} the outer
+ * transaction holds ({@code persist*TierUpgrade}) and self-deadlock.
+ */
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class PaymentRecoveryRecorder {
+
+    private final StripePendingSubscriptionEventRepository pendingEventRepository;
+    private final SubscriptionUpgradeReconciliationRepository upgradeReconciliationRepository;
+
+    @Autowired
+    @Lazy
+    private PaymentRecoveryRecorder self;
+
+    /** Parks an orphaned subscription event; returns true when the row is durable (inserted now or already present). */
+    public boolean parkSubscriptionEvent(ParkedSubscriptionEvent e) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.parkSubscriptionEventTx(e);
+            return true;
+        } catch (RuntimeException ex) {
+            log.error("[STRIPE_WEBHOOK_PARK_FAILED] orphaned subscription event dropped: eventId={} stripeSubId={}",
+                e.eventId(), e.stripeSubscriptionId(), ex);
+            return false;
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void parkSubscriptionEventTx(ParkedSubscriptionEvent e) {
+        pendingEventRepository.insertIfAbsent(e.eventId(), e.stripeSubscriptionId(), e.eventType(), e.eventCreated(),
+            e.status(), e.currentPeriodEnd(), e.cancelAtPeriodEnd());
+    }
+
+    /** Records a paid upgrade that could not be granted. Never throws. */
+    public void recordUngrantedUpgrade(String kind, String subscriberRef, String stripeSubscriptionId, String targetTier,
+                                       String latestInvoiceId) {
+        RoutingDataSourceContext.set(DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY);
+        try {
+            self.recordUngrantedUpgradeTx(kind, subscriberRef, stripeSubscriptionId, targetTier, latestInvoiceId);
+        } catch (RuntimeException ex) {
+            // The error-level log line written first by the caller is the alert source; this row is the durable half.
+            log.error("[SUBSCRIPTION_UPGRADE_RECORD_FAILED] stripeSubId={} invoiceId={}", stripeSubscriptionId, latestInvoiceId, ex);
+        } finally {
+            RoutingDataSourceContext.clear();
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordUngrantedUpgradeTx(String kind, String subscriberRef, String stripeSubscriptionId, String targetTier,
+                                         String latestInvoiceId) {
+        upgradeReconciliationRepository.save(new SubscriptionUpgradeReconciliation(
+            kind, subscriberRef, stripeSubscriptionId, targetTier, latestInvoiceId));
+    }
+
+    /** The extracted fields of a parked {@code customer.subscription.updated|deleted} event. */
+    public record ParkedSubscriptionEvent(String eventId, String stripeSubscriptionId, String eventType, Long eventCreated,
+                                          String status, Long currentPeriodEnd, Boolean cancelAtPeriodEnd,
+                                          boolean persisted) {
+
+        public ParkedSubscriptionEvent withPersisted(boolean value) {
+            return new ParkedSubscriptionEvent(eventId, stripeSubscriptionId, eventType, eventCreated, status, currentPeriodEnd,
+                cancelAtPeriodEnd, value);
+        }
+    }
+}

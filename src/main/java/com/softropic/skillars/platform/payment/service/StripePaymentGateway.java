@@ -14,6 +14,7 @@ import com.stripe.param.TransferCreateParams;
 import com.stripe.param.TransferReversalCollectionCreateParams;
 import com.softropic.skillars.infrastructure.util.ClockProvider;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.payment.contract.CaptureState;
 import com.softropic.skillars.platform.payment.contract.ChargeLookup;
 import com.softropic.skillars.platform.payment.contract.PaymentGateway;
 import com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException;
@@ -535,6 +536,24 @@ public class StripePaymentGateway implements PaymentGateway {
                 outcomeUnknown ? "outcome unknown" : "rejected", stripePaymentIntentId, idempotencyKey,
                 status, e.getMessage());
             throw new PaymentGatewayException(outcomeUnknown ? "payment.refundOutcomeUnknown" : "payment.refundFailed");
+        }
+    }
+
+    @Override
+    public CaptureState getCaptureState(String stripePaymentIntentId) {
+        try {
+            Charge charge = stripeClient.retrievePaymentIntentWithLatestCharge(stripePaymentIntentId)
+                .getLatestChargeObject();
+            if (charge == null) {
+                return new CaptureState(null, BigDecimal.ZERO);
+            }
+            long captured = charge.getAmountCaptured() == null ? 0L : charge.getAmountCaptured();
+            long refunded = charge.getAmountRefunded() == null ? 0L : charge.getAmountRefunded();
+            return new CaptureState(BigDecimal.valueOf(captured, 2), BigDecimal.valueOf(refunded, 2));
+        } catch (StripeException e) {
+            log.error("Stripe capture-state lookup failed: intentId={} error={}", stripePaymentIntentId, e.getMessage());
+            throw new PaymentGatewayException(isPermanentLookupFailure(e)
+                ? PaymentGateway.REFUND_TARGET_INVALID : "payment.refundLookupFailed");
         }
     }
 
