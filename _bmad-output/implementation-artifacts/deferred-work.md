@@ -3564,6 +3564,8 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Drop `marketplace.session_packs`.** Its last reader and writer (`SessionPack`, `SessionPackRepository`, `CoachProfileService.saveStep3`/`getOwnProfile`/`getPublicProfile`) were removed by skillars-deferred-168, and V226 copied the purchasable rows into `payment.session_pack_tiers`. `docs/deployment/migration-conventions.md` rule 2 allows the `DROP TABLE IF EXISTS marketplace.session_packs` only in a release after that one, with `-- migration-lint: drop-prepared-in: V226` immediately above it (`MigrationLint.Rule.DROP_WITHOUT_PRIOR_RELEASE_PREP`). Also drop the now-unused frontend i18n key `marketplace.duplicateSessionPackCount` in the same change, and update `docs/dev-docs/database/index.html:72`.
 - **Pitchside ONB-06 hand-off (on `feature/pitchside`).** Remove `test.fail(true, ...)` from ONB-06 (`e2e/packages/skillars-e2e/specs/onboarding/onboarding.spec.ts:150`) and delete the separate `POST /payment/coaches/me/session-pack-tiers` in the provisioner (`e2e/packages/skillars-e2e/src/data/provisioner.ts:281`): its step-3 PUT (`:262`) already sends the pack, which now creates the tier, so the extra POST only churns a second tier row and hides the path ONB-06 exists to cover.
 
+  **RESOLVED 2026-11-04:** done on `feature/pitchside` in #440 (merge `c4e80360`): ONB-06 no longer carries `test.fail`, and the provisioner's extra tier POST is gone, so the step-3 PUT is the only path that creates the tier. The provisioner's remaining `session-pack-tiers` call is the GET in `buyPack`.
+
 ## Deferred from: Pitchside UI tests, booking, payment and auth specs (2026-11-04)
 
 - **Booking slot labels render blank on the request-booking page (live on master).**
