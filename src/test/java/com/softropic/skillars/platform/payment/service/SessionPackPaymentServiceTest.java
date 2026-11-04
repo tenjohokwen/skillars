@@ -695,6 +695,19 @@ class SessionPackPaymentServiceTest {
     }
 
     @Test
+    void purchasePack_aRefusedCard_keepsItsOwnCode_soTheUiCanOfferToUpdateTheCard_andIsStillNoCharge() {
+        stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
+        when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))
+            .thenThrow(new PaymentGatewayException(PaymentGatewayException.CARD_DECLINED));
+
+        assertThatThrownBy(() -> sessionPackPaymentService.purchasePack(PARENT_ID, TIER_ID, PLAYER_ID, "pm_new", KEY))
+            .isInstanceOf(com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException.class)
+            .hasMessage("payment.cardDeclined");
+
+        verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
+    }
+
+    @Test
     void purchasePack_declineWithNoCardAttempted_doesNotTouchTheSavedCard() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString()))

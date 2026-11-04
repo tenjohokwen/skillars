@@ -3575,17 +3575,21 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
   - **Effect:** a parent who submits with the default is charged per session when the coach accepts, and the credits go unused. Reproduced on the E2E stack: 2 charges, credits still 5/5.
   - **The decision needed:** whether holding credits should preselect the pack.
   - BKG-01 and BKG-11 choose the pack explicitly until this is decided.
+  - **Resolved (2026-11-04):** owner chose to preselect the pack. The soonest-expiring usable pack starts selected and "Per session" moves last; a parent's own choice is kept across reloads. On `feature/pitchside` in #433 (BKG-01 and BKG-11 now check the preselection), on master in the cherry-pick PR `fix/pitchside-findings-q2-q3-q5`.
 - **A declined card shows only "Purchase failed. Please try again."**
   - **Cause:** `StripePaymentGateway` turns a card error into the catch-all `payment.lifecycleFailure` (`StripePaymentGateway.java:187`, `:201`), and `PaymentApiAdvice` returns that as a 422 `ErrorDto`. `SessionPackPurchasePage` then reads `e.response.data.message` (`SessionPackPurchasePage.vue:189`), which `ErrorDto` never has (its text is under `errorMsg`). This is the same mistake fixed on the profile builder in deferred-140 AC3.3.
   - **Effect:** every purchase failure shows the generic text, and the existing "card was declined" copy (`subscription.errors.paymentDeclined`) is never reached.
   - **No money impact:** no pack is created and nothing is captured. PAY-06 asserts the current behaviour.
+  - **Resolved (2026-11-04):** the gateway maps a card decline to `payment.cardDeclined`, and the purchase page shows the declined text with an "Update card" action. `translatedErrorMessage` (`utils/errorHandler.js`) translates only the key the server sent, and `AvailabilityManagerPage` uses it too. On `feature/pitchside` in #435 (PAY-06 updated), on master in the same cherry-pick PR.
 - **Registration discloses whether an email or phone number is already registered.**
   - **Cause:** all three registration services throw `security.emailInUse` (for example `CoachRegistrationService.java:75`, `:104`), and each register page shows "This email is already registered." (`auth.*.emailInUse`; the phone number gets `phoneInUse`).
   - **Effect:** anyone can test whether an address has an account. Elsewhere the app defends against this deliberately (the resend banner, D8 above).
   - **The decision needed:** whether registration should hide it. If it should, the Pitchside plan's REG-08 is the regression test, and it is not written yet.
+  - **Resolved (2026-11-04):** owner chose to hide it. `RegistrationDuplicateGuard` answers a taken email, login or phone exactly like a fresh registration and emails the existing account instead (`CREATION_DUP`). On a phone-only match, the typed address also gets the new `REGISTRATION_PHONE_IN_USE` email (migration `V227`). Notices are capped at 2 per hour per account and per typed address. On `feature/pitchside` in #437 with REG-08, on master in the same cherry-pick PR.
 - **The coach completeness gate guards only `/coach/command-center`.**
   - **Cause:** the router's async check (`router/index.js:93`) matches that one path.
   - **Effect:** an incomplete coach (builder unfinished, profile unpublished) can open other coach pages, such as `/coach/availability`. Observed while writing AUTH-13. It may be intended (the Pitchside plan's C-11 describes the command-centre guard), but it is unconfirmed.
+  - **Resolved (2026-11-04):** owner confirmed it is intended: an unpublished coach can't be booked, so the set-up pages stay open. No code change; AUTH-13 on `feature/pitchside` (#437) now asserts an incomplete coach can open `/coach/availability`.
 
 ## Deferred from: CI Trivy install workaround (2026-11-04)
 

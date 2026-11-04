@@ -2326,6 +2326,8 @@ export default {
         'Your Stripe account is disconnected from Skillars. Reconnect it to receive payouts.',
     },
     error: {
+      cardDeclined:
+        'Your card was declined or needs extra authentication. Please update your payment method and try again.',
       coachStripeNotConfigured: 'This coach has not completed their payment setup yet',
       providerUnavailable: 'Payment service unavailable. Please try again.',
       statusLoadFailed: 'Could not load your payment status. Please refresh the page.',
@@ -2400,6 +2402,7 @@ export default {
       replaceCard: 'Replace card',
       addCardPrompt: 'Add a payment card to continue',
       addCardCta: 'Add card',
+      updateCardCta: 'Update card',
       save: 'Save card',
       saveError: 'Could not save your card. Please try again.',
       savedRefreshFailed:

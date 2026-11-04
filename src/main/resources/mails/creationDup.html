@@ -7,7 +7,8 @@
 <body>
     <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
 
-    <p th:text="#{email.creation_dup.text1}">Someone attempted to create an account using your email address.</p>
+    <p th:if="${map['phoneMatch'] == true}" th:text="#{email.creation_dup.phoneText1}">Someone tried to create an account with your phone number.</p>
+    <p th:unless="${map['phoneMatch'] == true}" th:text="#{email.creation_dup.text1}">Someone attempted to create an account using your email address.</p>
 
     <p th:text="#{email.creation_dup.loginText}">If this was you and you forgot you already have an account, you can log in at:</p>
     <p>
@@ -21,7 +22,8 @@
            th:text="#{email.creation_dup.resetLink}">Reset your password</a>
     </p>
 
-    <p th:text="#{email.creation_dup.ignore}">If this was not you, please ignore this email. Your account is secure.</p>
+    <p th:if="${map['phoneMatch'] == true}" th:text="#{email.creation_dup.phoneIgnore}">If this was not you, you don't need to do anything.</p>
+    <p th:unless="${map['phoneMatch'] == true}" th:text="#{email.creation_dup.ignore}">If this was not you, please ignore this email. Your account is secure.</p>
 
     <hr/>
     <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>

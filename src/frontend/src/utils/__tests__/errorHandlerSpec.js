@@ -17,7 +17,7 @@
 
 import { describe, it, expect, afterEach } from 'vitest'
 import { i18n } from 'boot/i18n'
-import { parseApiError, getErrorMessage } from 'src/utils/errorHandler'
+import { parseApiError, getErrorMessage, translatedErrorMessage } from 'src/utils/errorHandler'
 
 function axiosError({ status, data } = {}) {
   if (status === undefined) return { response: undefined }
@@ -121,5 +121,45 @@ describe('errorHandler — parseApiError/getErrorMessage status-code fallback me
     )
     expect(parsed.message).toBe('Invalid Data')
     expect(parsed.errorKey).toBe('validation.invalidData')
+  })
+})
+
+const NETWORK_EN = 'Network error. Please check your connection.'
+const SLOT_UNAVAILABLE_EN = 'This time slot is no longer available.'
+
+describe('errorHandler — translatedErrorMessage', () => {
+  // A component's own t/te: here the real bundle's, so a translated key reads as real copy, and a
+  // concrete literal is asserted (a key-vs-key comparison would pass on a pruned key).
+  const t = (key) => i18n.global.t(key)
+  const te = (key) => i18n.global.te(key)
+  const apiError = (errorKey, message) => ({
+    response: { status: 409, data: { errorMsg: { errorKey, message } } },
+  })
+
+  it('translates an errorKey the bundle has (read from errorMsg, not response.data.message)', () => {
+    expect(translatedErrorMessage(apiError('booking.errors.slotUnavailable', 'raw'), t, te)).toBe(
+      SLOT_UNAVAILABLE_EN,
+    )
+  })
+
+  it("falls back to the server's message for a key the bundle does not translate", () => {
+    expect(
+      translatedErrorMessage(apiError('booking.somethingNew', 'Window overlaps another'), t, te),
+    ).toBe('Window overlaps another')
+  })
+
+  it('a network error (no response) gets the translated network message, never axios text', () => {
+    const msg = translatedErrorMessage(new Error('Request failed with status code 400'), t, te)
+    expect(msg).toBe(NETWORK_EN)
+    expect(msg).not.toContain('Request failed')
+  })
+
+  it('a bare status (gateway 502 HTML, empty 400) gets the user-facing fallback, not the status key', () => {
+    const gateway = translatedErrorMessage(axiosError({ status: 502, data: '<html>' }), t, te)
+    expect(gateway).toBe(i18n.global.t('error.generic'))
+    expect(gateway).not.toBe(i18n.global.t('error.unknown'))
+    const badRequest = translatedErrorMessage(axiosError({ status: 400, data: '' }), t, te)
+    expect(badRequest).toBe(i18n.global.t('error.badRequest'))
+    expect(badRequest).not.toBe(i18n.global.t('validation.badRequest'))
   })
 })

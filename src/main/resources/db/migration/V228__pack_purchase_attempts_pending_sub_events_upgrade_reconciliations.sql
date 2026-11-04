@@ -14,8 +14,8 @@
 -- any code uses it. This migration deliberately ships WITH its code (the lint does not enforce rule 1; deferred-167
 -- and deferred-168 did the same) because the tables are brand new, empty and referenced only by the new code; an old
 -- pod simply never touches them. Brand-new empty tables: constraints inline, nothing to validate; the indexes are
--- built on empty tables. V227 was contested at authoring time (feature/pitchside-master-sync,
--- skillars-deferred-170) - whichever merges second renumbers.
+-- built on empty tables. Authored as V227, renumbered to V228 when the pitchside cherry-pick (#441) took V227;
+-- skillars-deferred-170 also claims a number after this one and renumbers on merge.
 SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS payment.session_pack_purchase_attempts (

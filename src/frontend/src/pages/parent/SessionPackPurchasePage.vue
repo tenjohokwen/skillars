@@ -61,6 +61,14 @@
 
       <q-banner v-if="purchaseError" class="bg-negative text-white q-mb-md">
         {{ purchaseError }}
+        <template v-if="cardDeclined" #action>
+          <q-btn
+            flat
+            :label="t('payment.card.updateCardCta')"
+            data-test="purchase-update-card"
+            @click="addCardDialog = true"
+          />
+        </template>
       </q-banner>
 
       <q-banner v-if="!hasCard" rounded class="q-mb-md" style="background: var(--surface-warning)">
@@ -104,10 +112,11 @@ import SessionPackTracker from 'src/components/booking/SessionPackTracker.vue'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
 import { getCoachProfile } from 'src/api/marketplace.api'
 import { fetchCoachSessionPackTiers } from 'src/api/payment.api'
+import { parseApiError } from 'src/utils/errorHandler'
 
 const route = useRoute()
 const router = useRouter()
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const bookingStore = useBookingStore()
 const paymentStore = usePaymentStore()
 
@@ -128,6 +137,8 @@ const loadingPacks = ref(false)
 const selected = ref(null)
 const purchasing = ref(false)
 const purchaseError = ref(null)
+// The card was refused (payment.cardDeclined): the banner offers to update it, in place.
+const cardDeclined = ref(false)
 const addCardDialog = ref(false)
 
 // AC 5: gate the purchase control on a saved card — the backend falls back to it silently, so
@@ -140,6 +151,24 @@ function onCardSaved() {
   // A new card is a different purchase only when the last answer proved nothing was charged: while an earlier
   // attempt is unresolved the key must stay, or the retry could charge twice (skillars-deferred-169).
   if (!keyHeldForUnresolved) attemptKey = null
+  // A new card answers the decline; the old message no longer applies.
+  purchaseError.value = null
+  cardDeclined.value = false
+}
+
+const CARD_DECLINED = 'payment.cardDeclined'
+
+// What a failed purchase tells the parent. The error key lives under errorMsg (ErrorDto); the old
+// read of response.data.message was always undefined, so every failure — a refused card included —
+// showed the generic text. A known key is translated; payment.lifecycleFailure and anything else
+// unknown stay generic (PaymentApiAdvice puts the raw code in errorMsg.message, never shown).
+function purchaseFailureMessage(error) {
+  const { errorKey } = parseApiError(error)
+  if (errorKey === CARD_DECLINED) return t('payment.error.cardDeclined')
+  if (errorKey && errorKey.startsWith('payment.') && te(`payment.error.${errorKey.slice(8)}`)) {
+    return t(`payment.error.${errorKey.slice(8)}`)
+  }
+  return t('booking.packs.purchaseError')
 }
 
 // A player+coach pair can now have multiple simultaneously-active packs — show the
@@ -179,7 +208,13 @@ function errorCode(e) {
   return msg?.errorKey === 'generic.requestError' ? msg?.message : (msg?.errorKey ?? msg?.message)
 }
 
-const KEY_CLEARING_CODES = ['payment.noChargeMade', 'payment.invalidIdempotencyKey', 'payment.idempotencyKeyReused']
+// payment.cardDeclined is itself proof that nothing was charged (the gateway raises it only for a refused card).
+const KEY_CLEARING_CODES = [
+  'payment.noChargeMade',
+  'payment.cardDeclined',
+  'payment.invalidIdempotencyKey',
+  'payment.idempotencyKeyReused',
+]
 const STILL_CONFIRMING_CODES = ['payment.attemptInProgress', 'payment.attemptUnresolved']
 
 function newAttemptKey() {
@@ -196,6 +231,7 @@ async function confirmPurchase() {
   if (!selected.value || !playerId || purchasing.value) return
   purchasing.value = true
   purchaseError.value = null
+  cardDeclined.value = false
   attemptKey ??= newAttemptKey()
   try {
     await bookingStore.purchasePack(playerId, selected.value, undefined, attemptKey)
@@ -216,8 +252,9 @@ async function confirmPurchase() {
       // Also returned for a charge that was refunded: never say "nothing was charged".
       purchaseError.value = t('booking.packs.purchaseNotCompleted')
     } else {
-      purchaseError.value = t('booking.packs.purchaseError')
+      purchaseError.value = purchaseFailureMessage(e)
     }
+    cardDeclined.value = code === CARD_DECLINED
   } finally {
     purchasing.value = false
   }

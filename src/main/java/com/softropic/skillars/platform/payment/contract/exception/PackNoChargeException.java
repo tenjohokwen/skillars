@@ -11,6 +11,8 @@ public class PackNoChargeException extends PaymentGatewayException {
     public static final String CODE = "payment.noChargeMade";
 
     public PackNoChargeException(Throwable cause) {
-        super(CODE, cause);
+        // A refused card keeps its own code (payment.cardDeclined): the UI offers to update the card, and that code is itself
+        // proof that nothing was charged. Everything else is the generic no-charge code.
+        super(cause instanceof PaymentGatewayException pge && CARD_DECLINED.equals(pge.getErrorCode()) ? CARD_DECLINED : CODE, cause);
     }
 }

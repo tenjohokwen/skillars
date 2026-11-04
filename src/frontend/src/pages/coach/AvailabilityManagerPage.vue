@@ -165,9 +165,10 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getProfileBuilderStatus } from 'src/api/marketplace.api'
+import { translatedErrorMessage } from 'src/utils/errorHandler'
 import WeeklyCalendar from 'src/components/availability/WeeklyCalendar.vue'
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const store = useBookingStore()
 
 const coachId = ref(null)
@@ -255,6 +256,11 @@ function onAddWindowForDay(day) {
 
 const saveError = ref(null)
 
+// The error key lives under errorMsg (ErrorDto). The old read of response.data.message was always
+// undefined, so the coach saw axios's raw text ("Request failed with status code 400") or an English
+// literal.
+const saveFailureMessage = (error) => translatedErrorMessage(error, t, te)
+
 async function onSaveWindow() {
   saving.value = true
   windowSaved.value = false
@@ -276,7 +282,7 @@ async function onSaveWindow() {
       windowSaved.value = false
     }, 3000)
   } catch (e) {
-    saveError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to save window'
+    saveError.value = saveFailureMessage(e)
   } finally {
     saving.value = false
   }
@@ -355,7 +361,7 @@ async function onSaveBlock() {
       blockSaved.value = false
     }, 3000)
   } catch (e) {
-    blockSaveError.value = e?.response?.data?.message ?? e?.message ?? 'Failed to save block'
+    blockSaveError.value = saveFailureMessage(e)
   } finally {
     savingBlock.value = false
   }

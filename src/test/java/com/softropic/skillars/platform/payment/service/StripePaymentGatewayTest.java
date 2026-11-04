@@ -901,7 +901,7 @@ class StripePaymentGatewayTest {
     }
 
     @Test
-    void charge_cardDecline_isAPlainFailure_notUnknown() throws StripeException {
+    void charge_cardDecline_isACardDeclined_notUnknown() throws StripeException {
         stubChargeable();
         when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
             .thenThrow(new com.stripe.exception.CardException("declined", "req", "card_declined", null,
@@ -910,6 +910,42 @@ class StripePaymentGatewayTest {
         assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k2"))
             .isInstanceOf(PaymentGatewayException.class)
             .isNotInstanceOf(com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException.class)
+            .hasMessage("payment.cardDeclined");
+    }
+
+    /** A non-card Stripe failure (e.g. an invalid request) stays the catch-all lifecycleFailure. */
+    @Test
+    void charge_nonCardStripeError_staysALifecycleFailure() throws StripeException {
+        stubChargeable();
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenThrow(new com.stripe.exception.InvalidRequestException("bad", "param", "req", "parameter_invalid",
+                400, null));
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k2b"))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessage("payment.lifecycleFailure");
+    }
+
+    /** requires_action (3-D Secure an off-session charge cannot do) and requires_payment_method are the card. */
+    @Test
+    void charge_intentNeedingAuthenticationOrRefused_isACardDeclined() throws StripeException {
+        stubChargeable();
+        PaymentIntent needsAction = mockIntent("pi_3ds");
+        needsAction.setStatus("requires_action");
+        PaymentIntent refused = mockIntent("pi_refused");
+        refused.setStatus("requires_payment_method");
+        PaymentIntent canceled = mockIntent("pi_canceled");
+        canceled.setStatus("canceled");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(needsAction)
+            .thenReturn(refused)
+            .thenReturn(canceled);
+
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k4"))
+            .hasMessage("payment.cardDeclined");
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k4"))
+            .hasMessage("payment.cardDeclined");
+        assertThatThrownBy(() -> stripePaymentGateway.chargeAndCapture(BOOKING_ID, 1001L, COACH_ID, AMOUNT, "k4"))
             .hasMessage("payment.lifecycleFailure");
     }
 

@@ -286,11 +286,16 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  // Only the latest call writes: switching child mid-load must not let the previous child's slower
+  // response land last and replace the new child's list.
+  let packsLoadSequence = 0
   async function loadPlayerPacks(playerId) {
+    const requestId = ++packsLoadSequence
     packsLoading.value = true
     packsError.value = null
     try {
       const res = await getMySessionPacks()
+      if (requestId !== packsLoadSequence) return
       const packs = (res ?? []).map(normalizePack)
       sessionPacks.value = playerId
         ? packs.filter((p) => String(p.playerId) === String(playerId))
@@ -300,9 +305,9 @@ export const useBookingStore = defineStore('booking', () => {
       // silently trusting it. `null` means "all players" (playerId not passed).
       sessionPacksPlayerId.value = playerId ?? null
     } catch (e) {
-      packsError.value = getErrorMessage(e)
+      if (requestId === packsLoadSequence) packsError.value = getErrorMessage(e)
     } finally {
-      packsLoading.value = false
+      if (requestId === packsLoadSequence) packsLoading.value = false
     }
   }
 

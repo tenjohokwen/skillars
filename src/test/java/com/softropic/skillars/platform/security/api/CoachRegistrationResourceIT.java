@@ -4,9 +4,12 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.notification.contract.EmailTemplate;
+import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.security.SecurityIT;
 import com.softropic.skillars.platform.security.service.OtpHasher;
 import com.softropic.skillars.platform.security.service.RegistrationVerificationTokenService;
+import com.softropic.skillars.utils.TestMailManager;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -60,6 +63,9 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
     private HttpTestClient httpTestClient;
 
     @Autowired
+    private TestMailManager testMailManager;
+
+    @Autowired
     private RegistrationVerificationTokenService verificationTokenService;
 
     @Autowired
@@ -103,29 +109,73 @@ class CoachRegistrationResourceIT extends AbstractIntegrationTest {
         assertThat(user.get("activated")).isEqualTo(false);
     }
 
-    @Test
-    void registerCoach_duplicateEmail_returns409() {
-        httpTestClient.makeHttpRequest(
-            baseUrl() + REGISTER_ENDPOINT,
-            HttpMethod.POST,
-            registrationBody(TEST_EMAIL),
-            jsonHeaders(),
-            Void.class
-        );
+    // ── Neutral duplicate registration: no email/phone enumeration ──────────────────────────────
+    // A registration whose email or phone already belongs to an account gets exactly the response a
+    // successful registration gets (200, empty body); nothing is created, and the existing account's
+    // owner receives a CREATION_DUP notice through the notification outbox instead. On a phone-only match
+    // the address typed on the form also gets a REGISTRATION_PHONE_IN_USE notice.
 
-        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
-            baseUrl() + REGISTER_ENDPOINT,
-            HttpMethod.POST,
-            registrationBody(TEST_EMAIL),
-            jsonHeaders(),
-            Map.class
-        ))
-            .isInstanceOf(HttpClientErrorException.class)
-            .satisfies(e -> {
-                HttpClientErrorException ex = (HttpClientErrorException) e;
-                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-                assertThat(ex.getResponseBodyAsString()).contains("security.emailInUse");
-            });
+    @Test
+    void registerCoach_duplicateEmail_returnsTheSameResponseAsASuccessAndNotifiesTheOwner() {
+        ResponseEntity<String> first = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(TEST_EMAIL), jsonHeaders(), String.class);
+        testMailManager.clear();
+
+        ResponseEntity<String> duplicate = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(TEST_EMAIL), jsonHeaders(), String.class);
+
+        assertThat(duplicate.getStatusCode()).isEqualTo(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(duplicate.getBody()).isEqualTo(first.getBody());
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.email_verification_tokens evt JOIN main.\"user\" u ON u.id = evt.user_id "
+                + "WHERE u.email = ?", Integer.class, TEST_EMAIL))
+            .as("the duplicate attempt must not issue a second verification token")
+            .isEqualTo(1);
+        assertCreationDupSentTo(TEST_EMAIL, null);
+    }
+
+    @Test
+    void registerCoach_duplicatePhone_returnsTheSameResponseAsASuccessAndNotifiesThePhoneHolder() {
+        ResponseEntity<String> first = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(TEST_EMAIL), jsonHeaders(), String.class);
+        testMailManager.clear();
+
+        // A new email, but the same phone as registrationBody(TEST_EMAIL).
+        ResponseEntity<String> duplicate = httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody("second.coach@skillars.com"), jsonHeaders(),
+            String.class);
+
+        assertThat(duplicate.getStatusCode()).isEqualTo(first.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(duplicate.getBody()).isEqualTo(first.getBody());
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM main.\"user\" WHERE email = ?", Integer.class, "second.coach@skillars.com"))
+            .as("the duplicate-phone attempt must not have created a user row")
+            .isZero();
+        assertCreationDupSentTo(TEST_EMAIL, "second.coach@skillars.com");
+    }
+
+    private void assertCreationDupSentTo(String existingAccountEmail, String attemptedEmail) {
+        // Under the test profile the outbox drains synchronously after commit, so the envelope is here.
+        assertThat(testMailManager.getEnvelopes().values())
+            .filteredOn(e -> e.emailTemplate() == EmailTemplate.CREATION_DUP)
+            .as("exactly one CREATION_DUP notice, to the existing account")
+            .singleElement()
+            .satisfies(e -> assertThat(e.recipients()).extracting(Recipient::getEmail)
+                .containsExactly(existingAccountEmail));
+        if (attemptedEmail == null) {
+            // Email match: the typed address IS the existing account; no phone-in-use mail at all.
+            assertThat(testMailManager.getEnvelopes().values())
+                .noneMatch(e -> e.emailTemplate() == EmailTemplate.REGISTRATION_PHONE_IN_USE);
+            return;
+        }
+        // Phone match (the email was new): the address on the rejected form gets exactly one mail, the
+        // REGISTRATION_PHONE_IN_USE notice (phones are unverified, so it may be the number's real owner),
+        // and never a verification email.
+        assertThat(testMailManager.getEnvelopes().values())
+            .filteredOn(e -> e.recipients().stream().anyMatch(r -> attemptedEmail.equals(r.getEmail())))
+            .as("only the phone-in-use notice goes to the address on the rejected form")
+            .singleElement()
+            .satisfies(e -> assertThat(e.emailTemplate()).isEqualTo(EmailTemplate.REGISTRATION_PHONE_IN_USE));
     }
 
     @Test

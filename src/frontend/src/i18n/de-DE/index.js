@@ -1547,6 +1547,8 @@ export default {
         'Ihr Stripe-Konto ist von Skillars getrennt. Verbinden Sie es erneut, um Auszahlungen zu erhalten.',
     },
     error: {
+      cardDeclined:
+        'Ihre Karte wurde abgelehnt oder erfordert eine zusätzliche Authentifizierung. Bitte aktualisieren Sie Ihre Zahlungsmethode und versuchen Sie es erneut.',
       coachStripeNotConfigured:
         'Dieser Coach hat seine Zahlungseinrichtung noch nicht abgeschlossen',
       providerUnavailable: 'Zahlungsdienst nicht verfügbar. Bitte versuchen Sie es erneut.',
@@ -1627,6 +1629,7 @@ export default {
       replaceCard: 'Karte ersetzen',
       addCardPrompt: 'Fügen Sie eine Zahlungskarte hinzu, um fortzufahren',
       addCardCta: 'Karte hinzufügen',
+      updateCardCta: 'Karte aktualisieren',
       save: 'Karte speichern',
       saveError: 'Ihre Karte konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
       savedRefreshFailed:
