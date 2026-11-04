@@ -48,8 +48,8 @@ export interface CoachOnboarding {
   /** Seed a COMPLETE Stripe Connect account so the coach is payment-ready (bookable). */
   paymentReady?: boolean
   /**
-   * Stop after this builder step, leaving the profile an unpublished DRAFT (no pack tier, no Connect
-   * account): the half-finished coach that search must never return.
+   * Stop after this builder step, leaving the profile an unpublished DRAFT (no Connect account;
+   * a pack tier exists from step 3 on): the half-finished coach that search must never return.
    */
   stopAfterStep?: 1 | 2 | 3 | 4
 }
@@ -256,6 +256,7 @@ export class Provisioner {
         ageGroups: ['AGE_10_12', 'AGE_13_17', 'ADULT'],
       })
       if (options.stopAfterStep === 2) return account
+      // The step-3 pack becomes the coach's purchasable tier (skillars-deferred-168), so no tier POST follows.
       await put(3, {
         perSessionPrice: options.perSessionPrice ?? 55,
         sessionDurationMinutes: 60,
@@ -277,12 +278,6 @@ export class Provisioner {
         `${base}/publish`,
       )
       if (!published.profileComplete) throw new Error(`Coach ${account.email} did not publish`)
-      if (pack) {
-        await session.api.post('/payment/coaches/me/session-pack-tiers', {
-          data: pack,
-          expectStatus: 201,
-        })
-      }
       const coach: CoachAccount = { ...account, coachId: published.coachId }
       if (options.paymentReady ?? true) await this.markCoachPaymentReady(coach)
       return coach
