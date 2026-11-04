@@ -42,6 +42,7 @@ class PackPriceLockedOnPurchaseTest {
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentGateway paymentGateway;
     @Mock com.softropic.skillars.platform.config.service.ConfigService configService;
+    @Mock com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository attemptRepository;
 
     @InjectMocks SessionPackPaymentService sessionPackPaymentService;
 
@@ -59,6 +60,12 @@ class PackPriceLockedOnPurchaseTest {
             new com.softropic.skillars.platform.marketplace.repo.CoachProfile();
         coach.setStatus(com.softropic.skillars.platform.marketplace.contract.CoachProfileStatus.ACTIVE);
         org.mockito.Mockito.lenient().when(coachProfileRepository.findById(COACH_ID)).thenReturn(Optional.of(coach));
+        // skillars-deferred-169: every purchase inserts an attempt row first.
+        org.mockito.Mockito.lenient().when(attemptRepository.saveAndFlush(org.mockito.ArgumentMatchers.any())).thenAnswer(inv -> {
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt a = inv.getArgument(0);
+            a.setId(1L);
+            return a;
+        });
     }
 
     @Test
