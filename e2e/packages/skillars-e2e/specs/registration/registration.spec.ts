@@ -249,16 +249,20 @@ test.describe('B · Registration & verification', () => {
           })
           expect(told.links().some((link) => link.includes('/forgot-password'))).toBe(true)
         }
-        // Nothing was created: no verification mail goes to the address on the form. The notice
-        // is enqueued in the same transaction a verification mail would be, so it has arrived by now.
-        await expect(
-          mail.waitForMessage({
-            to: attempt.email,
-            subjectMatches: /verify/i,
-            since,
-            timeoutMs: 3_000,
-          }),
-        ).rejects.toThrow()
+        if (taken === 'phone') {
+          // Nothing was created: no verification mail goes to the (fresh) address on the form. The
+          // notices are enqueued in the same transaction a verification mail would be, so it has
+          // arrived by now. (Not checked for a taken email: that address is the existing account's,
+          // and its own verification mail from provisioning can land late.)
+          await expect(
+            mail.waitForMessage({
+              to: attempt.email,
+              subjectMatches: /verify/i,
+              since,
+              timeoutMs: 3_000,
+            }),
+          ).rejects.toThrow()
+        }
       },
     )
   }
