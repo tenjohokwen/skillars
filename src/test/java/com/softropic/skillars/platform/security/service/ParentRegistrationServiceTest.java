@@ -219,7 +219,7 @@ class ParentRegistrationServiceTest {
         assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
 
         assertNeutralNoCreate(phoneHolder);
-        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en"));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
     }
 
     @Test
@@ -245,7 +245,7 @@ class ParentRegistrationServiceTest {
         assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
 
         verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
-        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en"));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
         verify(userRepository, never()).saveAndFlush(any(User.class));
     }
 
@@ -263,7 +263,24 @@ class ParentRegistrationServiceTest {
         assertThatCode(() -> service.registerParent(req)).doesNotThrowAnyException();
 
         // Mail goes to the address as typed; only the bucket key is normalised (case variants share it).
-        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("Jane.Doe@Test.com", "en"));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("Jane.Doe@Test.com", "en", 8L));
+    }
+
+    @Test
+    void registerParent_phoneHolderIsTheSameAddressInOtherLetters_isAnEmailMatch_noPhoneInUseMail() {
+        // The lookups are exact-case. The owner of jane.doe@test.com registering as Jane.Doe@Test.com
+        // with their own number must get the duplicate notice only, not "we couldn't create your account".
+        allowNotice();
+        ParentRegistrationRequest req = new ParentRegistrationRequest(
+            "Jane", "Doe", "Jane.Doe@Test.com", "password123", "+491701234567", "en");
+        when(userRepository.findOneByEmail("Jane.Doe@Test.com")).thenReturn(Optional.empty());
+        User owner = existingAccount(8L, "jane.doe@test.com");
+        when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(owner));
+
+        assertThatCode(() -> service.registerParent(req)).doesNotThrowAnyException();
+
+        verify(publisher).publishEvent(new RegistrationDuplicateAttemptEvent(8L, "jane.doe@test.com", "Existing", "Owner", "de"));
+        verify(publisher, never()).publishEvent(any(RegistrationPhoneInUseEvent.class));
     }
 
     @Test

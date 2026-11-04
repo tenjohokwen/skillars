@@ -12,5 +12,7 @@ package com.softropic.skillars.platform.security.contract.event;
  *
  * @param toAddress the email address the registrant typed
  * @param langKey   the request's language, {@code "en"} when it was blank
+ * @param phoneHolderUserId the account holding the number, logged with the mail's help code (never
+ *                  put in the mail) so support can trace a "this number is mine" contact
  */
-public record RegistrationPhoneInUseEvent(String toAddress, String langKey) {}
+public record RegistrationPhoneInUseEvent(String toAddress, String langKey, Long phoneHolderUserId) {}

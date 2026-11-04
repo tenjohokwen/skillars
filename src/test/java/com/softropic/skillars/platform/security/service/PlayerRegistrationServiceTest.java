@@ -186,7 +186,7 @@ class PlayerRegistrationServiceTest {
         assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
 
         assertNeutralNoCreate(phoneHolder);
-        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en"));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
     }
 
     @Test
@@ -212,7 +212,7 @@ class PlayerRegistrationServiceTest {
         assertThatCode(() -> service.registerPlayer(buildRequest())).doesNotThrowAnyException();
 
         verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
-        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en"));
+        verify(publisher).publishEvent(new RegistrationPhoneInUseEvent("jane.doe@test.com", "en", 8L));
         verify(userRepository, never()).saveAndFlush(any(User.class));
     }
 

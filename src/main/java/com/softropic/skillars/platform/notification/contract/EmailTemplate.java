@@ -8,7 +8,10 @@ public enum EmailTemplate {
     CREATION_DUP("email.creation_dup.title"),
     // Phone-match duplicate registration: to the address the REGISTRANT typed (the email was new), saying
     // the phone number is already on an account. Sent next to CREATION_DUP to the existing account.
-    REGISTRATION_PHONE_IN_USE("email.registration_phone_in_use.title"),
+    // An unverified, caller-chosen address: on the isolated registration breaker (D-8, below), so bad
+    // addresses typed at registration cannot open the breaker that gates booking mail.
+    REGISTRATION_PHONE_IN_USE("email.registration_phone_in_use.title", Duration.ofHours(24),
+        "registrationEmailService"),
     PASSWORD_RESET("email.pw_reset.title"),
     // Retired (chore/auth-legacy-removal): its only producer, the legacy POST /authenticate -> /otp
     // login-2FA flow (TwoFactorLoginService), is gone. Kept so historical envelope_entity rows and

@@ -79,7 +79,12 @@ public class RegistrationDuplicateAttemptListener {
         try {
             Map<String, Object> data = new HashMap<>();
             data.put("baseUrl", frontendLinks.base());
-            data.put("helpCode", ShortCode.shortenInt(UUID.randomUUID().hashCode()));
+            String helpCode = ShortCode.shortenInt(UUID.randomUUID().hashCode());
+            data.put("helpCode", helpCode);
+            // The mail tells someone whose number sits on another account to quote this code; support
+            // finds the holder from this line.
+            log.info("[REGISTRATION_PHONE_IN_USE_NOTICE] phone-in-use notice queued",
+                kv("helpCode", helpCode), kv("phoneHolderUserId", event.phoneHolderUserId()), kv("sendId", sendId));
 
             // No first name: the registrant has no account, and the typed name is not echoed into a mail
             // to an address nobody has verified (the template greets without one).
