@@ -480,7 +480,7 @@
         <tr><td>POST</td><td>/api/payment/session-packs/{purchaseId}/extend</td><td>One-time 30-day extension within the 14-day pre-expiry window</td><td>COACH (owner)</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/session-packs?page&amp;size</td><td>Coach's sold packs (size clamped to 1–100) with status and <code>revokedReason</code>, feeding the Extend action (hidden on a withdrawn pack)</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Own pack tiers (active and inactive)</td><td>COACH</td></tr>
-        <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a tier, which deactivates the previous active tier. A race returns 409</td><td>COACH</td></tr>
+        <tr><td>POST</td><td>/api/payment/coaches/me/session-pack-tiers</td><td>Create a tier, which deactivates the previous active tier. A race returns 409. <code>sessionCount</code> must be a whole JSON number: <code>2.5</code> (or <code>2.0</code>) is a 400 <code>validation.badRequest</code>, not truncated (<code>StrictIntegerDeserializer</code>, skillars-deferred-170)</td><td>COACH</td></tr>
         <tr><td>PATCH</td><td>/api/payment/coaches/me/session-pack-tiers/{tierId}/deactivate</td><td>Deactivate a tier</td><td>COACH</td></tr>
         <tr><td>GET</td><td>/api/payment/coaches/{coachId}/session-pack-tiers</td><td>A coach's active tier (404 if none), with <code>validityDays</code></td><td>PARENT|PLAYER</td></tr>
         <tr><td>POST</td><td>/api/payment/setup-intent</td><td>Create a Stripe SetupIntent (creates the Stripe customer if needed)</td><td>PARENT|PLAYER|COACH</td></tr>

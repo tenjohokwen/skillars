@@ -306,18 +306,18 @@ D3's port constraint.
 
 ## Tasks / Subtasks
 
-- [ ] T1 (AC1): migration; delete `BuilderPackTierBackfillIT`; reword the port Javadoc (required);
+- [x] T1 (AC1): migration; delete `BuilderPackTierBackfillIT`; reword the port Javadoc (required);
   remove the i18n key and reword the `:398` comment; update the database and marketplace docs, the
   provisioning checklist (V226 entry, new line, the "prod is not live" list) and the search index; add the
   schema assertion.
-- [ ] T2 (AC2): `tierSummary` key in three locales; page heading and caption rule; sold-packs fallback;
+- [x] T2 (AC2): `tierSummary` key in three locales; page heading and caption rule; sold-packs fallback;
   spec with a local i18n instance; rewrite the `:110-119` test; mutation check.
-- [ ] T3 (AC4): `StrictIntegerDeserializer` (`StdScalarDeserializer<Integer>`) + unit test; annotate both
+- [x] T3 (AC4): `StrictIntegerDeserializer` (`StdScalarDeserializer<Integer>`) + unit test; annotate both
   fields; WebMvc test for the tier POST, IT for step 3.
 - [ ] T4 (AC3, **after 169 merges**): rebase; add the readiness check in 169's new-attempt gate, before
   its attempt row; default `lenient()` stub in the three unit-test classes; unit test, service-level IT,
   WebMvc 422 test; purchase-page message + spec.
-- [ ] T5 (AC5, AC6): docs, ledger.
+- [ ] T5 (AC5, AC6): docs, ledger. *(AC1/AC2/AC4 parts done: their three ledger bullets deleted, the D3 bullet added, the AC4 doc lines written. Left for T4: the AC3 doc line in `docs/dev-docs/payment/index.html` and deleting the AC3 bullet.)*
 - [ ] T6 (AC7): `/pr-review`, PR.
 
 ## Dev Notes
@@ -359,14 +359,75 @@ D3's port constraint.
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5)
+
 ### Debug Log References
+
+- The first targeted `mvn test` ran without `-DskipFrontend`; the frontend plugin's `npm install` replaced the
+  worktree's `src/frontend/node_modules` symlink with a real install (the main checkout's copy was untouched).
+  Every later Maven run used `-DskipFrontend`. The `git add -A` hazard noted above is gone with the symlink, but
+  files are still added by name.
+- `CoachProfileBuilderIT`'s first run failed only because the test client throws on a 4xx; rewritten to the IT's
+  own `assertThatThrownBy(...HttpClientErrorException...)` pattern.
 
 ### Completion Notes List
 
+- **AC1 (done).** `V227__drop_marketplace_session_packs.sql`, with D1 confirmed by the owner 2026-11-04. Header in
+  V142's shape, `SET LOCAL lock_timeout`, marker `drop-prepared-in: V226`. Checked by hand that the lint goes red
+  both with the marker removed (`DROP_WITHOUT_PRIOR_RELEASE_PREP`) and with the old Javadoc wording restored in
+  `CoachSessionPackPort` (reference scan); neither failing state is committed. `BuilderPackTierBackfillIT` deleted.
+  `marketplace.duplicateSessionPackCount` removed from all three locales and the en-US comment that named it
+  reworded. The "table is gone" assertion went into `CoachProfileBuilderIT` (base context, already holds a
+  `JdbcTemplate`) rather than `ShedLockConfigIT`, since it sits next to the deferred-168 pack test. Docs: database
+  table list, marketplace pack note, provisioning checklist (V226 entry corrected, new V227 entry, V226 and V227
+  added to the "prod is not live" list). **V227 is the next free number at this HEAD; skillars-deferred-169 also
+  claims V227+, so whichever merges second renumbers** (the lint checks the marker is below the file's version, so
+  V226 stays valid for any later number).
+- **AC2 (done).** `payment.sessionPack.tierLabel` (`'{label} — ...'`) became `tierSummary` (`'{count} sessions for
+  €{price}'`) in three locales; `admin.coaches.tierLabel` untouched. Labelled tier: label heading + summary
+  caption; label-less: summary heading, no caption; same in the history list. Sold-packs list: `soldPackName`
+  uses the label, else `marketplace.sessionsFallbackLabel` for `sessionCount > 0`, else `'—'` (tier row gone).
+  The four new spec cases mount with the real en-US messages (the `RevenueDashboardPageSpec` pattern). They were
+  red before the page change, and a hand mutation (caption restored to repeat the name, `v-if` dropped) turned two
+  of them red again; restored. The old `:110-119` test was replaced by these. 426 specs green across i18n,
+  coach pages, profile builder, profile, marketplace and utils.
+- **AC4 (done).** `infrastructure.validation.StrictIntegerDeserializer extends StdScalarDeserializer<Integer>`:
+  `VALUE_NUMBER_FLOAT` goes to `ctxt.handleWeirdNumberValue` (an `InvalidFormatException`); everything else to
+  the inherited `_parseInteger`. On both `sessionCount` components. Unit test: 8 cases (`2.5`, `2.0`, `1e1`,
+  `-0.5` refused; `2`, `null`, absent, `"2"` bind; `"2.5"` still refused; plus a guard that plain Jackson still
+  truncates). `SessionPackPaymentResourceWebMvcTest`: red first (the request reached the service), then green
+  with 400 `validation.badRequest` and no service call. `CoachProfileBuilderIT`: step 3 with `2.5` is a 400 and
+  writes neither a tier nor a pricing row. The old "known deviation" note in skillars-deferred-168 is left as
+  history; this closes it. Out of scope and left alone (Design 5): `sessionDurationMinutes` truncates the same way.
+- **Tests run (targeted; no full `mvn verify`):** `MigrationConventionLintTest` + `SchemaAssumptionsTest` (31),
+  `StrictIntegerDeserializerTest` (8), `SessionPackPaymentResourceWebMvcTest` (27),
+  `ProfileBuilderRequestValidationTest` (10), `CoachProfileBuilderIT` (49), Vitest 426. Docs: search index
+  rebuilt, `check-docs` OK.
+- **AC3 not started:** skillars-deferred-169 is not on master (no PR yet). T4 waits for it (D2).
+
 ### File List
+
+- `src/main/resources/db/migration/V227__drop_marketplace_session_packs.sql` (new)
+- `src/main/java/com/softropic/skillars/infrastructure/validation/StrictIntegerDeserializer.java` (new)
+- `src/main/java/com/softropic/skillars/platform/marketplace/contract/CoachSessionPackPort.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/contract/ProfileBuilderStep3Request.java`
+- `src/main/java/com/softropic/skillars/platform/payment/contract/CreateSessionPackTierRequest.java`
+- `src/test/java/com/softropic/skillars/infrastructure/validation/StrictIntegerDeserializerTest.java` (new)
+- `src/test/java/com/softropic/skillars/db/BuilderPackTierBackfillIT.java` (deleted)
+- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileBuilderIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResourceWebMvcTest.java`
+- `src/frontend/src/pages/coach/CoachSessionPackTiersPage.vue`
+- `src/frontend/src/pages/coach/__tests__/CoachSessionPackTiersPageSpec.js`
+- `src/frontend/src/i18n/en-US/index.js`, `de-DE/index.js`, `fr-FR/index.js`
+- `docs/dev-docs/database/index.html`, `docs/dev-docs/marketplace/index.html`, `docs/dev-docs/payment/index.html`,
+  `docs/dev-docs/assets/search-index.js`
+- `docs/deployment/provisioning-checklist.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this story file
 
 ### Change Log
 
 - 2026-11-04: created (ready-for-dev).
 - 2026-11-04: /mto-story-review findings applied (story-review.md, HEAD b21ea376): F1-F10 and the text
   fixes listed in the header comment. Still ready-for-dev.
+- 2026-11-04: dev-story: AC1 (V227, owner-confirmed D1), AC2 and AC4 implemented with targeted tests; T5 partly; T4 (AC3)
+  waits for skillars-deferred-169.
