@@ -7,6 +7,11 @@ import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.CoachOtpEmailEvent;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
+import com.softropic.skillars.platform.security.contract.CoachRegistrationRequest;
+import com.softropic.skillars.platform.security.contract.event.CoachVerificationEmailEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
+import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.repo.Authority;
 import com.softropic.skillars.platform.security.repo.AuthorityRepository;
 import com.softropic.skillars.platform.security.repo.EmailVerificationToken;
 import com.softropic.skillars.platform.security.repo.EmailVerificationTokenRepository;
@@ -21,6 +26,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
@@ -30,6 +36,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -70,6 +77,90 @@ class CoachRegistrationServiceTest {
         service = new CoachRegistrationService(userRepository, authorityRepository, emailTokenRepository,
             otpTokenRepository, passwordEncoder, publisher, sanitizer, rateLimitingService, otpResendSupport,
             verificationTokenService, OtpHasherTest.hasher(), configService);
+    }
+
+    // ── Neutral duplicate registration (no email/phone enumeration) ────────────────────────────
+
+    private CoachRegistrationRequest buildRequest() {
+        return new CoachRegistrationRequest(
+            "Jane", "Doe", "jane.doe@test.com", "password123", "+491701234567", "en");
+    }
+
+    private static User existingAccount(Long id, String email) {
+        User user = new User();
+        user.setId(id);
+        user.setEmail(email);
+        user.setFirstName("Existing");
+        user.setLastName("Owner");
+        user.setLangKey("de");
+        return user;
+    }
+
+    private void assertNeutralNoCreate(User notified) {
+        verify(passwordEncoder).encode("password123");
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+        verifyNoInteractions(emailTokenRepository, authorityRepository);
+        verify(publisher, never()).publishEvent(any(CoachVerificationEmailEvent.class));
+        verify(publisher).publishEvent(new RegistrationDuplicateAttemptEvent(
+            notified.getId(), notified.getEmail(), "Existing", "Owner", "de"));
+    }
+
+    @Test
+    void registerCoach_emailAlreadyRegistered_returnsNormallyAndNotifiesTheExistingAccount() {
+        User existing = existingAccount(7L, "jane.doe@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerCoach(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(existing);
+        verify(userRepository, never()).findOneByPhoneNumber(any());
+    }
+
+    @Test
+    void registerCoach_phoneAlreadyRegistered_returnsNormallyAndNotifiesThePhoneHolder() {
+        User phoneHolder = existingAccount(8L, "holder@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(phoneHolder));
+
+        assertThatCode(() -> service.registerCoach(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(phoneHolder);
+    }
+
+    @Test
+    void registerCoach_newEmailAndPhone_createsTheUserAndSendsOnlyTheVerificationEmail() {
+        stubCreatePath();
+
+        service.registerCoach(buildRequest());
+
+        verify(userRepository).findOneByPhoneNumber("+491701234567");
+        verify(userRepository).save(any(User.class));
+        verify(emailTokenRepository).save(any(EmailVerificationToken.class));
+        verify(publisher).publishEvent(any(CoachVerificationEmailEvent.class));
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+    }
+
+    // The pre-checks found nothing but a concurrent registration won the race to the insert (and
+    // the insert happened to flush inside the try): the narrow race keeps the explicit error.
+    @Test
+    void registerCoach_uniqueViolationRace_throwsEmailInUse() {
+        stubCreatePath();
+        when(userRepository.save(any(User.class)))
+            .thenThrow(new DataIntegrityViolationException("could not execute statement"));
+
+        assertThatThrownBy(() -> service.registerCoach(buildRequest()))
+            .isInstanceOfSatisfying(CoachRegistrationException.class,
+                e -> assertThat(e.getErrorCode()).isEqualTo("security.emailInUse"));
+
+        verify(emailTokenRepository, never()).save(any());
+    }
+
+    private void stubCreatePath() {
+        when(sanitizer.sanitize(any()))
+            .thenAnswer(inv -> new ContactDetailSanitizer.SanitizerResult(inv.getArgument(0), false));
+        when(authorityRepository.findOneByName(any())).thenReturn(Optional.of(new Authority()));
+        when(passwordEncoder.encode(any())).thenReturn("hashed");
     }
 
     private EmailVerificationToken buildToken(UUID token) {

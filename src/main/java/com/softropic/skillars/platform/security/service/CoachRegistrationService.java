@@ -71,8 +71,11 @@ public class CoachRegistrationService {
 
     @RateLimited(key = "coach_register", capacity = 3, duration = 60)
     public void registerCoach(CoachRegistrationRequest req) {
-        if (userRepository.findOneByEmail(req.email()).isPresent()) {
-            throw new CoachRegistrationException("security.emailInUse", "Email already registered");
+        // Email or phone already on an account: answer exactly like a successful registration and
+        // tell the existing account's owner instead (no enumeration oracle).
+        if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, "coach",
+                req.email(), req.phone(), req.password())) {
+            return;
         }
 
         String sanitizedFirst = sanitizer.sanitize(req.firstName()).sanitized();
@@ -101,6 +104,10 @@ public class CoachRegistrationService {
         try {
             userRepository.save(user);
         } catch (DataIntegrityViolationException ex) {
+            // Only reachable on a race: a concurrent registration took this email or phone between
+            // the duplicate pre-check above and the insert. Kept as an explicit error rather than the
+            // neutral path. save() (not saveAndFlush) usually defers the INSERT to commit, in which
+            // case the violation surfaces past this catch as a generic integrity error instead.
             throw new CoachRegistrationException("security.emailInUse", "Email already registered");
         }
 

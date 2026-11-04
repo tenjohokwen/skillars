@@ -7,6 +7,8 @@ import com.softropic.skillars.platform.security.api.dto.VerifyEmailResponse;
 import com.softropic.skillars.platform.security.contract.ParentRegistrationRequest;
 import com.softropic.skillars.platform.security.contract.SkillarsVerificationStatus;
 import com.softropic.skillars.platform.security.contract.event.ParentOtpEmailEvent;
+import com.softropic.skillars.platform.security.contract.event.ParentVerificationEmailEvent;
+import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
 import com.softropic.skillars.platform.security.contract.exception.OtpVerificationException;
 import com.softropic.skillars.platform.security.contract.exception.ParentRegistrationException;
 import com.softropic.skillars.platform.security.repo.Authority;
@@ -36,6 +38,7 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -118,8 +121,80 @@ class ParentRegistrationServiceTest {
         when(passwordEncoder.encode(any())).thenReturn("hashed");
     }
 
+    private static User existingAccount(Long id, String email) {
+        User user = new User();
+        user.setId(id);
+        user.setEmail(email);
+        user.setFirstName("Existing");
+        user.setLastName("Owner");
+        user.setLangKey("de");
+        return user;
+    }
+
+    private void assertNeutralNoCreate(User notified) {
+        verify(passwordEncoder).encode("password123");
+        verify(userRepository, never()).save(any(User.class));
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+        verifyNoInteractions(emailTokenRepository, authorityRepository);
+        verify(publisher, never()).publishEvent(any(ParentVerificationEmailEvent.class));
+        verify(publisher).publishEvent(new RegistrationDuplicateAttemptEvent(
+            notified.getId(), notified.getEmail(), "Existing", "Owner", "de"));
+    }
+
     @Test
-    void registerParent_phoneUniqueViolation_throwsPhoneInUse() {
+    void registerParent_emailAlreadyRegistered_returnsNormallyAndNotifiesTheExistingAccount() {
+        User existing = existingAccount(7L, "jane.doe@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.of(existing));
+
+        assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(existing);
+        verify(userRepository, never()).findOneByPhoneNumber(any());
+    }
+
+    @Test
+    void registerParent_phoneAlreadyRegistered_returnsNormallyAndNotifiesThePhoneHolder() {
+        User phoneHolder = existingAccount(8L, "holder@test.com");
+        when(userRepository.findOneByEmail("jane.doe@test.com")).thenReturn(Optional.empty());
+        when(userRepository.findOneByPhoneNumber("+491701234567")).thenReturn(Optional.of(phoneHolder));
+
+        assertThatCode(() -> service.registerParent(buildRequest())).doesNotThrowAnyException();
+
+        assertNeutralNoCreate(phoneHolder);
+    }
+
+    @Test
+    void registerParent_emailOfAnErasedTombstone_returnsNormallyWithoutCreatingOrNotifying() {
+        User tombstone = existingAccount(9L, "deleted.9@erased.io");
+        tombstone.setLocked(true);
+        ParentRegistrationRequest req = new ParentRegistrationRequest(
+            "Jane", "Doe", "deleted.9@erased.io", "password123", "+491701234567", "en");
+        when(userRepository.findOneByEmail("deleted.9@erased.io")).thenReturn(Optional.of(tombstone));
+
+        assertThatCode(() -> service.registerParent(req)).doesNotThrowAnyException();
+
+        verify(passwordEncoder).encode("password123");
+        verify(userRepository, never()).saveAndFlush(any(User.class));
+        verifyNoInteractions(publisher, emailTokenRepository);
+    }
+
+    @Test
+    void registerParent_newEmailAndPhone_createsTheUserAndSendsOnlyTheVerificationEmail() {
+        stubRegistrationPrerequisites();
+
+        service.registerParent(buildRequest());
+
+        verify(userRepository).findOneByPhoneNumber("+491701234567");
+        verify(userRepository).saveAndFlush(any(User.class));
+        verify(emailTokenRepository).save(any(EmailVerificationToken.class));
+        verify(publisher).publishEvent(any(ParentVerificationEmailEvent.class));
+        verify(publisher, never()).publishEvent(any(RegistrationDuplicateAttemptEvent.class));
+    }
+
+    // The pre-checks found nothing but a concurrent registration won the race to the insert: the
+    // unique constraint still fires, and that narrow case keeps the explicit error.
+    @Test
+    void registerParent_phoneUniqueViolationRace_throwsPhoneInUse() {
         stubRegistrationPrerequisites();
         when(userRepository.saveAndFlush(any(User.class))).thenThrow(dive("user_phone_key"));
 
@@ -131,7 +206,7 @@ class ParentRegistrationServiceTest {
     }
 
     @Test
-    void registerParent_nonPhoneDataIntegrityViolation_fallsThroughToEmailInUse() {
+    void registerParent_nonPhoneDataIntegrityViolationRace_fallsThroughToEmailInUse() {
         stubRegistrationPrerequisites();
         // A constraint-name-less generic violation, and one naming an unrelated constraint, must
         // both fall through to the existing emailInUse default — mirrors
@@ -145,7 +220,7 @@ class ParentRegistrationServiceTest {
     }
 
     @Test
-    void registerParent_unrelatedConstraintViolation_fallsThroughToEmailInUse() {
+    void registerParent_unrelatedConstraintViolationRace_fallsThroughToEmailInUse() {
         stubRegistrationPrerequisites();
         when(userRepository.saveAndFlush(any(User.class))).thenThrow(dive("user_login_key"));
 
