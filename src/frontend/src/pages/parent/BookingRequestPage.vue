@@ -405,10 +405,15 @@ const batchAtMax = computed(() => bookingStore.batchBasketSize >= maxBatchSize.v
 // booking request. Batch bookings don't carry a pack (Task 4 decision — credit-wallet/Stripe
 // only), so this selector only applies in single-booking mode.
 const selectedPackId = ref(null)
+// Only a list loaded for this page's player: after a child switch the store still holds the previous
+// child's packs until the reload lands (or for good, if it fails), and a pack picked from them would
+// be refused (packPlayerMismatch).
 const activePacksForCoach = computed(() =>
-  bookingStore.sessionPacks.filter(
-    (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
-  ),
+  String(bookingStore.sessionPacksPlayerId) !== String(playerId.value)
+    ? []
+    : bookingStore.sessionPacks.filter(
+        (p) => String(p.coachId) === String(coachId) && p.status === 'ACTIVE',
+      ),
 )
 const activePackSessionTotal = computed(() =>
   activePacksForCoach.value.reduce((sum, p) => sum + (Number(p.sessionCount) || 0), 0),
@@ -494,6 +499,21 @@ watch(
   },
   { immediate: true },
 )
+
+// The header's child switcher changes playerStore.activePlayerId while this page stays mounted. A pack
+// chosen (or preselected) for the previous child is not this child's: the backend refuses it
+// (packPlayerMismatch). Clear the choice and load this child's packs; defaultPackId stays undefined
+// until they arrive (sessionPacksPlayerId still names the previous child), then sets the new default.
+// Reloaded on every change to a real id, even while onMounted's own load is in flight or before it
+// runs, including an id that arrives after mount (null to an id). The store keeps only the latest
+// call's response, so an earlier load cannot land last, and a duplicate of onMounted's load is
+// harmless.
+watch(playerId, async (id, previous) => {
+  if (String(id) === String(previous)) return
+  selectedPackId.value = null
+  packChoiceTouched.value = false
+  if (id) await bookingStore.loadPlayerPacks(id)
+})
 
 // fix/booking-price-and-excused-race: only an explicit false blocks — an unknown (null) state must not
 // disable booking; the backend refusal (booking.coachPricingUnavailable) is the real guard.

@@ -54,7 +54,16 @@ public class RegistrationDuplicateAttemptListener {
         try {
             Map<String, Object> data = new HashMap<>();
             data.put("baseUrl", frontendLinks.base());
-            data.put("helpCode", ShortCode.shortenInt(UUID.randomUUID().hashCode()));
+            String helpCode = ShortCode.shortenInt(UUID.randomUUID().hashCode());
+            data.put("helpCode", helpCode);
+            // The template words a phone-only match differently ("the phone number on your account, with
+            // a different email address"). EmailRegistrationStrategy sends the same template without
+            // this key, which the template reads as false.
+            data.put("phoneMatch", event.phoneMatch());
+            // The mail tells the owner to quote this code; support finds the attempt from this line.
+            log.info("[REGISTRATION_DUPLICATE_NOTICE] duplicate-registration notice queued",
+                kv("helpCode", helpCode), kv("existingUserId", event.existingUserId()),
+                kv("phoneMatch", event.phoneMatch()), kv("sendId", sendId));
 
             Recipient recipient = new Recipient();
             recipient.setEmail(event.toAddress());
