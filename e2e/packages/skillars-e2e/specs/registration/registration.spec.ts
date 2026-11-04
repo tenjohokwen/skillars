@@ -238,6 +238,17 @@ test.describe('B · Registration & verification', () => {
           timeoutMs: 30_000,
         })
         expect(notice.links().some((link) => link.includes('/forgot-password'))).toBe(true)
+        if (taken === 'phone') {
+          // The person on the form is told too, at the address they typed: a number held by
+          // someone else (it is not verified at registration) must not leave them waiting.
+          const told = await mail.waitForMessage({
+            to: attempt.email,
+            subjectMatches: /couldn't create/i,
+            since,
+            timeoutMs: 30_000,
+          })
+          expect(told.links().some((link) => link.includes('/forgot-password'))).toBe(true)
+        }
         // Nothing was created: no verification mail goes to the address on the form. The notice
         // is enqueued in the same transaction a verification mail would be, so it has arrived by now.
         await expect(
