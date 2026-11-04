@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 import jakarta.persistence.LockModeType;
 
@@ -230,8 +231,147 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, Long
         + "WHERE r.tokenHash = :tokenHash AND r.used = false")
     void markUsedByTokenHash(@Param("tokenHash") String tokenHash);
 
+    /**
+     * skillars-deferred-167 (AC4): does this rotation chain still have a token that could be traded in for
+     * a session? Live means {@code used = false AND revoked_at IS NULL AND expires_at >= :now} — the same
+     * three conditions {@code AuthService.decideAndRotate} applies before it rotates. The bound is
+     * inclusive because that method treats {@code expiresAt == now} as still live
+     * ({@code expiresAt.isBefore(now)} is false), and the two must not disagree about the same row.
+     *
+     * <p><strong>This does cap a web session at {@code REFRESH_TOKEN_TTL} after login, and three attempts
+     * to avoid that were all withdrawn.</strong> The SPA has no caller for
+     * {@code POST /api/auth/refresh}, so its chain is the single row written at login and keeps that
+     * deadline. Recorded here because each attempt failed for a different reason and none should be
+     * retried blind:
+     * <ol>
+     *   <li>Rotating from the SPA: its only trigger was the idle-warning dialog, which a polling tab
+     *       never reaches, so it missed the very population it was for — and a failed rotation returns
+     *       cookie-deletion headers, so it could sign the user out instead of extending them.</li>
+     *   <li>Exempting rows with no {@code rotated_at}/{@code replaced_by_id} from the expiry test: dead on
+     *       arrival, because a rotated chain's LIVE END is itself always such a row
+     *       ({@code decideAndRotate} creates the successor with both null), so it exempted every chain.
+     *       Keying on sibling rows fails too — the sweep deletes the expired predecessors that would be
+     *       the evidence.</li>
+     *   <li>Sliding {@code expires_at} for an active session: it broke logout. The {@code rtkn} cookie's
+     *       max-age IS {@code REFRESH_TOKEN_TTL}, so past that point the browser has dropped it while the
+     *       slid row stayed live — and {@code SecurityUtil.terminateSession} revokes only when that cookie
+     *       is present, so Logout silently revoked nothing and this check could never answer false again.
+     *       It re-opened the hole AC4 exists to close.</li>
+     * </ol>
+     * The general rule those add up to: <strong>a session may not outlive the cookie that identifies
+     * it</strong>. Extending the row's life requires issuing a fresh {@code Set-Cookie}, which only
+     * rotation does, so there is no server-only fix — removing the cap needs the SPA to rotate on a
+     * trigger an active session actually reaches, which is its own piece of frontend work.
+     *
+     * <p>This is the whole of the per-session JWT check, and it is deliberately a scalar
+     * {@code exists}/count rather than a fetch: {@code JWTAuthorizationFilter} calls it on a request that
+     * has just authorized the user, and loading a managed {@code RefreshToken} there would put a row in
+     * the persistence context that a later locked read in the same request would return WITHOUT refreshing
+     * (the trap that cost skillars-deferred-166 a 409 on logout). Nothing in the filter needs the row.
+     *
+     * <p><strong>Never call this with a null {@code sessionId}.</strong> {@code session_id = NULL} matches
+     * no row, so a null argument would report "no live token" for every pre-V225 session and reject it —
+     * the exact opposite of AC5's deliberate fail-open. The caller checks for null first.
+     *
+     * <p>Scoped to {@code userId} as defence in depth, not because a bypass exists today: the claim can
+     * only have come from a token this server signed off that user's own row, and AC3 deliberately removed
+     * the one path that would have read a chain id from the request. But the claim is copied through
+     * {@code renewLoginToken} unvalidated, so without this predicate the only thing standing between a
+     * {@code potc} from one account and another account's live chain is that no mint path currently takes
+     * the value from the request. That is a property of today's call sites, not an invariant, so the
+     * question this answers is "is THIS user's chain live", never "is some chain live".
+     *
+     * <p>{@code :now} is a parameter rather than {@code CURRENT_TIMESTAMP} so the caller supplies
+     * {@code Instant.now(ClockProvider.getClock())}, keeping this consistent with every other expiry
+     * comparison in the auth code and testable without touching the database clock.
+     */
+    @Query("SELECT COUNT(r) > 0 FROM RefreshToken r WHERE r.sessionId = :sessionId "
+        + "AND r.userId = :userId AND r.used = false AND r.revokedAt IS NULL AND r.expiresAt >= :now")
+    boolean existsLiveBySessionId(@Param("sessionId") UUID sessionId, @Param("userId") Long userId,
+                                  @Param("now") Instant now);
+
+    /**
+     * skillars-deferred-167 round 2: the chain id of the row this token hash names, but only if the row
+     * belongs to {@code userId}.
+     *
+     * <p>Exists to REPAIR a lost claim, which is a real state rather than a hypothetical one. During a
+     * rolling deploy (and after a rollback) an instance running the previous release serves requests for
+     * JWTs minted by an upgraded one; its {@code extendTtlOfToken} rebuilds the claim map from
+     * {@code toClaims} and re-puts only the claims it knows, so it drops {@code rtsid} and re-signs
+     * without it. The new code then passes the missing value straight through, and that session would be
+     * unenforceable for the rest of its life. Re-deriving on the DB-reauth branch is the only thing that
+     * puts the claim back.
+     *
+     * <p>Scalar, so nothing is loaded into the persistence context on a request that has other work to do;
+     * and scoped to {@code userId} because the value comes from a cookie on the request. Without that
+     * predicate a caller pairing their own {@code rtkn} with a victim's {@code potc} could attach their
+     * own live chain's id to the victim's token and keep it passing the liveness check. Returns
+     * {@code null} for an unknown hash, a row owned by someone else, or a row whose own
+     * {@code session_id} is still null (a chain predating V225).
+     */
+    @Query("SELECT r.sessionId FROM RefreshToken r WHERE r.tokenHash = :tokenHash AND r.userId = :userId")
+    UUID findSessionIdByTokenHashAndUserId(@Param("tokenHash") String tokenHash,
+                                           @Param("userId") Long userId);
+
+    /**
+     * Deletes every expired row, acquiring them in ascending {@code id} order.
+     *
+     * <p><strong>skillars-deferred-167 (AC9): the ordering is the point.</strong> This used to be a plain
+     * JPQL bulk {@code DELETE}, which cannot carry an {@code ORDER BY}, so PostgreSQL locked rows in
+     * whatever order its scan produced. Meanwhile both chain walks —
+     * {@code AuthService.resolveGraceSuccessor} and
+     * {@code RefreshTokenRevocationService.revokeChainByTokenHash} — take {@code PESSIMISTIC_WRITE} locks
+     * along {@code replaced_by_id}, which is ascending {@code id} in practice (a successor is always
+     * created after its predecessor, and {@code BaseEntity}'s {@code @Tsid} ids are monotonic within a
+     * JVM). <strong>In practice, not by construction:</strong> a TSID's low bits are a per-JVM node and
+     * counter component, so a predecessor and successor written by two different application instances
+     * inside the same millisecond could invert. A rotation reads the predecessor under a row lock and
+     * inserts the successor after that commit, so the gap is a database round trip and this is
+     * unreachable rather than impossible. If it ever happens the walk locks descending while this sweep
+     * locks ascending, the cycle returns, and the guard on
+     * {@code AuthCleanupService.purgeExpiredRefreshTokens} logs a skipped run instead of a resolved one. An
+     * expired chain being walked while the hourly sweep ran could therefore cycle: the walk holding a
+     * predecessor and waiting for a successor the {@code DELETE} already held. PostgreSQL kills one side,
+     * and before deferred-166 logout took a single-row lock that could wait but never cycle.
+     *
+     * <p>The {@code FOR UPDATE} subselect is what imposes the order: PostgreSQL does not pull a locking
+     * subquery up into the outer statement, so it runs as its own plan with {@code LockRows} above
+     * {@code Sort} and takes every row lock in {@code id} order before the delete proceeds. Native,
+     * because JPQL has no way to express either the ordering or {@code FOR UPDATE} in a bulk delete.
+     *
+     * <p><strong>The cutoff is the DATABASE's clock, deliberately.</strong> An earlier version of this
+     * method took an {@code Instant} parameter so the caller could pass
+     * {@code Instant.now(ClockProvider.getClock())}, for consistency with every other expiry comparison in
+     * the auth code. That was wrong for a sweep: the cutoff decides what gets DELETED, and on a
+     * multi-instance deployment whichever node wins the {@code @SchedulerLock} would impose its own clock,
+     * so a node running fast would delete rows the database still considers live. Since
+     * skillars-deferred-167 AC4 that is no longer invisible — a deleted row makes
+     * {@link #existsLiveBySessionId} false and refuses the owner's standing JWT on its next DB-reauth
+     * cycle, so clock skew would read as a mass logout. {@code now()} is single-sourced and immune to it.
+     * The liveness check keeps the application clock on purpose: it must agree with
+     * {@code AuthService.decideAndRotate} about whether a row is live, and being a few seconds out there
+     * costs one early or late refusal rather than a deletion.
+     *
+     * <p><strong>What this does NOT fix:</strong> {@link #markAllUsedByUserId(Long)} and
+     * {@link #markAllRevokedByUserId(Long, Instant)} are still unordered bulk {@code UPDATE}s over one
+     * user's rows, so they can still deadlock against this sweep. That shape predates deferred-167 and is
+     * documented as a deadlock source on {@code AuthService.refresh}, which converts it to a 401.
+     *
+     * <p><strong>And one hole in the ordering itself, latent rather than reachable.</strong> V224's FK is
+     * {@code ON DELETE SET NULL}, so deleting a row makes PostgreSQL update its PREDECESSOR's
+     * {@code replaced_by_id} — a lower-id row that is not in this statement's locked, ordered set when it
+     * is not itself expired. That would be a lower-id lock taken while holding higher-id locks, the very
+     * cycle shape this ordering removes. It is unreachable in production: {@code expires_at} is only ever
+     * written as {@code now + REFRESH_TOKEN_TTL}, at login and at each rotation, and a predecessor is
+     * always created before its successor, so a predecessor always expires FIRST and is already in the
+     * set. Only a test that rewrites {@code expires_at} directly can construct the inverse — which
+     * {@code AuthResourceIT.expiredTokenSweep_deletesInIdOrder_andNullsThePredecessorsSuccessorLink} does
+     * deliberately, to cover the referential action. Do not restate the ordering guarantee as absolute.
+     */
     @Modifying
     @Transactional
-    @Query("DELETE FROM RefreshToken r WHERE r.expiresAt < CURRENT_TIMESTAMP")
+    @Query(value = "DELETE FROM main.refresh_tokens WHERE id IN ("
+        + "SELECT id FROM main.refresh_tokens WHERE expires_at < now() ORDER BY id FOR UPDATE)",
+        nativeQuery = true)
     void deleteExpiredTokens();
 }

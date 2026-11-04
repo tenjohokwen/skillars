@@ -19,6 +19,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.support.TransactionCallback;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+
 import java.time.Instant;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -73,6 +75,12 @@ class AuthServiceTest {
     @Mock private UserIdentitySignalService userIdentitySignalService;
     @Mock private TransactionTemplate transactionTemplate;
 
+    /**
+     * A real registry, not a mock: skillars-deferred-167 AC7 requires the downgraded theft case to be
+     * counted, and a counter is only worth asserting if the value actually moves.
+     */
+    private final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
+
     private AuthService authService;
     private MockHttpServletRequest request;
     private MockHttpServletResponse response;
@@ -87,7 +95,7 @@ class AuthServiceTest {
         MockitoAnnotations.openMocks(this);
         authService = new AuthService(userRepository, passwordEncoder, refreshTokenRepository,
             loginRateLimiter, configService, loginTokenManager, securityUtil, userIdentitySignalService,
-            transactionTemplate);
+            transactionTemplate, meterRegistry);
         request = new MockHttpServletRequest();
         request.setCookies(new Cookie(SecurityConstants.REFRESH_TOKEN_COOKIE, RAW_REFRESH_TOKEN));
         response = new MockHttpServletResponse();
@@ -250,6 +258,46 @@ class AuthServiceTest {
         verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
         verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
         assertThat(revokeInsideLockedBlock).isFalse();
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-167 AC7 as amended: a stale token on a chain that is STILL LIVE, "
+        + "outside the window, revokes THAT CHAIN only — never the account — and is counted")
+    void refresh_staleTokenOutsideTheWindowOnALiveChain_revokesTheChainNotTheAccount() {
+        // The case AC7 downgraded. Two concurrent refreshes of one cookie both set rtkn and the jar keeps
+        // whichever arrived last; when that is the winner's, the client is left permanently one hop behind
+        // a live chain. Its next refresh past the window used to run markAllUsedByUserId +
+        // invalidateSessionsForUser, logging the user out of every device over a double-submitted request.
+        //
+        // Note what distinguishes this from refresh_reuseRotatedLongAgo above: there the successor lookup
+        // is unstubbed and so finds nothing, which is still genuine reuse. Here the chain HAS a live end.
+        RefreshToken stale = presentedToken();
+        stale.setUsed(true);
+        stale.setRotatedAt(Instant.now().minusSeconds(3600));
+        stale.setReplacedById(SUCCESSOR_ID);
+
+        RefreshToken liveEnd = new RefreshToken();
+        liveEnd.setId(SUCCESSOR_ID);
+        liveEnd.setUserId(USER_ID);
+        liveEnd.setUsed(false);
+        liveEnd.setExpiresAt(Instant.now().plusSeconds(3600));
+
+        lockReturns(stale);
+        when(refreshTokenRepository.findByIdForUpdate(SUCCESSOR_ID)).thenReturn(Optional.of(liveEnd));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(liveUser()));
+
+        assertThatThrownBy(() -> authService.refresh(request, response))
+            .isInstanceOf(BadCredentialsException.class);
+
+        // The point of AC7, and what the amendment kept: the ACCOUNT is never revoked here.
+        verify(refreshTokenRepository, never()).markAllUsedByUserId(anyLong());
+        verify(userRepository, never()).invalidateSessionsForUser(anyLong(), any());
+        // What the amendment added: this chain IS revoked, via the walk that starts at the presented
+        // cookie. Without it, clearing the cookie left the victim of a stolen-and-rotated token no way to
+        // reach the thief's live successor — not by logging out, not by logging in again.
+        verify(securityUtil).terminateSession(request, response);
+        // Counted, not just logged: a warn line alone cannot be alerted on by rate.
+        assertThat(meterRegistry.counter("security.refresh.stale_live_chain").count()).isEqualTo(1.0);
     }
 
     @Test

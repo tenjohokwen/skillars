@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,6 +51,52 @@ import lombok.extern.slf4j.Slf4j;
 @Service
 @RequiredArgsConstructor
 public class RefreshTokenRevocationService {
+
+    /**
+     * skillars-deferred-167 (AC4): can the rotation chain identified by {@code refreshSessionId} still be
+     * traded in for a session? True while it has at least one row that is unused, unrevoked and unexpired.
+     *
+     * <p>This is the whole of the per-session JWT check that {@code JWTAuthorizationFilter} runs on its
+     * DB-reauth branch. False means every token in the chain is spent, revoked or expired — a logout, a
+     * forced logout, a revoke-all, or simply a chain that ran out its 7-day TTL — so the access token minted
+     * for that chain must stop working too.
+     *
+     * <p>Read-only and {@code SUPPORTS}, unlike everything else on this service: it writes nothing, so it
+     * has no rollback to protect itself from, and it must be able to join the caller's transaction or run
+     * with none at all — the filter's case — rather than forcing a second one per request. A previous
+     * version slid the chain's deadline from here; see
+     * {@link RefreshTokenRepository#existsLiveBySessionId(UUID, Long, Instant)} for why that was withdrawn,
+     * and do not reintroduce a write on this path without reading it.
+     *
+     * <p>Rejects a {@code null} id by returning {@code true} — "cannot tell, so do not block". A null
+     * {@code session_id} matches no row, so asking the database would answer "nothing live" for every
+     * pre-V225 session and log those users out, which is the precise opposite of AC5's deliberate
+     * fail-open. The filter also checks for null before calling, so this is defence in depth, not the
+     * primary guard.
+     */
+    @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
+    public boolean hasLiveTokenForSession(final UUID refreshSessionId, final Long userId) {
+        if (refreshSessionId == null || userId == null) {
+            return true;
+        }
+        return refreshTokenRepository.existsLiveBySessionId(
+            refreshSessionId, userId, Instant.now(ClockProvider.getClock()));
+    }
+
+    /**
+     * skillars-deferred-167 round 2: the chain id for a raw refresh token, used to put back a claim a
+     * rolling deploy stripped. See
+     * {@link RefreshTokenRepository#findSessionIdByTokenHashAndUserId(String, Long)} for why that state
+     * exists and why the lookup is owner-scoped. Returns {@code null} whenever it cannot answer, which the
+     * caller treats as "no claim" — the same deliberate fail-open as a token that never had one.
+     */
+    @Transactional(readOnly = true, propagation = Propagation.SUPPORTS)
+    public UUID sessionIdForTokenHash(final String tokenHash, final Long userId) {
+        if (tokenHash == null || tokenHash.isBlank() || userId == null) {
+            return null;
+        }
+        return refreshTokenRepository.findSessionIdByTokenHashAndUserId(tokenHash, userId);
+    }
 
     /**
      * Links ({@code replaced_by_id} hops) the chain walk will follow before giving up, so it revokes the

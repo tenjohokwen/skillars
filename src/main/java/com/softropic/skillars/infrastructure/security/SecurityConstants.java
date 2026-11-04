@@ -143,6 +143,31 @@ public final class SecurityConstants {
     public static final String PHONE         = "phone";
     public static final String USERNAME = "username";
     public static final String SESSION_ID = "sessionId";
+
+    /*
+    skillars-deferred-167 (AC3): the id of the refresh-token ROTATION CHAIN that minted this JWT —
+    main.refresh_tokens.session_id, as a uuid string. Deliberately NOT named sessionId: that constant
+    directly above is the BROWSER session id (the ION cookie, via RequestMetadataProvider) and
+    TokenValidatorImpl.isTokenFixed compares it on every request, so reusing or shadowing the name would
+    break client-fixation detection. The two are unrelated: one identifies a browser, this one identifies
+    a credential chain.
+
+    What it is for: JWTAuthorizationFilter's DB-reauth branch asks RefreshTokenRepository
+    .existsLiveBySessionId whether that chain still has a live token, and refuses the JWT when it does not.
+    That is what makes a logout (which revokes the whole chain) kill this session's access token within
+    DB_REFRESH_TOKEN_INTERVAL, WITHOUT bumping the account-wide security_session_invalidated_at epoch —
+    bumping it would sign the user out of every device, which skillars-deferred-166 AC3 forbids.
+
+    Carried forward UNCHANGED across fast-path extensions, like SESSION_ISSUED_AT and DB_REFRESH_TOKEN:
+    JwtManagerImpl.extendTtlOfToken rebuilds the claim map from scratch, so a claim it does not explicitly
+    re-put is silently dropped (OPF_SEED is the live example of one that is).
+
+    ABSENT on any JWT minted before this story, and the check is skipped rather than failed in that case
+    (AC5, fail-open) — failing closed would sign out every live session the moment this deploys, and
+    extendTtlOfToken has no way to invent the value. Not a credential: nothing is ever authorised by
+    possessing it.
+    */
+    public static final String RTKN_SESSION = "rtsid";
     public static final String CLIENT_ID = "clientId";
     public static final String USER_AGENT_HASH = "userAgent";
     public static final String OPF_SEED = "opfSeed";

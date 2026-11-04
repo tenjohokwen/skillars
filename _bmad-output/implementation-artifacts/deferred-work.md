@@ -21,7 +21,193 @@ list per this file's "deleted outright once implemented" rule; their eval cases 
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
 not renumber, so the list below starts at RS03.
 
-- **[skillars-deferred-166, OWNER DECISION NEEDED, medium/security]** A replay of a revoked refresh token
+**OWNER DECIDED 2026-11-03: the next bundle after skillars-deferred-167 is the payments/Stripe cluster** —
+RS05, RS06, RS07 and RS09, optionally RS08. Chosen because RS06 is the only high-severity money item (throwing
+away the idempotency key on any server response lets a retry double-charge after the server's own failure) and
+RS09 compounds it (the parent's saved default card is overwritten before the charge). One domain, so one story's
+context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + RS04 (the small logic pair) were
+the alternatives and stay queued behind it.
+
+- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a), IMPLEMENTATION PENDING A DATE, medium/security]** Flip the per-session JWT check from
+  fail-open to fail-closed on a missing session claim — and the trigger cannot be "wait 7 days", which is
+  what this entry first said. skillars-deferred-167 AC5 skips the check for a JWT with no `rtsid` claim,
+  because failing closed at deploy would sign out every live session and neither mint path can invent the
+  claim. **Both reviewer arms then showed the exposure is unbounded**, and a later round narrowed it without
+  closing it. As first written this entry said a claimless token never acquires a claim; that is now only
+  true of one presented WITHOUT its `rtkn` cookie. With the cookie the filter re-derives the chain id and
+  the claim is restored for the rest of that session — the repair that covers a rolling deploy stripping
+  it. Without the cookie there is nothing to derive from, the check is skipped, and a holder making one
+  request every `JWT_TTL` keeps the session alive indefinitely, past logout, expiry and the sweep.
+  **Omitting a cookie costs an attacker nothing**, so a `potc` copied before the rollout and replayed on
+  its own is still a permanent session, and the 7-day reasoning this entry originally carried was wrong.
+  **Options.** (a) Flip on a chosen date and accept that any remaining claimless holders are signed out
+  then — one-off, bounded, and the only option that actually closes it. (b) Ship a forced re-login
+  (invalidate every session once) and flip immediately after, which closes it without a surprise logout
+  later but costs every user one login now. (c) Derive the claim on the DB-reauth branch from the `rtkn`
+  cookie when the row carries one, with an ownership check against the authorized principal — narrows the
+  population but cannot help a holder who has only the `potc`, which is precisely the thief. **Recommend
+  (a)**, with the date announced; (c) adds a query and a new failure mode for partial coverage.
+  **DECIDED 2026-11-03: (a) — flip on an announced date.** Note that (c) shipped anyway for a different
+  reason (a rolling deploy strips the claim from post-deploy tokens, and re-derivation is the only repair),
+  so the remaining population is narrower than when this entry was written: only a holder presenting a
+  claimless `potc` WITHOUT the matching `rtkn` cookie. **Deliberately NOT implemented in
+  skillars-deferred-167:** the flip needs a date, which is an operational choice, and shipping it blind
+  would sign those holders out at an unannounced moment. Whoever picks the date owns inverting the
+  early return in `JWTAuthorizationFilter.assertSessionChainStillLive` and rewriting its javadoc, which
+  currently documents the fail-open as deliberate.
+
+- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option b) -> APPLIED, high/security]** The AC7 downgrade also destroyed the
+  victim's only remediation, which neither the story nor the AC7 decision anticipated. Both reviewer arms
+  raised it independently in round 3 of that story's PR review.
+  The shape: an attacker who steals an `rtkn` and rotates it first leaves the victim holding a `used` row
+  in front of the attacker's live chain. The victim's next refresh past the 30 s window now answers 401
+  with no writes — and calls `clearAuthCookies`, which **deletes the victim's `rtkn`**. That cookie was the
+  only value `SecurityUtil.terminateSession` could hash to start a chain walk, and that walk was the one
+  remaining thing that would have reached the attacker's successor and revoked it. So after that 401 the
+  victim's Logout revokes nothing, a fresh login starts an unrelated chain, and the attacker's chain keeps
+  rotating (each rotation writes a fresh `expires_at`, so it never expires). AC4 cannot help: attacker and
+  victim share the same `session_id` and the chain is live. Before this story the victim's own refresh
+  remediated automatically, because it escalated to revoke-all. What remains is a `warn` line and the
+  `security.refresh.stale_live_chain` counter; the only user-reachable fix is a password change.
+  **Options.** (a) Stop clearing the cookies on this branch — one line. The victim keeps a `used` cookie
+  that cannot be traded in for anything, but Logout can still walk the chain and kill the attacker. Cost:
+  a client that believes it is still signed in (its JWT does keep working, since the chain is live).
+  (b) Have the branch revoke the chain from the presented row forward, which kills the attacker and the
+  victim's own live end — correct for theft, and for a benign double-refresh it is the forced re-login AC7
+  set out to avoid, though scoped to one chain rather than the whole account. (c) Keep AC7 as shipped and
+  accept that this theft shape is unremediable short of a password change. **Recommend (b)**: it keeps
+  AC7's blast radius inside one chain, which was the point, while restoring a revocation the victim's own
+  client triggers.
+  **APPLIED.** The branch now calls `securityUtil.terminateSession`, which walks forward from the presented
+  cookie's row and so reaches the thief's live successor. The account-wide revocation AC7 removed stays
+  removed — that was always the distinction that mattered — so a benign double-refresh costs that one chain
+  a re-login rather than every device. This supersedes AC7's written text (`401 + clearAuthCookies`); the
+  AC was left as approved and the amendment is recorded in the story's Completion Notes and Change Log.
+  Residual, accepted: revoking one chain does not kill a JWT the thief holds from a DIFFERENT chain of the
+  same account, which only the account-wide epoch would — that is the trade AC7 exists to make.
+
+- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a) -> APPLIED, medium/logic]** The chain cap introduced by that story
+  logs every continuously active WEB user out 7 days after login, and does not cap API clients at all.
+  The SPA has no caller for `POST /api/auth/refresh` (`src/frontend/src/api/auth.api.js` records that the
+  helper was removed), so an SPA session's chain is the single row created at login. Seven days later it
+  expires, `existsLiveBySessionId` answers false, and the standing JWT is refused on the next DB-reauth
+  cycle — a hard logout, possibly mid-form, with no client-side way to extend and no warning (the existing
+  countdown dialog covers the 15-minute JWT, not this). A client that *does* rotate is never capped,
+  because each rotation writes a fresh `expires_at`. So the cap binds exactly the population the story did
+  not have in mind and misses the one it did. AC10 declared the cap intended, but on the understanding
+  that it affected long-lived API clients.
+  **Options.** (a) Let the SPA refresh — restore a `POST /api/auth/refresh` caller (ideally on the existing
+  countdown, which already knows when the JWT is near expiry), so a web session rotates and is never
+  capped. (b) Treat an unrotated chain as live for as long as its JWT keeps sliding, i.e. only apply the
+  cap to chains that have rotated at least once — keeps the logout-kill, drops the cap. (c) Accept the
+  7-day logout and tell users, which needs at least a warning state in the SPA. **Recommend (a)**: it makes
+  the chain do what the design assumed it already did, and the cap then means what AC10 said it meant.
+  **(a) WAS APPLIED AND THEN REVERTED; (b) APPLIED INSTEAD — owner re-decided 2026-11-03 after round 4
+  of the PR review.** Option (a) added `authApi.rotateRefreshToken()` to
+  `sessionManager.refreshSession()`. Round 4 showed it failed on three counts, all verified in code:
+   1. **It did not protect the target population.** `refreshSession()`'s only non-test caller is
+      `useSession.handleRefresh()`, bound solely to `SessionWarningDialog.vue`'s "Continue session" button.
+      That dialog needs ~10 minutes with no authenticated response (every response rewrites `rint`), so a
+      tab that keeps polling never reaches it, never rotates, and was still capped at 7 days — exactly the
+      continuously active web user (a) was chosen to save.
+   2. **"Best-effort and swallowed" was wrong.** The teardown does not come from the `errorKey` gate that
+      reasoning relied on: every failure branch of `AuthService.refresh` except `Unknown` clears cookies
+      BEFORE throwing, so a failed rotation's 401 deletes `potc`/`rtkn`/`rint`/`user`/`skp`; the axios
+      interceptor then finds no `rint` and fires `session:expired`. Clicking "Continue session" could log
+      the user out, with `refreshFailed` left false so nothing explained it. On the `Reuse` branch the
+      swallowed call had also revoked every device.
+   3. **It made the `StaleChain` branch reachable from the web**, which AC7's blast-radius argument
+      explicitly assumed it was not. A stripped or lost `Set-Cookie`, or two tabs extending together,
+      leaves the browser one hop behind, and the next extension then revokes the chain all its tabs use.
+  **OWNER RE-DECIDED 2026-11-03 (final): ship skillars-deferred-167 WITH the cap, and fix it in its own
+  story.** Three attempts to remove it were made and all withdrawn, each for a different reason, and the
+  third actively broke logout. The cap is therefore the shipped behaviour: a web session ends
+  `REFRESH_TOKEN_TTL` after login, which errs toward security and is documented in
+  `docs/session-refresh-mechanism.md` and the provisioning checklist.
+
+  **The three withdrawn attempts, so none is retried blind:**
+  1. *SPA rotation.* Its only trigger was `sessionManager.refreshSession()`, reachable solely from the
+     idle-warning dialog's "Continue session" button — which a tab that keeps polling never reaches, so it
+     missed the very population it was for. And "best-effort and swallowed" was false: every failure branch
+     of `AuthService.refresh` except `Unknown` clears cookies BEFORE throwing, so a failed rotation's 401
+     deletes `potc`/`rtkn`/`rint`/`user`/`skp` and the axios interceptor then fires `session:expired` —
+     clicking Continue could sign the user out, with `refreshFailed` false so nothing explained it. It also
+     made the `StaleChain` branch reachable from the web, which AC7's blast-radius argument assumed it was
+     not.
+  2. *Exempting chains that never rotated.* Dead on arrival, caught by an IT rather than a reviewer: a
+     rotated chain's LIVE END is itself always an unrotated row (`decideAndRotate` creates the successor
+     with `rotated_at` and `replaced_by_id` both null), so it exempted every chain and the cap applied to
+     nothing. Keying on sibling rows fails too — the sweep deletes the expired predecessors that would be
+     the evidence.
+  3. *Sliding `expires_at` for an active session.* Both reviewer arms found it broke logout. The `rtkn`
+     cookie's max-age IS `REFRESH_TOKEN_TTL` and only login/refresh write it, so past that point the
+     browser has dropped the cookie while the slid row stays live — and `SecurityUtil.terminateSession`
+     revokes only when that cookie is present, so Logout silently revoked nothing, `revoked_at` stayed
+     NULL, and the chain check could never answer false again. It re-opened the hole AC4 exists to close.
+     Two further holes: an attacker holding a copied jar performs the slide himself, so the cap never fires
+     on a stolen credential; and an `rtkn` exfiltrated on day 1 and left unused stays redeemable
+     indefinitely, kept alive by the victim's own browsing.
+
+  **The rule they add up to, which is the thing to design against: a session may not outlive the cookie
+  that identifies it.** Extending the row's life requires issuing a fresh `Set-Cookie`, which only a
+  rotation does, so there is no server-only fix.
+
+- **[NEW STORY NEEDED, filed 2026-11-03, medium/logic]** Let an actively-used web session rotate its
+  refresh chain, so it is not logged out every `REFRESH_TOKEN_TTL`. This is the real fix for the cap
+  skillars-deferred-167 shipped, and it is frontend work: a rotation call driven by a trigger an active
+  session actually reaches (a timer, or the sliding-TTL path — NOT the idle-warning dialog, which a polling
+  tab never sees), with real handling for the fact that every failure branch of `AuthService.refresh`
+  except `Unknown` returns cookie-deletion headers, so a failed rotation must be treated as a session
+  teardown rather than swallowed. Two constraints from that story's reviews: rotating makes the
+  `StaleChain` branch reachable from the web, so its behaviour has to be acceptable for browsers before
+  this ships; and `POST /api/auth/refresh` is `permitAll` and filter-exempt, so whichever `rtkn` is in the
+  jar decides whose session is issued — calling it unconditionally turns a planted cookie into a session,
+  which wants an owner check or a rethink of that endpoint's exposure. Sizing: small backend surface, real
+  frontend design, and it should carry its own `/pr-review` rounds.
+
+  **Option (b) was then tried in two forms; neither shipped.**
+  The first was an exemption: skip the expiry test for a row with no `rotated_at` and no `replaced_by_id`.
+  It was dead on arrival and an IT caught it — a rotated chain's LIVE END is itself always such a row
+  (`decideAndRotate` creates the successor with both null), so it exempted every chain and the cap applied
+  to nothing. Keying on sibling rows instead fails too, because the hourly sweep deletes the expired
+  predecessors that would be the evidence.
+  **Neither form shipped.** The exemption was dead on arrival (above); the slide was withdrawn in
+  round 5 because it broke logout — see the three withdrawn attempts recorded on this item. The 7-day
+  cap is the shipped behaviour and this follow-up story is the fix.
+
+- **[skillars-deferred-167 residual, low/logic]** A benign stale cookie more than `MAX_GRACE_HOPS` (8)
+  rotations behind an intact, live chain still gets the whole account revoked. The walk gives up after 8
+  `replaced_by_id` hops with no live end found, which is indistinguishable from genuine reuse at that
+  point, so the outcome is `Reuse`: `markAllUsedByUserId`, `invalidateSessionsForUser` and an epoch bump.
+  So the same client eight hops behind gets a quiet 401 and nine hops behind is signed out of every
+  device — the exact harm AC7 removed, reached by depth instead of by time. Raised by both arms on that
+  story's own PR and left unfixed because the alternative is an unbounded walk: distinguishing "no live
+  end within 8 hops" from "no live end at all" requires following the chain to its end, which is what the
+  bound exists to prevent. Options if it ever bites: raise the bound (it is already equal to
+  `RefreshTokenRevocationService.MAX_CHAIN_HOPS` by design, so both would move), or treat
+  bound-exceeded as its own outcome and answer 401 without revoking, accepting that a genuinely deep
+  replay then goes undetected too.
+
+- **[skillars-deferred-167 residual, low/performance — SUPERSEDED by the AC7 amendment, kept for the
+  record]** This was filed when the `StaleChain` outcome wrote nothing: the presented token stayed
+  replayable, and each replay took `findByTokenHashForUpdate` plus up to `MAX_GRACE_HOPS` (8)
+  `findByIdForUpdate` `PESSIMISTIC_WRITE` reads over a still-live chain, on an endpoint with no rate
+  limiter, plus one unthrottled `warn` per attempt.
+  **The owner's AC7 amendment removed the amplification.** The branch now calls `terminateSession`, which
+  stamps `revoked_at` on the presented row, so a second replay short-circuits at `decideAndRotate`'s
+  `presented.getRevokedAt() != null` check and returns `Revoked` — no chain walk, no warn. What remains is
+  the first replay's walk, which is the same cost any refresh pays, and the pre-existing
+  unrate-limited-`/api/auth/refresh` residual that deferred-166 already filed with the same two fixes
+  (rate-limit the endpoint, or a session `lock_timeout` on application connections).
+
+- **[skillars-deferred-167 residual, low/performance]** `extendTtlOfToken` now performs a FOURTH full JWT
+  parse and HMAC verification per authenticated request (`extractPrincipal`, `extractDbRefreshToken`,
+  `extractSessionIssuedAt`, and now `extractRefreshSessionId`), on the path the code repeatedly documents
+  as the cheap, DB-free one taken by every request. It follows the existing `SESSION_ISSUED_AT` shape
+  rather than inventing a one-off, which is why it shipped this way. Parsing once and threading the claims
+  through fixes all four together and would reshape `ClaimsExtractor`'s API — deliberately not done inside
+  a security story.
+- **[skillars-deferred-166 -> skillars-deferred-167, OWNER DECIDED 2026-11-03, medium/security]** A replay of a revoked refresh token
   no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
   JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such
   a replay was "used with no recent rotation", took the theft branch, and called
@@ -35,10 +221,18 @@ not renumber, so the list below starts at RS03.
   **Options.** (a) Keep AC3 and accept the detection loss, which is the current state. (b) Bump the epoch
   on REVOKED, which restores the control but logs the user out of every device (the harm AC3 was written to
   prevent, since the epoch check then refuses the other devices' older tokens). (c) Have logout stamp the
-  epoch for its own session only, which needs a per-session epoch the schema does not have. **Recommend
-  (a) plus a short JWT TTL review**, and treat (c) as the real fix if JWT-after-logout matters: it is the
-  only option that does not trade one of the two properties away. Not decided in that story because it
-  contradicts an approved AC.
+  epoch for its own session only, which needs a per-session epoch the schema does not have.
+  **OWNER DECIDED 2026-11-03: (c), scheduled as skillars-deferred-167.** The deciding facts, re-verified
+  against HEAD rather than taken from the filed note: `JWT_TTL` is 15 min but **sliding**
+  (`extendTtlOfToken` renews it on every request with no DB work), so shortening it bounds nobody who is
+  actively using a stolen cookie — the (a)-plus-TTL-review recommendation this entry originally carried was
+  wrong on that point. Conversely `assertSessionNotRevoked` already runs on the filter's DB-reauth branch
+  every `DB_REFRESH_TOKEN_INTERVAL` (5 min), so the enforcement machinery exists and is cheap; after
+  deferred-166 nothing triggers it. (b) was rejected because the epoch is account-wide: a backgrounded tab
+  retrying a revoked token would sign the user out of every device, the exact harm AC3 was written to
+  prevent, on benign behaviour. Chosen shape for (c): the rotation chain carries a session id, the JWT
+  carries it as a claim, and the re-auth branch rejects a JWT whose chain has no live token — per-session
+  granularity, reusing `revoked_at` and `replaced_by_id` as deferred-166 built them.
 - **[skillars-deferred-166, pre-existing, medium/logic]** After a grace-window redirect, one client is left
   holding a token that becomes account-wide theft 30 s later. Two concurrent refreshes of one cookie from
   the same browser (a double submit, an axios retry) serialise on the row lock: the winner is issued A1, the
@@ -52,7 +246,18 @@ not renumber, so the list below starts at RS03.
   window closes. **Options:** allow a redirect for a chain that is intact and exactly one hop behind
   regardless of the window (weakens theft detection for a token one hop stale); make the window relative to
   the chain's live end rather than the presented row's `rotatedAt`; or leave it and accept that a client
-  which keeps a superseded cookie is logged out everywhere once. Needs a policy call, not a patch.
+  which keeps a superseded cookie is logged out everywhere once.
+  **OWNER DECIDED 2026-11-03: measure the window from the chain's live end, scheduled as
+  skillars-deferred-167.** A client one hop behind an intact chain then keeps working while the session is
+  active, and replay of a long-dead token still reads as theft, so the time bound is kept rather than
+  dropped. The one-hop-regardless option was rejected for having no time bound at all. The IT gap this
+  entry names (the two-device test never re-checks after the window closes) is part of that story.
+  **AMENDED 2026-11-03, same day, during skillars-deferred-167's story creation and review: the live-end
+  measurement above was found NOT to fix the reported case** (the live end's createdAt is rotatedAt plus rotation
+  latency, so the window expires at the same moment under either rule). The owner re-decided: keep the window and
+  the rotation, and stop answering an intact-live-chain-outside-the-window with account-wide revocation (401 +
+  cookies, no writes). Known cost, found in the story review: that case was the canonical theft signal for a stolen
+  refresh token rotated by the attacker first; it is now a warn log and a metric only.
 - **[skillars-deferred-166, low/database]** The self-referential FK and the new multi-row walks give
   `AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have. Both
   `AuthService.resolveGraceSuccessor` and `RefreshTokenRevocationService.revokeChainByTokenHash` take
@@ -66,6 +271,8 @@ not renumber, so the list below starts at RS03.
   successor is always created later, so aligning the two removes the cycle), or wrap the scheduled sweep so
   a lost deadlock is logged and retried next hour instead of propagating. Remote — it needs an expired chain
   being walked during the hourly sweep — but cheap to close.
+  **OWNER DECIDED 2026-11-03: do both, scheduled as skillars-deferred-167** (ascending-id delete order
+  removes the cycle; the guard keeps one lost deadlock from costing an hour of cleanup).
 - **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
   `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
   on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as
@@ -84,6 +291,8 @@ not renumber, so the list below starts at RS03.
   does not enforce the link for rows written before the constraint, which only matters if something
   writes `replaced_by_id` outside `AuthService.refresh` — nothing does today. Same shape as the other
   outstanding `NOT VALID` constraints in this file; bundle it with the next one.
+  **OWNER DECIDED 2026-11-03: ships in skillars-deferred-167**, which already adds a `refresh_tokens`
+  migration, so the VALIDATE rides that migration instead of waiting for an unrelated one.
 - **[skillars-deferred-166 residual, medium]** Three revoke-all callers stamp
   `security_session_invalidated_at` BEFORE `markAllUsedByUserId`, not after: `AdminUserService.suspendUser`,
   `AgeVerificationService` and `AccountSuspensionEventListener.suspend`. A refresh that commits a successor
@@ -98,6 +307,9 @@ not renumber, so the list below starts at RS03.
   reactivate. Found by the security reviewer on deferred-166's own PR; left out of that story because it
   touches three services outside its scope, and `AuthService.isBeforeSessionEpoch`'s javadoc now states the
   limit precisely rather than overclaiming.
+  **OWNER DECIDED 2026-11-03: fix both halves in skillars-deferred-167** (swap the two statements in the
+  three callers, and revoke on `reactivateUser`). Scoped in deliberately despite touching three services:
+  the suspend-then-reactivate half is an authorisation hole, not a latent risk.
 - **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
   `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
   suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than

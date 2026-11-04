@@ -42,6 +42,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.time.Instant;
 import java.util.List;
+import java.util.UUID;
 import java.util.Locale;
 
 import jakarta.servlet.FilterChain;
@@ -60,6 +61,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -468,7 +470,7 @@ class JWTAuthorizationFilterTest {
         verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
         verify(securityUtil).terminateSession(request, response);
         verify(filterChain, never()).doFilter(request, response);
-        verify(loginTokenManager, never()).renewLoginToken(any(), any());
+        verify(loginTokenManager, never()).renewLoginToken(any(), any(), any());
     }
 
     @Test
@@ -500,8 +502,108 @@ class JWTAuthorizationFilterTest {
         filter.doFilterInternal(request, response, filterChain);
 
         verify(securityUtil, never()).terminateSession(any(), any());
-        verify(loginTokenManager).renewLoginToken(response, authorizedPrincipal);
+        verify(loginTokenManager).renewLoginToken(response, authorizedPrincipal, null);
         verify(filterChain).doFilter(request, response);
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-167 AC4: a JWT whose refresh-token chain has no live row is denied "
+        + "on the DB-reauth branch, even though the account-wide epoch is clean")
+    void testChainWithNoLiveToken_isDenied() throws ServletException, IOException {
+        // The logout case. deferred-166 AC3 deliberately stopped bumping securitySessionInvalidatedAt on a
+        // revoked-token replay (so a stale tab cannot sign the user out of every device), which left
+        // nothing to kill the access token a logged-out session had already been handed. The chain is the
+        // right granularity: null epoch here, and the JWT is still refused.
+        UUID chainId = UUID.randomUUID();
+        Principal authorizedPrincipal = new Principal.Builder()
+            .username("testuser").password("N/A").enabled(true)
+            .otpEnabled(false)
+            .authorities(List.of())
+            .businessId("1")
+            .build();
+        Authentication authorized = new UsernamePasswordAuthenticationToken(
+            authorizedPrincipal, null, authorizedPrincipal.getAuthorities());
+        ((UsernamePasswordAuthenticationToken) authorized).setDetails(authorizedPrincipal);
+
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
+        when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(chainId);
+        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), eq(1L))).thenReturn(false);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(filterChain, never()).doFilter(request, response);
+        verify(loginTokenManager, never()).renewLoginToken(any(), any(), any());
+        // The user id is pinned, not any(): scoping the liveness query to the authorized principal is the
+        // only thing stopping a potc from one account being paired with another account's live chain, and
+        // an any() stub would keep passing if a future change passed null (which fails OPEN) or the wrong
+        // id. businessId is "1" on the principal this test authorizes.
+        verify(securityUtil).hasLiveRefreshTokenForSession(chainId, 1L);
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-167 AC4: a JWT whose chain still has a live row proceeds, and the "
+        + "chain id is carried into the renewed token")
+    void testChainStillLive_proceedsAndCarriesTheClaim() throws ServletException, IOException {
+        UUID chainId = UUID.randomUUID();
+        Principal authorizedPrincipal = new Principal.Builder()
+            .username("testuser").password("N/A").enabled(true)
+            .otpEnabled(false)
+            .authorities(List.of())
+            .businessId("1")
+            .build();
+        Authentication authorized = new UsernamePasswordAuthenticationToken(
+            authorizedPrincipal, null, authorizedPrincipal.getAuthorities());
+        ((UsernamePasswordAuthenticationToken) authorized).setDetails(authorizedPrincipal);
+
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
+        when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(chainId);
+        when(securityUtil.hasLiveRefreshTokenForSession(eq(chainId), eq(1L))).thenReturn(true);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+        // Carrying the id into renewLoginToken is what keeps the claim alive across a DB re-auth: that
+        // method rebuilds its claim map from scratch, so an unpassed claim is silently dropped.
+        verify(loginTokenManager).renewLoginToken(response, authorizedPrincipal, chainId);
+        verify(securityUtil).hasLiveRefreshTokenForSession(chainId, 1L);
+    }
+
+    @Test
+    @DisplayName("skillars-deferred-167 AC5: a JWT with no chain claim skips the check entirely — the "
+        + "deliberate fail-open for tokens minted before that story")
+    void testNoChainClaim_skipsTheCheck() throws ServletException, IOException {
+        Principal authorizedPrincipal = new Principal.Builder()
+            .username("testuser").password("N/A").enabled(true)
+            .otpEnabled(false)
+            .authorities(List.of())
+            .businessId("1")
+            .build();
+        Authentication authorized = new UsernamePasswordAuthenticationToken(
+            authorizedPrincipal, null, authorizedPrincipal.getAuthorities());
+        ((UsernamePasswordAuthenticationToken) authorized).setDetails(authorizedPrincipal);
+
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
+        when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(null);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(filterChain).doFilter(request, response);
+        // The liveness query must not run: `session_id = NULL` matches no row, so asking would answer
+        // "nothing live" and reject every pre-story session. The filter does try to REPAIR the claim from
+        // the request's rtkn cookie first (round 2: a rolling deploy can strip it), and the unstubbed
+        // mock returns null for that, which is the same no-claim state.
+        verify(securityUtil).refreshSessionIdForRequest(request, 1L);
+        verify(securityUtil, never()).hasLiveRefreshTokenForSession(any(), any());
     }
 
     @Test

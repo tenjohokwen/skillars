@@ -15,6 +15,8 @@ import com.softropic.skillars.platform.security.repo.RefreshTokenRepository;
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 
+import io.micrometer.core.instrument.MeterRegistry;
+
 import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -78,6 +80,12 @@ public class AuthService {
      * Spring's proxy does not intercept self-invocation. Precedent: {@code MessagingService}.
      */
     private final TransactionTemplate transactionTemplate;
+
+    /**
+     * skillars-deferred-167 AC7: counts the refresh attempts that are no longer treated as theft, which is
+     * the only numeric trace left of a signal that used to revoke an account. See {@link StaleChain}.
+     */
+    private final MeterRegistry meterRegistry;
 
     /** Lazily encoded with the live encoder so its cost factor always matches real users' hashes. */
     private volatile String dummyPasswordHash;
@@ -148,9 +156,14 @@ public class AuthService {
         rt.setTokenHash(sha256Hex(rawToken));
         rt.setExpiresAt(Instant.now(ClockProvider.getClock()).plus(REFRESH_TOKEN_TTL));
         rt.setUsed(false);
+        // skillars-deferred-167 (AC2): a login starts a new rotation chain, so it mints the chain's id.
+        // Every successor copies it (decideAndRotate), and the JWT carries it as a claim so the filter can
+        // refuse this session's access token once the chain has no live row left.
+        final UUID refreshSessionId = UUID.randomUUID();
+        rt.setSessionId(refreshSessionId);
         refreshTokenRepository.save(rt);
 
-        loginTokenManager.createLoginToken(res, principal);
+        loginTokenManager.createLoginToken(res, principal, refreshSessionId);
         CookieUtil.addCookie(res, REFRESH_TOKEN_COOKIE, rawToken,
             true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
 
@@ -250,7 +263,7 @@ public class AuthService {
             // holding the row lock across them, which is exactly the shape that deadlocks against every
             // REQUIRES_NEW revoke (see this method's javadoc).
             final LoginResponse response = rotated.response();
-            loginTokenManager.createLoginToken(res, rotated.principal());
+            loginTokenManager.createLoginToken(res, rotated.principal(), rotated.refreshSessionId());
             CookieUtil.addCookie(res, REFRESH_TOKEN_COOKIE, rotated.newRawToken(),
                 true, (int) REFRESH_TOKEN_TTL.toSeconds(), "Lax");
             new SkillarsProfileCookie(String.valueOf(response.userId()), response.role(),
@@ -275,6 +288,30 @@ public class AuthService {
             userRepository.invalidateSessionsForUser(reuse.ownerId(), Instant.now(ClockProvider.getClock()));
             securityUtil.clearAuthCookies(res);
             throw new BadCredentialsException("Token reuse detected — all sessions revoked");
+        }
+
+        if (outcome instanceof StaleChain stale) {
+            log.warn("Refresh presented a token whose chain is still live but was rotated outside the "
+                    + "{}s grace window; revoking that chain only. user={} tokenHash={}",
+                REFRESH_GRACE_WINDOW.toSeconds(), stale.ownerId(), stale.presentedHash());
+            meterRegistry.counter("security.refresh.stale_live_chain").increment();
+            // Owner decision 2026-11-03, amending AC7: revoke THIS CHAIN, from the presented row forward,
+            // and nothing else. AC7 as written answered 401 and cleared cookies without writing anything,
+            // which both reviewer arms showed was worse than it looked — clearing the rtkn cookie destroys
+            // the only value terminateSession can hash to start its walk, so a victim whose token had been
+            // stolen and rotated could no longer revoke the thief's live successor by logging out, and a
+            // fresh login merely starts an unrelated chain. The foothold outlived every action short of a
+            // password change.
+            //
+            // terminateSession walks forward from the cookie's row, so it reaches exactly that successor.
+            // Safe here and nowhere earlier: the locked block has committed and released its locks by the
+            // time this runs, which is the rule a REQUIRES_NEW revoke imposes (55P03 otherwise).
+            //
+            // What AC7 was actually for is kept: the blast radius stays inside one chain instead of
+            // signing the user out of every device. A benign double-refresh now costs that one chain a
+            // re-login; it used to cost all of them.
+            securityUtil.terminateSession(req, res);
+            throw new BadCredentialsException("Refresh token is stale — please sign in again");
         }
 
         if (outcome instanceof Revoked) {
@@ -335,6 +372,9 @@ public class AuthService {
             if (resolution.chainRevoked()) {
                 return new Revoked();
             }
+            if (resolution.staleButLive()) {
+                return new StaleChain(presented.getUserId(), presentedHash);
+            }
             if (resolution.successor() == null) {
                 return new Reuse(presented.getUserId());
             }
@@ -364,6 +404,17 @@ public class AuthService {
         successor.setTokenHash(sha256Hex(newRaw));
         successor.setExpiresAt(now.plus(REFRESH_TOKEN_TTL));
         successor.setUsed(false);
+        // skillars-deferred-167 (AC2): the successor inherits the chain's id from the row being rotated —
+        // `token`, which on a grace redirect is the chain's live end rather than the row the client
+        // presented. A rotation therefore never starts a new chain.
+        //
+        // Minting a fresh id when the rotated row has none is the load-bearing half: V225 added the column
+        // with no backfill, so every chain that predates it starts null, and COPYING that null would keep
+        // it null through every subsequent rotation. A client that refreshes forever (an API or mobile
+        // client; the SPA does not call this endpoint) would then never acquire an id, and AC4's check
+        // would skip it for the rest of its life. This way such a chain picks one up on its next rotation.
+        final UUID chainId = token.getSessionId() != null ? token.getSessionId() : UUID.randomUUID();
+        successor.setSessionId(chainId);
         refreshTokenRepository.saveAndFlush(successor);
 
         token.setUsed(true);
@@ -377,7 +428,7 @@ public class AuthService {
         final Principal principal = Principal.instanceFrom(user);
         final String role = user.getSkillarsRole() != null ? user.getSkillarsRole().name() : "ADMIN";
         final boolean limitedAdmin = AdminTierGuard.isLimitedAdmin(principal.getAuthorities());
-        return new Rotated(newRaw, principal,
+        return new Rotated(newRaw, principal, chainId,
             new LoginResponse(user.getId(), role, principal.getDisplayName(), limitedAdmin));
     }
 
@@ -390,16 +441,28 @@ public class AuthService {
      * after the statement starts, so a revoke-all could leave one live token behind. A token minted after
      * the epoch is unaffected, which is what lets a legitimate re-login work immediately.
      *
-     * <p><strong>It closes that gap only where the epoch is stamped AFTER the bulk revoke</strong>, which is
-     * {@code UserProfileService.changePassword} and {@code PasswordResetService.completePasswordReset}.
-     * {@code AdminUserService.suspendUser}, {@code AgeVerificationService} and
-     * {@code AccountSuspensionEventListener} stamp it first, so a successor committed between their two
-     * statements carries a {@code createdAt} after the epoch and passes this check. Those three also set
-     * {@code locked = true}, so {@code ensureAccountIsLive} refuses such a token for as long as the account
-     * stays suspended — but an admin reactivation clears {@code locked} without revoking anything, which
-     * would restore it. Narrow (the window is two statements of one transaction) and pre-existing, so it is
-     * filed in {@code deferred-work.md} rather than fixed here by reordering three services this story does
-     * not otherwise touch. Do not widen this javadoc's claim without fixing that ordering.
+     * <p><strong>This check depends on a revoke-all caller stamping the epoch AFTER its bulk revoke, and
+     * two callers deliberately never stamp it at all.</strong> {@code RefreshTokenRevocationService
+     * .revokeAllForUser} revokes without stamping on purpose (deferred-166 AC3: a chain-scoped revoke must
+     * not reach the account's other devices), and {@code GdprErasureService} does not stamp either —
+     * it sets {@code locked} and {@code activated = false}, which {@code ensureAccountIsLive} catches
+     * instead. {@link #refresh}'s own {@code Reuse} branch stamps after its revoke. For the callers that
+     * do stamp, the order matters and as of skillars-deferred-167 AC8 it is correct in all of them:
+     * {@code UserProfileService.changePassword} and {@code PasswordResetService.completePasswordReset}
+     * always did, and {@code AdminUserService.suspendUser}, {@code AgeVerificationService.blockAccount} and
+     * {@code AccountSuspensionEventListener.suspend} were reordered by that story. Stamping first left a
+     * window in which a racing refresh's successor carried a {@code createdAt} after the epoch instant and
+     * so passed this check; stamping afterwards means any row that survived the revoke was inserted before
+     * it committed, and is therefore older than the epoch. If you add a revoke-all caller, keep that order.
+     *
+     * <p><strong>Two residuals remain, and this check does not close them.</strong> First,
+     * {@link #decideAndRotate} loads the user with a plain {@code findById}, so it does not block on the
+     * revoking transaction's row lock and can still read a {@code null} epoch until that transaction
+     * commits; the refresh it allows in that instant is refused on its next attempt, not this one. Second,
+     * the comparison is between a {@code createdAt} and an epoch written by potentially different
+     * application nodes, so clock skew between them can invert it. Both are narrow and neither is specific
+     * to this method — {@code changePassword} has always had the same shape — but "the window is closed" is
+     * not the claim to make here.
      *
      * <p>Fails CLOSED on a null {@code createdAt}: once an account carries a revocation epoch, a token that
      * cannot prove it was minted after it is refused. {@code refresh_tokens.created_at} is {@code NOT NULL}
@@ -442,10 +505,21 @@ public class AuthService {
      * replayed 31 s after a logout look like theft and revoke every session on the account — exactly what
      * AC3 exists to prevent, reached by a path AC3 did not describe.
      *
-     * <p>Returns a null successor with {@code chainRevoked == false} for genuine reuse: never rotated, no
-     * link at all (a rotation from before V224 — see that migration's accepted deploy-window trade-off), a
-     * chain whose end is expired, a chain longer than {@link #MAX_GRACE_HOPS}, or a rotation older than the
-     * window.
+     * <p>Three distinct answers, and skillars-deferred-167 AC7 is why there are three rather than two:
+     * <ul>
+     *   <li>{@link GraceResolution#of} — a live successor to hand over.</li>
+     *   <li>{@link GraceResolution#revokedChain()} — a hop carried {@code revokedAt}; the session was
+     *       deliberately ended.</li>
+     *   <li>{@link GraceResolution#stale()} — the chain HAS a live end, but the presented row's rotation is
+     *       older than the window. Answered as {@code StaleChain}: 401 and a revoke of THIS CHAIN, which
+     *       escalates account-wide only through the hop-bound fallback described on {@link StaleChain}. An earlier version of this paragraph listed "a rotation older than the
+     *       window" under genuine reuse, which is no longer what happens; do not restore a {@code none()}
+     *       return there without reading {@link StaleChain}'s javadoc first.</li>
+     *   <li>{@link GraceResolution#none()} — genuine reuse, i.e. nothing live to be found: never rotated,
+     *       no link at all (a rotation from before V224 — see that migration's accepted deploy-window
+     *       trade-off), a cross-account link, a chain whose end is expired, or a chain longer than
+     *       {@link #MAX_GRACE_HOPS}.</li>
+     * </ul>
      */
     private GraceResolution resolveGraceSuccessor(final RefreshToken presented, final Instant now) {
         RefreshToken liveEnd = null;
@@ -484,18 +558,40 @@ public class AuthService {
         }
         // Only now does the clock matter: the presented token must have been rotated recently enough for
         // this to be a plausible in-flight race rather than a replay of an old credential.
+        //
+        // skillars-deferred-167 AC7: outside the window this is staleButLive, NOT none. The chain is intact
+        // and live; all we know is that this caller's copy is old. Answering that with account-wide
+        // revocation punished a benign double-refresh with a logout from every device (see the outcome's
+        // own javadoc for the full reasoning, and for what detecting it would have cost).
         if (presented.getRotatedAt() == null
             || !now.isBefore(presented.getRotatedAt().plus(REFRESH_GRACE_WINDOW))) {
-            return GraceResolution.none();
+            return GraceResolution.stale();
         }
         return GraceResolution.of(liveEnd);
     }
 
-    /** The successor a grace-window redirect resolved to, or why it did not resolve one. */
-    private record GraceResolution(RefreshToken successor, boolean chainRevoked) {
-        static GraceResolution of(RefreshToken successor) { return new GraceResolution(successor, false); }
-        static GraceResolution none() { return new GraceResolution(null, false); }
-        static GraceResolution revokedChain() { return new GraceResolution(null, true); }
+    /**
+     * The successor a grace-window redirect resolved to, or why it did not resolve one.
+     *
+     * <p>skillars-deferred-167 (AC7) added {@link #staleButLive()} as a THIRD outcome, because
+     * "no successor" was conflating two very different situations: a chain with nothing live at its end
+     * (the token really is being replayed — theft, as far as this code can tell) and a chain that is alive
+     * and well but whose last rotation is older than the window. Only the first is evidence of theft.
+     */
+    private record GraceResolution(RefreshToken successor, boolean chainRevoked, boolean staleButLive) {
+        static GraceResolution of(RefreshToken successor) {
+            return new GraceResolution(successor, false, false);
+        }
+        static GraceResolution none() { return new GraceResolution(null, false, false); }
+        static GraceResolution revokedChain() { return new GraceResolution(null, true, false); }
+        /**
+         * A live chain, but the presented row was rotated too long ago to hand its successor over.
+         *
+         * <p>Named {@code stale()} rather than {@code staleButLive()} because a record's component
+         * accessor occupies that name — the same clash that made deferred-166 rename this record's
+         * {@code chainRevoked} factory to {@link #revokedChain()}.
+         */
+        static GraceResolution stale() { return new GraceResolution(null, false, true); }
     }
 
     /**
@@ -503,10 +599,18 @@ public class AuthService {
      * clear and throw happens after the row locks are released. See {@link #refresh}.
      */
     private sealed interface RefreshOutcome
-        permits Rotated, Unknown, Reuse, Revoked, Denied { }
+        permits Rotated, Unknown, Reuse, Revoked, StaleChain, Denied { }
 
-    /** Rotation succeeded. Everything needed for the response is pre-built; the user row is detached by now. */
-    private record Rotated(String newRawToken, Principal principal, LoginResponse response)
+    /**
+     * Rotation succeeded. Everything needed for the response is pre-built; the user row is detached by now.
+     *
+     * <p>{@code refreshSessionId} (skillars-deferred-167 AC2/AC3) is carried out of the transaction for the
+     * same reason {@code principal} is: the rows are detached by the time {@link #refresh} writes cookies,
+     * and the JWT minted there needs the chain's id as a claim. Never null on this path — rotation either
+     * inherits the chain's id or mints one.
+     */
+    private record Rotated(String newRawToken, Principal principal, UUID refreshSessionId,
+                           LoginResponse response)
         implements RefreshOutcome { }
 
     /** No row matches the presented hash: 401, and deliberately no cookie teardown. */
@@ -517,6 +621,68 @@ public class AuthService {
 
     /** The chain was deliberately ended: 401 and cookies, never account-wide revocation. */
     private record Revoked() implements RefreshOutcome { }
+
+    /**
+     * skillars-deferred-167 (AC7, amended by the owner on 2026-11-03): the presented token is one hop or
+     * more behind a chain that is still intact and live, but its own rotation is older than
+     * {@link #REFRESH_GRACE_WINDOW}. 401, and <strong>this chain is revoked</strong> — from the presented
+     * row forward, so its live end goes too. The account's other chains are untouched — with one
+     * exception, which this javadoc claimed did not exist until round 4 of the review found it:
+     * {@code terminateSession} delegates to {@code SecurityUtil.revokeChainWithBoundedRetry}, which
+     * escalates to {@code revokeAllForUser} if the revoke walk reports {@code boundExceeded}. Since
+     * {@link #resolveGraceSuccessor} can find a live end at exactly {@link #MAX_GRACE_HOPS} hops and the
+     * decide transaction commits before that walk runs, another client rotating the live end in between
+     * pushes the chain past the bound and the revoke does go account-wide. Narrow (8 hops plus a race) but
+     * real, so do not restate this as a guarantee.
+     *
+     * <p>Why this is not {@link Reuse}. Two concurrent refreshes of one cookie both answer with
+     * {@code Set-Cookie: rtkn}; the browser keeps whichever response arrives last. When that is the
+     * winner's, the client is left holding a row that is {@code used} with a live successor — permanently
+     * one hop behind, through no fault of its own. Its next refresh more than 30 s later used to land in
+     * the theft branch, which revoked every token on the account and bumped the session epoch, logging the
+     * user out of every device over a double-submitted request.
+     *
+     * <p>Why the chain is revoked rather than left alone. AC7 originally wrote nothing here, reasoning that
+     * the live end might be a sibling tab's credential. Both reviewer arms then showed what that cost: this
+     * branch clears the {@code rtkn} cookie, and that cookie is the only value
+     * {@code SecurityUtil.terminateSession} can hash to start a chain walk. Writing nothing therefore left
+     * a victim whose token had been stolen and rotated with no way to revoke the thief's live successor —
+     * not by logging out, and not by logging in again, which starts an unrelated chain. Revoking costs a
+     * sibling tab on that same chain its credential (one re-login, scoped to the chain) and buys back the
+     * remediation. The account-wide revocation AC7 removed stays removed: that was always the distinction
+     * that mattered.
+     *
+     * <p><strong>What this still gives up.</strong> The old behaviour also bumped
+     * {@code security_session_invalidated_at}, which killed any standing JWT the thief held on ANY chain of
+     * that account. Revoking one chain does not: a JWT minted off this chain is refused within
+     * {@code DB_REFRESH_TOKEN_INTERVAL} by AC4's check, but one the thief holds from a different chain of
+     * the same account survives. The case is counted ({@code security.refresh.stale_live_chain}) and logged
+     * at {@code warn} so the rate stays observable.
+     *
+     * <p>Three limits of this branch that its name does not convey, each verified rather than assumed:
+     * <ul>
+     *   <li><strong>Any age, not just a recent race.</strong> The window test is the last thing
+     *       {@link #resolveGraceSuccessor} evaluates, so a replay of a week-old credential against a live
+     *       chain lands here too, not only a double-submit from seconds ago.</li>
+     *   <li><strong>Any depth up to {@link #MAX_GRACE_HOPS}.</strong> The presented row may sit up to 8
+     *       rotations behind the live end. Beyond the bound the walk finds no live end and the outcome is
+     *       {@link Reuse} again, so the theft response depends on how deep the chain happens to be — an
+     *       artefact of bounding the walk, not a deliberate policy.</li>
+     *   <li><strong>The attacker's chain is not bounded by {@code REFRESH_TOKEN_TTL}.</strong> Every
+     *       rotation writes a fresh {@code expiresAt}, so a chain that keeps being rotated never expires.
+     *       An earlier draft of this javadoc said "the rest of its 7-day TTL", which is only true of a
+     *       chain nobody rotates.</li>
+     * </ul>
+     * A replay against a chain with NOTHING live at its end is still {@link Reuse} and still escalates.
+     *
+     * <p><strong>Do not replace {@code terminateSession} with {@code clearAuthCookies} here.</strong> That
+     * was AC7's original shape and it is what created a remediation hole both reviewer arms found: the
+     * cookie is cleared either way, so without the revoke there is nothing left able to reach the chain
+     * afterwards — not Logout, which hashes that cookie to start its walk, and not a fresh login, which
+     * starts an unrelated chain. The foothold then outlived every action a user could take short of a
+     * password change.
+     */
+    private record StaleChain(Long ownerId, String presentedHash) implements RefreshOutcome { }
 
     /** This one session is refused and revoked; {@code failure} is thrown after the teardown. */
     private record Denied(RuntimeException failure) implements RefreshOutcome { }

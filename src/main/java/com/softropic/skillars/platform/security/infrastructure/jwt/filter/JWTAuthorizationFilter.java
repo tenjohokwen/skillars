@@ -41,6 +41,7 @@ import lombok.extern.slf4j.Slf4j;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.Locale;
+import java.util.UUID;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -81,12 +82,15 @@ import jakarta.servlet.http.HttpServletResponse;
  *         re-loads the account and re-runs Spring Security's own pre-authentication checks, so a
  *         <i>locked or deactivated</i> account is caught, then {@code renewLoginToken(...)} mints
  *         the fresh token. ({@code renewLoginToken} itself touches no repository &mdash; the DB
- *         hit is {@code daoAuthProvider.authorize}.) It does <i>not</i> read {@code refresh_tokens}
- *         at all &mdash; GDPR erasure is caught on this cycle only because
- *         {@code GdprErasureService} also sets {@code locked = true} on the account, not because
- *         anything here checks for revoked refresh tokens; theft-driven mass-revocation (
- *         {@code markAllUsedByUserId} with no accompanying lock) is <i>not</i> caught by this path
- *         at all &mdash; see the deferred, pre-existing finding on that gap.</li>
+ *         hit is {@code daoAuthProvider.authorize}.)
+ *         <p>Since skillars-deferred-167 AC4 this path <i>does</i> read {@code refresh_tokens}: one
+ *         indexed existence query per cycle ({@code assertSessionChainStillLive} &rarr;
+ *         {@code existsLiveBySessionId}) refusing a JWT whose refresh chain has no live row. That is
+ *         what makes a plain logout end this session's access token. It also closes, for any JWT
+ *         carrying the {@code rtsid} claim, the theft-driven mass-revocation gap this paragraph used
+ *         to describe as open: {@code markAllUsedByUserId} leaves every row {@code used}, and the
+ *         liveness predicate requires {@code used = false}. GDPR erasure is still caught by
+ *         {@code locked = true} as well, so neither mechanism depends on the other.</li>
  * </ul>
  * Either path also rewrites the {@code user}, {@code potc} and {@code rint} cookies (see
  * {@code JwtManagerImpl.createLoginCookies}). Because the TTL is always reset to the full 15 min,
@@ -216,9 +220,12 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             // issued before a theft revocation and must not survive it, regardless of whether an
             // unrelated later login has since re-authenticated the account.
             assertSessionNotRevoked(req, authorizedPrincipal);
+            // skillars-deferred-167 AC4: and the per-SESSION counterpart of that account-wide check.
+            final UUID refreshSessionId = resolveRefreshSessionId(req, authorizedPrincipal);
+            assertSessionChainStillLive(refreshSessionId, authorizedPrincipal);
             //JWT with new db refresh token and new expiration
             //JWTUtil.e
-            loginTokenManager.renewLoginToken(res, authorizedPrincipal);
+            loginTokenManager.renewLoginToken(res, authorizedPrincipal, refreshSessionId);
         } else {
             final Principal principal = loginTokenManager.extractPrincipal(req);
             // skillars-deferred-144 AC8: this used to also check isRefreshTokenRevoked(req,
@@ -265,6 +272,105 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         if (sessionIssuedAt == null || sessionIssuedAt < invalidatedAt.toEpochMilli()) {
             throw new AuthorizationException(
                 "Session predates a refresh-token-theft revocation", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
+        }
+    }
+
+    /**
+     * skillars-deferred-167 AC4: refuses a JWT whose refresh-token rotation chain has no live row left.
+     *
+     * <p>This is what finally makes a logout kill the access token it handed out. {@link
+     * #assertSessionNotRevoked} only catches an ACCOUNT-wide revocation ({@code
+     * security_session_invalidated_at}), and skillars-deferred-166 AC3 deliberately stopped bumping that
+     * epoch on a revoked-token replay, so that a stale tab could not sign the user out of every device.
+     * After that story nothing bumped it on logout at all, and a copied {@code potc} cookie kept
+     * re-authenticating here for as long as its holder kept making requests. The chain is the right
+     * granularity: logout revokes exactly one chain, so refusing a JWT whose chain is spent ends that one
+     * session and leaves the account's other devices alone.
+     *
+     * <p>Runs only on this branch, which {@code hasDbRefreshTokenExpired} gates to once per {@code
+     * DB_REFRESH_TOKEN_INTERVAL} (5 min). The fast path stays free of database work by design
+     * (skillars-deferred-144 AC8), so 5 minutes is the exposure bound — the same bound a LOCKED account
+     * has always relied on. One indexed existence query, no entity loaded.
+     *
+     * <p><strong>Fails OPEN on a missing claim, deliberately (AC5).</strong> A {@code null} id means the
+     * JWT was minted before this story: {@code extendTtlOfToken} rebuilds its claim map from what it can
+     * read, so it cannot invent one, and refusing every such token would sign out every live session the
+     * moment this deploys.
+     *
+     * <p><strong>A claimless token sent WITH its own {@code rtkn} cookie is repaired, not skipped.</strong>
+     * {@link #resolveRefreshSessionId} re-derives the chain id from that cookie and the resolved value is
+     * what reaches {@code renewLoginToken}, so the claim is restored for the rest of the session. That is
+     * what covers a token a rolling deploy stripped.
+     *
+     * <p><strong>A claimless token sent WITHOUT it is unbounded</strong> — not bounded by the chain's TTL,
+     * as a draft of this javadoc once claimed. There is nothing to derive from, so the check is skipped;
+     * {@code extendTtlOfToken} omits what it cannot read while CARRYING {@code dbRToken} and
+     * {@code SESSION_ISSUED_AT} forward unchanged (only {@code exp} is fresh, which is what keeps the
+     * sliding window going without advancing the DB-reauth deadline), and nothing else on either path
+     * consults {@code refresh_tokens}
+     * (skillars-deferred-144 AC8 removed the per-request lookup). So a holder who makes one request every
+     * {@code JWT_TTL} keeps that session alive indefinitely, past logout, past the chain's expiry and past
+     * the sweep. That is precisely the shape of a thief who copied a {@code potc} and nothing else, and
+     * omitting a cookie costs them nothing — so the repair narrows this gap but does not close it. The
+     * fail-closed flip is an owner decision in {@code deferred-work.md}, and it cannot be scheduled by
+     * "wait one REFRESH_TOKEN_TTL".
+     *
+     * <p>Throws the same exception and error code as its account-wide sibling: the client cannot act
+     * differently on "your session ended" versus "your account's sessions ended", and the SPA already
+     * handles this one.
+     */
+    private void assertSessionChainStillLive(final UUID refreshSessionId, final Principal principal) {
+        if (refreshSessionId == null) {
+            return;
+        }
+        if (!securityUtil.hasLiveRefreshTokenForSession(refreshSessionId, userIdOf(principal))) {
+            throw new AuthorizationException(
+                "Session's refresh-token chain has no live token", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
+        }
+    }
+
+    /**
+     * skillars-deferred-167 round 2: the chain id this JWT claims, falling back to the one its own
+     * {@code rtkn} cookie names when the claim is absent.
+     *
+     * <p>The fallback is not belt-and-braces, it repairs a state this release creates. During a rolling
+     * deploy — and after a rollback — an instance running the previous release handles requests for JWTs
+     * minted by an upgraded one. Its {@code extendTtlOfToken} rebuilds the claim map from
+     * {@code toClaims} and re-puts only the claims it knows about, so it drops {@code rtsid} and re-signs
+     * without it; the new code then passes that absence straight through and the session is never checked
+     * again. Re-deriving here is the only thing that puts the claim back, and the claim travels onward
+     * because {@code renewLoginToken} is given this resolved value.
+     *
+     * <p>Costs one extra query only when the claim is missing, so the normal request still makes exactly
+     * one. Owner-scoped in the repository, because the value now comes from a cookie rather than from a
+     * token this server signed: without that, a caller could pair their own {@code rtkn} with a victim's
+     * {@code potc} and keep the victim's token passing the liveness check against their own live chain.
+     *
+     * <p>Still {@code null} for a genuinely pre-V225 chain (the row has no id either), which is AC5's
+     * documented fail-open.
+     */
+    private UUID resolveRefreshSessionId(final HttpServletRequest req, final Principal principal) {
+        final UUID claimed = loginTokenManager.extractRefreshSessionId(req);
+        if (claimed != null) {
+            return claimed;
+        }
+        return securityUtil.refreshSessionIdForRequest(req, userIdOf(principal));
+    }
+
+    /**
+     * The authorized principal's user id, or {@code null} when it cannot be read as one. A null makes both
+     * callers above fail open rather than throw: this filter runs on every authenticated request, and a
+     * principal whose {@code businessId} is unreadable is a different fault from the one this check is
+     * about.
+     */
+    private static Long userIdOf(final Principal principal) {
+        if (principal == null || StringUtils.isBlank(principal.getBusinessId())) {
+            return null;
+        }
+        try {
+            return Long.valueOf(principal.getBusinessId());
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 

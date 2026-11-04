@@ -681,11 +681,9 @@ created) and `revoked_at` (the session was deliberately ended), both nullable, p
 `replaced_by_id` and a self-referential FK added **`NOT VALID`**. Nothing to configure, no backfill, no
 downtime step.
 
-- [ ] **Outstanding: `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT fk_refresh_tokens_replaced_by`.**
-      Deliberately deferred by that story (rule 3: the table grows, so the FK ships `NOT VALID` and validates
-      later). Cheap and online (a `SHARE UPDATE EXCLUSIVE` scan). Until it runs, PostgreSQL does not enforce
-      the link for rows written before the constraint; only `AuthService.refresh` writes the column today, so
-      the practical risk is nil, but it must not be forgotten — it is also tracked in `deferred-work.md`.
+- [x] **Done in V225 (skillars-deferred-167): `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT
+      fk_refresh_tokens_replaced_by`.** V224 shipped the FK `NOT VALID` per rule 3 and promised the validation
+      in a later migration; V225 runs it. Nothing to do at deploy time.
 - [ ] **Behaviour change to announce, not configure.** Logout now revokes the presented refresh token *and
       every token it was rotated into*, and a replay of a logged-out token answers `401` without revoking the
       account's other sessions. A token minted before `user.security_session_invalidated_at` is refused. See
@@ -694,6 +692,42 @@ downtime step.
       have no `replaced_by_id`, so a replay of one inside the 30 s grace window is treated as reuse and revokes
       that account's sessions. Bounded and self-clearing once every instance is on the new code; the SPA does
       not call `POST /api/auth/refresh` at all, so the exposure is API clients only.
+
+**V225: refresh-token chain id, and V224's outstanding FK validation**
+(`V225__refresh_token_session_id_and_validate_successor_fk.sql`, skillars-deferred-167). Additive only:
+`main.refresh_tokens` gains `session_id` (uuid, nullable, no backfill) plus a btree index on it, and the
+self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure, no downtime step.
+
+- [ ] **Behaviour change to announce, not configure: a logout now ends that session's access token too.**
+      The JWT carries the chain id as an `rtsid` claim, and the authorisation filter refuses a JWT whose
+      chain has no live refresh token left — within `DB_REFRESH_TOKEN_INTERVAL` (5 min) of the logout.
+      Previously a copied `potc` cookie kept working for as long as its holder kept making requests.
+- [ ] **Behaviour change to announce: a web session now ends 7 days after login.** The SPA has no caller
+      for `POST /api/auth/refresh`, so its refresh chain is the single row written at login; when that
+      expires the standing access token is refused on the next DB-reauth cycle (within 5 min). Previously
+      an access token slid indefinitely while the user kept clicking. There is no warning dialog for this
+      — the existing countdown covers the 15-minute access token, not the 7-day chain — so an active user
+      is signed out mid-task and must log in again. Three attempts to remove the cap were made and
+      withdrawn during that story (the third broke logout outright); the real fix is frontend rotation,
+      filed as its own story in `deferred-work.md`. Tell support before this ships.
+- [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
+      carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
+      sign every live session out at deploy. A claimless token presented WITH its `rtkn` cookie is
+      repaired — the filter re-derives the chain id from that cookie, owner-scoped — so the exposed
+      population is narrower than it first appears: a holder presenting a claimless `potc` WITHOUT the
+      matching cookie, which is precisely a thief who copied only that cookie. For them the session stays
+      alive as long as they keep making requests, and waiting 7 days does not close it. The flip to fail-closed needs a deliberate
+      trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
+      flip); tracked as an owner decision in `deferred-work.md`.
+- [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain
+      that is still live, more than 30 s after its rotation, now answers `401` and revokes **that chain
+      only**, where it used to revoke every chain on the account and bump the session epoch. The change
+      exists because the old behaviour signed a user out of every device over a benign double-submitted
+      refresh. What is still given up: the epoch bump also killed any access token the thief held on
+      another chain of the same account, and revoking one chain does not. Watch for
+      `"Refresh presented a token whose chain is still live"` and the
+      `security.refresh.stale_live_chain` counter.
+
 
 **V223: optional coach safeguarding check** (`V223__coach_safeguarding_check.sql`). Two new empty tables,
 `marketplace.coach_safeguarding_requests` and `marketplace.coach_safeguarding_checks` (both FK to

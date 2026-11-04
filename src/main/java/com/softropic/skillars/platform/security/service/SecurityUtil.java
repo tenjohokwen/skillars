@@ -29,6 +29,7 @@ import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -144,6 +145,41 @@ public final class SecurityUtil {
         SecurityContext context = SecurityContextHolder.getContext();
         Authentication authentication = context.getAuthentication();
         return authentication.getAuthorities().stream().map(GrantedAuthority::getAuthority).toList();
+    }
+
+
+    /**
+     * skillars-deferred-167 (AC4): does this refresh-token rotation chain still have a live token?
+     *
+     * <p>A thin delegate, for the same reason {@link #terminateSession} delegates its chain walk:
+     * {@code JWTAuthorizationFilter} depends on this class and not on the repository or the revocation
+     * service, and threading a new dependency into that filter's constructor (and into everything that
+     * builds it) to ask one boolean would be the larger change. The answer itself, and why a null id
+     * answers {@code true}, are documented on
+     * {@link RefreshTokenRevocationService#hasLiveTokenForSession(UUID, Long)}.
+     */
+    public boolean hasLiveRefreshTokenForSession(final UUID refreshSessionId, final Long userId) {
+        return refreshTokenRevocationService.hasLiveTokenForSession(refreshSessionId, userId);
+    }
+
+    /**
+     * skillars-deferred-167 round 2: the chain id for the request's own {@code rtkn} cookie, or
+     * {@code null} if there is no cookie, no matching row, or the row belongs to someone else.
+     *
+     * <p>Called only when the JWT carries no chain claim, to put back one that a rolling deploy stripped
+     * (an instance on the previous release re-signs without the claim it does not know about, and the new
+     * code then passes the absence through for the rest of that session's life). It is therefore one extra
+     * query on an already-exceptional path, not a per-request cost — which is why AC4's "exactly one
+     * query" still holds for every normal request.
+     */
+    public UUID refreshSessionIdForRequest(final HttpServletRequest request, final Long userId) {
+        final String rawToken = CookieUtil.getCookieValue(request, REFRESH_TOKEN_COOKIE);
+        if (rawToken == null || rawToken.isBlank()) {
+            return null;
+        }
+        // Hashed here because this class already owns the hashing the rest of the auth code uses; the
+        // service never sees a raw token, matching how terminateSession hands it a hash too.
+        return refreshTokenRevocationService.sessionIdForTokenHash(sha256Hex(rawToken), userId);
     }
 
 

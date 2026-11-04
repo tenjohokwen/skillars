@@ -160,9 +160,17 @@ public class AdminUserService {
         user.getPersistentTokens().clear();
         userRepository.saveAndFlush(user);
 
+        // skillars-deferred-167 (AC8): the bulk revoke runs BEFORE the epoch stamp, and the order is
+        // load-bearing. A refresh racing this suspension holds a row lock and may commit a successor that
+        // the revoke's READ COMMITTED snapshot cannot see. Stamping the epoch first meant the epoch instant
+        // predated that successor's created_at, so AuthService.isBeforeSessionEpoch waved it through;
+        // stamping it after means any survivor was inserted before the revoke committed and is therefore
+        // older than the epoch, so it is refused. The two statements commit independently either way
+        // (markAllUsedByUserId is REQUIRES_NEW on refresh_tokens, the stamp is MANDATORY on the user row),
+        // so reordering them is free and cannot self-deadlock — they touch different rows.
+        refreshTokenRepository.markAllUsedByUserId(userId);
         // ClockProvider, not Instant.now(): JWT SESSION_ISSUED_AT claims are minted from the same clock.
         userRepository.invalidateSessionsForUserInCurrentTransaction(userId, Instant.now(ClockProvider.getClock()));
-        refreshTokenRepository.markAllUsedByUserId(userId);
 
         suspendCoachProfileIfAny(userId, reason, adminId, cancelUpcomingBookings);
 

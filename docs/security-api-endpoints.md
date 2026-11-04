@@ -31,7 +31,7 @@ These are the endpoints the Vue SPA uses (`src/frontend/src/api/auth.api.js`, `b
 |--------|------|------|---------|
 | POST | `/api/auth/login` | public | Email + password login. Sets `potc`, `rtkn`, `skp`. |
 | POST | `/api/auth/refresh` | public (needs `rtkn`) | Rotates the refresh token and mints a new JWT. |
-| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies. `204`. |
+| POST | `/api/auth/logout` | public | Revokes this session's refresh-token chain, clears all auth cookies, and ends that session's access token within 5 min (`rtsid` claim, skillars-deferred-167). `204`. |
 | POST | `/refresh` | any authenticated role | Extends the TTL of an already-valid JWT session. Empty `200`. |
 
 ### `POST /api/auth/login`
@@ -75,6 +75,16 @@ revoke the account:
 - the token's session was already ended (it carries `revoked_at`): a stale tab retrying after Logout
   must not sign the user out of their other devices;
 - the token predates `user.security_session_invalidated_at` (a revoke-all already happened);
+- the token is stale but its chain is **still live** — more than 30 s after its own rotation, with a live
+  row still at the end of the chain (skillars-deferred-167). Answered `401`, and **that chain is revoked**
+  from the presented row forward, so its live end goes too; the account's other chains are untouched. This
+  is what a benign double-submitted refresh looks like once the browser keeps the first response's cookie,
+  and treating it as account-wide theft signed the user out of every device. Revoking the chain rather than
+  writing nothing was added after review: this branch clears the `rtkn` cookie, which is the only value
+  logout can walk from, so writing nothing left a victim whose token had been stolen and rotated unable to
+  revoke the thief's live successor at all. What is still given up: the old behaviour also bumped the
+  session epoch, which killed a thief's access token on *any* chain of the account; revoking one chain does
+  not. Counted as `security.refresh.stale_live_chain` and logged at `warn`;
 - the account is locked, deactivated or suspended.
 
 Each of those revokes the presented token's whole rotation chain.
