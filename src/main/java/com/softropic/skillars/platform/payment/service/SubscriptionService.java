@@ -1291,7 +1291,9 @@ public class SubscriptionService {
         }
         handleSubscriptionWebhook(row.getEventType(), row.getStripeSubscriptionId(), toDataMap(row.getEventCreated(),
             row.getStatus(), row.getCurrentPeriodEnd(), row.getCancelAtPeriodEnd()));
-        return "customer.subscription.deleted".equals(row.getEventType());
+        // An `updated` carrying canceled / incomplete_expired is applied as a deletion (handleSubscriptionWebhook), so it ends the drain too.
+        return "customer.subscription.deleted".equals(row.getEventType())
+            || "canceled".equals(row.getStatus()) || "incomplete_expired".equals(row.getStatus());
     }
 
     private static Map<String, Object> toDataMap(Long eventCreated, String status, Long currentPeriodEnd, Boolean cancelAtPeriodEnd) {

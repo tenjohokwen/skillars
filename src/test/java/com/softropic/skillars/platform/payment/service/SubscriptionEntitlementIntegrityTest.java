@@ -630,6 +630,20 @@ class SubscriptionEntitlementIntegrityTest {
     }
 
     @Test
+    void drain_stopsAfterAnUpdatedThatCarriesACanceledStatus_itIsADeletionToo() {
+        var canceled = parkedRow(1, "customer.subscription.updated");
+        when(canceled.getStatus()).thenReturn("canceled");
+        var later = parkedRow(2, "customer.subscription.updated");
+        when(pendingSubscriptionEventRepository.findBySubscriptionOrdered(SUB_ID)).thenReturn(java.util.List.of(canceled, later));
+        when(pendingSubscriptionEventRepository.findById(1L)).thenReturn(java.util.Optional.of(canceled));
+        when(pendingSubscriptionEventRepository.claim(1L)).thenReturn(1);
+
+        service.drainParkedEvents(SUB_ID);
+
+        verify(pendingSubscriptionEventRepository, never()).claim(2L);
+    }
+
+    @Test
     void applyParkedEvent_aRowAnotherDrainerAlreadyClaimed_isNotAppliedAgain() {
         var row = parkedRow(5, "customer.subscription.updated");
         when(pendingSubscriptionEventRepository.findById(5L)).thenReturn(java.util.Optional.of(row));
