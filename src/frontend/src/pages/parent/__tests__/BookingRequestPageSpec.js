@@ -513,6 +513,114 @@ describe('BookingRequestPage.vue — per-session booking without credits', () =>
     expect(wrapper.vm.selectedPackId).toBe(null)
   })
 
+  it("switching child in the header drops the previous child's pack and loads the new child's", async () => {
+    // A garbage query playerId makes the page follow playerStore.activePlayerId, the header switcher.
+    const { wrapper, bookingStore, pinia } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1')],
+      },
+      'abc',
+      { activePlayerId: '5' },
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.selectedPackId).toBe('p1')
+    // Even an explicit choice belongs to the previous child.
+    wrapper.vm.packChoiceTouched = true
+
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    usePlayerStore(pinia).activePlayerId = '6'
+    await flushPromises()
+    // Before: p1 stayed selected and was sent with player 6 (the backend answers packPlayerMismatch).
+    expect(wrapper.vm.selectedPackId).toBe(null)
+    expect(bookingStore.loadPlayerPacks).toHaveBeenLastCalledWith('6')
+
+    // The new child's packs arrive: their default applies.
+    bookingStore.sessionPacksPlayerId = '6'
+    bookingStore.sessionPacks = [pack('q1')]
+    await wrapper.vm.$nextTick()
+    expect(wrapper.vm.selectedPackId).toBe('q1')
+  })
+
+  it("the previous child's packs are not offered while the new child's load is pending or failed", async () => {
+    const { wrapper, bookingStore, pinia } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: '5',
+        sessionPacks: [pack('p1')],
+      },
+      'abc',
+      { activePlayerId: '5' },
+      'PARENT',
+      renderPage,
+    )
+    expect(wrapper.vm.packOptions.map((o) => o.value)).toContain('p1')
+
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    usePlayerStore(pinia).activePlayerId = '6'
+    await flushPromises()
+    // The stubbed load never lands: the store still holds player 5's list.
+    expect(bookingStore.sessionPacksPlayerId).toBe('5')
+    expect(wrapper.vm.activePacksForCoach).toEqual([])
+    expect(wrapper.vm.packOptions.map((o) => o.value)).not.toContain('p1')
+  })
+
+  it('switching child while the mount-time pack load is in flight still loads the new child', async () => {
+    let releaseMountLoad
+    const { wrapper, bookingStore } = await mountPage(
+      {
+        computedSlots: [SLOT],
+        coachTimezone: 'UTC',
+        coachPriced: true,
+        sessionPacksPlayerId: null,
+        sessionPacks: [],
+      },
+      'abc',
+      { activePlayerId: '5' },
+      'PARENT',
+      {
+        ...renderPage,
+        beforeMount(pinia) {
+          const store = useBookingStore(pinia)
+          store.loadPlayerPacks.mockImplementationOnce(
+            () => new Promise((r) => (releaseMountLoad = r)),
+          )
+        },
+      },
+    )
+    expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith('5')
+
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    usePlayerStore(wrapper.vm.$pinia).activePlayerId = '6'
+    await flushPromises()
+    // Before: the switch was ignored until mount finished, and player 6's packs were never requested.
+    expect(bookingStore.loadPlayerPacks).toHaveBeenLastCalledWith('6')
+    releaseMountLoad()
+    await flushPromises()
+  })
+
+  it("a child id that arrives after mount loads that child's packs", async () => {
+    const { wrapper, bookingStore } = await mountPage(
+      { computedSlots: [SLOT], coachTimezone: 'UTC', coachPriced: true, sessionPacks: [] },
+      'abc',
+      { activePlayerId: null },
+      'PARENT',
+      renderPage,
+    )
+    expect(bookingStore.loadPlayerPacks).not.toHaveBeenCalled()
+
+    const { usePlayerStore } = await import('src/stores/playerStore')
+    usePlayerStore(wrapper.vm.$pinia).activePlayerId = '5'
+    await flushPromises()
+    expect(bookingStore.loadPlayerPacks).toHaveBeenCalledWith('5')
+  })
+
   it('a pack whose credits are all held by open bookings with this coach is not preselected', async () => {
     // The pack list has no reserved count; an open booking for this player with this coach may hold
     // a session, so 2 credits with 2 open bookings is not a safe default (the backend would answer
