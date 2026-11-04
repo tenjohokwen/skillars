@@ -3574,6 +3574,7 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
   - **Effect:** every slot row renders with no text, so parents pick from blank rows.
   - **Why tests missed it:** the page's own spec assumed Chrome accepted the options and skipped rendering the labels.
   - **Fix:** `e51b84f1` on `feature/pitchside` (PR #425) uses explicit date and time components and adds a Vitest case that fails against the old code. It can be cherry-picked to master on its own.
+  - **Resolved (2026-11-04):** owner chose to cherry-pick now; `e51b84f1` is on master as its own PR (`fix/booking-slot-labels-blank`).
   - Found by the Pitchside spec BKG-04.
 - **A family holding pack credits gets "Per session" preselected, and is charged by card.**
   - **Cause:** `selectedPackId` starts as `null` (`BookingRequestPage.vue:393`), and "Per session" is the first option (`:403`), even when the family holds credits with this coach.
