@@ -1,0 +1,86 @@
+{
+  "arm": "concurrency",
+  "case": "386-messaging-contact-detail-hardening",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "In this file the try/catch in reportMessage/reportConversation wraps only repository.save() with no flush before return, so the finding is structurally plausible; but the verification caveat requires the MessageReport/ConversationReport entity files to confirm @Tsid (deferred insert vs. IDENTITY, which would insert inside save()), plus listener and MessagingApiAdvice behavior \u2014 none of which are shown.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "CoachRatingService.recompute (lines 23\u201331) itself takes no coach-row or advisory lock \u2014 just computeAggregates then updateRatingAggregate \u2014 so the unserialized read-compute-write is real in this file. But the finding's verification step requires checking the callers (ReviewModerationService.handleReviewSubmitted, AdminReviewService.approveReview/blockReview, ReviewFlagService.flag) and the repository query definitions for a serializing lock, and none of that code is provided.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 0.49712500000000004,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding touches ContactDetailSanitizer or regex obfuscation bypasses.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses messages being stored/delivered before moderation verdict.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding mentions delimiter stripping or prompt injection in the moderation services.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "No reported finding about missing rate limits on sendMessage or the sanitize-preview oracle.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding about suspended/locked users retaining messaging access via verifyIsParty.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R1 (getMessages BLOCKED revert), R2 (sendMessage inner-transaction BLOCKED loss), and R3 (lastReadAt/lastMessageAt clobber) together cover the full unversioned full-row-save defect with the same mechanism and consequences.",
+        "reported_ids": [
+          "R1",
+          "R2",
+          "R3"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Concrete trigger: reportMessage's unlocked findById+save on unversioned Message writes deleted_at=NULL over a concurrently committed soft delete; same full-row-write mechanism as F6 but on Message, not listed in the key.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] In this file the try/catch in reportMessage/reportConversation wraps only repository.save() with no flush before return, so the finding is structurally plausible; but the verification caveat requires the MessageReport/ConversationReport entity files to confirm @Tsid (deferred insert vs. IDENTITY, which would insert inside save()), plus listener and MessagingApiAdvice behavior \u2014 none of which are shown. | pass-1: Concrete trigger: @Tsid pre-assigned ids defer the INSERT to commit-time flush, so the unique-violation escapes the try/catch around save() and surfaces as a 500 instead of the mapped 409.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Concrete trigger: a message committed after the reader's page and pending-clamp queries but with earlier createdAt is skipped by the lastReadAt clamp, so countUnread never surfaces it.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] CoachRatingService.recompute (lines 23\u201331) itself takes no coach-row or advisory lock \u2014 just computeAggregates then updateRatingAggregate \u2014 so the unserialized read-compute-write is real in this file. But the finding's verification step requires checking the callers (ReviewModerationService.handleReviewSubmitted, AdminReviewService.approveReview/blockReview, ReviewFlagService.flag) and the repository query definitions for a serializing lock, and none of that code is provided. | pass-1: Concrete trigger: two recompute transactions under READ COMMITTED each compute aggregates blind to the other's uncommitted APPROVED review, and the last commit publishes an aggregate missing a review.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "arm": "security",
+  "case": "386-messaging-contact-detail-hardening",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "getMessages and getConversationForSse gate only via verifyIsParty, whose PLAYER arm passes when the caller's profile id equals conv.getPlayerId() \u2014 no AgeMessagingPolicy/visibleToPlayer check, unlike getConversations (visibleToPlayer filter) and sendMessage (playerIsBlocked throw). The caveat is satisfied in-file: initiateConversation's comment and the playerIsBlocked guards show blocked-tier ROLE_PLAYER callers are expected, and updateLastRead's PLAYER case does advance playerLastReadAt.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "confirmed",
+      "note": "softDeleteMessage only rejects UNDER_REVIEW/BLOCKED and already-deleted messages, so a sender can delete an APPROVED message; it sets deletedAt and saves with no event or emitter call. getMessagesForPlayerConversation (oversight) reads via findByConversationIdAndNotDeleted, so the deleted message disappears from the parent's view silently.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "undetermined",
+      "note": "MessagingReportService.reportMessage confirms the trigger: verifyIsParty allows the sender, the only guard is the duplicate-report check (existsByMessageIdAndReportedBy), and the status block unconditionally flips any non-BLOCKED message to UNDER_REVIEW. But the claimed consequence \u2014 content hidden from the recipient and parent \u2014 depends on toMessageDto nulling UNDER_REVIEW content for all viewers, which is in code not shown here.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "getMessages and sendMessage both do conversationRepository.findById(...).orElseThrow(ResourceNotFoundException) before verifyIsParty (OperationNotAllowedException \u2192 403 per the in-file comment), so missing vs foreign ids are distinguishable; the sibling getMessagesForPlayerConversation deliberately normalizes to 403 (\"always 403, never 404\"), confirming these two paths lack that guard.",
+      "reported_id": "R10"
+    }
+  ],
+  "judge_cost_usd": 1.488375,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same sanitizer weakness at the same place, covering plain-format phone bypass plus the obfuscation bypasses (at/dot emails, spelled-out and non-ASCII digits) with the same consequence of contact details passing unredacted.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R2 states the sanitizer is never applied to messages and Gemini is the sole control, a fragment of F2, but never raises the persist-before-moderation send path or the missing supervised-conversation handling as a defect.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R2 and R9 jointly describe the single-pass non-recursive replace allowing delimiter reconstruction and prompt injection in both GeminiModerationService and ReviewModerationService, same mechanism and consequence.",
+        "reported_ids": [
+          "R2",
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R6 covers the unthrottled message sending with Gemini cost amplification and R7 covers the sanitize-preview bypass oracle, together covering both halves of F4.",
+        "reported_ids": [
+          "R6",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding mentions suspended coaches or locked users retaining messaging access.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions the missing @Version/full-row save race that overwrites a concurrently committed BLOCKED status.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] getMessages and getConversationForSse gate only via verifyIsParty, whose PLAYER arm passes when the caller's profile id equals conv.getPlayerId() \u2014 no AgeMessagingPolicy/visibleToPlayer check, unlike getConversations (visibleToPlayer filter) and sendMessage (playerIsBlocked throw). The caveat is satisfied in-file: initiateConversation's comment and the playerIsBlocked guards show blocked-tier ROLE_PLAYER callers are expected, and updateLastRead's PLAYER case does advance playerLastReadAt. | pass-1: Concrete trigger: under-13 player calls GET messages on their own conversation id, verifyIsParty passes on playerId match, bypassing the PARENT_MANAGED visibility gate applied only in getConversations/sendMessage.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] softDeleteMessage only rejects UNDER_REVIEW/BLOCKED and already-deleted messages, so a sender can delete an APPROVED message; it sets deletedAt and saves with no event or emitter call. getMessagesForPlayerConversation (oversight) reads via findByConversationIdAndNotDeleted, so the deleted message disappears from the parent's view silently. | pass-1: Concrete trigger: sender soft-deletes an APPROVED message after delivery and the oversight path reads findByConversationIdAndNotDeleted, erasing it from the parent's view with no alert.",
+        "reported_id": "R4",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] MessagingReportService.reportMessage confirms the trigger: verifyIsParty allows the sender, the only guard is the duplicate-report check (existsByMessageIdAndReportedBy), and the status block unconditionally flips any non-BLOCKED message to UNDER_REVIEW. But the claimed consequence \u2014 content hidden from the recipient and parent \u2014 depends on toMessageDto nulling UNDER_REVIEW content for all viewers, which is in code not shown here. | pass-1: Concrete trigger: reportMessage lacks a sender-not-reporter check and flips the message to UNDER_REVIEW whose content is nulled for all viewers, letting a sender censor their own delivered message.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The trigger depends on an asserted multi-instance deployment that the code's own Javadoc contradicts (single-instance assumption); not establishable from the reported text alone.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] getMessages and sendMessage both do conversationRepository.findById(...).orElseThrow(ResourceNotFoundException) before verifyIsParty (OperationNotAllowedException \u2192 403 per the in-file comment), so missing vs foreign ids are distinguishable; the sibling getMessagesForPlayerConversation deliberately normalizes to 403 (\"always 403, never 404\"), confirming these two paths lack that guard. | pass-1: Concrete trigger: findById throws 404 before the 403 party check, so sweeping sequential conversation ids distinguishes existing from missing conversations.",
+        "reported_id": "R10",
+        "verdict": "real"
+      }
+    ]
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "arm": "control",
+  "case": "398-ltd-admin-full-admin-rights",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "lockUserAccount's body is findOneByLogin(login).map(u -> u.lock()) guarded only by @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE) (Javadoc: \"Requires ADMIN or LTD_ADMIN role\") \u2014 no privileged-target or self check exists anywhere in the method, so any login passed in, including a ROLE_ADMIN account or the caller's own, gets locked. Per the finding's caveat this is latent (no production caller shown), and the AuthService lockout consequence is asserted outside this file, but the missing guard itself is confirmed.",
+      "reported_id": "R10"
+    }
+  ],
+  "judge_cost_usd": 0.51857,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies HAS_ADMIN_ROLE granting ROLE_LTD_ADMIN every admin endpoint; R2-R6 enumerate the finance, config, GDPR, user-state and video/dispute instances the key lists.",
+        "reported_ids": [
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R9 states deleteUserInformation is gated by HAS_ANY_ROLE, lets any authenticated user delete accounts by login, and notes it has no production callers \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 covers the non-transactional delete-then-save, missing @Valid, silent rule loss and id change exactly; R8 adds the unvalidated-request fragment (threshold/precision overflow) of the same defect.",
+        "reported_ids": [
+          "R7",
+          "R8"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] lockUserAccount's body is findOneByLogin(login).map(u -> u.lock()) guarded only by @PreAuthorize(SecurityConstants.HAS_ADMIN_ROLE) (Javadoc: \"Requires ADMIN or LTD_ADMIN role\") \u2014 no privileged-target or self check exists anywhere in the method, so any login passed in, including a ROLE_ADMIN account or the caller's own, gets locked. Per the finding's caveat this is latent (no production caller shown), and the AuthService lockout consequence is asserted outside this file, but the missing guard itself is confirmed. | pass-1: lockUserAccount under HAS_ADMIN_ROLE lacks the privileged-target guard AdminUserService applies, so an LTD_ADMIN caller can lock a ROLE_ADMIN account; latent (no caller) but the same class of defect the key accepts for F2.",
+        "reported_id": "R10",
+        "verdict": "real"
+      }
+    ]
+  }
+}

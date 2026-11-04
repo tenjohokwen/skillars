@@ -1,0 +1,118 @@
+{
+  "arm": "control",
+  "case": "307-frontend-links-and-tus",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "VideoService.initializeUpload returns providerUploadId, tusAuthorizationSignature, tusAuthorizationExpire and tusLibraryId. Bunny's TUS endpoint needs all four as the AuthorizationSignature, AuthorizationExpire, LibraryId and VideoId headers (see video.api.js createTusUpload). DrillUploadService.initiateUpload copies only videoId, sessionId, signedUploadUrl and expiresAt into DrillUploadInitiateResponse. Because the auth fields are dropped, no client can authenticate a drill-demo upload. Bunny rejects every upload, and the drill_video_refs row is left pointing at a video that never becomes READY.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/contract/DrillUploadInitiateResponse.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "DrillUploadInitiateResponse / DrillUploadService.initiateUpload",
+      "title": "Drill upload response drops the Bunny TUS auth fields, so every drill video upload fails",
+      "verification": "Compare InitializeUploadResponse (8 fields) with DrillUploadInitiateResponse (4 fields). The video-management flow (video.api.js:42-73) shows the headers Bunny requires."
+    },
+    {
+      "category": "logic",
+      "description": "runTusUpload builds the tus Upload with `uploadUrl: signedUploadUrl`. That URL is the shared creation endpoint (https://video.bunnycdn.com/tusupload), not the URL of an upload that already exists. With uploadUrl set, tus-js-client sends a HEAD to resume that URL instead of POSTing to create an upload. The call also sends no AuthorizationSignature, AuthorizationExpire, LibraryId or VideoId headers and no title/filetype metadata. Every coach drill-video upload fails with the generic 'uploadFailed' toast after the backend has already reserved quota and re-pointed the drill's video ref.",
+      "file": "src/frontend/src/components/session/DrillDetailPanel.vue",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "runTusUpload",
+      "title": "DrillDetailPanel resumes at the TUS creation endpoint with no auth headers or metadata",
+      "verification": "Compare with the working flow in src/frontend/src/api/video.api.js, which uses `endpoint:` plus the four Bunny headers. Bunny tests return signedUploadUrl 'https://video.bunnycdn.com/tusupload'."
+    },
+    {
+      "category": "logic",
+      "description": "The activation and duplicate-registration emails render `${baseUrl}/#/activate?key=\u2026` and `${baseUrl}/#/login`. Here baseUrl is `${baseurl}:${server.port}`, which no profile overrides, so it resolves to http://localhost:9990: the API server, not the SPA. Prod and UAT define app.frontend-url (https://skillars.com), and the other registration services already use it. As a result, every activation link sent outside a developer's own machine points to localhost and no new account can be activated.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/registration/EmailRegistrationStrategy.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "EmailRegistrationStrategy constructor (host = baseurl + \":\" + server.port)",
+      "title": "Account emails build links from the backend host and port instead of the frontend URL",
+      "verification": "application.yaml sets baseurl: http://localhost and server.port 9990, and neither application-prod.yaml nor application-uat.yaml overrides baseurl. CoachRegistrationService uses app.frontend-url + '/#/\u2026'."
+    },
+    {
+      "category": "logic",
+      "description": "sendMail puts baseUrl = `${baseurl}:${server.port}` (http://localhost:9990 in every profile) into the PASSWORD_RESET and PROFILE_CHANGE emails. passwordReset.html builds `${baseUrl}/#/reset-password?key=\u2026` from it. In UAT and prod the reset link points at localhost on the API port, so users cannot reset their password, and the profile-change security email links nowhere useful.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "AccountManagementFacade.sendMail (host field)",
+      "title": "Password-reset and email-change emails link to the backend host and port",
+      "verification": "See passwordReset.html lines 13 and 20, application.yaml line 1, and app.frontend-url in application-prod.yaml."
+    },
+    {
+      "category": "logic",
+      "description": "fullBaseUrl is baseurl + ':' + server.port, which resolves to http://localhost:9990 in every deployed profile, and the PROFILE_CHANGE template receives it as baseUrl. Every link in the security email for an account change (for example 'this wasn't me' or login links) points at localhost on the API port instead of app.frontend-url. A user reacting to a suspicious change can't reach the app from the email.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/AccountChangeEmailListener.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "sendNotificationEmail",
+      "title": "Account-change notification email uses the backend host and port as baseUrl",
+      "verification": "Read the PROFILE_CHANGE template (mails/profileChange*.html) to confirm which links use map.baseUrl."
+    },
+    {
+      "category": "logic",
+      "description": "bookingsUrl is `${baseurl}:${server.port}/bookings`, which resolves to http://localhost:9990/bookings. The URL has three problems: it uses the backend host instead of app.frontend-url, it has no '/#/' even though the SPA uses vueRouterMode 'hash', and the SPA has no '/bookings' route (the parent list is /parent/bookings). A parent asked to confirm or dispute a quick-completed session gets a dead link, so the confirmation step this email exists for can't be done from the email.",
+      "file": "src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/BookingEmailListener.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "onQuickCompleteConfirmationRequired",
+      "title": "Quick-complete confirmation email links to a non-existent, non-hash route on the API host",
+      "verification": "quasar.config.js sets vueRouterMode: 'hash'. routes.js defines only 'parent/bookings'."
+    },
+    {
+      "category": "logic",
+      "description": "reportsPageUrl is `${baseurl}/portal/players/{id}/reports`, which is http://localhost/portal/... in every profile. The SPA has no /portal/ route, and the app uses hash routing, so the path would need '/#/'. Reports are shown on /#/parent/players/{id}/development. Every PERFORMANCE_REPORT_SHARED email sends the parent to a dead link instead of the report.",
+      "file": "src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "notifyParent",
+      "title": "Performance-report email links to a non-existent, non-hash path",
+      "verification": "routes.js has no 'portal' path, and quasar.config.js uses hash mode. No profile overrides baseurl."
+    },
+    {
+      "category": "logic",
+      "description": "callbackSuccessUrl defaults to '/coach/payment-settings', and no profile overrides it. handleOAuthCallback sends the coach there with sendRedirect after every Stripe callback, including errors. The path is relative to the API origin, and it has no '#', while the Quasar SPA uses hash routing. The browser lands on a path the router ignores: in dev that is the backend at :9990, and in prod the SPA root, which redirects to /login or the dashboard. The coach never reaches the payment-settings page, and the stripe_error / state_mismatch query parameters are lost, so a failed onboarding is invisible to them.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/config/PaymentProperties.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "callbackSuccessUrl",
+      "title": "Stripe OAuth callback redirects to a non-hash, host-relative path",
+      "verification": "See application.yaml line 410 and quasar.config.js vueRouterMode: 'hash'. No UAT or prod override of callback-success-url exists."
+    },
+    {
+      "category": "logic",
+      "description": "No route in routes.js is named 'coach-dashboard'. QBtn with `to` resolves the target through vue-router's useLink while rendering, and Vue Router 4 throws 'No match for {name: \"coach-dashboard\"}' for an unknown name. The template vault page therefore fails to render or throws as soon as a coach opens /coach/session-templates, and the back button can never work.",
+      "file": "src/frontend/src/pages/coach/SessionTemplateVault.vue",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "template q-btn :to=\"{ name: 'coach-dashboard' }\"",
+      "title": "SessionTemplateVault back button targets an undefined route name",
+      "verification": "Grep routes.js for \"coach-dashboard\": there are no matches. Open the page in dev and check the console for the router 'No match' error."
+    },
+    {
+      "category": "logic",
+      "description": "The 'marketplace' route in routes.js has no name. The CTA is rendered whenever the player has no ACTIVE pack, which includes every new parent. Resolving `{ name: 'marketplace' }` makes vue-router throw 'No match', which breaks rendering of the development portal in exactly the empty-pack case. Even when it doesn't crash, the button can't navigate.",
+      "file": "src/frontend/src/pages/parent/ParentDevelopmentPortalPage.vue",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "template q-btn :to=\"{ name: 'marketplace' }\"",
+      "title": "Parent development portal 'Find a coach' CTA targets an unnamed route",
+      "verification": "routes.js lines 351-354 define `path: 'marketplace'` without a `name`."
+    },
+    {
+      "category": "logic",
+      "description": "When storage use reaches 95% or more, the bar shows an upgrade link to '/upgrade'. routes.js has no such route, so the catch-all sends the user to the 404 page. A user who is about to hit their quota and clicks the only call to action gets ErrorNotFound instead of a subscription page, such as coach/subscription or the player-subscription route.",
+      "file": "src/frontend/src/components/video/QuotaUsageBar.vue",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "router-link to=\"/upgrade\"",
+      "title": "Storage quota upgrade prompt links to a non-existent /upgrade route",
+      "verification": "routes.js contains no 'upgrade' path. The TODO comment confirms it is a placeholder."
+    }
+  ],
+  "input_rev": "70dbaec8da3fe28b06642e623573d0726262d623",
+  "model": null
+}

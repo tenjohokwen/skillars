@@ -1,0 +1,48 @@
+{
+  "arm": "security",
+  "case": "388-jwt-signing-key-in-database",
+  "findings": [
+    {
+      "category": "security",
+      "description": "derivePassword() builds the Jasypt BasicTextEncryptor (PBEWithMD5AndDES) password as reverse(busId + version) \u2014 both plaintext, not-null columns stored in the same `sec` row. For the JWT key the inputs are the compile-time constants JWT_BUS_NAME=\"jot\" and JWT_VERSION=\"v1\" (SecurityConstants.java:58-59), making the password the fixed string \"1vtoj\" in every environment. Anyone who gains read access to the database (SQL injection anywhere in the app, a leaked backup/dump, read-replica or support SELECT access) decrypts the HMAC signing key and can forge a JWT for any user and any role including ROLE_ADMIN, fully bypassing authentication. @Audited additionally copies every encrypted value into the Envers sec_aud history table, widening the leak surface and making the key impossible to scrub.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/Secret.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "Secret.derivePassword / Secret.getSecretBytes",
+      "title": "JWT signing key decryptable by anyone with read access to the sec table \u2014 Jasypt password derived from plaintext columns of the same row",
+      "verification": "Confirm the sec/sec_aud tables exist via the Flyway migrations and that no additional external encryption (e.g. pgcrypto, disk-level with column access control) applies; decrypt a sample row with BasicTextEncryptor and password \"1vtoj\" to demonstrate."
+    },
+    {
+      "category": "security",
+      "description": "Both JwtSecretService and JwtConfiguration cache the Secret in a volatile field set once and never invalidated, and the lookup they use (SecretService.fetchSecret -> SecretRepository.findOneByVersionAndBusId) ignores EntityStatus entirely. After a key compromise, marking the row INACTIVE changes nothing: running instances keep signing and verifying with the cached key, and even restarted instances fetch and honor the INACTIVE row. Because Secret's columns are updatable=false, (version,busId) is unique, and JWT_VERSION is a constant, there is no operational path to replace the key \u2014 tokens forged with a stolen key remain valid indefinitely until a code change and full redeploy.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/JwtSecretService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "JwtSecretService.addSecretToThread / JwtConfiguration.getSecret / SecretService.fetchSecret",
+      "title": "JWT secret cannot be revoked or rotated: status flag ignored and key cached per-instance forever",
+      "verification": "Confirm there is no admin endpoint or scheduled job that evicts JwtConfiguration.secret / JwtSecretService.secret or re-reads the row; confirm EntityStatus on the sec row is consulted nowhere on the JWT path."
+    },
+    {
+      "category": "security",
+      "description": "The method caches the latest ACTIVE Secret per busId in an in-memory ConcurrentHashMap that is never evicted, so deactivating a secret or inserting a newer active one never takes effect on a running instance, and in the multi-instance deployment different instances can serve different \"latest\" secrets after a rotation, each rejecting material signed by the other. No caller exists in src/main/java today, so the defect is latent, but any future consumer silently inherits broken revocation and rotation semantics.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/SecretService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "SecretService.fetchLatestActiveSecretAsBytes / secretMap",
+      "title": "fetchLatestActiveSecretAsBytes caches secrets in a per-JVM map with no TTL or invalidation",
+      "verification": "Grep the full tree (including tests and other modules) for callers of fetchLatestActiveSecretAsBytes; if a consumer exists, severity rises to medium."
+    },
+    {
+      "category": "security",
+      "description": "targetsLoopback passes any datasource host that resolves to loopback, link-local, or RFC 1918 private space \u2014 the last of which is where most cloud production databases sit. If app.bootstrap.jwt-secret.enabled=true is copied into a production configuration and the database has no secret row yet, the runner seeds the JWT signing key through this dev-only path instead of failing the boot as the guard intends. The seeded value is SecureRandom so direct impact is limited to the weak at-rest storage of finding 1; the javadoc acknowledges the gap as a deliberate tradeoff, leaving the enabled flag as the only effective gate against the exact misconfiguration the guard was added for.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/JwtSecretBootstrapRunner.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "JwtSecretBootstrapRunner.targetsLoopback",
+      "title": "Bootstrap runner's local-only guard accepts RFC 1918 hosts, i.e. most production VPC databases",
+      "verification": "Check prod/uat deployment configs and secret stores to confirm app.bootstrap.jwt-secret.enabled is not set there, and whether the production database host resolves to RFC 1918 space."
+    }
+  ],
+  "input_rev": "0621d23f5462306070ae084dc294bbf501d37458",
+  "model": null
+}

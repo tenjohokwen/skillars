@@ -1,0 +1,28 @@
+{
+  "arm": "security",
+  "case": "353-excused-cancel-cap-race",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The cap check saves the history row and runs countByCoachIdAndCancelReasonInAndCreatedAtAfter in the listener's own REQUIRES_NEW transaction with no lock, before ReliabilityStrikeService ever locks the coach row. Under READ_COMMITTED, N concurrent coach cancellations of different bookings (parallel requests, or requests landing on different app instances) each count committed rows plus only their own uncommitted row, so a coach at or just below the cap can fire a burst of self-declared 'excused' cancellations in parallel and none of them trips `excusedInWindow > maxPerWindow`. The coach ends far past the cap with zero COACH_CANCELLATION_EXCUSED_LIMIT strikes, evading the rolling strike count that drives REDUCED visibility and PENDING_REVIEW suspension \u2014 the exact race ReliabilityStrikeService.issue was fixed to prevent by taking a PESSIMISTIC_WRITE coach-row lock before its own count.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "CancellationRefundService.exceedsExcusedCancellationCap / onBookingCancelledByCoach",
+      "title": "Excused-cancellation cap check races: concurrent cancellations let a coach exceed the cap with no strikes",
+      "verification": "Confirm no serialization exists upstream: two cancel-booking requests for different bookings of the same coach commit independently and their AFTER_COMMIT listeners run concurrently. Reproduce with two transactions saving a history row each and counting before either commits; both counts exclude the other's row."
+    },
+    {
+      "category": "architecture",
+      "description": "Refunds were moved to a durable BEFORE_COMMIT outbox, but cancellation history and reliability strikes remain in an AFTER_COMMIT listener with no persistence of the pending work. A crash, OOM kill, or rolling deploy of the instance in the window between the cancellation transaction committing and the listener completing permanently drops the history row and any strike. That cancellation then never counts toward the excused-cancellation cap or the 30-day strike thresholds, so enforcement is silently undercounted for coaches who cancel or no-show \u2014 and unlike the documented lock-exhaustion trade-off, nothing logs or records that a consequence was owed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CancellationRefundService.java",
+      "id": "R2",
+      "severity": "low",
+      "symbol": "CancellationRefundService.onBookingCancelledByCoach / onCoachNoShow",
+      "title": "Cancellation history and strikes are lost if the instance dies between booking commit and the AFTER_COMMIT listener",
+      "verification": "Check there is no outbox/retry mechanism (equivalent to RefundEnqueueListener's) replaying missed BookingCancelledByCoachEvent / CoachNoShowEvent consequences after a restart."
+    }
+  ],
+  "input_rev": "783845c71730318ab777657e2c55a9c5714feece",
+  "model": null
+}

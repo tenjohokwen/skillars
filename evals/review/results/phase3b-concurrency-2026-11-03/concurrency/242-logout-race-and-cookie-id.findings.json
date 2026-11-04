@@ -1,0 +1,93 @@
+{
+  "arm": "concurrency",
+  "case": "242-logout-race-and-cookie-id",
+  "findings": [
+    {
+      "category": "database",
+      "description": "AuthService is class-level @Transactional. On an unknown email (line 85) or wrong password (line 90), recordAttempt() saves a LoginAttempt and the same method then throws BadCredentialsException, a RuntimeException, which rolls back the whole transaction including that insert. countByIdentifierAndAttemptedAtAfter (line 71) therefore always sees zero failed attempts from this path, and the max-attempts lockout can never trigger. The save and the throw must not share a transaction, but they do.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "AuthService.login / recordAttempt",
+      "title": "Failed-login attempts are rolled back with the exception that records them, so the lockout never engages",
+      "verification": "Confirm there is no REQUIRES_NEW on any path into LoginAttemptRepository.save and no noRollbackFor rule for BadCredentialsException; LoginAttemptRepository.java declares neither, and recordAttempt is private to AuthService."
+    },
+    {
+      "category": "concurrency",
+      "description": "logout (lines 211-216) loads the presented rtkn row and applies .filter(t -> !t.isUsed()) before marking it used. If an in-flight /refresh for the same token commits first (marks it used, issues a successor), logout's filter turns revocation into a no-op and the successor token stays valid for its full 7-day TTL with nothing revoking it. If the browser then applies the refresh response's Set-Cookie after the logout response's cookie clears (the frontend's Promise.race explicitly permits this overlap), JWT/rtkn/skp/rint are re-installed and the user remains signed in after logging out. In the opposite interleaving (refresh commits between logout's read and its flush), logout's save() fails the @Version check, the request errors, and nothing is revoked either.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "AuthService.logout",
+      "title": "Logout races a concurrent token refresh: revocation no-ops and the session can survive logout",
+      "verification": "Confirm no other code revokes the successor on logout (nothing calls markAllUsedByUserId from the logout path) and that the frontend sends /refresh and /logout concurrently (sessionManager's refresh vs MainLayout/useSession handleLogout)."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two tabs refresh the same rtkn simultaneously; both pass the isUsed check, and the saveAndFlush loser (lines 170-177) responds with clearAuthCookies \u2014 Max-Age=0 for JWT, rtkn and skp. Both tabs share one cookie jar: if the winner's Set-Cookie (new rtkn) is applied first and the loser's clears second, the newly issued valid token is deleted client-side and every tab is logged out despite a successful rotation. The 30-second grace window only covers a second request arriving after the first committed, not this true simultaneous pair, so the exact multi-tab race it was built for still tears the session down.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "AuthService.refresh (ObjectOptimisticLockingFailureException branch)",
+      "title": "Concurrent-refresh loser's clearAuthCookies wipes the winner's just-issued session cookies"
+    },
+    {
+      "category": "concurrency",
+      "description": "The grace branch (lines 148-155) reassigns `token` to the latest unused successor and then falls through to line 168, marking that successor used and minting yet another token, rather than pointing the caller at the still-valid successor. Sequence: tab A rotates T1 to T2; tab B's in-flight T1 request lands within grace, consumes T2, and is issued T3. If tab A's response (Set-Cookie T2) is applied to the shared jar after tab B's (T3), the browser is left holding T2, which is already marked used. The next refresh more than 30 seconds after T2's rotatedAt falls into the reuse branch and markAllUsedByUserId revokes every session for the user.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "AuthService.refresh (grace-window branch)",
+      "title": "Refresh grace window consumes the successor token; out-of-order responses later trigger full session revocation for a legitimate user"
+    },
+    {
+      "category": "concurrency",
+      "description": "handleLogout clears rint (line 360) and awaits the bounded backend call, but destroySession() runs only after the await \u2014 unlike useSession.handleLogout, which stops monitoring first. The POST /logout response's Set-Cookie removes the user cookie, and boot/axios.js's response interceptor runs refreshExpiryState() before the awaited promise resumes; sessionManager's fast-teardown branch (monitoring active, rint seen, user cookie absent) returns 0 and dispatches session:expired. App.vue's handler fires a second backend logout and calls pushLoginOrHardNavigate({expired: true}), claiming the inFlight slot; MainLayout's own expired:false call coalesces and pendingExpired only upgrades. Every MainLayout logout that completes within the 3s budget lands on /login?expired=true with the false expiry banner (the regression deferred-125 fixed) plus a duplicate POST /logout.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "handleLogout",
+      "title": "MainLayout logout clears rint while monitoring is still armed, deterministically firing a false session-expired teardown",
+      "verification": "Trace: MainLayout.vue:360 clear, boot/axios.js:139 refreshExpiryState, sessionManager.js:133 fast-teardown conditions, App.vue:28-41 handler, sessionRedirect.js pendingExpired upgrade-only semantics."
+    },
+    {
+      "category": "concurrency",
+      "description": "Both logout flows bound the backend call to 3 seconds and navigate regardless (MainLayout.vue:364-367, useSession.js:96-99). If POST /api/auth/logout stalls past the budget, the user reaches /login and can sign in again; the login response installs fresh JWT/rtkn/skp cookies. When the stalled logout response finally arrives, AuthService.logout:218-220 unconditionally emits Max-Age=0 clears for those same cookie names, deleting the new session's cookies and silently tearing down the fresh login client-side.",
+      "file": "src/frontend/src/layouts/MainLayout.vue",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "handleLogout (Promise.race with LOGOUT_BACKEND_WAIT_MS)",
+      "title": "Stalled logout response's unconditional cookie clears destroy the next session after a quick re-login"
+    },
+    {
+      "category": "concurrency",
+      "description": "The window count at line 71 and the failure insert in recordAttempt are separated with no lock, unique constraint or conditional update. N parallel failed logins for the same identifier all read a count below maxAttempts before any insert commits, so all pass and the cap is exceeded by the degree of parallelism. Classic write skew under READ COMMITTED; relevant once the rollback defect that currently suppresses the inserts entirely is fixed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "AuthService.login (rate-limit check)",
+      "title": "Login rate-limit check is count-then-insert with no serialization, so parallel failures exceed the cap"
+    },
+    {
+      "category": "logic",
+      "description": "findFirstByIdentifierOrderByAttemptedAtAsc (lines 73-78) has no attemptedAt-after-windowStart filter. Once attempts older than the window exist for an identifier (cleanup is a periodic purge, not immediate), oldest.attemptedAt + lockWindow is already in the past and the Math.max clamps retryAfterSeconds to 1, while the window-based count still blocks the login. The client is told to retry in one second and keeps receiving 429s for up to the full window.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "AuthService.login (retryAfterSeconds)",
+      "title": "Retry-After derives from the oldest attempt ever recorded, not the oldest inside the lock window"
+    },
+    {
+      "category": "logic",
+      "description": "routes.js:203 gates the route with meta `requiresParent: true`, but router/index.js:50 computes the parent gate solely from `meta.role === 'PARENT'` and never reads a requiresParent key. Every other parent-only route uses role: 'PARENT'; this one silently has no role gate, so any authenticated coach or player can open the page client-side and its API calls fire. Protection rests entirely on backend authorization of the subscription endpoints.",
+      "file": "src/frontend/src/router/routes.js",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "parent/player/:playerId/subscription route meta",
+      "title": "requiresParent route meta is never read by the router guard, leaving the player-subscription page ungated by role",
+      "verification": "Confirm the backend endpoints behind PlayerSubscriptionPage enforce parent ownership server-side; if they do, impact is limited to an unintended page render and 403s."
+    }
+  ],
+  "input_rev": "9923ffb024799b1fe7b98324191481ec3a74acb5",
+  "model": null
+}

@@ -1,0 +1,114 @@
+{
+  "arm": "security",
+  "case": "337-subscription-entitlement-integrity",
+  "checks": [],
+  "judge_cost_usd": 0.5933550000000001,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 describes the identical defect: pending change applied onto a CANCELLED row because cancellation never voids pending changes and applyPendingChanges never checks status.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R9 identifies the missing payment_behavior and resulting 'incomplete' subscription, but describes the consequence as a CHECK-violation rollback with no local row, not an unpaid tier being granted.",
+        "reported_ids": [
+          "R9"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R2 explicitly states both getCoachSubscriptionTier and resolvePlayerTierKey read tier with no status check, granting paid entitlements on non-live rows.",
+        "reported_ids": [
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 states downgrades only write a local change row and applyPendingChanges never calls Stripe, so the old higher price keeps billing \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "No reported finding says changeCoachTier/changePlayerTier lack a status check; R10 concerns the cancelAtPeriodEnd flag, not PAST_DUE/CANCELLED status.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F6",
+        "match": "full",
+        "note": "R7 covers the local-only grace expiry with Stripe left billing; R5 covers subscribeCoach/subscribePlayer passing the guard and creating a second live Stripe subscription.",
+        "reported_ids": [
+          "R7",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F7",
+        "match": "full",
+        "note": "R3 states pastDueSince is never nulled on recovery so a later failure gets zero grace \u2014 same mechanism and consequence.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F8",
+        "match": "full",
+        "note": "R9 covers unmapped statuses violating chk_pcs_status/chk_pps_status and the webhook rollback/retry loop; R6 covers the absent event-ordering guard; only the missing invoice.paid handler fragment is uncovered.",
+        "reported_ids": [
+          "R9",
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F9",
+        "match": "none",
+        "note": "No reported finding describes the load-before-Stripe/save-after lost update or the missing @Version field.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F10",
+        "match": "full",
+        "note": "R4 identifies the customer+price idempotency key replaying a stale creation response within 24h, including the resubscribe case, plus the cross-player collision.",
+        "reported_ids": [
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F11",
+        "match": "partial",
+        "note": "R10 touches the proration/cancel-at-period-end interaction in change-tier but inverts the scenario and consequence (claims proration is charged on a dying subscription rather than deferred and never collected).",
+        "reported_ids": [
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F12",
+        "match": "none",
+        "note": "R6 concerns ordering of delivered events, not the subscribe race where an event finds no row, is suppressed by the grace window, and is acknowledged and lost.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F13",
+        "match": "full",
+        "note": "R8 identifies the raw-cased tier persisted after Stripe was charged with the same rollback-after-charge consequence, attributing it to the tier CHECK rather than enum valueOf and omitting the player 'pro' quota-fallback fragment.",
+        "reported_ids": [
+          "R8"
+        ]
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

@@ -164,12 +164,6 @@ public class ApiAdvice {
         // skillars-deferred-103 AC1: partial unique index on session_pack_tiers — a concurrent
         // tier creation race resolved to a 409 retryable conflict, not a 500.
         "idx_spt_one_active_per_coach", "payment.tierRaceConflict",
-        // skillars-deferred-139 review audit item 2: uq_session_pack (coach_id, session_count).
-        // EditCoachPricingDialog guards duplicate session counts client-side, but that guard is not
-        // a backstop — a direct API call, or a second tab resubmitting a stale pack list, still
-        // reaches the constraint. Unmapped it surfaced as an untranslated "Data integrity error"
-        // (generic.dataError) with no indication which pack row was at fault.
-        "uq_session_pack", "marketplace.duplicateSessionPackCount",
         // feat/coach-workflow-gaps D1 (V173): a coach creating or renaming a private drill to the
         // name of another of their ACTIVE private drills. The unique index is the only guard (no
         // read-then-write pre-check), so this mapping is what the editor dialog branches on.

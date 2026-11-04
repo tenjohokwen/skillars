@@ -1,0 +1,90 @@
+{
+  "arm": "control",
+  "case": "330-missing-version-lost-updates",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "cited file not available: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "saveStep5's photoUrl branch is confirmed to blindly call coachProfileRepository.updatePhotoUrlByUserId without reading the old key or calling fileStorageService.softDelete (unlike deletePhoto), so replacement orphans the prior object at this layer. But the GDPR consequence depends on GdprErasureService, CoachProfilePhotoEventListener.onStorageConfirmed, and the verification caveat's possible orphan sweeper \u2014 none of which are in the provided code.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "The catch in createSession wraps only sessionRepository.save() with no flush before method exit, so the claim is plausible, but the Session entity (repo.Session) and schema are not shown: cannot confirm GenerationType.UUID (which determines whether save() defers the INSERT to commit) nor the unique constraint on sessions.booking_id required by the finding's own verification caveat.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "saveStep1's create path (findByUserId \u2192 orElseGet new CoachProfile) sets isExistingProfile=false and skips the lockRetryer block entirely \u2014 the in-code comment says so explicitly \u2014 and no code catches DataIntegrityViolationException, so two concurrent first-time calls both INSERT and the loser surfaces unhandled. The user_id unique constraint itself is outside this file, but Optional findByUserId presupposes it, and without it the result is persisted duplicates, the finding's other stated harm.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "saveStep1 and saveStep5 indeed contain no locked/erasure/status guard (only saveStep4 checks SUSPENDED), so the write-back path exists inside this service; but the finding's own verification caveat \u2014 whether the JWT/security filter rejects locked=true users per-request or only at login/refresh \u2014 depends on filter code not shown here, so the exploitable window cannot be confirmed or refuted from this file.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 1.860465,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 states CoachProfile lacks @Version/@DynamicUpdate so a stale full-row UPDATE silently reverts concurrent writes, the same defect and consequence at a listed location, though framed via the erasure writer.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "partial",
+        "note": "R6 points at updateSession and notes Session has no @Version with silent lost edits, but describes serialized last-write-wins rather than the stale-save/forgotten-lock mechanism and omits listeners' bulk updates.",
+        "reported_ids": [
+          "R6"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R1 identifies the unlocked findByUserId + save(cp) in the COACH branch, the long transaction window, and the silent overwrite of concurrent coach writes \u2014 same defect, place, and consequence.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check impossible: src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java is too large to inline (143428 bytes)] | pass-1: Concrete trigger: erasure clears only bio/city/district/photo, leaving displayName and ACTIVE status, so an erased coach remains publicly searchable with their real name.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] saveStep5's photoUrl branch is confirmed to blindly call coachProfileRepository.updatePhotoUrlByUserId without reading the old key or calling fileStorageService.softDelete (unlike deletePhoto), so replacement orphans the prior object at this layer. But the GDPR consequence depends on GdprErasureService, CoachProfilePhotoEventListener.onStorageConfirmed, and the verification caveat's possible orphan sweeper \u2014 none of which are in the provided code. | pass-1: Concrete trigger: saveStep5/photo-confirm blindly overwrite photo_url without deleting the prior object, and erasure deletes only the current key, so earlier photos survive a COMPLETED erasure.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] The catch in createSession wraps only sessionRepository.save() with no flush before method exit, so the claim is plausible, but the Session entity (repo.Session) and schema are not shown: cannot confirm GenerationType.UUID (which determines whether save() defers the INSERT to commit) nor the unique constraint on sessions.booking_id required by the finding's own verification caveat. | pass-1: Concrete trigger: with GenerationType.UUID the INSERT flushes at commit, so the DataIntegrityViolation catch in createSession never fires and the concurrent loser gets a raw exception instead of SESSION_ALREADY_EXISTS.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] saveStep1's create path (findByUserId \u2192 orElseGet new CoachProfile) sets isExistingProfile=false and skips the lockRetryer block entirely \u2014 the in-code comment says so explicitly \u2014 and no code catches DataIntegrityViolationException, so two concurrent first-time calls both INSERT and the loser surfaces unhandled. The user_id unique constraint itself is outside this file, but Optional findByUserId presupposes it, and without it the result is persisted duplicates, the finding's other stated harm. | pass-1: Concrete trigger: two concurrent first-time saveStep1 calls both pass the empty findByUserId check; the second INSERT hits the user_id unique constraint and surfaces as an unhandled 500.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] saveStep1 and saveStep5 indeed contain no locked/erasure/status guard (only saveStep4 checks SUSPENDED), so the write-back path exists inside this service; but the finding's own verification caveat \u2014 whether the JWT/security filter rejects locked=true users per-request or only at login/refresh \u2014 depends on filter code not shown here, so the exploitable window cannot be confirmed or refuted from this file. | pass-1: Concrete trigger: saveStep1/saveStep5 check neither locked state nor an erasure tombstone, so a save queued behind the erasure's row lock (with a still-valid access token) rewrites PII after the scrub.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

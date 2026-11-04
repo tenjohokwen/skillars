@@ -1,0 +1,98 @@
+{
+  "arm": "concurrency",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "getOrCreateStripeCustomer does show an unlocked, non-transactional read-then-save of the stripe_customers row, but the finding's consequence depends on code not provided: the StripeCustomer entity (whether it lacks @Version \u2014 if versioned, the stale save fails and the overwrite cannot happen), SubscriptionService.savePaymentMethodAndScheduleSync plus the 'superseded' skip at SubscriptionService.java:684-689, and the finding's own verification items (PaymentGateway.chargeAndCapture reading the card from stripe_customers, absence of DB triggers/constraints), none of which are in this file.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "purchasePack builds the Stripe key as \"pack-\" + parentId + \"-\" + (attemptKey != null ? attemptKey : UUID.randomUUID()), and the 4-arg overload passes attemptKey=null, so each header-less attempt gets a distinct key, a distinct payment intent, and its own pack \u2014 the findByStripePaymentIntentId replay check and V195 index dedupe only per intent, and no payer+tier claim marker exists in this service. The frontend-caller audit in the verification caveat could not be run (those files are not available here), but the server code itself contains no guard, so reachability only requires one client or proxy omitting the optional header.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "applyCoachChange's phase-1 transactionTemplate.execute commits (releasing the FOR UPDATE lock) before syncStripePriceForChange calls Stripe, so restoreCoachPriceAndVoidDowngrade can restore the price and void the change in between; the applicator's updateSubscriptionTier (fresh key sub-downgrade-apply-<changeId>) then sets the downgrade price while phase 2's pendingCoachChange filter skips the local apply \u2014 same in applyPlayerChange. Verification caveat holds within this file: handleSubscriptionUpdated never syncs tier/price, reconcileMarketplaceTiers only fixes the marketplace projection, reconcileStripeSubscriptions is alert-only, and syncPaymentMethodToSubscriptions touches only payment methods, so nothing pushes the local tier's price back to Stripe for a billing-healthy subscription.",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "The race is real in this file: GraceTarget.matches returns true for any non-null unchanged stripeSubscriptionId regardless of status, so a row set ACTIVE by handleInvoicePaid in the post-Phase-1 window is still revoked, and no refund path exists here (cancelAtStripeForGrace only cancels; reconcileStripeSubscriptions is alert-only). But the finding's \"no refund/credit\" consequence depends on StripeClient.cancelSubscriptionImmediately's proration/credit behavior, which is not shown.",
+      "reported_id": "R4"
+    },
+    {
+      "check": "confirmed",
+      "note": "reconcileMarketplaceTiers computes entitledTier from the detached `sub` loaded by findAll in a prior transaction; the per-row transactionTemplate block never re-reads or locks the payment row (only coachSubscriptionRepository.findByCoachId is fresh), so a revocation between batch load and per-row write makes the sweep call syncMarketplaceTier with the stale paid tier. No other path in this file corrects it sooner: reconcileStripeSubscriptions is alert-only, and syncCoachEntitlementChange requires a webhook that can no longer match because revokeCoachSubscription nulled stripeSubscriptionId.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "confirmed",
+      "note": "persistCoachTierUpgrade/persistPlayerTierUpgrade guard only on stripeSubscriptionId equality, which both concurrent changes share, and updateStripePrice uses a fresh random idempotency key per call \u2014 so crossed upgrades each charge a proration (ALWAYS_INVOICE per the changeCoachTier javadoc) and the last persist wins, leaving local tier below the Stripe-billed price. The subscribe-only claim marker (claimCoachSubscribeAttempt) confirms no upstream serialization is relied on for these endpoints.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "getOrCreateStripeCustomer's orElseGet branch (findById \u2192 paymentGateway.createStripeCustomer \u2192 save, no lock or transaction) does leave the described race window, but the consequence hinges on code not shown: whether StripeCustomer (assigned parentId PK) has @Version/Persistable (persist-with-PK-violation vs silent merge on save), and whether the PaymentGateway.createStripeCustomer implementation uses a parentId-scoped Stripe idempotency key, which would make both racing calls return one customer and void the duplicate. Need StripeCustomer, StripeCustomerRepository, and the PaymentGateway impl.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 5.202228,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "No reported finding addresses unbounded sessionCount/totalPrice or the 0.00 per-session rounding violating the CHECK constraint.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses missing format validation on paymentMethodId before it reaches Stripe and the database.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] getOrCreateStripeCustomer does show an unlocked, non-transactional read-then-save of the stripe_customers row, but the finding's consequence depends on code not provided: the StripeCustomer entity (whether it lacks @Version \u2014 if versioned, the stale save fails and the overwrite cannot happen), SubscriptionService.savePaymentMethodAndScheduleSync plus the 'superseded' skip at SubscriptionService.java:684-689, and the finding's own verification items (PaymentGateway.chargeAndCapture reading the card from stripe_customers, absence of DB triggers/constraints), none of which are in this file. | pass-1: Concrete lost-update trigger: unlocked read-then-save in getOrCreateStripeCustomer overwrites a concurrently saved card and its outbox sync self-skips as superseded.",
+        "reported_id": "R1",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] purchasePack builds the Stripe key as \"pack-\" + parentId + \"-\" + (attemptKey != null ? attemptKey : UUID.randomUUID()), and the 4-arg overload passes attemptKey=null, so each header-less attempt gets a distinct key, a distinct payment intent, and its own pack \u2014 the findByStripePaymentIntentId replay check and V195 index dedupe only per intent, and no payer+tier claim marker exists in this service. The frontend-caller audit in the verification caveat could not be run (those files are not available here), but the server code itself contains no guard, so reachability only requires one client or proxy omitting the optional header. | pass-1: Concrete trigger: Idempotency-Key is optional and purchasePack generates a fresh UUID per attempt, so a retry without the header yields two distinct Stripe charges with no server-side claim marker.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] applyCoachChange's phase-1 transactionTemplate.execute commits (releasing the FOR UPDATE lock) before syncStripePriceForChange calls Stripe, so restoreCoachPriceAndVoidDowngrade can restore the price and void the change in between; the applicator's updateSubscriptionTier (fresh key sub-downgrade-apply-<changeId>) then sets the downgrade price while phase 2's pendingCoachChange filter skips the local apply \u2014 same in applyPlayerChange. Verification caveat holds within this file: handleSubscriptionUpdated never syncs tier/price, reconcileMarketplaceTiers only fixes the marketplace projection, reconcileStripeSubscriptions is alert-only, and syncPaymentMethodToSubscriptions touches only payment methods, so nothing pushes the local tier's price back to Stripe for a billing-healthy subscription. | pass-1: Concrete trigger: phase-1 commit releases the lock before the Stripe price call, so a void-via-reselect in the window leaves Stripe billing the downgrade tier while the local tier stays higher with no reconciliation.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The race is real in this file: GraceTarget.matches returns true for any non-null unchanged stripeSubscriptionId regardless of status, so a row set ACTIVE by handleInvoicePaid in the post-Phase-1 window is still revoked, and no refund path exists here (cancelAtStripeForGrace only cancels; reconcileStripeSubscriptions is alert-only). But the finding's \"no refund/credit\" consequence depends on StripeClient.cancelSubscriptionImmediately's proration/credit behavior, which is not shown. | pass-1: Concrete trigger: invoice.paid landing between phase-1 commit and the Stripe cancel still revokes via GraceTarget.matches, keeping the just-paid invoice with no refund path.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check confirmed] reconcileMarketplaceTiers computes entitledTier from the detached `sub` loaded by findAll in a prior transaction; the per-row transactionTemplate block never re-reads or locks the payment row (only coachSubscriptionRepository.findByCoachId is fresh), so a revocation between batch load and per-row write makes the sweep call syncMarketplaceTier with the stale paid tier. No other path in this file corrects it sooner: reconcileStripeSubscriptions is alert-only, and syncCoachEntitlementChange requires a webhook that can no longer match because revokeCoachSubscription nulled stripeSubscriptionId. | pass-1: Concrete trigger: per-row transactions use detached entities from the batch load, so a revocation webhook between load and processing causes the sweep to re-grant the paid tier.",
+        "reported_id": "R5",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] persistCoachTierUpgrade/persistPlayerTierUpgrade guard only on stripeSubscriptionId equality, which both concurrent changes share, and updateStripePrice uses a fresh random idempotency key per call \u2014 so crossed upgrades each charge a proration (ALWAYS_INVOICE per the changeCoachTier javadoc) and the last persist wins, leaving local tier below the Stripe-billed price. The subscribe-only claim marker (claimCoachSubscribeAttempt) confirms no upstream serialization is relied on for these endpoints. | pass-1: Concrete trigger: crossed concurrent tier changes, persist guard checks only stripeSubscriptionId, so Stripe can bill PRO while local grants SEMI_PRO with both prorations charged.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] getOrCreateStripeCustomer's orElseGet branch (findById \u2192 paymentGateway.createStripeCustomer \u2192 save, no lock or transaction) does leave the described race window, but the consequence hinges on code not shown: whether StripeCustomer (assigned parentId PK) has @Version/Persistable (persist-with-PK-violation vs silent merge on save), and whether the PaymentGateway.createStripeCustomer implementation uses a parentId-scoped Stripe idempotency key, which would make both racing calls return one customer and void the duplicate. Need StripeCustomer, StripeCustomerRepository, and the PaymentGateway impl. | pass-1: Concrete trigger: two first-time purchases both see an empty stripe_customers row and both call createStripeCustomer, orphaning a Stripe customer or silently repointing the row.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

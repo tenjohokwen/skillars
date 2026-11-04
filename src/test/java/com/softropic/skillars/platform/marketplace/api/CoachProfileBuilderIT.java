@@ -334,6 +334,35 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void saveStep3_withAPack_createsTheCoachsPurchasableTier() {
+        // skillars-deferred-168 (Pitchside ONB-06): the wizard's pack must be the offer the purchase page sells,
+        // not a row in a table nothing can buy from.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+
+        ResponseEntity<Map> response = httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 40.0, "sessionPacks",
+                List.of(Map.of("sessionCount", 10, "totalPrice", 380.0, "label", "Season 10"))),
+            authenticatedHeaders(cookies),
+            Map.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        List<Map<String, Object>> active = jdbcTemplate.queryForList(
+            "SELECT t.session_count, t.total_price, t.label FROM payment.session_pack_tiers t "
+                + "JOIN marketplace.coach_profiles c ON c.id = t.coach_id WHERE c.user_id = ? AND t.is_active",
+            COACH_ID);
+        assertThat(active).singleElement().satisfies(t -> {
+            assertThat(t.get("session_count")).isEqualTo(10);
+            assertThat((java.math.BigDecimal) t.get("total_price")).isEqualByComparingTo("380");
+            assertThat(t.get("label")).isEqualTo("Season 10");
+        });
+    }
+
+    @Test
     void saveStep3_sessionDurationMinutes_roundTripsAsACoachOverride() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
         saveStep1(cookies);

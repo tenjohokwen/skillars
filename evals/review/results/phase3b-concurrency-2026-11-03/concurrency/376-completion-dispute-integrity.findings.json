@@ -1,0 +1,28 @@
+{
+  "arm": "concurrency",
+  "case": "376-completion-dispute-integrity",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "dismissDispute is allowed while the booking is still unsettled (resolveDispute's UNSETTLED_STATUSES 409 is deliberately not applied to dismissal), so it can overlap the transaction that completes the booking (parent confirmCompletion, the quick-complete timeout, or a force-complete). That completing transaction's BEFORE_COMMIT enqueuePayout reads existsOpenDisputeForBooking, still sees the OPEN dispute (the dismiss is uncommitted under READ COMMITTED), and inserts the coach_payouts row as FROZEN with dispute_frozen = true; meanwhile the dismiss's clearDisputeFreeze calls findByIdForUpdate on coach_payouts before the insert commits, finds no row, and no-ops. The two transactions share no lock (the completion only reads the disputes table; the dismiss only updates its own dispute row), so both commit, leaving a DISMISSED dispute and a payout frozen for it with no code path that ever clears the flag \u2014 the coach is never paid without operator intervention.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "dismissDispute / CoachPayoutOutboxSupport.enqueuePayout",
+      "title": "dismissDispute racing a completion's payout enqueue leaves the payout permanently FROZEN for a closed dispute",
+      "verification": "Confirm no scheduled job clears dispute_frozen by re-checking the disputes table: CoachPayoutRepository's comment says StalePayoutAlertScheduler only alerts on payouts stuck in FROZEN/HOLD, it does not release them. Also confirm existsOpenDisputeForBooking is a plain native read (CoachPayoutRepository.java:246-250) with no lock on the dispute row."
+    },
+    {
+      "category": "logic",
+      "description": "For a pack-funded booking, paidForSession derives sessionPrice from CoachPayoutRepository.findGrossAmountByBookingId, which selects the live grossAmount column \u2014 the value CoachPayoutAdjustmentService.cutNet reduces when a first dispute's PARTIAL_CREDIT is applied to a not-yet-released payout. If a second dispute is later raised on the same booking (allowed once the first is RESOLVED) and resolved with a credit, sessionPrice is the cut gross rather than the original: remainingRefundable caps the parent's credit at cutGross minus prior credits (under-crediting the parent), and reconcileCoachPayout passes the cut gross as parentPrice to applyRefund, so coachShareOfRefund computes originalNet * credited / cutGross \u2014 an inflated denominator-shrunk share that over-cuts or over-reverses the coach. The per-dispute amounts no longer reconcile against what was actually paid for the session.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/DisputeService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "paidForSession / reconcileCoachPayout",
+      "title": "Second dispute on a pack-funded booking prices the session from the already-cut payout gross",
+      "verification": "Confirm findGrossAmountByBookingId (CoachPayoutRepository.java:73-74) selects p.grossAmount rather than p.originalGrossAmount, and that CoachPayoutAdjustmentService.cutNet reduces grossAmount on a pending payout while CoachPayout.originalGrossAmount keeps the first-computed value."
+    }
+  ],
+  "input_rev": "ec997389b69f9ad84b0fbf5020d725fed5caca54",
+  "model": null
+}

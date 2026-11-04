@@ -1,0 +1,104 @@
+{
+  "arm": "concurrency",
+  "case": "350-pack-refund-rounding-remainder",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "Attempt 1: Stripe captures intent P, createPurchase fails transiently, the compensating refund of P succeeds, and the 500 is lost on the wire (proxy drop). The frontend deliberately keeps the same attempt key for a lost response and retries. Stripe's idempotent replay returns the same intent P \u2014 now refunded \u2014 the findByStripePaymentIntentId pre-check finds no pack (none was ever inserted), and createPurchase succeeds, committing an ACTIVE pack whose charge was already returned to the card. No marker records that P was refunded anywhere the replay path checks; the refund-failed variant (reconciliation record, then manual refund after the retry created the pack) ends in the same state.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Retry with same attempt key after compensating refund creates a pack funded by a refunded charge",
+      "verification": "Check whether paymentGateway.refund or RefundReconciliationService leaves any record the purchase path consults, or whether the intent's refunded status is re-checked before createPurchase on a replayed intent."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two concurrent deliveries of one attempt key get the same PaymentIntent. Request A's createPurchase insert is in flight (uncommitted); request B's insert waits on A's conflicting unique-index entry and fails with a lock timeout (55P03) rather than a unique violation. B's winner lookup (findByStripePaymentIntentId) runs under READ COMMITTED, cannot see A's uncommitted row, concludes no pack holds the charge, and refunds it; A then commits. End state: a committed, usable pack whose single charge was refunded. The 'proven that no pack holds this charge' check is only valid against committed state, not against an in-flight winner.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Failure-path refund can fire while a concurrent same-key insert is uncommitted",
+      "verification": "Confirm the application sets a statement/lock timeout on the purchase insert path (the codebase's 55P03\u2192409 mapping suggests it does); if the insert can only fail with a unique violation, the winner is guaranteed committed and the window closes."
+    },
+    {
+      "category": "logic",
+      "description": "perSessionShare floors amountCharged / sessionCount (200.00 / 3 \u2192 66.66), and every refund path (coach cancel, no-show, admin cancel, pause on an expired pack) refunds exactly that share per booking. Refunding all sessions of the pack returns sessionCount \u00d7 floor(share) = 199.98, keeping up to sessionCount \u2212 1 cents with no mechanism to return the remainder: nothing tracks cumulative refunds against amountCharged and no final refund absorbs the leftover. The fix for the HALF_UP over-refund (3 \u00d7 66.67 = 200.01) replaced it with a systematic under-refund; the HALF_UP over-refund itself still survives via the pricePerSession fallback for legacy rows without an amountCharged stamp.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "SessionPackPurchase.perSessionShare",
+      "title": "Pack refund shares round down and the remainder is never refunded to anyone"
+    },
+    {
+      "category": "concurrency",
+      "description": "The old Stripe key (tier id + parent + time bucket) collapsed a true retry of the same purchase within 60 seconds into one PaymentIntent. The new keyless path mints UUID.randomUUID() per invocation, so a double-submit or proxy-level POST retry from any client that does not send the header \u2014 a stale cached frontend bundle during the rollout window, a mobile or API consumer not yet updated \u2014 now produces two PaymentIntents and two packs where the bucket previously deduped them. The 4-arg purchasePack overload delegating null is kept precisely for such callers.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack (null attemptKey branch)",
+      "title": "Requests without an Idempotency-Key lost the 60-second retry dedup entirely",
+      "verification": "Enumerate callers of the 4-arg purchasePack / the purchase endpoint that do not send Idempotency-Key, and confirm whether the frontend is the only client."
+    },
+    {
+      "category": "concurrency",
+      "description": "confirmPurchase clears attemptKey whenever e?.response exists, treating any HTTP response as a definitive server verdict. The app runs behind a proxy: a 502/504 minted by the proxy while the backend request is still executing (and will succeed \u2014 charge captured, pack created) carries a response object, so the key is cleared and the user's retry sends a fresh key. Stripe then treats it as a new attempt and charges a second time, creating a second pack \u2014 exactly the double-charge the key was introduced to prevent, in the gateway-timeout case where it matters most.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "confirmPurchase",
+      "title": "Frontend discards the attempt key on proxy-generated error responses"
+    },
+    {
+      "category": "concurrency",
+      "description": "cancelDueToPause now acquires the booking row with lockBookingForUpdate. Its caller, the pausePack flow in PackSessionService, by that service's pattern locks the pack FOR UPDATE first (to set pausedUntil / extend expiresAt) and then cancels each booking \u2014 lock order pack \u2192 booking. The settle/accept path locks the booking in transition and then locks the pack in deductSession \u2014 order booking \u2192 pack. A pause racing an accept on the same pack therefore deadlocks; Postgres aborts one side with 40P01, which the lock retryer may not map to a clean retry for the multi-booking pause transaction.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "BookingService.cancelDueToPause",
+      "title": "Pack-then-booking lock order in the pause flow can deadlock against booking-then-pack order at settle",
+      "verification": "Open PackSessionService.pausePack: confirm it holds the pack FOR UPDATE while iterating cancelDueToPause, and confirm the accept/settle path locks the booking before calling deductSession."
+    },
+    {
+      "category": "logic",
+      "description": "The coach-cancel, no-show, admin-cancel and new pause paths all gate the restore on isPackRestore() (payment captured and pack not expired), because per C6 the pack session is only deducted at settle. The parent path enqueues a restore on sessionPackPurchaseId != null && isRefundEligible() alone. If a parent can cancel a REQUESTED or ACCEPTED pack booking more than 24h out \u2014 states where no session was ever deducted \u2014 the outbox handler increments remaining_sessions for a session never spent, inflating the pack above sessionCount (a free session per such cancel). It also restores into an expired pack where siblings would issue a wallet refund instead.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "RefundEnqueueListener.onBookingCancelledByParent",
+      "title": "Parent-cancellation pack restore lacks the captured guard every sibling path has",
+      "verification": "Check whether BookingCancelledByParentEvent is published for uncaptured (REQUESTED/ACCEPTED) pack bookings, or whether parent cancellation is only reachable post-capture; check whether the event carries a captured flag the listener ignores."
+    },
+    {
+      "category": "edge-case",
+      "description": "The new check refuses any deduction while pausedUntil is in the future, regardless of when the booked session takes place. A booking requested before the pause with a start time after the pause window is not in the pause's cancellation list (and is never refunded by the pause flow), yet if the coach accepts it during the pause, deductSession throws payment.packPaused and the accept path records a payment failure \u2014 a legitimate booking against a pack with remaining sessions is marked failed. The parallel expiry rule explicitly validates at request time and allows later settle; the pause rule does the opposite with no booking-time exemption.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "PackSessionService.deductSession",
+      "title": "deductSession's pause check keys on now(), failing acceptance of bookings scheduled after the pause ends"
+    },
+    {
+      "category": "concurrency",
+      "description": "The pack is read via findById with no lock; if pausePack commits pausedUntil between this check and the booking insert's commit, a booking against a paused pack exists that the pause's client-supplied cancellation list never contained, so it is neither cancelled nor refunded by the pause. It strands until the pause ends (an accept during the pause converts it into the payment failure described above). The settle-time re-check in deductSession is the only backstop, which is a failure, not a cancellation.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "BookingService.createBookingRequest (pack validation block)",
+      "title": "createBookingRequest's pause/expiry/remaining checks on the pack are unlocked reads racing pausePack"
+    },
+    {
+      "category": "concurrency",
+      "description": "stripeCustomer is loaded before builder construction and saved (full row) after the Stripe round-trip, a window of seconds under load. If a concurrent purchase's getOrCreateStripeCustomer commits a change in between (e.g., a new default payment method id) and StripeCustomer has no @Version, this save writes every column from the stale snapshot and silently reverts that change; the new catch-and-log around the save also means an optimistic-lock failure would now be swallowed rather than retried. Bookkeeping fields only, but it is the read-then-write-without-version shape this codebase has shipped before.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "StripePaymentGateway.charge",
+      "title": "stripeCustomer saved from a snapshot taken before the Stripe network call",
+      "verification": "Check the StripeCustomer entity for @Version or @DynamicUpdate, and what other fields getOrCreateStripeCustomer mutates concurrently."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

@@ -1,0 +1,88 @@
+{
+  "arm": "security",
+  "case": "330-filestorage-quota-race",
+  "findings": [
+    {
+      "category": "security",
+      "description": "signUpload mints a presigned PUT valid for uploadTtlSeconds, and confirmUpload does nothing to invalidate it (no version pin, no ETag/If-Match recorded for later comparison). A coach signs an upload, PUTs an innocuous image, confirms \u2014 HEAD-based size/quota/content-type checks pass and StorageObjectConfirmedEvent links it as their profile photo or gallery image served to parents and children \u2014 then re-PUTs arbitrary bytes of arbitrary length with the same URL. The stored FileStorageObject keeps the stale sizeBytes/checksum, so maxSizeBytes and the quota are bypassed (the re-PUT can be far larger than 100MB), and content that passed any review at confirm time is silently swapped. CoachGalleryService.addImage validates object.sizeBytes/contentType from the stale record, not the bucket.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "FileStorageService.confirmUpload / signUpload",
+      "title": "Presigned PUT URL remains valid after confirm, letting the uploader replace verified and already-linked content with arbitrary bytes",
+      "verification": "Check BlobstoreProperties.uploadTtlSeconds in prod config for the window length; confirm no S3 bucket versioning/object-lock or lifecycle policy outside the code compensates."
+    },
+    {
+      "category": "concurrency",
+      "description": "confirmUpload reads sumSizeBytesByOwnerId outside the insert transaction and nothing (no per-owner lock, no serializable isolation, no reservation row) prevents concurrent confirms from both seeing the same usage. A user signs N uploads each just under the remaining quota, PUTs them, then fires the N confirms in parallel (possibly against different instances); all pass the check at line 180 and all insert, exceeding the 10GB quota by up to N\u00d7 the file size. The sign-time check at line 108 has the same shape and is only advisory anyway.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload (sumSizeBytesByOwnerId then persistConfirmed)",
+      "title": "Quota enforcement is an unserialized check-then-insert: concurrent confirms exceed the owner quota",
+      "verification": "Confirm there is no database constraint or trigger on file_storage_objects enforcing per-owner totals (Liquibase/Flyway migrations)."
+    },
+    {
+      "category": "security",
+      "description": "The validation chain (MimeType, Extension, Filename, Checksum, FileSize steps) checks only client-declared metadata; no step and no code at confirm time inspects the stored bytes (confirmUpload compares HEAD contentType to the declared one, which the client set on the presigned PUT in the first place). Defaults explicitly allow application/octet-stream and the bin extension, so any authenticated user \u2014 including a self-registered ROLE_PLAYER \u2014 can store arbitrary binaries (executables, HTML polyglots inside image/* objects) and later distribute them via presigned GET URLs from signDownload.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/config/FileStorageProperties.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "FileStorageProperties.Validation.allowedMimeTypes / allowedExtensions; ValidationChain steps",
+      "title": "File bytes are never validated and the default allow-list admits application/octet-stream and .bin",
+      "verification": "Check prod/uat application config for platform.filestorage.validation.* overrides that narrow the defaults, and whether any downstream consumer serves these objects with the stored content type."
+    },
+    {
+      "category": "security",
+      "description": "signUpload mints presigned PUTs without recording anything; quota is summed only over confirmed file_storage_objects rows, and DeletionSchedulerService physically deletes only rows with deleted_at set. An object PUT via a presigned URL and never confirmed \u2014 or whose confirm was rejected for content-type/size/quota mismatch, which leaves the object in the bucket \u2014 has no row and is never garbage-collected. A single user can loop sign+PUT (up to 100MB each, no rate limit on /api/storage/sign/upload) to consume unbounded bucket storage and cost, invisible to the 10GB quota.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "FileStorageService.signUpload; DeletionSchedulerService.processDeletions",
+      "title": "Uploaded-but-never-confirmed objects are uncounted, uncleaned, and signUpload is unthrottled",
+      "verification": "Check infrastructure/terraform for an S3 lifecycle rule expiring unconfirmed objects; none exists in the application code."
+    },
+    {
+      "category": "edge-case",
+      "description": "ValidationChain (including ChecksumValidationStep's sha256 format check and FilenameSanitizationStep's control-char/traversal stripping and 255-char cap) runs only at sign time, and on a synthesized filename (entity + '.' + extension), never on the real one. At confirm, request.checksum() and request.originalFilename() are persisted raw: the checksum can be any string (then surfaced to domain modules via findActiveObject as 'sha256:<text>' despite never being compared to the bytes or ETag), and originalFilename can contain CRLF, path traversal, or be arbitrarily long \u2014 an unbounded string into the database, and header injection if any consumer later puts it in a Content-Disposition.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "FileStorageService.persistConfirmed / resolveOriginalFilename",
+      "title": "Confirm-time checksum and originalFilename are stored unvalidated, bypassing the sign-time validation chain",
+      "verification": "Check the file_storage_objects column lengths in the migration, and grep for consumers that place originalFilename into Content-Disposition or checksum into integrity decisions."
+    },
+    {
+      "category": "security",
+      "description": "signDownload and reconfirm intentionally return 404 for another user's key so the endpoint does not reveal existence, but softDelete throws AuthorizationException (MISSING_RIGHTS, a 403) when the key exists and belongs to someone else, and StorageObjectNotFoundException (404) when it does not. Any authenticated user can DELETE /api/storage/<key> to learn whether a given key exists and is still active \u2014 keys appear verbatim in presigned URL paths on public coach profiles, so probing known-shape keys is practical.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "FileStorageService.softDelete",
+      "title": "DELETE endpoint is an existence oracle (403 vs 404) that signDownload deliberately avoids",
+      "verification": "Confirm AuthorizationException(MISSING_RIGHTS) maps to a 403 status in the exception handler."
+    },
+    {
+      "category": "logic",
+      "description": "Ownership everywhere else is the numeric businessId stored in ownerId, but softDelete compares fso.getCreatedBy() (the JPA-auditing login captured at confirm) to the caller's current login. If the user's login later changes (email change) or the audit value ever differs from the interactive login, the owner can no longer delete their own files while still being able to download and reconfirm them; there is also no admin path through this method.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "FileStorageService.softDelete",
+      "title": "softDelete authorizes on createdBy (audit login) while every other check uses ownerId, breaking owner deletion if login and audit identity diverge",
+      "verification": "Check whether the platform supports login/email change, and what AuditorAware returns versus SecurityUtil.getCurrentUserName()."
+    },
+    {
+      "category": "logic",
+      "description": "The quota sum excludes deletedAt rows (by design per the comment), but physical deletion only happens retentionDays after soft delete. A user can repeatedly fill their 10GB quota and soft-delete, holding roughly retentionDays-worth of quota multiples in physical bucket storage at once \u2014 bounded cost amplification on top of the unbounded unconfirmed-object issue.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/repo/FileStorageObjectRepository.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "FileStorageObjectRepository.sumSizeBytesByOwnerId",
+      "title": "Soft delete frees quota immediately while bytes persist for the retention window",
+      "verification": "Check app.storage.deletion.retention-days in prod config to size the multiplier."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

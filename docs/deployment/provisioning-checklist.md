@@ -157,10 +157,20 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221 and V223 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223 and V224 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet". Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
+- [ ] **V226 turns builder packs into purchasable tiers, and discards the rest** (skillars-deferred-168). For each
+  coach with `marketplace.session_packs` rows, no `payment.session_pack_tiers` row at all and no erasure tombstone, it
+  creates one active tier from their lowest-session-count pack that fits the tier bounds (1-100 sessions,
+  0.01-50,000.00, per-session share above 0.00). Its label is NULL (shown as the translated
+  "N sessions"): legacy labels were never checked for contact details, so none is copied. The migration first makes
+  `payment.session_pack_tiers.label` nullable (metadata-only). Every other builder pack is discarded (none was ever purchasable). Coaches who withdrew an offer, or
+  who already sell one, are not touched, but their profile now shows their active tier, not their builder packs. On
+  UAT, tell coaches to check "My Session Pack Offer" after this deploy. `marketplace.session_packs` stays one release
+  and is then dropped (follow-up in `deferred-work.md`). This also relies on "prod is not live": the discard is not
+  reversible except from the pre-deploy dump.
 
 ---
 
@@ -674,6 +684,60 @@ blocked from the moment it was scheduled; from V210 on, a new pause is only in f
 SELECT purchase_id, parent_id, paused_until FROM payment.session_pack_purchases
 WHERE paused_from IS NULL AND paused_until > now();
 ```
+
+**V224: refresh-token successor link and revocation stamp** (`V224__refresh_token_successor_link_and_revoked_at.sql`,
+skillars-deferred-166). Additive only: `main.refresh_tokens` gains `replaced_by_id` (the successor a rotation
+created) and `revoked_at` (the session was deliberately ended), both nullable, plus a partial index on
+`replaced_by_id` and a self-referential FK added **`NOT VALID`**. Nothing to configure, no backfill, no
+downtime step.
+
+- [x] **Done in V225 (skillars-deferred-167): `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT
+      fk_refresh_tokens_replaced_by`.** V224 shipped the FK `NOT VALID` per rule 3 and promised the validation
+      in a later migration; V225 runs it. Nothing to do at deploy time.
+- [ ] **Behaviour change to announce, not configure.** Logout now revokes the presented refresh token *and
+      every token it was rotated into*, and a replay of a logged-out token answers `401` without revoking the
+      account's other sessions. A token minted before `user.security_session_invalidated_at` is refused. See
+      `docs/security-api-endpoints.md` and `docs/session-refresh-mechanism.md`.
+- [ ] **Rolling-deploy window (accepted, 30 s per token).** Tokens rotated by an instance running the old code
+      have no `replaced_by_id`, so a replay of one inside the 30 s grace window is treated as reuse and revokes
+      that account's sessions. Bounded and self-clearing once every instance is on the new code; the SPA does
+      not call `POST /api/auth/refresh` at all, so the exposure is API clients only.
+
+**V225: refresh-token chain id, and V224's outstanding FK validation**
+(`V225__refresh_token_session_id_and_validate_successor_fk.sql`, skillars-deferred-167). Additive only:
+`main.refresh_tokens` gains `session_id` (uuid, nullable, no backfill) plus a btree index on it, and the
+self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure, no downtime step.
+
+- [ ] **Behaviour change to announce, not configure: a logout now ends that session's access token too.**
+      The JWT carries the chain id as an `rtsid` claim, and the authorisation filter refuses a JWT whose
+      chain has no live refresh token left — within `DB_REFRESH_TOKEN_INTERVAL` (5 min) of the logout.
+      Previously a copied `potc` cookie kept working for as long as its holder kept making requests.
+- [ ] **Behaviour change to announce: a web session now ends 7 days after login.** The SPA has no caller
+      for `POST /api/auth/refresh`, so its refresh chain is the single row written at login; when that
+      expires the standing access token is refused on the next DB-reauth cycle (within 5 min). Previously
+      an access token slid indefinitely while the user kept clicking. There is no warning dialog for this
+      — the existing countdown covers the 15-minute access token, not the 7-day chain — so an active user
+      is signed out mid-task and must log in again. Three attempts to remove the cap were made and
+      withdrawn during that story (the third broke logout outright); the real fix is frontend rotation,
+      filed as its own story in `deferred-work.md`. Tell support before this ships.
+- [ ] **Accepted gap, and it does NOT self-clear: JWTs minted before this deploy are never checked.** They
+      carry no `rtsid` claim and the filter deliberately fails open for them, because failing closed would
+      sign every live session out at deploy. A claimless token presented WITH its `rtkn` cookie is
+      repaired — the filter re-derives the chain id from that cookie, owner-scoped — so the exposed
+      population is narrower than it first appears: a holder presenting a claimless `potc` WITHOUT the
+      matching cookie, which is precisely a thief who copied only that cookie. For them the session stays
+      alive as long as they keep making requests, and waiting 7 days does not close it. The flip to fail-closed needs a deliberate
+      trigger (a forced re-login, or accepting that remaining claimless holders are signed out at the
+      flip); tracked as an owner decision in `deferred-work.md`.
+- [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain
+      that is still live, more than 30 s after its rotation, now answers `401` and revokes **that chain
+      only**, where it used to revoke every chain on the account and bump the session epoch. The change
+      exists because the old behaviour signed a user out of every device over a benign double-submitted
+      refresh. What is still given up: the epoch bump also killed any access token the thief held on
+      another chain of the same account, and revoking one chain does not. Watch for
+      `"Refresh presented a token whose chain is still live"` and the
+      `security.refresh.stale_live_chain` counter.
+
 
 **V223: optional coach safeguarding check** (`V223__coach_safeguarding_check.sql`). Two new empty tables,
 `marketplace.coach_safeguarding_requests` and `marketplace.coach_safeguarding_checks` (both FK to

@@ -1,0 +1,47 @@
+{
+  "arm": "security",
+  "case": "384-stripe-oauth-state-and-payout-destination",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "handle calls paymentGateway.transferToCoach inside the outbox REQUIRES_NEW transaction after findByIdForUpdate (PESSIMISTIC_WRITE), isFrozenForShare (FOR SHARE), and planOffset's debt-row locks, with no lock release before the network call; the EC-4 comment confirms DisputeService.reconcileCoachPayout contends for the same row lock. SDK timeout/retry and drain concurrency (the verification caveat) are outside this file, so only the window size, not the blocking itself, is unquantified.",
+      "reported_id": "R4"
+    }
+  ],
+  "judge_cost_usd": 0.32339999999999997,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same CSRF via state=coachId (public UUID) in generateOnboardingUrl/handleOAuthCallback with the same consequence of rerouting the victim coach's payouts.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R2 identifies the same silent, immediate payout-destination overwrite in upsertCoachStripeAccount with no notification or cooling-off, letting an attacker receive subsequent payouts.",
+        "reported_ids": [
+          "R2"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "The per-instance in-memory throttle is acknowledged in the code comment as a deliberate soft guard, and the platform-wide rate-limit impact is speculative abuse rather than a concrete defect.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] handle calls paymentGateway.transferToCoach inside the outbox REQUIRES_NEW transaction after findByIdForUpdate (PESSIMISTIC_WRITE), isFrozenForShare (FOR SHARE), and planOffset's debt-row locks, with no lock release before the network call; the EC-4 comment confirms DisputeService.reconcileCoachPayout contends for the same row lock. SDK timeout/retry and drain concurrency (the verification caveat) are outside this file, so only the window size, not the blocking itself, is unquantified. | pass-1: Holding pessimistic row/share locks across a blocking external Stripe transfer call (with retries) is a concrete defect: Stripe latency pins DB connections and blocks dispute reconciliation and reinstatement on those locks.",
+        "reported_id": "R4",
+        "verdict": "real"
+      }
+    ]
+  }
+}

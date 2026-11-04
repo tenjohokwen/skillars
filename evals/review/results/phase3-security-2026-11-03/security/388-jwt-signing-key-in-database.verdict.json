@@ -1,0 +1,50 @@
+{
+  "arm": "security",
+  "case": "388-jwt-signing-key-in-database",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "JwtSecretService.addSecretToThread (lines ~31-36) does cache Secret in a volatile field set once with no eviction method in this class, but the finding's core claims \u2014 fetchSecret/findOneByVersionAndBusId ignoring EntityStatus, JwtConfiguration's cache, updatable=false columns, and the absence of any eviction endpoint or job elsewhere \u2014 depend on SecretService, SecretRepository, Secret, and JwtConfiguration source not provided here.",
+      "reported_id": "R2"
+    }
+  ],
+  "judge_cost_usd": 0.25081000000000003,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same derivePassword/getSecretBytes self-derived Jasypt password on constant busId/version and the same consequence: anyone with table read access decrypts the key and forges JWTs including ADMIN.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses that fetchSecret never calls getSecretBytes, so the runner's fail-at-startup guard for undecryptable rows cannot fire; R4 concerns a different aspect of the runner.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] JwtSecretService.addSecretToThread (lines ~31-36) does cache Secret in a volatile field set once with no eviction method in this class, but the finding's core claims \u2014 fetchSecret/findOneByVersionAndBusId ignoring EntityStatus, JwtConfiguration's cache, updatable=false columns, and the absence of any eviction endpoint or job elsewhere \u2014 depend on SecretService, SecretRepository, Secret, and JwtConfiguration source not provided here. | pass-1: Concrete trigger stated: marking the sec row INACTIVE changes nothing because fetchSecret ignores EntityStatus and the key is cached in never-invalidated volatile fields, with updatable=false columns and a unique (version,busId) constraint blocking any replacement path after compromise.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "By the report's own admission fetchLatestActiveSecretAsBytes has no callers, so the stale-cache behaviour has no concrete trigger today; it is a latent/speculative concern.",
+        "reported_id": "R3",
+        "verdict": "noise"
+      },
+      {
+        "note": "The report itself notes the javadoc documents the RFC 1918 acceptance as a deliberate tradeoff gated by the enabled flag, so this is acknowledged design, not a defect with a concrete trigger.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

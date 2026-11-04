@@ -1,0 +1,84 @@
+{
+  "arm": "control",
+  "case": "350-pack-refund-rounding-remainder",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "onBookingCancelledByParent (RefundEnqueueListener.java:46-50) does enqueue a restore on only sessionPackPurchaseId != null && isRefundEligible(), but whether that over-credits depends on when pack sessions are deducted: the finding assumes deduction at settlement, while the diff's own comment (\"else: forfeited (<=24h) \u2014 session consumed\", line 51) implies deduction at booking time. BookingCancelledByParentEvent's refundEligible construction and the pack-deduction site in CancellationRefundService/booking code are not shown, so this cannot be settled from the diff.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "The new guard in deductSession (purchase.getPausedUntil().isAfter(Instant.now()) throwing payment.packPaused) is unconditional and takes no booking/session-date input, so the mechanism is real; but the trigger depends on pausePack leaving an ACCEPTED booking uncancelled and on the settlement path recording a failure, and neither pausePack nor the caller is in the shown diff.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The watch(selected) handler nulls attemptKey unconditionally and the catch in confirmPurchase only clears the key when e?.response exists, so the described loss-then-new-key mechanism exists in the script; but whether `selected` can actually change while `purchasing` is true depends on the template (e.g., the pack selector being disabled during purchase), which is outside the shown diff.",
+      "reported_id": "R9"
+    }
+  ],
+  "judge_cost_usd": 0.6738919999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same defect (rounded-down share refunded without reconciling against amount_charged, cents paid to no one) and the same refund paths, proposing the remainder reconciliation; it omits the payout-ledger detail but the defect and consequence are the same.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses the lack of a per-booking refund marker or double-crediting on event redelivery.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R3 pins the exact defect: attemptKey reset whenever e.response exists, so a 5xx/timeout after capture leads to a retry with a fresh key and a second charge; R4 describes the same key-discard defect triggered via a concurrent-submit Stripe idempotency conflict.",
+        "reported_ids": [
+          "R3",
+          "R4"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] onBookingCancelledByParent (RefundEnqueueListener.java:46-50) does enqueue a restore on only sessionPackPurchaseId != null && isRefundEligible(), but whether that over-credits depends on when pack sessions are deducted: the finding assumes deduction at settlement, while the diff's own comment (\"else: forfeited (<=24h) \u2014 session consumed\", line 51) implies deduction at booking time. BookingCancelledByParentEvent's refundEligible construction and the pack-deduction site in CancellationRefundService/booking code are not shown, so this cannot be settled from the diff. | pass-1: Concrete trigger: parent cancels an uncaptured (REQUESTED/ACCEPTED) pack booking >24h ahead and the restore path increments remaining_sessions for a session that was never deducted, unlike the other paths which gate on paymentCaptured.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Depends on the unverified existence of a pause start/window; if the pack only stores pausedUntil, blocking from configuration time is the design, and the finding itself admits it does not know.",
+        "reported_id": "R5",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] The new guard in deductSession (purchase.getPausedUntil().isAfter(Instant.now()) throwing payment.packPaused) is unconditional and takes no booking/session-date input, so the mechanism is real; but the trigger depends on pausePack leaving an ACCEPTED booking uncancelled and on the settlement path recording a failure, and neither pausePack nor the caller is in the shown diff. | pass-1: Concrete trigger: pause a pack with one ACCEPTED booking not in the cancellation list and settle it before pausedUntil; deductSession throws payment.packPaused and the accept records a payment failure for a booking whose session may fall outside the pause.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Hinges on unverified data states (amount_charged = 0 or NULL price_per_session on legacy rows); no concrete trigger is established from the report alone.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "Speculative about NULL player_id rows and a possible id-type mismatch existing in production data; the report itself only asks to look for such rows.",
+        "reported_id": "R8",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] The watch(selected) handler nulls attemptKey unconditionally and the catch in confirmPurchase only clears the key when e?.response exists, so the described loss-then-new-key mechanism exists in the script; but whether `selected` can actually change while `purchasing` is true depends on the template (e.g., the pack selector being disabled during purchase), which is outside the shown diff. | pass-1: Concrete trigger: the watch(selected) handler nulls attemptKey while a request is in flight, so after a network error (which the catch block would otherwise survive) a retry of the original tier mints a new key and can charge twice.",
+        "reported_id": "R9",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

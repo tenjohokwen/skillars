@@ -1,0 +1,78 @@
+{
+  "arm": "concurrency",
+  "case": "382-upload-content-verification",
+  "findings": [
+    {
+      "category": "security",
+      "description": "signUpload presigns a PUT valid for uploadTtlSeconds (default 600s) that binds only bucket, key and content type \u2014 not length or content hash \u2014 and confirmUpload validates via a single s3Client.headObject at confirm time. If the uploader PUTs file 1, calls confirmUpload (HEAD sees file 1; the FSO row records file 1's size/checksum and quota is charged for it), and then re-PUTs different bytes of any size to the same still-valid URL, the stored object no longer matches the validated/recorded metadata. Every consumer trusting findActiveObject's 'HEAD-verified at confirm time' contract \u2014 including the public coach profile photo served via signedDownloadUrl \u2014 serves content that never passed the size/type validation, and the owner's quota accounting (sumSizeBytesByOwnerId of recorded sizeBytes) diverges from actual S3 usage, defeating the maxSizeBytes and quota checks entirely.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "FileStorageService.confirmUpload / signUpload",
+      "title": "Presigned PUT outlives confirm validation: object content can be swapped after HEAD check",
+      "verification": "Confirm the PutObjectPresignRequest in signUpload signs no content-length/x-amz-checksum header (it only sets bucket, key, contentType), that bucket versioning/ETag is not re-checked on any serve path, and that no bucket policy forbids re-PUT of an existing key."
+    },
+    {
+      "category": "concurrency",
+      "description": "reconfirm republishes StorageObjectConfirmedEvent for any key whose uploadConfirmedAt is within uploadTtlSeconds (600s), guarding only against replays older than the window, not against ordering between distinct keys. If a coach confirms photo A at t0 (photoUrl=A), confirms photo B at t0+3min (photoUrl=B), and a duplicate delivery of confirm(A) \u2014 proxy retry or double submit, which the reconfirm path exists to accept \u2014 lands before t0+10min, the listener's updatePhotoUrlByUserId silently reverts photoUrl from B back to A. The same replay racing deletePhoto is worse: reconfirm reads the FSO before deletePhoto's softDeleteByKey commits (passing the deletedAt==null check), the listener's UPDATE then blocks on the coach_profiles row lock deletePhoto holds, and after deletePhoto commits (photoUrl=null, FSO soft-deleted) the UPDATE applies, leaving photoUrl pointing at the soft-deleted object \u2014 the deleted photo resurfaces publicly until physical deletion.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "FileStorageService.reconfirm / CoachProfilePhotoEventListener.onStorageConfirmed",
+      "title": "reconfirm's 10-minute republish window lets a redelivered confirm revert the profile photo to an older or deleted upload",
+      "verification": "Confirm the confirm endpoint is reachable more than once per key by the owner (it is by design \u2014 the reconfirm path exists for retries) and the deployed value of platform blobstore uploadTtlSeconds."
+    },
+    {
+      "category": "logic",
+      "description": "ChecksumValidationStep only regex-checks the declared checksum's format at sign time, and confirmUpload compares contentType and contentLength to the HEAD response but never compares request.checksum to any S3-side hash (the eTag is only checked non-blank, and the presigned PUT binds no x-amz-checksum header). The declared value is then persisted on the FSO row and handed to consumers via StorageObjectDto / ConfirmUploadResponse formatted as 'sha256:<hex>', presenting an unverified client claim as a verified integrity attribute. Any downstream module using it for dedup, integrity or audit decisions is trusting attacker-controllable input.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload / formatChecksum",
+      "title": "Client-declared checksum is stored and surfaced as sha256:... without ever being verified against the object",
+      "verification": "Confirm no serve/replication path (ReplicatedStorageService, outbox handlers) independently recomputes or compares the checksum against the stored object."
+    },
+    {
+      "category": "logic",
+      "description": "The MIME allow-list in FileStorageProperties is global (includes application/pdf, text/plain, application/octet-stream; extensions pdf/txt/bin, max 100MB) and ValidationRequest carries no entity, so a coach can sign, upload and confirm a non-image under coach_profile/{userId}/. The listener links any confirmed object whose key's entity segment is coach_profile as photoUrl with no contentType check, and saveStep5 only checks the string prefix 'coach_profile/{userId}/' \u2014 it never calls findActiveObject/assertOwnership (the seam feat/coach-workflow-gaps D9 built for exactly this), so it also accepts a key that was signed but never uploaded or confirmed. Result: the public, child-facing profile serves a signed URL to a non-image or to a nonexistent object.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "CoachProfilePhotoEventListener.onStorageConfirmed / CoachProfileService.saveStep5",
+      "title": "Photo-link paths perform no image/content verification: any confirmed coach_profile object (pdf/txt/bin) or unconfirmed key becomes the public photo",
+      "verification": "Confirm there is no per-entity override of platform.filestorage.validation.allowed-mime-types in application config, and that the controller behind saveStep5 does no additional FSO lookup."
+    },
+    {
+      "category": "concurrency",
+      "description": "saveStep2 (specialties, age groups) and saveStep3 (session packs) do deleteByCoachId + flush + saveAll with no coachProfileRepository.findByIdForUpdate, unlike saveStep1/saveStep4/deletePhoto/publishProfile which all lock. Under READ COMMITTED, if T1 (submitting {A,B}) and T2 (submitting {C,D}) run concurrently, T2's DELETE blocks on T1's tuple locks, and after T1 commits it skips T1's newly inserted rows (invisible to its statement snapshot), then inserts {C,D}: the committed result is the union {A,B,C,D} rather than the latest submission. With overlapping values the second transaction instead dies on uq_coach_specialty/uq_coach_age_group/uq_session_pack as an unhandled 500. Both outcomes violate the replace semantics the delete-reinsert pattern assumes.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CoachProfileService.saveStep2 / saveStep3",
+      "title": "saveStep2/saveStep3 delete-then-reinsert child rows without the profile lock their sibling steps take; concurrent submissions merge instead of replace",
+      "verification": "Confirm no controller-level serialization (e.g., per-user mutex) in front of the profile-builder endpoints across instances \u2014 with multiple instances behind a proxy none can exist in-process."
+    },
+    {
+      "category": "edge-case",
+      "description": "When fileStorageService.softDelete throws AuthorizationException (stale created_by after an email/login change), deletePhoto warn-logs and clears photoUrl, but softDelete threw before softDeleteByKey ran, so the FileStorageObject stays deletedAt=null. That row keeps counting against the owner's 10GB quota via sumSizeBytesByOwnerId with no remaining user-reachable path to ever soft-delete it (deletePhoto is the only caller and photoUrl is now null), and it remains a live, non-deleted FSO eligible for the reconfirm replay re-link within its window. Repeated occurrences permanently shrink the coach's effective quota.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "CoachProfileService.deletePhoto",
+      "title": "deletePhoto's AuthorizationException tolerance clears photoUrl but orphans the storage row: quota leaked forever and the row stays replayable",
+      "verification": "Confirm no sweeper soft-deletes FSO rows whose key is no longer referenced by any coach_profiles.photo_url (grep schedulers in the filestorage module)."
+    },
+    {
+      "category": "concurrency",
+      "description": "confirmUpload commits the FSO insert via transactionTemplate.execute and only then calls applicationEventPublisher.publishEvent; the commit and the publish are not atomic and the event is not durable (the codebase has an outbox, but this path does not use it). If the instance crashes or is redeployed between the commit and the publish, the upload is recorded and quota-charged but photoUrl is never set. The designed healing \u2014 the client retrying confirm and landing in reconfirm \u2014 only re-publishes while uploadConfirmedAt is within uploadTtlSeconds (600s); a retry after that window (or a client that never retries because it saw a connection reset) leaves the upload permanently unlinked.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "StorageObjectConfirmedEvent is published in-memory after commit, not via the outbox: a crash between commit and publish permanently loses the photo link",
+      "verification": "Confirm no reconciliation job re-links confirmed coach_profile FSOs to coach_profiles.photo_url outside the event path."
+    }
+  ],
+  "input_rev": "6c0039fca63e7ef9d7a8a44dea5144918fc44cfd",
+  "model": null
+}

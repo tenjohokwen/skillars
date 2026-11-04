@@ -142,12 +142,6 @@ test.describe('C · Coach onboarding', () => {
       const purchase = new PackPurchaseScreen(parentPage, suite)
       await expect(purchase.packOption().or(purchase.noPack())).toBeVisible()
 
-      // KNOWN BUG (deferred-work.md, "Pitchside UI tests, spec ONB-06"): step 3 writes its packs to
-      // marketplace.session_packs, which drives the profile's "Buy sessions" button, but purchase
-      // reads payment.session_pack_tiers, which only the "My Session Pack Offer" page writes, so the
-      // page shows "no pack available". Declared here, not at the top, so a failure anywhere above
-      // is still a real failure. Remove it with the fix: Playwright reports an unexpected pass.
-      test.fail(true, 'Builder packs never become a purchasable tier (deferred-work.md, ONB-06)')
       await expect(purchase.packOption()).toContainText(
         t('booking.packs.sessionsBundle', { count: 10 }),
       )

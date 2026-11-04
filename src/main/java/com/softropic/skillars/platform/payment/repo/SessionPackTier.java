@@ -31,7 +31,8 @@ public class SessionPackTier {
     @Column(name = "coach_id", nullable = false)
     private UUID coachId;
 
-    @Column(nullable = false, length = 200)
+    /** Optional since skillars-deferred-168 (V226): a pack set from the profile builder may have no label. */
+    @Column(length = 200)
     private String label;
 
     @Column(name = "session_count", nullable = false)

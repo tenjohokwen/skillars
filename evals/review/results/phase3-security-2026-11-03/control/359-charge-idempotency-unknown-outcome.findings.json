@@ -1,0 +1,58 @@
+{
+  "arm": "control",
+  "case": "359-charge-idempotency-unknown-outcome",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "`charge` catches every StripeException, including ApiConnectionException (a read timeout after Stripe already captured the money), 5xx errors and 409 IdempotencyException, and rethrows a single `payment.lifecycleFailure`. `refund()` in the same class separates rejected from outcome-unknown, but `charge` does not. `handleCreditBasedBooking` treats this as a decline and calls `persistPaymentFailure`. That overwrites the CAPTURE_PENDING reservation with CHARGE_FAILED and stripe_charged=0, moves the booking to DECLINED and tells the parent the booking failed. The parent can end up charged with nothing on record, and the CAPTURE_PENDING row that PaymentPendingSweeper and the runbook rely on to detect possible money at Stripe has been erased.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.charge",
+      "title": "Charge whose outcome is unknown (timeout/5xx/409) is recorded as a definite failure and the booking declined, though the card may have been charged",
+      "verification": "Make `PaymentIntent.create` throw ApiConnectionException (for example a socket read timeout) after Stripe has processed the request. booking_payments ends up CHARGE_FAILED with stripe_charged=0 while Stripe shows a succeeded PaymentIntent with metadata referenceId=bookingId."
+    },
+    {
+      "category": "logic",
+      "description": "When `chargeAndCaptureForBatch` throws PaymentGatewayException, the batch path writes a BOOKING_DEDUCTION_REVERSAL and calls `declineBatchBooking` on every reserved booking. That replaces each CAPTURE_PENDING row with a zeroed CHARGE_FAILED row. The gateway sends network timeouts, 5xx and idempotency conflicts down this same path, so a batch charge that actually succeeded leaves the parent charged for the whole card portion. Their credit is also handed back, and every booking is declined with no record of the PaymentIntent. Nothing stays CAPTURE_PENDING, so the sweeper never flags the batch for reconciliation.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "PaymentLifecycleService.onBatchBookingAccepted",
+      "title": "Batch charge with unknown outcome restores the wallet credit and declines every booking, though the card may have been charged",
+      "verification": "Simulate ApiConnectionException from `PaymentIntent.create` on a batch where the card part is greater than zero. Every booking in the batch is CHARGE_FAILED/DECLINED and a reversal ledger entry exists, while Stripe holds a succeeded intent for the batchId."
+    },
+    {
+      "category": "database",
+      "description": "After a successful charge, `persistPaymentSuccess` joins the listener's REQUIRES_NEW transaction. If anything in it throws, for example `transitionOrReport` rethrowing because the parent cancelled at the same moment, or the ledger write failing, the whole transaction rolls back. That also discards `stripe_customers.last_payment_intent_id`, which `charge()` saved in the same transaction. The surviving CAPTURE_PENDING row has stripe_payment_intent_id=null, so the captured intent id exists only in a log line. After 72h the sweeper marks the row CAPTURE_ABANDONED without any intent to refund against.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "PaymentLifecycleService.handleCreditBasedBooking",
+      "title": "Captured PaymentIntent id is lost when the single-booking success write rolls back",
+      "verification": "Make `bookingService.transition` throw inside `persistPaymentSuccess` after a successful charge. The booking_payments row stays CAPTURE_PENDING with a null intent id, and last_payment_intent_id is not updated."
+    },
+    {
+      "category": "database",
+      "description": "The batch BOOKING_DEDUCTION ledger entry is written in the listener's outer transaction, but each booking is confirmed in its own REQUIRES_NEW perBookingTx, which commits right away. The `isSettled`/`bookingRepository.findById` calls in the settle loop (line 419) are outside the try/catch. A DataAccessException there, or a failure when the outer transaction commits, rolls back the BOOKING_DEDUCTION. Bookings confirmed earlier in the loop stay CAPTURED with a credit_debited share that was never deducted, so the parent keeps the credit. The remaining bookings are left in CAPTURE_PENDING even though the card was charged.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PaymentLifecycleService.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "PaymentLifecycleService.onBatchBookingAccepted",
+      "title": "Uncaught exception in the batch settle loop rolls back the credit deduction while sibling bookings stay committed as CAPTURED",
+      "verification": "Make `bookingRepository.findById` throw on the second reserved booking of a batch funded partly by credit. The first booking is CAPTURED with credit_debited>0, there is no BOOKING_DEDUCTION row for the batchId, and the wallet balance is unchanged."
+    },
+    {
+      "category": "edge-case",
+      "description": "After `createPaymentIntent` with confirm=true, the code logs 'captured' and returns the id without checking `intent.getStatus()`. If Stripe returns the intent without throwing in a state such as `processing`, `requires_action` or `requires_payment_method`, callers write CAPTURED and confirm the booking. The money has not been collected and may never be.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "StripePaymentGateway.charge",
+      "title": "PaymentIntent status is never checked, so a non-succeeded intent is recorded as CAPTURED",
+      "verification": "Check whether any saved payment method or Stripe configuration can make a confirmed off-session PaymentIntent come back with status other than `succeeded` without raising CardException, for example asynchronous methods or Radar review."
+    }
+  ],
+  "input_rev": "97f527f111a70dd0fdc2e50cd093fa65b8d9060e",
+  "model": null
+}

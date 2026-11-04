@@ -1,0 +1,63 @@
+{
+  "arm": "control",
+  "case": "353-agreed-price-null-fallback",
+  "checks": [],
+  "judge_cost_usd": 0.18266500000000002,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R1 identifies the same NULL agreed_price fallback in resolveSessionPrice/createBookingRequest/batchBookingPrice with the same consequence: parent charged an unseen later price.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R1 explicitly notes the batch quote/totalAmount of \u20ac0 for an unpriced coach, and R7 details the ZERO totalAmount in createBatch diverging from what settlement charges.",
+        "reported_ids": [
+          "R1",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "No reported finding mentions BookingDuplicationService's unchecked setAgreedPrice(currentCoachPrice(...)); R6 touches the file's callees but describes an unrelated proxy issue.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "Hinges on whether the settle method (admittedly 'not shown') can throw after its REQUIRES_NEW commit; the trigger cannot be established from the reported text alone.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Conditional on isTerminal/status consumers using an explicit list, which the reviewer did not inspect; no concrete trigger stated.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Depends entirely on unexamined PaymentPendingSweeper behavior for CAPTURE_PENDING batch rows ('a sweeper that abandons... will'); speculative trigger.",
+        "reported_id": "R4",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The swallowed-refund scenario depends on unchecked uq_pcl_booking_refund semantics and conflict handling (ignore vs error), so the trigger is not established.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "CGLIB package-private cross-classloader failure only arises in exotic setups like DevTools restart classloaders; speculative environment-dependent concern, not a defect in this code.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

@@ -1,0 +1,108 @@
+{
+  "arm": "security",
+  "case": "382-upload-content-verification",
+  "findings": [
+    {
+      "category": "security",
+      "description": "Every validation step (MimeTypeValidationStep etc.) runs at sign time on client-declared metadata, and confirmUpload's 'verification' compares request.contentType() to head.contentType() \u2014 which is just the Content-Type header the client itself sent on the presigned PUT, bound at sign time from the same declaration. No code ever reads the stored bytes (no magic-byte sniff). A coach signs an upload as image/jpeg, PUTs arbitrary bytes (HTML, executable, any file) with that header, and confirms: the resulting FileStorageObject is documented (findActiveObject javadoc: 'real (HEAD-verified...) content type') and trusted downstream, so CoachGalleryService.addImage's JPEG/PNG/WebP check and the profile-photo listener pass, and arbitrary non-image content is served to parents and children on the public coach profile as a trusted image.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "FileStorageService.confirmUpload",
+      "title": "Uploaded bytes are never verified against the declared content type anywhere in the pipeline",
+      "verification": "Confirm no byte-sniffing exists elsewhere: grep for Tika/magic-byte/ImageIO usage in the upload path; confirm the S3 presigner includes contentType in the signed headers so head.contentType always echoes the sign-time declaration."
+    },
+    {
+      "category": "security",
+      "description": "The presigned PUT is valid for upload-ttl-seconds (600s, application.yaml) and nothing invalidates it at confirm; confirm records the HEAD-time size/ETag but nothing re-checks them when the object is later served via signedDownloadUrl. A coach uploads a compliant 1 MB JPEG, confirms (passing the 100 MB global cap and CoachGalleryService's 5 MB/type checks, photo linked and publicly served), then within the remaining TTL re-PUTs a different body to the same key \u2014 only Content-Type is signature-bound, not the body or length. The publicly served profile/gallery object now contains content and a size that never passed confirm-time validation, and the file_storage_objects row (sizeBytes, quota accounting, checksum) is silently wrong.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "FileStorageService.signUpload / confirmUpload",
+      "title": "Presigned PUT URL remains usable after confirm, allowing post-validation content swap and size-cap bypass",
+      "verification": "Confirm the PutObjectPresignRequest signs no Content-Length/ETag condition, and that nothing (e.g. bucket policy or eTag re-check at download) detects the overwrite."
+    },
+    {
+      "category": "security",
+      "description": "The default allowedMimeTypes include application/octet-stream and text/plain, and allowedExtensions include .bin and .txt, so MimeTypeValidationStep/ExtensionValidationStep accept completely arbitrary binaries from any authenticated role. Combined with the profile-photo listener's lack of any type check, a coach can sign entity=coach_profile with contentType=application/octet-stream, extension=bin, confirm, and have an arbitrary binary blob become their live public profile photo; any other module that relies on the platform allow-list as its only type gate inherits the same hole.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/config/FileStorageProperties.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "FileStorageProperties.Validation.allowedMimeTypes / allowedExtensions",
+      "title": "Default upload allow-list admits application/octet-stream, .bin and text/plain",
+      "verification": "Check prod/uat property files for an override of platform.filestorage.validation.* \u2014 the defect stands only where these defaults (or equally permissive values) are effective."
+    },
+    {
+      "category": "security",
+      "description": "The listener filters only on entity == coach_profile and a numeric entityId, then updatePhotoUrlByUserId unconditionally. Contrast CoachGalleryService.addImage, which requires a confirmed active object, owner match, JPEG/PNG/WebP content type and a 5 MB cap: here a coach who signs and confirms a coach_profile upload declared application/pdf or application/octet-stream (both in the default allow-list, up to 100 MB) gets that blob instantly set as their photo and served on the public profile (ACTIVE/REDUCED/PENDING_REVIEW) with no moderation step and no check that the coach is not SUSPENDED. The photo shown to parents and children is therefore linked before any content gate that could block it.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfilePhotoEventListener.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "CoachProfilePhotoEventListener.onStorageConfirmed",
+      "title": "CoachProfilePhotoEventListener links any confirmed coach_profile object as the live public photo with no content-type, size or status check",
+      "verification": "Confirm there is no separate photo-moderation flow (grep marketplace/moderation for photoUrl consumers) that would gate the photo after this listener links it."
+    },
+    {
+      "category": "security",
+      "description": "saveStep5 validates only req.photoUrl().startsWith(\"coach_profile/\" + userId + \"/\") and writes it straight to the row that getPublicProfile blindly presigns via signedDownloadUrl. It never calls findActiveObject/assertOwnership (the seam built for exactly this and used by CoachGalleryService.addImage), so a coach can set as their public photo a key that was never uploaded or confirmed, a soft-deleted object (whose bytes remain in the bucket for retention-days and are still served by the raw presign), or a confirmed PDF/octet-stream blob \u2014 bypassing even the weak declared-type gate the confirm flow applies.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "CoachProfileService.saveStep5",
+      "title": "saveStep5 accepts photoUrl by string prefix only, without the existence/ownership/type validation the gallery path performs",
+      "verification": "Confirm ProfileBuilderStep5Request.photoUrl has no additional bean validation that restricts the key shape or ties it to a confirmed object."
+    },
+    {
+      "category": "security",
+      "description": "The presigned PUT binds no Content-Length, so a user can sign an upload declaring fileSizeBytes=1 (passing the sign-time quota check) and PUT an object of any size. If they never confirm, or confirm rejects (size/type mismatch, quota, max-size), the S3 object is never deleted: all failure branches of confirmUpload just throw, and DeletionSchedulerService only physically deletes keys that have a soft-deleted file_storage_objects row, which an unconfirmed upload never gets. The 10 GB quota sums only confirmed, non-deleted rows, so any authenticated user can consume unbounded storage (cost/DoS) by repeatedly signing and PUTting without confirming.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "FileStorageService.confirmUpload / DeletionSchedulerService.processDeletions",
+      "title": "Never-confirmed and confirm-rejected uploads stay in the bucket forever, outside any quota",
+      "verification": "Confirm no S3 bucket lifecycle rule or other scheduler (grep for abortMultipartUpload / lifecycle / orphan cleanup) reaps unconfirmed objects."
+    },
+    {
+      "category": "security",
+      "description": "confirmUpload stores request.checksum() without ever comparing it to the uploaded object (the HEAD eTag is only checked for presence, never against the checksum), yet findActiveObject and ConfirmUploadResponse return it formatted as 'sha256:<value>', presenting an unverified client claim as a verified digest. Any downstream consumer (replication verification, dedupe, integrity audit) that trusts this field can be fed an arbitrary value by the uploader, and the post-confirm PUT-overwrite makes even an honestly computed value stale.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "FileStorageService.persistConfirmed / formatChecksum",
+      "title": "Client-declared checksum stored unverified but re-served with an authoritative 'sha256:' prefix",
+      "verification": "Check whether ReplicatedStorageService or any audit/dedupe consumer reads StorageObjectDto.checksum or FileStorageObject.checksum as an integrity guarantee."
+    },
+    {
+      "category": "security",
+      "description": "DELETE /api/storage/** (any role) authorizes by fso.getCreatedBy().equals(currentUserLogin), a login string, while every other path uses the immutable ownerId. The code's own comments acknowledge that an email change renames the login and strands the file (CoachProfileService.deletePhoto has to swallow the resulting AuthorizationException); conversely, if a login/email can ever be re-registered or reassigned after account deletion, the new holder of that login gains delete rights over the previous holder's stored files.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "FileStorageService.softDelete",
+      "title": "softDelete authorizes on the mutable createdBy login instead of ownerId",
+      "verification": "Check whether user deletion/GDPR erasure frees the login/email for re-registration; if logins are never recycled, only the self-lockout (and the deletePhoto AuthorizationException workaround) remains."
+    },
+    {
+      "category": "edge-case",
+      "description": "Both photo-setting paths (saveStep5 and the confirm listener via updatePhotoUrlByUserId) overwrite photoUrl without soft-deleting the previously linked file_storage_objects row, and only deletePhoto ever soft-deletes. A coach who replaces their photo leaves the old face photo in the bucket and in the FSO table forever (still presignable through GET /api/storage/sign/download by the owner, still counted against their quota), which also means a GDPR erasure that only clears the current photoUrl misses every superseded photo.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "CoachProfileService.saveStep5 / CoachProfilePhotoEventListener.onStorageConfirmed",
+      "title": "Replacing a coach photo orphans the previous photo object indefinitely",
+      "verification": "Check the GDPR/account-deletion path: whether it deletes all file_storage_objects by ownerId or only the keys currently referenced by profile rows."
+    },
+    {
+      "category": "security",
+      "description": "SignUploadRequest.entity and entityId are free-text, and only coach_profile/coach_branding/coach_gallery are owner-bound, so any authenticated user can sign and confirm uploads under any other namespace with any entityId \u2014 e.g. keys under message_attachment/<someone else's conversation>/ or player_document/<another user's id>/. The two in-scope consumers are safe (gallery re-checks the FSO owner; saveStep5's prefix is owner-bound), but any current or future module that, like saveStep5, trusts the key prefix for a non-owner-bound entity instead of calling assertOwnership/findActiveObject accepts attacker-minted keys as belonging to the named entity.",
+      "file": "src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java",
+      "id": "R10",
+      "severity": "low",
+      "symbol": "FileStorageService.OWNER_BOUND_ENTITIES / signUpload",
+      "title": "Owner binding covers only three coach entities while the entity field is free text",
+      "verification": "Grep all modules for startsWith(\"<entity>/\" patterns or key-prefix checks on storage keys for entities outside OWNER_BOUND_ENTITIES; each such consumer without an assertOwnership/findActiveObject call is a concrete instance."
+    }
+  ],
+  "input_rev": "6c0039fca63e7ef9d7a8a44dea5144918fc44cfd",
+  "model": null
+}

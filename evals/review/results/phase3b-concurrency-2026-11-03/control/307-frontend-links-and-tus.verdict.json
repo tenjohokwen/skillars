@@ -1,0 +1,66 @@
+{
+  "arm": "control",
+  "case": "307-frontend-links-and-tus",
+  "checks": [],
+  "judge_cost_usd": 0.26581,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R6 covers the booking email /bookings link and R7 the report email /portal/... link, both on backend origin without hash prefix \u2014 same defect and consequence.",
+        "reported_ids": [
+          "R6",
+          "R7"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "R3 (EmailRegistrationStrategy), R4 (AccountManagementFacade) and R5 (AccountChangeEmailListener) together cover all three ${baseurl}:${server.port} localhost link sites.",
+        "reported_ids": [
+          "R3",
+          "R4",
+          "R5"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R8 identifies the relative callbackSuccessUrl redirect resolving against backend origin without hash and the lost stripe_error query \u2014 same mechanism and consequence.",
+        "reported_ids": [
+          "R8"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "R1 covers the dropped TUS auth fields in DrillUploadInitiateResponse and R2 the resulting unauthenticated tus Upload in DrillDetailPanel \u2014 jointly the full defect.",
+        "reported_ids": [
+          "R1",
+          "R2"
+        ]
+      },
+      {
+        "expected_id": "F5",
+        "match": "full",
+        "note": "R9 (coach-dashboard name), R10 (marketplace name) and R11 (/upgrade path) cover all broken navigation targets listed in the expected finding.",
+        "reported_ids": [
+          "R9",
+          "R10",
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F6",
+        "match": "none",
+        "note": "No reported finding mentions BookingRequestPage gating packs on !authStore.isPlayer.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

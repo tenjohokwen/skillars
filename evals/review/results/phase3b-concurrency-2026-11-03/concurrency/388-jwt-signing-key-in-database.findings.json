@@ -1,0 +1,38 @@
+{
+  "arm": "concurrency",
+  "case": "388-jwt-signing-key-in-database",
+  "findings": [
+    {
+      "category": "security",
+      "description": "The Jasypt password protecting the stored secret is reverse(busId + version), and busId and version are plaintext columns of the very same `sec` row (and are duplicated into the Envers `sec_aud` table). For the JWT secret they are the compile-time constants JWT_BUS_NAME/JWT_VERSION. Anyone with read access to the table, a backup, or a dump can trivially decrypt the HMAC signing key and forge tokens for any user, including children's accounts. The cipher is also BasicTextEncryptor (PBEWithMD5AndDES), so the encryption layer is obfuscation only.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/repo/Secret.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "Secret.derivePassword / getSecretBytes",
+      "title": "JWT signing key decryptable from the same row that stores it",
+      "verification": "Confirm no external secret (env var, KMS) is mixed into derivePassword anywhere; grep for other setters of encryptedValue. SecurityConstants.JWT_BUS_NAME/JWT_VERSION are source-code constants."
+    },
+    {
+      "category": "logic",
+      "description": "fetchSecret filters only on (version, busId), never on status, and both JwtConfiguration.secret and JwtSecretService.secret cache the loaded entity for the life of the process with no invalidation or refresh. If an operator revokes a leaked signing key by setting the sec row's status to INACTIVE/BLOCKED, every running instance keeps signing and accepting tokens with the revoked key until restart, and even a restarted instance loads the blocked row again because status is never consulted on this path. createInactiveSecret implies status is meant to gate use, but the JWT path ignores it entirely.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/SecretService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "SecretService.fetchSecret",
+      "title": "Blocking or deactivating the JWT secret has no effect on any instance",
+      "verification": "Confirm no other code path re-reads the secret or filters by status for the JWT (version, busId) pair; check SecurityAdviceFilter and JwtUtil consumers for any cache-busting."
+    },
+    {
+      "category": "concurrency",
+      "description": "secretMap caches the first Secret fetched per busId and is never evicted, while the underlying query selects the latest ACTIVE secret by created date. If a newer active secret is inserted for a busId, an instance that already populated its cache keeps returning the old secret forever, while a freshly started instance returns the new one; behind the proxy, material signed on one instance then fails verification on another. Latent today only because the method currently has no callers in src/main/java \u2014 a deployment fact, not a guard.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/SecretService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "SecretService.fetchLatestActiveSecretAsBytes / secretMap",
+      "title": "fetchLatestActiveSecretAsBytes per-instance cache never invalidated, diverges across instances on rotation",
+      "verification": "Grep tests and any admin/tooling modules for callers of fetchLatestActiveSecretAsBytes; if a rotation feature ever calls it, this becomes a live cross-instance divergence."
+    }
+  ],
+  "input_rev": "0621d23f5462306070ae084dc294bbf501d37458",
+  "model": null
+}

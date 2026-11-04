@@ -1,0 +1,70 @@
+{
+  "arm": "control",
+  "case": "368-pack-status-badges",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "getOrCreateStripeCustomer saves paymentMethodId to stripe_customers before paymentGateway.chargeAndCapture, which has no failure handling in purchasePack; the gateway cannot restore the old card since previousCard is a local never passed to it and the row already holds the new card. On a successful retry with the same card, previousCard equals paymentMethodId, so scheduleSubscriptionCardSync's Objects.equals guard returns early and savePaymentMethodAndScheduleSync is skipped, leaving subscriptions on the old card.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "confirmed",
+      "note": "In purchasePack, the tier.isActive() check and BookingService.requireBookableCoachStatus run before chargeAndCapture, and the replay lookup findByStripePaymentIntentId only occurs after the charge \u2014 so a same-attemptKey retry after createTier deactivated the tier throws payment.packTierInactive without ever reaching the replayedPurchase path, despite the pack already being charged and recorded.",
+      "reported_id": "R8"
+    }
+  ],
+  "judge_cost_usd": 0.809785,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R2 covers frozen\u2192ACTIVE and R3 covers revoked (incl. revokedReason never exposed); R3's EXHAUSTED consequence follows from revoke zeroing sessions, same computeStatus defect.",
+        "reported_ids": [
+          "R2",
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same dead branch: status==='ACTIVE' && isPaused can never hold since server returns PAUSED, so paused packs show the green Active badge.",
+        "reported_ids": [
+          "R1"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R7 identifies the missing frozen guard in pausePackTransactional and R4 the missing revoked guard in extendPack/extendable, jointly covering both halves.",
+        "reported_ids": [
+          "R7",
+          "R4"
+        ]
+      },
+      {
+        "expected_id": "F4",
+        "match": "full",
+        "note": "Same UTC-midnight parse vs local minPauseStartDate mismatch, same pauseStartInPast rejection and wrong day-boundary consequence.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] getOrCreateStripeCustomer saves paymentMethodId to stripe_customers before paymentGateway.chargeAndCapture, which has no failure handling in purchasePack; the gateway cannot restore the old card since previousCard is a local never passed to it and the row already holds the new card. On a successful retry with the same card, previousCard equals paymentMethodId, so scheduleSubscriptionCardSync's Objects.equals guard returns early and savePaymentMethodAndScheduleSync is skipped, leaving subscriptions on the old card. | pass-1: Concrete trigger: paymentMethodId persisted before chargeAndCapture, so a declined card stays as saved default and a later retry skips scheduleSubscriptionCardSync via previousCard==B.",
+        "reported_id": "R6",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] In purchasePack, the tier.isActive() check and BookingService.requireBookableCoachStatus run before chargeAndCapture, and the replay lookup findByStripePaymentIntentId only occurs after the charge \u2014 so a same-attemptKey retry after createTier deactivated the tier throws payment.packTierInactive without ever reaching the replayedPurchase path, despite the pack already being charged and recorded. | pass-1: Concrete trigger: tier-active/coach-bookable checks precede the idempotent replay lookup, so a same-key retry after createTier deactivates the tier errors despite a completed charge.",
+        "reported_id": "R8",
+        "verdict": "real"
+      }
+    ]
+  }
+}

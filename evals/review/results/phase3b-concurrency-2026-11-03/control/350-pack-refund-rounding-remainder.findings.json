@@ -1,0 +1,98 @@
+{
+  "arm": "control",
+  "case": "350-pack-refund-rounding-remainder",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "perSessionShare divides amountCharged by sessionCount and rounds down to the cent, and every refund uses that same figure. For a 200.00 / 3 pack each refund is 66.66, so refunding all three sessions returns 199.98 and the 0.02 is never paid back. This hits every expired-pack wallet refund (coach cancellation, no-show, admin and pause through resolveAmountPaid). The fix prevents over-refunding but now always under-refunds whenever the charge doesn't divide evenly. The last refunded session should get amountCharged minus what was already refunded for that pack.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchase.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "SessionPackPurchase.perSessionShare",
+      "title": "Rounding the per-session share down loses the remainder, so a full refund of a pack pays back less than was charged",
+      "verification": "Refund all sessions of a 200.00/3 expired pack through coach cancellation and add up the BOOKING_REFUND ledger rows: you get 199.98."
+    },
+    {
+      "category": "logic",
+      "description": "The new restore enqueue runs whenever sessionPackPurchaseId != null && isRefundEligible(), with no check that the booking was ever charged. A pack session is only deducted when the booking settles (CONFIRMED/UPCOMING), so a parent who cancels a REQUESTED or ACCEPTED pack booking more than 24h ahead gets remainingSessions + 1, which is a free session. The coach, admin, no-show and pause paths all check this with isPackRestore()/paymentCaptured (C6); only the parent path doesn't. The new per-booking marker doesn't help, because that booking was never deducted in the first place.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RefundEnqueueListener.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "RefundEnqueueListener.onBookingCancelledByParent",
+      "title": "Parent cancellation more than 24h ahead adds a pack session back that was never taken off",
+      "verification": "Check whether BookingCancelledByParentEvent's refundEligible already takes captured status into account. If it only reflects the >24h rule, cancelling an ACCEPTED pack booking 48h ahead will increase remaining_sessions."
+    },
+    {
+      "category": "edge-case",
+      "description": "The key is reset whenever e.response exists, on the assumption that 'the server answered'. A 502/504 from a load balancer or proxy, or a 500 thrown after Stripe captured the charge, also has a response even though the backend may have charged and recorded the pack. The parent clicks again, a new key is minted, and a second charge and second pack go through, which is exactly what the key was added to stop. Keep the key for 5xx/timeout statuses and only reset it on definite 4xx business errors or on success.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "confirmPurchase",
+      "title": "A proxy or gateway timeout makes the client throw away the key, so a retry can charge twice",
+      "verification": "Put a proxy that times out with a 504 in front of a purchase that succeeds on the backend, then retry from the page: purchasePack receives a different attemptKey."
+    },
+    {
+      "category": "concurrency",
+      "description": "When two requests send the same idempotency key at the same moment, Stripe rejects the second one (409 idempotency conflict) while the first is still running. charge() turns any StripeException into payment.lifecycleFailure. That request returns an error response, so the front end mints a new key, even if the first request succeeds. If the first one's response is lost, the parent sees only the failure and a retry buys a second pack. Treat the concurrent-use error as retryable under the same key instead of a definite failure.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "StripePaymentGateway.charge",
+      "title": "Two simultaneous submits with the same key can end in an error even though the charge went through",
+      "verification": "Fire two purchase requests with the same Idempotency-Key in parallel against Stripe test mode and look at the second response and the client's key handling."
+    },
+    {
+      "category": "logic",
+      "description": "Both checks reject when pausedUntil is after now, without looking at when the pause starts. pausePack accepts a future start (the IT uses now + 1 day), so from the moment the pause is configured until it ends, the parent can't book against the pack and deductSession refuses to settle sessions that fall before the pause begins. The rule should compare against the pause window or the session time, not just 'now < pausedUntil'.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "createBookingRequest / PackSessionService.deductSession",
+      "title": "Setting up a future pause blocks bookings and settlement straight away, not only during the pause",
+      "verification": "Check whether SessionPackPurchase stores a pause start and whether findActivePacks uses it. Schedule a pause starting in 7 days, then book a session for tomorrow."
+    },
+    {
+      "category": "logic",
+      "description": "pausePack only cancels the bookings the parent lists. Any other ACCEPTED pack booking is left alone, but when it settles while the pack is paused, deductSession now throws payment.packPaused and the accept path records a payment failure. A booking that was valid when it was made then fails even though its session date may be outside the pause. Either check the session time against the pause or require that all affected bookings are cancelled when the pause is applied.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "PackSessionService.deductSession",
+      "title": "An accepted pack booking the pause didn't cancel fails payment when it settles",
+      "verification": "Pause a pack while one ACCEPTED pack booking isn't in the cancellation list, then run settlement for it before pausedUntil."
+    },
+    {
+      "category": "edge-case",
+      "description": "For pack bookings, resolveAmountPaid now returns perSessionShare directly. A pack with amountCharged 0 (free or comped) returns 0.00, and a legacy row with no stamp and a null pricePerSession returns null. That goes against the method's own contract ('never commit a refund of 0 while telling the parent they were fully refunded'), and a null can cause an NPE in callers that compare or add the amount. Before, a missing price fell through to resolveSessionPrice, which throws.",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "BookingService.resolveAmountPaid",
+      "title": "perSessionShare can return 0.00 or null, which the refund path then commits",
+      "verification": "Check whether amount_charged can be 0 and whether price_per_session can be NULL in session_pack_purchases."
+    },
+    {
+      "category": "edge-case",
+      "description": "Objects.equals(pack.getPlayerId(), req.playerId()) fails when an older pack has player_id NULL, so every booking against such a pack is rejected with packPlayerMismatch. The same happens if a self-registered player's pack stores a different id type (user id rather than PlayerProfile PK).",
+      "file": "src/main/java/com/softropic/skillars/platform/booking/service/BookingService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "createBookingRequest (packPlayerMismatch)",
+      "title": "Packs without a playerId can no longer be booked",
+      "verification": "Look for session_pack_purchases rows with NULL player_id, and check what purchasePack stores as playerId on the self-registered player path."
+    },
+    {
+      "category": "edge-case",
+      "description": "The watcher sets attemptKey to null whenever the selection changes, even while a request is still running. If the parent changes selection during the request and it then fails with a network error, the key the server may already have charged with is lost, and re-selecting and retrying the original tier charges again under a new key.",
+      "file": "src/frontend/src/pages/parent/SessionPackPurchasePage.vue",
+      "id": "R9",
+      "severity": "low",
+      "symbol": "watch(selected)",
+      "title": "Changing the selected pack while a purchase is in progress throws away that purchase's key",
+      "verification": "Change the selection while purchasing is true, simulate a network error, and retry the original tier."
+    }
+  ],
+  "input_rev": "cb23925514e53ab5f88d95078c84e014b506422d",
+  "model": null
+}

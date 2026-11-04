@@ -1,0 +1,44 @@
+{
+  "arm": "control",
+  "case": "330-filestorage-quota-race",
+  "checks": [
+    {
+      "check": "undetermined",
+      "note": "The in-file mechanics hold: signUpload's quota check uses sumSizeBytesByOwnerId (confirmed FSO rows only, pending uploads reserve nothing), and confirmUpload's QuotaExceededException/StorageValidationException paths throw before persistConfirmed without deleting the S3 object, leaving it with no FSO row. But the finding's verification caveat \u2014 whether a bucket lifecycle rule or sweeper cleans generated-key objects lacking FSO rows \u2014 depends on infrastructure config and scheduler code not shown in this file.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "FileStorageService.softDelete does dereference fso.getCreatedBy() with no null guard and uses login where signDownload/assertOwnership use ownerId, so the consequence follows if createdBy is null \u2014 but whether it can be null depends on the V147 migration, the FileStorageObject entity, StorageMigrationService, and the AuditorAware configuration, none of which are in the provided code.",
+      "reported_id": "R3"
+    }
+  ],
+  "judge_cost_usd": 0.699165,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "Same check-then-act race in confirmUpload: quota read via sumSizeBytesByOwnerId outside the insert transaction, parallel confirms all pass and overshoot the quota, with no lock or constraint serialising per owner.",
+        "reported_ids": [
+          "R1"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check undetermined] The in-file mechanics hold: signUpload's quota check uses sumSizeBytesByOwnerId (confirmed FSO rows only, pending uploads reserve nothing), and confirmUpload's QuotaExceededException/StorageValidationException paths throw before persistConfirmed without deleting the S3 object, leaving it with no FSO row. But the finding's verification caveat \u2014 whether a bucket lifecycle rule or sweeper cleans generated-key objects lacking FSO rows \u2014 depends on infrastructure config and scheduler code not shown in this file. | pass-1: Distinct defect from F1: signUpload reserves nothing, so presigned PUTs for uploads later rejected (or never confirmed) leave objects in the bucket with no FileStorageObject row, which the soft-delete/physical-delete scheduler can never clean; concrete trigger is stated.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] FileStorageService.softDelete does dereference fso.getCreatedBy() with no null guard and uses login where signDownload/assertOwnership use ownerId, so the consequence follows if createdBy is null \u2014 but whether it can be null depends on the V147 migration, the FileStorageObject entity, StorageMigrationService, and the AuditorAware configuration, none of which are in the provided code. | pass-1: Concrete trigger stated: softDelete dereferences nullable created_by (null for pre-V147 or non-audited rows), yielding an NPE/500, and authorises on login rather than ownerId unlike the rest of the class.",
+        "reported_id": "R3",
+        "verdict": "unverified"
+      }
+    ]
+  }
+}

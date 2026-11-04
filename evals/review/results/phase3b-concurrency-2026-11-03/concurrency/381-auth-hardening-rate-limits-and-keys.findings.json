@@ -1,0 +1,88 @@
+{
+  "arm": "concurrency",
+  "case": "381-auth-hardening-rate-limits-and-keys",
+  "findings": [
+    {
+      "category": "security",
+      "description": "generateResetKey() and generateActivationKey() use RandomStringUtils.randomNumeric(10), which is backed by a non-cryptographic PRNG (ThreadLocalRandom in commons-lang3), and produce only 10 decimal digits (~33 bits even if the RNG were secure). These keys are the sole credential for account activation (UserRegistrationService.createUser line 65) and password reset (PasswordResetService.prepareForPasswordReset line 44, consumed by AccountManagementFacade.finishPasswordReset), so a predictable or brute-forceable key is an account-takeover primitive. The reset-finish endpoint is rate limited only per IP (5 per 10 min) via the in-memory RateLimitingService, which multiplies by instance count and resets on restart, so the online-guessing bound is weaker than it looks.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/util/RandomUtil.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "RandomUtil.generateResetKey / generateActivationKey",
+      "title": "Activation and password-reset keys generated with non-cryptographic PRNG at ~33 bits of entropy",
+      "verification": "Confirm the commons-lang3 version in the build: RandomStringUtils delegates to ThreadLocalRandom (not SecureRandom) in all versions before the 3.16 RandomStringUtils.secure() API, and this code calls the insecure static methods either way."
+    },
+    {
+      "category": "security",
+      "description": "RateLimitingService keeps Bucket4j buckets in a per-JVM ConcurrentHashMap, and its own javadoc scopes this to a single-instance deployment ('revisit only if/when the app is horizontally scaled'). The app now runs as several instances behind a proxy, so every guard built on it holds per instance, not per cluster: the 6-digit phone-OTP verification budget in Coach/Parent/PlayerRegistrationService.verifyPhone (5 or 10 attempts per OTP) becomes 5xN or 10xN when the proxy spreads requests, and every @RateLimited bucket (registration, password-reset init/finish, resend endpoints) multiplies by N and additionally resets to full on each instance restart or hourly idle eviction. The DB-backed LoginRateLimiter is unaffected; everything else silently weakens with scale.",
+      "file": "src/main/java/com/softropic/skillars/infrastructure/security/RateLimitingService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "RateLimitingService.tryConsume",
+      "title": "All @RateLimited buckets and the OTP brute-force budget are per-JVM in-memory on a multi-instance deployment",
+      "verification": "Confirm the production instance count and proxy load-balancing policy; if requests for one client can reach more than one instance, the budgets are multiplied as described."
+    },
+    {
+      "category": "concurrency",
+      "description": "verifyPhone loads the User (line 205), checks locked and status, then sets verificationStatus=BASIC_VERIFIED and saves (lines 222-223) with no lock and no @Version on User. If an AccountSuspensionEventListener (CSAM safety suspension) commits verification_status=SUSPENDED and locked=true between that read and this transaction's flush, @DynamicUpdate does not help because verificationStatus is exactly the column this transaction changed: the commit overwrites SUSPENDED with BASIC_VERIFIED. AuthService.ensureAccountIsLive's dedicated SUSPENDED check (AuthService.java:311) \u2014 added precisely so suspension holds 'whatever later touches locked' \u2014 is defeated; only the locked flag still blocks login, so a later admin unlock fully revives a safety-suspended account with no record of the suspension status. The same window exists in verifyEmail's UNVERIFIED->EMAIL_VERIFIED + activated=true write (lines 147-151), which also re-activates the account.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "CoachRegistrationService.verifyPhone / verifyEmail (identical in ParentRegistrationService and PlayerRegistrationService)",
+      "title": "verifyEmail/verifyPhone can overwrite a concurrently committed SUSPENDED verification status (User has no @Version)",
+      "verification": "Confirm AccountSuspensionEventListener sets verificationStatus=SUSPENDED via a direct write that can commit while a registration-verification transaction is in flight, and that User has no @Version (confirmed in User.java \u2014 only @DynamicUpdate)."
+    },
+    {
+      "category": "database",
+      "description": "User.id is an app-assigned @Tsid (BaseEntity), so the plain userRepository.save(user) defers the INSERT to commit-time flush \u2014 ParentRegistrationService's own AC6 comment documents this exact mechanism and switched parent to saveAndFlush, but coach and player were not fixed. The try/catch around save() therefore never fires: if a second registration for the same email commits between findOneByEmail (line 74) and this transaction's commit, the user_login_key violation surfaces at the transaction boundary as a raw DataIntegrityViolationException instead of the mapped security.emailInUse. Worse, no race is needed for phone: registering with a new email but an already-taken phone number deterministically fails at commit against user_phone_key with no mapping at all (parent maps it to security.phoneInUse; coach/player return an unexplained error every time). State stays correct (constraint holds), but the handling the code claims to have does not exist.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "CoachRegistrationService.registerCoach lines 101-105 (identical in PlayerRegistrationService.registerPlayer lines 116-120)",
+      "title": "Dead DataIntegrityViolationException catch in coach/player registration: duplicate email race and any duplicate phone surface as unhandled commit-time failures",
+      "verification": "Confirm ApiAdvice has no specific mapping for a commit-time DataIntegrityViolationException on these endpoints (parent's AC6 comment implies the unmapped path was considered unacceptable there)."
+    },
+    {
+      "category": "concurrency",
+      "description": "registerAccount reads findUserByEmailOrLogin (line 130) and, if absent, persists a new User (line 150) \u2014 a classic double-submit shape with no claim marker. If two requests for the same email run concurrently (double-click, or two instances), both pass the existence check, both persist; the @Tsid-deferred INSERT means the loser's user_login_key violation surfaces at commit, after publishEvent(UserRegisteredEvent) at line 151 and strategy.notifyNewUser have already run in-transaction, and unlike the registration services there is no catch anywhere, so the client gets a raw 500 instead of the deliberate enumeration-safe notifyUserExists path. The unique constraint prevents a duplicate account, but the designed behavior for 'user exists' is bypassed by exactly the timing it was meant to handle.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "AccountManagementFacade.registerAccount",
+      "title": "registerAccount check-then-insert has no duplicate handling at all: concurrent registration of one email fails at commit unmapped",
+      "verification": "Check whether the UserRegisteredEvent listener and the EmailRegistrationStrategy notification path are BEFORE_COMMIT/outbox-bound (then they roll back with the loser) or plain @EventListener/@Async (then the loser's side effects leak despite the rollback)."
+    },
+    {
+      "category": "edge-case",
+      "description": "emailTokenRepository.save(evt) on a managed entity queues the versioned UPDATE but does not flush, so when a second use of the same verification link races the first (T1 commits evt.used=true after T2 read used=false at line 118), T2's version-conflict exception is thrown at the next flush point \u2014 deleteByUserIdAndUsedFalse (flushAutomatically=true, line 168), saveAndFlush(otpToken) (line 179), or commit itself on the phone-otp-not-required path \u2014 all outside this try/catch. The user gets an unmapped exception (or a misleading 409 otpResendInProgress from the OTP partial-index collision in the both-in-flight interleaving) instead of the intended security.emailTokenUsed. Final DB state is protected by EmailVerificationToken's @Version; only the error surface is wrong, but the catch is dead code giving false assurance in all three services.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "CoachRegistrationService.verifyEmail lines 154-158 (identical in ParentRegistrationService lines 167-171 and PlayerRegistrationService lines 169-173)",
+      "title": "ObjectOptimisticLockingFailureException catch in verifyEmail can never fire: save() does not flush, the conflict surfaces later outside the try",
+      "verification": "Reproduce by double-submitting one verification link with a barrier between the two transactions' reads; observe where the ObjectOptimisticLockingFailureException actually surfaces."
+    },
+    {
+      "category": "edge-case",
+      "description": "The comment at lines 113-114 claims the refresh-token persist 'ensures DB state is committed before the client receives auth credentials', but the commit happens at the @Transactional boundary after loginTokenManager.createLoginToken and CookieUtil.addCookie have already added Set-Cookie headers to the live HttpServletResponse. If the commit then fails (Envers audit write, outbox insert, connection loss at flush), the exception reaches error rendering with those headers already set; unless the error path calls response.reset(), the client receives an error status together with a self-contained valid JWT and a refresh-token cookie whose row never committed \u2014 a 'failed' login that nevertheless hands out a working session token. Latent: it needs a commit-time failure after the password check passed.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/AuthService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "AuthService.login lines 112-126",
+      "title": "login() writes JWT and refresh cookies before the transaction commits, contrary to its own ordering comment",
+      "verification": "Check whether ApiAdvice/the servlet error dispatch resets the response (response.reset() or isCommitted() guard) before writing the error body; if it only writes a body, the Set-Cookie headers survive."
+    },
+    {
+      "category": "performance",
+      "description": "claim() retries pg_try_advisory_xact_lock every 50ms for up to 2s with Thread.sleep, all inside the caller's already-open login transaction (checkLimited is MANDATORY), so each waiting request holds its Hikari connection idle-in-transaction for the full wait. The try-lock was chosen (per the repository javadoc on tryAcquireIdentifierLock) specifically so a burst against one (login, ip) key 'could not drain the pool', but a burst of M parallel attempts on one key parks M-1 connections sleeping for up to 2s each \u2014 the same pool-drain shape, merely bounded at CLAIM_WAIT. Correct today only because the bound is short relative to pool size and bursts on a single key are expected to be rare.",
+      "file": "src/main/java/com/softropic/skillars/platform/security/service/LoginRateLimiter.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "LoginRateLimiter.claim",
+      "title": "LoginRateLimiter claim loop sleeps up to 2s inside the login transaction, pinning a pooled connection per queued attempt",
+      "verification": "Compare HikariCP pool size against plausible concurrent login bursts for one credential-stuffed account/IP pair; if the pool is small (e.g. 10), ~10 parallel attempts on one key stall all other DB work for up to 2s."
+    }
+  ],
+  "input_rev": "fa62da9dc634130b1031b01e4ddc0cda668c2cb1",
+  "model": null
+}

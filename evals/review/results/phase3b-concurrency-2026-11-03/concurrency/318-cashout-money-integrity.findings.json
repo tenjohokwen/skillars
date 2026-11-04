@@ -1,0 +1,128 @@
+{
+  "arm": "concurrency",
+  "case": "318-cashout-money-integrity",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "processCashOut reads the balance via creditWalletService.getBalance (a plain SUM, no transaction, no lock) at line 26, then debits via two proxy calls to writeLedgerEntry (lines 47-50), each committing in its own transaction. If a second cash-out (second tab, second instance) or a BOOKING_DEDUCTION settlement commits a debit between the read at line 26 and the debit commit at line 47, both requests pass the check against the same balance: the wallet goes negative and Stripe refunds are issued for both. CreditWalletService.debitForCashOut, the SERIALIZABLE check-and-debit written for exactly this path, has zero callers.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out balance check is not atomic with the debit; SERIALIZABLE guard is dead code",
+      "verification": "Grep for callers of debitForCashOut (none found); confirm no DB constraint prevents a negative SUM over payment.parent_credit_ledger (the parent_credit_balance view has no check)."
+    },
+    {
+      "category": "concurrency",
+      "description": "The CASH_OUT_DEBIT and STRIPE_FEE_DEBIT entries commit in two independent transactions (lines 47-50) before paymentGateway.refund is called at line 53. A crash, deploy, or kill between the debit commits and the refund call leaves the parent debited with no refund issued and no record anywhere to re-drive it \u2014 there is no outbox row, no stripe_refund_failures record (RefundReconciliationService is only used by the pack path), and the compensation at lines 56-59 only runs if refund throws, not if the process dies. A crash between the two debit transactions additionally leaves only half the debit written.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R2",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Wallet debits commit before the Stripe refund with no durable recovery record",
+      "verification": "Confirm no webhook or sweeper reconciles missing cash-out refunds (grep for CASH_OUT in outbox handlers and scheduled jobs)."
+    },
+    {
+      "category": "concurrency",
+      "description": "refund() uses the key \"refund-\" + stripePaymentIntentId (line 197), but CashOutService refunds against stripe_customers.last_payment_intent_id, which only changes when a new charge happens. A parent who cashes out twice for the same amount with no intervening charge sends the same key and params twice: Stripe replays the first refund and returns success, so the second cash-out's wallet debits stand while no money moves \u2014 debited twice, paid once. With a different amount, Stripe returns idempotency_error, which surfaces as PaymentGatewayException and blocks cash-out until the key expires (~24h). The key also collides with SessionPackPaymentService's compensating refund for the same intent.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R3",
+      "severity": "high",
+      "symbol": "StripePaymentGateway.refund",
+      "title": "Refund idempotency key refund-{paymentIntentId} collapses distinct cash-outs into one Stripe refund",
+      "verification": "Confirm Stripe's behavior for a reused idempotency key with identical params (replays original response as success) and with different params (idempotency_error)."
+    },
+    {
+      "category": "concurrency",
+      "description": "StripePaymentGateway.refund wraps every StripeException \u2014 including ApiConnectionException, where the refund may have been created server-side before the connection dropped \u2014 into PaymentGatewayException. CashOutService's catch (lines 54-60) then writes CASH_OUT_REVERSAL entries restoring the full requested amount plus fee. If the refund actually succeeded at Stripe, the parent holds both the cash refund on their card and the restored wallet credit. The deterministic refund key does not help: the compensation is a credit-back, not a retry of the refund.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R4",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Compensation after an ambiguous refund failure double-pays the parent",
+      "verification": "Check whether ApiConnectionException (vs definitive API errors) is distinguished anywhere before compensating; it is not in StripePaymentGateway.refund."
+    },
+    {
+      "category": "logic",
+      "description": "The wallet is debited requestedAmount (CASH_OUT_DEBIT) plus feeAmount (STRIPE_FEE_DEBIT), totaling requested + fee, while the Stripe payout at line 53 is netAmount = requested \u2212 fee: the parent is charged the fee twice on every cash-out. Separately, the check at line 27 compares balance only against requestedAmount, so a parent with balance exactly equal to the request passes and ends with a negative balance of \u2212fee with no concurrency involved. debitForCashOut has the same check/debit mismatch.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R5",
+      "severity": "high",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out fee deducted twice and omitted from the balance check \u2014 deterministic overdraw",
+      "verification": "Confirm intended fee semantics with product: either the wallet debit should be requested only (fee netted from payout) or the payout should be the full requested amount (fee taken from wallet), not both."
+    },
+    {
+      "category": "database",
+      "description": "The two CASH_OUT_REVERSAL writes in the catch block (lines 56-59) each commit in their own transaction via the CreditWalletService proxy. If the process dies or the second write fails after the first commits, the requested amount is restored but the fee is not; if the first write itself throws (DB outage during the error path), neither reversal lands and the wallet stays fully debited even though no refund was sent, with only a log line as evidence.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CashOutService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "CashOutService.processCashOut",
+      "title": "Cash-out compensation writes are two independent transactions",
+      "verification": "Confirm writeLedgerEntry's @Transactional(REQUIRED) opens a new transaction per call when invoked from the non-transactional processCashOut."
+    },
+    {
+      "category": "concurrency",
+      "description": "chargeAndCapture loads StripeCustomer at line 83, makes a multi-second Stripe PaymentIntent call, then save()s the entity at line 121 to set lastPaymentIntentId. StripeCustomer has no @Version and no @DynamicUpdate, so the save writes every column from memory. If the parent saves a new card during the Stripe call (SessionPackPaymentResource lines 195-201 or getOrCreateStripeCustomer commit a new stripePaymentMethodId), the save at line 121 silently writes the stale payment-method id back, and future off-session charges hit the old or detached card.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java",
+      "id": "R7",
+      "severity": "medium",
+      "symbol": "StripePaymentGateway.chargeAndCapture",
+      "title": "StripeCustomer full-row save across the Stripe call reverts concurrent card updates",
+      "verification": "Confirm StripeCustomer.java has no @Version and no @DynamicUpdate (it does not), and that SessionPackPaymentResource's save-payment-method endpoint can run concurrently with a charge."
+    },
+    {
+      "category": "concurrency",
+      "description": "The charge key pi-{tierId}-{parentId}-{bucket} dedupes charges inside a 60-second bucket, but purchasePack is not idempotent above it: a second sequential call in the same bucket (double submit, client retry after a slow response) gets the same PaymentIntent back from Stripe as a replay, then createPurchase (line 275) inserts unconditionally \u2014 session_pack_purchases has no unique index on stripe_payment_intent_id \u2014 producing two full packs for one charge. Conversely, a double submit straddling the bucket boundary produces two separate charges and two packs when the parent intended one.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R8",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Replayed PaymentIntent within the 60s idempotency bucket creates a second pack purchase row",
+      "verification": "V138__baseline_schema.sql lines 3003-3007: only PK on purchase_id; no unique index on stripe_payment_intent_id. Confirm no controller-level dedup on the purchase endpoint."
+    },
+    {
+      "category": "concurrency",
+      "description": "purchasePack deliberately runs without a transaction: chargeAndCapture captures the charge at line 98, then createPurchase commits at line 103. The compensating refund and the stripe_refund_failures reconciliation row only run when createPurchase throws; if the instance is killed between the Stripe call returning and the purchase insert committing, the charge exists at Stripe with no purchase row, no refund, and no reconciliation record. A later retry outside the 60-second bucket charges the parent a second time.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R9",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Crash between Stripe charge and purchase persist leaves a paid charge with no pack and no record",
+      "verification": "Confirm no Stripe webhook handler creates or reconciles session_pack_purchases from payment_intent.succeeded events (search webhook handlers for pack-purchase metadata)."
+    },
+    {
+      "category": "concurrency",
+      "description": "handleCashOut's catch treats every error \u2014 including a proxy timeout or 502 after the server already debited and refunded \u2014 as a failure, shows an error banner, and the finally block re-enables the button. POST /api/payment/credits/cashout carries no client idempotency token and the server has no claim marker, so the user's natural retry runs the entire cash-out again. Combined with the shared refund-{PI} idempotency key, a retry for the same amount debits the wallet a second time while Stripe replays the first refund and sends nothing.",
+      "file": "src/frontend/src/pages/parent/ParentCreditWalletPage.vue",
+      "id": "R10",
+      "severity": "medium",
+      "symbol": "handleCashOut",
+      "title": "Cash-out UI treats ambiguous failures as no-ops and the endpoint has no idempotency token",
+      "verification": "Confirm CreditWalletResource.cashOut accepts no idempotency header and CashOutService has no dedup of in-flight or recent cash-outs per parent."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two concurrent first purchases for the same parent both find no stripe_customers row (line 259), both call Stripe Customer.create, and both save a row keyed on parent_id. One insert commits; the other save becomes a merge-update that overwrites stripe_customer_id with the duplicate customer. The charge created for the first request then references a Stripe customer id no longer stored locally, so lookups by findByStripeCustomerId (e.g. from webhooks) for that charge's customer find nothing, and an orphan customer accumulates at Stripe.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R11",
+      "severity": "low",
+      "symbol": "SessionPackPaymentService.getOrCreateStripeCustomer",
+      "title": "First-time Stripe customer creation is check-then-insert; loser overwrites the winner's customer id",
+      "verification": "Confirm JpaRepository.save on a StripeCustomer with an assigned id performs merge (select-then-update) rather than failing on duplicate key for the second transaction."
+    },
+    {
+      "category": "logic",
+      "description": "getAdminOverview multiplies the period's total gross by the live platform.commission.rate config value (lines 269-274), even though the commission rate is stamped per payment into booking_payments.commission_rate at capture precisely so it is never re-read (per the B-1 note in StripePaymentGateway). After any rate change, the overview reports commission that was never collected at that rate for payments captured before the change. Reporting only \u2014 no money moves \u2014 but it is the admin's money-reconciliation view.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/RevenueReportingService.java",
+      "id": "R12",
+      "severity": "low",
+      "symbol": "RevenueReportingService.getAdminOverview",
+      "title": "Admin finance overview recomputes commission with the current rate over historical gross",
+      "verification": "Confirm booking_payments.commission_rate exists and is populated at capture, and that no other admin view sums it directly."
+    }
+  ],
+  "input_rev": "8661a41e51611978823b1d3c6688c524a449d7e3",
+  "model": null
+}

@@ -1,0 +1,93 @@
+{
+  "arm": "concurrency",
+  "case": "350-pack-refund-rounding-remainder",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "On refund success the catch block in purchasePack writes no marker (recordReconciliation runs only when the lookup or refund fails), and both replay guards \u2014 the alreadyRecorded pre-check and the winner lookup \u2014 consult only sessionPackPurchaseRepository.findByStripePaymentIntentId, never the refund status or reconciliation records; a same-key retry therefore passes both checks and createPurchase commits a pack funded by the refunded intent.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "undetermined",
+      "note": "The catch around createPurchase in purchasePack is a blanket catch(Exception) and the winner lookup (findByStripePaymentIntentId) sees only committed rows before refunding, so the mechanism holds if the insert can fail with a lock timeout \u2014 but whether lock_timeout/statement_timeout is set on that path (the finding's own verification condition) and createPurchase's transaction boundaries are not in the shown diff.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "undetermined",
+      "note": "onBookingCancelledByParent does gate only on sessionPackPurchaseId != null && isRefundEligible() while all sibling paths use isPackRestore(), but whether this over-restores depends on BookingCancelledByParentEvent's publisher and contract (is it published for uncaptured REQUESTED/ACCEPTED pack bookings, and does it expose a captured/isPackRestore flag) \u2014 neither is in the provided hunks.",
+      "reported_id": "R7"
+    }
+  ],
+  "judge_cost_usd": 0.8249299999999999,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "R3 identifies the same defect: floored per-session share with no reconciliation of the remainder against amount_charged, losing up to sessionCount-1 cents on full refund, across the same refund paths.",
+        "reported_ids": [
+          "R3"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding addresses the lack of a per-booking refund marker enabling double credit on event redelivery; R1 concerns purchase replay, not refund idempotency.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "R5 names the same mechanism (confirmPurchase clears attemptKey on any e.response) and the same consequence (fresh key on retry captures a second charge), via the proxy-5xx-after-capture instance of the defect.",
+        "reported_ids": [
+          "R5"
+        ]
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] On refund success the catch block in purchasePack writes no marker (recordReconciliation runs only when the lookup or refund fails), and both replay guards \u2014 the alreadyRecorded pre-check and the winner lookup \u2014 consult only sessionPackPurchaseRepository.findByStripePaymentIntentId, never the refund status or reconciliation records; a same-key retry therefore passes both checks and createPurchase commits a pack funded by the refunded intent. | pass-1: Concrete trigger stated: lost response keeps the key, Stripe idempotent replay returns the already-refunded intent, no pack row exists, so createPurchase commits an ACTIVE pack funded by a refunded charge.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check undetermined] The catch around createPurchase in purchasePack is a blanket catch(Exception) and the winner lookup (findByStripePaymentIntentId) sees only committed rows before refunding, so the mechanism holds if the insert can fail with a lock timeout \u2014 but whether lock_timeout/statement_timeout is set on that path (the finding's own verification condition) and createPurchase's transaction boundaries are not in the shown diff. | pass-1: Concrete interleaving stated: concurrent same-key insert fails with lock timeout instead of unique violation, winner lookup under READ COMMITTED misses the uncommitted row, and the loser refunds a charge backing a pack that then commits.",
+        "reported_id": "R2",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Regression depends on hypothetical callers that omit the Idempotency-Key header; no concrete such caller is identified, so the trigger is speculative.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "The pack\u2192booking lock order in pausePack is assumed ('by that service's pattern') rather than observed, so the deadlock trigger is speculative.",
+        "reported_id": "R6",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] onBookingCancelledByParent does gate only on sessionPackPurchaseId != null && isRefundEligible() while all sibling paths use isPackRestore(), but whether this over-restores depends on BookingCancelledByParentEvent's publisher and contract (is it published for uncaptured REQUESTED/ACCEPTED pack bookings, and does it expose a captured/isPackRestore flag) \u2014 neither is in the provided hunks. | pass-1: Concrete trigger stated: parent cancel of an uncaptured (never-deducted) pack booking enqueues a restore that increments remaining_sessions, granting a free session, because the parent path alone lacks the isPackRestore guard.",
+        "reported_id": "R7",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Concrete trigger stated: coach accepts, during the pause, a booking scheduled after pausedUntil; deductSession throws payment.packPaused and the accept records a payment failure for a legitimate booking.",
+        "reported_id": "R8",
+        "verdict": "real"
+      },
+      {
+        "note": "Concrete check-then-act race stated: pausePack commits pausedUntil between the unlocked pack read and the booking insert, creating a booking the pause's cancellation list never covered, stranded until settle-time failure.",
+        "reported_id": "R9",
+        "verdict": "real"
+      },
+      {
+        "note": "Lost-update claim hinges on unverified absence of @Version and an unidentified concurrent mutator of the same fields; reporter concedes it affects bookkeeping fields only \u2014 speculative.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      }
+    ]
+  }
+}

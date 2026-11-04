@@ -1,0 +1,88 @@
+{
+  "arm": "control",
+  "case": "368-pack-status-badges",
+  "findings": [
+    {
+      "category": "logic",
+      "description": "The server's computeStatus returns 'PAUSED' when the pack is inside [pausedFrom, pausedUntil). The badge functions only pick the paused style when `pack.status === 'ACTIVE' && isPaused(pack)`. That combination cannot happen, because when the server says ACTIVE the pack is not inside its pause window. So a pack with status PAUSED matches none of the branches and falls through to the 'positive' colour and the activeStatus label, which means every paused pack shows as Active.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "packBadgeColor / packBadgeLabel",
+      "title": "Paused packs get a green 'Active' badge on the parent dashboard",
+      "verification": "Confirmed from SessionPackPaymentService.computeStatus (PAUSED is checked before EXPIRED/ACTIVE) and normalizePack in booking.store.js, which passes `status` through unchanged."
+    },
+    {
+      "category": "logic",
+      "description": "computeStatus never looks at disputeFrozenAt. A pack under an open dispute therefore gets status ACTIVE, while findActivePacks/deductSession refuse to use it (disputeFrozenAt IS NULL / payment.packFrozen). The parent sees an Active badge and a Pause button. booking.store creditsForCoach counts its sessions as available, but every booking attempt fails with 'No effective session credits'.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "computeStatus(SessionPackPurchase, Instant)",
+      "title": "A pack frozen by a card dispute is reported as ACTIVE in both the parent and coach views",
+      "verification": "Check whether some other API field shows the frozen state. Nothing in SessionPackPurchaseResponse or CoachSoldPackDto exposes it."
+    },
+    {
+      "category": "logic",
+      "description": "PackSessionService.revoke sets remainingSessions to 0 and sets revokedAt. computeStatus checks remainingSessions == 0 first and never checks isRevoked(). So a pack whose sessions were revoked, or refunded to the wallet because the coach was suspended, appears to the parent and coach as used up. Neither side can tell it was revoked or refunded.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R3",
+      "severity": "low",
+      "symbol": "computeStatus",
+      "title": "Revoked packs (chargeback lost, external refund, coach suspended) show as 'EXHAUSTED'",
+      "verification": "Confirm that no other UI surface shows revokedReason. The response DTOs carry neither revokedAt nor revokedReason."
+    },
+    {
+      "category": "edge-case",
+      "description": "`extendable` is only `inWindow && extendedAt == null`. A revoked pack (remainingSessions 0, money already returned) or an exhausted pack inside the last 14 days is still marked extendable. extendPack has no revoked/exhausted guard either, so the coach can extend a pack that cannot be used and uses up its one extension on it.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/CoachSoldPackQueryService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "toDto",
+      "title": "Coach sold-pack list offers Extend on revoked or exhausted packs",
+      "verification": "Decide whether extending exhausted packs is intended. For revoked packs it clearly is not."
+    },
+    {
+      "category": "edge-case",
+      "description": "`new Date('YYYY-MM-DD')` is parsed as UTC midnight, while minPauseStartDate is worked out from the local date. Example: a parent in UTC-5 at 21:00 local (02:00 UTC the next day) picks the minimum allowed date, tomorrow. It becomes 00:00 UTC of a day that has already started in UTC, so the server's `pauseStart.isAfter(now)` check fails and returns booking.pauseStartInPast. For other zones the pause starts hours before or after local midnight, and that changes which bookings fall inside the window.",
+      "file": "src/frontend/src/pages/parent/SessionPackDashboardPage.vue",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "submitPause / minPauseStartDate",
+      "title": "Pause start date is parsed as UTC midnight, so 'tomorrow' is rejected or the pause starts at the wrong local time",
+      "verification": "Reproduce with the browser timezone set to America/New_York after 19:00 local time."
+    },
+    {
+      "category": "logic",
+      "description": "getOrCreateStripeCustomer saves the new paymentMethodId to stripe_customers before chargeAndCapture. If card B is declined, the row keeps B as the default card, even though the code says only a successful charge moves the card. If the parent then retries with B and it succeeds, previousCard is already B. scheduleSubscriptionCardSync then returns early, so subscriptions stay on the old card A while the saved default is B.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "purchasePack / getOrCreateStripeCustomer",
+      "title": "The parent's saved default card is overwritten before the charge, so a declined card stays saved and the subscription sync is skipped later",
+      "verification": "Check whether chargeAndCapture's failure path restores the previous payment method. Nothing in purchasePack does."
+    },
+    {
+      "category": "edge-case",
+      "description": "pausePackTransactional checks ownership, remaining sessions, expiry and the earlier-pause rule, but not isDisputeFrozen(). Because the status shows ACTIVE (see the computeStatus finding), the UI offers Pause on a disputed pack. The pause adds its length to expiresAt and can cancel bookings drawn on a pack whose charge is under dispute.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/PackSessionService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "pausePackTransactional",
+      "title": "A frozen pack can still be paused, which extends its expiry while frozen",
+      "verification": "Confirm the intended policy for pausing during a dispute. The deduct and booking paths both block frozen packs."
+    },
+    {
+      "category": "edge-case",
+      "description": "The checks that the tier is active and the coach is bookable run before the idempotent replay lookup. A client retrying the same Idempotency-Key after the first request charged and recorded the pack gets payment.packTierInactive or a coach-status error if the coach replaced the tier (createTier deactivates the old one) in between. The parent was charged and owns the pack but is told the purchase failed.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "purchasePack",
+      "title": "A replayed double-submit fails if the tier was deactivated or the coach suspended after the first charge",
+      "verification": "Run a retry with the same attemptKey after createTier for the same coach."
+    }
+  ],
+  "input_rev": "b123c73de463e349f082c70b2a1861350e3eee83",
+  "model": null
+}

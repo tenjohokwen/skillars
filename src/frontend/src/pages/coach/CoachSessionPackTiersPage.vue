@@ -31,12 +31,12 @@
           <div class="text-subtitle1 q-mb-sm">{{ t('payment.myTiers.currentOffer') }}</div>
           <div v-if="activeTier" class="glass-card q-pa-md tier-card" data-testid="tier-active">
             <div class="text-body1 text-weight-bold" data-testid="tier-active-label">
-              {{ activeTier.label }}
+              {{ tierName(activeTier) }}
             </div>
             <div class="text-body2" style="color: var(--text-secondary)">
               {{
                 t('payment.sessionPack.tierLabel', {
-                  label: activeTier.label,
+                  label: tierName(activeTier),
                   count: activeTier.sessionCount,
                   price: activeTier.totalPrice,
                 })
@@ -92,11 +92,11 @@
               data-testid="tier-history-item"
             >
               <q-item-section>
-                <q-item-label>{{ tier.label }}</q-item-label>
+                <q-item-label>{{ tierName(tier) }}</q-item-label>
                 <q-item-label caption>
                   {{
                     t('payment.sessionPack.tierLabel', {
-                      label: tier.label,
+                      label: tierName(tier),
                       count: tier.sessionCount,
                       price: tier.totalPrice,
                     })
@@ -394,6 +394,12 @@ function loadSoldPacks(page) {
   soldPage.value = page
   extendError.value = ''
   return paymentStore.fetchSoldPacks(page)
+}
+
+// skillars-deferred-168: a pack set from the profile builder may have no label (null); show the same
+// localized "N sessions" the public profile falls back to.
+function tierName(tier) {
+  return tier.label || t('marketplace.sessionsFallbackLabel', { count: tier.sessionCount })
 }
 
 function formatDate(iso) {

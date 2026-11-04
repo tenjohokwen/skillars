@@ -1,0 +1,88 @@
+{
+  "arm": "security",
+  "case": "351-paused-subscription-card-sync",
+  "findings": [
+    {
+      "category": "security",
+      "description": "A user who deliberately lets their subscription go PAST_DUE/UNPAID can POST /api/payment/save-payment-method repeatedly with different stolen card payment-method ids; each call now runs stripeClient.payLatestOpenInvoice, a real charge attempt, under a fresh 'inv-retry-' + UUID idempotency key, so every call is a new attempt and a decline leaves the invoice open for the next one. The endpoint returns 204 regardless, but a valid card flips the subscription to ACTIVE (observable via the subscription GET), giving a card-validation oracle that generates declines and fraud charges against the platform's Stripe account. No limiter appears anywhere in the diff, and the service method is explicitly designed to 'never fail the save'.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "savePaymentMethod / SubscriptionService.syncPaymentMethod",
+      "title": "Save-payment-method now triggers real Stripe charge attempts with no visible rate limit, enabling card testing",
+      "verification": "Check whether /api/payment/save-payment-method (or a filter in front of it) applies any rate limit, and if so whether its state is shared across instances rather than a per-JVM map/cache."
+    },
+    {
+      "category": "logic",
+      "description": "payLatestOpenInvoice returns the paid invoice synchronously, but syncPaymentMethod only logs its status; recovery of the local row (status back to ACTIVE, pastDueSince cleared) depends entirely on the invoice.paid webhook, per the StripeClient comment. If that webhook is dropped or delayed past the next 03:00 sweep on a row whose grace period has expired, checkPastDueGracePeriod cancels the subscription immediately at Stripe: the user paid the open invoice minutes or hours earlier and then loses the subscription with no refund path shown. GraceTarget.matches does not protect against this, since it returns true whenever the Stripe subscription id is unchanged and non-null, regardless of current status.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "syncPaymentMethod / checkPastDueGracePeriod",
+      "title": "Synchronous invoice-pay success is discarded; grace sweep can cancel a subscription the user just paid",
+      "verification": "Confirm in the unshown per-row sweep body whether the locked row is re-checked with isGraceExpired (fresh status and pastDueSince) before cancelAtStripeForGrace; if it only checks GraceTarget.matches, the race also exists for a webhook that arrives between row selection and the per-row transaction."
+    },
+    {
+      "category": "logic",
+      "description": "PAUSED is added to GRACE_STATUSES and startMissingGraceClocks stamps pastDueSince on every existing PAUSED row, so each one is now counting down to an irreversible cancelSubscriptionImmediately. But saving a new card only sets the subscription's default payment method for PAUSED (RETRY_ON_NEW_PAYMENT_METHOD excludes it), nothing in the diff invokes the Stripe resume flow the comment defers to, and nothing clears pastDueSince for a PAUSED row (invoice.paid cannot fire because a paused subscription raises no invoice). The frontend paymentIssue banner on both subscription pages only covers PAST_DUE and UNPAID, so a paused subscriber \u2014 typically a trial that ended without a card \u2014 gets no prompt, and even if they add a card as the generic subscriptionNote suggests, their subscription is still cancelled at the next sweep after the grace period.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "GRACE_STATUSES / startMissingGraceClocks / syncPaymentMethod",
+      "title": "PAUSED subscriptions get a grace-expiry cancellation clock but no recovery path and no user warning",
+      "verification": "Check whether any other code path (webhook handler or UI action) resumes a PAUSED Stripe subscription or clears its pastDueSince after a card is saved."
+    },
+    {
+      "category": "logic",
+      "description": "The idempotency key is the fixed string 'sub-pm-' + subscriptionId + '-' + paymentMethodId. If a user saves card A, then card B, then card A again within Stripe's 24-hour idempotency window (plausible while troubleshooting a declined payment), the third call replays the cached response of the first and the subscription's default_payment_method silently stays on card B. The immediate invoice retry still passes card A explicitly, so the one-off recovery works, but all future renewals charge card B \u2014 a card the user explicitly replaced and may have cancelled \u2014 leading to another PAST_DUE cycle and eventual grace-period cancellation despite the user having done the right thing. The sibling method payLatestOpenInvoice documents exactly this replay hazard as the reason it uses per-attempt keys.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "updateSubscriptionDefaultPaymentMethod",
+      "title": "Fixed idempotency key makes re-selecting a previously saved card a silent no-op at Stripe for 24 hours",
+      "verification": "Confirm Stripe idempotency semantics apply as described for the installed stripe-java version (replayed key returns cached response without re-executing the update)."
+    },
+    {
+      "category": "security",
+      "description": "The sync walks parentPlayerLinkRepository.findByParentId plus the caller's own player profile and pushes the new card onto every linked player's subscription without checking which Stripe customer that subscription bills. If two parents are linked to the same child and parent A's customer pays the subscription, parent B saving a card triggers updateSubscriptionDefaultPaymentMethod and potentially payLatestOpenInvoice against parent A's subscription with parent B's payment method. Stripe should reject a payment method not attached to the subscription's customer, degrading this to logged failures, but if the platform ever attaches payment methods to a shared or wrong customer, one parent's card could be set as the charge source for the other parent's subscription without the paying parent's knowledge.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "syncPaymentMethodToSubscriptions",
+      "title": "Payment-method sync assumes every subscription in the ownership graph is billed to the caller's Stripe customer",
+      "verification": "Check whether ParentPlayerLink allows multiple parents per player, and whether the player subscription row or StripeCustomer mapping records which user's Stripe customer the subscription bills; confirm save-payment-method attaches the payment method only to the caller's own customer."
+    },
+    {
+      "category": "logic",
+      "description": "The service's own comment notes UNPAID subscriptions keep raising invoices, so several open invoices can accumulate across billing cycles. The retry pays only subscription.getLatestInvoice; when that single payment succeeds, the existing invoice.paid handling (RECOVERABLE_ON_PAYMENT includes UNPAID) restores the local row to ACTIVE and re-entitles the tier while the older invoices remain unpaid at Stripe. A user can let a subscription run UNPAID for multiple cycles, save a card to settle only the newest invoice, and regain the paid tier with the earlier debt uncollected; local ACTIVE status may also diverge from Stripe, which still reports the subscription delinquent.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "payLatestOpenInvoice",
+      "title": "UNPAID retry pays only the latest invoice while invoice.paid restores ACTIVE, forgiving earlier open invoices",
+      "verification": "Confirm the invoice.paid handler restores ACTIVE without checking the Stripe subscription's own status, and whether Stripe is configured to void or keep collecting older invoices on an unpaid subscription."
+    },
+    {
+      "category": "logic",
+      "description": "The backend sync and invoice retry run unconditionally on every save-payment-method call, but the explanatory subscriptionNote is a prop that defaults to false and is only passed by the two subscription pages. A parent with a past-due player subscription who saves a card from any other context (for example to buy a session pack) is immediately charged the outstanding subscription invoice with no disclosure on the page they are using. The charge is for money genuinely owed, but it is an unexpected immediate debit the user was told nothing about at the point of consent.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "savePaymentMethod / PaymentMethodCard subscriptionNote prop",
+      "title": "Card saved from non-subscription pages triggers an undisclosed subscription charge retry",
+      "verification": "Enumerate the other mount points of PaymentMethodCard in the frontend to confirm they omit subscription-note while sharing the same backend endpoint."
+    },
+    {
+      "category": "edge-case",
+      "description": "request.paymentMethodId() is taken from the JSON body and used directly as a Stripe parameter and concatenated into the 'sub-pm-' idempotency key without any format or length validation visible in the diff. An arbitrary long or malformed string is stored on the StripeCustomer row and then produces Stripe API errors (idempotency keys are capped at 255 characters) that are swallowed by the best-effort catch, leaving the user's DB record pointing at a junk payment method while the endpoint still returns 204. No injection is possible through the Stripe SDK, but the stored-junk-plus-silent-failure combination leaves the account in a state where future subscription operations fail quietly.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java",
+      "id": "R8",
+      "severity": "low",
+      "symbol": "updateSubscriptionDefaultPaymentMethod / SavePaymentMethod request",
+      "title": "Caller-supplied paymentMethodId flows unvalidated into Stripe calls and idempotency keys",
+      "verification": "Check the SavePaymentMethod DTO for a @Pattern/@Size constraint on paymentMethodId (Stripe ids match ^pm_[A-Za-z0-9]+$) and whether the earlier part of savePaymentMethod validates the id against the caller's Stripe customer before storing it."
+    }
+  ],
+  "input_rev": "1f1240ac91e1e334178b56cf40e2994f8b1077f7",
+  "model": null
+}

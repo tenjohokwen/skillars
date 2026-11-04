@@ -1,0 +1,77 @@
+{
+  "arm": "control",
+  "case": "330-missing-version-lost-updates",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "The COACH branch loads CoachProfile without a lock and calls save(cp). CoachProfile has no @Version or @DynamicUpdate, so the UPDATE that runs when the outer transaction commits writes every mapped column from that early copy. The window is long: it covers the REQUIRES_NEW recap scrub with its lock_timeout and all the later message, review and player work. Any status, statusChangedAt, averageRating/reviewCount, canonicalTimezone, displayName or languages change committed in that window is undone. For example, if AdminCoachEnforcementService.suspendCoach commits SUSPENDED (it locks the row, but erasure does not) or ReliabilityStrikeService escalates to PENDING_REVIEW, the erasure commit puts back ACTIVE/DRAFT. Likewise, a concurrent saveStep1 relocation has its profile timezone reverted while its re-stamped availability windows stay, so profile and windows no longer match. The code comment only accepts the photo-key race, but every other column is exposed in the same way.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R1",
+      "severity": "high",
+      "symbol": "eraseTransactional (COACH branch, coachProfileRepository.findByUserId(...).ifPresent / save(cp))",
+      "title": "GDPR coach erasure writes back a stale copy of the whole coach_profiles row, undoing concurrent status, rating and timezone changes",
+      "verification": "Integration test: start erasure for a coach, and while the recap scrub is in progress (for example by holding a lock on session_completion_data), commit suspendCoach for the same coach. After the erasure commits, coach_profiles.status is back to its value before the suspension."
+    },
+    {
+      "category": "security",
+      "description": "The COACH branch clears only bio, city, district and photoUrl. It never touches displayName, which is normally the coach's real name and is required to be NOT NULL, or languages. It also does not move the profile out of ACTIVE/REDUCED. getPublicProfile and the search queries filter on status alone, so after an erasure is reported COMPLETED the coach is still searchable and their public profile still shows their personal display name. That contradicts the Article 17 guarantee the method's Javadoc claims.",
+      "file": "src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "eraseTransactional (COACH branch)",
+      "title": "Coach erasure keeps display name and languages, and leaves the profile publicly listed",
+      "verification": "Check whether some other handler of AccountDeletionRequestedEvent/UserErasedEvent (UserErasedEventListener is the only security-side one found) sets the coach profile to DEACTIVATED or replaces display_name. If none does, run an erasure on an ACTIVE coach and call GET public profile by coachId."
+    },
+    {
+      "category": "edge-case",
+      "description": "saveStep5 and the storage-confirmed listener both overwrite photo_url with a blind targeted UPDATE. Neither reads the previous key or soft-deletes/enqueues the old object, while deletePhoto does both. Each photo replacement therefore leaves the previous coach_profile/{userId}/... object in storage with nothing pointing to it. GdprErasureService deletes only the key currently in cp.getPhotoUrl(), so every earlier photo of the coach survives a COMPLETED erasure.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "saveStep5 / CoachProfilePhotoEventListener.onStorageConfirmed / CoachProfileRepository.updatePhotoUrlByUserId",
+      "title": "Replacing a profile photo leaves the old photo stored and outside GDPR erasure",
+      "verification": "Look for any sweeper that deletes file_storage_objects / S3 keys under coach_profile/ that nothing references. If there is none, upload two photos, erase the coach, and list the bucket prefix coach_profile/{userId}/."
+    },
+    {
+      "category": "database",
+      "description": "Session uses GenerationType.UUID, so sessionRepository.save() only calls persist and the INSERT runs at flush/commit, after the try/catch(DataIntegrityViolationException) has exited. Two concurrent createSession calls for the same booking both pass existsByBookingId. The loser then fails at commit with a raw DataIntegrityViolation/TransactionSystemException instead of the intended SESSION_ALREADY_EXISTS OperationNotAllowedException, so the client gets a generic 500/409 rather than the documented error code.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R4",
+      "severity": "low",
+      "symbol": "createSession",
+      "title": "createSession's catch for a duplicate plan never triggers because the INSERT is deferred to commit",
+      "verification": "Confirm that a unique constraint exists on session.sessions.booking_id, then send two concurrent POSTs for the same booking and compare the second response with the SESSION_ALREADY_EXISTS contract."
+    },
+    {
+      "category": "concurrency",
+      "description": "For a coach with no profile yet, findByUserId is empty and no lock is taken. Two simultaneous submissions (for example a double click) each build a new CoachProfile and save it. The second INSERT violates the unique constraint on user_id at commit and surfaces as an unhandled DataIntegrityViolationException (500) instead of applying the step or returning a domain error.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R5",
+      "severity": "low",
+      "symbol": "saveStep1",
+      "title": "Two concurrent first-time saveStep1 calls create duplicate profiles and one fails with an unhandled unique violation",
+      "verification": "Send two concurrent Step 1 POSTs for a user who has no coach_profiles row and look at the second response."
+    },
+    {
+      "category": "concurrency",
+      "description": "Session has no @Version, and the update request carries no expected version or timestamp. The row lock only orders two edits one after the other, so the second updateSession (for example from a second browser tab opened on the same plan) rewrites blocks, development focus and equipment from its own copy. Nothing is detected or reported, and the first edit is lost. The lock protects only the status field from the completion listener, not the plan content.",
+      "file": "src/main/java/com/softropic/skillars/platform/session/service/SessionPlanService.java",
+      "id": "R6",
+      "severity": "low",
+      "symbol": "updateSession",
+      "title": "Concurrent session-plan edits silently overwrite each other"
+    },
+    {
+      "category": "security",
+      "description": "Erasure clears bio, city and photo, revokes refresh tokens and locks the user, but leaves the coach_profiles row in its current status. saveStep1 and saveStep5 check neither user.locked nor the recap/erasure tombstone. A request made with an access token that is still valid can therefore write bio, city or a photo key back onto the erased profile after, or interleaved with, the erasure commit. Because saveStep1 locks and refreshes, a save waiting behind the erasure's row lock commits its PII after the scrub.",
+      "file": "src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "saveStep1 / saveStep5",
+      "title": "Coach profile writes are not blocked after erasure, so erased personal data can be written back",
+      "verification": "Check whether the JWT/security filter rejects requests from users with locked=true on every request, or only at login/refresh. If only at login/refresh, the window lasts for the access-token TTL."
+    }
+  ],
+  "input_rev": "deefa90f6d1054558933350ecf66022b5c5fe736",
+  "model": null
+}

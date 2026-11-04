@@ -1,0 +1,151 @@
+{
+  "arm": "security",
+  "case": "242-logout-race-and-cookie-id",
+  "checks": [
+    {
+      "check": "confirmed",
+      "note": "In AuthService.refresh, a used token within 30s of rotatedAt is swapped for the user's newest unused token via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc and then rotated for the caller, issuing a live JWT + refresh cookie to a replayer and restarting the grace window on each rotation, so markAllUsedByUserId is never reached. Verification caveat satisfied from this file: every RefreshToken created (login/refresh) sets only userId/tokenHash/expiresAt/used \u2014 no parent-token or session binding exists in the flow, and the successor lookup is scoped only by userId.",
+      "reported_id": "R1"
+    },
+    {
+      "check": "confirmed",
+      "note": "AuthService.logout revokes only via findByTokenHash(...).filter(t -> !t.isUsed()); a token already rotated by refresh() is skipped by that filter, the successor minted in refresh() is never touched, and logout never calls markAllUsedByUserId \u2014 so the successor refresh token stays valid after a 204 logout, as described.",
+      "reported_id": "R2"
+    },
+    {
+      "check": "confirmed",
+      "note": "AuthService is class-level @Transactional with no noRollbackFor, and recordAttempt() is a plain loginAttemptRepository.save() invoked immediately before BadCredentialsException is thrown at both failure sites in login(); the RuntimeException propagating through the transactional proxy rolls back the LoginAttempt insert, so countByIdentifierAndAttemptedAtAfter always sees zero and the lockout never trips. Per the verification caveat, no REQUIRES_NEW or noRollbackFor exists anywhere in this file's save path (only default Spring Data save, which joins the ambient transaction).",
+      "reported_id": "R3"
+    },
+    {
+      "check": "undetermined",
+      "note": "PasswordResetService.completePasswordReset (lines ~63-72) indeed performs no refresh-token revocation itself, but it delegates to User.completePasswordReset, and neither that domain method, AuthService.refresh, nor RefreshTokenRepository usage is shown \u2014 so whether a password-change timestamp or other guard invalidates outstanding sessions cannot be verified, and the verification caveat (UserAdminService/account paths) cannot be run from this file.",
+      "reported_id": "R5"
+    },
+    {
+      "check": "undetermined",
+      "note": "Router.beforeEach confirmedly never reads meta.role === 'COACH' or meta.requiresParent (its only gates are requiresCoach, role PARENT/PLAYER, and meta.roles), but routes.js is not provided, so whether /coach/revenue, the receipt route, and the subscription route actually carry those unmatched keys \u2014 and whether the backend endpoints have role-correct @PreAuthorize per the verification caveat \u2014 cannot be determined from this file.",
+      "reported_id": "R6"
+    },
+    {
+      "check": "undetermined",
+      "note": "The meta half is confirmed: the 'admin' > 'health-dashboard' route declares only requiresAuth with no role/roles/requiresAdmin key, unlike role-gated siblings. But the claim that the guard has no admin branch depends on router/index.js, and the finding's verification caveat (health-dashboard backend endpoints being HAS_ADMIN_ROLE-guarded) depends on backend code \u2014 neither is shown here.",
+      "reported_id": "R8"
+    },
+    {
+      "check": "confirmed",
+      "note": "In AuthService.login, the unknown-email path throws BadCredentialsException from findOneByLogin(...).orElseThrow before passwordEncoder.matches is ever called, and no dummy-hash comparison exists anywhere in the class, so known emails pay bcrypt cost while unknown ones don't. The deployed-instance timing measurement in the verification caveat could not be run here, but the asymmetric code path is unambiguous.",
+      "reported_id": "R12"
+    },
+    {
+      "check": "confirmed",
+      "note": "AuthService.refresh loads the user via userRepository.findById and immediately mints a new JWT (loginTokenManager.createLoginToken) and RefreshToken with no isActivated(), verification-status, or lock check, unlike login(). The caveat items (CoachSuspensionIT, JWT filter, UserErasedEventListener) are outside this file, but the missing re-check in refresh() itself is directly visible.",
+      "reported_id": "R13"
+    }
+  ],
+  "judge_cost_usd": 1.9714390000000002,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "none",
+        "note": "R7 touches MainLayout.handleLogout but describes a different defect (unrevoked HttpOnly cookie on timeout), not the destroySession-after-logout ordering that fires a spurious session:expired.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F2",
+        "match": "none",
+        "note": "No reported finding mentions sessionRedirect.js or the redirect query param carried across accounts on deliberate logout.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F3",
+        "match": "none",
+        "note": "R6 and R8 flag guard/meta drift on other routes (/coach/revenue, /admin) but nothing reports the missing requiresCoach on coach/profile-builder.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F4",
+        "match": "none",
+        "note": "R9 covers the skp cookie's role fallback, not the unquoted Long id losing precision in JSON.parse; no finding addresses the id serialization.",
+        "reported_ids": []
+      },
+      {
+        "expected_id": "F5",
+        "match": "none",
+        "note": "R11 is at PUBLIC_MGMT_ENDPOINTS but claims the opposite defect (prometheus too public); nothing reports /manage/health/smoke being absent from the public list.",
+        "reported_ids": []
+      }
+    ],
+    "unmatched_reported": [
+      {
+        "note": "[v2 check confirmed] In AuthService.refresh, a used token within 30s of rotatedAt is swapped for the user's newest unused token via findFirstByUserIdAndUsedFalseAndExpiresAtAfterOrderByCreatedAtDesc and then rotated for the caller, issuing a live JWT + refresh cookie to a replayer and restarting the grace window on each rotation, so markAllUsedByUserId is never reached. Verification caveat satisfied from this file: every RefreshToken created (login/refresh) sets only userId/tokenHash/expiresAt/used \u2014 no parent-token or session binding exists in the flow, and the successor lookup is scoped only by userId. | pass-1: Concrete trigger: replaying a rotated refresh token within the 30s grace window hands the attacker the user's newest unused token, silently bypassing the markAllUsedByUserId reuse-detection revocation.",
+        "reported_id": "R1",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] AuthService.logout revokes only via findByTokenHash(...).filter(t -> !t.isUsed()); a token already rotated by refresh() is skipped by that filter, the successor minted in refresh() is never touched, and logout never calls markAllUsedByUserId \u2014 so the successor refresh token stays valid after a 204 logout, as described. | pass-1: Concrete race: a refresh processed just before logout marks the presented token used, so logout's used-token filter revokes nothing and the successor token survives for its full TTL.",
+        "reported_id": "R2",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] AuthService is class-level @Transactional with no noRollbackFor, and recordAttempt() is a plain loginAttemptRepository.save() invoked immediately before BadCredentialsException is thrown at both failure sites in login(); the RuntimeException propagating through the transactional proxy rolls back the LoginAttempt insert, so countByIdentifierAndAttemptedAtAfter always sees zero and the lockout never trips. Per the verification caveat, no REQUIRES_NEW or noRollbackFor exists anywhere in this file's save path (only default Spring Data save, which joins the ambient transaction). | pass-1: Concrete mechanism: LoginAttempt save shares the class-level transaction that is rolled back by the thrown BadCredentialsException, so the lockout counter never increments and brute force is unlimited.",
+        "reported_id": "R3",
+        "verdict": "real"
+      },
+      {
+        "note": "Per-(email,IP) keying is a common deliberate tradeoff and the finding hedges between two mutually exclusive proxy failure modes, making the actual exposure speculative.",
+        "reported_id": "R4",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] PasswordResetService.completePasswordReset (lines ~63-72) indeed performs no refresh-token revocation itself, but it delegates to User.completePasswordReset, and neither that domain method, AuthService.refresh, nor RefreshTokenRepository usage is shown \u2014 so whether a password-change timestamp or other guard invalidates outstanding sessions cannot be verified, and the verification caveat (UserAdminService/account paths) cannot be run from this file. | pass-1: Concrete trigger: completePasswordReset swaps only the hash and never revokes refresh tokens, so a stolen refresh cookie survives the victim's password reset indefinitely.",
+        "reported_id": "R5",
+        "verdict": "unverified"
+      },
+      {
+        "note": "[v2 check undetermined] Router.beforeEach confirmedly never reads meta.role === 'COACH' or meta.requiresParent (its only gates are requiresCoach, role PARENT/PLAYER, and meta.roles), but routes.js is not provided, so whether /coach/revenue, the receipt route, and the subscription route actually carry those unmatched keys \u2014 and whether the backend endpoints have role-correct @PreAuthorize per the verification caveat \u2014 cannot be determined from this file. | pass-1: Concrete guard/meta mismatch: routes declare meta.role 'COACH' and meta.requiresParent which beforeEach never reads, so any authenticated role can direct-navigate those three routes.",
+        "reported_id": "R6",
+        "verdict": "unverified"
+      },
+      {
+        "note": "Best-effort logout after a named timeout constant is deliberate design; the client cannot delete the HttpOnly cookie regardless, and the harm scenario (stalled/offline shared machine) is an accepted-risk tradeoff rather than a defect.",
+        "reported_id": "R7",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check undetermined] The meta half is confirmed: the 'admin' > 'health-dashboard' route declares only requiresAuth with no role/roles/requiresAdmin key, unlike role-gated siblings. But the claim that the guard has no admin branch depends on router/index.js, and the finding's verification caveat (health-dashboard backend endpoints being HAS_ADMIN_ROLE-guarded) depends on backend code \u2014 neither is shown here. | pass-1: Concrete trigger: /admin/health-dashboard carries only requiresAuth and the guard has no admin branch, so any authenticated user renders the admin page \u2014 the same route-guard gap class the key treats as a finding for coach/profile-builder.",
+        "reported_id": "R8",
+        "verdict": "unverified"
+      },
+      {
+        "note": "The null-skillarsRole-means-ADMIN fallback is plausibly deliberate (admin accounts carry no skillars role); harm depends on speculative legacy ROLE_USER/LTD_ADMIN accounts using this login path.",
+        "reported_id": "R9",
+        "verdict": "noise"
+      },
+      {
+        "note": "A permitAll prefix matching no existing controller has no current trigger; the exposure is entirely hypothetical future code.",
+        "reported_id": "R10",
+        "verdict": "noise"
+      },
+      {
+        "note": "/manage/prometheus is explicitly and deliberately listed in PUBLIC_MGMT_ENDPOINTS for scraping; the claimed harm depends on speculative deployment topology.",
+        "reported_id": "R11",
+        "verdict": "noise"
+      },
+      {
+        "note": "[v2 check confirmed] In AuthService.login, the unknown-email path throws BadCredentialsException from findOneByLogin(...).orElseThrow before passwordEncoder.matches is ever called, and no dummy-hash comparison exists anywhere in the class, so known emails pay bcrypt cost while unknown ones don't. The deployed-instance timing measurement in the verification caveat could not be run here, but the asymmetric code path is unambiguous. | pass-1: Concrete trigger: unknown-email logins skip the bcrypt comparison entirely (no dummy hash), giving a measurable timing oracle for account enumeration.",
+        "reported_id": "R12",
+        "verdict": "real"
+      },
+      {
+        "note": "[v2 check confirmed] AuthService.refresh loads the user via userRepository.findById and immediately mints a new JWT (loginTokenManager.createLoginToken) and RefreshToken with no isActivated(), verification-status, or lock check, unlike login(). The caveat items (CoachSuspensionIT, JWT filter, UserErasedEventListener) are outside this file, but the missing re-check in refresh() itself is directly visible. | pass-1: Concrete trigger: refresh() mints new credentials with no isActivated/verification re-check, so deactivating an account does not end its sessions unless every deactivation path separately revokes tokens, and the cited erasure-remediation listener does not.",
+        "reported_id": "R13",
+        "verdict": "real"
+      }
+    ]
+  }
+}

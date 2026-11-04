@@ -1,0 +1,47 @@
+{
+  "arm": "security",
+  "case": "398-ltd-admin-full-admin-rights",
+  "checks": [],
+  "judge_cost_usd": 0.18311499999999997,
+  "judge_model": null,
+  "judge_turns": 2,
+  "judge_version": 2,
+  "verdict": {
+    "matches": [
+      {
+        "expected_id": "F1",
+        "match": "full",
+        "note": "All ten findings report the shared root cause \u2014 HAS_ADMIN_ROLE includes ROLE_LTD_ADMIN \u2014 and jointly cover every location the expected finding names (finance R1, config R5, GDPR R9, disputes R3, user suspension R8) plus further surfaces of the same defect.",
+        "reported_ids": [
+          "R1",
+          "R2",
+          "R3",
+          "R4",
+          "R5",
+          "R6",
+          "R7",
+          "R8",
+          "R9",
+          "R10"
+        ]
+      },
+      {
+        "expected_id": "F2",
+        "match": "full",
+        "note": "Same method, same HAS_ANY_ROLE guard, same consequence (any authenticated user can delete another account), and it also notes the absence of production callers.",
+        "reported_ids": [
+          "R11"
+        ]
+      },
+      {
+        "expected_id": "F3",
+        "match": "full",
+        "note": "Identifies the non-transactional delete-then-save in update(), the unvalidated request body hitting NOT NULL constraints, and permanent rule loss with silent alerting failure; only the minor id-change-on-PUT detail is omitted.",
+        "reported_ids": [
+          "R12"
+        ]
+      }
+    ],
+    "unmatched_reported": []
+  }
+}

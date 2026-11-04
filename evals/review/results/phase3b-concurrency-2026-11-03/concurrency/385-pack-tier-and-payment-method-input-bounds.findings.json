@@ -1,0 +1,78 @@
+{
+  "arm": "concurrency",
+  "case": "385-pack-tier-and-payment-method-input-bounds",
+  "findings": [
+    {
+      "category": "concurrency",
+      "description": "StripeCustomer has no @Version and getOrCreateStripeCustomer (lines 361-376) does an unlocked, non-transactional read-then-full-row-save. If savePaymentMethodAndScheduleSync commits a new card Y (and enqueues its sync) between a purchase's read and save of the same row, the purchase paying with older card X writes X back over Y. Y's outbox sync then runs syncPaymentMethodToSubscriptions, sees currentCard==X != Y, and skips itself as 'superseded' (SubscriptionService.java:684-689) \u2014 the user's newer card save is fully lost: the default card, subscription default_payment_method, and all future charges stay on X.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R1",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.getOrCreateStripeCustomer",
+      "title": "Pack purchase reverts a concurrently saved card and its outbox sync is then skipped as superseded",
+      "verification": "Confirm PaymentGateway.chargeAndCapture reads the payment method from stripe_customers (the in-code comment says it does), and that stripe_customers has no trigger/constraint preventing the overwrite."
+    },
+    {
+      "category": "concurrency",
+      "description": "SessionPackPaymentResource.purchaseSessionPack declares Idempotency-Key as required=false, and purchasePack substitutes UUID.randomUUID() per attempt (line 130) when it is absent. A timeout-retry or double-submit without the header therefore produces two distinct Stripe idempotency keys, two chargeAndCapture calls, and two packs. The V195 unique index only dedupes per payment intent and there are two intents; unlike subscribeCoach/subscribePlayer there is no server-side claim marker refusing a concurrent second attempt for the same payer+tier.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R2",
+      "severity": "medium",
+      "symbol": "SessionPackPaymentService.purchasePack",
+      "title": "Pack purchase without the optional Idempotency-Key header charges twice on retry",
+      "verification": "Check whether every frontend caller of POST /session-packs/purchase always sends Idempotency-Key; if any client or retrying proxy omits it, the double charge is reachable."
+    },
+    {
+      "category": "concurrency",
+      "description": "applyCoachChange phase 1 commits (releasing the FOR UPDATE lock) before syncStripePriceForChange calls Stripe (lines 797-832, 908-922). If the coach re-selects their current tier in that window, restoreCoachPriceAndVoidDowngrade restores the Stripe price and voids the change; the applicator's Stripe call then moves the price back down to the downgrade tier anyway, and phase 2 sees the voided change and skips the local apply. End state: local tier (and entitlement) at the higher tier while Stripe bills the lower price, permanently \u2014 reconcileMarketplaceTiers only fixes the marketplace projection and nothing syncs Stripe prices from local tiers. Same shape in applyPlayerChange.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R3",
+      "severity": "medium",
+      "symbol": "SubscriptionService.applyCoachChange / applyPlayerChange / syncStripePriceForChange",
+      "title": "Scheduled-downgrade applicator sets the Stripe price after the change was voided, leaving Stripe billing below the granted tier",
+      "verification": "Confirm no sweep or webhook path ever pushes the local tier's price back to Stripe for a billing-healthy subscription."
+    },
+    {
+      "category": "concurrency",
+      "description": "Phase 1 selects a grace-expired row and commits, releasing the lock, before cancelAtStripeForGrace calls Stripe (lines 947-962). If an invoice.paid webhook lands in that window (handleInvoicePaid sets the row ACTIVE and clears pastDueSince), the sweep still cancels the subscription immediately at Stripe, and GraceTarget.matches (lines 1042-1045) deliberately revokes the row even though it is now ACTIVE. The customer's just-paid invoice is kept \u2014 money taken for a period revoked seconds later \u2014 and no path refunds it. The comment acknowledges the race but the acknowledgement is not a defense.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R4",
+      "severity": "medium",
+      "symbol": "SubscriptionService.checkPastDueGracePeriod / GraceTarget.matches",
+      "title": "Grace-period sweep cancels and revokes a subscription whose recovery invoice was paid in the window, with no refund",
+      "verification": "Confirm stripeClient.cancelSubscriptionImmediately does not prorate/credit the just-paid invoice, and that no reconciliation refunds invoices paid within the cancel window."
+    },
+    {
+      "category": "concurrency",
+      "description": "The sweep loads all PaymentCoachSubscription rows in one transaction, then each per-row transaction (lines 1085-1114) derives the entitled tier from that stale, detached entity without re-reading under lock \u2014 unlike applyPendingChanges and checkPastDueGracePeriod, which re-lock and re-check. If a customer.subscription.deleted webhook revokes a coach (payment row -> CANCELLED, marketplace -> SCOUT) between the batch load and that coach's per-row transaction, the sweep sees marketplace=SCOUT vs stale entitled=paid-tier, calls syncMarketplaceTier with the paid tier, and the revoked coach keeps paid marketplace entitlement until the next daily run.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R5",
+      "severity": "medium",
+      "symbol": "SubscriptionService.reconcileMarketplaceTiers",
+      "title": "reconcileMarketplaceTiers computes entitlement from a stale batch snapshot and can re-grant a revoked coach's paid tier",
+      "verification": "Confirm the sweep's per-row transaction never refreshes `sub` (findAll entities are detached across transactionTemplate boundaries) and that no other sweep corrects the projection sooner than the next 04:00 run."
+    },
+    {
+      "category": "concurrency",
+      "description": "changeCoachTier/changePlayerTier read the subscription unlocked, call updateStripePrice (fresh random idempotency key per call), then persist; the persist guard (e.g. persistPlayerTierUpgrade lines 573-586) only checks stripeSubscriptionId equality, not that Stripe's current price matches the tier being written. Two concurrent changes for the same owner (e.g. upgrade to SEMI_PRO and upgrade to PRO double-submitted) can order as: A.updateStripePrice(SEMI_PRO), B.updateStripePrice(PRO) \u2014 both prorations charged \u2014 then B.persist(tier=PRO), A.persist(tier=SEMI_PRO). End state: Stripe bills PRO, local grants SEMI_PRO; the user paid the higher proration and holds the lower tier. subscribeCoach has a claim marker that refuses exactly this concurrency; the change paths have none.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java",
+      "id": "R6",
+      "severity": "medium",
+      "symbol": "SubscriptionService.changeCoachTier / changePlayerTier / persistPlayerTierUpgrade",
+      "title": "Tier changes lack the subscribe flow's claim marker; crossed concurrent changes leave local tier != Stripe billed price",
+      "verification": "Confirm Stripe charges a proration on each successive upgrade call (ALWAYS_INVOICE + error_if_incomplete per the class comment) and that no controller-level serialization exists for tier-change requests."
+    },
+    {
+      "category": "concurrency",
+      "description": "Two simultaneous first purchases by the same parent both find stripe_customers empty (line 362) and both call paymentGateway.createStripeCustomer before either insert commits \u2014 two customer objects are created at Stripe. The loser's insert then fails on the parent_id primary key (or merge overwrites the winner's stripe_customer_id), failing that request before any charge but leaving an orphaned Stripe customer, or \u2014 in the merge case \u2014 silently repointing the row to a different Stripe customer than the one the winner's flow continues to use.",
+      "file": "src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java",
+      "id": "R7",
+      "severity": "low",
+      "symbol": "SessionPackPaymentService.getOrCreateStripeCustomer",
+      "title": "Concurrent first-time purchases for one parent create duplicate Stripe customers",
+      "verification": "Check whether SimpleJpaRepository.save on this assigned-ID, version-less entity persists (PK violation, request fails cleanly) or merges (silent overwrite of stripe_customer_id), and whether orphaned Stripe customers are ever cleaned up."
+    }
+  ],
+  "input_rev": "980eff338df64b0b3704c756c53a9c5db56c3224",
+  "model": null
+}
