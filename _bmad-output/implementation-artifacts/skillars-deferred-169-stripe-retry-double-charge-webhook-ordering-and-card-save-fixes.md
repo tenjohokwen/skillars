@@ -14,23 +14,26 @@ Owner-chosen bundle of five payments items filed on the review-evals baseline sa
 **master `bed75f19`** (the real HEAD at story creation — not any SHA quoted inside the ledger). Branch:
 `skillars-deferred-169-stripe-retry-double-charge-webhook-ordering-and-card-save-fixes`.
 
-**Numbering.** This story was created as `skillars-deferred-168` and renumbered to **169** after
-`/mto-story-review` found an unmerged story already using that id
-(`skillars-deferred-168-builder-packs-become-the-purchasable-tier`, worktree
-`/Users/mokwen/dev/gitrepos/bluegithub/skillars-deferred-168`, status `review`, **pushed**). **Two** unmerged
-branches hold migration **`V226`**: that one (`V226__backfill_builder_packs_into_session_pack_tiers.sql`) and
-`feature/pitchside-reg-neutral` (`V226__registration_phone_in_use_email_template.sql`, worktree
-`/Users/mokwen/dev/gitrepos/bluegithub/skillars-pitchside`). One of them will have to renumber, so this story's
-migrations are **`V227` or later, and the number must be re-derived at dev time**: list
-`src/main/resources/db/migration` on `origin/master`, `git branch -a` (local *and* remote), and every worktree, and take
-the next free number only after the others have merged or been rebased past.
+**Numbering and master.** This story was created as `skillars-deferred-168` and renumbered to **169** because another story
+held that id; **that story (`skillars-deferred-168`, builder packs) has since merged as #436** (`47180ea7`), and its migration
+**`V226__backfill_builder_packs_into_session_pack_tiers.sql` is on master**. This branch has been merged with `origin/master`
+(`281b8433` at the time), so the code the story cites is current. **The next free number on master is `V227`, but it is
+contested**: a local-only `feature/pitchside-master-sync` already renamed its migration to
+`V227__registration_phone_in_use_email_template.sql`, and `skillars-deferred-170` (in progress in the worktree
+`/Users/mokwen/dev/gitrepos/bluegithub/skillars-deferred-168`) says "169 also claims V227+, whichever merges second renumbers".
+Every migration here is therefore **`V227` or later and must be re-derived at dev time** (list `src/main/resources/db/migration`
+on `origin/master`, `git branch -a` local *and* remote, every worktree).
 
-**The builder-packs branch edits more of this story's code than its title suggests**: `SessionPackPaymentService.java`
-(adds `replaceActiveOffer`, `withdrawActiveOffer`, `normalizeLabel` after ~`:333`), `SessionPackTier.java`,
-`CreateSessionPackTierRequest.java`, `CoachSessionPackAdapter.java`, plus `SessionPackOfferTest` and the i18n bundles.
-**Every `SessionPackPaymentService` line citation below was verified against master and will shift once it merges —
-re-locate by symbol, not by number.** Rebase onto it before starting. Both branches also write `story-review.md` and
-`sprint-status.yaml`, so expect a real (not trivial) conflict in those two files.
+**`skillars-deferred-170` is sequenced after this story and rewrites the same lines.** Its AC3 moves the coach-readiness check ahead
+of any write in `purchasePack` and it edits `SessionPackPurchasePage.vue` (it independently found the `data.message` bug at `:189`).
+AC1a's ordering below is written so that reorder composes with it: gates and the attempt lookup first, readiness before the attempt
+insert and the card write.
+
+**Line numbers.** #436 added 42 lines to `SessionPackPaymentService.java`. Citations at or before `:203` (`:98-192`, `:139`, `:140`,
+`:144`, `:148`, `:154-186`, `:204`) are unchanged; those after it moved — `getSavedPaymentMethod :363→:405` (null guard `:367→:409`),
+`getOrCreateStripeCustomer :398→:440` (card saves `:402→:444`, `:411→:453`), `createPurchase :414→:457`, and `@Transactional` is now at
+`:255, :295, :347, :361, :378`. Also `BookingRequestPage.vue zonedMidnightMs :552→:554` and `i18n/en-US/index.js pauseStartInPast :1992→:1995`.
+**Re-locate by symbol, not by number, in anything that is not listed here.**
 
 Ledger source: `_bmad-output/implementation-artifacts/deferred-work.md`, section
 `## Deferred from: review-evals baseline real-sample, owner-verified (2026-11-03)` — items RS05, RS06,
@@ -121,6 +124,17 @@ this rejection now stands on scope alone. Accepted
 cost: this is compensation, not prevention — a crash between the charge and the revert still leaves the
 declined card saved.
 
+**RS06 simplified — OWNER DECIDED 2026-11-04 (after the third `/mto-story-review`).** The third review showed that each prior fix had
+added mechanism (a status model, a cross-attempt resolve-before-new guard, a minimum age, a scan, a two-commit protocol) and that the new
+mechanisms interacted badly: resolve-before-new double-charged when it found a capture, it was a check-then-insert race, and nothing gave a
+stuck attempt an exit. The owner chose to **simplify RS06 rather than split the story**: concurrency is enforced by **a partial unique index**
+(one open attempt per parent) instead of by application logic; **there is no cross-attempt resolution on the request path** — an open attempt
+is resolved only by a replay of its own key or by the scheduled job; and the job plus a self-clearing backlog gauge replace the log-tag scan.
+*Rejected:* splitting into three stories (RS08 alone, RS06+RS09, RS05+RS07) — not rejected on merit, only deferred; it remains available if a
+fourth review still finds high-severity defects. *Accepted cost, stated plainly:* a parent who has **lost the key** (page reload) while an
+attempt is `UNKNOWN` cannot self-heal; they are refused with `attemptUnresolved` until the job resolves the row — at most the minimum age
+(default 10 min) plus one job cycle (5 min).
+
 ### Facts established after the decisions above (`/mto-story-review`, 2026-11-04, two passes)
 
 The three decisions stand as chosen. These facts bear on them and the owner should be able to see them:
@@ -142,169 +156,165 @@ The three decisions stand as chosen. These facts bear on them and the owner shou
 - **RS09's revert cannot be made safe against two of its own edge cases** (AC8(d), (e)): a concurrent save of the *same*
   card, and two concurrent purchases by one parent with different cards sharing the single `stripe_customers` row.
 
-**Applied without an owner answer (2026-11-04) — OWNER TO CONFIRM.** Two questions raised by the second review were
-not answered before the fixes were applied, so the recommended option was taken. Reverse either by editing AC3/AC8:
-(1) **RS06 carries a scheduled scan** of aged unresolved attempts (AC3) — recommended, because nothing otherwise finds a
-charge whose request died mid-flight; it adds one ShedLock job beside the purge the story already needs;
-(2) **the RS09 revert is kept** (the owner's decision stands) with the two limits above stated as accepted.
+**Still to confirm (applied with the recommended option, 2026-11-04) — OWNER TO CONFIRM:** (1) **the RS09 revert is kept**, with its two
+stated limits (AC8); (2) **GDPR (AC13):** the attempt rows are retained like `stripe_customers` ("financial-record retention",
+`GdprErasureService :805`) and erasure **nulls `previous_card`/`attempted_card`** — a policy call, since `GdprErasureService` has no table registry and
+would silently skip the new tables; (3) **the scheduled job carries four duties** (resolve stale attempts, purge terminal attempts, drain linkable
+parked events, purge never-linked parked events) under one lock.
 
 ## Acceptance Criteria
 
-**AC1 — a retry cannot charge a second time, and a decline can still be retried.** *(OWNER DECIDED
-2026-11-04, option a: persist the attempt server-side.)* A new table `payment.session_pack_purchase_attempts`
-(migration `V227+`, see Numbering) holds one row per attempt: `parent_id`, `attempt_key` (matches
-`ATTEMPT_KEY_PATTERN`), `pack_tier_id`, `player_id`, `previous_card` and `attempted_card` (both nullable payment-method
-ids), `payment_intent_id` (nullable), `status`, timestamps; **`UNIQUE (parent_id, attempt_key)` declared inline in
-`CREATE TABLE`** (a separate `CREATE UNIQUE INDEX` would need an `allow-blocking-index` marker). Statuses:
+**AC1 — one open purchase attempt per parent; a retry cannot charge twice; a decline can still be retried.** *(OWNER DECIDED 2026-11-04, option a: persist the
+attempt server-side; simplified the same day — see "RS06 simplified".)* A new table `payment.session_pack_purchase_attempts` (migration `V227+`, see Numbering) holds
+one row per attempt: `parent_id`, `attempt_key` (the client's `Idempotency-Key`, or a **server-minted UUID when the header is absent** — so *every* purchase has a row),
+`pack_tier_id`, `player_id`, `previous_card` and `attempted_card` (nullable payment-method ids), `customer_existed` (boolean), `payment_intent_id` (nullable), `status`,
+`created_at`, `updated_at`. Two constraints, both created in the same migration as the (empty) table:
 
-| status | meaning | a replay of this key answers |
+- `UNIQUE (parent_id, attempt_key)` declared inline in `CREATE TABLE`;
+- **a partial unique index `ON (parent_id) WHERE status IN ('IN_PROGRESS','UNKNOWN','UNRECONCILED')`.** This index *is* the concurrency control: a second purchase by the same
+  parent while one is open fails its insert, so two concurrent requests with different keys — or one keyed and one keyless — cannot both reach Stripe. Check
+  `MigrationConventionLintTest`; if it flags the index, add `allow-blocking-index` immediately above it with the reason "table created in this migration, empty".
+
+Statuses (open = the three in the index; terminal = the other three):
+
+| status | meaning | a same-key replay answers |
 |---|---|---|
-| `IN_PROGRESS` | row written, charge not yet resolved | fresh → `409 payment.attemptInProgress`; older than the minimum age (AC2) → resolve via AC2 |
+| `IN_PROGRESS` | row written, charge not yet resolved | younger than the minimum age → `409 payment.attemptInProgress`; older → resolve via AC2 on this thread |
 | `SUCCEEDED` | charged and pack recorded | the recorded pack (`replayedPurchase`) — answered from the DB, never by calling Stripe |
-| `NO_CHARGE` | proven no money moved: decline, non-`succeeded` intent, or a pre-flight rejection | the no-charge signal (AC1b); the client mints a fresh key |
+| `NO_CHARGE` | proven no money moved | the no-charge signal (AC1b); the client mints a fresh key |
 | `REFUNDED` | captured then refunded | the no-charge signal (AC1b) |
-| `UNKNOWN` | Stripe outcome not known | resolve via AC2; keep the key |
-| `UNRECONCILED` | captured, pack not recorded, refund failed or unknown | resolve via AC2; keep the key |
+| `UNKNOWN` | Stripe outcome not known | resolve via AC2 if older than the minimum age, else `409 payment.attemptUnresolved`; keep the key |
+| `UNRECONCILED` | captured, pack not recorded, refund failed or unknown | as `UNKNOWN` |
 
-**AC1a — the record's mechanics and ordering.** `purchasePack` has no transaction to join (javadoc `:78`), so the row is
-written in **its own committed transaction** and its outcome in a second committed step. The order inside `purchasePack` is
-fixed, because the gates currently run on every call:
+**There is no cross-attempt resolution on the request path.** An open attempt is resolved only (a) by a replay of **its own key** past the minimum age, or (b) by the scheduled
+job (AC3). A different request from the same parent is simply refused. This removes the interaction the third review found (resolving an earlier attempt, finding it captured, then
+charging the retry as well).
+
+**Every status write is a compare-and-set** — `UPDATE … SET status = :new WHERE id = :id AND status IN (:expected)`. If it affects no row, re-read and never overwrite a terminal state.
+The single exception is proof of capture: a writer holding a `succeeded` PaymentIntent id may move `NO_CHARGE → SUCCEEDED` (or `UNRECONCILED`), because a captured fact beats a resolver's
+*inference from absence*; log it at `error` with the tag `[PACK_PURCHASE_CAS_LOST] key=value`.
+
+**Minimum age.** At least **10 minutes**, read from a `ConfigBounds` key (default 10, bounds 5-1440), mirroring `ChargeOutcomeReconciler`'s
+`booking.payment.charge_reconcile_after_minutes`. A legitimate request can run 6-8 minutes: the SDK uses a 10 s connect and 30 s read timeout with 2 network retries
+(`PaymentConfig :56-60`, ~2 min per Stripe call worst case) and a purchase makes 2-4 sequential calls (`createStripeCustomer` for a first-time payer, the charge, the lookup, the
+compensating refund).
+
+**AC1a — ordering inside `purchasePack`.** The gates currently run on every call (`:100-135`), so the order is fixed:
 
 1. key-format check; payment-method format; player ownership and age verification (security gates, unchanged);
-2. **look up an existing attempt for `(parent_id, attempt_key)`** and answer per the table above — *before* the tier and
-   coach gates, so a replay can still resolve a captured payment after the tier was deactivated or the coach suspended
-   (`purchasePack` runs `packTierInactive` and `requireBookableCoachStatus` on every call today, `:126-135`; without this a
-   captured payment could never resolve);
-3. only for a **new** attempt: the tier-active and coach-status gates; then
-4. **resolve-before-new:** resolve every non-terminal attempt of this parent via AC2 and refuse with
-   `409 payment.attemptUnresolved` while any remains unresolved. This is what makes retry safe regardless of what the
-   client does with its key — a client that clears its key after an unknown outcome (card save, pack change) cannot open a
-   second charge while the first is unresolved, because the server resolves the first from `parent_id` and the stored key;
-5. read the `previous_card` snapshot (`:139`), insert the row (with `previous_card`), then the card write (`:140`), then the charge (`:144`).
+2. **if a key was sent, look up `(parent_id, attempt_key)`** and answer per the table — *before* the tier and coach gates, so a replay can still resolve a captured payment after the
+   tier was deactivated or the coach suspended (`packTierInactive` `:128`, `requireBookableCoachStatus` `:135`). A stored `pack_tier_id`/`player_id` that differs from the request:
+   **open row → `409 payment.attemptUnresolved`** (not `idempotencyKeyReused`, which would trap the user after a pack change); **terminal row → the existing `payment.idempotencyKeyReused`**;
+3. only for a **new** attempt: the tier-active and coach-status gates (and `skillars-deferred-170`'s readiness check, once it merges);
+4. read the `previous_card` snapshot and `customer_existed` (`:137-139`), then **insert the row** in its own committed transaction. A violation of the open-per-parent index → read the
+   open row and answer `409 payment.attemptInProgress` (if `IN_PROGRESS`) or `409 payment.attemptUnresolved`; a violation of `UNIQUE (parent_id, attempt_key)` (concurrent same key) → read the
+   winner and answer per step 2;
+5. the card write (`:140`), then the charge (`:144`).
 
-The loser of a concurrent same-key insert reads the winner's row and answers per the table. Stored `pack_tier_id` /
-`player_id` are compared up front, so reusing a key for a different tier or player is refused with the existing
-`payment.idempotencyKeyReused` before any Stripe call. An **absent** `Idempotency-Key` keeps today's behaviour (no row, no
-dedup; `:143` mints a random UUID; AC8 uses the in-process `previousCard`) and is logged; requiring the header is out of scope.
+An **absent** `Idempotency-Key` gets a server-minted key (`:143` already mints one today): the row still serialises purchases and carries `previous_card`, but there is no client dedup — this
+is today's behaviour, logged. Requiring the header is out of scope.
 
-**Failures that happen inside `chargeAndCapture` are not "pre-charge".** `charge()` throws
-`payment.coachStripeNotConfigured` (call `:116`, throw `:635`), `payment.configurationUnavailable` (`:121-124`),
-`payment.noStripeCustomer` and `payment.noPaymentMethod` (`:138-143`) **after** the row exists and before any PaymentIntent is
-created; `getOrCreateStripeCustomer` (`:140`, a Stripe call for a first-time payer) can fail after it too. All mark the row
-`NO_CHARGE`. A failed `SUCCEEDED` write must never fail a response for a pack that exists.
+**Failures inside `chargeAndCapture` are not "pre-charge".** `charge()` throws `payment.coachStripeNotConfigured` (call `:116`, throw `:635`), `payment.configurationUnavailable`
+(`:121-124`), `payment.noStripeCustomer` and `payment.noPaymentMethod` (`:138-143`) **after** the row exists and before any PaymentIntent is created; `getOrCreateStripeCustomer`
+(`:140`) can fail after it too. All mark the row `NO_CHARGE`. **An unclassified `RuntimeException`** (a pool timeout, an NPE) from `chargeAndCapture` is treated as `UNKNOWN`, not left
+`IN_PROGRESS` — it may have been thrown after Stripe captured. A failed `SUCCEEDED` write must never fail a response for a pack that exists.
 
-**Retention.** Terminal rows (`SUCCEEDED`, `NO_CHARGE`, `REFUNDED`) are purged after a retention window (a `ConfigBounds` key,
-default ~30 days) by the scheduled job in AC3 — any authenticated parent can otherwise insert unbounded rows with distinct
-keys. `previous_card`/`attempted_card` are payment-method ids tied to `parent_id`: confirm `GdprErasureService`'s table
-enumeration covers every new table (Task 9).
+**Retention.** Terminal rows are purged after a `ConfigBounds`-keyed retention window (default ~30 days) by the job in AC3.
 
 **AC1b — the client can tell "no money moved" from "money may have moved".** A card decline is a 4xx that `charge()` maps to
-`PaymentGatewayException("payment.lifecycleFailure")` (`StripePaymentGateway.java:185-187`; a non-succeeded intent at
-`:198-201`) — the **same code and the same 422** as the refunded and unreconciled branches, so today's responses cannot carry the
-distinction. **Mechanism (settled here, because the first draft pointed at the wrong layer):** `purchasePack` classifies
-itself. Any plain `PaymentGatewayException` from `chargeAndCapture` that is not a `ChargeOutcomeUnknownException` means no money
-moved (the capture path returns an id or throws before capture); the service marks the row `NO_CHARGE` and rethrows a
-**pack-service subclass with its own code** (e.g. `payment.noChargeMade`). The `REFUNDED`/`UNRECONCILED` outcomes are thrown from
-the service (`:171`, `:185`) and never reach the gateway. **Do not change the gateway's decline code** — it is pinned by
-`StripePaymentGatewayTest:865-872`, and `charge()` is shared with bookings (`PaymentLifecycleService :195,:259,:266,:473,:480`
-and `CashOutService :141,:217` catch the base class; nothing branches on `payment.lifecycleFailure`; `PaymentApiAdvice:20` keys
-only on `coachStripeNotConfigured`), so a subclass thrown only from the pack service leaves every booking caller untouched.
+`PaymentGatewayException("payment.lifecycleFailure")` (`StripePaymentGateway.java:185-187`; a non-succeeded intent at `:198-201`) — the **same code and the same 422** as the refunded and
+unreconciled branches, so today's responses cannot carry the distinction. **Mechanism:** `purchasePack` classifies itself. Any plain `PaymentGatewayException` from `chargeAndCapture` that is
+not a `ChargeOutcomeUnknownException` means no money moved (the capture path returns an id or throws before capture); the service marks the row `NO_CHARGE` and rethrows a **pack-service
+subclass with its own code** (e.g. `payment.noChargeMade`). `REFUNDED`/`UNRECONCILED` are thrown from the service (`:171`, `:185`) and never reach the gateway. **Do not change the gateway's
+decline code** — it is pinned by `StripePaymentGatewayTest:865-872`, and `charge()` is shared with bookings (`PaymentLifecycleService :259/:266` and `:473/:480` catch the base class;
+nothing branches on `payment.lifecycleFailure`; `PaymentApiAdvice:20` keys only on `coachStripeNotConfigured`), so a subclass thrown only from the pack service leaves every booking caller untouched.
+`REFUNDED` returns the same signal though money *did* move and was refunded — the UI copy must not say "nothing was charged".
 
-**Wire contract (the page reads a field that does not exist today).** `SessionPackPurchasePage.vue:189` reads
-`e.response.data.message`, but `ErrorDto` is `{helpCode, errorMsg:{errorKey, message}, fieldErrors}`, so the parent never sees
-any payment code. A `PaymentGatewayException` (422) carries the code in **`errorMsg.errorKey`**; a `ResponseStatusException`
-(`payment.invalidIdempotencyKey` 400, `payment.idempotencyKeyReused` 409, the new `payment.attemptInProgress` and
-`payment.attemptUnresolved` 409s) goes through `ApiAdvice.responseStatusExceptionHandler` and carries it in
-**`errorMsg.message`** with `errorKey = generic.requestError`. The page must read each from its own field.
+**Wire contract (the page reads a field that does not exist today).** `SessionPackPurchasePage.vue:189` reads `e.response.data.message`, but `ErrorDto` is
+`{helpCode, errorMsg:{errorKey, message}, fieldErrors}`, so the parent never sees any payment code. A `PaymentGatewayException` (422) carries the code in **`errorMsg.errorKey`**; a
+`ResponseStatusException` (`payment.invalidIdempotencyKey` 400, `payment.idempotencyKeyReused`, `payment.attemptInProgress`, `payment.attemptUnresolved` — 409s) goes through
+`ApiAdvice.responseStatusExceptionHandler` (`:132-136`) and carries it in **`errorMsg.message`** with `errorKey = generic.requestError`. The page reads each from its own field, and gains
+i18n strings for the two new 409s ("your previous purchase is still being confirmed").
 
-**Client rules.** Keep `attemptKey ??=` (`:182`) and the in-flight guard (`:179`). Clear the key on success, on the no-charge
-signal, and on `400 payment.invalidIdempotencyKey`. On a **card save** (`onCardSaved`, `:138-140`) or a **pack change**
-(`watch(selected)`, `:174`) clear it **only if the last answer was the no-charge signal** (or there was none); never while the
-last outcome was unknown or unreconciled. This is UX, not safety — AC1a(4) is the guard. Retaining the key across a *decline*
-would replay Stripe's cached decline, and saving a different card under the same key changes the PaymentIntent's
-`payment_method`, which Stripe rejects as an idempotency mismatch that `isOutcomeUnknown` classifies as an unknown outcome
-(documented Stripe behaviour, not exercised in review — pin it with a test).
+**Client rules.** Keep `attemptKey ??=` (`:182`) and the in-flight guard (`:179`). **Clear** the key on success, on the no-charge signal, on `400 payment.invalidIdempotencyKey` and on
+`409 payment.idempotencyKeyReused` (terminal row, so safe). **Keep** it on a network error and on `attemptInProgress`/`attemptUnresolved`/unknown outcomes, and show the "still being confirmed"
+message. On a **card save** (`onCardSaved`, `:138-140`) or a **pack change** (`watch(selected)`, `:174`) clear the key **only if the last answer was the no-charge signal** (or there was none).
+These are UX rules — the partial unique index is the safety guarantee. (Saving a different card under the same key changes the PaymentIntent's `payment_method`, which Stripe rejects as an
+idempotency mismatch that `isOutcomeUnknown` classifies as unknown; retaining the key across a *decline* would replay Stripe's cached decline. Both documented Stripe behaviour, not exercised in
+review — pin them with a test.)
 
-**AC2 — a replay resolves the truth before it builds anything.** Any replay of a row that is not `SUCCEEDED`, `NO_CHARGE` or
-`REFUNDED` — and `resolve-before-new` (AC1a(4)) — resolves it with these tools and **only** these rules:
+**AC2 — an open attempt is resolved from Stripe, by exactly these rules.** Used by a same-key replay past the minimum age and by the job (AC3) — **nowhere else**:
 
-- **Existing pack first.** Call `findByStripePaymentIntentId` (as `:148` does) before anything else and go through
-  `replayedPurchase`. `createPurchase` is a bare `save` (`:414-430`), so the process can die after it and before the
+- **Existing pack first.** Call `findByStripePaymentIntentId` (as `:148` does) and go through `replayedPurchase`. `createPurchase` (`:457`) is a bare `save`, so the process can die after it and before the
   `SUCCEEDED` write; without this check the resolution would create a second pack for the same intent.
-- **Find the intent:** `findChargeByIdempotencyKey(parentId, key, createdAfter)` (`StripePaymentGateway.java:274`) with
-  **`createdAfter = attempt.created_at − slack`** (reuse `ChargeOutcomeReconciler`'s `LOOKUP_SLACK`). It lists the payer's
-  PaymentIntents (`limit(100)`) and returns empty when the payer has no `stripe_customers` row.
-- **Classify what it finds.** `ChargeLookup` has no refund state — a refunded PaymentIntent is still `succeeded` — so for a
-  `succeeded` intent call **`getRefundableAmount`** (`PaymentGateway.java:107`, impl `:541-562`, captured − refunded):
-  zero → `REFUNDED`; positive → captured. `pending()` (`processing`, `requires_capture`) → stay `UNKNOWN`. Found but **not**
-  `succeeded` and not pending (a decline leaves a `requires_payment_method` PaymentIntent behind) → `NO_CHARGE`.
-- **"Not found" is not proof.** It counts as `NO_CHARGE` only when the attempt is older than a **minimum age** (≥ the Stripe SDK
-  read timeout plus retries — define it as a constant and justify it) — a fresh `IN_PROGRESS` row is answered `409
-  payment.attemptInProgress`, never resolved. Inside the minimum age, or when the payer has no customer row, stay `UNKNOWN`.
-- **Lookup fails** (`payment.chargeLookupFailed`, `payment.refundLookupFailed`, `REFUND_TARGET_INVALID`) → stay `UNKNOWN`, answer
-  `payment.chargeOutcomeUnknown`, keep the key.
-- **Then act:** `REFUNDED` → mark it, answer the no-charge signal, create **no** pack; captured and not refunded → create the pack
-  (once; `uq_spp_stripe_payment_intent_id` backstops it) **and resolve the open `stripe_refund_failures` row** (`resolved_at`) so an
-  operator does not later refund a funded pack; `NO_CHARGE` → mark it and answer the no-charge signal.
-- **Transitions out of the `:154-186` catch** are specified, not implied: refund succeeded → `REFUNDED`; refund failed or its lookup
-  failed → `UNRECONCILED`; winner found → `SUCCEEDED`. The row is updated **before** the exception propagates.
+- **No customer row → `NO_CHARGE`.** `charge()` throws `payment.noStripeCustomer` (`StripePaymentGateway :138-139`) *before any Stripe call*, so nothing could have been charged. The gateway's
+  `findChargeByIdempotencyKey` returns empty for both "no customer row" and "not found" (`:276-279`), so **the caller must re-query `stripeCustomerRepository` itself**.
+- **Find the intent:** `findChargeByIdempotencyKey(parentId, key, createdAfter)` (`StripePaymentGateway.java:274`) with **`createdAfter = attempt.created_at − slack`** (widen `ChargeOutcomeReconciler.LOOKUP_SLACK`,
+  `private static final`, 10 min, `:87`, or duplicate it). It lists the payer's PaymentIntents via `StripeClient.listPaymentIntentsForCustomer` (`limit(100)`, auto-paged).
+- **Classify what it finds**, in this order (an **invariant** — with a test for a `requires_payment_method` intent that never reaches `getRefundableAmount`): `pending()` (`processing`,
+  `requires_capture`) → stay `UNKNOWN`; found but **not** `succeeded` (a decline leaves a `requires_payment_method` PaymentIntent behind) → `NO_CHARGE`; `succeeded` → call
+  **`getRefundableAmount`** (`PaymentGateway.java:107`, impl `:541-562`, captured − refunded — `ChargeLookup` has no refund state, a refunded PaymentIntent is still `succeeded`): zero → `REFUNDED`,
+  otherwise captured. A *partially* refunded intent counts as captured and the pack is created (log it) — **a policy call, flagged**.
+- **"Not found" is not proof.** It counts as `NO_CHARGE` only past the minimum age; and a row that stays `UNKNOWN` is given a **terminal rule**: once the key's ~24 h Stripe lifetime plus a margin
+  has passed and a lookup *succeeds* and finds nothing, it becomes `NO_CHARGE`. A failing lookup (`payment.chargeLookupFailed`, `payment.refundLookupFailed`, `REFUND_TARGET_INVALID`) stays `UNKNOWN`.
+- **Then act:** `REFUNDED` → mark it, answer the no-charge signal, create **no** pack; captured and not refunded → create the pack (once; `uq_spp_stripe_payment_intent_id` backstops it), **resolve the open
+  `stripe_refund_failures` row** (`resolved_at`) so an operator does not later refund a funded pack, and **run `scheduleSubscriptionCardSync`** (`:189`'s original success path never ran) using the row's
+  `customer_existed`, `previous_card` and `attempted_card`; `NO_CHARGE` → run the AC8 revert **first**, then mark it.
+- **Transitions out of the `:154-186` catch** are specified: refund succeeded → `REFUNDED`; refund failed or its lookup failed → `UNRECONCILED`; winner found → `SUCCEEDED`. The row is updated **before** the exception propagates.
 
-This closes the crash between the compensating refund (`:177`) and the outcome write: that crash leaves `IN_PROGRESS`, and with
-the same key Stripe returns the original (refunded) intent, `:148` finds no pack, and `createPurchase` would otherwise succeed
-with refunded money. `createPurchase` is never run against an unverified intent.
+This closes the crash between the compensating refund (`:177`) and the outcome write: that crash leaves `IN_PROGRESS`, and with the same key Stripe returns the original (refunded) intent, `:148` finds no
+pack, and `createPurchase` would otherwise succeed with refunded money. `createPurchase` is never run against an unverified intent.
 
-**AC3 — the untraceable charge path becomes observable, without paging on healthy events.**
-1. Add a catch around `chargeAndCapture` (`:144`) for `ChargeOutcomeUnknownException`: **log first** with a pack-specific tag
-   `PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN` (so it still fires if the next write fails), then mark the attempt `UNKNOWN`, then
-   rethrow. This tag is for diagnosis and the dashboard panel; it is **not** an alert, because a timeout or `processing` response
-   is routinely resolved by the parent's replay with no operator action and a log alert cannot be cleared.
-2. **The alert is driven by aged unresolved attempts.** A ShedLock-scheduled scan (the same job that purges, AC1a) finds attempts
-   in `IN_PROGRESS`, `UNKNOWN` or `UNRECONCILED` older than N minutes, logs a stable tag `PACK_PURCHASE_ATTEMPT_UNRESOLVED` per row
-   and exposes a gauge. This also finds the case nothing otherwise finds: the pod is killed mid-request (a rolling deploy makes that
-   likely), Stripe may have captured, nothing was logged, and the row sits `IN_PROGRESS`.
-3. Add `PACK_PURCHASE_ATTEMPT_UNRESOLVED` to the `MoneyIntegrityEvent` regex (`deploy/lgtm/grafana-alerts.yml:638-648`) and its runbook
-   (`docs/deployment/monitoring.md#MoneyIntegrityEvent`, `:294`), and add both new tags to the `deploy/lgtm/dashboards/payments.json:1314`
-   panel (it already lists `STRIPE_CHARGE_OUTCOME_UNKNOWN`). **Do not** add the shared gateway tag `STRIPE_CHARGE_OUTCOME_UNKNOWN`
-   to the alert: it is logged from the shared `charge()` that bookings also use, where `ChargeOutcomeReconciler` self-heals it, and for a Stripe
-   409 idempotency conflict (two tabs, same key).
-4. The durable record is the attempt row, **not** `stripe_refund_failures` (`NOT NULL` PaymentIntent columns; `ChargeOutcomeUnknownException`
-   carries only the idempotency key, `ChargeOutcomeUnknownException.java:19-28`). Automated reconciliation is **out of scope**: the runbook step is manual
-   (look the key up in Stripe) and a ledger entry is filed (AC12). `AlertDocumentationParityTest` matches alert titles, so a regex token does not affect
-   it — confirm by running it.
+**AC3 — a scheduled job resolves stale attempts, and a self-clearing gauge tells an operator when it cannot.**
+1. **One ShedLock job, every 5 minutes** (sized per `docs/deployment/scheduler-lock-tuning.md`; non-`@Transactional`, calling transactional collaborators, per
+   `SchedulerLockTransactionOrderingIT`), with four duties, **each in its own `try/catch`** so one failing cannot starve the others: (a) resolve `IN_PROGRESS`/`UNKNOWN`/`UNRECONCILED` attempts older than
+   the minimum age via AC2; (b) purge terminal attempts past retention; (c) drain parked webhook events whose subscription is now linked (AC4); (d) purge never-linked parked events past retention (AC4).
+2. **The alert is a backlog gauge, not a log tag.** Add a branch to `OperationalBacklogMetrics` — a DB-derived `MultiGauge`, refreshed per JVM and aggregated with `max`, so there is no per-pod staleness and it clears itself
+   when the backlog does — reporting `backlog="pack_attempts"`, `detail=<status>`, the count and oldest age for open attempts; and a Grafana alert mirroring the existing
+   `max(skillars_backlog_oldest_age_seconds{backlog="cash_outs",detail="UNKNOWN"}) or vector(0)` rule (`grafana-alerts.yml :771`), with a threshold above *minimum age + two job cycles*. This also finds the case nothing else
+   does: the pod is killed mid-request (a rolling deploy makes that likely), Stripe may have captured, nothing was logged, and the row sits `IN_PROGRESS`. Runbook in `docs/deployment/monitoring.md`.
+3. **Diagnostics, not alerts.** Where `purchasePack` catches `ChargeOutcomeUnknownException` at `:144`: **log first**, then mark the attempt `UNKNOWN`, then rethrow. Log with
+   `[PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN] key=value`. **Tags must be written `[TAG] key=value`**: the `MoneyIntegrityEvent` expression matches `\[(TAG1|TAG2…)\]`, so `[TAG key=value]` never matches
+   (`grafana-alerts.yml :638-648`). This tag is for the dashboard panel (`deploy/lgtm/dashboards/payments.json :1314`), **not** the alert — a timeout or `processing` response is routinely resolved by the
+   job or a replay with no operator action, and a log alert cannot be cleared. **Do not** add the shared gateway tag `STRIPE_CHARGE_OUTCOME_UNKNOWN` to any alert: it is logged from the shared `charge()` that
+   bookings also use, where `ChargeOutcomeReconciler` self-heals it, and for a Stripe 409 idempotency conflict.
+4. The durable record is the attempt row, **not** `stripe_refund_failures` (`NOT NULL` PaymentIntent columns; `ChargeOutcomeUnknownException` carries only the idempotency key, `:19-28`).
+   `AlertDocumentationParityTest` matches alert titles, so a new alert needs its `monitoring.md` heading — run it.
 
-**AC4 — a subscription event that races the signup is applied, not dropped — coach and player, `updated` and `deleted`.**
-When `handleSubscriptionUpdated` (`StripeWebhookService.java:271-275`) or `handleSubscriptionDeleted` (`:356-370`, which today returns
-silently with not even an alert) finds no local row, the event is **parked** in a new table
-(`payment.stripe_pending_subscription_events`: `event_id`, `stripe_subscription_id`, `event_type`, `event_created`, and the
-**already-extracted** fields — status, period end, cancel flag — not raw JSON, because `buildSubDataMap` is private to
-`StripeWebhookService`, `:499`, and the drain runs in `SubscriptionService`).
+**AC4 — a subscription event that races the signup is applied, not dropped — coach and player, `updated` and `deleted`.** When `handleSubscriptionUpdated`
+(`StripeWebhookService.java:271-275`) or `handleSubscriptionDeleted` (`:356-370`, which today returns silently with not even an alert) finds no local row, the event is **parked** in a new table
+(`payment.stripe_pending_subscription_events`: `event_id` **`UNIQUE`**, `stripe_subscription_id`, `event_type`, `event_created`, and the **already-extracted** fields — status, period end, cancel flag —
+not raw JSON, because `buildSubDataMap` is private to `StripeWebhookService`, `:499`, and the drain runs in `SubscriptionService`). **No FK** to `stripe_webhook_events` (its marker row is uncommitted when the park runs).
 
-*The protocol has two commit points, because re-reading inside the webhook's own transaction cannot close the race.* Under READ COMMITTED
-(no override), webhook W reads no row, inserts the park (uncommitted), re-reads and still sees no link, then `persistCoachSubscription` P commits
-the link and drains (finding no park, because W is uncommitted), then W commits — an orphaned event. So:
+*The protocol, with one consistent structure.* Under READ COMMITTED (no override) re-reading inside the webhook's own transaction cannot close the race: webhook W reads no row, inserts the park (uncommitted),
+re-reads and still sees no link, then `persistCoachSubscription` P commits the link and drains (finding no park), then W commits — an orphaned event. So:
 
-1. **W** inserts the park **and** the processed marker (`:177-179`) and **commits**;
-2. **then, in a separate post-commit step**, W re-reads for the local row and, if present, applies the event in its own transaction;
-3. **P** commits the link, **then** drains parked events for that id.
+1. **W parks in its own transaction that commits *before* W's outer transaction** — a `REQUIRES_NEW` call on a **separate bean** (or `self` proxy; in-class self-invocation silently ignores `REQUIRES_NEW`, as recorded in
+   `OutboxService` and `PendingProviderAssetTracker`), `INSERT … ON CONFLICT DO NOTHING` on `event_id` (an outer rollback after a committed park leads to redelivery and a re-park);
+2. **after W's outer transaction commits** — in `processWebhook`, which is not transactional (`:116-122`) — W **re-reads for the local row** and, if present, applies the event in its own transaction. `handleEventAtomically`
+   is `void`, so it must return a signal that an event was parked. This step runs **even when the park insert failed** (the link may already exist);
+3. **P commits the link, then drains** parked events for that id.
 
-Either W's commit precedes P's drain read (P sees the park), or P's drain read precedes W's commit — in which case P's link commit already
-precedes W's re-read (W sees the link). Alternatively take a shared `pg_advisory_xact_lock(hash(stripe_subscription_id))` in both. Add the
-interleaving as an IT.
+Either W's park commit precedes P's drain read (P sees the park), or P's drain read precedes W's park commit — in which case P's link commit already precedes W's re-read (W sees the link). (Alternatively a shared
+`pg_advisory_xact_lock(hash(stripe_subscription_id))` in both.) Add the interleaving as an IT.
 
-*Failure semantics.* The park runs in `REQUIRES_NEW` (or a savepoint) so that a failed park cannot roll back `insertIfAbsent` and put Stripe into
-indefinite retry (AC5); a failed park is **logged and dropped**, which is today's behaviour. A `try/catch` in the same PostgreSQL transaction would not
-help — the transaction is poisoned. After a successful apply (direct or drained) the park row is **deleted**, or the purge would later warn "purged
-unapplied" for an applied event.
+*Failure semantics.* A failed park is **logged and dropped** (today's behaviour) — it must not roll back `insertIfAbsent` and put Stripe into indefinite retry (AC5). The post-commit step is wrapped in `try/catch` and logs:
+`StripeWebhookResource :75-78` returns 500 on any exception, Stripe redelivers, and `insertIfAbsent` returns 0 so `handleEventAtomically` returns as a duplicate (`:180-183`) — the event is **never re-applied by redelivery**.
+It is not lost, because the committed park row survives and **the job's drain (AC3(c)) recovers it; the job cadence is the recovery latency.** A row is claimed with **`DELETE … RETURNING` in the same transaction as the
+apply**, so the request-thread drain, the post-commit step and the job apply each event exactly once.
 
-*Drain.* Drain **after commit** — never inside `persistCoachSubscription`/`persistPlayerSubscription` (`@Transactional`, `SubscriptionService.java:235-270`,
-`:489-`), where an exception would roll back a persist after Stripe has billed (`:259-266`: "the worst available outcome") — oldest `event_created` first, each
-event in its own `try/catch`, through `subscriptionService.handleSubscriptionWebhook` (`:1220-1238`), which already runs `isStaleEvent` and sets
-`lastStripeEventAt` through `newer(...)` in every branch (so the drain need not), and stop after a `deleted`. The drain on the request thread can be missed
-(a crash between the persist commit and the drain), so the **scheduled job also drains** — "a link now exists → apply; else purge past retention".
+*Nested connections.* The park (`REQUIRES_NEW`) runs while the outer webhook transaction holds a connection. The repo added a dedicated routed pool for exactly this shape —
+`DataSourceConfig.PAYMENT_REQUIRES_NEW_DATASOURCE_KEY` (pool 10), selected by `RoutingDataSourceContext.set(...)` in a **non-transactional wrapper before the proxy opens the connection**
+(`BookingPaymentPersistenceService :132-136`). Use it; with the primary pool at 25, ~25 concurrent webhooks could otherwise exhaust it.
 
-*Retention.* Never-linked rows exist by design: `cancelDuplicateSubscription` (`:190`, `:453`, `:1522`) cancels unlinked duplicates, so their events never drain.
-The scheduled job purges them after a `ConfigBounds`-keyed retention window, logging `warn` and incrementing a metric for any row purged unapplied.
-`invoice.paid` (silent no-op without a row) and `invoice.payment_failed` have the same shape and are **out of scope** — declared here and filed (AC12).
+*Drain.* After commit — never inside `persistCoachSubscription`/`persistPlayerSubscription` (`@Transactional`, `SubscriptionService.java:235-270`, `:489-`), where an exception would roll back a persist after Stripe has
+billed (`:259-266`: "the worst available outcome"). Call it in `subscribeCoach`/`subscribePlayer` after the `isEmpty()` check, in its own `try/catch` (`:185-193`, `:450-458`); only the non-empty branch drains (an empty one
+cancels a duplicate and never links). Oldest `event_created` first, each event through `subscriptionService.handleSubscriptionWebhook` (`:1220-1238`), which already runs `isStaleEvent` and sets `lastStripeEventAt` through
+`newer(...)` in every branch (so the drain need not), and stop after a `deleted`.
+
+*Retention.* Never-linked rows exist by design: `cancelDuplicateSubscription` (`:190`, `:453`, `:1522`) cancels unlinked duplicates. The job (AC3(d)) purges them after a `ConfigBounds`-keyed window, logging `warn` and
+incrementing a metric for any row purged unapplied; a row deleted by a successful apply is not counted. `invoice.paid` (silent no-op without a row) and `invoice.payment_failed` have the same shape and are **out of scope** —
+declared here and filed (AC12).
 
 **AC5 — AC4 must not be bought by making the orphan path louder, or by touching the sweep.** `SUBSCRIBE_RACE_GRACE_WINDOW`
 (`StripeWebhookService.java:75`) stays as it is; the orphan path still must not throw (`:287-293`, `:451-454`); `insertIfAbsent` stays **before** dispatch
@@ -313,11 +323,12 @@ stay green untouched.
 
 **AC6 — a paid proration that cannot be granted is recorded and surfaced, and the record cannot fail the request.** *(OWNER DECIDED 2026-11-04, option a:
 record and keep the 204.)* The superseded **upgrade** branches (`SubscriptionService.java:341-346` coach, `:577-580` player) stop being a bare `log.warn` +
-`return`. In order: (1) **log at `error` with a stable tag first** — the alert source, which works even if the insert fails — and increment a metric; (2) insert a row into a
+`return`. In order: (1) **log at `error` first with a stable tag written `[SUBSCRIPTION_UPGRADE_UNGRANTED] key=value`** (the `]` must follow the tag directly or the Loki expression will not match) — the alert source, which works even if the insert fails — and increment a metric; (2) insert a row into a
 **new table** (`payment.subscription_upgrade_reconciliations`: `subscriber_kind` COACH/PLAYER, `subscriber_ref` text, `stripe_subscription_id`, `target_tier`,
 **`latest_invoice_id`**, `created_at`, `resolved_at`; **no FK** to the subscription tables). `persist*TierUpgrade` already receives the `Subscription updated`, and
 `StripeClient` already uses `sub.getLatestInvoice()` (`:356`, `:415`), so the proration's invoice id is available (the first draft's "no identifier is available"
-was wrong) and gives an operator something to find in Stripe. The insert is **best-effort**: wrap it so that a failure is logged and swallowed, because a
+was wrong) and gives an operator something to find in Stripe. The insert is **best-effort**: wrap it so that a failure is logged and swallowed — and run it, like AC4's park, in a `REQUIRES_NEW` on the payment routed pool
+(`PAYMENT_REQUIRES_NEW_DATASOURCE_KEY`, set by a non-transactional wrapper on a separate bean) because the outer `persist*TierUpgrade` transaction already holds a connection and the row lock — because a
 same-transaction insert that throws would roll back the (otherwise empty) `persist*TierUpgrade` transaction after Stripe has billed, the endpoint would error, and a
 client retry is a *new* upgrade key — a second proration (AC7). Because the table has **no FK**, a `REQUIRES_NEW` insert inside that `try/catch` does **not** deadlock on the
 `FOR UPDATE` held at `:341`; the deadlock the module's carried constraint warns about needs an FK to the locked row, so keep the table FK-free and say why in a comment.
@@ -338,13 +349,13 @@ outcome (`NO_CHARGE`), the `stripe_customers` default is restored to the previou
   `StripeCustomer` has no `@Version` (`StripeCustomer.java:19-32`) and the gateway saves the same entity (`setLastPaymentIntentId`, `StripePaymentGateway.java:209-211`, success path only), so
   a merge would clobber it. Declare it `@Modifying(flushAutomatically = true, clearAutomatically = true) @Transactional @Query` — `purchasePack` is non-transactional, so a bare
   `@Modifying` method throws `TransactionRequiredException` (house precedent: `StripeOAuthStateRepository:18-27`). `NativeModifyingVersionAuditTest` is not tripped (no `@Version`).
-- **Where the snapshot lives:** for a keyed request, `previous_card` and `attempted_card` on the attempt row (AC1), so a replay-driven revert has both values; for a **keyless** request
-  (no row, AC1a) the in-process `previousCard` from `:139`. The keyless clients are exactly the direct-API clients this AC protects.
+- **Where the snapshot lives:** `previous_card` and `attempted_card` on the attempt row (AC1) — which now exists for **every** purchase, keyed or keyless, so a replay-, job- or request-driven revert has both values.
+  Skip the revert when `attempted_card` is null (the shipped UI always sends `undefined`; `= :attempted` would never match, so it is a harmless no-op — make it explicit).
 - **Order:** revert **first**, then write `NO_CHARGE`. The other way round, a crash leaves the declined card saved permanently, because a replay never rewrites the card.
 - **No revert on `UNKNOWN`/`UNRECONCILED`** (the charge may have captured, and a revert would desynchronise the default from the card actually used); for a first-time payer restore to
   `null` and keep the row (the Stripe customer exists; null is handled at `getSavedPaymentMethod:367` and `StripePaymentGateway.java:141-143`).
 - Must not enqueue a card sync (the post-charge gate at `:188-190` exists so a declined card is never pushed onto live subscriptions — keep it).
-- **Accepted limits, stated so the guarantee is not over-read** *(the first draft said "safe against a concurrent legitimate save"; that is false for these)*: (d) if the parent saves the **same**
+- **Reachability and accepted limits, stated so the guarantee is not over-read** *(the first draft said "safe against a concurrent legitimate save"; that is false for these)*: (d) if the parent saves the **same**
   card X through `/save-payment-method` while a pack attempt with X is declining, the column equals the attempted card and the revert undoes a legitimate save; (e) two concurrent purchases by one parent
   with different cards share the single `stripe_customers` row — and because the gateway re-reads it, one can charge the other's card (pre-existing) — so the reverts can leave a declined card saved.
   Both are rare and API-only.
@@ -363,71 +374,76 @@ pause day belongs to the coach's calendar zone instead of the parent's — it ne
 
 **AC11 — the eval cases.** The four existing cases (`337-subscription-entitlement-integrity.yaml` RS05, `350-pack-refund-rounding-remainder.yaml` RS06, `359-charge-idempotency-unknown-outcome.yaml` RS07,
 `368-pack-status-badges.yaml` RS08) **already carry their finding with `fix_pr` and `fix_merge` set** (F12, F3, F10, F4) — nothing to add. The only edit is RS09's draft
-`evals/review/cases/_drafts/pending-card-default-before-charge.yaml`, per `evals/review/README.md:117-120`: **in this PR** set `fix_pr` to the PR number, keep `input_rev`, and promote it to
-`cases/` **without the `pending-` prefix, with `id` equal to the new filename** (`validate.py` rejects a mismatch). The PR number is only known once the PR exists, so this is a follow-up commit on the branch.
-**After the squash merge**, add `fix_merge: <squash sha>` and drop `input_rev` (the README's second step) — note it in Completion Notes as a post-merge chore. The draft's `F1` title and description are
-**correct** (correction 3) — leave them alone. Do not change the anchors; `chargeAndCapture` is declared in `StripePaymentGateway` as well as being called from `SessionPackPaymentService`.
+`evals/review/cases/_drafts/pending-card-default-before-charge.yaml`, per `evals/review/README.md:117-120`: **in this PR** set `fix_pr` to the PR number, keep `input_rev`, and promote it to `cases/`
+**without the `pending-` prefix, with `id` equal to the new filename** (`evals/review/bin/validate.py:64` rejects a mismatch). The PR number is only known once the PR exists, so this is a follow-up commit.
+**After the squash merge**, add `fix_merge: <squash sha>` and drop `input_rev` (`README.md:121`) — a post-merge chore for Completion Notes. The draft's `F1` title and description are **correct**
+(correction 3) — leave them alone. Do not change the anchors; `chargeAndCapture` is declared in `StripePaymentGateway` as well as being called from `SessionPackPaymentService`.
 
-**AC12 — the ledger.** Per `deferred-work.md`'s own rule, delete RS05-RS09 outright once implemented. Before that, as part of this PR, correct in place what was wrong: RS06 (422; the untraceable path;
-its owner-decision text's `V226` was already changed to "a new migration (V227+)" when this story was revised), RS05 (alert-only and coach-only sweep, caller-side marker), RS08 (the silent cancellation of a booking on a day nobody
-paused). **RS09's entry needs no correction** (correction 3) beyond its rejected-alternative wording, which repeats the unenforced SetupIntent premise — it has already been rewritten to say so. File new
-entries for what this story deliberately leaves: automated reconciliation of `UNKNOWN`/`UNRECONCILED` pack attempts; `invoice.paid` / `invoice.payment_failed` with no local row; the `/save-payment-method` door;
-requiring the `Idempotency-Key` header; `persist*TierUpgrade` failing after a successful Stripe update (`payment.subscription.notFound`, DB error).
+**AC12 — the ledger.** Per `deferred-work.md`'s own rule, **delete RS05-RS09 outright** once implemented; do not spend effort correcting entries that are being deleted. File new entries for what this story
+deliberately leaves: automated reconciliation beyond the job (a pack-specific reconciler for `UNRECONCILED` rows that need a human); `invoice.paid` / `invoice.payment_failed` with no local row; the
+`/save-payment-method` door; requiring the `Idempotency-Key` header; `persist*TierUpgrade` failing after a successful Stripe update (`payment.subscription.notFound`, DB error); and the partial-refund policy (AC2).
 
-**AC13 — docs and registrations.** `docs/dev-docs/payment/index.html` (+ rebuilt `docs/dev-docs/assets/search-index.js`) for the attempt record, the parked-event path and the upgrade reconciliation table;
-`docs/deployment/monitoring.md` for AC3/AC6; `docs/deployment/provisioning-checklist.md` for the migrations, the new scheduled job (section 6, "Scheduled jobs and ShedLock") and the alert change. For the new
-ShedLock job read `docs/deployment/scheduler-lock-tuning.md` and follow the existing pattern in `SubscriptionSchedulerLockTest` and `ConfigStartupAssertionTest` for whatever a new scheduler must register.
-`check-docs` must pass.
+**AC13 — docs, registrations, config, erasure.**
+- `docs/dev-docs/payment/index.html` (+ rebuilt `docs/dev-docs/assets/search-index.js`, via `node docs/dev-docs/tools/build-search-index.mjs` — never by hand) for the attempt record, the parked-event path and the
+  upgrade reconciliation table, **including the "Last verified against master SHA (date)" footer stamp that `check-docs` requires**; `docs/deployment/monitoring.md` for the new alert and the AC6 tag;
+  `docs/deployment/provisioning-checklist.md` for the migrations (§0), the new job (§6 "Scheduled jobs and ShedLock") and the alert. `check-docs` must pass.
+- **Config.** Each of these is a `ConfigBounds` `BoundedKey` constant **plus** an entry in `ALL` (**plus** `HAS_CODE_DEFAULT`, or a seed row in a migration if there is no code default): the minimum age (default 10, 5-1440), the
+  attempts retention (default ~30 days), the parked-events retention. `ConfigStartupAssertion` consumes `ALL` at boot.
+- **Scheduler registration.** Follow `SubscriptionSchedulerLockTest` and `ConfigStartupAssertionTest`; there is no hard-coded scheduler count. If any new code calls `lockRetryer.withBoundedRetry(`, bump
+  `PessimisticLockRetryerCallSiteAuditTest.EXPECTED_CALL_SITE_COUNT` (67).
+- **Erasure (OWNER TO CONFIRM).** `GdprErasureService` has no table registry — it is imperative and retains financial rows (`:805`), and would silently skip the new tables. Retain the attempt rows (financial record) and
+  have erasure **null `previous_card` and `attempted_card`**, with an IT. `previous_card`/`attempted_card`/`parent_id` are payment-method ids tied to a person.
+- `docs/deployment/migration-conventions.md` rule 1 says a new table ships a release before any code uses it. `MigrationConventionLintTest` does not enforce it and deferred-167/168 shipped table and code together;
+  acknowledge it in the migration header rather than silently diverging.
 
 **AC14 — `/pr-review` on the final commit.** Run it, fix what it finds, run it again. Deferred-167 closed this at seven rounds by owner decision rather than on a clean round; if this one is still finding behaviour
 defects after five, raise it rather than looping silently.
 
 ## Tasks / Subtasks
 
-- [ ] Task 0: rebase onto the builder-packs branch / master, and re-derive the migration number (Numbering); re-locate `SessionPackPaymentService` cites by symbol
-- [ ] Task 1: RS06 attempt record (AC1, AC1a, AC2)
-  - [ ] Migration for `payment.session_pack_purchase_attempts` — additive; inline `UNIQUE`; `SET LOCAL lock_timeout`; follow `docs/deployment/migration-conventions.md`;
-        `mvn -q -Dtest=MigrationConventionLintTest test`
-  - [ ] Order in `purchasePack`: gates → **attempt lookup** → tier/coach gates (new rows only) → resolve-before-new → snapshot → insert → card write → charge
-  - [ ] Concurrent same-key loser → table answers; `409 payment.attemptInProgress` / `payment.attemptUnresolved`; tier/player mismatch → `payment.idempotencyKeyReused` before any Stripe call
+- [ ] Task 0: confirm this branch is current (`git fetch`, merge `origin/master`), and **re-derive the migration number** (Numbering); re-locate anything not listed there by symbol; check whether `skillars-deferred-170` has started and agree the `purchasePack` ordering
+- [ ] Task 1: RS06 attempt record and index (AC1, AC1a)
+  - [ ] Migration for `payment.session_pack_purchase_attempts` — additive; inline `UNIQUE`; the **partial unique index** on open attempts per parent; `SET LOCAL lock_timeout`; follow `migration-conventions.md`;
+        `mvn -q -Dtest=MigrationConventionLintTest test` (add `allow-blocking-index` only if it flags the index, with the stated reason)
+  - [ ] Order in `purchasePack`: gates → key lookup → tier/coach gates (new rows only) → snapshot → insert (server-minted key if absent) → card write → charge; the two 409s and the open-vs-terminal mismatch rules
+  - [ ] Compare-and-set on every status write; the proof-of-capture exception for `NO_CHARGE`; unclassified `RuntimeException` → `UNKNOWN`
   - [ ] Pre-flight rejections inside `charge()` and `getOrCreateStripeCustomer` failures → `NO_CHARGE`; a failed `SUCCEEDED` write never fails the response
-  - [ ] Replay resolution per AC2: existing-pack check first; `findChargeByIdempotencyKey` with `createdAfter = created_at − slack`; `getRefundableAmount` for refund state; minimum age before "none found" counts;
-        transitions out of the `:154-186` catch; resolve the `stripe_refund_failures` row
-  - [ ] ITs: concurrent same key; crash between refund and outcome write; replay of `UNRECONCILED`; replay after the tier is deactivated; resolve-before-new blocks a second charge; "not found" inside the minimum age stays `UNKNOWN`
-  - [ ] Extend `StubPaymentGateway` (`src/test/.../config/StubPaymentGateway.java`): it always returns `Optional.empty()` from `findChargeByIdempotencyKey` and never declines; mock the new repository in `SessionPackPaymentServiceTest` (`@InjectMocks`)
+  - [ ] ITs: concurrent different keys (the index refuses the second); concurrent same key; a keyless request while a keyed one is open; replay after the tier is deactivated; a stale CAS
+- [ ] Task 1b: AC2 resolution (same-key replay and the job)
+  - [ ] Existing-pack check first; no-customer-row → `NO_CHARGE` (re-query the repository); `createdAfter = created_at − slack`; classification order as an invariant (a `requires_payment_method` intent never reaches `getRefundableAmount`)
+  - [ ] Terminal rule after the key window; minimum age from a `ConfigBounds` key; resolved-captured runs `scheduleSubscriptionCardSync` and resolves the `stripe_refund_failures` row; transitions out of the `:154-186` catch
+  - [ ] ITs: crash between refund and outcome write; replay of `UNRECONCILED`; "not found" inside the minimum age stays `UNKNOWN`; partial refund
+  - [ ] Extend `StubPaymentGateway` (`src/test/.../config/StubPaymentGateway.java` — it never declines and `findChargeByIdempotencyKey` returns empty); mock the new repository in `SessionPackPaymentServiceTest`
+        (`@InjectMocks`); add the new spies as **shared fields** in `AbstractIntegrationTest` (a per-class spy changes the context key; ceiling 17); backdate `created_at` via `commitWrite` (`ClockProvider` does not reach server threads)
 - [ ] Task 2: RS06 no-charge signal + frontend (AC1b)
   - [ ] Pack-service subclass/code for no-charge; gateway decline code **unchanged** (`StripePaymentGatewayTest:865-872`)
-  - [ ] `SessionPackPurchasePage.vue`: read `errorMsg.errorKey` (422) and `errorMsg.message` (400/409); clear rules per AC1b; `:188` stops clearing on every `e?.response`
-  - [ ] **`SessionPackPurchasePageSpec.js:61-71` asserts the defect** (`'mints a new key once the server answered a failure'`) and changes deliberately; add: key kept on an unknown-outcome answer, cleared on the
-        no-charge signal, **not** cleared on card save/pack change after an unknown outcome
-- [ ] Task 3: RS06 observability + scheduled job (AC3, AC1a retention, AC4 drain/purge)
-  - [ ] Log-first catch at `:144`; `PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN` (diagnostic only)
-  - [ ] ShedLock job: scan aged unresolved attempts → `PACK_PURCHASE_ATTEMPT_UNRESOLVED` + gauge; purge terminal attempts; drain linkable parked events; purge never-linked parked events — one lock, sized per `scheduler-lock-tuning.md`
-  - [ ] Regex + runbook + `payments.json` panel; run `AlertDocumentationParityTest`
+  - [ ] `SessionPackPurchasePage.vue`: read `errorMsg.errorKey` (422) and `errorMsg.message` (409/400); clear/keep rules per AC1b; i18n for the two new 409s; `:188` stops clearing on every `e?.response`
+  - [ ] **`SessionPackPurchasePageSpec.js:61-71` asserts the defect** and changes deliberately; add: key kept on an unknown outcome and on `attemptUnresolved`, cleared on the no-charge signal and on `idempotencyKeyReused`
+- [ ] Task 3: the job, the gauge and the diagnostics (AC3)
+  - [ ] One ShedLock job, 5-minute cadence, four duties each in its own `try/catch`; `lockAtMostFor` sized per `scheduler-lock-tuning.md`; non-`@Transactional`
+  - [ ] `OperationalBacklogMetrics` branch (`pack_attempts`) + a Grafana alert mirroring `grafana-alerts.yml :771` + the `monitoring.md` heading; run `AlertDocumentationParityTest`
+  - [ ] Log-first catch at `:144`; `[PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN] key=value` for the dashboard panel only
 - [ ] Task 4: RS05 park-and-reapply (AC4, AC5)
-  - [ ] Migration for `payment.stripe_pending_subscription_events`
-  - [ ] Park in `REQUIRES_NEW`/savepoint with the processed marker, commit, **then** post-commit re-read and apply; P commits the link then drains; delete after apply; failed park = log and drop
-  - [ ] Coach **and** player (`subscribePlayer:422-460`, `persistPlayerSubscription:489-`), `updated` **and** `deleted`; store extracted fields
-  - [ ] ITs: the interleaving in AC4 (both orders); out-of-order parked events; deleted-then-older-update; a failed park does not trigger Stripe retry
+  - [ ] Migration for `payment.stripe_pending_subscription_events` (`UNIQUE(event_id)`, no FK)
+  - [ ] Park in `REQUIRES_NEW` on the routed pool via a separate bean, `ON CONFLICT DO NOTHING`; `handleEventAtomically` returns a signal; post-commit re-read in `processWebhook` (also when the park failed), `try/catch`; `DELETE … RETURNING` claim in the apply transaction
+  - [ ] Coach **and** player (`subscribePlayer:422-460`, `persistPlayerSubscription:489-`), `updated` **and** `deleted`; store extracted fields; drain after the `isEmpty()` check in its own `try/catch`
+  - [ ] ITs: the AC4 interleaving (both orders — needs a hook on `PaymentCoachSubscriptionRepository.findByStripeSubscriptionId`); out-of-order parked events; deleted-then-older-update; a failed park does not trigger a Stripe retry; a throwing post-commit step leaves the park row for the job
   - [ ] Confirm `SubscriptionServiceStripeReconciliationIT :91/:112` pass **unchanged**
 - [ ] Task 5: RS07 superseded proration (AC6, AC7)
-  - [ ] Migration for `payment.subscription_upgrade_reconciliations` (FK-free, `latest_invoice_id`); `error` log tag **first**, metric, then best-effort insert that cannot fail the request; tag into the regex and runbook
-  - [ ] `SubscriptionEntitlementIntegrityTest.item9…:562-568` verifies `never()).save(any())` on `paymentCoachSubscriptionRepository` only — a write to a different repository does not trip it; the realistic
-        failure is an NPE from an un-mocked new dependency under `@InjectMocks`
+  - [ ] Migration for `payment.subscription_upgrade_reconciliations` (FK-free, `latest_invoice_id`); `[SUBSCRIPTION_UPGRADE_UNGRANTED] key=value` at `error` **first**, metric, then a best-effort `REQUIRES_NEW` insert on the routed pool that cannot fail the request; tag into the `MoneyIntegrityEvent` regex and runbook
+  - [ ] `SubscriptionEntitlementIntegrityTest.item9…:562-568` verifies `never()).save(any())` on `paymentCoachSubscriptionRepository` only — a write to a different repository does not trip it; the realistic failure is an NPE from an un-mocked new dependency under `@InjectMocks`
   - [ ] Keep `ALWAYS_INVOICE` + `ERROR_IF_INCOMPLETE` (`StripeClient.java:309-311`)
 - [ ] Task 6: RS09 declined-card revert (AC8, AC9)
-  - [ ] Conditional-update repository method with `@Modifying(...)` + `@Transactional`; `previous_card`/`attempted_card` on the row; in-process `previousCard` for keyless requests
-  - [ ] Revert before writing `NO_CHARGE`; no revert on `UNKNOWN`/`UNRECONCILED`; first-time payer → null
-  - [ ] Tests: decline with X, retry with X succeeds, sync fires (correction 3); first-time payer's retry fires the sync
+  - [ ] Conditional-update repository method with `@Modifying(flushAutomatically = true, clearAutomatically = true)` + `@Transactional`; skip when `attempted_card` is null; revert **before** writing `NO_CHARGE`; no revert on `UNKNOWN`/`UNRECONCILED`; first-time payer → null
+  - [ ] Tests: decline with X, retry with X succeeds, sync fires (correction 3); a first-time payer's retry fires the sync
   - [ ] Remove the dead local `customer` at `:140` (assigned, never read)
-  - [ ] Completion Notes: UI never sends a card here; the `/save-payment-method` door and AC8(d)/(e) are out of scope
+  - [ ] Completion Notes: the shipped UI never sends a card here; the `/save-payment-method` door and AC8(d)/(e) are out of scope
 - [ ] Task 7: RS08 pause date (AC10)
   - [ ] `SessionPackDashboardPage.vue:313` → local midnight; refresh the comment at `:271`
   - [ ] Add a regression test to `SessionPackDashboardPageSpec.js` (nothing existing changes; the assertion at `:180` checks the notify message, not the instant)
-  - [ ] Reuse the idiom at `AvailabilityManagerPage.vue:192` / `WeeklyCalendar.vue:79`; no shared util. The DST-aware `zonedMidnightMs` (`BookingRequestPage.vue:552`, page-local, docblock `:542-551`) is only needed
-        for the coach-zone variant AC10 puts out of scope
-- [ ] Task 8: eval case + ledger (AC11, AC12) — promote the draft (rename file + `id`), then the post-merge `fix_merge` chore
-- [ ] Task 9: docs, registrations, erasure (AC13) — confirm `GdprErasureService` covers the new tables
+  - [ ] Reuse the idiom at `AvailabilityManagerPage.vue:192` / `WeeklyCalendar.vue:79`; no shared util. The DST-aware `zonedMidnightMs` (`BookingRequestPage.vue:554`, page-local, docblock `:542-551`) is only needed for the coach-zone variant AC10 puts out of scope
+- [ ] Task 8: eval case promotion (AC11): rename file + `id`, then the post-merge `fix_merge` chore; ledger deletions and new entries (AC12)
+- [ ] Task 9: docs, config keys, registrations, erasure (AC13) — including the erasure null-out and its IT
 - [ ] Task 10: `/pr-review` (AC14)
 
 ## Dev Notes
@@ -503,16 +519,16 @@ is a narrower second route. The subscribe writers cannot race it: `requireBillin
 `assertCanSubscribe:1438-1442` and `claimCoachSubscribeAttempt:205-216` all refuse a subscribe while the
 row is billing-healthy.
 
-**RS09 — `SessionPackPaymentService.purchasePack:98-192`, `getOrCreateStripeCustomer:398-413`.** The card
-write is at `:402` (existing customer) or `:411` (new), reached from `:140`; the charge is at `:144`.
-`purchasePack` has no `@Transactional`, the class's only transactional methods are `:255`, `:295`, `:336`,
+**RS09 — `SessionPackPaymentService.purchasePack:98-192`, `getOrCreateStripeCustomer:440-455`.** The card
+write is at `:444` (existing customer) or `:453` (new), reached from `:140`; the charge is at `:144`.
+`purchasePack` has no `@Transactional`, the class's only transactional methods are `:255`, `:295`, `:347`, `:361`, `:378` (the last three added by #436, none on the purchase path),
 no `TransactionTemplate` is injected, `getOrCreateStripeCustomer` is `private` and called in-class (so no
 proxy), and `SessionPackPaymentResource` has zero `Transactional`. Therefore
 `stripeCustomerRepository.save` runs in Spring Data's own transaction and **commits on return from
 `:140`** — exactly one `stripe_customers` row, before the charge is attempted. There is no try/catch
 around `:144` (the only `try`, `:154-186`, wraps `createPurchase`), so a decline propagates and nothing
 reverts the write. Every later platform-initiated charge for that payer then picks up the declined card,
-because `StripePaymentGateway.charge:138-145` re-reads it from that table, and `getSavedPaymentMethod:363-382`
+because `StripePaymentGateway.charge:138-145` re-reads it from that table, and `getSavedPaymentMethod:405-`
 reports it as the saved card. Blast radius is bounded by the post-charge-only sync gate (`:188-190`,
 javadoc `:198-199`): a declined card is never pushed onto live Stripe subscriptions. **But that gate is also
 why the retry case is broken** (correction 3): the declined card X is already committed, so the retry's
@@ -532,7 +548,7 @@ removed.
 
 Worked example: `America/Los_Angeles`, local 2026-11-04 17:30 PST. Picker's earliest is `"2026-11-05"`;
 `:313` sends `2026-11-05T00:00:00.000Z`; server `now` is `2026-11-05T01:30:00Z`; `isAfter` is false →
-`booking.pauseStartInPast`, whose message (`i18n/en-US/index.js:1992`) tells the user to "pick tomorrow or
+`booking.pauseStartInPast`, whose message (`i18n/en-US/index.js:1995`) tells the user to "pick tomorrow or
 later" — which is what they did. Rejection window is local time-of-day ≥ `24h − |offset|`: eight hours a
 day in Los Angeles, five in New York, **never** at UTC or east.
 
@@ -550,7 +566,7 @@ day in Los Angeles, five in New York, **never** at UTC or east.
   retry against a healthy subscription.
 - **Do not shorten `SUBSCRIBE_RACE_GRACE_WINDOW`.** There is no generic way to clear an `AdminAlert` once
   OPEN (`:50-57`), so that trades a silent drop for permanently unresolvable false alerts.
-- **A per-attempt idempotency key means a client retry is a new charge** — packs
+- **A per-attempt idempotency key means a client retry with a new key is a new charge** — packs (a keyless request mints its own key)
   (`SessionPackPaymentService.java:143`) and upgrades (`SubscriptionService.java:1547`, prefix passed at
   `:305`). Any error you
   return must not invite a retry of a call that already moved money.
@@ -559,9 +575,9 @@ day in Los Angeles, five in New York, **never** at UTC or east.
   entity (a locked read returns an already-managed instance without refreshing it); Java 17, so
   `instanceof` chains and no switch patterns; a finite `jakarta.persistence.lock.timeout` is **inert** on
   PostgreSQL.
-- **Resolve before you start a new attempt, and look up before you gate.** A replay must be able to resolve a captured
-  payment even if the tier was deactivated or the coach suspended since (AC1a), and a new attempt must not open while an
-  earlier one is unresolved — the server enforces this; the client's key handling is only UX (AC1a(4), AC1b).
+- **One open attempt per parent is enforced by a partial unique index, not by application logic** (AC1). **Never resolve another attempt from the
+  request path** — resolving an earlier attempt and then charging the retry is exactly how the third review found a double charge. Look up the
+  caller's own key *before* the tier/coach gates, so a replay can still resolve a captured payment after the tier was deactivated or the coach suspended (AC1a).
 - **"Not found" at Stripe is not proof of no charge** inside the minimum age or when the payer has no customer row (AC2); a refunded
   PaymentIntent is still `succeeded` (`ChargeLookup` has no refund state — use `getRefundableAmount`).
 - **Two commit points for the webhook race** (AC4): re-reading inside the webhook's own transaction cannot see a link that commits
@@ -573,8 +589,8 @@ day in Los Angeles, five in New York, **never** at UTC or east.
   the payment method under the same key is an idempotency mismatch that `isOutcomeUnknown` treats as an
   unknown outcome. This is documented Stripe behaviour, not exercised in this review — pin it with a test.
 - Migrations: additive first, FK/CHECK `NOT VALID` then `VALIDATE` later, `SET LOCAL lock_timeout` (not
-  plain `SET`), `allow-*` markers immediately above their own statement with a real reason. V226 is **claimed by two unmerged
-  branches** (builder-packs and `feature/pitchside-reg-neutral`) — start from V227 and re-derive at dev time (Numbering).
+  plain `SET`), `allow-*` markers immediately above their own statement with a real reason. V226 is **on master** (builder-packs,
+  #436); V227 is contested by a local-only pitchside branch and by `skillars-deferred-170` — start from V227 and re-derive at dev time (Numbering).
 - **If Task 4 touches the daily sweep, respect its lock budget.** `StripeSubscriptionReconciliationScheduler`
   is `@Scheduled(cron = "0 0 5 * * *")` with `lockAtMostFor = "PT15M"`, `lockAtLeastFor = "PT2M"`, sized
   against Stripe page latency (its javadoc `:22-36`). A per-row status comparison costs no extra Stripe
@@ -696,4 +712,12 @@ Claude Opus 5 (`claude-opus-5`)
   extracted-field storage; AC6 logs first, inserts best-effort, stores `latest_invoice_id` (the first draft wrongly said no identifier was available) and corrects its blanket
   `REQUIRES_NEW` ban (the FK-free table cannot deadlock); AC8 gains `attempted_card`, keyless handling, revert-before-`NO_CHARGE`, `@Transactional` on the repository method and two accepted
   limits; Numbering now names the **second** unmerged V226 holder and that the builder-packs branch edits `SessionPackPaymentService.java`; AC11 includes the rename-and-`id` and
-  post-merge steps; seven citation drifts fixed. **Applied without an owner answer — OWNER TO CONFIRM:** the scheduled scan is included in RS06, and the RS09 revert is kept.
+  post-merge steps; seven citation drifts fixed. **Applied without an owner answer — OWNER TO CONFIRM:** the scheduled scan is included in RS06, and the RS09 revert is kept. *(The scan was replaced by a resolving job + backlog gauge in the third revision below; only the RS09 revert remains to confirm.)*
+- 2026-11-04 — **revised after the third `/mto-story-review`** against HEAD `05b8bea8` (report: `story-review.md`; ~140 citations, ~25 attributions, ~30 behavioural claims, 13 corner-case areas; **4 high / 9 medium / 4 low**).
+  All four high findings were in mechanisms the previous revision had added, and the story was not converging (6, 3, then 4 high-severity defects), so the **owner chose to simplify RS06 rather than patch it or split the story**.
+  **Removed:** the cross-attempt *resolve-before-new* guard (it double-charged when it found a capture, was a check-then-insert race, and had no exit for a stuck row), the log-tag scan, and the "keyless requests write no row" special case.
+  **Added:** a **partial unique index** — one open attempt per parent — as the concurrency control (a server-minted key means *every* purchase has a row); **compare-and-set** on every status write with a proof-of-capture exception; a **minimum age of 10 min** (configurable)
+  matching the existing reconciler and the 6-8 min a legitimate request can run; resolution **only** by a same-key replay or the **job**; "no customer row → `NO_CHARGE`" and a terminal rule after the key window; an `OperationalBacklogMetrics` branch + Grafana alert (self-clearing) in place of a log alert; log tags in `[TAG] key=value` form;
+  one consistent AC4 structure (park in `REQUIRES_NEW` on the routed pool via a separate bean, post-commit re-read in `processWebhook`, `DELETE … RETURNING` claim, a throwing post-commit step recovered by the job); a GDPR decision (null the card columns); `ConfigBounds`/registration notes; unclassified exceptions → `UNKNOWN`; a resolved-captured replay runs the card sync.
+  **Also:** **merged `origin/master`** (#436 landed with `V226`; `+42` lines in `SessionPackPaymentService`; `V227` contested; `skillars-deferred-170` is sequenced after this story and rewrites `purchasePack`'s ordering), re-located the shifted cites, and fixed six citation drifts. **Accepted cost:** a parent who loses the key while an attempt is `UNKNOWN` waits for the job (≤ minimum age + 5 min).
+  **Still to confirm:** the RS09 revert, the GDPR null-out, and the four-duty job.
