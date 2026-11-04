@@ -65,9 +65,41 @@ so `findConflictingBookingsForPause` (`PackSessionService.java:556`) sweeps the 
 into the cancellation set. It silently cancels a booking on a day nobody paused. That is a money and
 entitlement consequence, not the UX annoyance the `medium/edge-case` label suggests.
 
+## Owner decisions (2026-11-04)
+
+All three design forks raised at story creation are settled. The ACs below already encode them; this
+section records the reasoning and the rejected alternatives so a later reader does not have to guess why.
+
+**RS06 — persist the attempt server-side (option a).** `V226` adds a pack attempt record, unique on
+`(parent_id, attempt_key)`, written before the charge; replay returns the recorded outcome. *Rejected:*
+frontend key retention alone, because it does not close the refunded-intent trap (AC2) and leaves dedup
+dependent on browser state, so a reload or a second tab still double-charges. *Rejected:* phasing the two,
+because the thing that makes retention safe is the server record itself, so the phasing would ship the half
+that reads as fixed while the gap remains.
+
+**RS07 — record for recovery, keep the 204 (option a).** A durable money-moved-no-entitlement row plus a
+metric and an alert, following the `RefundReconciliationService` / `stripe_refund_failures` precedent
+already used for packs. *Rejected:* auto-refunding the proration, because the subscription was revoked and
+a refund may be the wrong answer while that revocation is itself disputed or being reversed, and because
+the module's precedent is deliberately record-and-reconcile. *Rejected:* answering 202 and surfacing it in
+the UI, because it is a two-endpoint contract change plus frontend and i18n work, and 202 invites a client
+retry — which, with a per-attempt key (`SubscriptionService.java:1547`), charges a **second** proration.
+Accepted cost, stated plainly: the user is still told the upgrade worked, and resolution is manual and
+depends on someone acting on the alert.
+
+**RS09 — revert to the previous card on failure (option a).** Restore the `:139` snapshot when
+`chargeAndCapture` throws, idempotent across replays and safe against a concurrent save. *Rejected:*
+passing the payment method into the gateway, which would remove the window entirely but changes
+`StripePaymentGateway`'s contract — it re-reads from `stripe_customers` at `:138-145` — and so touches
+every caller including the booking path, a materially larger blast radius than the rest of this bundle.
+*Rejected:* also fixing `/save-payment-method` (`SubscriptionService.java:657-665`), because that endpoint
+follows a confirmed, customer-scoped SetupIntent so the card is already Stripe-authenticated. Accepted
+cost: this is compensation, not prevention — a crash between the charge and the revert still leaves the
+declined card saved.
+
 ## Acceptance Criteria
 
-**AC1 — a retry after an answered failure cannot charge a second time.** Pack purchase gains a
+**AC1 — a retry after an answered failure cannot charge a second time.** *(OWNER DECIDED 2026-11-04, option a.)* Pack purchase gains a
 server-side attempt record, written **before** the Stripe call, keyed on `(parentId, attemptKey)`, so
 dedup no longer depends solely on the client resending the same key. A replay of a known attempt key
 returns that attempt's recorded outcome and charges nothing. The frontend stops discarding the key on any
@@ -108,7 +140,7 @@ staleness and normalisation rules still run.
 (`:287-293`, `:451-454`: Stripe must never be put into indefinite retry on a healthy subscription), and
 `insertIfAbsent` stays **before** dispatch (`:179`) so the concurrent-retry race it closes stays closed.
 
-**AC6 — a paid proration that cannot be granted is recorded and surfaced.** The superseded branches
+**AC6 — a paid proration that cannot be granted is recorded and surfaced.** *(OWNER DECIDED 2026-11-04, option a: record and keep the 204.)* The superseded branches
 (`SubscriptionService.java:341-346` coach, `:577-580` player) stop being a bare `log.warn` + `return`:
 they record a durable money-moved-no-entitlement row following the existing
 `RefundReconciliationService` / `stripe_refund_failures` precedent, and increment a metric. The fix must
@@ -122,7 +154,7 @@ and a new charge. Whatever AC6 returns must not invite the client to retry the u
 call must stay outside the DB transaction (`:353-357` — rolling back after Stripe has billed is the
 stated worse outcome).
 
-**AC8 — a declined card does not remain the payer's saved default.** When `chargeAndCapture`
+**AC8 — a declined card does not remain the payer's saved default.** *(OWNER DECIDED 2026-11-04, option a: revert to the snapshot.)* When `chargeAndCapture`
 (`SessionPackPaymentService.java:144`) throws, the `stripe_customers` default written at `:402`/`:411` is
 restored to the `previousCard` snapshot already taken at `:139`. The compensating write must be safe
 against a concurrent legitimate save of the same column, and must not enqueue a card sync (the post-charge
@@ -428,3 +460,4 @@ Claude Opus 5 (`claude-opus-5`)
   fixes wrong — key retention alone would hand back a pack funded by refunded money, and granting the tier
   on a superseded row would re-grant a paid tier with no subscription — and names the four existing tests
   that assert the current defective behaviour and must change deliberately.
+- 2026-11-04 — owner settled all three design forks the same day, each on the recommended option (persist the attempt server-side; record the superseded proration and keep the 204; revert the card to the pre-charge snapshot). The ACs already encoded these, so nothing was rewritten; the reasoning and the rejected alternatives are recorded in the new `Owner decisions` section, including the two costs the owner accepted — RS07 still tells the user the upgrade worked, and RS09 compensates rather than prevents.
