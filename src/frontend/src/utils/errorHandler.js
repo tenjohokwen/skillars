@@ -192,6 +192,24 @@ export function getErrorMessage(error) {
 }
 
 /**
+ * The user-facing text for an API error, from a component's own i18n: the errorKey the backend sent when
+ * this bundle translates it, else parseApiError's message (already translated for network and server errors).
+ * For call sites that used to read response.data.message, which ErrorDto never has.
+ *
+ * @param {Error} error - Axios error object
+ * @param {Function} t - the component's useI18n() t
+ * @param {Function} te - the component's useI18n() te
+ * @returns {string} Error message
+ */
+export function translatedErrorMessage(error, t, te) {
+  const parsed = parseApiError(error)
+  // Only a key the backend sent: parseApiError derives one from a bare HTTP status (validation.badRequest,
+  // error.unknown, ...) that is developer text, and puts the user-facing fallback in `message`.
+  const sentKey = error?.response?.data?.errorMsg?.errorKey
+  return sentKey && te(sentKey) ? t(sentKey) : parsed.message
+}
+
+/**
  * Get help code for support reference.
  *
  * @param {Error} error - Axios error object

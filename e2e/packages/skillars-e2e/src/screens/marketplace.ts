@@ -38,6 +38,8 @@ export class PackPurchaseScreen extends Screen {
   addCard = () => this.tid('purchase-add-card-btn')
   confirm = () => this.tid('purchase-confirm')
   error = () => this.tid('purchase-error')
+  /** Offered in the error banner when the card was declined. */
+  updateCard = () => this.tid('purchase-update-card')
 }
 
 export class PacksDashboardScreen extends ListScreen {

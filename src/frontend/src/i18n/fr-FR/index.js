@@ -1969,6 +1969,8 @@ export default {
         'Votre compte Stripe est déconnecté de Skillars. Reconnectez-le pour recevoir vos versements.',
     },
     error: {
+      cardDeclined:
+        'Votre carte a été refusée ou nécessite une authentification supplémentaire. Veuillez mettre à jour votre moyen de paiement et réessayer.',
       coachStripeNotConfigured: "Ce coach n'a pas encore terminé la configuration de son paiement",
       providerUnavailable: 'Service de paiement indisponible. Veuillez réessayer.',
       statusLoadFailed:
@@ -2046,6 +2048,7 @@ export default {
       replaceCard: 'Remplacer la carte',
       addCardPrompt: 'Ajoutez une carte de paiement pour continuer',
       addCardCta: 'Ajouter une carte',
+      updateCardCta: 'Mettre à jour la carte',
       save: 'Enregistrer la carte',
       saveError: "Impossible d'enregistrer votre carte. Veuillez réessayer.",
       savedRefreshFailed:

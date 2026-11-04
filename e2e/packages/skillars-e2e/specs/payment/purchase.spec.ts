@@ -102,7 +102,7 @@ test.describe('E · Payment method & pack purchase', () => {
   )
 
   test(
-    'a declined card shows an error and leaves the family without credits',
+    'a declined card says so, offers to update the card, and leaves the family without credits',
     scenario({
       id: 'PAY-06',
       priority: 'P0',
@@ -118,11 +118,10 @@ test.describe('E · Payment method & pack purchase', () => {
       const { purchase } = await openPurchase(page, suite, parent, coach)
       await purchase.confirm().click()
 
-      // GAP: the reason is not surfaced. The backend answers a decline with the catch-all
-      // payment.lifecycleFailure, and the page reads response.data.message, which ErrorDto never
-      // has, so every failure shows the generic text. The existing "card was declined" copy
-      // (subscription.errors.paymentDeclined) is never reached from here.
-      await expect(purchase.error()).toHaveText(t('booking.packs.purchaseError'))
+      // The decline is named (payment.cardDeclined → payment.error.cardDeclined), with a way to
+      // update the card right there; the generic purchase error is for everything else.
+      await expect(purchase.error()).toContainText(t('payment.error.cardDeclined'))
+      await expect(purchase.updateCard()).toBeVisible()
       // Still on the purchase page (success goes back to the profile), and no pack was created.
       await expect(purchase.packOption()).toBeVisible()
       const packs = await new PacksDashboardScreen(page, suite).open({
