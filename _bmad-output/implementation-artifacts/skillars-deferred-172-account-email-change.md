@@ -1,6 +1,6 @@
 # Story skillars-deferred-172: Account email change — verified, reversible, safe
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-05 (/bmad-create-story equivalent, written by hand), right after skillars-deferred-171
      (#451, merged 78bb2c9e) and Dependabot #452-#455. Built from ledger item RS03 plus owner decisions taken in
@@ -363,7 +363,7 @@ add the `frontend-tests` label so the Vitest job runs).
 - [x] T10 (AC11): templates' four bundles + guard tests, copy fixes, `security-api-endpoints.md`, checklist, ledger,
       eval case.
 - [x] T10b (AC11): dev docs in `docs/dev-docs` (correct + extend as listed), search index rebuilt, `check-docs` passes.
-- [ ] T11 (AC12): `/pr-review`, PR.
+- [x] T11 (AC12): `/pr-review`, PR.
 
 ## Dev Notes
 
@@ -562,3 +562,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-05: revised after /mto-story-review: F1-F15 folded in; owner decisions R1 (one change per undo window), R2
   (erasure cleanup; suspended-account undo keeps the suspension), R3 (erasure hold replaces the 72 h cool-off), R4 (no id
   lookups; F14 check first), R5 (registration half + V231 lowercase backfill and `lower()` unique indexes).
+- 2026-11-05: implemented (T0-T11); /pr-review rounds 1-4 with owner decisions V2, F3, C, D, E, F, G folded in; status review.
