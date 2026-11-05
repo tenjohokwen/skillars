@@ -174,16 +174,21 @@ test.describe('C · Coach onboarding', () => {
       page.on('request', (r) => {
         if (r.method() === 'PUT' && r.url().endsWith('/steps/3')) step3Saves.push(r.url())
       })
-      // No price and no pack: Next stays on step 3 and saves nothing.
+      // The price field's own rule message (Quasar may put the test id on the inner <input>, which
+      // holds no text, so match the message itself; it is the only field on the step in error).
+      const required = page.getByText(t('validation.required'), { exact: true })
+      await expect(required).toBeHidden()
+      // No price and no pack: Next stays on step 3, says why, and saves nothing. The price was
+      // never touched, so the message comes from Next itself (ledger 2026-11-05, #449).
       await builder.next().click()
       await expect(builder.stepIndicator()).toHaveText(stepOf(3))
+      await expect(required).toBeVisible()
       // Even with a complete pack, the price is still required.
       await builder.addPackRow({ sessionCount: 5, totalPrice: 200, label: 'Five' })
       await builder.perSessionPrice().fill('40')
+      await expect(required).toBeHidden()
       await builder.perSessionPrice().fill('')
-      // The price field's own rule message (Quasar may put the test id on the inner <input>, which
-      // holds no text, so match the message itself; it is the only field on the step in error).
-      await expect(page.getByText(t('validation.required'), { exact: true })).toBeVisible()
+      await expect(required).toBeVisible()
       await builder.next().click()
       await expect(builder.stepIndicator()).toHaveText(stepOf(3))
       expect(step3Saves).toEqual([])

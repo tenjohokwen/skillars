@@ -185,7 +185,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       't() on payment.error.<code> for a server-supplied payment.* errorKey, after a te() probe',
   },
   {
-    at: 'src/components/profileBuilder/ProfileBuilderStep3.vue:219',
+    at: 'src/components/profileBuilder/ProfileBuilderStep3.vue:226',
     reason:
       'pack error keyed by packErrorKey (src/utils/sessionPackForm.js), one of five literal auth.coach.step3Pack* keys',
   },
