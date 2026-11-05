@@ -460,6 +460,22 @@ export class Provisioner {
   }
 
   /**
+   * Set a runtime config value through the admin config API (which also drops the app's config cache)
+   * and return the effective value it replaced. Global to the app: only for @config tests, through the
+   * `runtimeConfig` fixture, which restores it.
+   */
+  async setConfigValue(key: string, value: string): Promise<string> {
+    const previous = await this.configValue(key)
+    const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      await session.api.put(`/config/values/${key}`, { data: { value }, expectStatus: 200 })
+      return previous
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
    * Run a scheduled job now through the e2e-profile trigger (E2eJobResource), as the bootstrap admin,
    * instead of waiting for its schedule. Seed state that is already due first. The job holds its
    * ShedLock while it runs; a 409 means another run has it, so this retries until its own run lands.

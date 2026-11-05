@@ -75,6 +75,14 @@ function originPattern(url: string): RegExp {
   return new RegExp(`^${origin}(?:/|$)`)
 }
 
+interface SkillarsTestFixtures {
+  /**
+   * Change runtime config for this test only. Config is global to the app, so a test that uses this must
+   * carry @config, which runs it in the serial lane; every value set is put back after the test.
+   */
+  runtimeConfig: { set: (key: string, value: string | number) => Promise<void> }
+}
+
 interface SkillarsWorkerFixtures {
   /** The worker's baseline accounts, provisioned on first use. */
   baseline: <R extends BaselineRole>(role: R) => Promise<Baseline[R]>
@@ -82,7 +90,21 @@ interface SkillarsWorkerFixtures {
   provision: Provisioner
 }
 
-export const test = skillars.test.extend<object, SkillarsWorkerFixtures>({
+export const test = skillars.test.extend<SkillarsTestFixtures, SkillarsWorkerFixtures>({
+  runtimeConfig: async ({ provision }, use, testInfo) => {
+    const originals = new Map<string, string>()
+    await use({
+      set: async (key, value) => {
+        if (!testInfo.tags.includes('@config'))
+          throw new Error(
+            `runtimeConfig.set(${key}) needs the @config tag: config is global to the app`,
+          )
+        const previous = await provision.setConfigValue(key, String(value))
+        if (!originals.has(key)) originals.set(key, previous)
+      },
+    })
+    for (const [key, value] of [...originals].reverse()) await provision.setConfigValue(key, value)
+  },
   baseline: [
     async ({}, use) => {
       await use(ensureBaseline)

@@ -21,5 +21,8 @@ public record SessionPackPurchaseResponse(
     Instant pausedFrom,
     /* fix/pack-status-badges: why a REVOKED pack was revoked (CHARGEBACK_LOST, EXTERNAL_REFUND,
        COACH_SUSPENDED — SessionPackPurchase.REVOKED_*); null unless revoked. */
-    String revokedReason
+    String revokedReason,
+    /* The longest pause the server accepts now (pack.pause.maxDays, runtime config), so the pause dialog
+       states and enforces the real limit instead of a copy of the default. */
+    int pauseMaxDays
 ) {}

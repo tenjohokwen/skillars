@@ -530,6 +530,20 @@ class SessionPackPaymentServiceTest {
         assertThat(statusOf(responses, expired.getPurchaseId())).isEqualTo("EXPIRED");
     }
 
+    /** Pitchside MNY-05: each pack carries the live pause maximum, so the dialog states the real limit. */
+    @Test
+    void getPacksForParent_reportsTheConfiguredPauseMaximum() {
+        SessionPackPurchase active = purchase(3, Instant.now().plus(10, ChronoUnit.DAYS), null);
+        when(sessionPackPurchaseRepository.findByParentIdOrderByCreatedAtDesc(PARENT_ID)).thenReturn(List.of(active));
+        when(sessionPackTierRepository.findAllById(any())).thenReturn(List.of());
+        when(configService.getBoundedLong(com.softropic.skillars.platform.config.service.ConfigBounds.PACK_PAUSE_MAX_DAYS))
+            .thenReturn(30L);
+
+        List<SessionPackPurchaseResponse> responses = sessionPackPaymentService.getPacksForParent(PARENT_ID, null);
+
+        assertThat(responses).singleElement().extracting(SessionPackPurchaseResponse::pauseMaxDays).isEqualTo(30);
+    }
+
     /**
      * fix/pack-status-badges: a revoked pack reads REVOKED (not EXHAUSTED, though its sessions were zeroed) and
      * carries its reason; a pack under an open card dispute reads FROZEN (even while paused); a pause scheduled
