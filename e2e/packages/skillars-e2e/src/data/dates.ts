@@ -18,3 +18,8 @@ export function dateInputValue(days: number): string {
 }
 
 export const DAY_MS = 86_400_000
+
+/** A date as the coach's sold-pack list prints it (`toLocaleDateString` with no options). */
+export function uiShortDate(instant: string | Date): string {
+  return new Date(instant).toLocaleDateString(E2E.locale, { timeZone: BROWSER_TIME_ZONE })
+}

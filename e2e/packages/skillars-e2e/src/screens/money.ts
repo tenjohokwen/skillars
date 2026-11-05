@@ -1,4 +1,5 @@
 import { Screen } from 'pitchside-core'
+import { ListScreen } from './ListScreen.js'
 import type { Locator } from '@playwright/test'
 import { R } from '../routes.js'
 
@@ -29,4 +30,46 @@ export class CreditStatementScreen extends Screen {
       .filter({ has: this.page.getByTestId('statement-amount') })
   amount = (row: Locator) => this.within(row, 'statement-amount')
   balance = (row: Locator) => this.within(row, 'statement-balance')
+}
+
+/** A booking receipt. The parent's and the coach's views share these ids; the amounts differ. */
+abstract class ReceiptScreen extends Screen {
+  readonly readyTestId = 'receipt'
+  coach = () => this.tid('receipt-coach')
+  player = () => this.tid('receipt-player')
+  gross = () => this.tid('receipt-gross')
+}
+
+/** The family's receipt: what the card was charged, any wallet credit used, and the total. */
+export class ParentReceiptScreen extends ReceiptScreen {
+  readonly route = R.parentReceipt
+  creditUsed = () => this.tid('receipt-credit-used')
+  total = () => this.tid('receipt-total')
+}
+
+/** The coach's receipt: gross, the platform commission, and the net. */
+export class CoachReceiptScreen extends ReceiptScreen {
+  readonly route = R.coachReceipt
+  commission = () => this.tid('receipt-commission')
+  net = () => this.tid('receipt-net')
+}
+
+/** The coach's pack tier page, and below it the packs this coach has sold (with Extend). */
+export class CoachPackTiersScreen extends ListScreen {
+  readonly route = R.packTiers
+  readonly readyTestId = 'sold-pack'
+  soldPacks = () => this.tid('sold-pack')
+  protected rows = () => this.soldPacks()
+  empty = () => this.tid('sold-packs-empty')
+  /** The sold pack for the player named `playerName`. */
+  soldPack = (playerName: string): Locator =>
+    this.soldPacks().filter({
+      has: this.page.getByTestId('sold-pack-player').getByText(playerName, { exact: true }),
+    })
+  expiry = (pack: Locator) => this.within(pack, 'sold-pack-expiry')
+  expiringSoon = (pack: Locator) => this.within(pack, 'sold-pack-expiring-soon')
+  alreadyExtended = (pack: Locator) => this.within(pack, 'sold-pack-already-extended')
+  status = (pack: Locator) => this.within(pack, 'sold-pack-status')
+  extend = (pack: Locator) => this.within(pack, 'extend-pack')
+  extendError = () => this.tid('extend-error')
 }

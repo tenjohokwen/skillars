@@ -63,6 +63,8 @@ export class ParentBookingsScreen extends ListScreen {
   player = (booking: Locator) => this.within(booking, 'parent-booking-player')
   /** Offered on CONFIRMED / UPCOMING rows; opens the cancel dialog. */
   cancel = (booking: Locator) => this.within(booking, 'parent-booking-cancel-btn')
+  /** Shown once the booking's payment is captured; opens the family's receipt. */
+  receipt = (booking: Locator) => this.within(booking, 'booking-receipt')
   cancelDialog = () => this.tid('cancel-booking-dialog')
   cancelDialogBody = () => this.tid('cancel-booking-body')
   confirmCancel = () => this.tid('cancel-booking-confirm')

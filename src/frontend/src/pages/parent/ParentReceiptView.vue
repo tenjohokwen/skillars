@@ -14,18 +14,22 @@
         />
       </div>
 
-      <div class="receipt-card glass-card q-pa-xl">
+      <div class="receipt-card glass-card q-pa-xl" data-testid="receipt">
         <div class="text-h5 text-weight-bold q-mb-xs">{{ t('revenue.receipt.title') }}</div>
 
         <q-separator class="q-mb-lg" />
 
         <div class="row q-mb-sm">
           <div class="col text-secondary">{{ t('revenue.receipt.coach') }}</div>
-          <div class="col text-weight-medium">{{ receipt.coachName }}</div>
+          <div class="col text-weight-medium" data-testid="receipt-coach">
+            {{ receipt.coachName }}
+          </div>
         </div>
         <div class="row q-mb-sm">
           <div class="col text-secondary">{{ t('revenue.receipt.player') }}</div>
-          <div class="col text-weight-medium">{{ receipt.playerFirstName }}</div>
+          <div class="col text-weight-medium" data-testid="receipt-player">
+            {{ receipt.playerFirstName }}
+          </div>
         </div>
         <div class="row q-mb-sm">
           <div class="col text-secondary">{{ t('revenue.receipt.sessionDate') }}</div>
@@ -36,23 +40,29 @@
 
         <div class="row q-mb-sm">
           <div class="col text-secondary">{{ t('revenue.receipt.gross') }}</div>
-          <div class="col text-right">€{{ fmt(receipt.stripeCharged) }}</div>
+          <div class="col text-right" data-testid="receipt-gross">
+            €{{ fmt(receipt.stripeCharged) }}
+          </div>
         </div>
         <div v-if="Number(receipt.creditUsed) > 0" class="row q-mb-sm">
           <div class="col text-secondary">{{ t('payment.credits.balance') }}</div>
-          <div class="col text-right text-positive">– €{{ fmt(receipt.creditUsed) }}</div>
+          <div class="col text-right text-positive" data-testid="receipt-credit-used">
+            – €{{ fmt(receipt.creditUsed) }}
+          </div>
         </div>
 
         <q-separator class="q-my-md" />
 
         <div class="row text-h6 text-weight-bold">
           <div class="col">{{ t('revenue.receipt.totalCharged') }}</div>
-          <div class="col text-right">€{{ fmt(receipt.totalCharged) }}</div>
+          <div class="col text-right" data-testid="receipt-total">
+            €{{ fmt(receipt.totalCharged) }}
+          </div>
         </div>
       </div>
     </div>
 
-    <div v-else class="flex flex-center q-py-xl text-secondary">
+    <div v-else class="flex flex-center q-py-xl text-secondary" data-testid="receipt-not-found">
       {{ t('revenue.receipt.notFound') }}
     </div>
   </q-page>

@@ -60,6 +60,9 @@ export class PacksDashboardScreen extends ListScreen {
   expiry = (card: Locator) => this.within(card, 'pack-expiry')
   status = (card: Locator) => this.within(card, 'pack-status-badge')
   pausedUntil = (card: Locator) => this.within(card, 'pack-paused-until')
+  frozenNotice = (card: Locator) => this.within(card, 'pack-frozen-notice')
+  /** Why a withdrawn pack was withdrawn. */
+  revokedReason = (card: Locator) => this.within(card, 'pack-revoked-reason')
   pauseScheduled = (card: Locator) => this.within(card, 'pack-pause-scheduled')
   /** Offered only on an active pack with credits that has never been paused. */
   pause = (card: Locator) => this.within(card, 'pack-pause-cta')
