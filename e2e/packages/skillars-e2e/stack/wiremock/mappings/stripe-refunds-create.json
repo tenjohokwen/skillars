@@ -1,0 +1,19 @@
+{
+  "name": "Stripe — create a refund: succeeds (deterministic tier)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/refunds"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "id": "re_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}",
+      "object": "refund",
+      "status": "succeeded",
+      "livemode": false,
+      "payment_intent": "{{formData request.body 'form' urlDecode=true}}{{form.payment_intent}}"
+    }
+  }
+}

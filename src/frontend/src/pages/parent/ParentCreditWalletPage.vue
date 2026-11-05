@@ -68,6 +68,7 @@
               rounded
               inline-actions
               type="negative"
+              data-testid="wallet-cashout-error"
             >
               {{ cashoutError }}
             </q-banner>

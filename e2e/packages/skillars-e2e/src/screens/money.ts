@@ -16,6 +16,26 @@ export class WalletScreen extends Screen {
   spendOnly = () => this.tid('wallet-spend-only')
   cashOutAmount = () => this.tid('wallet-cashout-amount')
   cashOut = () => this.tid('wallet-cashout-btn')
+  cashOutError = () => this.tid('wallet-cashout-error')
+}
+
+/** A coach's revenue: a date range, summary cards, the new-coach payout hold notice, payouts. */
+export class RevenueScreen extends Screen {
+  readonly route = R.revenue
+  readonly readyTestId = 'revenue-summary'
+  from = () => this.tid('revenue-from')
+  to = () => this.tid('revenue-to')
+  apply = () => this.tid('revenue-apply')
+  holdBanner = () => this.tid('revenue-hold-banner')
+  gross = () => this.tid('revenue-gross')
+  commission = () => this.tid('revenue-commission')
+  net = () => this.tid('revenue-net')
+  refunds = () => this.tid('revenue-refunds')
+  /** Present only while some payouts are held. */
+  held = () => this.tid('revenue-held')
+  sessions = () => this.tid('revenue-sessions')
+  /** Data rows only (Quasar's "no data" row has a single cell). */
+  transactions = (): Locator => this.tid('revenue-transactions').locator('tbody tr:has(td + td)')
 }
 
 /** The ledger, newest entry first, each with its running balance. */

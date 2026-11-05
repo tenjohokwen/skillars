@@ -428,6 +428,50 @@ export class Provisioner {
   }
 
   /**
+   * The effective value of a runtime config key (C-16), as the admin config editor lists it: the
+   * stored value, else the coded default. Read as the bootstrap admin, so specs follow the
+   * environment's thresholds instead of hard-coding them.
+   */
+  async configValue(key: string): Promise<string> {
+    const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      const entries = await session.api.json<
+        { key: string; value: string | null; codeDefault: number | null }[]
+      >('GET', '/config/values')
+      const entry = entries.find((e) => e.key === key)
+      const value = entry?.value ?? entry?.codeDefault
+      if (value === null || value === undefined) throw new Error(`No config value for ${key}`)
+      return String(value)
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * Run a scheduled job now through the e2e-profile trigger (E2eJobResource), as the bootstrap admin,
+   * instead of waiting for its schedule. Seed state that is already due first. The job holds its
+   * ShedLock while it runs; a 409 means another run has it, so this retries until its own run lands.
+   * A scheduled run (at boot, then on its schedule) keeps the lock for its `lockAtLeastFor`, 2 minutes
+   * for the forfeiture, so the default wait outlasts that.
+   */
+  async runJob(name: 'pack-forfeiture', timeoutMs = 180_000): Promise<void> {
+    const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const response = await session.api.post(`/e2e/jobs/${name}`, {
+          expectStatus: [204, 409],
+        })
+        if (response.status() === 204) return
+        if (Date.now() > deadline) throw new Error(`Job ${name} stayed locked for ${timeoutMs}ms`)
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
    * Publish APPROVED reviews of a coach and refresh the coach's rating aggregate, the way
    * CoachRatingService.recompute does after moderation. SQL seam: a review becomes visible only on a
    * Gemini verdict (C-8), and the stack has no Gemini stub yet. Each author must be a distinct account.
@@ -515,32 +559,54 @@ export class Provisioner {
   }
 
   /**
-   * Append one positive entry to a family's credit wallet and return its tx id. SQL seam: wallet credit
+   * Append one positive entry to a family's credit wallet; returns its tx id and funding charge. SQL seam: wallet credit
    * is otherwise only written by refunds, dispute resolutions and chargeback restores, each at the end
    * of a multi-actor flow. `spendOnly` writes it the way an expired-pack refund is written (V208): a
    * BOOKING_REFUND whose whole amount is spend-only; otherwise a cashable DISPUTE_CREDIT. Each entry
    * references a fresh random id, so neither type's per-booking unique index can collide.
+   *
+   * `fundedBy` writes a cashable BOOKING_REFUND that names the card charge it came from
+   * (`source_payment_intent_id`, V199), as a refund of a card booking is written: a cash-out refunds
+   * onto that charge. The id is `pi_e2ecap_<cents>_…`, which the stack's WireMock reads back as a
+   * charge that captured `capturedCents` and has refunded nothing (stripe-payment-intents-retrieve.json);
+   * with `rejectsRefund` Stripe refuses any refund on it (stripe-refunds-rejected.json).
    */
   async seedWalletCredit(
     account: Pick<Account, 'userId'>,
     amount: number,
-    options: { spendOnly?: boolean } = {},
-  ): Promise<string> {
+    options: {
+      spendOnly?: boolean
+      fundedBy?: { capturedCents: number; rejectsRefund?: boolean }
+    } = {},
+  ): Promise<{ txId: string; paymentIntent: string | null }> {
+    const { spendOnly, fundedBy } = options
+    const paymentIntent = fundedBy
+      ? `pi_e2ecap_${fundedBy.capturedCents}_${fundedBy.rejectsRefund ? 'rejects_' : ''}${this.names
+          .token('pi')
+          .replace(/-/g, '_')}`
+      : null
     const sql = await this.sql()
     const [row] = await sql.query<{ tx_id: string }>(
       `INSERT INTO payment.parent_credit_ledger
-         (parent_id, amount, type, reference_id, description, spend_only_amount)
-       VALUES ($1::bigint, $2::numeric, $3, gen_random_uuid(), $4, $5::numeric)
+         (parent_id, amount, type, reference_id, description, spend_only_amount,
+          source_payment_intent_id, source_card_amount)
+       VALUES ($1::bigint, $2::numeric, $3, gen_random_uuid(), $4, $5::numeric, $6, $7::numeric)
        RETURNING tx_id`,
       [
         account.userId,
         amount.toFixed(2),
-        options.spendOnly ? 'BOOKING_REFUND' : 'DISPUTE_CREDIT',
-        options.spendOnly ? 'E2E seeded expired-pack refund' : 'E2E seeded dispute credit',
-        (options.spendOnly ? amount : 0).toFixed(2),
+        spendOnly || fundedBy ? 'BOOKING_REFUND' : 'DISPUTE_CREDIT',
+        spendOnly
+          ? 'E2E seeded expired-pack refund'
+          : fundedBy
+            ? 'E2E seeded card booking refund'
+            : 'E2E seeded dispute credit',
+        (spendOnly ? amount : 0).toFixed(2),
+        paymentIntent,
+        fundedBy ? amount.toFixed(2) : null,
       ],
     )
-    return row!.tx_id
+    return { txId: row!.tx_id, paymentIntent }
   }
 
   /**

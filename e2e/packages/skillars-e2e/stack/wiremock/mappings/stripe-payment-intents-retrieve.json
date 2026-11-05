@@ -1,0 +1,13 @@
+{
+  "name": "Stripe — retrieve a pi_e2ecap_<cents>_* PaymentIntent: its charge captured <cents>, nothing refunded yet (deterministic tier)",
+  "priority": 10,
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/v1/payment_intents/pi_e2ecap_[0-9]+_[A-Za-z0-9_]+"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "body": "{{regexExtract request.pathSegments.[2] 'pi_e2ecap_([0-9]+)_' 'cap'}}{\"id\":\"{{request.pathSegments.[2]}}\",\"object\":\"payment_intent\",\"status\":\"succeeded\",\"livemode\":false,\"amount\":{{cap.0}},\"amount_received\":{{cap.0}},\"latest_charge\":{\"id\":\"ch_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}\",\"object\":\"charge\",\"status\":\"succeeded\",\"amount\":{{cap.0}},\"amount_captured\":{{cap.0}},\"amount_refunded\":0,\"captured\":true}}"
+  }
+}

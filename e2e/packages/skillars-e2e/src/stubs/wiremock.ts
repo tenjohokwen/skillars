@@ -51,3 +51,34 @@ async function chargeRequestsFor(payerUserId: string): Promise<JournalRequest[]>
     await context.dispose()
   }
 }
+
+/** One refund the backend asked Stripe for: the PaymentIntent and the amount in cents. */
+export interface RefundRequest {
+  paymentIntent: string
+  amountCents: number
+}
+
+/**
+ * The refunds the backend has requested against the given PaymentIntents, read
+ * from the WireMock journal (refused ones included). Refunds carry no payer metadata, so a spec
+ * filters by the ids it seeded (provision.seedWalletCredit with `fundedBy`).
+ */
+export async function refundsOn(paymentIntents: string[]): Promise<RefundRequest[]> {
+  const context = await request.newContext()
+  try {
+    const response = await context.post(`${E2E.wiremockUrl}/__admin/requests/find`, {
+      data: { method: 'POST', urlPath: '/v1/refunds' },
+    })
+    if (!response.ok()) throw new Error(`WireMock journal: HTTP ${response.status()}`)
+    const { requests } = (await response.json()) as { requests: { body: string }[] }
+    return requests
+      .map(({ body }) => new URLSearchParams(body))
+      .map((form) => ({
+        paymentIntent: form.get('payment_intent') ?? '',
+        amountCents: Number(form.get('amount')),
+      }))
+      .filter((refund) => paymentIntents.includes(refund.paymentIntent))
+  } finally {
+    await context.dispose()
+  }
+}

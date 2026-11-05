@@ -35,3 +35,21 @@ export function t(
     params[name] === undefined ? match : String(params[name]),
   )
 }
+
+/**
+ * A pluralised message (`'one | many'` or `'none | one | many'`), chosen the way vue-i18n's default
+ * rule does, with `{n}` (and any `params`) filled.
+ */
+export function tc(
+  key: string,
+  n: number,
+  params: Record<string, string | number> = {},
+  locale: string = E2E.locale,
+): string {
+  const forms = t(key, { n, ...params }, locale)
+    .split('|')
+    .map((form) => form.trim())
+  const index =
+    forms.length === 3 ? Math.min(Math.abs(n), 2) : forms.length === 2 ? (n === 1 ? 0 : 1) : 0
+  return forms[index]!
+}
