@@ -462,6 +462,52 @@ export class Provisioner {
   }
 
   /**
+   * Append one positive entry to a family's credit wallet and return its tx id. SQL seam: wallet credit
+   * is otherwise only written by refunds, dispute resolutions and chargeback restores, each at the end
+   * of a multi-actor flow. `spendOnly` writes it the way an expired-pack refund is written (V208): a
+   * BOOKING_REFUND whose whole amount is spend-only; otherwise a cashable DISPUTE_CREDIT. Each entry
+   * references a fresh random id, so neither type's per-booking unique index can collide.
+   */
+  async seedWalletCredit(
+    account: Pick<Account, 'userId'>,
+    amount: number,
+    options: { spendOnly?: boolean } = {},
+  ): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ tx_id: string }>(
+      `INSERT INTO payment.parent_credit_ledger
+         (parent_id, amount, type, reference_id, description, spend_only_amount)
+       VALUES ($1::bigint, $2::numeric, $3, gen_random_uuid(), $4, $5::numeric)
+       RETURNING tx_id`,
+      [
+        account.userId,
+        amount.toFixed(2),
+        options.spendOnly ? 'BOOKING_REFUND' : 'DISPUTE_CREDIT',
+        options.spendOnly ? 'E2E seeded expired-pack refund' : 'E2E seeded dispute credit',
+        (options.spendOnly ? amount : 0).toFixed(2),
+      ],
+    )
+    return row!.tx_id
+  }
+
+  /**
+   * A family's wallet ledger, oldest first, each entry as its full row (every column, JSON-encoded).
+   * The ledger is append-only (trg_ledger_no_update), so a row read twice must compare equal.
+   */
+  async walletLedger(
+    account: Pick<Account, 'userId'>,
+  ): Promise<{ txId: string; type: string; amount: string; row: string }[]> {
+    const sql = await this.sql()
+    return sql.query(
+      `SELECT tx_id AS "txId", type, amount::text AS amount, to_jsonb(l)::text AS row
+         FROM payment.parent_credit_ledger l
+        WHERE parent_id = $1::bigint
+        ORDER BY created_at, tx_id`,
+      [account.userId],
+    )
+  }
+
+  /**
    * Move a family's one booking with a coach to start `hoursFromNow` hours from now (one-hour
    * session). Returns the new start. SQL seam for time travel: the request page offers whole weeks of
    * the coach's published hours, so no spec can book a slot a fixed few hours ahead on any run date.

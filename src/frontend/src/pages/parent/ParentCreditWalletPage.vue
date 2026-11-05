@@ -11,14 +11,14 @@
             <div v-if="store.loading.creditBalance" class="text-h4">
               <q-skeleton type="text" width="120px" />
             </div>
-            <div v-else class="text-h4 text-weight-bold">
+            <div v-else class="text-h4 text-weight-bold" data-testid="wallet-balance">
               {{ balance !== null ? `€${Number(balance).toFixed(2)}` : '—' }}
             </div>
             <div v-if="spendOnly > 0" class="q-mt-sm" data-testid="wallet-split">
-              <div class="text-body2">
+              <div class="text-body2" data-testid="wallet-cashable">
                 {{ $t('payment.credits.cashableBalance', { amount: cashable.toFixed(2) }) }}
               </div>
-              <div class="text-body2">
+              <div class="text-body2" data-testid="wallet-spend-only">
                 {{ $t('payment.credits.spendOnlyBalance', { amount: spendOnly.toFixed(2) }) }}
               </div>
               <div class="text-caption text-grey-6">{{ $t('payment.credits.spendOnlyHint') }}</div>
@@ -50,6 +50,7 @@
               :min="0.01"
               :step="0.01"
               class="q-mb-md"
+              data-testid="wallet-cashout-amount"
             />
             <q-btn
               :label="$t('payment.credits.cashout')"
@@ -57,6 +58,7 @@
               unelevated
               :loading="cashingOut"
               :disable="cashoutDisabled"
+              data-testid="wallet-cashout-btn"
               @click="handleCashOut"
             />
             <q-banner

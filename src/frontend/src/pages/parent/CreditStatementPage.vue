@@ -36,17 +36,26 @@
         flat
         :loading="paymentStore.loading.creditStatement"
         :pagination="{ rowsPerPage: 20 }"
+        data-testid="credit-statement"
       >
         <template #body-cell-createdAt="props">
-          <q-td :props="props">{{ formatDate(props.row.createdAt) }}</q-td>
+          <q-td :props="props" data-testid="statement-date">{{
+            formatDate(props.row.createdAt)
+          }}</q-td>
         </template>
         <template #body-cell-amount="props">
-          <q-td :props="props" :class="props.row.amount >= 0 ? 'text-positive' : 'text-negative'">
+          <q-td
+            :props="props"
+            :class="props.row.amount >= 0 ? 'text-positive' : 'text-negative'"
+            data-testid="statement-amount"
+          >
             {{ props.row.amount >= 0 ? '+' : '-' }}€{{ fmt(props.row.amount) }}
           </q-td>
         </template>
         <template #body-cell-runningBalance="props">
-          <q-td :props="props">€{{ fmtBalance(props.row.runningBalance) }}</q-td>
+          <q-td :props="props" data-testid="statement-balance"
+            >€{{ fmtBalance(props.row.runningBalance) }}</q-td
+          >
         </template>
         <template #body-cell-actions="props">
           <q-td :props="props">
