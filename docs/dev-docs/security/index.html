@@ -537,7 +537,7 @@ sequenceDiagram
   S->>DB: supersedeOpen (previous open request ends on every path)
   alt address held by another account or reserved
     S->>OB: EMAIL_CHANGE_ADDRESS_IN_USE to the holder (2/h per holder, silent)
-  else address free, under 3 confirm mails per address per 24h
+  else address free, under 3 confirm mails per account and address and 10 per address per 24h
     S->>DB: insert request (confirm hash, expires in 24h)
     S->>OB: EMAIL_CHANGE with confirm link to the new address
   end

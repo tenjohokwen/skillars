@@ -444,6 +444,9 @@ Claude Opus 5.5 (claude-opus-5-5)
   fixed in e7005213. Owner decision V2 (option 1): every undo also mails the `revertedAway` variant of
   `EMAIL_CHANGED_NOTICE` to the address the account left, because whoever reads the old mailbox can undo. V1 (per-JVM
   rate limits) is moot on the single-instance deploy.
+- Owner decision F3 (option 1): the confirmation-mail limit is two buckets, 3 a day per (requesting account, address)
+  and 10 a day per address, so one account can no longer use up an address's allowance and silently block its owner
+  (Design step 208's single per-target bucket replaced). Mutation check: back to the per-address key, the new IT fails.
 
 ### File List
 

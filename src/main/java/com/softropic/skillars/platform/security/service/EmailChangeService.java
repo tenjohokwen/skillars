@@ -86,10 +86,15 @@ public class EmailChangeService {
     static final long ATTEMPT_CAPACITY = 10;
     static final long ATTEMPT_WINDOW_MINUTES = 60;
 
-    // Per target address: stops one account mailing confirmation links to someone else's inbox over and over.
-    // Exhaustion is silent (same answer, nothing sent), so it is no oracle.
+    // Confirmation links to one address: 3 a day per requesting account, 10 a day in all. The pair limit stops
+    // one account mailing someone's inbox over and over; keyed by the pair, it also cannot use up the address's
+    // allowance and so silently block that address's real owner from moving their own account there. The total
+    // caps what several accounts together can send to one inbox. Exhaustion is silent (same answer, nothing
+    // sent), so it is no oracle. The 24 h windows rely on the bucket idle TTL (default 24 h) not being lowered.
     static final String CONFIRM_MAIL_LIMIT_KEY = "email_change_confirm_mail";
     static final long CONFIRM_MAIL_CAPACITY = 3;
+    static final String CONFIRM_MAIL_TARGET_LIMIT_KEY = "email_change_confirm_mail_target";
+    static final long CONFIRM_MAIL_TARGET_CAPACITY = 10;
     static final long CONFIRM_MAIL_WINDOW_HOURS = 24;
 
     // Per holder account, like registration's CREATION_DUP notice. Exhaustion is silent.
@@ -155,7 +160,9 @@ public class EmailChangeService {
             notifyAddressInUse(holder.get(), user.getId());
             return;
         }
-        if (!rateLimitingService.tryConsume(target, CONFIRM_MAIL_LIMIT_KEY, CONFIRM_MAIL_CAPACITY,
+        if (!rateLimitingService.tryConsume(user.getId() + ":" + target, CONFIRM_MAIL_LIMIT_KEY,
+                CONFIRM_MAIL_CAPACITY, CONFIRM_MAIL_WINDOW_HOURS, TimeUnit.HOURS)
+            || !rateLimitingService.tryConsume(target, CONFIRM_MAIL_TARGET_LIMIT_KEY, CONFIRM_MAIL_TARGET_CAPACITY,
                 CONFIRM_MAIL_WINDOW_HOURS, TimeUnit.HOURS)) {
             log.info("[EMAIL_CHANGE_CONFIRM_MAIL_LIMITED] confirmation mail skipped", kv("userId", user.getId()));
             return;

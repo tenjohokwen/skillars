@@ -37,6 +37,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -169,6 +170,33 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         // Even the right password is refused now: the limit is consumed before the password is checked.
         assertThatThrownBy(() -> emailChangeService.request(ME, NEW, PASSWORD))
             .hasMessageContaining("email.change.tooManyRequests");
+    }
+
+    @Test
+    void anotherAccount_cannotUseUpTheConfirmationMailsOfAnAddress_butTheAddressHasADailyTotal() {
+        signInAs(OTHER, otherId());
+        for (int i = 0; i <= EmailChangeService.CONFIRM_MAIL_CAPACITY; i++) {
+            clearRequestBucketOnly(); // the caller's request bucket, not the confirmation-mail limits under test
+            emailChangeService.request(OTHER, NEW, PASSWORD);
+        }
+        assertThat(sentTo(EmailTemplate.EMAIL_CHANGE)).hasSize((int) EmailChangeService.CONFIRM_MAIL_CAPACITY);
+
+        // The owner of NEW, moving their own account there, still gets the link.
+        testMailManager.clear();
+        signInAs(ME, ME_ID);
+        emailChangeService.request(ME, NEW, PASSWORD);
+        assertThat(sentTo(EmailTemplate.EMAIL_CHANGE)).containsExactly(NEW);
+
+        // Until the address's daily total is used up (by however many accounts), silently.
+        testMailManager.clear();
+        for (int i = 0; i < EmailChangeService.CONFIRM_MAIL_TARGET_CAPACITY; i++) {
+            rateLimitingService.tryConsume(NEW, EmailChangeService.CONFIRM_MAIL_TARGET_LIMIT_KEY,
+                EmailChangeService.CONFIRM_MAIL_TARGET_CAPACITY, EmailChangeService.CONFIRM_MAIL_WINDOW_HOURS,
+                TimeUnit.HOURS);
+        }
+        clearRequestBucketOnly();
+        emailChangeService.request(ME, NEW, PASSWORD);
+        assertThat(sentTo(EmailTemplate.EMAIL_CHANGE)).isEmpty();
     }
 
     // ── AC1 + AC5: confirming switches the address, revokes sessions, notifies the old address ─────────
