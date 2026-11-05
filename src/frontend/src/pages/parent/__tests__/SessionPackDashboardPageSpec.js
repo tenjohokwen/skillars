@@ -219,12 +219,16 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     expect(setup.pauseDaysValid).toBe(true)
   })
 
-  it('a server refusal of the duration names the limit', async () => {
+  it('a server refusal of the duration re-reads the limit and names it', async () => {
     const wrapper = await mountPage([{ ...BASE, pauseMaxDays: 30 }])
     const { useBookingStore } = await import('src/stores/booking.store')
     const store = useBookingStore()
     store.initiatePausePack.mockRejectedValue({
       response: { data: { errorMsg: { errorKey: 'booking.pauseDurationInvalid' } } },
+    })
+    // An admin lowered the limit after the page loaded: the reload carries the new one.
+    store.loadPlayerPacks.mockImplementation(async () => {
+      store.sessionPacks = [{ ...BASE, pauseMaxDays: 14 }]
     })
     const setup = wrapper.vm.$.setupState
     setup.openPauseDialog({ ...BASE, pauseMaxDays: 30 })
@@ -232,7 +236,7 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     await setup.submitPause()
     await flushPromises()
     expect(notifyMock).toHaveBeenCalledWith({
-      message: wrapper.vm.$t('booking.packs.pauseDurationInvalid', { max: 30 }),
+      message: wrapper.vm.$t('booking.packs.pauseDurationInvalid', { max: 14 }),
       type: 'negative',
     })
   })

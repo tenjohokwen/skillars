@@ -78,7 +78,9 @@ function originPattern(url: string): RegExp {
 interface SkillarsTestFixtures {
   /**
    * Change runtime config for this test only. Config is global to the app, so a test that uses this must
-   * carry @config, which runs it in the serial lane; every value set is put back after the test.
+   * carry @config, which runs it in the serial lane; every value set is put back after the test. The
+   * value restored is the effective one: a key that had no stored value (running on its code default)
+   * is left stored at that default, since the admin API cannot unset a key.
    */
   runtimeConfig: { set: (key: string, value: string | number) => Promise<void> }
 }

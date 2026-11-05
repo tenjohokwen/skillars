@@ -355,7 +355,7 @@ async function submitPause() {
         $q.notify({ message: t('booking.packs.pauseSuccess'), type: 'positive' })
       }
     } catch (err) {
-      notifyPauseError(err)
+      await notifyPauseError(err)
     }
   } else {
     try {
@@ -368,14 +368,19 @@ async function submitPause() {
         await bookingStore.loadPlayerPacks(playerId)
       }
     } catch (err) {
-      notifyPauseError(err)
+      await notifyPauseError(err)
     }
   }
 }
 
-function notifyPauseError(err) {
+async function notifyPauseError(err) {
   const errorKey = err?.response?.data?.errorMsg?.errorKey
   if (errorKey === 'booking.pauseDurationInvalid') {
+    // The limit may have changed since the page loaded (it is runtime config): re-read it, so the
+    // message and the dialog name the limit the server just applied.
+    await bookingStore.loadPlayerPacks(playerId)
+    const fresh = bookingStore.sessionPacks.find((p) => p.id === activePack.value?.id)
+    if (fresh) activePack.value = fresh
     $q.notify({
       message: t('booking.packs.pauseDurationInvalid', { max: pauseMaxDays.value }),
       type: 'negative',
