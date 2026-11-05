@@ -5,6 +5,7 @@ export * from './auth.js'
 export * from './coach.js'
 export * from './marketplace.js'
 export * from './booking.js'
+export * from './money.js'
 
 // One screen object per page under test. Thin by policy: locators and composite actions, never
 // assertions. Only pages that already carry data-testids are modelled; the rest wait for the

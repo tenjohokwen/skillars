@@ -49,6 +49,7 @@
                 v-if="pack.expiresAt && pack.status !== 'REVOKED'"
                 class="text-caption q-mt-xs"
                 :class="expiryClass(pack)"
+                data-testid="pack-expiry"
               >
                 {{ t('booking.packs.expiresLabel', { date: formatDate(pack.expiresAt) }) }}
               </div>
@@ -101,6 +102,7 @@
                   pack.status === 'ACTIVE' && pack.creditsRemaining > 0 && pack.pausedUntil
                 "
                 class="text-caption q-mt-xs text-grey"
+                data-testid="pack-already-paused"
               >
                 {{ t('booking.packs.alreadyPausedLabel') }}
               </div>
@@ -117,7 +119,7 @@
 
     <!-- Pause Dialog -->
     <q-dialog v-model="pauseDialogOpen">
-      <q-card style="min-width: 340px; max-width: 90vw">
+      <q-card style="min-width: 340px; max-width: 90vw" data-testid="pack-pause-dialog">
         <q-card-section>
           <div class="text-h6">{{ t('booking.packs.pauseDialogTitle') }}</div>
         </q-card-section>
@@ -129,6 +131,7 @@
             :hint="t('booking.packs.pauseStartHint')"
             :label="t('booking.packs.pauseStartLabel')"
             outlined
+            data-testid="pack-pause-start"
             class="q-mb-md"
           />
           <q-input
@@ -139,6 +142,7 @@
             :min="1"
             :max="90"
             outlined
+            data-testid="pack-pause-days"
           />
         </q-card-section>
         <q-card-section v-if="bookingStore.packPauseConflicts.length > 0">
@@ -146,7 +150,11 @@
             {{ t('booking.packs.pauseConflictsTitle') }}
           </div>
           <q-list dense bordered separator>
-            <q-item v-for="b in bookingStore.packPauseConflicts" :key="b.id">
+            <q-item
+              v-for="b in bookingStore.packPauseConflicts"
+              :key="b.id"
+              data-testid="pack-pause-conflict"
+            >
               <q-item-section>
                 <q-item-label>{{
                   formatDateTime(b.requestedStartTime, b.canonicalTimezone)
@@ -191,6 +199,7 @@
             "
             :loading="bookingStore.packPauseLoading"
             :disable="hasBlockingConflict"
+            data-testid="pack-pause-confirm"
             @click="submitPause"
           />
         </q-card-actions>
@@ -337,8 +346,11 @@ async function submitPause() {
     try {
       const result = await bookingStore.initiatePausePack(packId, pauseStartDate, pauseDurationDays)
       if (result.pauseApplied) {
+        // Close first, so no second click can send a pause the server will refuse; then reload, as
+        // confirmPausePack does, or the card keeps the old expiry and a Pause button that no longer works.
         pauseDialogOpen.value = false
         $q.notify({ message: t('booking.packs.pauseSuccess'), type: 'positive' })
+        await bookingStore.loadPlayerPacks(playerId)
       }
     } catch (err) {
       notifyPauseError(err)

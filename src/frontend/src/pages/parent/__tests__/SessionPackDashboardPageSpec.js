@@ -180,6 +180,24 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     expect(notifyMock).toHaveBeenCalledWith({ message, type: 'negative' })
   })
 
+  // Pitchside MNY-03: a pause applied on the first attempt (no conflicts) reloads the packs, so the card
+  // shows the moved expiry and drops the Pause action. Before the fix only the conflict path reloaded.
+  // Mutation check: drop the loadPlayerPacks call in submitPause's no-conflict branch and this turns red.
+  it('a pause applied with no conflicts reloads the packs', async () => {
+    const wrapper = await mountPage([BASE])
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const store = useBookingStore()
+    store.loadPlayerPacks.mockClear()
+    store.initiatePausePack.mockResolvedValue({ pauseApplied: true, conflictingBookings: [] })
+    const setup = wrapper.vm.$.setupState
+    setup.openPauseDialog(BASE)
+    setup.pauseForm.startDate = '2099-01-01'
+    await setup.submitPause()
+    await flushPromises()
+    expect(store.loadPlayerPacks).toHaveBeenCalledWith('42')
+    expect(setup.pauseDialogOpen).toBe(false)
+  })
+
   // fix/audit3-booking-scheduling-integrity: a booking mid-settlement (PAYMENT_PENDING) inside the pause
   // window blocks the pause; it is explained as "payment still processing", not as the 24h-notice rule.
   it('a PAYMENT_PENDING conflict blocks the pause with its own explanation', async () => {

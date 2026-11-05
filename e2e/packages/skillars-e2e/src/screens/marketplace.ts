@@ -56,5 +56,22 @@ export class PacksDashboardScreen extends ListScreen {
       has: this.page.getByTestId('pack-coach-name').getByText(coachName, { exact: true }),
     })
   credits = (card: Locator) => this.within(card, 'pack-credits')
+  /** "Expires {date}"; absent on a withdrawn pack. */
+  expiry = (card: Locator) => this.within(card, 'pack-expiry')
+  status = (card: Locator) => this.within(card, 'pack-status-badge')
+  pausedUntil = (card: Locator) => this.within(card, 'pack-paused-until')
+  pauseScheduled = (card: Locator) => this.within(card, 'pack-pause-scheduled')
+  /** Offered only on an active pack with credits that has never been paused. */
+  pause = (card: Locator) => this.within(card, 'pack-pause-cta')
+  /** Shown instead of the pause control once the pack has used its one pause. */
+  alreadyPaused = (card: Locator) => this.within(card, 'pack-already-paused')
   empty = () => this.tid('packs-empty')
+
+  pauseDialog = () => this.tid('pack-pause-dialog')
+  pauseStart = () => this.tid('pack-pause-start')
+  pauseDays = () => this.tid('pack-pause-days')
+  /** One row per booking the pause would cancel, listed after a first, unapplied attempt. */
+  pauseConflicts = () => this.tid('pack-pause-conflict')
+  /** "Pause pack", or "Cancel sessions & apply pause" once conflicts are listed. */
+  confirmPause = () => this.tid('pack-pause-confirm')
 }

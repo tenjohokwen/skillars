@@ -32,6 +32,7 @@ export const R = {
   childHub: '/parent/players/:playerId(\\d+)/sessions',
   childPacks: '/parent/players/:playerId(\\d+)/packs',
   wallet: '/parent/credit-wallet',
+  creditStatement: '/parent/credit-statement',
   retiredApprovals: '/parent/approvals',
   purchasePack: '/parent/coaches/:coachId/purchase-sessions',
   requestBooking: '/parent/coaches/:coachId/request-booking',
