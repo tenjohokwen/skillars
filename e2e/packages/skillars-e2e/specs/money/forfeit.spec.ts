@@ -33,7 +33,7 @@ test.describe('G · Pack forfeiture', () => {
 
       await provision.runJob('pack-forfeiture')
 
-      // The family is told how many sessions were lost, and with whom.
+      // The family is told how many sessions were lost, with whom, and that they are not refunded.
       const message = await mail.waitForMessage({
         to: parent.email,
         subjectMatches: /session pack expired/i,
@@ -42,6 +42,7 @@ test.describe('G · Pack forfeiture', () => {
       })
       expect(message.text).toContain(coachName)
       expect(message.text).toContain(String(sessions))
+      expect(message.text).toMatch(/forfeited and are not refunded/i)
 
       // Not refunded: no wallet entry, and the sessions stay on the pack, unusable.
       expect(await provision.walletLedger(parent)).toEqual(ledger)
