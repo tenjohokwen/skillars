@@ -447,6 +447,11 @@ Claude Opus 5.5 (claude-opus-5-5)
 - Owner decision F3 (option 1): the confirmation-mail limit is two buckets, 3 a day per (requesting account, address)
   and 10 a day per address, so one account can no longer use up an address's allowance and silently block its owner
   (replaces the Design's single per-address bucket). Mutation check: back to the per-address key, the new IT fails.
+- /pr-review round 2 (09554010), owner decision C (option 1): after an undo, the revoked session could still erase the
+  account for up to 5 min (the filter re-checks tokens only every `DB_REFRESH_TOKEN_INTERVAL`). New
+  `CurrentSessionGuard.assertNotRevoked` (DB read: locked, or token issued before the session epoch → 401) runs first
+  on both erasure endpoints. `GdprErasureIT`'s fast-path probe moved to `GET /api/gdpr/requests`, and it now also
+  asserts the repeated erasure is refused. Mutation check: guard call removed → `EmailChangeResourceIT` fails.
 
 ### File List
 

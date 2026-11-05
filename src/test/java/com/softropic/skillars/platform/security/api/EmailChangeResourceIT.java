@@ -121,6 +121,16 @@ class EmailChangeResourceIT extends AbstractIntegrationTest {
         assertThat(undone.getBody()).containsEntry("code", "email.change.undone").containsEntry("passwordResetSent", true);
         assertThat(jdbcTemplate.queryForObject("SELECT email FROM main.\"user\" WHERE id = ?", String.class, USER_ID))
             .isEqualTo(EMAIL);
+
+        // The undo ended the hold on erasure, and the filter re-checks a token only every 5 minutes, so the session
+        // that made the change must be refused by erasure's own check, or it could still make the takeover final.
+        HttpClientErrorException erasure = catchThrowableOfType(HttpClientErrorException.class, () ->
+            httpTestClient.makeHttpRequest(baseUrl() + "/api/gdpr/erasure", HttpMethod.POST, null,
+                withCookies(newCookies), Map.class));
+        assertThat(erasure).as("erasure with a session revoked by the undo").isNotNull();
+        assertThat(erasure.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM admin.gdpr_requests WHERE user_id = ?",
+            Integer.class, USER_ID)).isZero();
     }
 
     @Test
