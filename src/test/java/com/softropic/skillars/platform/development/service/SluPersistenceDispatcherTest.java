@@ -122,4 +122,18 @@ class SluPersistenceDispatcherTest {
         assertThat(async).isNotNull();
         assertThat(async.value()).isEqualTo("sluRetryExecutor");
     }
+
+    // skillars-deferred-171 AC3: an erased player's detail rows were not written, so neither is the snapshot.
+    @Test
+    void dispatchSluPersistence_playerErased_skipsSnapshotWrite_noError() {
+        List<PlayerSkillStat> stats = List.of(new PlayerSkillStat());
+        when(sluPersistenceRetrier.saveSluWithRetry(stats)).thenReturn(SluSaveOutcome.PLAYER_ERASED);
+
+        dispatcher.dispatchSluPersistence(stats, ISO_YEAR, ISO_WEEK);
+
+        verify(snapshotPersistenceRetrier, never()).writeAllWithRetry(stats, ISO_YEAR, ISO_WEEK);
+        assertThat(logCapture.list).noneMatch(e -> e.getLevel() == Level.ERROR);
+        assertThat(logCapture.list)
+            .noneMatch(e -> e.getFormattedMessage().contains("SLU persistence chain finished"));
+    }
 }

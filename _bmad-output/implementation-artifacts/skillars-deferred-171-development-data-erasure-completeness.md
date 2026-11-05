@@ -309,7 +309,7 @@ rewritten ITs.
       Step A guard-then-update with the enqueue branch outside the upload `try`, Step B timeline + notify);
       inject `BlobDeletionOutboxSupport` and a transaction manager; tests (including the race IT and the
       lock-busy case).
-- [ ] T3 (AC3): SLU template + `PLAYER_ERASED` outcome + dispatcher branch; snapshot guard (sorted); Javadocs
+- [x] T3 (AC3): SLU template + `PLAYER_ERASED` outcome + dispatcher branch; snapshot guard (sorted); Javadocs
       (`:55-57`, `:95-97`, `SluSaveOutcome`, dispatcher prose); tests.
 - [ ] T4 (AC4): `deleteAllByPlayerId` on homework assignments and radar preferences; groups 2 and 3 counts;
       all "12" literals; `GdprErasureServiceTest` constructor; IT.

@@ -64,9 +64,23 @@ class SluRetrierProxyRetryTest {
             return Mockito.mock(SluSnapshotOutboxSupport.class);
         }
 
+        // skillars-deferred-171 AC3: the retrier runs the erasure check and saveAll in one template transaction.
+        // A mock transaction manager lets TransactionTemplate run the callback; the guard answers "not erased".
         @Bean
-        SluPersistenceRetrier sluPersistenceRetrier(SluRepository sluRepository) {
-            return new SluPersistenceRetrier(sluRepository);
+        com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard erasureGuard() {
+            return Mockito.mock(com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard.class);
+        }
+
+        @Bean
+        org.springframework.transaction.PlatformTransactionManager transactionManager() {
+            return Mockito.mock(org.springframework.transaction.PlatformTransactionManager.class);
+        }
+
+        @Bean
+        SluPersistenceRetrier sluPersistenceRetrier(SluRepository sluRepository,
+                com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard erasureGuard,
+                org.springframework.transaction.PlatformTransactionManager transactionManager) {
+            return new SluPersistenceRetrier(sluRepository, erasureGuard, transactionManager);
         }
 
         @Bean
