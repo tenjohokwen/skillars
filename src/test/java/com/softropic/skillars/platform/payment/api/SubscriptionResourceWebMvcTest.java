@@ -208,7 +208,7 @@ class SubscriptionResourceWebMvcTest {
         RequestPostProcessor parent = parentOfPlayer();
         when(subscriptionService.subscribePlayer(PARENT_ID, PLAYER_ID, "SEMI_PRO", "YEARLY")).thenReturn(
             new PlayerSubscriptionResponse(UUID.randomUUID(), PLAYER_ID, "SEMI_PRO", "YEARLY", "ACTIVE",
-                Instant.now().plusSeconds(86400), false));
+                Instant.now().plusSeconds(86400), false, true));
 
         mockMvc.perform(post("/api/payment/subscriptions/player/subscribe")
                 .contentType("application/json")
@@ -265,7 +265,7 @@ class SubscriptionResourceWebMvcTest {
     void subscribePlayer_selfRegisteredPlayerOwnProfile_returns200() throws Exception {
         when(subscriptionService.subscribePlayer(SELF_PLAYER_USER_ID, PLAYER_ID, "SEMI_PRO", "YEARLY")).thenReturn(
             new PlayerSubscriptionResponse(UUID.randomUUID(), PLAYER_ID, "SEMI_PRO", "YEARLY", "ACTIVE",
-                Instant.now().plusSeconds(86400), false));
+                Instant.now().plusSeconds(86400), false, true));
 
         mockMvc.perform(post("/api/payment/subscriptions/player/subscribe")
                 .contentType("application/json")

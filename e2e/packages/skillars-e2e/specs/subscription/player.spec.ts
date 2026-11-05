@@ -68,7 +68,8 @@ test.describe('H · Player subscription', () => {
 
       await expect(plans.currentTier()).toHaveText('PRO')
       await expect(family.page.getByText(t('subscription.errors.alreadyActive'))).toHaveCount(0)
-      await expect(plans.choose('SEMI_PRO')).toHaveText(t('subscription.downgrade'))
+      // No paid downgrade is offered: the page could neither show it pending nor undo it.
+      await expect(plans.choose('SEMI_PRO')).toHaveCount(0)
     },
   )
 
@@ -96,6 +97,8 @@ test.describe('H · Player subscription', () => {
       )
       await expect(plans.currentTier()).toHaveText('SEMI_PRO')
       await expect(plans.cancel('SEMI_PRO')).toHaveCount(0)
+      // Nor can a plan that is ending be upgraded: that would charge for an upgrade that still ends.
+      await expect(plans.choose('PRO')).toHaveCount(0)
     },
   )
 

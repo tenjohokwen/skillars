@@ -120,14 +120,12 @@
             </q-list>
             <div class="tier-actions">
               <!-- A Scout coach has no paid subscription yet, so any paid tier subscribes (the dialog
-                   checks for a card first); a paid coach changes tier on the subscription they have.
-                   Moving down to Scout is the Cancel button on the current paid tier. -->
+                   checks for a card first); a paid coach upgrades the subscription they have. Moving
+                   down to Scout is the Cancel button on the current paid tier. -->
               <q-btn
-                v-if="tier.tier !== currentTier && tier.tier !== 'SCOUT'"
+                v-if="canChoose(tier.tier)"
                 color="primary"
-                :label="
-                  isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
-                "
+                :label="t('subscription.upgrade')"
                 class="full-width"
                 :loading="actionLoading"
                 data-testid="subscription-change-btn"
@@ -282,6 +280,16 @@ function statusColor(status) {
 function isUpgrade(tier) {
   const current = TIER_ORDER.indexOf(currentTier.value)
   return TIER_ORDER.indexOf(tier) > current
+}
+
+// Upgrades only. A paid downgrade (ACADEMY -> INSTRUCTOR) moves the Stripe price at once and the tier at
+// period end, and this page can neither show that it is pending nor undo it, so it is not offered here;
+// nor is any change once the plan is set to cancel (an upgrade would charge proration on a plan that still
+// ends).
+function canChoose(tier) {
+  if (tier === 'SCOUT' || tier === currentTier.value) return false
+  if (subscription.value?.cancelAtPeriodEnd) return false
+  return isUpgrade(tier)
 }
 
 // Scout is the free tier with no Stripe subscription behind it (a revoked subscription returns the coach

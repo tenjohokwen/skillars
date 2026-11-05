@@ -1,7 +1,9 @@
 // Pitchside SUB-03: a Scout coach's Upgrade called changeCoachTier, which the server refuses with no
 // subscription to change, and the subscribe dialog opened only from a lock overlay on the tiers BELOW the
 // current one, where subscribing is refused as already active; the paid downgrade the server supports was
-// unreachable. Scout now subscribes through the dialog, and a paid coach changes tier either way.
+// unreachable. Scout now subscribes through the dialog and a paid coach upgrades in place. Paid
+// downgrades are not offered (the page cannot show or undo a pending one), nor is any change while the
+// plan is set to cancel.
 // Mutation check: make chooseTier always call handleChangeTier and the Scout case turns red.
 
 import { describe, it, expect, vi, afterEach } from 'vitest'
@@ -22,12 +24,12 @@ import CoachSubscriptionPage from 'src/pages/coach/CoachSubscriptionPage.vue'
 const TIERS = ['SCOUT', 'INSTRUCTOR', 'ACADEMY'].map((tier) => ({ tier, features: [] }))
 const mounted = []
 
-async function mountPage(tier) {
+async function mountPage(tier, cancelAtPeriodEnd = false) {
   const pinia = createTestingPinia({
     createSpy: vi.fn,
     initialState: {
       payment: {
-        coachSubscription: { tier, status: 'ACTIVE', cancelAtPeriodEnd: false },
+        coachSubscription: { tier, status: 'ACTIVE', cancelAtPeriodEnd },
         coachTiers: TIERS,
         savedPaymentMethod: { hasCard: true },
       },
@@ -66,13 +68,20 @@ describe('CoachSubscriptionPage.vue — choosing a tier', () => {
     expect(store.subscribeCoach).toHaveBeenCalledWith({ tier: 'INSTRUCTOR' })
   })
 
-  it('a paid coach can move up or down a paid tier, on the subscription they have', async () => {
-    const { wrapper, store } = await mountPage('ACADEMY')
-    expect(changeButtonTiers(wrapper)).toEqual(['INSTRUCTOR'])
-    wrapper.vm.$.setupState.chooseTier('INSTRUCTOR')
+  it('a paid coach upgrades on the subscription they have', async () => {
+    const { wrapper, store } = await mountPage('INSTRUCTOR')
+    expect(changeButtonTiers(wrapper)).toEqual(['ACADEMY'])
+    wrapper.vm.$.setupState.chooseTier('ACADEMY')
     await flushPromises()
-    expect(store.changeCoachTier).toHaveBeenCalledWith('INSTRUCTOR')
+    expect(store.changeCoachTier).toHaveBeenCalledWith('ACADEMY')
     expect(store.subscribeCoach).not.toHaveBeenCalled()
     expect(wrapper.vm.$.setupState.subscribeDialog).toBe(false)
+  })
+
+  it('offers no paid downgrade, and no change at all while the plan is set to cancel', async () => {
+    const academy = await mountPage('ACADEMY')
+    expect(changeButtonTiers(academy.wrapper)).toEqual([])
+    const cancelling = await mountPage('INSTRUCTOR', true)
+    expect(changeButtonTiers(cancelling.wrapper)).toEqual([])
   })
 })

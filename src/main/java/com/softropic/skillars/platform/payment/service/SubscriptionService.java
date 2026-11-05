@@ -1895,6 +1895,6 @@ public class SubscriptionService {
         return new PlayerSubscriptionResponse(
             sub.getSubscriptionId(), sub.getPlayerId(), sub.getTier(),
             sub.getBillingInterval(), sub.getStatus(),
-            sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd());
+            sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd(), sub.getStripeSubscriptionId() != null);
     }
 }

@@ -175,12 +175,18 @@ describe('PlayerSubscriptionPage.vue — banner after saving a card', () => {
 
 // Pitchside SUB-06: confirm decided between subscribing and changing tier on a stripeSubscriptionId the
 // response never carries, so a family on a paid tier was always sent to subscribe again, which the server
-// refuses as already active. A paid current tier (anything but ATHLETE) now changes tier.
-// Mutation check: restore the stripeSubscriptionId test and the first case turns red.
+// refuses as already active. It now reads the response's `subscribed` flag (ATHLETE is both the free
+// fallback and a priced tier, so the tier cannot say). Mutation check: restore the stripeSubscriptionId
+// test and the first case turns red.
 describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
-  async function confirmFrom(currentTier, chosenTier) {
+  async function confirmFrom(currentTier, chosenTier, subscribed = currentTier !== 'ATHLETE') {
     const { wrapper, pinia } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
-      playerSubscription: { tier: currentTier, status: 'ACTIVE', cancelAtPeriodEnd: false },
+      playerSubscription: {
+        tier: currentTier,
+        status: 'ACTIVE',
+        cancelAtPeriodEnd: false,
+        subscribed,
+      },
       playerTiers: [],
       savedPaymentMethod: { hasCard: true },
     })
@@ -210,5 +216,33 @@ describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
       billingInterval: 'YEARLY',
     })
     expect(store.changePlayerTier).not.toHaveBeenCalled()
+  })
+
+  it('a player paying for ATHLETE changes tier: the flag decides, not the tier', async () => {
+    const store = await confirmFrom('ATHLETE', 'SEMI_PRO', true)
+    expect(store.changePlayerTier).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      newTier: 'SEMI_PRO',
+    })
+    expect(store.subscribePlayer).not.toHaveBeenCalled()
+  })
+
+  it('offers no paid downgrade, and no change at all while the plan is set to cancel', async () => {
+    const tiers = ['ATHLETE', 'SEMI_PRO', 'PRO'].map((tier) => ({ tier, features: [] }))
+    const offered = async (playerSubscription) => {
+      const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+        playerSubscription,
+        playerTiers: tiers,
+        savedPaymentMethod: { hasCard: true },
+      })
+      return wrapper
+        .findAll('[data-testid="subscription-tier-card"]')
+        .filter((card) => card.find('[data-testid="subscription-change-btn"]').exists())
+        .map((card) => card.attributes('data-tier'))
+    }
+    const plan = { status: 'ACTIVE', subscribed: true, cancelAtPeriodEnd: false }
+    expect(await offered({ ...plan, tier: 'PRO' })).toEqual([])
+    expect(await offered({ ...plan, tier: 'SEMI_PRO' })).toEqual(['PRO'])
+    expect(await offered({ ...plan, tier: 'SEMI_PRO', cancelAtPeriodEnd: true })).toEqual([])
   })
 })

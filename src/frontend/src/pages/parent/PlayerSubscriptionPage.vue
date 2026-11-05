@@ -133,11 +133,9 @@
                    GET lets a PLAYER load). Server-side, subscribe/change-tier/cancel are guarded by
                    PlayerOwnershipGuard, which admits exactly those two callers. -->
               <q-btn
-                v-if="canManage && tier.tier !== currentTier && tier.tier !== 'ATHLETE'"
+                v-if="canManage && canChoose(tier.tier)"
                 color="primary"
-                :label="
-                  isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
-                "
+                :label="t('subscription.upgrade')"
                 class="full-width"
                 data-testid="subscription-change-btn"
                 @click="openSubscribeDialog(tier.tier)"
@@ -259,10 +257,10 @@ const billingInterval = ref('MONTHLY')
 
 const subscription = computed(() => paymentStore.playerSubscription)
 const currentTier = computed(() => subscription.value?.tier || 'ATHLETE')
-// ATHLETE is the free tier with no Stripe subscription behind it (a revoked subscription returns the
-// player to ATHLETE), so any other current tier is a paid plan: picking a new tier changes it rather
-// than subscribing again, which the server refuses as already active. The response carries no Stripe id.
-const hasPaidPlan = computed(() => currentTier.value !== 'ATHLETE')
+// A Stripe subscription backs the plan: picking a new tier changes it rather than subscribing again,
+// which the server refuses as already active. Not judged from the tier: ATHLETE is both the free
+// fallback and a priced tier.
+const hasPaidPlan = computed(() => subscription.value?.subscribed === true)
 const tiers = computed(() => paymentStore.playerTiers)
 // AC 5: gate confirm on a saved card instead of a raw, frontend-typed payment-method id — the
 // backend resolves the saved card itself (SubscriptionService.subscribePlayer).
@@ -320,6 +318,16 @@ function statusColor(status) {
 function isUpgrade(tier) {
   const current = TIER_ORDER.indexOf(currentTier.value)
   return TIER_ORDER.indexOf(tier) > current
+}
+
+// Subscribe from the free plan, or upgrade a paid one. A paid downgrade moves the Stripe price at once and
+// the tier at period end, and this page can neither show that it is pending nor undo it, so it is not
+// offered; nor is any change once the plan is set to cancel (an upgrade would charge proration on a plan
+// that still ends).
+function canChoose(tier) {
+  if (tier === 'ATHLETE' || tier === currentTier.value) return false
+  if (subscription.value?.cancelAtPeriodEnd) return false
+  return !hasPaidPlan.value || isUpgrade(tier)
 }
 
 function openSubscribeDialog(tier) {

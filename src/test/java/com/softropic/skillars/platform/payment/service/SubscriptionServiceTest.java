@@ -52,6 +52,22 @@ class SubscriptionServiceTest {
         assertThat(response.playerId()).isEqualTo(OWN_PLAYER_ID);
     }
 
+    // Pitchside SUB-06: the plan page decides between subscribing and changing tier on this flag, not on the
+    // tier, because ATHLETE is both the free fallback and a priced tier.
+    @Test
+    void getPlayerSubscription_reportsWhetherAStripeSubscriptionBacksThePlan() {
+        when(parentPlayerLinkRepository.existsByParentIdAndPlayerId(CALLER_ID, OWN_PLAYER_ID)).thenReturn(true);
+        PaymentPlayerSubscription sub = new PaymentPlayerSubscription();
+        sub.setPlayerId(OWN_PLAYER_ID);
+        sub.setTier("ATHLETE");
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(OWN_PLAYER_ID)).thenReturn(Optional.of(sub));
+
+        assertThat(subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID).subscribed()).isFalse();
+
+        sub.setStripeSubscriptionId("sub_athlete");
+        assertThat(subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID).subscribed()).isTrue();
+    }
+
     @Test
     void getPlayerSubscription_selfRegisteredPlayerOtherProfile_throwsPlayerOwnership() {
         // Not parent-linked AND not the caller's own self-registered profile — must still be rejected.

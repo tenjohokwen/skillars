@@ -490,6 +490,7 @@ export class Provisioner {
    * worker; through the admin config API, which also drops the config cache.
    */
   async subscriptionPrices(): Promise<void> {
+    // A failed attempt is dropped, so the next caller retries instead of awaiting the same rejection.
     this.pricesReady ??= (async () => {
       const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
       try {
@@ -507,7 +508,10 @@ export class Provisioner {
       } finally {
         await session.dispose()
       }
-    })()
+    })().catch((error: unknown) => {
+      this.pricesReady = undefined
+      throw error
+    })
     await this.pricesReady
   }
 
