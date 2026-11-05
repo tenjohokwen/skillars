@@ -153,6 +153,9 @@ public class ApiAdvice {
     private static final Map<String, String> CONSTRAINT_MAPPINGS = Map.of(
         "user_login_key", "user.login.duplicate",
         "user_email_key", "user.email.duplicate",
+        // skillars-deferred-172 (V231): the case-insensitive twins of the two above.
+        "ux_user_login_lower", "user.login.duplicate",
+        "ux_user_email_lower", "user.email.duplicate",
         "excl_bkg_coach_slot_overlap", "booking.slotUnavailable",
         // skillars-deferred-88 AC10: two concurrent OTP-issue calls for one user hit the partial
         // unique index; the retry is itself a resend, so a plain "try again" is the right UX.

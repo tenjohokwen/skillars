@@ -12,6 +12,7 @@ import org.apache.commons.lang3.StringUtils;
 import java.time.LocalDate;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -140,8 +141,9 @@ public class Customer extends AbstractAuditingEntity implements Consumer {
         return email;
     }
 
+    /** Stored lowercased (skillars-deferred-172): V231's {@code ux_user_email_lower} treats case variants as one address. */
     public void setEmail(String email) {
-        this.email = email;
+        this.email = email == null ? null : email.toLowerCase(Locale.ROOT);
     }
 
     public @Valid Set<Address> getAddresses() {

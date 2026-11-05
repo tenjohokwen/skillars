@@ -1,6 +1,6 @@
 # Story skillars-deferred-172: Account email change — verified, reversible, safe
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- CREATED 2026-11-05 (/bmad-create-story equivalent, written by hand), right after skillars-deferred-171
      (#451, merged 78bb2c9e) and Dependabot #452-#455. Built from ledger item RS03 plus owner decisions taken in
@@ -345,8 +345,8 @@ add the `frontend-tests` label so the Vitest job runs).
 
 ## Tasks / Subtasks
 
-- [ ] T0 (AC9): F14 check (Design 13); fix + test if the gap exists. Record the outcome.
-- [ ] T1 (AC1, AC2): V231 (collision check, backfill, `lower()` indexes); `ApiAdvice` mapping; registration lowercasing
+- [x] T0 (AC9): F14 check (Design 13); fix + test if the gap exists. Record the outcome.
+- [x] T1 (AC1, AC2): V231 (collision check, backfill, `lower()` indexes); `ApiAdvice` mapping; registration lowercasing
       (facade + three role services); reset `currentEmail` lowercasing; tests.
 - [ ] T2 (AC3-AC8): V232 table + CHECK re-union; entity (`@Version`) + repository (open-window query); token helper;
       "address is taken" helper replacing the guard's lookup (unit).

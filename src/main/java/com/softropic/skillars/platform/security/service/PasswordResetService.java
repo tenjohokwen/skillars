@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.Locale;
 import java.util.Optional;
 
 /**
@@ -39,8 +40,11 @@ public class PasswordResetService {
      * @return the user with reset key if successful, empty otherwise
      */
     public Optional<User> prepareForPasswordReset(ChangePasswordDto changePasswordDto) {
-        return userRepository.findOneByEmail(changePasswordDto.getCurrentEmail())
-                .filter(user -> StringUtils.equals(user.getLogin(), changePasswordDto.getLoginId()))
+        // skillars-deferred-172: addresses and logins are stored lowercased (V231), so match the typed values
+        // the way sign-in does.
+        final String currentEmail = StringUtils.lowerCase(changePasswordDto.getCurrentEmail(), Locale.ROOT);
+        return userRepository.findOneByEmail(currentEmail)
+                .filter(user -> StringUtils.equalsIgnoreCase(user.getLogin(), changePasswordDto.getLoginId()))
                 .filter(user -> changePasswordDto.getDob().equals(user.getDateOfBirth()))
                 .filter(User::canInitiatePasswordReset) // Use domain method
                 .map(user -> {

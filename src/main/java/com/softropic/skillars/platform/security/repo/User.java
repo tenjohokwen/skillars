@@ -14,6 +14,7 @@ import java.io.Serializable;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.Set;
 
@@ -55,7 +56,7 @@ public class User extends Customer implements Serializable {
 
     //TODO lastLogins (loginTime:LocalDateTime, sessionId:text, explicitLogout:boolean, RequestMetadata:json, logoutTime:localDateTime, credId:uuid, blacklisted:boolean)
     //TODO give the following at registration (username, password, email,langkey)
-    //Please note that the email address used as the username is the one associate to the user at the user creation time. If users update their email address in their My Profile area, the username is not updated to reflect the new email address.
+    // For an email-login account the login IS the email: a confirmed email change (UserProfileService) moves both together.
     @NotNull
     @Email(regexp = "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,3}", flags = Pattern.Flag.CASE_INSENSITIVE)
     @Size(min = 6, max = 100)
@@ -240,8 +241,12 @@ public class User extends Customer implements Serializable {
         return login;
     }
 
+    /**
+     * Stored lowercased (skillars-deferred-172): sign-in lowercases the typed id and matches exactly, and V231's
+     * {@code ux_user_login_lower} treats case variants as one login. Phone logins are digits, so unaffected.
+     */
     public void setLogin(final String login) {
-        this.login = login;
+        this.login = login == null ? null : login.toLowerCase(Locale.ROOT);
     }
 
     public @NotNull LoginIdType getLoginIdType() {
