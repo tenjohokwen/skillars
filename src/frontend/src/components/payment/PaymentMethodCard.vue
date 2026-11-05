@@ -37,6 +37,7 @@
           size="sm"
           color="primary"
           :label="t('payment.card.replaceCard')"
+          data-testid="payment-card-replace-btn"
           @click="startEditing"
         />
       </div>

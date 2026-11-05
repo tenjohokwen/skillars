@@ -33,6 +33,7 @@
               flat
               color="primary"
               :label="t('subscription.updateCard')"
+              data-testid="subscription-update-card-btn"
               @click="addCardDialog = true"
             />
           </template>
@@ -44,6 +45,7 @@
           class="q-mb-md"
           rounded
           style="background: rgba(255, 165, 0, 0.15)"
+          data-testid="subscription-cancel-pending"
         >
           <template #avatar>
             <q-icon name="mdi-alert" color="warning" />
@@ -62,8 +64,12 @@
           </div>
           <div class="row items-center q-gutter-md">
             <div>
-              <q-badge :color="tierColor(subscription?.tier)" class="text-body1 q-px-md q-py-xs">
-                {{ subscription?.tier || 'ATHLETE' }}
+              <q-badge
+                :color="tierColor(currentTier)"
+                class="text-body1 q-px-md q-py-xs"
+                data-testid="subscription-current-tier"
+              >
+                {{ currentTier }}
               </q-badge>
             </div>
             <div>
@@ -73,6 +79,7 @@
                 :color="statusColor(subscription?.status)"
                 text-color="white"
                 class="q-ml-xs"
+                data-testid="subscription-status"
               >
                 {{ subscription?.status || 'ACTIVE' }}
               </q-chip>
@@ -85,7 +92,9 @@
             </div>
             <div v-if="subscription?.currentPeriodEnd">
               <span class="text-caption text-secondary">{{ t('subscription.renewsOn') }}:</span>
-              <span class="q-ml-xs">{{ formatDate(subscription.currentPeriodEnd) }}</span>
+              <span class="q-ml-xs" data-testid="subscription-period-end">{{
+                formatDate(subscription.currentPeriodEnd)
+              }}</span>
             </div>
           </div>
         </div>
@@ -99,7 +108,9 @@
             v-for="tier in tiers"
             :key="tier.tier"
             class="col tier-card glass-card q-pa-md"
-            :class="{ 'current-tier': tier.tier === subscription?.tier }"
+            :class="{ 'current-tier': tier.tier === currentTier }"
+            data-testid="subscription-tier-card"
+            :data-tier="tier.tier"
           >
             <div class="text-h6 text-weight-bold q-mb-xs">{{ tier.tier }}</div>
             <div v-if="tier.monthlyPrice" class="text-body2 text-secondary q-mb-xs">
@@ -122,29 +133,30 @@
                    GET lets a PLAYER load). Server-side, subscribe/change-tier/cancel are guarded by
                    PlayerOwnershipGuard, which admits exactly those two callers. -->
               <q-btn
-                v-if="canManage && tier.tier !== subscription?.tier && tier.tier !== 'ATHLETE'"
+                v-if="canManage && canChoose(tier.tier)"
                 color="primary"
-                :label="
-                  isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
-                "
+                :label="t('subscription.upgrade')"
                 class="full-width"
+                data-testid="subscription-change-btn"
                 @click="openSubscribeDialog(tier.tier)"
               />
               <q-btn
                 v-else-if="
                   canManage &&
-                  tier.tier === subscription?.tier &&
-                  tier.tier !== 'ATHLETE' &&
+                  tier.tier === currentTier &&
+                  hasPaidPlan &&
                   !subscription?.cancelAtPeriodEnd
                 "
                 color="negative"
                 outline
                 :label="t('subscription.cancel')"
                 class="full-width"
+                data-testid="subscription-cancel-btn"
                 @click="handleCancel"
               />
+              <!-- ATHLETE is free unless a subscription pays for it (the Cancel above then shows). -->
               <div
-                v-else-if="tier.tier === 'ATHLETE'"
+                v-else-if="tier.tier === 'ATHLETE' && !(tier.tier === currentTier && hasPaidPlan)"
                 class="text-center text-caption text-secondary"
               >
                 {{ t('subscription.freePlan') }}
@@ -162,15 +174,23 @@
           <div class="text-h6">{{ t('subscription.subscribeTo', { tier: selectedTier }) }}</div>
         </q-card-section>
         <q-card-section>
+          <!-- A tier change keeps the subscription's billing interval (changePlayerTier), so the
+               interval is chosen only when subscribing. -->
           <q-select
+            v-if="!hasPaidPlan"
             v-model="billingInterval"
             :options="availableIntervals"
             :label="t('subscription.billingInterval')"
             outlined
             dense
             class="q-mb-md"
+            data-testid="subscription-interval"
           />
-          <div v-if="hasCard === false" class="text-body2 text-warning q-mb-sm">
+          <div
+            v-if="hasCard === false"
+            class="text-body2 text-warning q-mb-sm"
+            data-testid="subscription-add-card-prompt"
+          >
             {{ t('payment.card.addCardPrompt') }}
             <q-btn
               flat
@@ -189,6 +209,7 @@
             :label="t('subscription.confirm')"
             :loading="actionLoading"
             :disable="hasCard === false"
+            data-testid="subscription-confirm-btn"
             @click="confirmSubscribe"
           />
         </q-card-actions>
@@ -236,6 +257,11 @@ const selectedTier = ref('')
 const billingInterval = ref('MONTHLY')
 
 const subscription = computed(() => paymentStore.playerSubscription)
+const currentTier = computed(() => subscription.value?.tier || 'ATHLETE')
+// A Stripe subscription backs the plan: picking a new tier changes it rather than subscribing again,
+// which the server refuses as already active. Not judged from the tier: ATHLETE is both the free
+// fallback and a priced tier.
+const hasPaidPlan = computed(() => subscription.value?.subscribed === true)
 const tiers = computed(() => paymentStore.playerTiers)
 // AC 5: gate confirm on a saved card instead of a raw, frontend-typed payment-method id — the
 // backend resolves the saved card itself (SubscriptionService.subscribePlayer).
@@ -253,9 +279,10 @@ function onCardSaved() {
 }
 
 const TIER_ORDER = ['ATHLETE', 'SEMI_PRO', 'PRO']
+const YEARLY_ONLY = ['SEMI_PRO', 'PRO']
 
 const availableIntervals = computed(() => {
-  if (selectedTier.value === 'SEMI_PRO' || selectedTier.value === 'PRO') return ['YEARLY']
+  if (YEARLY_ONLY.includes(selectedTier.value)) return ['YEARLY']
   return ['MONTHLY', 'QUARTERLY', 'YEARLY']
 })
 
@@ -291,8 +318,21 @@ function statusColor(status) {
 }
 
 function isUpgrade(tier) {
-  const current = TIER_ORDER.indexOf(subscription.value?.tier || 'ATHLETE')
+  const current = TIER_ORDER.indexOf(currentTier.value)
   return TIER_ORDER.indexOf(tier) > current
+}
+
+// Subscribe from the free plan, or upgrade a paid one. A paid downgrade moves the Stripe price at once and
+// the tier at period end, and this page can neither show that it is pending nor undo it, so it is not
+// offered; nor is any change once the plan is set to cancel (an upgrade would charge proration on a plan
+// that still ends).
+function canChoose(tier) {
+  if (tier === 'ATHLETE' || tier === currentTier.value) return false
+  if (subscription.value?.cancelAtPeriodEnd) return false
+  if (!hasPaidPlan.value) return true
+  // A change keeps the plan's interval, and SEMI_PRO and PRO are sold yearly only.
+  if (YEARLY_ONLY.includes(tier) && subscription.value?.billingInterval !== 'YEARLY') return false
+  return isUpgrade(tier)
 }
 
 function openSubscribeDialog(tier) {
@@ -308,10 +348,7 @@ async function confirmSubscribe() {
   }
   actionLoading.value = true
   try {
-    const isAlreadySubscribed =
-      subscription.value?.stripeSubscriptionId != null && subscription.value?.status === 'ACTIVE'
-
-    if (isAlreadySubscribed) {
+    if (hasPaidPlan.value) {
       await paymentStore.changePlayerTier({ playerId: playerId.value, newTier: selectedTier.value })
     } else {
       await paymentStore.subscribePlayer({

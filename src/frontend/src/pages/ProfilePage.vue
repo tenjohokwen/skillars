@@ -281,7 +281,11 @@
                caller is the coach player-detail page (CoachPlayerDetailPage.vue, skillars-12-9) —
                a bare read here would be null on any cold /profile load, hiding the feature from
                the coaches entitled to it. -->
-          <div v-if="authStore.isCoach" class="glass-card profile-section">
+          <div
+            v-if="authStore.isCoach"
+            class="glass-card profile-section"
+            data-testid="coach-branding-section"
+          >
             <div class="text-label q-mb-lg">{{ t('profile.sectionCoachBranding') }}</div>
 
             <div v-if="brandingTierLoading" class="profile-row">
@@ -345,6 +349,7 @@
                   icon="edit"
                   round
                   class="edit-btn"
+                  data-testid="coach-branding-edit-btn"
                   @click="showCoachBrandingDialog = true"
                 >
                   <q-tooltip>{{ t('profile.edit') }}</q-tooltip>
@@ -363,6 +368,7 @@
                   icon="edit"
                   round
                   class="edit-btn"
+                  data-testid="coach-branding-edit-btn"
                   @click="showCoachBrandingDialog = true"
                 >
                   <q-tooltip>{{ t('profile.edit') }}</q-tooltip>

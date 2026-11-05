@@ -1,0 +1,15 @@
+{
+  "name": "Stripe — create a subscription: active, paid, renewing in 30 days (deterministic tier)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/subscriptions"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"id\":\"sub_e2e_{{randomValue length=14 type='ALPHANUMERIC'}}\",\"object\":\"subscription\",\"status\":\"active\",\"livemode\":false,\"customer\":\"cus_e2e\",\"cancel_at_period_end\":false,\"current_period_start\":{{now format='unix'}} ,\"current_period_end\":{{now offset='30 days' format='unix'}} ,\"items\":{\"object\":\"list\",\"data\":[{\"id\":\"si_e2e_1\",\"object\":\"subscription_item\",\"current_period_start\":{{now format='unix'}} ,\"current_period_end\":{{now offset='30 days' format='unix'}} }]}}"
+  }
+}

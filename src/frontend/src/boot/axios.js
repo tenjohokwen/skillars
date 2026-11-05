@@ -256,6 +256,10 @@ api.interceptors.response.use(
         const message = data?.errorMsg?.message || 'Server error'
         console.error('[Server Error]', message, helpCode ? `(Help code: ${helpCode})` : '')
       }
+    } else if (axios.isCancel(error)) {
+      // Aborted by the app itself (an AbortController signal, e.g. a debounced preview superseded or its
+      // component unmounted): the server was never the problem, so nothing to report. The caller still
+      // sees the rejection.
     } else if (error.request) {
       // Network error - request made but no response received
       console.error('[Network Error] Unable to reach server. Please check your connection.')

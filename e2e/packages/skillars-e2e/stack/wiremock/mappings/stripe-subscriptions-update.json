@@ -1,0 +1,15 @@
+{
+  "name": "Stripe — update a sub_e2e_* subscription (price change or cancel at period end): still active (deterministic tier)",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/v1/subscriptions/sub_e2e_[A-Za-z0-9]+"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "body": "{\"id\":\"{{request.pathSegments.[2]}}\",\"object\":\"subscription\",\"status\":\"active\",\"livemode\":false,\"customer\":\"cus_e2e\",\"cancel_at_period_end\":{{#if (contains request.body 'cancel_at_period_end=true')}}true{{else}}false{{/if}},\"current_period_start\":{{now format='unix'}} ,\"current_period_end\":{{now offset='30 days' format='unix'}} ,\"items\":{\"object\":\"list\",\"data\":[{\"id\":\"si_e2e_1\",\"object\":\"subscription_item\",\"current_period_start\":{{now format='unix'}} ,\"current_period_end\":{{now offset='30 days' format='unix'}} }]}}"
+  }
+}
