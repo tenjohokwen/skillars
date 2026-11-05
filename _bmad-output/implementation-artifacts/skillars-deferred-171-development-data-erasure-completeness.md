@@ -303,9 +303,9 @@ rewritten ITs.
 
 ## Tasks / Subtasks
 
-- [ ] T1 (AC1): radar guard; `setTargets` guard; `savePreferences` guard; 6-arg `writeTimelineEvent` guard; stale
+- [x] T1 (AC1): radar guard; `setTargets` guard; `savePreferences` guard; 6-arg `writeTimelineEvent` guard; stale
       comment `:224`; tests.
-- [ ] T2 (AC2): report guard in `generateReport`; restructure `onReportGenerated` (drop its `@Transactional`,
+- [x] T2 (AC2): report guard in `generateReport`; restructure `onReportGenerated` (drop its `@Transactional`,
       Step A guard-then-update with the enqueue branch outside the upload `try`, Step B timeline + notify);
       inject `BlobDeletionOutboxSupport` and a transaction manager; tests (including the race IT and the
       lock-busy case).

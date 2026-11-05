@@ -221,8 +221,8 @@ public class TimelineEventListener {
     /**
      * skillars-12-8 AC7: HOMEWORK_ASSIGNED producer's consumer. fallbackExecution = true is REQUIRED: the
      * publisher (HomeworkAssignmentService.handleBookingCompleted) has no active transaction, and an
-     * AFTER_COMMIT listener without fallback is silently dropped then. Written via the 5-arg overload so
-     * the coach_id column stays NULL -- that column is the attendance-gated coach-access-clock signal and a
+     * AFTER_COMMIT listener without fallback is silently dropped then. Written via saveTimelineEvent with a
+     * null coachId (writeHomeworkAssigned below), so the coach_id column stays NULL -- that column is the attendance-gated coach-access-clock signal and a
      * homework entry must never reset it. One row per (player, booking): the publisher announces only the
      * drill ids it newly persisted, so a booking can legitimately produce a SECOND event (drill 2 failed
      * mid-loop, a later replay inserts it). That event is merged into the existing row (drill ids already
@@ -297,10 +297,17 @@ public class TimelineEventListener {
     // reads to merge with the SLU-only clock (AC1) — null for RADAR_ASSESSMENT/PERFORMANCE_REPORT,
     // whose source events (RadarEntrySubmittedEvent, ReportGeneratedEvent) carry nothing resolvable
     // to a coach id usable here, and for a non-attended SESSION_COMPLETED.
+    // skillars-deferred-171 AC1/AC2: the erasure check sits here, not in the 5-arg overload, so every path
+    // reaches it. The 5-arg overload calls this one on `this`, so its own REQUIRES_NEW transaction is the one
+    // in effect, which is what the guard's MANDATORY propagation needs. A caller must not hold the player's
+    // profile lock when it calls this: the NOWAIT guard here would then fail against its own caller.
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void writeTimelineEvent(Long playerId, PlayerTimelineEventType type,
                                    UUID referenceId, String referenceModule,
                                    Map<String, Object> metadata, UUID coachId) {
+        if (erasureGuard.isErasedUnderLock(playerId, "TimelineEventListener.writeTimelineEvent(" + type + ")")) {
+            return;
+        }
         saveTimelineEvent(playerId, type, referenceId, referenceModule, metadata, coachId);
     }
 

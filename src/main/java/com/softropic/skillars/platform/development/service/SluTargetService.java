@@ -1,11 +1,13 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.development.contract.NeglectedSkillResponse;
 import com.softropic.skillars.platform.development.contract.SluTargetRequest;
 import com.softropic.skillars.platform.development.contract.SluTargetResponse;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluTarget;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +23,7 @@ public class SluTargetService {
     private final SluTargetRepository sluTargetRepository;
     private final NeglectedSkillFlagRepository flagRepository;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    private final DevelopmentDataErasureGuard erasureGuard;
 
     @Transactional(readOnly = true)
     public List<SluTargetResponse> getTargets(UUID coachId, Long playerId) {
@@ -36,6 +39,11 @@ public class SluTargetService {
     @Transactional
     public List<SluTargetResponse> setTargets(UUID coachId, Long playerId, List<SluTargetRequest> requests) {
         coachPlayerAuthorizationService.requireCoachPlayerRelationship(coachId, playerId);
+        // skillars-deferred-171 AC1: erasure empties player_slu_targets but leaves the relationship above
+        // intact, so check the marker under the profile lock before writing.
+        if (erasureGuard.isErasedUnderLock(playerId, "SluTargetService.setTargets")) {
+            throw new ResourceNotFoundException("Player not found", "player_profile");
+        }
         for (SluTargetRequest req : requests) {
             if (req.weeklyTargetSlu() == null) {
                 PlayerSluTarget.PlayerSluTargetId pk = new PlayerSluTarget.PlayerSluTargetId();

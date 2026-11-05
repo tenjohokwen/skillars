@@ -1,10 +1,13 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.development.contract.NeglectedSkillResponse;
+import com.softropic.skillars.platform.development.contract.SluTargetRequest;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.SluTargetRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -17,6 +20,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -29,6 +34,7 @@ class SluTargetServiceTest {
     @Mock private SluTargetRepository sluTargetRepository;
     @Mock private NeglectedSkillFlagRepository flagRepository;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    @Mock private DevelopmentDataErasureGuard erasureGuard;
 
     private SluTargetService service;
 
@@ -37,7 +43,8 @@ class SluTargetServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new SluTargetService(sluTargetRepository, flagRepository, coachPlayerAuthorizationService);
+        service = new SluTargetService(sluTargetRepository, flagRepository, coachPlayerAuthorizationService,
+            erasureGuard);
         lenient().when(flagRepository.findByPlayerIdAndResolvedAtIsNull(PLAYER_ID)).thenReturn(List.of());
         lenient().when(sluTargetRepository.findByIdCoachIdAndIdPlayerId(COACH_ID, PLAYER_ID)).thenReturn(List.of());
     }
@@ -82,5 +89,28 @@ class SluTargetServiceTest {
         assertThatThrownBy(() -> service.getTargets(COACH_ID, PLAYER_ID))
             .isInstanceOf(OperationNotAllowedException.class);
         verify(sluTargetRepository, never()).findByIdCoachIdAndIdPlayerId(any(), any());
+    }
+
+    // ── skillars-deferred-171 AC1: an erased player gets no new SLU targets ─────────────────────────
+
+    @Test
+    void setTargets_erasedPlayer_throwsNotFoundAndWritesNothing() {
+        when(erasureGuard.isErasedUnderLock(eq(PLAYER_ID), anyString())).thenReturn(true);
+        List<SluTargetRequest> requests = List.of(
+            new SluTargetRequest("PASS", java.math.BigDecimal.TEN), new SluTargetRequest("DRIB", null));
+
+        assertThatThrownBy(() -> service.setTargets(COACH_ID, PLAYER_ID, requests))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .extracting(e -> ((ResourceNotFoundException) e).getResourceName()).isEqualTo("player_profile");
+        verify(sluTargetRepository, never()).upsert(any(), any(), any(), any(), any());
+        verify(sluTargetRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void setTargets_notErasedPlayer_checksTheGuardThenUpserts() {
+        service.setTargets(COACH_ID, PLAYER_ID, List.of(new SluTargetRequest("PASS", java.math.BigDecimal.TEN)));
+
+        verify(erasureGuard).isErasedUnderLock(eq(PLAYER_ID), anyString());
+        verify(sluTargetRepository).upsert(eq(COACH_ID), eq(PLAYER_ID), eq("PASS"), eq(java.math.BigDecimal.TEN), any());
     }
 }

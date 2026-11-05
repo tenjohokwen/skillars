@@ -19,6 +19,8 @@ import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
+import com.softropic.skillars.platform.filestorage.service.BlobDeletionOutboxSupport;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
@@ -29,15 +31,19 @@ import com.softropic.skillars.platform.notification.contract.Envelope;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -55,6 +61,8 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -80,6 +88,11 @@ class ReportGenerationServiceTest {
     @Mock private SecurityUtil securityUtil;
     @Mock private PlayerProfileRepository playerProfileRepository;
     @Mock private PlayerTimelineRepository playerTimelineRepository;
+    @Mock private DevelopmentDataErasureGuard erasureGuard;
+    @Mock private BlobDeletionOutboxSupport blobDeletionOutboxSupport;
+    // A mock transaction manager: TransactionTemplate.execute then runs the callback between a (mock)
+    // getTransaction and commit, which is enough to prove what runs inside which transaction.
+    @Mock private PlatformTransactionManager transactionManager;
     // skillars-deferred-92 AC18: a real instance, not a mock. The per-coach limit is the
     // point of the AC, and a mock would return false for tryConsume and silently reject
     // every call, or be stubbed to always allow and prove nothing.
@@ -103,13 +116,17 @@ class ReportGenerationServiceTest {
             reportRepository, brandingRepository, fileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
             rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
-            playerTimelineRepository, new FrontendLinkBuilder("http://app.test")
+            playerTimelineRepository, new FrontendLinkBuilder("http://app.test"),
+            erasureGuard, blobDeletionOutboxSupport, transactionManager
         );
         // skillars-deferred-153 AC7: a bare @Mock ConfigService does not throw on an unstubbed call —
         // getBoundedLong returns Mockito's default 0L, which would make every existing happy-path
         // generateReport test (lastSessionDate stubbed as "1 hour ago") start throwing
         // AccessDeniedException. lenient() — the stale-signal test below overrides with its own value.
         org.mockito.Mockito.lenient().when(configService.getBoundedLong(ConfigBounds.TIMELINE_COACH_ACCESS_EXPIRY_DAYS)).thenReturn(90L);
+        // skillars-deferred-171 AC2: onReportGenerated reads the READY update count (0 = the row is gone).
+        lenient().when(reportRepository.updateStatusAndStorageKey(any(), eq(ReportStatus.READY), anyString()))
+            .thenReturn(1);
     }
 
     private CoachProfileDto coachDto() {
@@ -141,7 +158,7 @@ class ReportGenerationServiceTest {
         saved.setGeneratedAt(Instant.now());
         saved.setStatus(ReportStatus.PENDING_UPLOAD);
         saved.setNextSteps("Keep practicing dribbling.");
-        when(reportRepository.saveAndFlush(any())).thenReturn(saved);
+        lenient().when(reportRepository.saveAndFlush(any())).thenReturn(saved);
     }
 
     // ---- skillars-deferred-92 AC18: the per-coach rate limit ----
@@ -559,6 +576,100 @@ class ReportGenerationServiceTest {
         verify(publisher).publishEvent(any(Envelope.class));
     }
 
+    // ---- skillars-deferred-171 AC2: erasure vs. report generation ----
+
+    // The race path only: a really erased player is refused earlier with 403 (no session history),
+    // see generateReport_coachWithNoPlayerRelationship_throwsAccessDeniedException-style tests above.
+    @Test
+    void generateReport_playerErasedMidRequest_throwsNotFoundAndSavesNothing() {
+        stubGenerateReport(CoachSubscriptionTier.INSTRUCTOR);
+        when(erasureGuard.isErasedUnderLock(eq(PLAYER_ID), anyString())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "Keep practicing dribbling."))
+            .isInstanceOf(ResourceNotFoundException.class);
+        verify(reportRepository, never()).saveAndFlush(any());
+        verify(publisher, never()).publishEvent(any(ReportGeneratedEvent.class));
+    }
+
+    @Test
+    void generateReport_lastSessionSignalGone_isRefusedBeforeTheGuard() {
+        when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
+        when(coachProfileService.getCoachSubscriptionTier(COACH_ID)).thenReturn(CoachSubscriptionTier.INSTRUCTOR);
+        when(coachPlayerLastSessionResolver.resolve(PLAYER_ID, COACH_ID))
+            .thenReturn(new CoachPlayerLastSessionResolver.LastCoachSessionSignal(null, null));
+
+        assertThatThrownBy(() -> service.generateReport(COACH_USER_ID, PLAYER_ID, "x"))
+            .isInstanceOf(AccessDeniedException.class);
+        verify(erasureGuard, never()).isErasedUnderLock(any(), anyString());
+    }
+
+    @Test
+    void onReportGenerated_checksTheGuardBeforeTheReadyUpdate_andNotifiesInsideATransaction() {
+        ReportGeneratedEvent event = generatedEvent();
+        when(playerProfileService.getParentEmailByPlayerId(PLAYER_ID)).thenReturn("parent@test.com");
+
+        service.onReportGenerated(event);
+
+        InOrder order = inOrder(erasureGuard, reportRepository, timelineEventListener, transactionManager, publisher);
+        order.verify(erasureGuard).isErasedUnderLock(eq(PLAYER_ID), anyString());
+        order.verify(reportRepository).updateStatusAndStorageKey(eq(event.reportId()), eq(ReportStatus.READY), anyString());
+        order.verify(transactionManager).commit(any());
+        // Step B: the timeline row after Step A committed, then the e-mail published inside its own transaction
+        // (MailManager listens AFTER_COMMIT with no fallback, so an e-mail published outside one is dropped).
+        order.verify(timelineEventListener).writeTimelineEvent(eq(PLAYER_ID), eq(PlayerTimelineEventType.PERFORMANCE_REPORT),
+            eq(event.reportId()), eq("development"), any());
+        order.verify(transactionManager).getTransaction(any());
+        order.verify(publisher).publishEvent(any(Envelope.class));
+        order.verify(transactionManager).commit(any());
+        verify(blobDeletionOutboxSupport, never()).enqueue(any());
+    }
+
+    @Test
+    void onReportGenerated_playerErasedBeforeReady_enqueuesThePdfAndSkipsTimelineAndNotification() {
+        ReportGeneratedEvent event = generatedEvent();
+        when(erasureGuard.isErasedUnderLock(eq(PLAYER_ID), anyString())).thenReturn(true);
+
+        service.onReportGenerated(event);
+
+        ArgumentCaptor<String> storedKey = ArgumentCaptor.forClass(String.class);
+        verify(fileStorageService).storeBytes(any(), storedKey.capture(), anyString(), anyString());
+        verify(blobDeletionOutboxSupport).enqueue(List.of(storedKey.getValue()));
+        verify(blobDeletionOutboxSupport).requestDrainAfterCommit();
+        verify(reportRepository, never()).updateStatusAndStorageKey(any(), eq(ReportStatus.READY), anyString());
+        verify(timelineEventListener, never()).writeTimelineEvent(any(), any(), any(), any(), any());
+        verify(publisher, never()).publishEvent(any(Envelope.class));
+    }
+
+    @Test
+    void onReportGenerated_rowAlreadyDeleted_enqueuesThePdfAndSkipsTimelineAndNotification() {
+        ReportGeneratedEvent event = generatedEvent();
+        when(reportRepository.updateStatusAndStorageKey(eq(event.reportId()), eq(ReportStatus.READY), anyString()))
+            .thenReturn(0);
+
+        service.onReportGenerated(event);
+
+        verify(blobDeletionOutboxSupport).enqueue(any());
+        verify(blobDeletionOutboxSupport).requestDrainAfterCommit();
+        verify(timelineEventListener, never()).writeTimelineEvent(any(), any(), any(), any(), any());
+        verify(publisher, never()).publishEvent(any(Envelope.class));
+    }
+
+    @Test
+    void onReportGenerated_readyStepFailsAfterUpload_enqueuesThePdfAndMarksUploadFailed() {
+        ReportGeneratedEvent event = generatedEvent();
+        when(erasureGuard.isErasedUnderLock(eq(PLAYER_ID), anyString()))
+            .thenThrow(new PessimisticLockingFailureException("profile row busy"));
+
+        assertThatCode(() -> service.onReportGenerated(event)).doesNotThrowAnyException();
+
+        ArgumentCaptor<String> storedKey = ArgumentCaptor.forClass(String.class);
+        verify(fileStorageService).storeBytes(any(), storedKey.capture(), anyString(), anyString());
+        verify(blobDeletionOutboxSupport).enqueue(List.of(storedKey.getValue()));
+        verify(reportRepository).updateStatusAndStorageKey(event.reportId(), ReportStatus.UPLOAD_FAILED, null);
+        verify(timelineEventListener, never()).writeTimelineEvent(any(), any(), any(), any(), any());
+        verify(publisher, never()).publishEvent(any(Envelope.class));
+    }
+
     // ---- listReports (READY-only) ----
 
     // skillars-deferred-153 AC6 code review (2026-10-17): NEW. Task 9 claimed coverage of the
@@ -821,7 +932,8 @@ class ReportGenerationServiceTest {
             reportRepository, brandingRepository, realFileStorageService,
             timelineEventListener, publisher, coachPlayerAuthorizationService,
             rateLimitingService, new CoachAccessWindow(configService), securityUtil, playerProfileRepository,
-            playerTimelineRepository, new FrontendLinkBuilder("http://app.test")
+            playerTimelineRepository, new FrontendLinkBuilder("http://app.test"),
+            erasureGuard, blobDeletionOutboxSupport, transactionManager
         );
     }
 
