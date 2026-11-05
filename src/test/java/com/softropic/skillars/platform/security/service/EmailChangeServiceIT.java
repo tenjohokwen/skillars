@@ -21,6 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.PessimisticLockingFailureException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -261,6 +262,34 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void aSecondRequestWhileOneIsRunning_isRefusedTheSameWayWhateverItsTarget() throws Exception {
+        // Only a free target inserts a row, so without serialising, which of two simultaneous requests collides
+        // would tell whether an address is registered. The running request is simulated by a held row lock.
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<?> holder = pool.submit(() -> transactionTemplate.executeWithoutResult(s -> {
+                jdbcTemplate.queryForObject("SELECT id FROM main.\"user\" WHERE id = ? FOR UPDATE", Long.class, ME_ID);
+                locked.countDown();
+                await(release);
+            }));
+            assertThat(locked.await(10, TimeUnit.SECONDS)).isTrue();
+            for (String target : List.of(NEW, OTHER)) {
+                assertThatThrownBy(() -> emailChangeService.request(ME, target, PASSWORD)).as(target)
+                    .isInstanceOf(PessimisticLockingFailureException.class);
+            }
+            release.countDown();
+            holder.get(10, TimeUnit.SECONDS);
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+        assertThat(openRequests()).isZero();
+        assertThat(testMailManager.getEnvelopes()).isEmpty();
+    }
+
+    @Test
     void theUserForeignKey_cascades_soAHardDeleteOfTheAccountIsNeverBlocked() {
         // UserAdminService's sweep hard-deletes never-activated accounts; GDPR erasure keeps the row.
         assertThat(jdbcTemplate.queryForObject(
@@ -357,9 +386,12 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void undo_onASuspendedAccount_restoresTheAddress_butLeavesTheSuspensionAndPasswordAlone() {
+    void undo_onASuspendedAccount_restoresTheAddress_keepsTheSuspension_butKillsThePasswordAndAnyResetKey() {
         String undo = confirmChangeTo(NEW);
-        commit("UPDATE main.\"user\" SET locked = true WHERE id = ?", ME_ID);
+        // The party who made the change knows the password and may hold a reset key mailed to the new address;
+        // neither may still work once an admin reinstates the account.
+        commit("UPDATE main.\"user\" SET locked = true, reset_key = 'takerkey', "
+            + "reset_expiration = now() + interval '1 hour' WHERE id = ?", ME_ID);
         testMailManager.clear();
 
         EmailChangeService.UndoOutcome outcome = emailChangeService.undo(undo);
@@ -368,7 +400,9 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         assertThat(outcome.passwordResetSent()).isFalse();
         assertThat(me.getEmail()).isEqualTo(ME);
         assertThat(me.isLocked()).isTrue();
-        assertThat(passwordEncoder.matches(PASSWORD, me.getPassword())).isTrue();
+        assertThat(passwordEncoder.matches(PASSWORD, me.getPassword())).isFalse();
+        assertThat(me.getResetKey()).isNull();
+        assertThat(sentTo(EmailTemplate.PASSWORD_RESET)).isEmpty();
         assertThat(sentTo(EmailTemplate.EMAIL_CHANGED_NOTICE)).containsExactlyInAnyOrder(ME, NEW);
         assertThat(envelopeTo(EmailTemplate.EMAIL_CHANGED_NOTICE, ME).data()).containsEntry("undone", true);
         assertThat(envelopeTo(EmailTemplate.EMAIL_CHANGED_NOTICE, NEW).data()).containsEntry("revertedAway", true);

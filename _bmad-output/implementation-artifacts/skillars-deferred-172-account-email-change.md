@@ -462,6 +462,15 @@ Claude Opus 5.5 (claude-opus-5-5)
   `PESSIMISTIC_WRITE` lookup, so a reset racing an undo waits and then no longer finds the replaced key, instead of
   overwriting the undo's password. Race IT `aResetKeyReplacedWhileItsResetIsRunning_...` (held transaction, waits until
   the reset blocks on the lock); without the lock it fails (the reset succeeds). PasswordResetIT and UserServiceIT green.
+- /pr-review round 3 (8d5293b5), owner decision G (option 1, amends R2): an undo on a suspended or not-activated account
+  still replaces the password and clears any pending reset key (the party who made the change knows the password and
+  may hold a key mailed to its address; `User.completePasswordReset` refuses a locked account, so the risk was after
+  reinstatement). The suspension stays and no reset link is sent; the notice already says to reset after reinstatement.
+- Round 3 low finding fixed: `request` locks the user row (`findByIdForUpdate`, NO_WAIT) before anything target-dependent,
+  so two simultaneous requests no longer tell whether an address is registered (only a free target inserts a row into
+  `ux_ecr_one_open_per_user`); a concurrent one answers 409 `generic.conflict` whatever its target. IT
+  `aSecondRequestWhileOneIsRunning_...`; mutation (lock removed) turns it red. Round 3's confirm REQUIRES_NEW finding is
+  decision E again; the per-JVM limits are V1 again (single instance).
 
 ### File List
 

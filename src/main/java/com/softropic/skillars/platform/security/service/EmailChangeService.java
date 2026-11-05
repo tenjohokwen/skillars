@@ -58,8 +58,9 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  *   <li><b>Undo</b> (public link): the old address and login come back, every session is revoked, every other
  *       open request and undo link of the account dies, and the password is replaced by an unusable value with
  *       a reset link mailed to the restored address, so whoever changed it is locked out. On a suspended (or
- *       not activated) account the suspension is left alone and no password is touched (R2). The address the
- *       account leaves is told the change was undone, with a help code.</li>
+ *       not activated) account the suspension is left alone (R2): the password is still replaced and any pending
+ *       reset key cleared, but no reset link is sent until it is reinstated. The address the account leaves is
+ *       told the change was undone, with a help code.</li>
  * </ol>
  *
  * <p>One change per undo window (R1): while a confirmed change can still be undone, a new request is refused.
@@ -143,6 +144,10 @@ public class EmailChangeService {
                 REQUEST_WINDOW_MINUTES, TimeUnit.MINUTES)) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "email.change.tooManyRequests");
         }
+        // One request at a time per account (NO_WAIT; a concurrent one answers 409 generic.conflict whatever its
+        // target). Without it, two requests sent at once would tell whether an address is registered: only a free
+        // target inserts a row, and only that insert collides with the other's in ux_ecr_one_open_per_user.
+        userRepository.findByIdForUpdate(user.getId());
         final Optional<Instant> windowEnd = requestRepository.findOpenUndoWindowEnd(user.getId(), now);
         if (windowEnd.isPresent()) {
             throw new RecentEmailChangeException(RecentEmailChangeException.EMAIL_CHANGE_KEY, windowEnd.get());
@@ -252,11 +257,16 @@ public class EmailChangeService {
         final User account = userRepository.findById(request.getUserId()).orElseThrow();
         account.setEmail(request.getOldEmail());
         account.setLogin(request.getOldLogin());
+        // Whoever made the change knows the password (they re-entered it to ask) and may hold a reset key mailed to
+        // their address, so both die on every account. A suspended one keeps its suspension, and its owner resets
+        // from the sign-in page once reinstated, as the notice says; until then no key can be issued for it.
+        account.setPassword(passwordEncoder.encode(EmailChangeTokens.generate()));
+        account.setResetKey(null);
+        account.setResetExpiration(null);
         final boolean resetPassword = account.isActivated() && !account.isLocked();
         final Map<String, Object> data = baseData();
         final EmailTemplate template;
         if (resetPassword) {
-            account.setPassword(passwordEncoder.encode(EmailChangeTokens.generate()));
             account.preparePasswordReset(RandomUtil.generateResetKey(),
                 securityProperties.getPasswordResetExpiration().toHours());
             data.put("resetKey", account.getResetKey());
