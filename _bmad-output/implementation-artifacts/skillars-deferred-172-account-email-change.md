@@ -210,8 +210,24 @@ tests are rewritten for the new flow.
 - Dialog no longer logs out; new message in three locales; two new public pages with specs (Vitest, real enUS messages
   for the visible text).
 - `ProfileResource` Javadoc and `User.java:58` corrected.
-- Dev docs (security module page: the email-change flow, tokens, reservation, cool-off); provisioning checklist entry for
-  V231 (new table + template CHECK) and the three templates; search index rebuilt; `check-docs` passes.
+- **Dev docs (`docs/dev-docs`) updated to reflect the change.** No page describes the email change today (checked at
+  b80569ec: no page mentions `updateUserEmail`, `change_email`, `UpdateEmailDialog` or `PROFILE_CHANGE`), so this is new
+  content, not a touch-up. At least:
+  - `security/index.html`: the email-change flow end to end (request → confirm → undo), the two public endpoints and
+    their rate limits, hashed single-use tokens and their lifetimes (24 h / 7 d), the address reservation, the 72 h
+    password-reset cool-off, session revocation at confirm and undo, the generic answer for a taken address, and that
+    `login` follows `email` (lowercased) for email-login accounts; the `email_change_requests` entity in the entity
+    table; a gotcha callout ("a new uniqueness check on an email must also consult the reservation").
+  - `notification/index.html`: the three templates (`EMAIL_CHANGE`, `EMAIL_CHANGED_NOTICE`,
+    `EMAIL_CHANGE_ADDRESS_IN_USE`), who receives each, that they go through the outbox, and that `PROFILE_CHANGE` is no
+    longer sent for an email change.
+  - `database/index.html`: V231 (`main.email_change_requests`, its indexes, the template CHECK re-union).
+  - `frontend/index.html`: the two new public routes/pages (`/email-change/confirm`, `/email-change/undo`) and the
+    dialog's new behaviour (no logout on request).
+  - `glossary/index.html` if it gains terms ("email-change reservation", "reset cool-off"); any other page a `grep` for
+    the touched classes finds.
+  - Rebuild the search index (`node docs/dev-docs/tools/build-search-index.mjs`); `check-docs` passes.
+- Provisioning checklist entry for V231 (new table + template CHECK) and the three templates.
 - Ledger: delete RS03 (`:336`); add one bullet "lost old mailbox and forgotten password: no self-service recovery
   (needs a support/admin path) — owner decision"; flip `evals/review/cases/_drafts/pending-login-case-normalisation.yaml`
   from `fix_pr: pending` to the PR number once known.
@@ -229,7 +245,9 @@ add the `frontend-tests` label so the Vitest job runs).
 - [ ] T6 (AC7): cool-off in password reset; tests.
 - [ ] T7 (AC8): id-based lookups; remove the two `PROFILE_CHANGE` mails; rewrite existing email-change tests.
 - [ ] T8 (AC9): frontend dialog, two pages, routes, API, i18n (3 locales), specs.
-- [ ] T9 (AC9): templates (html + 4 properties files + catalog), copy fixes, docs, checklist, ledger, eval case.
+- [ ] T9 (AC9): templates (html + 4 properties files + catalog), copy fixes, checklist, ledger, eval case.
+- [ ] T9b (AC9): dev docs in `docs/dev-docs` (security, notification, database, frontend, glossary as listed in AC9),
+      search index rebuilt, `check-docs` passes.
 - [ ] T10 (AC10): `/pr-review`, PR.
 
 ## Dev Notes
