@@ -704,11 +704,9 @@ public class BookingCompletionService {
      * recap fields null and the player recorded absent, which a genuine wrap-up never produces
      * (step 5 is mandatory, so at least {@code whatWeDid} is always set on a real submit).
      *
-     * <p>skillars-deferred-163 AC6.1: no longer reads {@code voiceNoteText} — step 1 of a
-     * three-release sequence to drop the column (see {@code migration-conventions.md} rule 2).
-     * The entity field, both GDPR scrub references and this method's placeholder test without it
-     * are unaffected: {@code whatWeDid}/{@code whatsNext} being null is already sufficient to
-     * detect the placeholder signature.
+     * <p>skillars-deferred-163 AC6.1: no longer reads the legacy voice-note field — step 1 of the
+     * sequence that dropped it (V230, skillars-deferred-171). {@code whatWeDid}/{@code whatsNext}
+     * being null is already sufficient to detect the placeholder signature.
      */
     private boolean isSweeperPlaceholder(SessionCompletionData existing) {
         return !existing.isAwaitingWrapUp()

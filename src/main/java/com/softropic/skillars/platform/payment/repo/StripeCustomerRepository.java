@@ -4,9 +4,11 @@ import jakarta.persistence.LockModeType;
 import jakarta.persistence.QueryHint;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Optional;
@@ -47,4 +49,17 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT c FROM StripeCustomer c WHERE c.parentId = :parentId")
     Optional<StripeCustomer> findByIdForUpdateWaiting(@Param("parentId") Long parentId);
+
+    /**
+     * skillars-deferred-169 AC8: restore the saved card a declined pack purchase overwrote. A conditional column update, never
+     * load-modify-save ({@code StripeCustomer} has no {@code @Version}, and the gateway saves the same entity), and only while
+     * the column still holds the attempted card, so a card saved meanwhile is not clobbered. {@code purchasePack} is
+     * non-transactional, hence {@code @Transactional} here.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE StripeCustomer c SET c.stripePaymentMethodId = :previous "
+        + "WHERE c.parentId = :parentId AND c.stripePaymentMethodId = :attempted")
+    int revertPaymentMethod(@Param("parentId") Long parentId, @Param("previous") String previous,
+                            @Param("attempted") String attempted);
 }

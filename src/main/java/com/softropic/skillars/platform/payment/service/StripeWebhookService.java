@@ -19,6 +19,7 @@ import com.stripe.model.Charge;
 import com.stripe.model.Dispute;
 import com.stripe.model.Event;
 import com.stripe.model.Invoice;
+import com.softropic.skillars.platform.payment.service.PaymentRecoveryRecorder.ParkedSubscriptionEvent;
 import com.stripe.model.Subscription;
 import com.stripe.net.Webhook;
 import io.micrometer.core.instrument.Counter;
@@ -96,6 +97,10 @@ public class StripeWebhookService {
     @Lazy
     private SubscriptionService subscriptionService;
 
+    /** skillars-deferred-169 AC4: durable REQUIRES_NEW writes on the payment routed pool (parked subscription events). */
+    @Autowired
+    private PaymentRecoveryRecorder paymentRecoveryRecorder;
+
     /** fix/payment-payouts-disputes-webhooks: chargebacks and refunds made outside the app. */
     @Autowired
     private ChargeDisputeWebhookService chargeDisputeWebhookService;
@@ -118,7 +123,26 @@ public class StripeWebhookService {
             throw new WebhookSignatureException("payment.webhookSignatureInvalid");
         }
         Event event = verifySignature(payload, sigHeader, paymentProperties.getWebhookSecret());
-        self.handleEventAtomically(event);
+        ParkedSubscriptionEvent parked = self.handleEventAtomically(event);
+        if (parked != null) {
+            applyParkedAfterCommit(parked);
+        }
+    }
+
+    /**
+     * skillars-deferred-169 AC4: runs AFTER {@code handleEventAtomically} committed (this method is not transactional). The park
+     * committed independently, before that transaction, so either the signup's drain saw it or its link commit precedes this
+     * re-read - never neither. Runs even when the park insert failed (the link may already exist). A failure here is logged and
+     * does NOT fail the webhook: Stripe would redeliver, {@code insertIfAbsent} would drop it as a duplicate, and it would not be
+     * re-applied anyway; the committed park row survives for the job's drain (the job cadence is the recovery latency).
+     */
+    private void applyParkedAfterCommit(ParkedSubscriptionEvent parked) {
+        try {
+            subscriptionService.applyParkedEventIfLinked(parked);
+        } catch (RuntimeException e) {
+            log.error("[STRIPE_WEBHOOK_PARKED_APPLY_FAILED] the job's drain will retry: eventId={} stripeSubId={}",
+                parked.eventId(), parked.stripeSubscriptionId(), e);
+        }
     }
 
     /**
@@ -175,18 +199,19 @@ public class StripeWebhookService {
      * Must be public so the Spring CGLIB proxy can intercept it.
      */
     @Transactional
-    public void handleEventAtomically(Event event) {
+    public ParkedSubscriptionEvent handleEventAtomically(Event event) {
         int inserted = webhookEventRepository.insertIfAbsent(event.getId(), event.getType());
         if (inserted == 0) {
             log.debug("[STRIPE_WEBHOOK_DUPLICATE id={}]", event.getId());
-            return;
+            return null;
         }
+        ParkedSubscriptionEvent parked = null;
         if ("account.updated".equals(event.getType())) {
             handleAccountUpdated(event);
         } else if ("customer.subscription.updated".equals(event.getType())) {
-            handleSubscriptionUpdated(event);
+            parked = handleSubscriptionUpdated(event);
         } else if ("customer.subscription.deleted".equals(event.getType())) {
-            handleSubscriptionDeleted(event);
+            parked = handleSubscriptionDeleted(event);
         } else if ("invoice.payment_failed".equals(event.getType())) {
             handleInvoicePaymentFailed(event);
         } else if ("charge.dispute.created".equals(event.getType())) {
@@ -204,6 +229,7 @@ public class StripeWebhookService {
         } else {
             log.debug("[STRIPE_WEBHOOK_UNKNOWN_TYPE type={}]", event.getType());
         }
+        return parked;
     }
 
     private Event verifySignature(String payload, String sigHeader, String secret) {
@@ -261,9 +287,10 @@ public class StripeWebhookService {
                 stripeAccountId, event.getId()));
     }
 
-    private void handleSubscriptionUpdated(Event event) {
+    /** @return the parked event when no local subscription row exists yet (it raced the signup), else null. */
+    private ParkedSubscriptionEvent handleSubscriptionUpdated(Event event) {
         Subscription sub = deserializeSubscription(event);
-        if (sub == null) return;
+        if (sub == null) return null;
 
         String stripeSubId = sub.getId();
         boolean coachFound = paymentCoachSubscriptionRepository.findByStripeSubscriptionId(stripeSubId).isPresent();
@@ -271,11 +298,23 @@ public class StripeWebhookService {
         if (!coachFound && !playerFound) {
             log.warn("[STRIPE_WEBHOOK_ORPHANED_SUBSCRIPTION stripeSubId={}]", stripeSubId);
             maybeAlertOrphanedLiveSubscription(sub);
-            return;
+            return park(event, sub);
         }
 
         Map<String, Object> data = buildSubDataMap(sub, event);
         subscriptionService.handleSubscriptionWebhook("customer.subscription.updated", stripeSubId, data);
+        return null;
+    }
+
+    /**
+     * skillars-deferred-169 AC4: park the event in its own transaction that commits BEFORE this webhook's transaction (a
+     * REQUIRES_NEW on the payment routed pool, on a separate bean). A failed park is logged and dropped - today's behaviour - and
+     * must not roll back the idempotency marker and put Stripe into indefinite retry (AC5); the post-commit re-read still runs.
+     */
+    private ParkedSubscriptionEvent park(Event event, Subscription sub) {
+        ParkedSubscriptionEvent parked = new ParkedSubscriptionEvent(event.getId(), sub.getId(), event.getType(),
+            event.getCreated(), sub.getStatus(), sub.getCurrentPeriodEnd(), sub.getCancelAtPeriodEnd(), false);
+        return parked.withPersisted(paymentRecoveryRecorder.parkSubscriptionEvent(parked));
     }
 
     /**
@@ -353,20 +392,22 @@ public class StripeWebhookService {
         eventPublisher.publishEvent(new CoachSubscriptionOrphanedEvent(this, coachId, stripeSubId));
     }
 
-    private void handleSubscriptionDeleted(Event event) {
+    /** @return the parked event when no local subscription row exists yet, else null (see {@link #handleSubscriptionUpdated}). */
+    private ParkedSubscriptionEvent handleSubscriptionDeleted(Event event) {
         Subscription sub = deserializeSubscription(event);
-        if (sub == null) return;
+        if (sub == null) return null;
 
         String stripeSubId = sub.getId();
         boolean coachFound = paymentCoachSubscriptionRepository.findByStripeSubscriptionId(stripeSubId).isPresent();
         boolean playerFound = paymentPlayerSubscriptionRepository.findByStripeSubscriptionId(stripeSubId).isPresent();
         if (!coachFound && !playerFound) {
             log.warn("[STRIPE_WEBHOOK_ORPHANED_SUBSCRIPTION stripeSubId={}]", stripeSubId);
-            return;
+            return park(event, sub);
         }
 
         Map<String, Object> data = buildSubDataMap(sub, event);
         subscriptionService.handleSubscriptionWebhook("customer.subscription.deleted", stripeSubId, data);
+        return null;
     }
 
     private void handleInvoicePaymentFailed(Event event) {

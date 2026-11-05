@@ -352,6 +352,23 @@ class SessionPackPaymentResourceWebMvcTest {
             eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(), eq("3f2b8c1e-attempt"));
     }
 
+    /** skillars-deferred-170 AC3: a pack of a coach who cannot be paid answers 422 with the code the page translates. */
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void purchaseSessionPack_coachNotPaymentReady_returns422WithItsErrorKey() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        java.util.UUID packTierId = java.util.UUID.randomUUID();
+        when(sessionPackPaymentService.purchasePack(eq(PARENT_USER_ID), eq(packTierId), eq(1L), any(), any()))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+                "payment.coachStripeNotConfigured"));
+
+        mockMvc.perform(post("/api/payment/session-packs/purchase")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"packTierId\":\"" + packTierId + "\",\"playerId\":1}"))
+            .andExpect(status().isUnprocessableEntity())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("payment.coachStripeNotConfigured"));
+    }
+
     @Test
     @WithMockUser(roles = "PLAYER")
     void getMySessionPacks_playerRole_returns200() throws Exception {
@@ -431,6 +448,18 @@ class SessionPackPaymentResourceWebMvcTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"label\":\"Odd\",\"sessionCount\":5,\"totalPrice\":10.005}"))
             .andExpect(status().isBadRequest());
+        org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void createTier_fractionalSessionCount_returns400InsteadOfTruncating() throws Exception {
+        // skillars-deferred-170 AC4: Jackson's default ACCEPT_FLOAT_AS_INT used to bind 2.5 as 2.
+        mockMvc.perform(post("/api/payment/coaches/me/session-pack-tiers")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"label\":\"Half\",\"sessionCount\":2.5,\"totalPrice\":95.00}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.errorMsg.errorKey").value("validation.badRequest"));
         org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
     }
 

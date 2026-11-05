@@ -2,12 +2,15 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SluRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
+import org.mockito.InOrder;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.TransientDataAccessResourceException;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionSystemException;
 
 import java.sql.SQLException;
@@ -18,6 +21,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -27,12 +34,15 @@ import static org.mockito.Mockito.when;
 class SluPersistenceRetrierTest {
 
     @Mock private SluRepository sluRepository;
+    @Mock private DevelopmentDataErasureGuard erasureGuard;
+    // A mock transaction manager: TransactionTemplate runs the callback between getTransaction and commit.
+    @Mock private PlatformTransactionManager transactionManager;
 
     private SluPersistenceRetrier retrier;
 
     @org.junit.jupiter.api.BeforeEach
     void setUp() {
-        retrier = new SluPersistenceRetrier(sluRepository);
+        retrier = new SluPersistenceRetrier(sluRepository, erasureGuard, transactionManager);
     }
 
     private static PlayerSkillStat stat(UUID sessionId) {
@@ -174,5 +184,55 @@ class SluPersistenceRetrierTest {
         // this pins that the un-proxied method itself is a thin pass-through with no retry logic
         // baked into the method body, confirming retries come from the proxy, not self-invocation.
         assertThatThrownBy(() -> retrier.saveSluWithRetry(rows)).isSameAs(ex);
+    }
+
+    // ── skillars-deferred-171 AC3: an erased player gets no SLU detail rows ─────────────────────────
+
+    private static PlayerSkillStat stat(UUID sessionId, Long playerId) {
+        PlayerSkillStat s = stat(sessionId);
+        s.setPlayerId(playerId);
+        return s;
+    }
+
+    @Test
+    void saveSluWithRetry_erasedPlayer_savesNothingAndReturnsPlayerErased() {
+        UUID session = UUID.randomUUID();
+        when(erasureGuard.isErasedUnderLock(eq(7L), anyString())).thenReturn(true);
+
+        assertThat(retrier.saveSluWithRetry(List.of(stat(session, 7L), stat(session, 7L))))
+            .isEqualTo(SluSaveOutcome.PLAYER_ERASED);
+        verify(sluRepository, never()).saveAll(any());
+    }
+
+    @Test
+    void saveSluWithRetry_guardAndSaveShareOneTransaction() {
+        List<PlayerSkillStat> rows = List.of(stat(UUID.randomUUID(), 7L));
+
+        assertThat(retrier.saveSluWithRetry(rows)).isEqualTo(SluSaveOutcome.SAVED);
+
+        InOrder order = inOrder(transactionManager, erasureGuard, sluRepository);
+        order.verify(transactionManager).getTransaction(any());
+        order.verify(erasureGuard).isErasedUnderLock(eq(7L), anyString());
+        order.verify(sluRepository).saveAll(rows);
+        order.verify(transactionManager).commit(any());
+    }
+
+    // The V47 collision now surfaces at the template's commit (the flush), outside the callback. The catch sits
+    // outside template.execute, so it still sees it.
+    @Test
+    void saveSluWithRetry_v47CollisionAtCommit_isStillTheIdempotentNoOp() {
+        doThrow(dive(SluPersistenceRetrier.SESSION_SKILL_UNIQUE_CONSTRAINT)).when(transactionManager).commit(any());
+
+        assertThat(retrier.saveSluWithRetry(List.of(stat(UUID.randomUUID(), 7L))))
+            .isEqualTo(SluSaveOutcome.ALREADY_PERSISTED);
+    }
+
+    @Test
+    void saveSluWithRetry_rowsForTwoPlayers_isRefused() {
+        UUID session = UUID.randomUUID();
+
+        assertThatThrownBy(() -> retrier.saveSluWithRetry(List.of(stat(session, 7L), stat(session, 8L))))
+            .isInstanceOf(IllegalStateException.class);
+        verify(sluRepository, never()).saveAll(any());
     }
 }

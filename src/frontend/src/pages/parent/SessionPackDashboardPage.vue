@@ -280,7 +280,8 @@ function isUsableOrFrozen(pack) {
   return pack.status === 'ACTIVE' || pack.status === 'FROZEN'
 }
 
-// The pause must start in the future (the server refuses today or earlier): tomorrow at the earliest.
+// The pause must start in the future (the server refuses today or earlier): tomorrow at the earliest. The picked day is sent as
+// its LOCAL midnight (see submitPause), so the earliest date offered here is always accepted.
 const minPauseStartDate = computed(() => {
   const d = new Date()
   d.setDate(d.getDate() + 1)
@@ -322,7 +323,10 @@ function openPauseDialog(pack) {
 async function submitPause() {
   const packId = activePack.value?.id
   if (!packId || !pauseForm.value.startDate) return
-  const pauseStartDate = new Date(pauseForm.value.startDate).toISOString()
+  // Local midnight of the picked day, same idiom as AvailabilityManagerPage.mondayOf. `new Date('2099-01-01')` is UTC midnight,
+  // which west of UTC is the previous evening: the earliest offered date was refused (not after "now" in UTC) or, outside the
+  // refusal window, the pause began the evening before and swept that day's session into the cancellation set.
+  const pauseStartDate = new Date(pauseForm.value.startDate + 'T00:00:00').toISOString()
   const pauseDurationDays = pauseForm.value.durationDays
   const conflicts = bookingStore.packPauseConflicts
 

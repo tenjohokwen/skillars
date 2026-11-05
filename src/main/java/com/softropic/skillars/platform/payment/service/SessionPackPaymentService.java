@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.booking.service.BookingService;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
@@ -12,11 +13,19 @@ import com.softropic.skillars.platform.payment.contract.SavedPaymentMethodRespon
 import com.softropic.skillars.platform.payment.contract.SessionPackPurchaseResponse;
 import com.softropic.skillars.platform.payment.contract.SessionPackTierResponse;
 import com.softropic.skillars.platform.payment.contract.StripeIdFormat;
+import com.softropic.skillars.platform.payment.contract.CaptureState;
+import com.softropic.skillars.platform.payment.contract.ChargeLookup;
+import com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException;
+import com.softropic.skillars.platform.payment.contract.exception.PackNoChargeException;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.stripe.exception.StripeException;
 import com.stripe.model.PaymentMethod;
 import com.softropic.skillars.platform.security.service.UserIdentitySignalService;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchase;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status;
+import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository;
+import com.softropic.skillars.platform.payment.repo.StripeRefundFailureRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackPurchaseRepository;
 import com.softropic.skillars.platform.payment.repo.SessionPackTier;
 import com.softropic.skillars.platform.payment.repo.SessionPackTierRepository;
@@ -29,6 +38,7 @@ import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,10 +48,12 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -55,10 +67,18 @@ public class SessionPackPaymentService {
     static final java.time.Duration EXTENSION_WINDOW = java.time.Duration.ofDays(14);
 
     /** A client purchase-attempt key: UUID-like, bounded so the derived Stripe key stays under 255 chars. */
+    /** A captured fact beats a resolver's inference from absence: the request thread that captured may move NO_CHARGE to these. */
+    private static final Set<Status> OPEN_OR_NO_CHARGE = EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN, Status.UNRECONCILED, Status.NO_CHARGE);
+
+    /** AC2: how far before the attempt row Stripe's PaymentIntent listing is widened (same value as ChargeOutcomeReconciler.LOOKUP_SLACK). */
+    private static final java.time.Duration LOOKUP_SLACK = java.time.Duration.ofMinutes(10);
+
     private static final Pattern ATTEMPT_KEY_PATTERN = Pattern.compile("[A-Za-z0-9_-]{8,64}");
 
     private final SessionPackTierRepository sessionPackTierRepository;
     private final SessionPackPurchaseRepository sessionPackPurchaseRepository;
+    private final SessionPackPurchaseAttemptRepository attemptRepository;
+    private final StripeRefundFailureRepository refundFailureRepository;
     private final StripeCustomerRepository stripeCustomerRepository;
     private final CoachProfileRepository coachProfileRepository;
     private final PlayerProfileRepository playerProfileRepository;
@@ -97,6 +117,7 @@ public class SessionPackPaymentService {
      */
     public SessionPackPurchaseResponse purchasePack(Long parentId, UUID packTierId, Long playerId, String paymentMethodId,
                                                     String attemptKey) {
+        // 1. security gates, unchanged
         if (attemptKey != null && !ATTEMPT_KEY_PATTERN.matcher(attemptKey).matches()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.invalidIdempotencyKey");
         }
@@ -123,6 +144,16 @@ public class SessionPackPaymentService {
             ageVerificationService.requireVerifiedToBook(player.getUserId());
         }
 
+        // 2. skillars-deferred-169 AC1a: a replay of a known key is answered BEFORE the tier and coach gates, so a captured
+        // payment can still be resolved after the tier was deactivated or the coach suspended.
+        if (attemptKey != null) {
+            Optional<SessionPackPurchaseAttempt> known = attemptRepository.findByParentIdAndAttemptKey(parentId, attemptKey);
+            if (known.isPresent()) {
+                return answerKnownAttempt(known.get(), parentId, packTierId, playerId);
+            }
+        }
+
+        // 3. gates for a NEW attempt only
         SessionPackTier tier = sessionPackTierRepository.findById(packTierId)
             .orElseThrow(() -> new ResourceNotFoundException("Session pack tier not found", "session_pack_tier"));
         if (!tier.isActive()) {
@@ -133,20 +164,73 @@ public class SessionPackPaymentService {
         CoachProfile coach = coachProfileRepository.findById(tier.getCoachId())
             .orElseThrow(() -> new ResourceNotFoundException("Coach profile not found", "coach_profile"));
         BookingService.requireBookableCoachStatus(coach, Map.of("coach id", tier.getCoachId()));
+        // skillars-deferred-170 AC3: a coach without a usable Connect account is refused here, before the attempt row, the
+        // Stripe customer and the card write. charge() keeps its own check as the backstop.
+        if (!paymentGateway.isCoachPaymentReady(tier.getCoachId())) {
+            throw new PaymentGatewayException("payment.coachStripeNotConfigured");
+        }
 
+        // 4. snapshot, then the attempt row (its own committed transaction; the partial unique index admits one open
+        // attempt per parent). An absent header gets a server-minted key: no client dedup (today's behaviour), but the row
+        // still serialises purchases and carries the card snapshot for the revert.
         Optional<StripeCustomer> customerBefore = stripeCustomerRepository.findById(parentId);
         boolean customerExisted = customerBefore.isPresent();
         String previousCard = customerBefore.map(StripeCustomer::getStripePaymentMethodId).orElse(null);
-        StripeCustomer customer = getOrCreateStripeCustomer(parentId, paymentMethodId);
+        String key = attemptKey != null ? attemptKey : UUID.randomUUID().toString();
+        if (attemptKey == null) {
+            log.info("Pack purchase without an Idempotency-Key: server-minted attempt key, no client dedup parentId={}", parentId);
+        }
+        SessionPackPurchaseAttempt attempt;
+        try {
+            attempt = attemptRepository.saveAndFlush(new SessionPackPurchaseAttempt(
+                parentId, key, packTierId, playerId, previousCard, blankToNull(paymentMethodId), customerExisted));
+        } catch (DataIntegrityViolationException e) {
+            // Both UNIQUE (parent_id, attempt_key) and the open-per-parent index raise 23505: re-read by key first to tell
+            // them apart (a concurrent same-key request found the winner; otherwise another attempt of this parent is open).
+            if (attemptKey != null) {
+                Optional<SessionPackPurchaseAttempt> winner = attemptRepository.findByParentIdAndAttemptKey(parentId, attemptKey);
+                if (winner.isPresent()) {
+                    return answerKnownAttempt(winner.get(), parentId, packTierId, playerId);
+                }
+            }
+            throw refusedByOpenAttempt(parentId);
+        }
 
-        // Scoped by parentId so two payers can never share a key, whatever the client sends.
-        String idempotencyKey = "pack-" + parentId + "-" + (attemptKey != null ? attemptKey : UUID.randomUUID());
-        String paymentIntentId = paymentGateway.chargeAndCapture(
-            packTierId, parentId, tier.getCoachId(), tier.getTotalPrice(), idempotencyKey);
+        // 5. card write, then the charge. Scoped by parentId so two payers can never share a key, whatever the client sends.
+        String idempotencyKey = stripeKey(parentId, key);
+        String paymentIntentId;
+        try {
+            getOrCreateStripeCustomer(parentId, paymentMethodId);
+        } catch (RuntimeException e) {
+            // Nothing could have been charged yet (a Stripe customer create, or a DB write of the card).
+            markNoCharge(attempt);
+            throw e instanceof PaymentGatewayException ? new PackNoChargeException(e) : e;
+        }
+        try {
+            paymentIntentId = paymentGateway.chargeAndCapture(
+                packTierId, parentId, tier.getCoachId(), tier.getTotalPrice(), idempotencyKey);
+        } catch (ChargeOutcomeUnknownException e) {
+            // Log first (the diagnostic for the dashboard panel), then mark the row, then rethrow. NOT an alert source:
+            // a timeout is routinely resolved by a replay or the job with no operator action.
+            log.error("[PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN] parentId={} attemptKey={} packTierId={}", parentId, key, packTierId, e);
+            markOpen(attempt, Status.UNKNOWN);
+            throw e;
+        } catch (PaymentGatewayException e) {
+            // A plain PaymentGatewayException from the capture path means no money moved: a card decline, or a refusal before
+            // any PaymentIntent existed (no customer, no card, coach not onboarded, configuration).
+            markNoCharge(attempt);
+            throw new PackNoChargeException(e);
+        } catch (RuntimeException e) {
+            // Unclassified (a pool timeout, an NPE): it may have been thrown after Stripe captured, so it is not "no charge".
+            log.error("[PACK_PURCHASE_CHARGE_OUTCOME_UNKNOWN] parentId={} attemptKey={} unclassified failure", parentId, key, e);
+            markOpen(attempt, Status.UNKNOWN);
+            throw e;
+        }
 
         // A replayed attempt whose pack is already recorded: return it, charge nothing more.
         Optional<SessionPackPurchase> alreadyRecorded = sessionPackPurchaseRepository.findByStripePaymentIntentId(paymentIntentId);
         if (alreadyRecorded.isPresent()) {
+            markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, OPEN_OR_NO_CHARGE);
             return replayedPurchase(alreadyRecorded.get(), playerId, tier);
         }
 
@@ -168,9 +252,11 @@ public class SessionPackPaymentService {
                     + "parentId={} packTierId={}", paymentIntentId, tier.getTotalPrice(), parentId, packTierId, lookupEx);
                 recordReconciliation(paymentIntentId, tier.getTotalPrice(), parentId, packTierId,
                     "pack record failed and intent lookup failed (not refunded): " + lookupEx);
+                markQuietly(attempt, Status.UNRECONCILED, paymentIntentId, OPEN_OR_NO_CHARGE);
                 throw new PaymentGatewayException("payment.lifecycleFailure");
             }
             if (winner.isPresent()) {
+                markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, OPEN_OR_NO_CHARGE);
                 return replayedPurchase(winner.get(), playerId, tier);
             }
             try {
@@ -181,14 +267,302 @@ public class SessionPackPaymentService {
                 // reconciliation record and the lifecycleFailure wrap. Excludes Error only.
                 log.error("Compensating refund also failed: intentId={}", paymentIntentId, refundEx);
                 recordReconciliation(paymentIntentId, tier.getTotalPrice(), parentId, packTierId, refundEx.toString());
+                markQuietly(attempt, Status.UNRECONCILED, paymentIntentId, OPEN_OR_NO_CHARGE);
+                throw new PaymentGatewayException("payment.lifecycleFailure");
             }
+            // The row is written BEFORE the exception propagates; a crash between the refund and this write leaves
+            // IN_PROGRESS, which a same-key replay or the job resolves from Stripe (the refund is visible there).
+            markQuietly(attempt, Status.REFUNDED, paymentIntentId, OPEN_OR_NO_CHARGE);
             throw new PaymentGatewayException("payment.lifecycleFailure");
         }
 
+        // A failed SUCCEEDED write must never fail a response for a pack that exists.
+        markQuietly(attempt, Status.SUCCEEDED, paymentIntentId, OPEN_OR_NO_CHARGE);
         if (customerExisted) {
             scheduleSubscriptionCardSync(parentId, previousCard, paymentMethodId);
         }
         return toResponse(purchase, tier.getLabel(), tier.getSessionCount());
+    }
+
+    // ------------------------------------------------------------------------------------------------------------
+    // skillars-deferred-169 AC1/AC2: the attempt record and its resolution
+    // ------------------------------------------------------------------------------------------------------------
+
+    private static String stripeKey(Long parentId, String attemptKey) {
+        return "pack-" + parentId + "-" + attemptKey;
+    }
+
+    private static String blankToNull(String s) {
+        return s == null || s.isBlank() ? null : s;
+    }
+
+    private ResponseStatusException refusedByOpenAttempt(Long parentId) {
+        Optional<SessionPackPurchaseAttempt> open = attemptRepository.findOpenByParentId(parentId, Status.OPEN);
+        boolean inProgress = open.isEmpty() || open.get().getStatus() == Status.IN_PROGRESS;
+        return new ResponseStatusException(HttpStatus.CONFLICT,
+            inProgress ? "payment.attemptInProgress" : "payment.attemptUnresolved");
+    }
+
+    /** A same-key request that found a stored attempt: answer it from the row, resolving from Stripe only when it is old enough. */
+    private SessionPackPurchaseResponse answerKnownAttempt(SessionPackPurchaseAttempt attempt, Long parentId,
+                                                           UUID packTierId, Long playerId) {
+        if (!Objects.equals(attempt.getPackTierId(), packTierId) || !Objects.equals(attempt.getPlayerId(), playerId)) {
+            // Same key, different purchase. An OPEN row means the client's pack choice changed while an attempt is unresolved:
+            // not "idempotencyKeyReused", which would trap the user after a pack change.
+            throw new ResponseStatusException(HttpStatus.CONFLICT, attempt.getStatus().isOpen()
+                ? "payment.attemptUnresolved" : "payment.idempotencyKeyReused");
+        }
+        SessionPackTier tier = sessionPackTierRepository.findById(packTierId)
+            .orElseThrow(() -> new ResourceNotFoundException("Session pack tier not found", "session_pack_tier"));
+        switch (attempt.getStatus()) {
+            case SUCCEEDED -> {
+                Optional<SessionPackPurchase> pack = attempt.getPaymentIntentId() == null ? Optional.empty()
+                    : sessionPackPurchaseRepository.findByStripePaymentIntentId(attempt.getPaymentIntentId());
+                if (pack.isPresent()) {
+                    return replayedPurchase(pack.get(), playerId, tier);
+                }
+                log.error("[PACK_PURCHASE_ATTEMPT_INCONSISTENT] SUCCEEDED attempt without a pack: attemptId={} intentId={}",
+                    attempt.getId(), attempt.getPaymentIntentId());
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.attemptUnresolved");
+            }
+            case NO_CHARGE, REFUNDED -> throw new PackNoChargeException(null);
+            default -> {
+                long minAge = configService.getBoundedLong(ConfigBounds.PACK_ATTEMPT_MIN_AGE_MINUTES);
+                if (attempt.getCreatedAt().plus(minAge, ChronoUnit.MINUTES).isAfter(Instant.now())) {
+                    throw new ResponseStatusException(HttpStatus.CONFLICT, attempt.getStatus() == Status.IN_PROGRESS
+                        ? "payment.attemptInProgress" : "payment.attemptUnresolved");
+                }
+                Resolution resolved = resolveAttempt(attempt.getId());
+                return switch (resolved.status()) {
+                    case SUCCEEDED -> {
+                        if (resolved.pack() == null) {
+                            // closed by a concurrent writer whose pack is not visible yet: never hand a null pack to the mapper
+                            throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.attemptUnresolved");
+                        }
+                        yield replayedPurchase(resolved.pack(), playerId, tier);
+                    }
+                    case NO_CHARGE, REFUNDED -> throw new PackNoChargeException(null);
+                    default -> throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.attemptUnresolved");
+                };
+            }
+        }
+    }
+
+    /** The outcome of {@link #resolveAttempt}: the attempt's status afterwards, and the pack when one exists. */
+    record Resolution(Status status, SessionPackPurchase pack) { }
+
+    /**
+     * skillars-deferred-169 AC2. Resolves an OPEN attempt from Stripe. Called by a same-key replay past the minimum age and by
+     * the resolving job, and nowhere else (no cross-attempt resolution on the request path). Never refunds. Non-transactional:
+     * every write is its own compare-and-set.
+     */
+    public Resolution resolveAttempt(Long attemptId) {
+        SessionPackPurchaseAttempt a = attemptRepository.findById(attemptId).orElse(null);
+        if (a == null) {
+            return new Resolution(Status.UNKNOWN, null);
+        }
+        if (!a.getStatus().isOpen()) {
+            return new Resolution(a.getStatus(), recordedPack(a));
+        }
+        Instant now = Instant.now();
+        long ageMinutes = java.time.Duration.between(a.getCreatedAt(), now).toMinutes();
+        boolean pastAbsenceAge = ageMinutes >= configService.getBoundedLong(ConfigBounds.PACK_ATTEMPT_ABSENCE_AGE_MINUTES);
+        Long parentId = a.getParentId();
+
+        // Existing pack first: createPurchase is a bare save, so the process can die after it and before the SUCCEEDED write.
+        if (a.getPaymentIntentId() != null) {
+            Optional<SessionPackPurchase> existing = sessionPackPurchaseRepository.findByStripePaymentIntentId(a.getPaymentIntentId());
+            if (existing.isPresent()) {
+                return succeeded(a, a.getPaymentIntentId(), existing.get());
+            }
+        }
+
+        // No customer row: charge() throws payment.noStripeCustomer before any Stripe call. But a live request thread may be about to
+        // create that row and charge, so, like every absence verdict, it needs the absence age.
+        if (stripeCustomerRepository.findById(parentId).isEmpty()) {
+            return pastAbsenceAge ? noCharge(a) : new Resolution(a.getStatus(), null);
+        }
+
+        final Optional<ChargeLookup> found;
+        try {
+            found = paymentGateway.findChargeByIdempotencyKey(parentId, stripeKey(parentId, a.getAttemptKey()),
+                a.getCreatedAt().minus(LOOKUP_SLACK));
+        } catch (PaymentGatewayException lookupFailed) {
+            log.warn("[PACK_PURCHASE_ATTEMPT_LOOKUP_FAILED] stays open: attemptId={} code={}", a.getId(), lookupFailed.getErrorCode());
+            return new Resolution(a.getStatus(), null);
+        }
+        if (found.isEmpty()) {
+            // "Not found" is not proof: only a successful empty lookup at or past the absence age counts as no charge.
+            return pastAbsenceAge ? noCharge(a) : new Resolution(a.getStatus(), null);
+        }
+        ChargeLookup charge = found.get();
+        // Order is an invariant: a requires_payment_method intent must never reach getCaptureState.
+        if (charge.pending()) {
+            markQuietly(a, Status.UNKNOWN, charge.paymentIntentId(), Set.of(Status.IN_PROGRESS));
+            return new Resolution(Status.UNKNOWN, null);
+        }
+        if (!charge.succeeded()) {
+            return noCharge(a);
+        }
+        Optional<SessionPackPurchase> existingForIntent = sessionPackPurchaseRepository.findByStripePaymentIntentId(charge.paymentIntentId());
+        if (existingForIntent.isPresent()) {
+            return succeeded(a, charge.paymentIntentId(), existingForIntent.get());
+        }
+        final CaptureState state;
+        try {
+            state = paymentGateway.getCaptureState(charge.paymentIntentId());
+        } catch (PaymentGatewayException lookupFailed) {
+            log.warn("[PACK_PURCHASE_ATTEMPT_LOOKUP_FAILED] stays open: attemptId={} code={}", a.getId(), lookupFailed.getErrorCode());
+            return new Resolution(a.getStatus(), null);
+        }
+        if (state.unreadable()) {
+            log.error("[PACK_PURCHASE_ATTEMPT_CHARGE_UNREADABLE] succeeded intent without a readable charge, stays open: attemptId={} intentId={}",
+                a.getId(), charge.paymentIntentId());
+            return new Resolution(a.getStatus(), null);
+        }
+        if (state.fullyRefunded()) {
+            if (attemptRepository.transition(a.getId(), Status.REFUNDED, charge.paymentIntentId(), Status.OPEN)) {
+                return new Resolution(Status.REFUNDED, null);
+            }
+            return reread(a.getId());
+        }
+        // Captured and not (fully) refunded. A PARTIALLY refunded intent counts as captured and the pack is created (policy call).
+        if (state.refunded().signum() > 0) {
+            log.warn("[PACK_PURCHASE_PARTIAL_REFUND] pack created for a partially refunded intent: attemptId={} intentId={}",
+                a.getId(), charge.paymentIntentId());
+        }
+        SessionPackTier tier = sessionPackTierRepository.findById(a.getPackTierId()).orElse(null);
+        if (tier == null) {
+            log.error("[PACK_PURCHASE_ATTEMPT_UNRESOLVABLE] tier gone, captured payment stays open: attemptId={} intentId={}",
+                a.getId(), charge.paymentIntentId());
+            return new Resolution(a.getStatus(), null);
+        }
+        SessionPackPurchase pack;
+        try {
+            pack = createPurchase(parentId, a.getPlayerId(), tier, charge.paymentIntentId());
+        } catch (Exception e) {
+            // NEVER refund from here: the request-path catch's compensating refund would refund a funded pack if a concurrent
+            // writer won. Re-read once; otherwise stay open and retry next cycle.
+            Optional<SessionPackPurchase> winner = sessionPackPurchaseRepository.findByStripePaymentIntentId(charge.paymentIntentId());
+            if (winner.isEmpty()) {
+                log.error("[PACK_PURCHASE_RECORD_FAILED] resolver could not record the pack, stays open: attemptId={} intentId={}",
+                    a.getId(), charge.paymentIntentId(), e);
+                return new Resolution(a.getStatus(), null);
+            }
+            pack = winner.get();
+        }
+        Resolution done = succeeded(a, charge.paymentIntentId(), pack);
+        // The request path's success never ran: run its card sync, and close the refund-failure row so an operator does not
+        // later refund a funded pack.
+        if (a.isCustomerExisted()) {
+            scheduleSubscriptionCardSync(parentId, a.getPreviousCard(), a.getAttemptedCard());
+        }
+        closeRefundFailure(charge.paymentIntentId());
+        return done;
+    }
+
+    private Resolution reread(Long attemptId) {
+        SessionPackPurchaseAttempt a = attemptRepository.findById(attemptId).orElseThrow();
+        return new Resolution(a.getStatus(), recordedPack(a));
+    }
+
+    private SessionPackPurchase recordedPack(SessionPackPurchaseAttempt a) {
+        return a.getStatus() == Status.SUCCEEDED && a.getPaymentIntentId() != null
+            ? sessionPackPurchaseRepository.findByStripePaymentIntentId(a.getPaymentIntentId()).orElse(null) : null;
+    }
+
+    /** Proof of capture beats a resolver's inference from absence: NO_CHARGE may move to SUCCEEDED. */
+    private Resolution succeeded(SessionPackPurchaseAttempt a, String paymentIntentId, SessionPackPurchase pack) {
+        Set<Status> expected = EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN, Status.UNRECONCILED, Status.NO_CHARGE);
+        if (!attemptRepository.transition(a.getId(), Status.SUCCEEDED, paymentIntentId, expected)) {
+            SessionPackPurchaseAttempt now = attemptRepository.findById(a.getId()).orElse(a);
+            if (now.getStatus() != Status.SUCCEEDED) {
+                log.error("[PACK_PURCHASE_CAS_LOST] key=SUCCEEDED attemptId={} status={}", a.getId(), now.getStatus());
+            }
+        } else if (a.getStatus() == Status.NO_CHARGE) {
+            log.error("[PACK_PURCHASE_CAS_LOST] key=NO_CHARGE_TO_SUCCEEDED attemptId={}", a.getId());
+        }
+        return new Resolution(Status.SUCCEEDED, pack);
+    }
+
+    /** Proven no charge: revert the declined card FIRST (a replay never rewrites it), then write NO_CHARGE. */
+    private Resolution noCharge(SessionPackPurchaseAttempt a) {
+        markNoCharge(a);
+        return reread(a.getId());
+    }
+
+    private void markNoCharge(SessionPackPurchaseAttempt a) {
+        try {
+            revertDeclinedCard(a);
+        } catch (RuntimeException e) {
+            log.error("[PACK_PURCHASE_CARD_REVERT_FAILED] attemptId={} parentId={}", a.getId(), a.getParentId(), e);
+        }
+        markQuietly(a, Status.NO_CHARGE, null, EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN));
+    }
+
+    /**
+     * AC8: restore the card a declined purchase overwrote, conditional on the column still holding the attempted card.
+     * Skipped when no card was attempted (null or blank): the shipped UI always sends none, and the match could never succeed.
+     * Never on UNKNOWN/UNRECONCILED (the charge may have captured with that card).
+     */
+    private void revertDeclinedCard(SessionPackPurchaseAttempt a) {
+        if (a.getAttemptedCard() == null || a.getAttemptedCard().isBlank()) {
+            return;
+        }
+        stripeCustomerRepository.revertPaymentMethod(a.getParentId(), a.getPreviousCard(), a.getAttemptedCard());
+    }
+
+    private void markOpen(SessionPackPurchaseAttempt a, Status to) {
+        markQuietly(a, to, null, Set.of(Status.IN_PROGRESS));
+    }
+
+    private void markQuietly(SessionPackPurchaseAttempt a, Status to, String paymentIntentId, Set<Status> expected) {
+        try {
+            if (!attemptRepository.transition(a.getId(), to, paymentIntentId, expected)) {
+                log.warn("[PACK_PURCHASE_CAS_LOST] key=transition attemptId={} wanted={}", a.getId(), to);
+            }
+        } catch (RuntimeException e) {
+            // Mirrors the compensating-refund design: a bookkeeping write never fails the response for money already moved.
+            if (to == Status.NO_CHARGE) {
+                log.error("[PACK_PURCHASE_CAS_LOST] NO_CHARGE write failed, row stays open: attemptId={}", a.getId(), e);
+            } else {
+                log.error("[PACK_PURCHASE_CAS_LOST] status write failed: attemptId={} wanted={}", a.getId(), to, e);
+            }
+        }
+    }
+
+    private void closeRefundFailure(String paymentIntentId) {
+        try {
+            refundFailureRepository.findByPaymentIntentId(paymentIntentId).ifPresent(f -> {
+                if (f.getResolvedAt() == null) {
+                    f.setResolvedAt(Instant.now());
+                    refundFailureRepository.save(f);
+                }
+            });
+        } catch (RuntimeException e) {
+            log.error("Could not close the refund-failure row of a resolved pack: intentId={}", paymentIntentId, e);
+        }
+    }
+
+    /** Job duty (a): resolve open attempts older than the minimum age. Each attempt in its own try/catch. */
+    public int resolveStaleAttempts() {
+        long minAge = configService.getBoundedLong(ConfigBounds.PACK_ATTEMPT_MIN_AGE_MINUTES);
+        int resolved = 0;
+        for (SessionPackPurchaseAttempt a : attemptRepository.findOpenOlderThan(Status.OPEN, Instant.now().minus(minAge, ChronoUnit.MINUTES))) {
+            try {
+                Status s = resolveAttempt(a.getId()).status();
+                if (!s.isOpen()) resolved++;
+            } catch (RuntimeException e) {
+                log.error("[PACK_PURCHASE_ATTEMPT_RESOLVE_FAILED] attemptId={}", a.getId(), e);
+            }
+        }
+        return resolved;
+    }
+
+    /** Job duty (b): purge terminal attempts past the retention window. */
+    public int purgeTerminalAttempts() {
+        long days = configService.getBoundedLong(ConfigBounds.PACK_ATTEMPT_RETENTION_DAYS);
+        return attemptRepository.purgeTerminalOlderThan(Instant.now().minus(days, ChronoUnit.DAYS));
     }
 
     /**

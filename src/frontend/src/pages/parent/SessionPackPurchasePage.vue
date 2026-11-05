@@ -165,6 +165,9 @@ const hasCard = computed(() => paymentStore.savedPaymentMethod?.hasCard ?? false
 
 function onCardSaved() {
   addCardDialog.value = false
+  // A new card is a different purchase only when the last answer proved nothing was charged: while an earlier
+  // attempt is unresolved the key must stay, or the retry could charge twice (skillars-deferred-169).
+  if (!keyHeldForUnresolved) attemptKey = null
   // A new card answers the decline; the old message no longer applies.
   purchaseError.value = null
   cardDeclined.value = false
@@ -208,8 +211,39 @@ function formatPrice(value) {
 
 // One key per purchase attempt (sent as Idempotency-Key): a double-click or a retry after a lost
 // response replays the same charge instead of buying a second pack. Kept across a retry that never got
-// an answer; a fresh one is minted once the server has answered (success or a definite failure).
+// a DEFINITE answer (a network error, a 5xx, "still being confirmed", any outcome that may have charged);
+// cleared on success and on a definite no-charge answer (skillars-deferred-169). The server's one-open-attempt-per-parent
+// index is the safety guarantee; these rules are UX.
 let attemptKey = null
+// True while the last answer left the outcome unknown, so a card save or pack change must not mint a new key.
+let keyHeldForUnresolved = false
+
+// A PaymentGatewayException (422) carries its code in errorMsg.errorKey; a ResponseStatusException (400/409) carries it
+// in errorMsg.message (errorKey is the generic 'generic.requestError').
+function errorCode(e) {
+  const msg = e?.response?.data?.errorMsg
+  return msg?.errorKey === 'generic.requestError' ? msg?.message : (msg?.errorKey ?? msg?.message)
+}
+
+// payment.cardDeclined is itself proof that nothing was charged (the gateway raises it only for a refused card).
+const KEY_CLEARING_CODES = [
+  'payment.noChargeMade',
+  'payment.cardDeclined',
+  'payment.invalidIdempotencyKey',
+  'payment.idempotencyKeyReused',
+]
+// An answer that may have moved money: no answer at all, a 5xx, "still being confirmed", or a 422 that is not a definite refusal.
+function outcomeMayHaveCharged(e, code) {
+  const status = e?.response?.status
+  if (!status || status >= 500) return true
+  if (STILL_CONFIRMING_CODES.includes(code)) return true
+  return (
+    status === 422 &&
+    (code === 'payment.lifecycleFailure' || code === 'payment.chargeOutcomeUnknown')
+  )
+}
+
+const STILL_CONFIRMING_CODES = ['payment.attemptInProgress', 'payment.attemptUnresolved']
 
 function newAttemptKey() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
@@ -218,7 +252,7 @@ function newAttemptKey() {
 
 // A different pack choice is a different purchase.
 watch(selected, () => {
-  attemptKey = null
+  if (!keyHeldForUnresolved) attemptKey = null
 })
 
 async function confirmPurchase() {
@@ -230,11 +264,31 @@ async function confirmPurchase() {
   try {
     await bookingStore.purchasePack(playerId, selected.value, undefined, attemptKey)
     attemptKey = null
+    keyHeldForUnresolved = false
     router.back()
   } catch (e) {
-    if (e?.response) attemptKey = null
-    purchaseError.value = purchaseFailureMessage(e)
-    cardDeclined.value = parseApiError(e).errorKey === CARD_DECLINED
+    const code = errorCode(e)
+    if (KEY_CLEARING_CODES.includes(code)) {
+      attemptKey = null
+      keyHeldForUnresolved = false
+    } else if (outcomeMayHaveCharged(e, code)) {
+      keyHeldForUnresolved = true
+    } else {
+      // A definite refusal raised before any attempt row existed (403 age gate, 404/409 inactive tier or suspended coach,
+      // 422 coach who cannot be paid yet, 400):
+      // nothing was charged and nothing is open, so a card save or pack change may mint a fresh key.
+      attemptKey = null
+      keyHeldForUnresolved = false
+    }
+    if (STILL_CONFIRMING_CODES.includes(code)) {
+      purchaseError.value = t('booking.packs.purchasePending')
+    } else if (code === 'payment.noChargeMade') {
+      // Also returned for a charge that was refunded: never say "nothing was charged".
+      purchaseError.value = t('booking.packs.purchaseNotCompleted')
+    } else {
+      purchaseError.value = purchaseFailureMessage(e)
+    }
+    cardDeclined.value = code === CARD_DECLINED
   } finally {
     purchasing.value = false
   }

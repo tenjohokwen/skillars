@@ -89,6 +89,9 @@ public class OperationalBacklogMetrics {
         UNION ALL
         SELECT 'cash_outs', status, COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
           FROM payment.cash_out_reconciliations WHERE status IN ('PENDING', 'UNKNOWN') GROUP BY status
+        UNION ALL
+        SELECT 'pack_attempts', status, COUNT(*), EXTRACT(EPOCH FROM now() - MIN(created_at))
+          FROM payment.session_pack_purchase_attempts WHERE status IN ('IN_PROGRESS', 'UNKNOWN', 'UNRECONCILED') GROUP BY status
         """;
 
     private static final int DEFAULT_QUERY_TIMEOUT_SECONDS = 10;

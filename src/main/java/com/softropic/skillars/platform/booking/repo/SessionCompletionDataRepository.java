@@ -48,23 +48,20 @@ public interface SessionCompletionDataRepository extends JpaRepository<SessionCo
     // before this — what_we_did/whats_next (skillars-12-2) otherwise survive a player's own erasure
     // indefinitely. Nulls the coach-authored free-text columns in place; does not delete the row
     // itself (ratings/attendance are not personally-identifying free text — out of this method's
-    // scope). skillars-deferred-165 AC12: the voiceNoteText entity field is removed (step 2 of 3), but
-    // the column stays until a later release's migration (migration-conventions.md rule 2 forbids
-    // compressing field-removal and column-drop into one release) — and rows written before
-    // skillars-12-7 stopped sending voice notes still hold coach-authored free text in it. So this is
-    // native SQL, still nulling voice_note_text, until the column itself is dropped (code review
-    // 2026-10-27, Decision 1).
+    // scope). skillars-deferred-171 AC5: also nulls homework_drill_ids, the drills this player was set.
+    // Native SQL: it was the only way to reach a column JPA no longer mapped, and the legacy voice-note
+    // column it also scrubbed is now dropped (V230, the third step of skillars-deferred-163/165's removal).
     @Modifying
-    @Query(value = "UPDATE booking.session_completion_data SET voice_note_text = NULL, what_we_did = NULL, "
-        + "whats_next = NULL, what_went_well = NULL WHERE player_id = :playerId", nativeQuery = true)
+    @Query(value = "UPDATE booking.session_completion_data SET what_we_did = NULL, whats_next = NULL, "
+        + "what_went_well = NULL, homework_drill_ids = NULL WHERE player_id = :playerId", nativeQuery = true)
     void anonymizeByPlayerId(@Param("playerId") Long playerId);
 
     // skillars-deferred-154 AC2: anonymizeByPlayerId only runs from the PLAYER-side erasure branch —
     // a coach's own erasure never touched this table, so their authored what_we_did/whats_next
-    // survived their own erasure indefinitely. Identical shape, keyed on coachId instead (native for
-    // the same legacy voice_note_text reason as anonymizeByPlayerId above).
+    // survived their own erasure indefinitely. Same shape, keyed on coachId instead, minus
+    // homework_drill_ids: those are references into the coach's own drill library, not the player's data.
     @Modifying
-    @Query(value = "UPDATE booking.session_completion_data SET voice_note_text = NULL, what_we_did = NULL, "
-        + "whats_next = NULL, what_went_well = NULL WHERE coach_id = :coachId", nativeQuery = true)
+    @Query(value = "UPDATE booking.session_completion_data SET what_we_did = NULL, whats_next = NULL, "
+        + "what_went_well = NULL WHERE coach_id = :coachId", nativeQuery = true)
     void anonymizeByCoachId(@Param("coachId") UUID coachId);
 }

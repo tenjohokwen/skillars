@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.development.contract.AssessmentType;
 import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.development.contract.RadarAssessmentEntryResponse;
@@ -14,6 +15,7 @@ import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTie
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.marketplace.service.PlayerProfileService;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
@@ -42,6 +44,7 @@ public class RadarAssessmentService {
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final ApplicationEventPublisher publisher;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    private final DevelopmentDataErasureGuard erasureGuard;
 
     @Transactional
     public void submitAssessment(Long coachUserId, Long playerId, RadarAssessmentRequest req) {
@@ -86,6 +89,12 @@ public class RadarAssessmentService {
             return e;
         }).toList();
 
+        // skillars-deferred-171 AC1: the coach's booking relationship survives a development-data erasure,
+        // so the checks above still pass for an erased player. Lock-then-check right before the write (the
+        // lock is held until these entries commit). 404 like a missing player; no erasure-specific wording.
+        if (erasureGuard.isErasedUnderLock(playerId, "RadarAssessmentService.submitAssessment")) {
+            throw new ResourceNotFoundException("Player not found", "player_profile");
+        }
         radarRepository.saveAll(entries);
         log.info("Radar assessment saved: {} skills for player {} coach {}", entries.size(), playerId, coachId);
 

@@ -30,7 +30,7 @@ import java.util.List;
  *
  * <p><strong>The snapshot write is gated on the detail save (skillars-deferred-89 AC2, tightened by
  * its code review).</strong> {@link SluPersistenceRetrier#saveSluWithRetry} returns a
- * {@link SluSaveOutcome} tri-state and this method runs {@code writeAllWithRetry} <em>only</em> on
+ * {@link SluSaveOutcome} and this method runs {@code writeAllWithRetry} <em>only</em> on
  * {@link SluSaveOutcome#SAVED}:
  * <ul>
  *   <li>{@link SluSaveOutcome#FAILED} (retries exhausted) — skip the snapshot write and ERROR-log:
@@ -43,6 +43,8 @@ import java.util.List;
  *       {@code isoYear}/{@code isoWeek} is derived from a <em>separate</em> per-invocation
  *       {@code Instant.now()} and can land in a different week bucket, so writing here would add a
  *       delta the winning delivery never marked — the exact over-report AC2 exists to prevent.</li>
+ *   <li>{@link SluSaveOutcome#PLAYER_ERASED} (skillars-deferred-171 AC3) — skip the snapshot write quietly: the
+ *       player's development data was erased, so no detail rows were written for it to mirror.</li>
  * </ul>
  * This closes the <em>over</em>-report direction only; the reverse (detail rows saved,
  * {@code writeAllWithRetry} exhausts and under-reports) is untouched here —
@@ -84,12 +86,18 @@ public class SluPersistenceDispatcher {
                 stats.isEmpty() ? null : stats.get(0).getSessionId());
             return;
         }
+        if (outcome == SluSaveOutcome.PLAYER_ERASED) {
+            // skillars-deferred-171 AC3: no detail rows were written, so no snapshot delta either. The guard
+            // already logged the skip at INFO; nothing was lost.
+            return;
+        }
         snapshotPersistenceRetrier.writeAllWithRetry(stats, isoYear, isoWeek);
         // Positive end-of-chain signal on the isolated pool. Neither retrier logs on its happy path
         // and the caller's "…dispatched" line fires before any DB work, so without this a clean run
         // and a run whose task threw (and was swallowed by MdcDecorator) look identical in the logs.
-        // Emitted only on the SAVED branch — a run that skipped the snapshot write (FAILED or
-        // ALREADY_PERSISTED) is not a "finished chain" and says so via the ERROR / INFO above. A
+        // Emitted only on the SAVED branch — a run that skipped the snapshot write (FAILED,
+        // ALREADY_PERSISTED or PLAYER_ERASED) is not a "finished chain" and says so via the ERROR / INFO
+        // above (PLAYER_ERASED: the guard's own INFO line). A
         // preceding @Recover ERROR ("… rows lost … manual recovery needed") from
         // SnapshotPersistenceRetrier still means that leg was lost despite this line.
         log.info("SLU persistence chain finished for session {} player {} ({} skill entries, week {}/{})",

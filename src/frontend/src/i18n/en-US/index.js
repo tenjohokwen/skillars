@@ -389,15 +389,12 @@ export default {
   },
   marketplace: {
     sharedSlot: 'Your coach shared this time slot: {slot} (coach local time)',
-    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
-    duplicateSessionPackCount:
-      'That pack size is listed twice. Each session pack must have a different number of sessions.',
     // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws
     // (MarketplaceException errorCode -> ErrorDto.errorMsg.errorKey -> here, via useErrorHandler's
     // te(key) ? t(key) : rawMessage). One generic translated phrase per key, same tradeoff this
-    // codebase already accepts elsewhere (e.g. duplicateSessionPackCount above,
-    // booking.slotUnavailable): once translated, the backend's more specific per-call English
-    // message is not shown, in exchange for a correctly localized one.
+    // codebase already accepts elsewhere (e.g. booking.slotUnavailable): once translated, the
+    // backend's more specific per-call English message is not shown, in exchange for a correctly
+    // localized one.
     stepOutOfOrder: 'Please complete the previous step first.',
     profileNotFound: 'Coach profile not found.',
     alreadyPublished: 'Your profile is already published.',
@@ -2010,6 +2007,9 @@ export default {
       pauseSuccess: 'Pack paused — expiry extended accordingly',
       alreadyPausedLabel: 'Pack already used its pause',
       purchaseError: 'Purchase failed. Please try again.',
+      purchasePending:
+        'Your previous purchase is still being confirmed. Please wait a few minutes and try again.',
+      purchaseNotCompleted: 'The payment did not go through. Please try again.',
       noTierAvailable: 'This coach has no session pack available for purchase.',
     },
     completion: {
@@ -2390,7 +2390,7 @@ export default {
       coachPackSessionsReserved:
         'The family’s session pack has no free sessions left for another booking.',
       extendSuccess: 'Your session pack has been extended to {date}',
-      tierLabel: '{label} — {count} sessions for €{price}',
+      tierSummary: '{count} sessions for €{price}',
       noActiveTier: 'This coach has no active session pack available.',
     },
     card: {

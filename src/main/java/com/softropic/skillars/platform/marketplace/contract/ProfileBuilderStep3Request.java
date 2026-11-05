@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.marketplace.contract;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.softropic.skillars.infrastructure.validation.NoContactDetails;
+import com.softropic.skillars.infrastructure.validation.StrictIntegerDeserializer;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.DecimalMax;
@@ -35,10 +37,12 @@ public record ProfileBuilderStep3Request(
     /**
      * Bounds are the tier's own ({@link SessionPackLimits}), so a pack the builder accepts is always a pack
      * the payment module can sell. {@code sessionCount} is boxed so a missing count is a {@code @NotNull}
-     * violation rather than a silent 0. (Jackson's default float-to-int coercion still truncates a fractional
-     * count, boxed or not; the pack forms only allow whole numbers.)
+     * violation rather than a silent 0. A fractional count is refused, not truncated
+     * ({@link StrictIntegerDeserializer}, skillars-deferred-170): Jackson's default float-to-int coercion
+     * would bind 2.5 as 2, boxed or not.
      */
     public record SessionPackRequest(
+        @JsonDeserialize(using = StrictIntegerDeserializer.class)
         @NotNull @Min(1) @Max(SessionPackLimits.MAX_SESSION_COUNT) Integer sessionCount,
         @NotNull @DecimalMin("0.01") @DecimalMax(SessionPackLimits.MAX_TOTAL_PRICE)
         @Digits(integer = 8, fraction = 2) BigDecimal totalPrice,

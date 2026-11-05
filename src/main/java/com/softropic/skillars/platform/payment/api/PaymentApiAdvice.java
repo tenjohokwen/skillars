@@ -18,7 +18,7 @@ public class PaymentApiAdvice {
     @ExceptionHandler(PaymentGatewayException.class)
     public ResponseEntity<ErrorDto> paymentGatewayExceptionHandler(PaymentGatewayException ex) {
         if ("payment.coachStripeNotConfigured".equals(ex.getErrorCode())) {
-            log.warn("Booking blocked — coach Stripe not configured: {}", ex.getErrorCode());
+            log.warn("Booking or pack purchase blocked — coach Stripe not configured: {}", ex.getErrorCode());
         } else if (PaymentGatewayException.CARD_DECLINED.equals(ex.getErrorCode())) {
             // A refused card is the payer's to fix, not a platform error (the gateway logged the details).
             log.warn("Payment declined by the card issuer: {}", ex.getErrorCode());

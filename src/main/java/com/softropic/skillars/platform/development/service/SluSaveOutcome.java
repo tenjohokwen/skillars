@@ -1,9 +1,10 @@
 package com.softropic.skillars.platform.development.service;
 
 /**
- * Outcome of {@link SluPersistenceRetrier#saveSluWithRetry} — a tri-state, not a boolean, because
- * {@link SluPersistenceDispatcher} must distinguish three cases before deciding whether to run the
- * weekly-snapshot write (skillars-deferred-89 AC2, tightened by its code review):
+ * Outcome of {@link SluPersistenceRetrier#saveSluWithRetry} — not a boolean, because
+ * {@link SluPersistenceDispatcher} must distinguish these cases before deciding whether to run the
+ * weekly-snapshot write (skillars-deferred-89 AC2, tightened by its code review; {@link #PLAYER_ERASED} added
+ * by skillars-deferred-171 AC3):
  *
  * <ul>
  *   <li>{@link #SAVED} — <em>this</em> invocation persisted the detail rows (or the batch was empty).
@@ -19,10 +20,13 @@ package com.softropic.skillars.platform.development.service;
  *       {@code player_slu_weekly_snapshot} would over-report against the detail rows.</li>
  *   <li>{@link #FAILED} — retries exhausted, rows lost (the {@code @Recover} paths). The dispatcher
  *       skips the snapshot write and logs the recovery ERROR.</li>
+ *   <li>{@link #PLAYER_ERASED} — the player's development data was erased, so no detail rows were written.
+ *       The dispatcher skips the snapshot write quietly: nothing was lost.</li>
  * </ul>
  */
 public enum SluSaveOutcome {
     SAVED,
     ALREADY_PERSISTED,
-    FAILED
+    FAILED,
+    PLAYER_ERASED
 }

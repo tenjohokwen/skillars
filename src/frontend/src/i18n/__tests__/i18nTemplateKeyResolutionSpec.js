@@ -180,7 +180,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'translatedErrorMessage: t() on a server-supplied errorKey, guarded by te() on the same line',
   },
   {
-    at: 'src/pages/parent/SessionPackPurchasePage.vue:183',
+    at: 'src/pages/parent/SessionPackPurchasePage.vue:186',
     reason:
       't() on payment.error.<code> for a server-supplied payment.* errorKey, after a te() probe',
   },
