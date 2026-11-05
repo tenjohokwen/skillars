@@ -1,6 +1,6 @@
 # Story skillars-deferred-171: Development-data erasure completeness (guards on every development write, homework rows, the last recap column)
 
-Status: ready-for-dev
+Status: review
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand), right after skillars-deferred-170
      (#446, merged debd4dca) and the Dependabot batch #341-#348. Bundles the five still-open GDPR items
@@ -108,7 +108,7 @@ player-linked tables erasure still does not clear: `development.radar_composite_
   window, answering the same 404. The two paths differ (radar 404, report 403 in the normal case); that is
   accepted. **Do not claim "the same answer an unknown player gets":** an unrelated or unknown player gets 403
   from the relationship check, which runs first. No dedicated 409 code, no new translation, no frontend work.
-- **D2: background writes skip quietly** (the guard logs INFO): timeline rows, SLU rows, weekly snapshots. **A
+- **D2 (owner: A, 2026-11-05, after /pr-review): background writes skip quietly** (the guard logs INFO): timeline rows, SLU rows, weekly snapshots. **A
   busy profile lock is not skipped, it is the ledger's accepted tradeoff (`:3533`), now extended:** the guard
   throws `PessimisticLockingFailureException` after ~3.2 s. Consequences, all accepted and to be written into
   the ledger bullet and the Javadocs: synchronous submit and report answer 409 "busy" (`ApiAdvice:711`); the
@@ -317,7 +317,7 @@ rewritten ITs.
 - [x] T6 (AC6): V230 with header, marker and exemption; both queries and all four comments; rewrite the two ITs;
       schema assertion; lint check by hand.
 - [x] T7 (AC7): docs, checklist, ledger.
-- [ ] T8 (AC8): `/pr-review`, PR.
+- [x] T8 (AC8): `/pr-review`, PR.
 
 ## Dev Notes
 
@@ -443,3 +443,7 @@ Claude Opus 5.5 (claude-opus-5-5)
   erasure deletes `coach_radar_preferences`). D4 redesigned (guard-then-update in its own transaction, timeline
   moved to Step B), dispatcher branch, V230 header and IT rewrites, lock-busy consequences (D2), constructor sites
   and the "12 fixed" literals added.
+- 2026-11-05: implemented T1-T8. `/pr-review` at d8322bc6: no findings; two verify items (V1 SLU detail rows, V2 the
+  report's READY flip, both lost only when the profile lock stays held past the retry budget) are D2's busy-lock
+  tradeoff. Owner accepted D2 (option A) after reviewing how rare it is and that `LockRetriesExhausted` and the
+  Database dashboard's "Retries exhausted by lock" panel already surface it by lock name. Status -> review.
