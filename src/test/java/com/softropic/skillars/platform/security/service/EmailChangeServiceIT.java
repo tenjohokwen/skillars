@@ -36,7 +36,12 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +63,7 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
 
     @Autowired private EmailChangeService emailChangeService;
     @Autowired private UserProfileService userProfileService;
+    @Autowired private PasswordResetService passwordResetService;
     @Autowired private GdprRequestService gdprRequestService;
     @Autowired private AccountManagementFacade facade;
     @Autowired private UserRepository userRepository;
@@ -197,6 +203,61 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         clearRequestBucketOnly();
         emailChangeService.request(ME, NEW, PASSWORD);
         assertThat(sentTo(EmailTemplate.EMAIL_CHANGE)).isEmpty();
+    }
+
+    @Test
+    void aResetKeyReplacedWhileItsResetIsRunning_isRefused_soTheReplacementPasswordSurvives() throws Exception {
+        // An undo replaces the reset key and the password in one transaction. A reset with the previous key that
+        // runs at the same moment must not overwrite them: its lookup locks the row, waits for the undo, and
+        // then no longer finds the key. The undo's write is simulated by an open transaction held on a latch.
+        commit("UPDATE main.\"user\" SET reset_key = 'oldkey', reset_expiration = now() + interval '1 hour' "
+            + "WHERE id = ?", ME_ID);
+        String undoPasswordHash = passwordEncoder.encode("undo-replacement");
+        CountDownLatch written = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<?> undo = pool.submit(() -> transactionTemplate.executeWithoutResult(s -> {
+                jdbcTemplate.update("UPDATE main.\"user\" SET reset_key = 'undokey', password_hash = ? WHERE id = ?",
+                    undoPasswordHash, ME_ID);
+                written.countDown();
+                await(release);
+            }));
+            assertThat(written.await(10, TimeUnit.SECONDS)).isTrue();
+            Future<Optional<User>> reset = pool.submit(() -> passwordResetService.completePasswordReset(
+                "Attacker*123!", "oldkey"));
+            waitUntilABackendWaitsOnALock();
+            release.countDown();
+            undo.get(10, TimeUnit.SECONDS);
+
+            assertThat(reset.get(10, TimeUnit.SECONDS).map(User::getId)).as("reset with the replaced key").isEmpty();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+        }
+        User me = user(ME_ID);
+        assertThat(me.getResetKey()).isEqualTo("undokey");
+        assertThat(passwordEncoder.matches("undo-replacement", me.getPassword())).isTrue();
+    }
+
+    private void waitUntilABackendWaitsOnALock() throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            Integer waiting = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'", Integer.class);
+            if (waiting != null && waiting > 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("the reset never waited on the row lock");
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            latch.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     @Test

@@ -455,6 +455,13 @@ Claude Opus 5.5 (claude-opus-5-5)
 - Owner decision D (option 1): V232's FK to `"user"` is now `ON DELETE CASCADE` (edited in place, V232 is not live), so
   `UserAdminService`'s hard delete of never-activated accounts is never blocked; the comment that the user row is never
   deleted was wrong. Pinned by `EmailChangeServiceIT.theUserForeignKey_cascades_...` (pg_constraint `confdeltype = 'c'`).
+- Owner decision E (option 1, accepted): two accounts confirming the same address at the same moment. The loser's
+  sessions are already revoked (REQUIRES_NEW) and it gets `user.email.duplicate` once; a retry gets the uniform
+  `email.change.linkInvalid` through the "address taken since" refusal. Only the inbox owner can trigger it. Noted in the PR.
+- Owner decision F (option 1): `UserRepository.findOneByResetKey` (used only by reset completion) is now a JPQL
+  `PESSIMISTIC_WRITE` lookup, so a reset racing an undo waits and then no longer finds the replaced key, instead of
+  overwriting the undo's password. Race IT `aResetKeyReplacedWhileItsResetIsRunning_...` (held transaction, waits until
+  the reset blocks on the lock); without the lock it fails (the reset succeeds). PasswordResetIT and UserServiceIT green.
 
 ### File List
 
