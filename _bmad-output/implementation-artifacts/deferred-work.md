@@ -3603,6 +3603,7 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
   - **Effect:** the coach clicks Next and stays on step 3 with no explanation. Nothing is saved, so there is no data impact, only a confusing dead end.
   - **Owner decision (2026-11-05):** the per-session price is required and must not be left empty on step 3. That matches the server (`perSessionPrice` is `@NotNull`). What is missing is the message: Next should trigger the field's validation, so "Required" shows even when the field is untouched.
   - **Test:** Pitchside ONB-07 (`e2e/packages/skillars-e2e/specs/onboarding/onboarding.spec.ts:154`, on `feature/pitchside`) asserts that Next stays on step 3 and sends no step-3 PUT. It only checks the "Required" message after typing a price and clearing it. Once this is fixed, it should also assert the message after a click on an untouched field.
+  - **Resolved (2026-11-05):** `submit()` now calls the price input's `validate()` before returning, so Next on an untouched price shows "Required". `ProfileBuilderStep3Spec` gained a case that fails without the call. On master in `fix/builder-step3-price-required`; ONB-07 on `feature/pitchside` gets the untouched-field assertion when the fix reaches that branch.
 
 ## Deferred from: CI Trivy install workaround (2026-11-04)
 

@@ -90,6 +90,22 @@ describe('ProfileBuilderStep3.vue — duration select (deferred-108 AC2)', () =>
     expect(wrapper.emitted('submit')).toBeUndefined()
   })
 
+  // Ledger 2026-11-05 (Pitchside ONB-07): the price rule only fired after an edit, so Next on a
+  // never-touched price stayed on step 3 with no message. Mutation check: drop the validate() call
+  // in submit() and both assertions on the error turn red.
+  it('submit with a never-touched price shows the required message on the price field', async () => {
+    const wrapper = mountStep3()
+    const price = wrapper.findComponent({ name: 'QInput' })
+    expect(price.vm.hasError).toBe(false)
+
+    wrapper.vm.submit()
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.emitted('submit')).toBeUndefined()
+    expect(price.vm.hasError).toBe(true)
+    expect(price.text()).toContain(wrapper.vm.$t('validation.required'))
+  })
+
   // -------------------------------------------------------------------------
   // skillars-deferred-168: the pack is the coach's one purchasable offer.
   // -------------------------------------------------------------------------

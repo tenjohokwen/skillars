@@ -175,7 +175,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 't() on a server-supplied errorKey, guarded by its own $te probe on the same line',
   },
   {
-    at: 'src/components/profileBuilder/ProfileBuilderStep3.vue:200',
+    at: 'src/components/profileBuilder/ProfileBuilderStep3.vue:207',
     reason:
       'pack error keyed by packErrorKey (src/utils/sessionPackForm.js), one of five literal auth.coach.step3Pack* keys',
   },
