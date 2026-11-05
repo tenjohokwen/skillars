@@ -3596,6 +3596,14 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
   - **Effect:** an incomplete coach (builder unfinished, profile unpublished) can open other coach pages, such as `/coach/availability`. Observed while writing AUTH-13. It may be intended (the Pitchside plan's C-11 describes the command-centre guard), but it is unconfirmed.
   - **Resolved (2026-11-04):** owner confirmed it is intended: an unpublished coach can't be booked, so the set-up pages stay open. No code change; AUTH-13 on `feature/pitchside` (#437) now asserts an incomplete coach can open `/coach/availability`.
 
+## Deferred from: Pitchside UI tests, phase 2 P0 specs (2026-11-05)
+
+- **Profile builder step 3: Next does nothing, silently, when the per-session price was never touched.**
+  - **Cause:** `ProfileBuilderStep3.submit()` returns early on an empty price (`ProfileBuilderStep3.vue:197` on master, `:216` on `feature/pitchside`) without validating the field. The price input's rule (`:10`) only shows "Required" once the field has been edited, so a coach who never typed a price gets no message.
+  - **Effect:** the coach clicks Next and stays on step 3 with no explanation. Nothing is saved, so there is no data impact, only a confusing dead end.
+  - **Owner decision (2026-11-05):** the per-session price is required and must not be left empty on step 3. That matches the server (`perSessionPrice` is `@NotNull`). What is missing is the message: Next should trigger the field's validation, so "Required" shows even when the field is untouched.
+  - **Test:** Pitchside ONB-07 (`e2e/packages/skillars-e2e/specs/onboarding/onboarding.spec.ts:154`, on `feature/pitchside`) asserts that Next stays on step 3 and sends no step-3 PUT. It only checks the "Required" message after typing a price and clearing it. Once this is fixed, it should also assert the message after a click on an untouched field.
+
 ## Deferred from: CI Trivy install workaround (2026-11-04)
 
 Source: the `/pr-review` round on the branch that replaced trivy-action's `get.trivy.dev` installer with a
