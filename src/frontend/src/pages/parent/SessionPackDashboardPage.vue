@@ -338,8 +338,11 @@ async function submitPause() {
     try {
       const result = await bookingStore.initiatePausePack(packId, pauseStartDate, pauseDurationDays)
       if (result.pauseApplied) {
+        // Close first, so no second click can send a pause the server will refuse; then reload, as
+        // confirmPausePack does, or the card keeps the old expiry and a Pause button that no longer works.
         pauseDialogOpen.value = false
         $q.notify({ message: t('booking.packs.pauseSuccess'), type: 'positive' })
+        await bookingStore.loadPlayerPacks(playerId)
       }
     } catch (err) {
       notifyPauseError(err)
