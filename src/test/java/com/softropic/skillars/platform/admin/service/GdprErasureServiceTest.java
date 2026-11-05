@@ -118,6 +118,8 @@ class GdprErasureServiceTest {
     @Mock private PerformanceReportRepository performanceReportRepository;
     @Mock private PlayerTimelineRepository playerTimelineRepository;
     @Mock private HomeworkCompletionRepository homeworkCompletionRepository;
+    @Mock private com.softropic.skillars.platform.session.repo.HomeworkAssignmentRepository homeworkAssignmentRepository;
+    @Mock private com.softropic.skillars.platform.development.repo.CoachRadarPreferenceRepository coachRadarPreferenceRepository;
     @Mock private BlobDeletionOutboxSupport blobDeletionOutboxSupport;
     @Mock private com.softropic.skillars.platform.payment.service.StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
     @Mock private com.softropic.skillars.platform.security.service.AgeVerificationService ageVerificationService;
@@ -165,7 +167,8 @@ class GdprErasureServiceTest {
             userIdentitySignalService, sluRepository, sluWeeklySnapshotRepository, playerSluWeeklySnapshotAppliedRepository,
             sluTargetRepository, radarAssessmentRepository, neglectedSkillFlagRepository,
             playerRadarBaselineRepository, playerRadarCompositeRepository, performanceReportRepository,
-            playerTimelineRepository, homeworkCompletionRepository, blobDeletionOutboxSupport,
+            playerTimelineRepository, homeworkCompletionRepository, homeworkAssignmentRepository,
+            coachRadarPreferenceRepository, blobDeletionOutboxSupport,
             refreshTokenRepository, eventPublisher, lockRetryer, entityManager, txManager, configService,
             dataSource, coachMediaItemRepository, coachBrandingRepository, stripeCustomerErasureOutboxSupport,
             ageVerificationService, coachSafeguardingService);
@@ -322,8 +325,8 @@ class GdprErasureServiceTest {
      * test above bails out BEFORE any statement runs — it doesn't prove the rollback-safety claim for
      * a bail-out that happens AFTER some statements already executed. This test forces the trip at
      * GROUP 4 specifically (the only group whose divisor, {@code M = childBlobKeys.size()}, is not
-     * fixed at 6/3/3): seeding a 20s budget lets groups 1–3's own divisors (6, 3, 3) pass comfortably
-     * (20/6=3, 20/3=6, both {@code >=} the 2s floor) while a deliberately large {@code M=15} makes
+     * fixed at 6/4/4 since skillars-deferred-171): seeding a 20s budget lets groups 1–3's own divisors (6, 4, 4)
+     * pass comfortably (20/6=3, 20/4=5, both {@code >=} the 2s floor) while a deliberately large {@code M=15} makes
      * group 4's shrunk timeout (20/15=1) fall below it — proving groups 1–3's deletes genuinely ran
      * before the bail-out, not just that the mechanism can fire at all.
      */
@@ -348,7 +351,7 @@ class GdprErasureServiceTest {
             REQUEST_ID.toString(), AdminAlertType.GDPR_ERASURE_DEADLINE, AdminAlertStatus.OPEN))
             .thenReturn(Optional.empty());
         // M = 15 non-null storage keys — large enough that group 4's own divisor (15) shrinks a 20s
-        // budget below the 2s floor (20/15=1), while groups 1-3's fixed divisors (6, 3, 3) do not.
+        // budget below the 2s floor (20/15=1), while groups 1-3's fixed divisors (6, 4, 4) do not.
         when(performanceReportRepository.findStorageKeysByPlayerId(PLAYER_PROFILE_ID))
             .thenReturn(java.util.stream.IntStream.range(0, 15).mapToObj(i -> "key-" + i).toList());
 
@@ -361,6 +364,9 @@ class GdprErasureServiceTest {
         verify(playerTimelineRepository).deleteByPlayerId(PLAYER_PROFILE_ID);
         verify(playerRadarBaselineRepository).deleteAllByPlayerId(PLAYER_PROFILE_ID);
         verify(performanceReportRepository).deleteAllByPlayerId(PLAYER_PROFILE_ID);
+        // skillars-deferred-171 AC4: the radar-preference (group 2) and homework-assignment (group 3) deletes.
+        verify(coachRadarPreferenceRepository).deleteAllByIdPlayerId(PLAYER_PROFILE_ID);
+        verify(homeworkAssignmentRepository).deleteAllByPlayerId(PLAYER_PROFILE_ID);
         // Group 4 and the tombstone commit never ran — the whole REQUIRES_NEW transaction (including
         // groups 1-3's own statements above) rolled back, so nothing is left half-applied to reason
         // about. (eraseTransactional's own OUTER enqueue() call for export-zip keys still fires with

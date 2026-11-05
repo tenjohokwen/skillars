@@ -705,6 +705,56 @@ class GdprErasureIT extends AbstractIntegrationTest {
     }
 
     /**
+     * skillars-deferred-171 AC4: erasure deletes the player's homework assignments (their completions with
+     * them) and every coach's radar preferences for that player. Another player's rows are untouched.
+     */
+    @Test
+    void erase_selfRegisteredPlayer_deletesHomeworkAssignmentsAndRadarPreferences() {
+        UUID erasedAssignment = UUID.randomUUID();
+        UUID otherAssignment = UUID.randomUUID();
+        // A real profile: coach_radar_preferences.player_id references player_profiles.
+        long otherPlayerId = 9210_777_951_501L;
+        transactionTemplate.execute(status -> {
+            jdbcTemplate.update(
+                "INSERT INTO main.player_profiles "
+                    + "(id, name, date_of_birth, position, age_tier, parent_id, independent_account_allowed, created_at, created_by) "
+                    + "VALUES (?, 'Other Player', ?, 'MIDFIELDER', 'AGE_10_12', ?, false, ?, 'system')",
+                otherPlayerId, Date.valueOf(LocalDate.now().minusYears(12)), PARENT_ID, Timestamp.from(Instant.now()));
+            insertHomework(erasedAssignment, SELF_PLAYER_PROFILE_ID);
+            insertHomework(otherAssignment, otherPlayerId);
+            jdbcTemplate.update(
+                "INSERT INTO development.coach_radar_preferences (coach_id, player_id, updated_at) VALUES (?, ?, ?)",
+                coachProfileId, SELF_PLAYER_PROFILE_ID, Timestamp.from(Instant.now()));
+            jdbcTemplate.update(
+                "INSERT INTO development.coach_radar_preferences (coach_id, player_id, updated_at) VALUES (?, ?, ?)",
+                coachProfileId, otherPlayerId, Timestamp.from(Instant.now()));
+            return null;
+        });
+
+        erase(SELF_PLAYER_USER_ID);
+
+        for (String table : List.of("session.homework_assignments", "session.homework_completions",
+                "development.coach_radar_preferences")) {
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + table + " WHERE player_id = ?", Integer.class, SELF_PLAYER_PROFILE_ID))
+                .as(table + " for the erased player").isZero();
+            assertThat(jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM " + table + " WHERE player_id = ?", Integer.class, otherPlayerId))
+                .as(table + " for another player").isEqualTo(1);
+        }
+    }
+
+    private void insertHomework(UUID assignmentId, long playerId) {
+        jdbcTemplate.update(
+            "INSERT INTO session.homework_assignments (id, booking_id, player_id, coach_id, drill_id) "
+                + "VALUES (?, ?, ?, ?, ?)",
+            assignmentId, UUID.randomUUID(), playerId, coachProfileId, UUID.randomUUID());
+        jdbcTemplate.update(
+            "INSERT INTO session.homework_completions (assignment_id, player_id) VALUES (?, ?)",
+            assignmentId, playerId);
+    }
+
+    /**
      * skillars-deferred-153 AC2: session_completion_data's coach-authored free-text columns
      * (what_we_did/whats_next) must not survive the player's own erasure. Asserts both the erased
      * player's own row is anonymized AND an unrelated player's row is left completely untouched —

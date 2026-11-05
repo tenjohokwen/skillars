@@ -17,10 +17,12 @@ import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlockReposi
 import com.softropic.skillars.platform.booking.repo.SessionCompletionDataRepository;
 import com.softropic.skillars.platform.config.service.ConfigBounds;
 import com.softropic.skillars.platform.config.service.ConfigService;
+import com.softropic.skillars.platform.session.repo.HomeworkAssignmentRepository;
 import com.softropic.skillars.platform.session.repo.HomeworkCompletionRepository;
 import com.softropic.skillars.platform.development.repo.CoachBrandingRepository;
 import com.softropic.skillars.platform.development.repo.NeglectedSkillFlagRepository;
 import com.softropic.skillars.platform.development.repo.PerformanceReportRepository;
+import com.softropic.skillars.platform.development.repo.CoachRadarPreferenceRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepository;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.PlayerSluWeeklySnapshotAppliedRepository;
@@ -115,6 +117,8 @@ public class GdprErasureService {
     private final PerformanceReportRepository performanceReportRepository;
     private final PlayerTimelineRepository playerTimelineRepository;
     private final HomeworkCompletionRepository homeworkCompletionRepository;
+    private final HomeworkAssignmentRepository homeworkAssignmentRepository;
+    private final CoachRadarPreferenceRepository coachRadarPreferenceRepository;
     private final BlobDeletionOutboxSupport blobDeletionOutboxSupport;
     private final RefreshTokenRepository refreshTokenRepository;
     private final ApplicationEventPublisher eventPublisher;
@@ -185,7 +189,7 @@ public class GdprErasureService {
     private volatile Duration gdprEraseLockBudget = Duration.ofSeconds(10);
 
     // skillars-deferred-137 AC1: bounds deletePlayerDevelopmentData's own cumulative statement-group
-    // lock wait — see that method's own Javadoc for the "(12 + M) x lockTimeoutSeconds, not a
+    // lock wait — see that method's own Javadoc for the "(14 + M) x lockTimeoutSeconds, not a
     // method-level ceiling" accounting this closes, and deletePlayerDevelopmentDataInDedicatedPool's
     // own Javadoc for the statement-grouping mechanism itself. Ports
     // RadarCompositeCalculationService.recalculateComposite's own CUMULATIVE_LOCK_WAIT_BUDGET — same
@@ -1580,9 +1584,10 @@ public class GdprErasureService {
      * {@code lock_timeout}, not the method's total wait.</strong> Postgres {@code lock_timeout} is
      * per-STATEMENT — mirroring {@code RadarCompositeCalculationService.recalculateComposite}'s own
      * documented trap (see that method's Javadoc) — so a {@code set_config} call bounds each of this
-     * method's ~12 independently-timeout-able statements individually. There are 12 fixed delete/scan
+     * method's ~14 independently-timeout-able statements individually. There are 14 fixed delete/scan
      * statements below (the nine {@code deleteAllByPlayerId}/{@code deleteByPlayerId} calls, the
-     * {@code performance_reports} scan, its own delete, and the {@code homework_completions} delete),
+     * {@code performance_reports} scan, its own delete, the {@code homework_completions} delete, and — since
+     * skillars-deferred-171 AC4 — the {@code homework_assignments} and {@code coach_radar_preferences} deletes),
      * plus one additional {@code INSERT} per non-null {@code storage_key} the blob-enqueue below
      * issues (zero or more, via {@link BlobDeletionOutboxSupport#enqueue} — no dedup, so a repeated
      * key across reports would count more than once, though that is not expected in practice), so
@@ -1592,7 +1597,7 @@ public class GdprErasureService {
      * report count — a {@code PENDING_UPLOAD}/{@code UPLOAD_FAILED} report has none) — with no
      * method-level ceiling at all.
      *
-     * <p><strong>skillars-deferred-137 AC1 closes that gap:</strong> the 12+M statements are batched
+     * <p><strong>skillars-deferred-137 AC1 closes that gap:</strong> the 14+M statements are batched
      * into four logical groups (see {@link #deletePlayerDevelopmentDataInDedicatedPool}'s own Javadoc
      * for the exact grouping and the per-group budget-shrink mechanism, ported from
      * {@code RadarCompositeCalculationService.recalculateComposite}'s own cumulative spend-down), so
@@ -1661,11 +1666,11 @@ public class GdprErasureService {
     }
 
     /**
-     * skillars-deferred-137 AC1: the ~12 fixed statements plus the variable-length blob-enqueue are
+     * skillars-deferred-137 AC1: the ~14 fixed statements plus the variable-length blob-enqueue are
      * grouped into four logical steps (mirroring this method's own pre-existing statement ORDER
      * exactly, just batched) rather than bounded per-individual-statement like
      * {@code RadarCompositeCalculationService.recalculateComposite}'s own per-SKILL grain — this
-     * method's 12 statements have no natural per-skill-style grouping, so a coarser, table-domain
+     * method's 14 statements have no natural per-skill-style grouping, so a coarser, table-domain
      * grouping (timeline/SLU, radar, performance-report/homework, blob-enqueue) keeps the fix legible
      * without a budget check between every single {@code deleteAllByPlayerId} call. Each group re-issues
      * {@code set_config} with a timeout shrunk to {@code remainingBudget / (statements in that group)},
@@ -1719,33 +1724,39 @@ public class GdprErasureService {
                 neglectedSkillFlagRepository.deleteAllByPlayerId(playerId);
                 remainingLockBudget = spendDownLockBudget(remainingLockBudget, group1StartedAt);
 
-                // Group 2 (3 statements): radar deletes.
+                // Group 2 (4 statements): radar deletes. skillars-deferred-171 AC4 added the coach radar
+                // preferences (every coach's skill selection for this player).
                 long group2Timeout = nextGroupLockTimeoutSecondsOrThrow(
-                    remainingLockBudget, 3, lockTimeoutSeconds, playerId, "radar deletes");
+                    remainingLockBudget, 4, lockTimeoutSeconds, playerId, "radar deletes");
                 Instant group2StartedAt = Instant.now();
                 setStatementLockTimeout(group2Timeout);
                 playerRadarBaselineRepository.deleteAllByPlayerId(playerId);
                 playerRadarCompositeRepository.deleteAllByPlayerId(playerId);
                 radarAssessmentRepository.deleteAllByPlayerId(playerId);
+                coachRadarPreferenceRepository.deleteAllByIdPlayerId(playerId);
                 remainingLockBudget = spendDownLockBudget(remainingLockBudget, group2StartedAt);
 
-                // Group 3 (3 statements): performance-report scan + delete, homework-completion delete.
+                // Group 3 (4 statements): performance-report scan + delete, homework-completion delete, and
+                // (skillars-deferred-171 AC4) homework-assignment delete. The completions go first, explicitly:
+                // the assignment delete would cascade to them, but one statement per table keeps this group's
+                // lock arithmetic honest.
                 // Deferred-77 AC2: a PENDING_UPLOAD/UPLOAD_FAILED report may have no storage_key yet —
                 // the query's own WHERE clause excludes those. skillars-deferred-90 AC13: enqueue the
                 // key, don't delete from S3 inside this transaction. skillars-deferred-132 AC2 Fix 8:
                 // a projection, not full-entity hydration — only the storage_key was ever read.
                 long group3Timeout = nextGroupLockTimeoutSecondsOrThrow(
-                    remainingLockBudget, 3, lockTimeoutSeconds, playerId, "performance-report/homework deletes");
+                    remainingLockBudget, 4, lockTimeoutSeconds, playerId, "performance-report/homework deletes");
                 Instant group3StartedAt = Instant.now();
                 setStatementLockTimeout(group3Timeout);
                 childBlobKeys.addAll(performanceReportRepository.findStorageKeysByPlayerId(playerId));
                 performanceReportRepository.deleteAllByPlayerId(playerId);
                 homeworkCompletionRepository.deleteAllByPlayerId(playerId);
+                homeworkAssignmentRepository.deleteAllByPlayerId(playerId);
                 remainingLockBudget = spendDownLockBudget(remainingLockBudget, group3StartedAt);
 
                 // skillars-deferred-153 AC2: session_completion_data lives in the `booking` schema,
                 // not `development` — this method's own cumulative-lock-budget arithmetic above is
-                // sized to its pre-existing, development-schema-only statement count (12 + M), and
+                // sized to its pre-existing, development-schema-only statement count (14 + M), and
                 // folding this UPDATE into one of those groups would require re-deriving that
                 // arithmetic for a table this method otherwise has nothing to do with. Deliberately
                 // kept as its own independently-bounded step instead: same per-statement

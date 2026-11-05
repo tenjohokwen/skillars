@@ -311,7 +311,7 @@ rewritten ITs.
       lock-busy case).
 - [x] T3 (AC3): SLU template + `PLAYER_ERASED` outcome + dispatcher branch; snapshot guard (sorted); Javadocs
       (`:55-57`, `:95-97`, `SluSaveOutcome`, dispatcher prose); tests.
-- [ ] T4 (AC4): `deleteAllByPlayerId` on homework assignments and radar preferences; groups 2 and 3 counts;
+- [x] T4 (AC4): `deleteAllByPlayerId` on homework assignments and radar preferences; groups 2 and 3 counts;
       all "12" literals; `GdprErasureServiceTest` constructor; IT.
 - [ ] T5 (AC5): `homework_drill_ids = NULL`; IT.
 - [ ] T6 (AC6): V230 with header, marker and exemption; both queries and all four comments; rewrite the two ITs;
