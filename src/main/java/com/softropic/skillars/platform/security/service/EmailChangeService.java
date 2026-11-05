@@ -88,10 +88,11 @@ public class EmailChangeService {
     static final long ATTEMPT_WINDOW_MINUTES = 60;
 
     // Confirmation links to one address: 3 a day per requesting account, 10 a day in all. The pair limit stops
-    // one account mailing someone's inbox over and over; keyed by the pair, it also cannot use up the address's
-    // allowance and so silently block that address's real owner from moving their own account there. The total
-    // caps what several accounts together can send to one inbox. Exhaustion is silent (same answer, nothing
-    // sent), so it is no oracle. The 24 h windows rely on the bucket idle TTL (default 24 h) not being lowered.
+    // one account mailing someone's inbox over and over, and alone it cannot use up the address's allowance. The
+    // total caps what several accounts together can send to one inbox; four or more accounts acting together can
+    // still use it up and so silently delay the address's owner by a day (accepted, owner decision F3). Exhaustion
+    // is silent (same answer, nothing sent), so it is no oracle. The 24 h windows rely on the bucket idle TTL
+    // (default 24 h) not being lowered.
     static final String CONFIRM_MAIL_LIMIT_KEY = "email_change_confirm_mail";
     static final long CONFIRM_MAIL_CAPACITY = 3;
     static final String CONFIRM_MAIL_TARGET_LIMIT_KEY = "email_change_confirm_mail_target";
