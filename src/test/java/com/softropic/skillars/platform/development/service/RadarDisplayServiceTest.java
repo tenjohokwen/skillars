@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.development.contract.RadarDisplayResponse;
 import com.softropic.skillars.platform.development.repo.CoachRadarPreferenceRepository;
@@ -7,6 +8,7 @@ import com.softropic.skillars.platform.development.repo.PlayerRadarBaselineRepos
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -37,6 +39,7 @@ class RadarDisplayServiceTest {
     @Mock private SkillDefinitionRepository skillDefinitionRepository;
     @Mock private CoachRadarPreferenceRepository preferenceRepository;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    @Mock private DevelopmentDataErasureGuard erasureGuard;
 
     private RadarDisplayService service;
 
@@ -46,7 +49,7 @@ class RadarDisplayServiceTest {
     void setUp() {
         service = new RadarDisplayService(
             compositeRepository, baselineRepository, skillDefinitionRepository,
-            preferenceRepository, coachPlayerAuthorizationService);
+            preferenceRepository, coachPlayerAuthorizationService, erasureGuard);
         lenient().when(skillDefinitionRepository.findAllByActiveTrueOrderByDisplayOrderAsc()).thenReturn(List.of());
         lenient().when(compositeRepository.findByIdPlayerId(PLAYER_ID)).thenReturn(List.of());
         lenient().when(baselineRepository.findByIdPlayerId(PLAYER_ID)).thenReturn(List.of());
@@ -94,5 +97,33 @@ class RadarDisplayServiceTest {
             .isInstanceOf(OperationNotAllowedException.class);
         verify(preferenceRepository, never()).findByIdCoachIdAndIdPlayerId(COACH_ID, PLAYER_ID);
         verify(preferenceRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    // ── skillars-deferred-171 AC1: an erased player gets no new radar preferences ───────────────────
+
+    @Test
+    void savePreferences_erasedPlayer_throwsNotFoundAndWritesNothing() {
+        when(erasureGuard.isErasedUnderLock(org.mockito.ArgumentMatchers.eq(PLAYER_ID),
+            org.mockito.ArgumentMatchers.anyString())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.savePreferences(COACH_ID, PLAYER_ID,
+            new com.softropic.skillars.platform.development.contract.CoachRadarPreferenceRequest(List.of("PASS"))))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .extracting(e -> ((ResourceNotFoundException) e).getResourceName()).isEqualTo("player_profile");
+        verify(preferenceRepository, never()).save(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void savePreferences_notErasedPlayer_checksTheGuardThenSaves() {
+        when(preferenceRepository.findByIdCoachIdAndIdPlayerId(COACH_ID, PLAYER_ID)).thenReturn(java.util.Optional.empty());
+        when(preferenceRepository.save(org.mockito.ArgumentMatchers.any()))
+            .thenAnswer(inv -> inv.getArgument(0));
+
+        service.savePreferences(COACH_ID, PLAYER_ID,
+            new com.softropic.skillars.platform.development.contract.CoachRadarPreferenceRequest(List.of("PASS")));
+
+        verify(erasureGuard).isErasedUnderLock(org.mockito.ArgumentMatchers.eq(PLAYER_ID),
+            org.mockito.ArgumentMatchers.anyString());
+        verify(preferenceRepository).save(org.mockito.ArgumentMatchers.any());
     }
 }

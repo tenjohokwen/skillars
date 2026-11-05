@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.repo;
 
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -7,7 +8,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -15,6 +19,7 @@ import java.util.UUID;
 public class SnapshotBatchWriter {
 
     private final SluWeeklySnapshotRepository snapshotRepository;
+    private final DevelopmentDataErasureGuard erasureGuard;
 
     /**
      * Applies each stat's SLU delta to the weekly snapshot via
@@ -40,7 +45,17 @@ public class SnapshotBatchWriter {
      */
     @Transactional
     public void writeAllDeltas(List<SluDelta> deltas, short isoYear, short isoWeek) {
+        // skillars-deferred-171 AC3: drop an erased player's deltas, under that player's profile lock, held until
+        // this transaction commits. Players in ascending id order, so two batches cannot take the locks in
+        // opposite orders. Returns normally, so an outbox re-drive for an erased player completes, not loops.
+        Set<Long> erasedPlayers = deltas.stream().map(SluDelta::playerId).filter(Objects::nonNull)
+            .distinct().sorted()
+            .filter(playerId -> erasureGuard.isErasedUnderLock(playerId, "SnapshotBatchWriter.writeAllDeltas"))
+            .collect(Collectors.toSet());
         for (SluDelta d : deltas) {
+            if (erasedPlayers.contains(d.playerId())) {
+                continue;
+            }
             if (d.sessionId() == null) {
                 // The marker table's session_id is NOT NULL, so skip rather than fail the whole batch.
                 log.warn("SnapshotBatchWriter: delta for player {} skill {} has null sessionId — "

@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.platform.development.contract.CoachRadarPreferenceRequest;
 import com.softropic.skillars.platform.development.contract.CoachRadarPreferenceResponse;
 import com.softropic.skillars.platform.development.contract.RadarDisplayResponse;
@@ -13,6 +14,7 @@ import com.softropic.skillars.platform.development.repo.PlayerRadarComposite;
 import com.softropic.skillars.platform.development.repo.PlayerRadarCompositeRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinition;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -35,6 +37,7 @@ public class RadarDisplayService {
     private final SkillDefinitionRepository skillDefinitionRepository;
     private final CoachRadarPreferenceRepository preferenceRepository;
     private final CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    private final DevelopmentDataErasureGuard erasureGuard;
 
     public RadarDisplayResponse getRadarDisplay(Long playerId) {
         coachPlayerAuthorizationService.requireCoachPlayerRelationshipIfCoach(playerId);
@@ -77,6 +80,10 @@ public class RadarDisplayService {
             UUID coachId, Long playerId, CoachRadarPreferenceRequest request) {
         // skillars-12-10 AC1 (G19): checked BEFORE the upsert so an unrelated coach creates no row.
         coachPlayerAuthorizationService.requireCoachPlayerRelationshipForRead(coachId, playerId);
+        // skillars-deferred-171 AC1: erasure deletes this player's preferences; keep it from writing new ones.
+        if (erasureGuard.isErasedUnderLock(playerId, "RadarDisplayService.savePreferences")) {
+            throw new ResourceNotFoundException("Player not found", "player_profile");
+        }
         CoachRadarPreference pref = preferenceRepository
             .findByIdCoachIdAndIdPlayerId(coachId, playerId)
             .orElseGet(() -> {

@@ -641,7 +641,7 @@ public final class ConfigBounds {
      * <p><strong>This bounds each STATEMENT, not the method's total wait</strong> (Postgres {@code
      * lock_timeout} is per-statement, not per-transaction — the same trap {@link
      * #RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS}'s own Javadoc already documents for its own method).
-     * {@code deletePlayerDevelopmentData} issues this bound once, before its ~12 independently-
+     * {@code deletePlayerDevelopmentData} issues this bound once, before its ~14 independently-
      * timeout-able statements, so the method's real worst case is {@code N ×} this value, not a
      * method-level ceiling — see that method's own Javadoc for the honest accounting. Read via the
      * 4-arg {@code getBoundedLong} route and registered in {@link #HAS_CODE_DEFAULT}, exactly like

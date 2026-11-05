@@ -335,6 +335,29 @@ class TimelineEventListenerTest {
         verifyNoInteractions(timelineRepository);
     }
 
+    // skillars-deferred-171 AC1/AC2: RADAR_ASSESSMENT and PERFORMANCE_REPORT rows go through writeTimelineEvent.
+
+    @Test
+    void writeTimelineEvent_erasedPlayer_writesNothing() {
+        when(erasureGuard.isErasedUnderLock(eq(7L), anyString())).thenReturn(true);
+
+        listener.writeTimelineEvent(7L, PlayerTimelineEventType.RADAR_ASSESSMENT, null, "development",
+            Map.of("skillCodes", List.of("PASS")));
+        listener.writeTimelineEvent(7L, PlayerTimelineEventType.PERFORMANCE_REPORT, UUID.randomUUID(), "development",
+            Map.of(), null);
+
+        verifyNoInteractions(timelineRepository);
+    }
+
+    @Test
+    void writeTimelineEvent_notErasedPlayer_checksTheGuardThenSaves() {
+        listener.writeTimelineEvent(7L, PlayerTimelineEventType.RADAR_ASSESSMENT, null, "development",
+            Map.of("skillCodes", List.of("PASS")));
+
+        verify(erasureGuard).isErasedUnderLock(eq(7L), anyString());
+        verify(timelineRepository).save(any(PlayerTimelineEvent.class));
+    }
+
     // skillars-deferred-162 AC7.6: a replayed BookingCompletedEvent is a quiet no-op, never a second row.
 
     @Test

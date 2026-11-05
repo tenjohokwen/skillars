@@ -1,129 +1,116 @@
-# Story review: skillars-deferred-170-session-pack-tier-follow-ups
+# Story review: skillars-deferred-171 (development-data erasure completeness)
 
-- **Story file:** `_bmad-output/implementation-artifacts/skillars-deferred-170-session-pack-tier-follow-ups.md` (status `ready-for-dev`)
-- **Audit date:** 2026-11-04
-- **HEAD verified against:** `b21ea376` "docs(story): create skillars-deferred-170 — session-pack tier follow-ups from deferred-168". Its parent is `281b8433` = origin/master (#434).
-- **The story says it was verified at `0ee68f07`.** That is stale. #434 has landed since and changed `BookingRequestPage.vue`. Every citation below was re-checked at `b21ea376`, not at the SHA the story names.
-- **Method:** four parallel read-only layers (citations, ledger/precedents, mechanisms, corner cases), then my own skeptical re-read of every finding (Step 4b).
-- **Also checked:** Jackson behaviour was checked against the pinned jar, jackson-databind 2.21.7 (`pom.xml:95`), using `javap` and a jshell run. The skillars-deferred-169 story was read at its branch tip `05b8bea8`.
+- **Audit date:** 2026-11-05
+- **Real HEAD (git rev-parse / git log, run before reading the story):** `576e96d6 docs(story): create skillars-deferred-171 ...` (worktree `skillars-deferred-168`, branch `skillars-deferred-171-development-data-erasure-completeness`; code content is `3f6afc94` plus the story commit).
+- Every citation below was checked against this HEAD, not against any SHA the story names.
+- Method: four read-only verification agents (citations, ledger/precedent, mechanistic, corner cases), then my own adversarial re-read of the findings that matter (section 6).
 
-## 1. Citation verification (43 citations)
+## 1. Citation verification (Layer 1, 15 items)
 
-| Citation | Verdict | Evidence / correction |
+| Citation | Verdict | Evidence / corrected location |
 |---|---|---|
-| `V138__baseline_schema.sql:1628` | MATCH | `CREATE TABLE marketplace.session_packs (` |
-| i18n `duplicateSessionPackCount` en-US `:393`, fr-FR `:397`, de-DE `:920`; en-US `:398` comment | MATCH | key lines and `// ... (e.g. duplicateSessionPackCount above,` |
-| `docs/dev-docs/database/index.html:72` | MATCH | marketplace row lists `session_packs` |
-| `CoachSessionPackPort.java:12` | MATCH | `{@code marketplace.session_packs} table that nothing could buy.` |
-| `BuilderPackTierBackfillIT.java:69` | MATCH | `INSERT INTO marketplace.session_packs (...)` |
-| `CoachSessionPackTiersPage.vue:29`, `:77`, `:32-36`, `:80-84` | MATCH | heading `tierName(...)`; caption `t('payment.sessionPack.tierLabel', { label: tierName(...), ... })` |
-| `tierLabel` en-US `:2391`, de-DE `:1618`, fr-FR `:2044` | MATCH | `'{label} — {count} sessions for €{price}'` etc. |
-| "`payment.sessionPack.tierLabel: 'Tier'`" en-US `:1466` (Design 3) | **WRONG PATH** | `:1466` is **`admin.coaches.tierLabel`** (used at `AdminCoachEnforcementPage.vue:139`). `payment.sessionPack.tierLabel` exists once per locale and is the `'{label} — …'` string. See F6. |
-| `SessionPackPaymentService.java:98`, `:126-130`, `:135`, `:137`, `:140`, `:144`, `:440-455` | MATCH | quoted by Layer 1; re-read by me at `:88-158`, `:440-455` |
-| `StripePaymentGateway.java:113-116`, `:631` | MATCH | `resolveCoachStripeAccountId(coachId);` first in `charge()`; throws at `:635` |
-| `BookingService.java:599`, `:415`; `BookingBatchService.java:156` | MATCH | package-private `requireCoachPaymentReady`; its two callers |
-| `SessionPackPurchasePage.vue:189` | MATCH | `e?.response?.data?.message ?? t('booking.packs.purchaseError')` |
-| `application.yaml:134-137` | MATCH | jackson block sets only `time-zone` and `WRITE_DATES_AS_TIMESTAMPS` |
-| `ProfileBuilderStep3Request.java:42`, `CreateSessionPackTierRequest.java:27` | MATCH | boxed `Integer sessionCount` |
-| `BookingRequestPage.vue:656` | MATCH (no drift despite #434) | `} else if (errorKey === 'payment.coachStripeNotConfigured') {` |
-| `CoachPublicProfilePage.vue:617` | MATCH | `if (!coachHasPerSessionPrice.value && !coachHasPacks.value) return 'unbookable'` |
-| `ApiAdvice.java:486` | MATCH (minor) | `:486` is the `@ExceptionHandler`; the method is at `:488` |
-| en-US `:2327` `payment.error.coachStripeNotConfigured` | MATCH | all three locales have it |
-| `deferred-work.md:2321` → `runbook.md:598-613` (D1) | **DRIFTED** | `runbook.md:598-613` is now "Config change appears to have no effect". The statement lives at `docs/deployment/migration-rebaseline.md:137` ("no production deploy has ever happened") and at `runbook.md:691` ("prod is not live yet"). |
-| `V142__drop_pending_blob_deletions.sql` header | MATCH | owner decision 2026-09-16 (skillars-deferred-117), drop now because nothing was ever deployed. Note: it uses plain `SET lock_timeout`; Design 1's `SET LOCAL` is the current convention, so it is right not to copy that line. |
-| `PhoneNumberDto.java:24` as the `@JsonDeserialize` precedent | MATCH, partly | It is the only `@JsonDeserialize` in src/main. It is applied at TYPE level, not on a record component, so it is not an exact precedent. |
-| `sessionPackForm.js` `packErrorKey`; `ProfileBuilderStep3.vue` `step="1"` | MATCH | `:29` / `:36 Number.isInteger`; `:49` |
+| Guard `isErasedUnderLock`, MANDATORY, retryer, refresh (`DevelopmentDataErasureGuard:44-55`) | MATCH | `:44` MANDATORY, `:49` `withBoundedRetry`, `:55` `refresh(..., PESSIMISTIC_WRITE)`; NOWAIT is the repo's `findByIdForUpdate` lock hint |
+| Erasure tombstone `:1820` | MATCH | `setDevelopmentDataErasedAt(Instant.now())` |
+| Callers `:156`, `:252`, `HomeworkAssignmentService:132`, `BookingService` | MATCH (one drift) | `assignOne` is declared at `:131`; the guard call is `:132` |
+| `RadarCompositeCalculationService` "own equivalent check" | MATCH | `:230` plain field check after its own lock, not the guard |
+| `RadarAssessmentService:47`, saveAll `:89` | MATCH | `@Transactional` `:46`, `saveAll` `:89`, publish `:92` |
+| `TimelineEventListener` `:275` / `:290` / `:301` / `:277` | MATCH | Both `writeTimelineEvent` overloads are `REQUIRES_NEW`; neither has a guard. 5-arg `:289-290` delegates to 6-arg `:300-301` |
+| `ReportGenerationService` `:155`, `:235`, `:253`, `:258`, `:266`, `:276` | MATCH (minor drift) | `@Transactional` is `:153`; `onReportGenerated` annotations `:249-253`, method `:254` |
+| `updateStatusAndStorageKey` returns `int`, unread | MATCH | `PerformanceReportRepository:32`; both main callers discard it |
+| SLU chain, `saveSluWithRetry :125`, `saveAll :153`, Javadoc `:55-57`, `:95-97` | MATCH | |
+| `SnapshotBatchWriter :28 / :42`; no `development.repo` import of `security.service` | MATCH | |
+| Group 3 `:1737-1744`, "12 fixed" `:1583`, comment `:470-476` | MATCH | |
+| V138 `:4567` cascade | MATCH | `homework_completions_assignment_id_fkey ... ON DELETE CASCADE` |
+| `anonymizeByPlayerId` / `anonymizeByCoachId` | MATCH, **story wording wrong** | `anonymizeByCoachId` nulls the same four columns as the player query, not "voice_note_text too" |
+| deferred-165 step 2, `604f7e67`, latest migration V170; V230 next free | MATCH | V229 is the latest on disk today |
+| V229 shape, rule 2; module-rule tests | MATCH | Only `MarketplaceDoesNotDependOnPaymentTest` exists; nothing forbids `development` to `filestorage` or `development.repo` to `security.service` |
 
-## 2. Ledger and precedent attribution
+## 2. Ledger and precedent attribution (Layer 2)
 
 | Claim | Sources checked | Verdict |
 |---|---|---|
-| The four ledger bullets map to AC1–AC4 | ledger `:3558-3566` (tagged `[PICKED UP by skillars-deferred-170]`) | SUPPORTED |
-| ONB-06 is "the ledger's sixth bullet there", "done in PR #439" | ledger; `gh pr view 439` | **WRONG / OVERSTATED.** It is the **second** of five bullets in that section. #439 is **OPEN** (in review, not merged). |
-| #436 removed `SessionPack`/`SessionPackRepository`; V226 copied rows | `git show --stat 47180ea7`; V226 header; ledger `:3558` | SUPPORTED |
-| #436's body said an unready coach's pack "can be bought" | `gh pr view 436` body ("Known, low severity") | SUPPORTED (that sentence is quoted; the ledger corrects it) |
-| deferred-168 Completion Notes record the fractional-count deviation | story file `:406`; Javadoc `ProfileBuilderStep3Request.java:37-40` | SUPPORTED |
-| No production deploy has happened | ledger `:2321` (stale citation, see §1); `migration-rebaseline.md:137`; `runbook.md:691`; `provisioning-checklist.md:160-172`; git log after 2026-09-16 (latest #428 still says prod not live) | SUPPORTED (citation drifted) |
-| V142 precedent (deferred-117) | V142 header; commit e374aa6c (#197) | SUPPORTED. V142's marker named a separate *marker* migration (V141); here V226 plays that role, which the lint accepts (`preparedVersion < version`). |
-| Rule 2 and the lint marker / reference scan | `migration-conventions.md:58-85`; `MigrationLint.java:97-99`, `:197`, `:994` (skips `db/migration`) | SUPPORTED |
-| 169 rewrites `purchasePack` ordering and the purchase page's error/retry handling; claims V227+ | 169 story at `05b8bea8` (AC1a/AC1b, AC8, Task 2; V227+ at `:24`, `:96`, `:155`) | SUPPORTED. **169 adds no readiness check**, so AC3 is not redundant. |
-| PR #433 / #435 / #439 | gh | #433 and #435 are **MERGED into `feature/pitchside`** (the story calls them "on `feature/pitchside`", which is fine). #439 is open. |
-| V184 defers the `main.video_approval_requests` drop | `V184:16-18` | SUPPORTED |
+| Ledger `:3527-:3530`, `:3537` say what the mapping table says, tagged `[PICKED UP by skillars-deferred-171]` | deferred-work.md, 162/163 story files, code | CONFIRMED. No other open erasure bullet was missed |
+| Not-in-story bullets `:3532`, `:3533`, chargeback | ledger, `TimelineEventListener`, guard | CONFIRMED |
+| 162 AC5 is the guard's design; 165 step 1 / step 2 | story files, `BookingCompletionService:707`, `git cat-file 604f7e67` | CONFIRMED (step 1 = 163 AC6.1) |
+| `PLAYER_NOT_BOOKABLE` exists; "existing guard callers log INFO and skip" | `BookingError:167`, callers | CODE EXISTS; **wording imprecise**: the INFO line is written by the guard, only the background callers skip, `BookingService` throws and `GdprRequestService` throws 409. 409 status mapping not traced |
+| `drop-prepared-in: V170` valid for DROP COLUMN | `MigrationLint` | Mechanically valid (170 < 230); see finding F5 for truthfulness |
+| REQUIRES_NEW row-lock note | `SecurityUtil:205/254`, `RefreshTokenRevocationService:46` etc. | CONFIRMED in code |
 
-## 3. Mechanistic claims
+## 3. Mechanistic claims (Layer 3)
 
-1. **`purchasePack` has no transaction; the customer writes commit before the charge and survive its failure.** TRUE.
-   - The Javadoc at `:78` says it is "Not annotated @Transactional ..."; the controller is not transactional either, and `open-in-view: false`.
-   - `StripeCustomerRepository.save` commits in its own transaction.
-2. **No Stripe charge call happens for an unready coach.** TRUE. `charge()`'s first statement is `resolveCoachStripeAccountId` (`:116`), before currency resolution and before the PaymentIntent builder. The only Stripe call earlier in the flow is `createStripeCustomer`, from `purchasePack:140`.
-3. **`isCoachPaymentReady` is on the `PaymentGateway` interface and uses the same predicate.** TRUE (`PaymentGateway.java:134-135`; `StripePaymentGateway.java:601-605` against `:631-636`, both `COMPLETE && chargesEnabled`). `BookingService.requireCoachPaymentReady` is a package-private instance method.
-4. **The 422 shape is `{helpCode, errorMsg:{errorKey, message}, fieldErrors}`.** TRUE. `PaymentApiAdvice` covers `payment.api` (where `SessionPackPaymentResource` lives) and handles only `PaymentGatewayException`.
-5. **The purchase page always shows the generic text.** TRUE. The axios error interceptor rejects with the original error (`boot/axios.js:268`), so `e.response.data` is the `ErrorDto`, which has no `message`.
-6. **Jackson truncates 2.5 → 2 by default.** TRUE.
-   - jackson-databind 2.21.7, `ACCEPT_FLOAT_AS_INT` defaults on. No customizer, `ObjectMapper` bean or coercion config exists in src/main.
-   - jshell results: `2.5`, `2.0`, `2.9e0` and `"2"` all bind to 2. `"2.5"` and `"2.0"` are **already rejected** with `InvalidFormatException`.
-7. **Design 5's "extends `NumberDeserializers.IntegerDeserializer`".** **FALSE: that class is `public final`** (re-checked with `javap`). `StdScalarDeserializer<Integer>` / `StdDeserializer<Integer>` works, and `_parseInteger(p, ctxt, Integer.class)` is callable for non-float tokens. `@JsonDeserialize` on a record component is honoured (javac propagates it to the field, accessor and parameter).
-8. **The resulting response is `ApiAdvice`'s 400 `validation.badRequest`.** TRUE for `InvalidFormatException`/`MismatchedInputException`, which arrive as `HttpMessageNotReadableException`. A deserializer that fails with a *definition* error (`InvalidDefinitionException`) would surface as `HttpMessageConversionException` instead, so the deserializer must raise its failure through `ctxt.handleWeirdNumberValue` / `InvalidFormatException`. No package advice intercepts it first.
-9. **Endpoints:** TRUE. Step 3 is `PUT /api/marketplace/coaches/me/profile/steps/3` (`ProfileBuilderResource`). The tier POST is `POST /api/payment/coaches/me/session-pack-tiers` (`SessionPackPaymentResource:138`, 201).
-10. **`payment.sessionPack.tierLabel` has only the two page callers; `sessionsFallbackLabel` stays because the public profile uses it.** TRUE (`SessionPackPricingDisplay.vue:48`, rendered by `CoachPublicProfilePage.vue:318`).
-11. **The lint "may" flag `CoachSessionPackPort.java:12`.** It **will**:
-    - the scan reads whole files, Javadoc included, and finds `\bsession_packs\b`, which matches here;
-    - it is the only src/main file outside `db/migration` that does.
-
-    The rewording is required work, not an "if".
-
-## 4. Corner cases, false assumptions, missed flows (survived Step 4b)
-
-- **F1 (medium, AC3): existing purchase unit tests go red.**
-  - `SessionPackPaymentServiceTest` (`@Mock PaymentGateway`, `:54`; strict `MockitoExtension`, `:46`; 21 `purchasePack(` calls) and `PackPriceLockedOnPurchaseTest` both get `false` from an unstubbed `isCoachPaymentReady`. Every test that gets past the coach-status gate would then throw `coachStripeNotConfigured`.
-  - Fix: `lenient().when(paymentGateway.isCoachPaymentReady(COACH_ID)).thenReturn(true)` in `@BeforeEach`, following the existing `lenient()` stub at `:72`.
-  - `SessionPackInputBoundsTest` also mocks the gateway; check it.
-  - ITs are unaffected (`StubPaymentGateway:97` returns `true`).
-- **F2 (medium, AC3): `SessionPackPurchaseIT` calls the service directly, not over HTTP** (`:47`, `:64`, `:88`). The "422 with `errorMsg.errorKey`" assertion cannot live there as written.
-  - Option 1: assert the code and the absence of a `stripe_customers` row at service level in that IT.
-  - Option 2: put the HTTP shape in `SessionPackPaymentResourceWebMvcTest` (service mocked to throw).
-  - Either way the IT must override the stub's always-ready answer, e.g. `doReturn(false)` on the shared spy, if the base class exposes one. Confirm at dev time.
-- **F3 (medium, AC3 and 169): after 169, the backstop no longer answers `coachStripeNotConfigured`.**
-  - 169 AC1b (its story `:200-207`) reclassifies any plain `PaymentGatewayException` from `chargeAndCapture` as a pack-service subclass with its own code (e.g. `payment.noChargeMade`).
-  - So the page message for `coachStripeNotConfigured` covers only the new early check. A coach losing readiness between the two checks would get the no-charge message. That is acceptable, but the story should say so.
-  - 169 also orders "look up before you gate" (`:562-563`): the replay lookup runs first, and the new-attempt gates run before the attempt row is inserted. AC3's check belongs in that gate block, or "refused before any write" is false, because 169's attempt row is a write.
-- **F4 (low, AC2): the "label appears once" mutation check cannot go red under the default setup.** `test/vitest/setup-file.js:18-26` installs `createI18n` with `messages: { 'en-US': {} }`, so `t(key, params)` renders the bare key and ignores `label`. The spec needs real messages for `tierSummary` (a local i18n instance) or must assert the params passed to `t`.
-- **F5 (low, AC2): an existing spec breaks.** `CoachSessionPackTiersPageSpec.js:110-119` expects `marketplace.sessionsFallbackLabel` for label-less tiers. Under Design 3 the page no longer renders it. Rewrite that test.
-- **F6 (low, AC2): Design 3 names the wrong key to keep.** See §1: the `'Tier'` key is `admin.coaches.tierLabel`. As written, the instruction keeps and deletes the same path `payment.sessionPack.tierLabel`.
-- **F7 (low, AC2, missed flow): the sold-packs list shows "—" for a label-less tier.** `CoachSessionPackTiersPage.vue:135` renders `{{ pack.tierLabel || '—' }}`, fed by `CoachSoldPackQueryService.java:89` (`tier.getLabel()`, null for every V226 backfill and unlabelled builder tier). It is the same naming rule on the third list of the same page; include it in AC2 (use the count-based name).
-- **F8 (low, AC1): two more docs promise a later drop.**
-  - `docs/dev-docs/marketplace/index.html:126` ("... is dropped by a later migration").
-  - `docs/deployment/provisioning-checklist.md:171` (V226 entry: "stays one release").
-
-  Also, because D1 relies on prod not being live, the new migration (and V226, which is missing too) belongs in the checklist list at `:160` ("Recent migrations assume 'prod is not live'", which ends at V224).
-- **F9 (low, AC4, partly refuted, see §5): the wrong IT is named.** `SessionPackPaymentServiceIT` calls the service, so Jackson never runs. Use:
-  - `SessionPackPaymentResourceWebMvcTest` (already POSTs the tier endpoint through MockMvc with real Jackson, `:410-430`) for the tier POST;
-  - `CoachProfileSelfEditIT` / `CoachProfileBuilderIT` (HTTP) for step 3.
-- **F10 (low, AC4, clarification): fractional strings are already rejected.** Of the deserializer unit test's cases, `"2"` should stay accepted and `"2.5"` already fails today. Exponent floats (`1e1`) are float tokens and will be rejected, which matches the intent. Out of scope but worth a line: `ProfileBuilderStep3Request.sessionDurationMinutes` (`:26`) truncates the same way. The UI never sends floats or strings (`packsForRequest`; `v-model.number` + `Number.isInteger` at `CoachSessionPackTiersPage.vue:325`).
-- **Story text errors:**
-  - "sixth bullet" should be "second".
-  - "done in PR #439" should be "in review in PR #439".
-  - "verified at 0ee68f07" should be `281b8433`.
-  - The D1 runbook citation should be `migration-rebaseline.md:137`.
-  - "extends `IntegerDeserializer`" is impossible (§3.7).
-  - "if the lint flags it" should be "the lint will flag it" (§3.11).
-
-## 5. What did not survive re-verification
-
-- **"A replay for a coach who lost readiness would now 422 instead of returning the recorded pack" (Layer 4 hypothesis).** Killed. Today `charge()` already throws before the `alreadyRecorded` lookup (`SessionPackPaymentService.java:144` vs `:148`), so a replay to an unready coach already fails. After 169, the lookup precedes the gates, so a replay skips the new check. The early check changes nothing for replays in either world.
-- **"No tier-resource IT exists, so AC4's tier-endpoint test has no home" (F9 as raised).** Partly killed. The claim that only `CoachProfileSelfEditIT` POSTs the tier endpoint over HTTP is wrong: `SessionPackPaymentResourceWebMvcTest:410-430` does, and a WebMvc slice runs the real Jackson converter. The finding survives only as "`SessionPackPaymentServiceIT` is the wrong place".
-- **"About 23 tests break" (F1's count).** Downgraded to approximate. I confirmed the mock default and 21 `purchasePack(` calls in one class, but did not count, test by test, which ones pass the earlier gates. The finding stands; the exact number does not matter.
-- **"A non-null `stripeAccountId` difference between `isCoachPaymentReady` and `resolveCoachStripeAccountId`" (Layer 3 aside).** Killed. The column is NOT NULL in both the entity and the schema.
-
-## 6. Recommendation
-
-The story's diagnosis holds. Every defect it describes reproduces at `b21ea376`, and the ledger correction about `purchasePack` is right: no PaymentIntent is created for an unready coach. The design needs edits before dev. Confidence by area:
-
-| Area | Confidence | Basis |
+| Claim | Verdict | Evidence |
 |---|---|---|
-| AC1 (drop) | high | Lint mechanics read in full; reference sweep done. Apply F8 and the required Javadoc rewording. D1 stays an owner call; its evidence is current, but its citation needs fixing. |
-| AC2 (caption) | high on the defect, medium on the test plan | Apply F4–F7. |
-| AC3 (readiness) | high on mechanics | Re-read by me. Its sequencing on 169 is right, and F3 makes it more so. Apply F1–F3. 169's final shape is not merged, so the AC3 details must be re-derived on rebase, as D2 already says. |
-| AC4 (fractional) | high | Checked against the pinned Jackson jar. Fix the base class (§3.7), the failure type (§3.8) and the test homes (F9). F10 narrows the test cases. |
+| Guard is MANDATORY, takes NOWAIT lock, held to caller commit; erasure stamps under the same lock | HOLDS | Guard returns **false** (not throws) for a missing player row (`:51-54`); lock exhaustion rethrows `PessimisticLockingFailureException` after 8 tries (~3.2 s) |
+| `submitAssessment` is `@Transactional`, nothing writes before `:89` | HOLDS | Guard slot between the tier check and `saveAll` is right |
+| Guard at the top of the 6-arg `writeTimelineEvent` covers both callers | HOLDS | Callers use the 5-arg through the proxy (`self.` / injected bean); the 5-arg's own `REQUIRES_NEW` tx satisfies MANDATORY; the 5-arg to 6-arg hop is self-invocation, harmless. A stale comment at `:224` says `writeHomeworkAssigned` uses the 5-arg; it does not |
+| `onReportGenerated`: "the row cannot be deleted between upload and update without the update returning 0" | **PARTIAL: true but does not close the window** | See F1 |
+| No self-deadlock between `onReportGenerated`'s tx and `writeTimelineEvent`'s guard | HOLDS **for the design as written only** | `performance_reports.player_id` has no FK to `player_profiles`, so the outer UPDATE takes no profile lock. Stops holding the moment F1's fix puts a guard in the outer tx |
+| `BlobDeletionOutboxSupport.enqueue(Collection<String>)` usable in the 0-row path | HOLDS | No `@Transactional` of its own; `requestDrainAfterCommit()` is a separate call (F7) |
+| Retrier: not `@Transactional`, 23505 caught in the `try`, catch can stay outside `template.execute` | HOLDS | Catch is `DataIntegrityViolationException` whose cause is Hibernate `ConstraintViolationException` named `uq_player_skill_stats_session_skill`; the same translation applies on template commit |
+| "Dispatcher skips the snapshot write" on the new outcome | **PARTIAL** | Dispatcher (`SluPersistenceDispatcher:70-92`) skips only on `FAILED` / `ALREADY_PERSISTED` and falls through to `writeAllWithRetry` otherwise; a `PLAYER_ERASED` value needs an explicit branch (F6) |
+| `writeAllDeltas` guard per distinct player | HOLDS | Erased player: return quietly so the outbox row completes. Lock-busy there is retried (3 tries then outbox), not lost |
+| Group 3 arithmetic 3 to 4 | HOLDS | Literal `3` at `:1738`; helper is `min(timeout, remaining / n)`; no test pins the group counts. Other "12" literals: `:1585`, `:1595`, `:1599`, `:1663`, `:1669`, `:1747-1750`, `ConfigBounds:644` |
+| `homework_assignments`: only incoming FK is the completions cascade | HOLDS | `player_id` has no FK; `pack_id` is an outgoing `SET NULL` |
 
-Not independently re-checked by me: Layer 4's sweep of e2e/ and Pitchside for caption-text assertions (accepted from that layer: none found), and Layer 2's git-log sweep for a production deploy (spot-checked #428 only).
+## 4. Findings that survived re-verification
+
+### F1 (HIGH): D4 does not close the orphaned-PDF race
+`onReportGenerated` runs in one `REQUIRES_NEW` tx: upload, `updateStatusAndStorageKey(READY, key)` (`ReportGenerationService:257-258`), timeline write, `notifyParent`. The tx stays open until after the notification. Erasure group 3 does a plain SELECT `findStorageKeysByPlayerId` (WHERE `storage_key IS NOT NULL`, `GdprErasureService:1741`) and then `deleteAllByPlayerId` (`:1742`), under READ COMMITTED.
+
+Trigger: erasure's scan runs while the row is still `PENDING_UPLOAD` with a null key, so nothing is enqueued. `onReportGenerated` updates to READY (returns **1**). Erasure's DELETE blocks on that row lock, then deletes the committed READY row after the handler commits. The PDF (name, age, skills, recap excerpts) stays in storage with no key anywhere. The story's `0`-row branch never fires. The window is update to commit, which includes the timeline write and the notification.
+
+Fix direction: run `isErasedUnderLock` in `onReportGenerated` after the upload and before the update, so the update is serialized against erasure on the `player_profiles` lock; if erased, enqueue the key and return. **Consequence the story must also decide:** the outer tx then holds the profile lock, so the inner `REQUIRES_NEW` `writeTimelineEvent` guard (NOWAIT) will always fail against its own caller's lock. The timeline row for the report must then be written inside the outer tx without a second guard, or the order restructured. Dev Notes `:220-223` ("no self-deadlock") must be rewritten. (This race pre-exists; the defect is that the story claims to close it.)
+
+### F2 (HIGH): V230 as specified fails CI in three ways
+1. **Lint reference scan.** `MigrationLint.referencesIn` (`MigrationLint.java:1027-1043`) matches a file that contains the table name and either `voice_note_text` or the camelCase `voiceNoteText`; comments are not stripped. `BookingCompletionService.java:707` has `{@code voiceNoteText}` and the same file has `"session_completion_data"` at `:574` and `:594`. The story lists only `SessionCompletionDataRepository` and `GdprErasureService:470-476`.
+2. **ITs use the column.** `GdprErasureIT` (INSERT at `:725`, `:733`, `:964`, `:972`; SELECT and assert at `:745-756`, `:984-995`, including "Unrelated voice note") and `SessionCompletionResourceIT:291-293`. They fail with "column does not exist". AC6's "both anonymise queries still pass their ITs" cannot hold; no task rewrites them.
+3. **Header comment.** `MigrationLint.java:740` requires a leading header comment on any migration that drops a column (`BARE_DROP_NO_HEADER`). Design 8 specifies only `SET LOCAL` plus the marker.
+
+### F3 (MEDIUM): D1's premise is wrong for reports
+For a really erased player, `generateReport` never reaches the new guard. Erasure deletes the SLU rows and the timeline rows, and `CoachPlayerLastSessionResolver.resolve` is computed from exactly those (`sluRepository.findLastSessionDate`, SESSION_COMPLETED timeline lookup). So `lastSession == null` and the method throws `AccessDeniedException` (403) at `ReportGenerationService:~200` before the PDF is built. The guard is reachable only in the race where erasure commits after the resolver read. AC2's unit test (guard mocked `true`) passes while saying nothing about the real path. Radar behaves differently (relationship survives, reaches the guard, 404), so an erased player gets 403 on reports and 404 on radar. "Same answer an unknown player gets" is also wrong: an unrelated player gets 403 from the relationship check first. State the real behaviour in D1 and test the race separately.
+
+### F4 (MEDIUM): coach-initiated writers still unguarded after this story
+- `SluTargetService.setTargets` (`:36-50`) upserts `player_slu_targets` after only `requireCoachPlayerRelationship`. Erasure empties that table, but the coach's booking relationship survives, so an erased child can get new rows. `NeglectedSkillDetectionService` is driven by that table and can then write `neglected_skill_flags`.
+- `RadarDisplayService.savePreferences` writes `coach_radar_preferences`, unguarded.
+Both are the same class as the ledger bullet at `:3527` that AC1/AC2 close. Either add them to AC1 or add an explicit ledger bullet and name them as out of scope.
+
+### F5 (MEDIUM): D3's "met without the pre-launch exemption" is not accurate, and there is a rolling-deploy hazard
+Step 2 (#304) left the two native queries naming the column, so the last code reference is removed in the same change as the drop (the compress-removal-and-drop case rule 2 exists to prevent). The V170 marker passes the lint mechanically but is not truthful. Old pods keep running `anonymizeByPlayerId` / `anonymizeByCoachId` with `voice_note_text = NULL` during the migration window; an erasure in that window throws "column does not exist" and surfaces as an `UNCLASSIFIED_FAILURE` alert. V229 handled this with an explicit owner-exemption header and a checklist entry. Adopt the same: header stating the exemption, owner decision recorded, V230 entry in the "prod is not live" list.
+
+### F6 (MEDIUM): behaviour the story does not specify
+- Dispatcher needs an explicit `PLAYER_ERASED` branch (see section 3); update the "tri-state" prose and `SluSaveOutcome` Javadoc.
+- **Lock-busy:** the guard throws `PessimisticLockingFailureException` after ~3.2 s. In `saveSluWithRetry` that is a `DataAccessException`, so it is retried 3 times and then `@Recover` returns `FAILED` ("rows lost ... manual recovery needed", ERROR). A non-erased player now loses detail rows to a transient profile-lock collision, which cannot happen today. `onRadarEntrySubmitted` (catch at `:283`) and the report timeline (catch `:265-273`) drop the row; submit and `generateReport` return 409 (`ApiAdvice:711`). The ledger bullet `:3533` accepts this tradeoff only for SESSION_COMPLETED / HOMEWORK_ASSIGNED; extend it to RADAR_ASSESSMENT, PERFORMANCE_REPORT and SLU, and decide whether the SLU ERROR is acceptable.
+- Multi-player batches in `writeAllDeltas`: pin a sorted order (in practice one player per session, so low).
+
+### F7 (LOW-MEDIUM): implementation traps
+- `GdprErasureServiceTest:161` calls `new GdprErasureService(...)` positionally; the new `HomeworkAssignmentRepository` breaks compilation until a mock and argument are added. Eight hand-construction sites need updating in total: `RadarAssessmentServiceTest:54`, `ReportGenerationServiceTest:99` and `:817`, `SluPersistenceRetrierTest:35`, `SluRetrierProxyRetryTest:69` (a `@Configuration` needing a tx manager or template bean), `SnapshotBatchWriterTest:28`, `GdprErasureServiceTest:161`. `ReportGenerationService` also gains a `BlobDeletionOutboxSupport` field.
+- Call `BlobDeletionOutboxSupport.requestDrainAfterCommit()` after `enqueue`, or the key waits for the 5-minute sweep.
+- Place the new `0`-row branch outside the existing `try`; an exception from `enqueue` inside it falls into `catch (Exception)` at `:259`, which marks UPLOAD_FAILED and leaves the blob orphaned.
+- Test recipe: there is no stub `FileStorage`. `ReportGenerationServiceIT` extends `BaseStorageIT` (real MinIO); `SluCalculationServiceIT:80` uses a `@MockitoBean` whose field name is part of the context-cache key. `onReportGenerated` is `@Async`, so the IT needs an await or the event path used at `ReportGenerationServiceIT:~148`. For AC6 there is no existing `information_schema` assertion IT to extend; a small new one is simpler.
+- Group-3 Javadoc/literal updates listed in section 3.
+
+### F8 (LOW): player data erasure still does not clear
+`development.coach_radar_preferences`, `development.radar_composite_dlq` (player id, `last_error` text), and `booking.session_completion_data.plan_blocks_snapshot` (V170; drill/block detail, at least as strong as `homework_drill_ids`). Ledger them or name them out of scope.
+
+## 5. Corrections to the story text
+- `anonymizeByCoachId` nulls all four columns (Background, last bullet).
+- `assignOne` is `:131` (guard call `:132`); `generateReport` annotation `:153`; `onReportGenerated` method `:254`.
+- D2: the INFO line comes from the guard, and only background callers skip.
+- D1: drop "same answer an unknown player gets / learns nothing".
+- Stale comment at `TimelineEventListener:224` (pre-existing; fix opportunistically).
+
+## 6. What did not survive re-verification, or was downgraded
+
+- **L3 "possible lock wait between erasure's `performance_reports` DELETE and the inner guard's NOWAIT retry"**: real but pre-existing and bounded (~3.2 s, then the inner catch swallows it). Not a story defect; folded into F1's note.
+- **L4 "erasure may hit `CHILD_DELETE_LOCK_TIMEOUT` because the handler holds the report row lock"**: depends on timing against the 5 s per-statement timeout; I did not reproduce it. Kept only as a reason to prefer the F1 fix, not as its own finding.
+- **L4 "no PENDING_UPLOAD sweeper, so a retry cannot re-upload after erasure"**: this is a reassurance, not a defect. `DevelopmentConfig:95` says abandoned uploads stay PENDING_UPLOAD. Dropped.
+- **L1 row 1 "NOWAIT location not checked"**: L3 found it in `PlayerProfileRepository` (`lock.timeout=0`). Closed.
+- **L2 "D3 rule-2 wording is a judgement call"**: upgraded to F5 once L4 showed the queries still name the column at step 2.
+- **L4 "radar and report 404 vs 403 disclosure"**: kept inside F3 only; the disclosure to a coach who already has a relationship is minor and not a standalone finding.
+
+## 7. Recommendation (per claim, not blanket)
+
+- **Independently re-read by me against HEAD:** F1 (onReportGenerated body and erasure group 3 statements), F2 items 1-3 (`BookingCompletionService` hits, the IT file list, the `hasHeaderComment` rule), F3 (report pre-guard flow and `CoachPlayerLastSessionResolver`), the F4 `setTargets` body, the F6 dispatcher branches, the F7 constructor site. High confidence on these.
+- **Taken from the agents, not re-read by me:** the line numbers inside `GdprErasureIT` / `SessionCompletionResourceIT`, the `ApiAdvice:711` 409 mapping, `RadarDisplayService.savePreferences` and the F8 tables, the exact list of eight hand-construction sites, the neglected-skill cascade in F4. Medium confidence; the dev should re-grep before editing.
+- **Not checked by anyone:** the `PLAYER_NOT_BOOKABLE` HTTP status, actual lock timings under load, and whether `provisioning-checklist.md` already has a V230 placeholder.
+- **Verdict:** do not start implementation as written. F1 changes the design of AC2 and the Dev Notes; F2 makes AC6/T6 incomplete and CI-red; F3 and F5 need an owner call (404 vs 403 wording, exemption for V230). F4 needs a scope decision. F6-F8 are fixes to the task list. The remaining ACs (AC1 radar guard, AC3 core mechanics, AC4, AC5) are sound.

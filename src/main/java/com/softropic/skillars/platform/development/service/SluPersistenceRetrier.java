@@ -2,6 +2,7 @@ package com.softropic.skillars.platform.development.service;
 
 import com.softropic.skillars.platform.development.repo.PlayerSkillStat;
 import com.softropic.skillars.platform.development.repo.SluRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
@@ -11,10 +12,14 @@ import org.springframework.retry.annotation.Recover;
 import org.springframework.retry.annotation.Retryable;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.CannotCreateTransactionException;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.TransactionException;
 import org.springframework.transaction.TransactionSystemException;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -52,11 +57,13 @@ import java.util.UUID;
  * is re-thrown and retries / recovers exactly as before.
  *
  * <p><strong>Why the catch works.</strong> {@code saveSluWithRetry} is <em>not</em>
- * {@code @Transactional}, so {@code SimpleJpaRepository.saveAll} opens and commits its own
- * transaction and the constraint fires <em>inside</em> the {@code sluRepository.saveAll(rows)} call —
- * within reach of the {@code try/catch}. If anyone ever adds {@code @Transactional} to this retrier
- * the flush/commit moves to the outer boundary, <em>after</em> the catch, and this no-op handling
- * silently stops working — flag that in review.
+ * {@code @Transactional}. Since skillars-deferred-171 AC3 the erasure check and {@code saveAll} share one
+ * {@code REQUIRES_NEW} {@link TransactionTemplate} transaction (the guard's profile lock must be held until the
+ * rows commit), so the constraint now fires at that template's flush/commit — and
+ * {@code TransactionTemplate.execute} rethrows it, translated exactly as before, after the rollback. The
+ * {@code try/catch} wraps the whole {@code execute(...)} call, so it still sees it. If anyone ever adds
+ * {@code @Transactional} to this retrier the flush/commit moves to the outer boundary, <em>after</em> the catch,
+ * and this no-op handling silently stops working — flag that in review.
  *
  * <p>{@link #saveSluWithRetry} additionally short-circuits on an explicit
  * {@code existsBySessionId(session_id)} check-then-act (skillars-deferred-86 AC2) — this documents
@@ -64,14 +71,16 @@ import java.util.UUID;
  * <em>not</em> a bug fix (the {@code merge} path above is already safe) and is also a backstop the
  * day {@code PlayerSkillStat} ever gains a mutable column or a {@code @Version} field.
  *
- * <p><strong>Return contract (skillars-deferred-89 AC2, tightened by its code review).</strong>
- * {@link #saveSluWithRetry} returns a {@link SluSaveOutcome} tri-state:
+ * <p><strong>Return contract (skillars-deferred-89 AC2, tightened by its code review; a fourth state since
+ * skillars-deferred-171).</strong> {@link #saveSluWithRetry} returns a {@link SluSaveOutcome}:
  * <ul>
  *   <li>{@link SluSaveOutcome#SAVED} — this call persisted the rows (or the batch was empty);</li>
  *   <li>{@link SluSaveOutcome#ALREADY_PERSISTED} — a <em>different</em> delivery persisted them
  *       (the {@code existsBySessionId} short-circuit or the V47 collision catch);</li>
  *   <li>{@link SluSaveOutcome#FAILED} — retries exhausted, rows lost (the two {@code @Recover}
- *       paths).</li>
+ *       paths);</li>
+ *   <li>{@link SluSaveOutcome#PLAYER_ERASED} — the player's development data was erased, so nothing was
+ *       written (skillars-deferred-171 AC3).</li>
  * </ul>
  * {@code SluPersistenceDispatcher} runs the weekly-snapshot write <em>only</em> on {@code SAVED}: a
  * permanently lost detail save cannot leave {@code player_slu_weekly_snapshot} over-reporting, and
@@ -93,12 +102,20 @@ import java.util.UUID;
  * deliberately not in {@code retryFor} — they are not reachable from this well-formed delegate.
  *
  * <p><strong>Do not add {@code @Transactional} to this class or method.</strong> The V47 collision
- * catch works only because {@code SimpleJpaRepository.saveAll} opens and commits its own transaction,
- * so {@code 23505} fires inside the {@code try} block. A {@code @Transactional} here would move the
+ * catch works only because the transaction around {@code saveAll} (since skillars-deferred-171 the template's,
+ * before that {@code SimpleJpaRepository.saveAll}'s own) commits inside the {@code try} block, so {@code 23505}
+ * surfaces there. A template is fine for exactly that reason; an annotation is not. A {@code @Transactional} here would move the
  * flush to the outer boundary, past the catch — silently restoring the retry storm, the false
  * "rows lost" {@code @Recover} ERROR, and (post-AC2) a snapshot under-report. {@code
  * SluPersistenceRetrierTest.saveSluWithRetry_isNotTransactional_soTheSaveAllCollisionFiresInsideTheCatch}
  * is a reflective regression guard on exactly that.
+ *
+ * <p><strong>Erasure (skillars-deferred-171 AC3).</strong> The rows are checked against
+ * {@code DevelopmentDataErasureGuard} under the player's profile lock, in the same transaction as the insert.
+ * A busy lock surfaces as {@code PessimisticLockingFailureException} — a {@link DataAccessException} — so it is
+ * retried like any other, and on exhaustion the rows are lost through the {@code @Recover} "manual recovery
+ * needed" path, even for a player who is not erased. That is the ledger's accepted busy-lock tradeoff, now
+ * extended to SLU detail rows; there is no outbox for them.
  */
 @Slf4j
 @Component
@@ -113,6 +130,8 @@ public class SluPersistenceRetrier {
     static final String SESSION_SKILL_UNIQUE_CONSTRAINT = "uq_player_skill_stats_session_skill";
 
     private final SluRepository sluRepository;
+    private final DevelopmentDataErasureGuard erasureGuard;
+    private final PlatformTransactionManager transactionManager;
 
     @Retryable(
         retryFor = {DataAccessException.class, TransactionSystemException.class, CannotCreateTransactionException.class},
@@ -149,9 +168,16 @@ public class SluPersistenceRetrier {
             // differ across a week boundary — an over-report the winning delivery never caused.
             return SluSaveOutcome.ALREADY_PERSISTED;
         }
+        Long playerId = singlePlayerId(rows);
         try {
-            sluRepository.saveAll(rows);
-            return SluSaveOutcome.SAVED;
+            boolean erased = Boolean.TRUE.equals(requiresNewTransaction().execute(status -> {
+                if (erasureGuard.isErasedUnderLock(playerId, "SluPersistenceRetrier.saveSluWithRetry")) {
+                    return true;
+                }
+                sluRepository.saveAll(rows);
+                return false;
+            }));
+            return erased ? SluSaveOutcome.PLAYER_ERASED : SluSaveOutcome.SAVED;
         } catch (DataIntegrityViolationException ex) {
             if (isSessionSkillUniqueViolation(ex)) {
                 // Two concurrent BookingCompletedEvent deliveries for this session both passed the
@@ -176,6 +202,22 @@ public class SluPersistenceRetrier {
             // SluPersistenceDispatcher's AC2 gate — do not widen it.
             throw ex;
         }
+    }
+
+    /** One session has one player; the erasure check is per player, so mixed rows would be a caller bug. */
+    private static Long singlePlayerId(List<PlayerSkillStat> rows) {
+        Long playerId = rows.get(0).getPlayerId();
+        if (rows.stream().anyMatch(r -> !Objects.equals(r.getPlayerId(), playerId))) {
+            throw new IllegalStateException("SLU rows for one save must share one player, session "
+                + rows.get(0).getSessionId());
+        }
+        return playerId;
+    }
+
+    private TransactionTemplate requiresNewTransaction() {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template;
     }
 
     private static boolean isSessionSkillUniqueViolation(DataIntegrityViolationException ex) {

@@ -6,6 +6,8 @@ import com.softropic.skillars.config.AbstractIntegrationTest;
 import com.softropic.skillars.e2e.HttpTestClient;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.video.VideoProviderAdapter;
+import com.softropic.skillars.platform.development.contract.PlayerTimelineEventType;
+import com.softropic.skillars.platform.development.service.TimelineEventListener;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,6 +49,7 @@ class RadarAssessmentResourceIT extends AbstractIntegrationTest {
     @Autowired private HttpTestClient httpTestClient;
     @Autowired private RestTemplate restTemplate;
     @Autowired private PasswordEncoder passwordEncoder;
+    @Autowired private TimelineEventListener timelineEventListener;
     @LocalServerPort private int randomServerPort;
 
     @MockitoBean
@@ -209,6 +212,45 @@ class RadarAssessmentResourceIT extends AbstractIntegrationTest {
                 assertThat(httpEx.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
                 assertThat(httpEx.getResponseBodyAsString()).contains("security.featureGated");
             });
+    }
+
+    // skillars-deferred-171 AC1: erasure keeps the bookings, so the coach still passes the relationship and
+    // tier checks; the guard refuses the write with a 404 and nothing lands.
+    @Test
+    void submitAssessment_erasedPlayer_returns404AndWritesNothing() {
+        stampDevelopmentDataErased();
+        Map<String, Object> payload = buildPayload(UUID.randomUUID(), "OBJECTIVE", LocalDate.now(),
+            List.of(Map.of("skillCode", "PAC", "score", 60)));
+
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            radarUrl(), HttpMethod.POST, payload, authenticatedHeaders(cookies), Void.class))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(ex -> assertThat(((HttpClientErrorException) ex).getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.radar_assessment_entries WHERE player_id = ?", Long.class, PLAYER_ID))
+            .isZero();
+    }
+
+    // skillars-deferred-171 AC1: the timeline write itself (RADAR_ASSESSMENT / PERFORMANCE_REPORT rows) skips an
+    // erased player. Called through the bean (proxy), as the radar and report listeners do.
+    @Test
+    void writeTimelineEvent_erasedPlayer_writesNoRow() {
+        stampDevelopmentDataErased();
+
+        timelineEventListener.writeTimelineEvent(PLAYER_ID, PlayerTimelineEventType.RADAR_ASSESSMENT, null,
+            "development", Map.of("skillCodes", List.of("PAC")));
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE player_id = ?", Long.class, PLAYER_ID))
+            .isZero();
+    }
+
+    private void stampDevelopmentDataErased() {
+        transactionTemplate.executeWithoutResult(status -> jdbcTemplate.update(
+            "UPDATE main.player_profiles SET development_data_erased_at = ? WHERE id = ?",
+            Timestamp.from(Instant.now()), PLAYER_ID));
     }
 
     @Test
