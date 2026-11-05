@@ -199,6 +199,16 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         assertThat(sentTo(EmailTemplate.EMAIL_CHANGE)).isEmpty();
     }
 
+    @Test
+    void theUserForeignKey_cascades_soAHardDeleteOfTheAccountIsNeverBlocked() {
+        // UserAdminService's sweep hard-deletes never-activated accounts; GDPR erasure keeps the row.
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT confdeltype FROM pg_constraint WHERE contype = 'f' "
+                + "AND conrelid = 'main.email_change_requests'::regclass "
+                + "AND confrelid = 'main.\"user\"'::regclass", String.class))
+            .isEqualTo("c");
+    }
+
     // ── AC1 + AC5: confirming switches the address, revokes sessions, notifies the old address ─────────
 
     @Test

@@ -452,6 +452,9 @@ Claude Opus 5.5 (claude-opus-5-5)
   `CurrentSessionGuard.assertNotRevoked` (DB read: locked, or token issued before the session epoch → 401) runs first
   on both erasure endpoints. `GdprErasureIT`'s fast-path probe moved to `GET /api/gdpr/requests`, and it now also
   asserts the repeated erasure is refused. Mutation check: guard call removed → `EmailChangeResourceIT` fails.
+- Owner decision D (option 1): V232's FK to `"user"` is now `ON DELETE CASCADE` (edited in place, V232 is not live), so
+  `UserAdminService`'s hard delete of never-activated accounts is never blocked; the comment that the user row is never
+  deleted was wrong. Pinned by `EmailChangeServiceIT.theUserForeignKey_cascades_...` (pg_constraint `confdeltype = 'c'`).
 
 ### File List
 

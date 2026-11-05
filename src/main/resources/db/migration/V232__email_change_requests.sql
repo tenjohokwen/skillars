@@ -3,8 +3,9 @@
 -- main.email_change_requests: one row per requested change. Nothing changes on the account until the link sent to
 -- the new address is used (confirm, 24 h); the old address then gets an undo link (7 days) and stays reserved for
 -- that window (no registration, no other change may take it). Only SHA-256 hashes of the two tokens are stored.
--- The user row is never deleted (GDPR erasure tombstones it), so there is no ON DELETE CASCADE: erasure deletes
--- these rows itself (GdprErasureService).
+-- GDPR erasure keeps the user row (a tombstone), so it deletes these rows itself (GdprErasureService). A user row
+-- can still be hard-deleted (UserAdminService's sweep of never-activated accounts), so the FK cascades like the
+-- other per-user tables (refresh tokens, verification tokens): a delete is never blocked by this table.
 --
 -- main.envelope_entity.envelope_entity_email_template_check widened with EMAIL_CHANGED_NOTICE and
 -- EMAIL_CHANGE_ADDRESS_IN_USE. Rebuilt as the union: V227's 60 values + these two. EnvelopeEntitySchemaIT pins
@@ -20,7 +21,7 @@ SET LOCAL lock_timeout = '5s';
 CREATE TABLE main.email_change_requests (
     id                 bigint      NOT NULL PRIMARY KEY,
     version            bigint      NOT NULL DEFAULT 0,
-    user_id            bigint      NOT NULL REFERENCES main."user" (id),
+    user_id            bigint      NOT NULL REFERENCES main."user" (id) ON DELETE CASCADE,
     old_email          text        NOT NULL,
     old_login          text        NOT NULL,
     new_email          text        NOT NULL,
