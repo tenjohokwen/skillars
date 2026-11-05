@@ -30,7 +30,8 @@ case from `fix_pr: pending` to the PR number. Not a story yet: bundle per the us
 RS01 and RS02 (the two auth items) were implemented by **skillars-deferred-166** and deleted from this
 list per this file's "deleted outright once implemented" rule; their eval cases moved to
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
-not renumber, so the list below starts at RS03.
+not renumber, so the list below starts at RS04. RS03 (email change / registration storing the login in the
+typed case) was implemented by **skillars-deferred-172** and deleted; its eval case moved to `evals/review/cases/`.
 
 **OWNER DECIDED 2026-11-03: the next bundle after skillars-deferred-167 is the payments/Stripe cluster** —
 RS05, RS06, RS07 and RS09, optionally RS08. Chosen because RS06 is the only high-severity money item (throwing
@@ -333,7 +334,16 @@ the alternatives and stay queued behind it.
   callers — deliberately out of scope there, recorded so the next person to touch it knows why the two
   columns are not symmetric.
 
-- RS03 [medium/logic] Email change sets login to the raw new email (no lowercasing, no uniqueness check). `[PICKED UP by skillars-deferred-172]` u.setLogin(newEmail) stores the value exactly as submitted. Owner: HEAD updateUserEmail unchanged. [`UserProfileService.java` `UserProfileService.updateUserEmail` (also S16: AccountManagementFacade.java); input rev `651ed1effc04`; sample S04]
+- RS03b [medium/security] Lost old mailbox and forgotten password: no self-service recovery. An email change can be
+  undone only from the old address (skillars-deferred-172), and a password reset goes to the account's current
+  address; someone who lost access to the old mailbox and whose account was taken over needs a support/admin path
+  that does not exist. Owner decision (2026-11-05): out of scope for 172, needs its own design.
+- RS03c [low/logic] The Stripe customer email is set only when the customer is created
+  (`StripePaymentGateway.java:647-648`) and is not updated when the account's email changes, so Stripe receipts keep
+  going to the old address.
+- RS03d [low/logic] `FileStorageService.softDelete` (`:328`) compares `created_by` with the current login, so files
+  uploaded before an email change can no longer be deleted through the generic path (`CoachProfileService.deletePhoto`
+  tolerates this for the profile photo only).
 - RS04 [medium/logic] findIdsByLanguage lowercases only the input, not the stored array elements. `lower(:lang) = ANY(languages)` matches only if stored values are already lowercase. Owner: frontend stores 'English' etc., so the filter never matches for anyone. [`CoachProfileRepository.java` `findIdsByLanguage`; input rev `deefa90f6d10`; sample S05]
 - RS05b [medium/concurrency] `invoice.paid` (a silent no-op without a local row) and `invoice.payment_failed` have the same race shape as the subscription events skillars-deferred-169 now parks, and are not parked. Left on purpose: they carry no state the signup does not re-derive from the Stripe subscription it just created.
 - RS06b [medium/logic] A pack purchase attempt that needs a human (`UNRECONCILED` where the pack cannot be recorded, or a Stripe lookup that fails forever) is closed by an operator with SQL (monitoring.md, `PackAttemptsUnresolved`); there is no pack-specific reconciler or admin action. Until it is closed, that parent cannot buy any pack (one open attempt per parent).

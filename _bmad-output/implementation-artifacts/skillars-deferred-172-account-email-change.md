@@ -360,7 +360,7 @@ add the `frontend-tests` label so the Vitest job runs).
       (statement count); tests.
 - [x] T8 (AC9): rewrite existing email-change tests for the new flow.
 - [x] T9 (AC10): frontend dialog, two pages, routes, API, privacy-card mapping, i18n (3 locales), specs.
-- [ ] T10 (AC11): templates' four bundles + guard tests, copy fixes, `security-api-endpoints.md`, checklist, ledger,
+- [x] T10 (AC11): templates' four bundles + guard tests, copy fixes, `security-api-endpoints.md`, checklist, ledger,
       eval case.
 - [ ] T10b (AC11): dev docs in `docs/dev-docs` (correct + extend as listed), search index rebuilt, `check-docs` passes.
 - [ ] T11 (AC12): `/pr-review`, PR.

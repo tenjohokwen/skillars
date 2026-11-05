@@ -157,7 +157,7 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226, V229 and V230 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226, V229, V230, V231 and V232 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
   justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V229 and V230:
   a drop in the same release as its last reader's removal, not the release after). Once PROD holds real data,
@@ -190,6 +190,17 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   would fail with "column does not exist" during the migration window. Owner decision: allowed because PROD has never
   been deployed. If PROD is live by then, hold V230 back a release. The legacy voice-note text in the column is gone
   after this deploy (that is the point; nothing reads it).
+- [ ] **V231 makes account identity case-insensitive** (skillars-deferred-172). It lowercases `main."user".email` and
+  `login` and adds unique indexes on `lower(email)` and `lower(login)`. If two accounts differ only by letter case it
+  stops the deploy with an error naming them: run the V231 check in 3.2 first and settle any pair with the owner
+  (merging accounts is never automatic). The rows it lowercases are accounts that could not sign in before.
+- [ ] **V232 adds `main.email_change_requests` with its code** (skillars-deferred-172), and widens the
+  `envelope_entity` template CHECK with `EMAIL_CHANGED_NOTICE` and `EMAIL_CHANGE_ADDRESS_IN_USE`. An email change now
+  takes effect only from the link mailed to the new address, and the old address gets a 7-day undo link. Two new
+  public endpoints (`/api/email-change/confirm`, `/api/email-change/undo`) and SPA routes
+  (`/#/email-change/confirm`, `/#/email-change/undo`): no proxy or firewall rule needed beyond the existing `/api`
+  and SPA ones. **After the deploy (UAT):** change a test account's email end to end (request, confirm link, undo
+  link) and check the three mails arrive.
 
 ---
 
@@ -467,6 +478,18 @@ The strongest gate is a rehearsal: restore the latest dump into a scratch Postgr
 (`backup-restore.md` Section A), point the target image (or the Flyway CLI with
 `src/main/resources/db/migration` from the target commit) at it, and let it migrate. Any CHECK or
 unique index that fails will fail there first **(confirm procedure)**.
+
+**V231: one account per address, whatever its casing** (`V231__user_email_login_case_insensitive.sql`)
+```sql
+SELECT 'email' AS col, lower(email) AS value, count(*) FROM main."user" GROUP BY lower(email) HAVING count(*) > 1
+UNION ALL
+SELECT 'login', lower(login), count(*) FROM main."user" GROUP BY lower(login) HAVING count(*) > 1;
+-- non-zero: two accounts differ only by letter case. Decide with the owner which one keeps the address
+-- (the other gets a different address or is erased) before deploying; the migration refuses to merge them.
+```
+
+**V232: email change requests** (`V232__email_change_requests.sql`). A new empty table and a CHECK widening (the
+new list is a superset). Nothing to check before it runs.
 
 **V195: `uq_spp_stripe_payment_intent_id`** (partial unique index, `V195__session_pack_integrity.sql`)
 ```sql
@@ -1580,3 +1603,6 @@ an operator must now do.
   `BACKUP_STORAGE_TYPE` / `S3_BACKUP_*` switch never existed in code); container memory limits sum to about 7.3 GiB; V216, V221 and V222 pre-migration entries; V221 and V223
   joined the "prod is not live" list; `MediaScanRetryScheduler` in the job table; `.env.example` lost the dead `APP_BOOTSTRAP_JWT_SECRET_ENABLED` and gained the `GEMINI_*`
   variables and the optional passthroughs. `deploy.yml` recreates `app` only, so a release that adds `.env` variables or changes compose needs the steps in `deploy-guide.md`.
+- 2026-11-05: skillars-deferred-172 (V231, V232): run the V231 case-collision check before deploying; email changes are
+  confirmed from the new address and can be undone from the old one for 7 days (two public endpoints and SPA routes,
+  three account mails).

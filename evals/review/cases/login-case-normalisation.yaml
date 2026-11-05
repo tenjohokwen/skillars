@@ -1,4 +1,4 @@
-id: pending-login-case-normalisation
+id: login-case-normalisation
 kind: pre-fix-snapshot
 fix_pr: pending
 input_rev: fa62da9dc634
