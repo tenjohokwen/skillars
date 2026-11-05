@@ -33,6 +33,8 @@ export const R = {
   childPacks: '/parent/players/:playerId(\\d+)/packs',
   wallet: '/parent/credit-wallet',
   creditStatement: '/parent/credit-statement',
+  parentReceipt: '/parent/bookings/:bookingId/receipt',
+  coachReceipt: '/coach/bookings/:bookingId/receipt',
   retiredApprovals: '/parent/approvals',
   purchasePack: '/parent/coaches/:coachId/purchase-sessions',
   requestBooking: '/parent/coaches/:coachId/request-booking',

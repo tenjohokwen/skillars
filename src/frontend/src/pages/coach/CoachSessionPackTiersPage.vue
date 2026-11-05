@@ -124,6 +124,7 @@
           <div
             v-else-if="!paymentStore.soldPacks.length"
             class="text-body2"
+            data-testid="sold-packs-empty"
             style="color: var(--text-secondary)"
           >
             {{ t('payment.myTiers.soldPacksEmpty') }}
@@ -137,13 +138,16 @@
               >
                 <q-item-section>
                   <q-item-label class="text-weight-medium">
-                    {{ pack.playerName || t('payment.myTiers.unknownPlayer') }}
+                    <span data-testid="sold-pack-player">{{
+                      pack.playerName || t('payment.myTiers.unknownPlayer')
+                    }}</span>
                     <q-badge
                       v-if="pack.expiringSoon"
                       color="warning"
                       text-color="dark"
                       class="q-ml-xs"
                       :label="t('payment.myTiers.expiringSoon')"
+                      data-testid="sold-pack-expiring-soon"
                     />
                   </q-item-label>
                   <q-item-label v-if="pack.buyerName && pack.buyerName !== pack.playerName" caption>
@@ -159,9 +163,14 @@
                     }}
                   </q-item-label>
                   <q-item-label caption>
-                    {{ t('payment.myTiers.expiresOn', { date: formatDate(pack.expiresAt) }) }}
+                    <span data-testid="sold-pack-expiry">{{
+                      t('payment.myTiers.expiresOn', { date: formatDate(pack.expiresAt) })
+                    }}</span>
                     <template v-if="pack.extendedAt">
-                      · {{ t('payment.myTiers.alreadyExtended') }}
+                      ·
+                      <span data-testid="sold-pack-already-extended">{{
+                        t('payment.myTiers.alreadyExtended')
+                      }}</span>
                     </template>
                   </q-item-label>
                   <q-item-label
@@ -193,7 +202,11 @@
                 </q-item-section>
               </q-item>
             </q-list>
-            <div v-if="extendError" class="text-negative text-caption q-mt-sm">
+            <div
+              v-if="extendError"
+              class="text-negative text-caption q-mt-sm"
+              data-testid="extend-error"
+            >
               {{ extendError }}
             </div>
             <div v-if="soldTotalPages > 1" class="flex flex-center q-mt-sm">

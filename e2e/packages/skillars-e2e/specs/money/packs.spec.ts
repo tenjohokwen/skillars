@@ -3,7 +3,8 @@ import type { Actor, SuiteEnv } from 'pitchside-core'
 import { expect, scenario, test } from '../../src/app.js'
 import { asRole } from '../../src/data/accounts.js'
 import { DAY_MS, dateInputValue, uiDate } from '../../src/data/dates.js'
-import type { CoachAccount, ParentAccount, Provisioner } from '../../src/data/provisioner.js'
+import type { CoachAccount, ParentAccount } from '../../src/data/provisioner.js'
+import { packOf } from '../../src/data/packs.js'
 import { nextWeekSlot } from '../../src/data/slots.js'
 import { t } from '../../src/i18n.js'
 import {
@@ -16,34 +17,6 @@ import {
 
 // G · Pack lifecycle. Every rule here is runtime-tunable, so expectations are computed from what the
 // server reports for the seeded pack (its expiresAt, its session count), never from literal dates.
-
-interface PackView {
-  purchaseId: string
-  sessionCount: number
-  remainingSessions: number
-  expiresAt: string
-  pausedFrom: string | null
-  pausedUntil: string | null
-  status: string
-}
-
-async function packOf(
-  provision: Provisioner,
-  parent: ParentAccount,
-  coach: CoachAccount,
-): Promise<PackView> {
-  const session = await provision.login(parent)
-  try {
-    const packs = await session.api.json<PackView[]>(
-      'GET',
-      `/payment/session-packs?coachId=${coach.coachId}`,
-    )
-    expect(packs).toHaveLength(1)
-    return packs[0]!
-  } finally {
-    await session.dispose()
-  }
-}
 
 /** The tracker's wording on the coach profile (SessionPackTracker.vue creditsLabel). */
 function trackerText(remaining: number, total: number): string {

@@ -462,6 +462,59 @@ export class Provisioner {
   }
 
   /**
+   * Put a family's one pack with a coach into a state, by SQL. Seam for states the UI reaches only
+   * through time or other actors: expiry relative to now, a used or scheduled pause, an open card
+   * dispute (FROZEN), a withdrawal (REVOKED), no sessions left (EXHAUSTED). Fields left out are kept.
+   * Days are relative to now; the pause window is [pausedFromDays, pausedUntilDays).
+   */
+  async setPackState(
+    parent: Pick<Account, 'userId'>,
+    coach: CoachAccount,
+    state: {
+      expiresInDays?: number
+      remainingSessions?: number
+      pause?: { fromDays: number; untilDays: number }
+      frozen?: boolean
+      revokedReason?: 'CHARGEBACK_LOST' | 'EXTERNAL_REFUND' | 'COACH_SUSPENDED'
+      extended?: boolean
+    },
+  ): Promise<void> {
+    if (!coach.coachId) throw new Error('setPackState needs a published coach')
+    const day = (n: number) => new Date(Date.now() + n * 86_400_000).toISOString()
+    const sets: string[] = []
+    const params: unknown[] = [parent.userId, coach.coachId]
+    const set = (column: string, value: unknown, cast: string) => {
+      params.push(value)
+      sets.push(`${column} = $${params.length}::${cast}`)
+    }
+    if (state.expiresInDays !== undefined)
+      set('expires_at', day(state.expiresInDays), 'timestamptz')
+    if (state.remainingSessions !== undefined)
+      set('remaining_sessions', state.remainingSessions, 'int')
+    if (state.pause) {
+      set('paused_from', day(state.pause.fromDays), 'timestamptz')
+      set('paused_until', day(state.pause.untilDays), 'timestamptz')
+    }
+    if (state.frozen !== undefined)
+      set('dispute_frozen_at', state.frozen ? day(0) : null, 'timestamptz')
+    if (state.revokedReason) {
+      set('revoked_at', day(0), 'timestamptz')
+      set('revoked_reason', state.revokedReason, 'varchar')
+    }
+    if (state.extended !== undefined)
+      set('extended_at', state.extended ? day(0) : null, 'timestamptz')
+    if (sets.length === 0) return
+    const sql = await this.sql()
+    const rows = await sql.query<{ purchase_id: string }>(
+      `UPDATE payment.session_pack_purchases SET ${sets.join(', ')}
+        WHERE parent_id = $1::bigint AND coach_id = $2::uuid
+        RETURNING purchase_id`,
+      params,
+    )
+    if (rows.length !== 1) throw new Error(`setPackState expected one pack, found ${rows.length}`)
+  }
+
+  /**
    * Append one positive entry to a family's credit wallet and return its tx id. SQL seam: wallet credit
    * is otherwise only written by refunds, dispute resolutions and chargeback restores, each at the end
    * of a multi-actor flow. `spendOnly` writes it the way an expired-pack refund is written (V208): a
