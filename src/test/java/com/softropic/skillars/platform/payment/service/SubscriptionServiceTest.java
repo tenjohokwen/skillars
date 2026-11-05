@@ -65,7 +65,12 @@ class SubscriptionServiceTest {
         assertThat(subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID).subscribed()).isFalse();
 
         sub.setStripeSubscriptionId("sub_athlete");
+        sub.setStatus("ACTIVE");
         assertThat(subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID).subscribed()).isTrue();
+
+        // A CANCELLED row that kept its Stripe id subscribes afresh (assertCanSubscribe cancels the stale one).
+        sub.setStatus("CANCELLED");
+        assertThat(subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID).subscribed()).isFalse();
     }
 
     @Test

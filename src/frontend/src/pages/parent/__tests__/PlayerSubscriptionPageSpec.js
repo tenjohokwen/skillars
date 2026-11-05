@@ -88,7 +88,13 @@ describe('PlayerSubscriptionPage.vue — mutating controls by role', () => {
       { tier: 'SEMI_PRO', features: [] },
       { tier: 'PRO', features: [] },
     ],
-    playerSubscription: { tier: 'SEMI_PRO', status: 'ACTIVE', cancelAtPeriodEnd: false },
+    playerSubscription: {
+      tier: 'SEMI_PRO',
+      status: 'ACTIVE',
+      cancelAtPeriodEnd: false,
+      subscribed: true,
+      billingInterval: 'YEARLY',
+    },
   }
 
   function actionButtons(wrapper) {
@@ -240,9 +246,37 @@ describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
         .filter((card) => card.find('[data-testid="subscription-change-btn"]').exists())
         .map((card) => card.attributes('data-tier'))
     }
-    const plan = { status: 'ACTIVE', subscribed: true, cancelAtPeriodEnd: false }
+    const plan = {
+      status: 'ACTIVE',
+      subscribed: true,
+      cancelAtPeriodEnd: false,
+      billingInterval: 'YEARLY',
+    }
     expect(await offered({ ...plan, tier: 'PRO' })).toEqual([])
     expect(await offered({ ...plan, tier: 'SEMI_PRO' })).toEqual(['PRO'])
     expect(await offered({ ...plan, tier: 'SEMI_PRO', cancelAtPeriodEnd: true })).toEqual([])
+    // A change keeps the interval, and SEMI_PRO and PRO are yearly only.
+    expect(await offered({ ...plan, tier: 'ATHLETE', billingInterval: 'MONTHLY' })).toEqual([])
+    expect(await offered({ ...plan, tier: 'ATHLETE', billingInterval: 'YEARLY' })).toEqual([
+      'SEMI_PRO',
+      'PRO',
+    ])
+  })
+
+  it('a paid ATHLETE plan can be cancelled and is not labelled free', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerSubscription: {
+        tier: 'ATHLETE',
+        status: 'ACTIVE',
+        subscribed: true,
+        cancelAtPeriodEnd: false,
+        billingInterval: 'MONTHLY',
+      },
+      playerTiers: [{ tier: 'ATHLETE', features: [] }],
+      savedPaymentMethod: { hasCard: true },
+    })
+    const card = wrapper.find('[data-testid="subscription-tier-card"]')
+    expect(card.find('[data-testid="subscription-cancel-btn"]').exists()).toBe(true)
+    expect(card.text()).not.toContain(wrapper.vm.$t('subscription.freePlan'))
   })
 })

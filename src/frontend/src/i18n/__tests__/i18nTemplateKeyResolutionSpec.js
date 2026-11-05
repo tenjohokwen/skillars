@@ -243,7 +243,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'tier-change error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/parent/PlayerSubscriptionPage.vue:363',
+    at: 'src/pages/parent/PlayerSubscriptionPage.vue:368',
     reason:
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },

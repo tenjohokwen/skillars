@@ -143,8 +143,8 @@
               <q-btn
                 v-else-if="
                   canManage &&
-                  tier.tier === subscription?.tier &&
-                  tier.tier !== 'ATHLETE' &&
+                  tier.tier === currentTier &&
+                  hasPaidPlan &&
                   !subscription?.cancelAtPeriodEnd
                 "
                 color="negative"
@@ -154,8 +154,9 @@
                 data-testid="subscription-cancel-btn"
                 @click="handleCancel"
               />
+              <!-- ATHLETE is free unless a subscription pays for it (the Cancel above then shows). -->
               <div
-                v-else-if="tier.tier === 'ATHLETE'"
+                v-else-if="tier.tier === 'ATHLETE' && !(tier.tier === currentTier && hasPaidPlan)"
                 class="text-center text-caption text-secondary"
               >
                 {{ t('subscription.freePlan') }}
@@ -278,9 +279,10 @@ function onCardSaved() {
 }
 
 const TIER_ORDER = ['ATHLETE', 'SEMI_PRO', 'PRO']
+const YEARLY_ONLY = ['SEMI_PRO', 'PRO']
 
 const availableIntervals = computed(() => {
-  if (selectedTier.value === 'SEMI_PRO' || selectedTier.value === 'PRO') return ['YEARLY']
+  if (YEARLY_ONLY.includes(selectedTier.value)) return ['YEARLY']
   return ['MONTHLY', 'QUARTERLY', 'YEARLY']
 })
 
@@ -327,7 +329,10 @@ function isUpgrade(tier) {
 function canChoose(tier) {
   if (tier === 'ATHLETE' || tier === currentTier.value) return false
   if (subscription.value?.cancelAtPeriodEnd) return false
-  return !hasPaidPlan.value || isUpgrade(tier)
+  if (!hasPaidPlan.value) return true
+  // A change keeps the plan's interval, and SEMI_PRO and PRO are sold yearly only.
+  if (YEARLY_ONLY.includes(tier) && subscription.value?.billingInterval !== 'YEARLY') return false
+  return isUpgrade(tier)
 }
 
 function openSubscribeDialog(tier) {
