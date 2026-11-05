@@ -16,9 +16,19 @@ const cents = (amount: number) => Math.round(amount * 100)
 
 /** The processing fee a cash-out of `amount` pays, from the environment's config (CashOutService). */
 async function cashOutFee(provision: Provisioner, amount: number): Promise<number> {
-  const rate = Number(await provision.configValue('payment.stripe.feeRate'))
-  const fixed = Number(await provision.configValue('payment.stripe.feeFixed'))
-  return cents(amount * rate + fixed) / 100
+  // Exact decimals, rounded half up to the cent, as the service's BigDecimal does: a float product
+  // can land just under a half cent and round the other way.
+  const scale = 12
+  const scaled = (decimal: string) => {
+    const [whole = '0', fraction = ''] = decimal.trim().split('.')
+    return BigInt(whole + fraction.padEnd(scale, '0').slice(0, scale))
+  }
+  const unit = 10n ** BigInt(scale)
+  const rate = scaled(await provision.configValue('payment.stripe.feeRate'))
+  const fixed = scaled(await provision.configValue('payment.stripe.feeFixed'))
+  // In units of 10^-scale cents: amount (cents) × rate, plus the fixed fee in cents.
+  const exact = BigInt(cents(amount)) * rate + fixed * 100n
+  return Number((exact + unit / 2n) / unit) / 100
 }
 
 /** The wallet balance the ledger adds up to: what the page must show, success or not. */
