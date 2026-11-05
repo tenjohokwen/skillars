@@ -357,11 +357,83 @@ rewritten ITs.
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5)
+
 ### Debug Log References
+
+- Red runs before each fix: T1 6 unit + 2 timeline unit (guard not called); T2 5 unit; the T2 race IT against a
+  mutated `markReadyUnlessErased` (old behaviour) timed out with the PDF still in storage; T3 7 unit; T4 the new
+  `GdprErasureIT` case with the two deletes removed (`session.homework_assignments for the erased player`); T5 the
+  rewritten recap IT (`homework_drill_ids` not null); AC6 the lint with the V230 marker removed
+  (`DROP_WITHOUT_PRIOR_RELEASE_PREP`). Every mutation restored and re-run green.
 
 ### Completion Notes List
 
+- **Design deviation (T2), found while implementing:** the parent e-mail is published in its own short transaction
+  in Step B. `MailManager.sendEmailFromTemplate` is `@TransactionalEventListener(AFTER_COMMIT)` with no fallback, so
+  with `onReportGenerated` no longer `@Transactional`, an `Envelope` published outside a transaction would have been
+  dropped silently. `onReportGenerated_checksTheGuardBeforeTheReadyUpdate_andNotifiesInsideATransaction` pins it.
+- **T2:** Step A treats "erased" and "update returned 0" the same (enqueue the PDF, drain after commit, skip timeline
+  and e-mail). A Step A failure after the upload (lock exhausted) enqueues the PDF and marks UPLOAD_FAILED in a fresh
+  transaction; if even that fails it logs `[REPORT_PDF_ORPHANED]`. The "erasure commits after Step A" case is the
+  existing erasure path (its key scan sees the committed READY row), already covered by
+  `GdprErasureIT.erase_selfRegisteredPlayer_mixOfPendingAndReadyReports_enqueuesOnlyTheNonNullStorageKey`.
+- **T2 IT signal:** the race IT proves deletion through storage itself (no new object left under `reports/`), after
+  waiting for `reportExecutor`'s completed-task count to move. Asserting the outbox row would race the drain, which
+  deletes it.
+- **T3:** the SLU retrier's unit and proxy tests use a mock `PlatformTransactionManager` (the template runs the
+  callback between `getTransaction` and `commit`), so no test stubs a template. A new test throws the V47 violation
+  from `commit` to prove the catch outside `execute` still returns ALREADY_PERSISTED.
+  `SluCalculationServiceIT` (17, including the real-DB collision test) is green.
+- **T4:** the other-player fixture is a real `player_profiles` row (`coach_radar_preferences.player_id` has an FK).
+  No test pinned the group counts; the `GdprErasureServiceTest` budget comment now reads 6/4/4.
+- **T6:** V230's header states the D3 exemption; `BookingCompletionService`'s Javadoc no longer names the field, so the
+  lint's reference scan is clean (re-grepped: no `voice_note_text`/`voiceNoteText` in `src/main` outside migrations).
+  The AC6 schema assertion lives in `SessionCompletionResourceIT` (the class that owns this table's API).
+- **Tests run (targeted, all green):** `RadarAssessmentServiceTest` 4, `SluTargetServiceTest` 6,
+  `RadarDisplayServiceTest` 6, `TimelineEventListenerTest` 19, `ReportGenerationServiceTest` 41,
+  `SluPersistenceRetrierTest` 14, `SluPersistenceDispatcherTest` 5, `SnapshotBatchWriterTest` 4,
+  `SluRetrierProxyRetryTest` 6, `SnapshotPersistenceRetrierTest`, `GdprErasureServiceTest` 34,
+  `MigrationConventionLintTest` 30, `SchemaAssumptionsTest` 1; ITs `RadarAssessmentResourceIT` 11,
+  `ReportGenerationServiceIT` 4, `SluCalculationServiceIT` 17, `GdprErasureIT` 49, `SessionCompletionResourceIT` 39.
+  No full `mvn verify` (CI is the gate).
+
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/development/service/RadarAssessmentService.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/SluTargetService.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/RadarDisplayService.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/TimelineEventListener.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/ReportGenerationService.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/SluPersistenceRetrier.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/SluSaveOutcome.java`
+- `src/main/java/com/softropic/skillars/platform/development/service/SluPersistenceDispatcher.java`
+- `src/main/java/com/softropic/skillars/platform/development/repo/SnapshotBatchWriter.java`
+- `src/main/java/com/softropic/skillars/platform/development/repo/CoachRadarPreferenceRepository.java`
+- `src/main/java/com/softropic/skillars/platform/session/repo/HomeworkAssignmentRepository.java`
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java`
+- `src/main/java/com/softropic/skillars/platform/booking/repo/SessionCompletionDataRepository.java`
+- `src/main/java/com/softropic/skillars/platform/booking/service/BookingCompletionService.java`
+- `src/main/resources/db/migration/V230__drop_session_completion_data_voice_note_text.sql` (new)
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarAssessmentServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/SluTargetServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/RadarDisplayServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/TimelineEventListenerTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/ReportGenerationServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/ReportGenerationServiceIT.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/SluPersistenceRetrierTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/SluPersistenceDispatcherTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/service/SluRetrierProxyRetryTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/repo/SnapshotBatchWriterTest.java`
+- `src/test/java/com/softropic/skillars/platform/development/api/RadarAssessmentResourceIT.java`
+- `src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/admin/api/GdprErasureIT.java`
+- `src/test/java/com/softropic/skillars/platform/booking/api/SessionCompletionResourceIT.java`
+- `docs/dev-docs/security/index.html`, `docs/dev-docs/development/index.html`, `docs/dev-docs/admin/index.html`,
+  `docs/dev-docs/booking/index.html`, `docs/dev-docs/assets/search-index.js`
+- `docs/deployment/provisioning-checklist.md`
+- `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this story file
 
 ### Change Log
 
