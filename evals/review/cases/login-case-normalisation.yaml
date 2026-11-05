@@ -1,6 +1,6 @@
 id: login-case-normalisation
 kind: pre-fix-snapshot
-fix_pr: pending
+fix_pr: 466
 input_rev: fa62da9dc634
 confidence: high
 scope:
