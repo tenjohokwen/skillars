@@ -359,7 +359,7 @@ add the `frontend-tests` label so the Vitest job runs).
 - [x] T7 (AC8): erasure hold in `requestErasure` / `requestChildErasure`; erasure cleanup in `GdprErasureService`
       (statement count); tests.
 - [x] T8 (AC9): rewrite existing email-change tests for the new flow.
-- [ ] T9 (AC10): frontend dialog, two pages, routes, API, privacy-card mapping, i18n (3 locales), specs.
+- [x] T9 (AC10): frontend dialog, two pages, routes, API, privacy-card mapping, i18n (3 locales), specs.
 - [ ] T10 (AC11): templates' four bundles + guard tests, copy fixes, `security-api-endpoints.md`, checklist, ledger,
       eval case.
 - [ ] T10b (AC11): dev docs in `docs/dev-docs` (correct + extend as listed), search index rebuilt, `check-docs` passes.

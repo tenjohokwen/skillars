@@ -283,6 +283,16 @@ function stopPolling() {
   }
 }
 
+function errorText(err) {
+  // skillars-deferred-172: erasure is held while an email change can still be undone; the message is the
+  // ISO instant the hold ends.
+  const errorMsg = err?.response?.data?.errorMsg
+  if (errorMsg?.errorKey === 'gdpr.recentEmailChange') {
+    return t('privacy.errors.recentEmailChange', { date: formatDate(errorMsg.message) })
+  }
+  return t(errorMessageKey(err))
+}
+
 function errorMessageKey(err) {
   const message = err?.response?.data?.errorMsg?.message
   const errorKey = err?.response?.data?.errorMsg?.errorKey
@@ -305,7 +315,7 @@ async function handleRequestExport() {
     await (isChild.value ? requestChildExport(props.playerId) : requestMyExport())
     $q.notify({ type: 'positive', message: t('privacy.exportRequested') })
   } catch (err) {
-    $q.notify({ type: 'negative', message: t(errorMessageKey(err)) })
+    $q.notify({ type: 'negative', message: errorText(err) })
   } finally {
     exportSubmitting.value = false
   }
@@ -346,7 +356,7 @@ async function handleErasure() {
       await handleLogout()
     }
   } catch (err) {
-    erasureError.value = t(errorMessageKey(err))
+    erasureError.value = errorText(err)
     if (err?.response?.data?.errorMsg?.message === 'gdpr.requestAlreadyPending') {
       await refresh()
     }

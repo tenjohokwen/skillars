@@ -858,7 +858,7 @@ export default {
     emailSent: 'Veuillez vérifier votre e-mail pour les instructions.',
     loggedOut: 'Vous avez été déconnecté avec succès.',
     emailChangeInitiated:
-      "Modification de l'e-mail initiée. Veuillez vérifier votre nouvelle adresse e-mail.",
+      'Si cette adresse peut être utilisée, nous lui avons envoyé un lien de confirmation. Votre adresse e-mail ne change que lorsque vous ouvrez ce lien (dans les 24 heures).',
     passwordChanged: 'Votre mot de passe a été modifié avec succès.',
     phoneChanged: 'Votre numéro de téléphone a été mis à jour.',
     addressChanged: 'Votre adresse a été mise à jour.',
@@ -944,7 +944,13 @@ export default {
     postalCode: 'Code postal',
     country: 'Pays',
     emailChangeWarning:
-      'La modification de votre adresse e-mail entraînera également un changement de vos identifiants de connexion. Vous serez automatiquement déconnecté et devrez vous reconnecter avec votre nouvelle adresse e-mail.',
+      "Votre adresse e-mail de connexion ne change qu'après l'ouverture du lien de confirmation envoyé à la nouvelle adresse. Vous êtes alors déconnecté(e) partout et vous vous reconnectez avec la nouvelle adresse. Votre adresse actuelle reçoit un lien pour annuler le changement pendant 7 jours.",
+    // skillars-deferred-172: answers of PUT /api/account/email the dialog shows itself.
+    emailChange: {
+      recentChange:
+        "Vous avez récemment modifié votre adresse e-mail. Vous pourrez la modifier à nouveau après le {date}. Si vous n'êtes pas à l'origine de ce changement, utilisez le lien envoyé à votre ancienne adresse.",
+      tooManyRequests: 'Trop de tentatives. Veuillez réessayer plus tard.',
+    },
     sectionCoachProfile: 'Profil Entraîneur',
     sectionPlayerProfile: 'Profil Joueur',
     sectionMyChildren: 'Profils de mes enfants',
@@ -2856,6 +2862,25 @@ export default {
     metricLast30Days: '30 derniers jours',
     metricAverageMs: 'Moyenne en ms',
   },
+  // skillars-deferred-172: public landing pages for the email-change confirm and undo links.
+  emailChangeLink: {
+    confirmTitle: 'Confirmez votre nouvelle adresse e-mail',
+    confirmPrompt:
+      'Utiliser désormais cette adresse pour vous connecter à Skillars ? Vous serez déconnecté(e) partout et vous vous reconnecterez avec elle.',
+    confirmButton: 'Confirmer la nouvelle adresse',
+    confirmed: 'Votre adresse e-mail a été modifiée. Connectez-vous avec votre nouvelle adresse.',
+    undoTitle: "Annuler le changement d'adresse e-mail",
+    undoPrompt:
+      'Rétablir votre ancienne adresse e-mail ? Toutes les personnes utilisant votre compte sont déconnectées, et vous définissez un nouveau mot de passe via le lien envoyé à cette adresse.',
+    undoButton: 'Annuler le changement',
+    undone:
+      'Votre ancienne adresse e-mail est rétablie et vous avez été déconnecté(e) partout. Consultez cette boîte de réception pour définir un nouveau mot de passe.',
+    undoneSuspended:
+      'Votre ancienne adresse e-mail est rétablie et vous avez été déconnecté(e) partout. Votre compte est suspendu : une fois rétabli, réinitialisez votre mot de passe depuis la page de connexion.',
+    invalid: 'Ce lien ne peut plus être utilisé. Il a peut-être expiré ou déjà été utilisé.',
+    missingToken: "Ce lien est incomplet. Ouvrez-le à nouveau depuis l'e-mail.",
+    signIn: 'Aller à la connexion',
+  },
   privacy: {
     exportTitle: 'Exporter mes données',
     exportHint:
@@ -2913,6 +2938,8 @@ export default {
     childSectionTitle: 'Confidentialité et données',
     errors: {
       alreadyPending: 'Une demande de ce type est déjà en cours de traitement.',
+      recentEmailChange:
+        'Vous avez récemment modifié votre adresse e-mail. La suppression sera possible après le {date}.',
       exportInProgress:
         'Un export est encore en préparation. Attendez qu’il soit terminé avant de supprimer.',
       activeBookings:

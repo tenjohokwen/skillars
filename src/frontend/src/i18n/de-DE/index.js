@@ -2673,7 +2673,13 @@ export default {
     postalCode: 'Postleitzahl',
     country: 'Land',
     emailChangeWarning:
-      'Das Ändern Ihrer E-Mail-Adresse ändert auch Ihre Anmeldedaten. Sie werden automatisch abgemeldet und müssen sich mit Ihrer neuen E-Mail-Adresse erneut anmelden.',
+      'Ihre Anmelde-E-Mail ändert sich erst, wenn Sie den Bestätigungslink öffnen, den wir an die neue Adresse senden. Danach werden Sie überall abgemeldet und melden sich mit der neuen Adresse an. Ihre bisherige Adresse erhält 7 Tage lang einen Link, um die Änderung rückgängig zu machen.',
+    // skillars-deferred-172: answers of PUT /api/account/email the dialog shows itself.
+    emailChange: {
+      recentChange:
+        'Sie haben Ihre E-Mail-Adresse kürzlich geändert. Eine erneute Änderung ist nach dem {date} möglich. Wenn Sie diese Änderung nicht vorgenommen haben, verwenden Sie den Link, den wir an Ihre bisherige Adresse gesendet haben.',
+      tooManyRequests: 'Zu viele Versuche. Bitte versuchen Sie es später erneut.',
+    },
     sectionCoachProfile: 'Trainerprofil',
     sectionPlayerProfile: 'Spielerprofil',
     sectionMyChildren: 'Profile meiner Kinder',
@@ -2721,7 +2727,7 @@ export default {
     emailSent: 'Bitte überprüfen Sie Ihre E-Mail für weitere Anweisungen.',
     loggedOut: 'Sie wurden erfolgreich abgemeldet.',
     emailChangeInitiated:
-      'E-Mail-Aktualisierung eingeleitet. Bitte überprüfen Sie Ihre neue E-Mail-Adresse zur Bestätigung.',
+      'Wenn diese Adresse verwendet werden kann, haben wir einen Bestätigungslink an sie gesendet. Ihre E-Mail-Adresse ändert sich erst, wenn Sie diesen Link öffnen (innerhalb von 24 Stunden).',
     passwordChanged: 'Ihr Passwort wurde erfolgreich geändert.',
     phoneChanged: 'Ihre Telefonnummer wurde aktualisiert.',
     addressChanged: 'Ihre Adresse wurde aktualisiert.',
@@ -2882,6 +2888,26 @@ export default {
     metricLast30Days: 'Letzte 30 Tage',
     metricAverageMs: 'Durchschnitt (ms)',
   },
+  // skillars-deferred-172: public landing pages for the email-change confirm and undo links.
+  emailChangeLink: {
+    confirmTitle: 'Neue E-Mail-Adresse bestätigen',
+    confirmPrompt:
+      'Diese Adresse ab jetzt für die Anmeldung bei Skillars verwenden? Sie werden überall abgemeldet und melden sich damit erneut an.',
+    confirmButton: 'Neue E-Mail-Adresse bestätigen',
+    confirmed: 'Ihre E-Mail-Adresse wurde geändert. Melden Sie sich mit Ihrer neuen Adresse an.',
+    undoTitle: 'E-Mail-Änderung rückgängig machen',
+    undoPrompt:
+      'Ihre bisherige E-Mail-Adresse wiederherstellen? Alle Nutzer Ihres Kontos werden abgemeldet, und Sie legen über den Link, den wir an diese Adresse senden, ein neues Passwort fest.',
+    undoButton: 'Änderung rückgängig machen',
+    undone:
+      'Ihre bisherige E-Mail-Adresse wurde wiederhergestellt, und Sie wurden überall abgemeldet. Prüfen Sie dieses Postfach, um ein neues Passwort festzulegen.',
+    undoneSuspended:
+      'Ihre bisherige E-Mail-Adresse wurde wiederhergestellt, und Sie wurden überall abgemeldet. Ihr Konto ist gesperrt: Sobald es wieder freigegeben ist, setzen Sie Ihr Passwort über die Anmeldeseite zurück.',
+    invalid:
+      'Dieser Link kann nicht mehr verwendet werden. Er ist möglicherweise abgelaufen oder wurde bereits verwendet.',
+    missingToken: 'Dieser Link ist unvollständig. Öffnen Sie ihn erneut aus der E-Mail.',
+    signIn: 'Zur Anmeldung',
+  },
   privacy: {
     exportTitle: 'Meine Daten exportieren',
     exportHint:
@@ -2939,6 +2965,8 @@ export default {
     childSectionTitle: 'Datenschutz & Daten',
     errors: {
       alreadyPending: 'Eine Anfrage dieser Art wird bereits bearbeitet.',
+      recentEmailChange:
+        'Sie haben Ihre E-Mail-Adresse kürzlich geändert. Eine Löschung ist nach dem {date} möglich.',
       exportInProgress:
         'Ein Export wird noch erstellt. Warte, bis er fertig ist, bevor du löschst.',
       activeBookings:
