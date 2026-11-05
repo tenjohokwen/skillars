@@ -248,7 +248,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:243',
+    at: 'src/pages/marketplace/CoachPublicProfilePage.vue:253',
     reason: "label keyed by the review-eligibility response's own reasonCode enum",
   },
   {
@@ -315,12 +315,12 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:673',
+    at: 'src/pages/parent/ParentBookingsPage.vue:675',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:713',
+    at: 'src/pages/parent/ParentBookingsPage.vue:715',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },

@@ -1,9 +1,12 @@
+import { randomBytes } from 'node:crypto'
 import type { Page } from '@playwright/test'
 import type { SuiteEnv } from 'pitchside-core'
 import type { CoachAccount, ParentAccount } from '../../src/data/provisioner.js'
 import { expect, scenario, test } from '../../src/app.js'
 import { t } from '../../src/i18n.js'
-import { chargeKeysFor } from '../../src/stubs/wiremock.js'
+import { asRole } from '../../src/data/accounts.js'
+import { stubStripeCardEntry } from '../../src/stubs/stripe.js'
+import { chargeKeysFor, chargesFor } from '../../src/stubs/wiremock.js'
 import {
   CoachPublicProfileScreen,
   LoginScreen,
@@ -157,6 +160,55 @@ test.describe('E · Payment method & pack purchase', () => {
       await expect(packs.cards()).toHaveCount(1)
       // One Stripe idempotency key: however many requests, Stripe would charge once.
       expect([...(await chargeKeysFor(parent.userId))]).toHaveLength(1)
+    },
+  )
+
+  test(
+    'adding a card from the inline dialog enables purchase without a page reload',
+    scenario({
+      id: 'PAY-03',
+      priority: 'P0',
+      type: 'happy',
+      tags: ['@regression', '@parent', '@payment', '@payment-ui'],
+    }),
+    async ({ actor, suite, provision, baseline }) => {
+      test.slow()
+      const coach = await baseline('coach')
+      const parent = await provision.parent()
+      const family = await actor(asRole(parent))
+      // Stripe.js confirms the SetupIntent with this card (stubbed: no card form is typed into).
+      await stubStripeCardEntry(family.context, `pm_e2e_${randomBytes(8).toString('hex')}`)
+      const { page } = family
+
+      const profile = await new CoachPublicProfileScreen(page, suite).open({
+        coachId: coach.coachId!,
+      })
+      await profile.buySessionsSecondary().click()
+      const purchase = await new PackPurchaseScreen(page, suite).waitReady()
+      await purchase.packOption().click()
+      await expect(purchase.confirm()).toBeDisabled()
+      // Marks this document: a reload would drop it.
+      await page.evaluate(
+        () => ((window as unknown as { e2eNoReload: boolean }).e2eNoReload = true),
+      )
+
+      await purchase.addCard().click()
+      await expect(purchase.cardDialog()).toBeVisible()
+      await expect(purchase.saveCard()).toBeEnabled()
+      await purchase.saveCard().click()
+
+      await expect(purchase.cardDialog()).toHaveCount(0)
+      await expect(purchase.addCardBanner()).toHaveCount(0)
+      await expect(purchase.confirm()).toBeEnabled()
+      expect(
+        await page.evaluate(() => (window as unknown as { e2eNoReload?: boolean }).e2eNoReload),
+      ).toBe(true)
+
+      // And the card works: the purchase goes through and the family holds the coach's credits.
+      await purchase.confirm().click()
+      await profile.waitReady()
+      await expect(profile.credits()).toBeVisible()
+      expect(await chargesFor(parent.userId)).toBe(1)
     },
   )
 })

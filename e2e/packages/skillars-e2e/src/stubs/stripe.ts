@@ -33,3 +33,28 @@ export async function stubStripeJs(context: BrowserContext): Promise<void> {
     route.fulfill({ status: 200, contentType: 'text/javascript', body: STRIPE_STUB }),
   )
 }
+
+/**
+ * The `@payment-ui` card-entry stub: like the default stub, but `confirmCardSetup` succeeds with
+ * `paymentMethodId`, the way real Stripe.js does once a SetupIntent is confirmed. The app then saves
+ * that id through its own endpoint, and the stack's WireMock answers every `pm_e2e_*` lookup as a
+ * Visa ending 4242. Register it on a context before its first navigation: routes registered later win
+ * over the default one from `prepareContext`.
+ */
+export async function stubStripeCardEntry(
+  context: BrowserContext,
+  paymentMethodId: string,
+): Promise<void> {
+  if (!paymentMethodId.startsWith('pm_e2e_')) {
+    throw new Error(`The stack's WireMock answers only pm_e2e_* ids, got ${paymentMethodId}`)
+  }
+  const confirmed = `async () => ({ setupIntent: { status: 'succeeded', payment_method: ${JSON.stringify(paymentMethodId)} } })`
+  const body = STRIPE_STUB.replace(
+    /confirmCardSetup: async \(\) => \(\{[^\n]*\}\),/,
+    `confirmCardSetup: ${confirmed},`,
+  )
+  if (body === STRIPE_STUB) throw new Error('stubStripeCardEntry: the stub no longer matches')
+  await context.route('https://js.stripe.com/**', (route) =>
+    route.fulfill({ status: 200, contentType: 'text/javascript', body }),
+  )
+}

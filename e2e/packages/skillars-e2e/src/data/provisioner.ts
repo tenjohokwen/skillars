@@ -405,6 +405,93 @@ export class Provisioner {
   }
 
   /**
+   * A limited administrator (`ROLE_LTD_ADMIN` without `ROLE_ADMIN`, S-28). SQL seam: no HTTP path
+   * grants an admin tier. AdminBootstrapRunner creates only full admins, and operators grant the
+   * limited tier by hand in the database. Registered as an adult player first (any role would do),
+   * then the account's role is cleared and its authorities replaced, so login reports role ADMIN with
+   * `limitedAdmin: true` (AuthService.login).
+   */
+  async limitedAdmin(): Promise<Account> {
+    const dateOfBirth = this.clock.dateOfBirthForAge(30).toISODate()
+    const account = await this.registerAndVerify('player', { dateOfBirth })
+    const sql = await this.sql()
+    await sql.query(`UPDATE main."user" SET skillars_role = NULL WHERE id = $1::bigint`, [
+      account.userId,
+    ])
+    await sql.query(`DELETE FROM main.user_authority WHERE user_id = $1::bigint`, [account.userId])
+    await sql.query(
+      `INSERT INTO main.user_authority (user_id, authority_id)
+       SELECT $1::bigint, id FROM main.authority WHERE name = 'ROLE_LTD_ADMIN'`,
+      [account.userId],
+    )
+    return account
+  }
+
+  /**
+   * Publish APPROVED reviews of a coach and refresh the coach's rating aggregate, the way
+   * CoachRatingService.recompute does after moderation. SQL seam: a review becomes visible only on a
+   * Gemini verdict (C-8), and the stack has no Gemini stub yet. Each author must be a distinct account.
+   */
+  async seedApprovedReviews(
+    coach: CoachAccount,
+    reviews: { author: Account; rating: 1 | 2 | 3 | 4 | 5; body: string }[],
+  ): Promise<void> {
+    if (!coach.coachId) throw new Error('seedApprovedReviews needs a published coach')
+    const sql = await this.sql()
+    for (const { author, rating, body } of reviews) {
+      await sql.query(
+        `INSERT INTO reviews.coach_reviews (coach_id, author_id, author_role, rating, body, moderation_status)
+         VALUES ($1::uuid, $2::bigint, $3, $4, $5, 'APPROVED')`,
+        [
+          coach.coachId,
+          author.userId,
+          author.kind === 'player' ? 'PLAYER' : 'PARENT',
+          rating,
+          body,
+        ],
+      )
+    }
+    await sql.query(
+      `UPDATE marketplace.coach_profiles p
+          SET review_count = agg.n, average_rating = ROUND(agg.avg, 1)
+         FROM (SELECT COUNT(*) AS n, AVG(rating)::numeric AS avg FROM reviews.coach_reviews
+                WHERE coach_id = $1::uuid AND moderation_status = 'APPROVED' AND related_party = false) agg
+        WHERE p.id = $1::uuid`,
+      [coach.coachId],
+    )
+  }
+
+  /**
+   * Move a family's one booking with a coach to start `hoursFromNow` hours from now (one-hour
+   * session). Returns the new start. SQL seam for time travel: the request page offers whole weeks of
+   * the coach's published hours, so no spec can book a slot a fixed few hours ahead on any run date.
+   * The original start moves with it (the cancel rule measures notice from the earlier of the two).
+   */
+  async moveBookingStart(
+    parent: ParentAccount,
+    coach: CoachAccount,
+    hoursFromNow: number,
+  ): Promise<Date> {
+    if (!coach.coachId) throw new Error('moveBookingStart needs a published coach')
+    const start = new Date(Date.now() + hoursFromNow * 3_600_000)
+    start.setUTCSeconds(0, 0)
+    const end = new Date(start.getTime() + 3_600_000)
+    const sql = await this.sql()
+    const rows = await sql.query<{ id: string }>(
+      `UPDATE booking.bookings
+          SET requested_start_time = $3::timestamptz, requested_end_time = $4::timestamptz,
+              original_start_time = CASE WHEN original_start_time IS NULL THEN NULL ELSE $3::timestamptz END
+        WHERE parent_id = $1::bigint AND coach_id = $2::uuid
+        RETURNING id`,
+      [parent.userId, coach.coachId, start.toISOString(), end.toISOString()],
+    )
+    if (rows.length !== 1) {
+      throw new Error(`moveBookingStart expected one booking, found ${rows.length}`)
+    }
+    return start
+  }
+
+  /**
    * `+1` + 6 random digits + 3 worker digits + 4 counter digits = 15 characters (`main.user.phone`
    * is UNIQUE). The fixed width keeps every generated number distinct from the shorter fixed numbers
    * the stack seeds — the bootstrap admin is `+15550000001` (12 characters) — and the 3-digit worker

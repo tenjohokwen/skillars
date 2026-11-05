@@ -2,6 +2,7 @@ import { expect, scenario, test } from '../../src/app.js'
 import { asRole } from '../../src/data/accounts.js'
 import { R } from '../../src/routes.js'
 import {
+  AdminRequiredScreen,
   AvailabilityScreen,
   LoginScreen,
   logOutViaUserMenu,
@@ -108,4 +109,33 @@ test.describe('A · Auth & session — guards and logout', () => {
       await new AvailabilityScreen(page, suite).waitReady()
     },
   )
+
+  // C-11 / C-13: finance, GDPR and config are meta.fullAdmin. The router sends a limited admin to
+  // the requires-administrator page before the page (or any of its admin-only calls) loads.
+  for (const [page, route] of [
+    ['finance', R.adminFinance],
+    ['GDPR', R.adminGdpr],
+    ['config', R.adminConfig],
+  ] as const) {
+    test(
+      `a limited admin opening the ${page} page lands on "requires administrator"`,
+      scenario({
+        id: 'AUTH-20',
+        priority: 'P0',
+        type: 'neg',
+        tags: ['@regression', '@ltd-admin', '@auth', '@admin-console'],
+      }),
+      async ({ actor, suite, provision }) => {
+        const admin = await provision.limitedAdmin()
+        const { page: browser } = await actor(asRole(admin))
+        await browser.goto(suite.routing.toUrl(route))
+        expect(
+          await waitForSettledRoute(browser, suite.routing, R.adminRequiresAdministrator),
+        ).toBe(R.adminRequiresAdministrator)
+        const required = await new AdminRequiredScreen(browser, suite).waitReady()
+        await expect(required.message()).toBeVisible()
+        await expect(required.back()).toBeVisible()
+      },
+    )
+  }
 })

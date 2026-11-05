@@ -59,4 +59,11 @@ export class ParentBookingsScreen extends ListScreen {
   /** Switches the row between the session's zone and the browser's. */
   timezoneToggle = (booking: Locator) => this.within(booking, 'parent-booking-tz-toggle')
   time = (booking: Locator) => this.within(booking, 'parent-booking-time')
+  /** The "Player: <name>" line. */
+  player = (booking: Locator) => this.within(booking, 'parent-booking-player')
+  /** Offered on CONFIRMED / UPCOMING rows; opens the cancel dialog. */
+  cancel = (booking: Locator) => this.within(booking, 'parent-booking-cancel-btn')
+  cancelDialog = () => this.tid('cancel-booking-dialog')
+  cancelDialogBody = () => this.tid('cancel-booking-body')
+  confirmCancel = () => this.tid('cancel-booking-confirm')
 }

@@ -52,6 +52,9 @@ export const R = {
   unsubscribe: '/unsubscribe',
   adminHealth: '/admin/health-dashboard',
   adminRequiresAdministrator: '/admin/requires-administrator',
+  adminFinance: '/admin/finance',
+  adminGdpr: '/admin/gdpr',
+  adminConfig: '/admin/config',
 } as const
 
 /** Where each role lands after login (src/frontend/src/router/roleRoutes.js). */
