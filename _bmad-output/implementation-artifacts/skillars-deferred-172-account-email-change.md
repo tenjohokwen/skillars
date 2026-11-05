@@ -446,7 +446,7 @@ Claude Opus 5.5 (claude-opus-5-5)
   rate limits) is moot on the single-instance deploy.
 - Owner decision F3 (option 1): the confirmation-mail limit is two buckets, 3 a day per (requesting account, address)
   and 10 a day per address, so one account can no longer use up an address's allowance and silently block its owner
-  (Design step 208's single per-target bucket replaced). Mutation check: back to the per-address key, the new IT fails.
+  (replaces the Design's single per-address bucket). Mutation check: back to the per-address key, the new IT fails.
 
 ### File List
 
