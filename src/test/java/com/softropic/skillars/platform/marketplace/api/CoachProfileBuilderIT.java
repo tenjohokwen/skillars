@@ -363,6 +363,49 @@ class CoachProfileBuilderIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void theBuildersFormerPackTable_isGone() {
+        // skillars-deferred-170 AC1: V229 dropped marketplace.session_packs; the tier above is the only pack store.
+        Integer tables = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'marketplace' AND table_name = 'session_packs'",
+            Integer.class);
+        assertThat(tables).isZero();
+    }
+
+    @Test
+    void saveStep3_withAFractionalSessionCount_isRejectedAndWritesNothing() {
+        // skillars-deferred-170 AC4: Jackson's default ACCEPT_FLOAT_AS_INT used to bind 2.5 as 2, so a direct API
+        // call could set a 2-session pack for the price typed against 2.5.
+        String cookies = loginAndGetCookies(COACH_EMAIL);
+        saveStep1(cookies);
+        saveStep2(cookies);
+
+        assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+            baseUrl() + PROFILE_BASE + "/steps/3",
+            HttpMethod.PUT,
+            Map.of("perSessionPrice", 40.0, "sessionPacks",
+                List.of(Map.of("sessionCount", 2.5, "totalPrice", 95.0))),
+            authenticatedHeaders(cookies),
+            Map.class
+        ))
+            .isInstanceOf(HttpClientErrorException.class)
+            .satisfies(e -> {
+                HttpClientErrorException ex = (HttpClientErrorException) e;
+                assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+                assertThat(ex.getResponseBodyAsString()).contains("validation.badRequest");
+            });
+        Integer tiers = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.session_pack_tiers t JOIN marketplace.coach_profiles c ON c.id = t.coach_id "
+                + "WHERE c.user_id = ?",
+            Integer.class, COACH_ID);
+        assertThat(tiers).isZero();
+        Integer pricing = jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM marketplace.coach_pricing p JOIN marketplace.coach_profiles c ON c.id = p.coach_id "
+                + "WHERE c.user_id = ?",
+            Integer.class, COACH_ID);
+        assertThat(pricing).isZero();
+    }
+
+    @Test
     void saveStep3_sessionDurationMinutes_roundTripsAsACoachOverride() {
         String cookies = loginAndGetCookies(COACH_EMAIL);
         saveStep1(cookies);

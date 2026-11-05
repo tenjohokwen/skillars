@@ -636,6 +636,9 @@ export default {
       pauseSuccess: 'Paket pausiert — Ablaufdatum entsprechend verlängert',
       alreadyPausedLabel: 'Paket hat seine Pause bereits genutzt',
       purchaseError: 'Kauf fehlgeschlagen. Bitte erneut versuchen.',
+      purchasePending:
+        'Ihr vorheriger Kauf wird noch bestätigt. Bitte warten Sie einige Minuten und versuchen Sie es erneut.',
+      purchaseNotCompleted: 'Die Zahlung ist nicht durchgegangen. Bitte erneut versuchen.',
       noTierAvailable: 'Dieser Trainer hat kein Sitzungspaket zum Kauf verfügbar.',
     },
     completion: {
@@ -916,9 +919,6 @@ export default {
   },
   marketplace: {
     sharedSlot: 'Ihr Coach hat diesen Termin geteilt: {slot} (Ortszeit des Coaches)',
-    // Review audit item 2: server-side backstop for uq_session_pack (coach_id, session_count).
-    duplicateSessionPackCount:
-      'Diese Paketgröße ist doppelt vorhanden. Jedes Sitzungspaket muss eine unterschiedliche Anzahl an Sitzungen haben.',
     // skillars-deferred-140 AC3: full sweep of every marketplace.* error key the backend throws.
     stepOutOfOrder: 'Bitte schließen Sie zuerst den vorherigen Schritt ab.',
     profileNotFound: 'Coach-Profil nicht gefunden.',
@@ -1617,7 +1617,7 @@ export default {
       coachPackSessionsReserved:
         'Das Sitzungspaket der Familie hat keine freie Sitzung mehr für eine weitere Buchung.',
       extendSuccess: 'Ihr Sitzungspaket wurde bis zum {date} verlängert',
-      tierLabel: '{label} — {count} Sitzungen für €{price}',
+      tierSummary: '{count} Sitzungen für €{price}',
       noActiveTier: 'Dieser Coach hat kein aktives Sitzungspaket verfügbar.',
     },
     card: {

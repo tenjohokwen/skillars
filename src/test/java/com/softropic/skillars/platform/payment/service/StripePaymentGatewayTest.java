@@ -741,6 +741,47 @@ class StripePaymentGatewayTest {
         assertThat(stripePaymentGateway.getRefundableAmount("pi_8")).isEqualByComparingTo("37.50");
     }
 
+    // skillars-deferred-169 AC2: getCaptureState tells "captured then refunded" from "charge not readable" - getRefundableAmount cannot.
+    @Test
+    void getCaptureState_fullyRefundedCharge_isFullyRefunded() throws StripeException {
+        PaymentIntent intent = mockIntent("pi_cs1");
+        com.stripe.model.Charge charge = new com.stripe.model.Charge();
+        charge.setAmountCaptured(10000L);
+        charge.setAmountRefunded(10000L);
+        intent.setLatestChargeObject(charge);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs1")).thenReturn(intent);
+
+        com.softropic.skillars.platform.payment.contract.CaptureState state = stripePaymentGateway.getCaptureState("pi_cs1");
+
+        assertThat(state.fullyRefunded()).isTrue();
+        assertThat(state.unreadable()).isFalse();
+    }
+
+    @Test
+    void getCaptureState_partiallyRefundedCharge_isNotFullyRefunded() throws StripeException {
+        PaymentIntent intent = mockIntent("pi_cs2");
+        com.stripe.model.Charge charge = new com.stripe.model.Charge();
+        charge.setAmountCaptured(10000L);
+        charge.setAmountRefunded(2500L);
+        intent.setLatestChargeObject(charge);
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs2")).thenReturn(intent);
+
+        com.softropic.skillars.platform.payment.contract.CaptureState state = stripePaymentGateway.getCaptureState("pi_cs2");
+
+        assertThat(state.fullyRefunded()).isFalse();
+        assertThat(state.refunded()).isEqualByComparingTo("25.00");
+    }
+
+    @Test
+    void getCaptureState_noChargeObject_isUnreadable_notRefunded() throws StripeException {
+        when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_cs3")).thenReturn(mockIntent("pi_cs3"));
+
+        com.softropic.skillars.platform.payment.contract.CaptureState state = stripePaymentGateway.getCaptureState("pi_cs3");
+
+        assertThat(state.unreadable()).isTrue();
+        assertThat(state.fullyRefunded()).isFalse();
+    }
+
     @Test
     void getRefundableAmount_noChargeYet_isZero() throws StripeException {
         when(stripeClient.retrievePaymentIntentWithLatestCharge("pi_9")).thenReturn(mockIntent("pi_9"));

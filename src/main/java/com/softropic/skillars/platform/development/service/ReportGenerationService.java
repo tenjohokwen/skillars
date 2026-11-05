@@ -10,6 +10,7 @@ import com.lowagie.text.pdf.BaseFont;
 import com.lowagie.text.pdf.PdfPCell;
 import com.lowagie.text.pdf.PdfPTable;
 import com.lowagie.text.pdf.PdfWriter;
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.web.FrontendLinkBuilder;
 import com.softropic.skillars.platform.security.contract.exception.LoginRateLimitedException;
 import com.softropic.skillars.platform.development.contract.CoachBrandingRequest;
@@ -29,6 +30,7 @@ import com.softropic.skillars.platform.development.repo.PlayerTimelineEvent;
 import com.softropic.skillars.platform.development.repo.PlayerTimelineRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
 import com.softropic.skillars.platform.development.repo.SluRepository;
+import com.softropic.skillars.platform.filestorage.service.BlobDeletionOutboxSupport;
 import com.softropic.skillars.platform.filestorage.service.FileStorageService;
 import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTier;
 import com.softropic.skillars.platform.marketplace.contract.CoachProfileDto;
@@ -40,6 +42,7 @@ import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.security.contract.util.AuthoritiesConstants;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import com.softropic.skillars.infrastructure.security.RateLimited;
 import lombok.RequiredArgsConstructor;
@@ -48,10 +51,12 @@ import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.awt.Color;
 import java.io.ByteArrayOutputStream;
@@ -101,6 +106,11 @@ public class ReportGenerationService {
     private final PlayerTimelineRepository playerTimelineRepository;
 
     private final FrontendLinkBuilder frontendLinks;
+    // skillars-deferred-171 AC2: erasure check before the report row and before READY, the orphaned-PDF
+    // deletion, and the short transactions onReportGenerated now runs in.
+    private final DevelopmentDataErasureGuard erasureGuard;
+    private final BlobDeletionOutboxSupport blobDeletionOutboxSupport;
+    private final PlatformTransactionManager transactionManager;
 
     /**
      * Per-coach report-generation budget (skillars-deferred-92 AC18), enforced <em>in addition to</em>
@@ -220,6 +230,13 @@ public class ReportGenerationService {
             throw new RuntimeException("PDF generation produced empty output");
         }
 
+        // skillars-deferred-171 AC2: a really erased player is refused above (erasure deletes the SLU and
+        // timeline rows the last-session lookup reads, so it answers 403). This closes the window where
+        // erasure commits after that lookup. After the PDF build so the profile lock is held only for the save.
+        if (erasureGuard.isErasedUnderLock(playerId, "ReportGenerationService.generateReport")) {
+            throw new ResourceNotFoundException("Player not found", "player_profile");
+        }
+
         // Deferred-77 AC2: the report row is saved PENDING_UPLOAD, with no storage_key yet — the S3
         // upload (external I/O) moves to an async post-commit handler so it no longer holds this
         // method's DB connection for its duration. listReports only ever returns READY reports, so a
@@ -243,22 +260,49 @@ public class ReportGenerationService {
      * writes its timeline event, and notifies the parent — none of which should happen for a report
      * whose PDF never made it to S3. On failure the report is marked UPLOAD_FAILED and stays hidden
      * from listReports; there is currently no automatic retry (matches this story's scope).
+     *
+     * <p>skillars-deferred-171 AC2: no transaction around the whole method any more. It runs as three short
+     * ones, so the READY flip is serialized against GDPR erasure on the player's profile lock:
+     * <ol>
+     *   <li>the upload, with no transaction open;</li>
+     *   <li>the erasure check, then the READY flip ({@link #markReadyUnlessErased}). Erasure holds the same lock for
+     *       its whole transaction, so either it committed first (the check sees the marker) or its storage-key scan
+     *       runs after this commit and finds the READY row's key. Before this, a scan that ran while the row was
+     *       still PENDING_UPLOAD skipped it, and the DELETE then removed the READY row with its PDF never
+     *       enqueued for deletion;</li>
+     *   <li>the timeline row and the e-mail, after that commit. The timeline write takes the profile lock itself,
+     *       so it must not run while step 2 still holds it.</li>
+     * </ol>
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     // skillars-deferred-92 code review (D2): its own pool, not the shared @Async one. The upload
     // below is a full S3 round trip with no outbox row and no retry behind it, and taskExecutor's
     // 2s shutdown slice is sized for tasks that are never individually long-running.
     @Async("reportExecutor")
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void onReportGenerated(ReportGeneratedEvent event) {
         String storageKey = "reports/" + UUID.randomUUID() + "/report.pdf";
         try {
             fileStorageService.storeBytes(event.pdfBytes(), storageKey, "application/pdf",
                 "attachment; filename=\"performance-report.pdf\"");
-            reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.READY, storageKey);
         } catch (Exception e) {
             log.error("Failed to upload PDF for report {} — marking UPLOAD_FAILED", event.reportId(), e);
-            reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.UPLOAD_FAILED, null);
+            requiresNewTransaction().executeWithoutResult(status ->
+                reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.UPLOAD_FAILED, null));
+            return;
+        }
+
+        boolean ready;
+        try {
+            ready = Boolean.TRUE.equals(requiresNewTransaction().execute(status -> markReadyUnlessErased(event, storageKey)));
+        } catch (RuntimeException e) {
+            // Typically the profile lock stayed busy (an erasure in progress). The PDF is stored but no row will
+            // point at it, so schedule it for deletion and hide the report.
+            log.error("Could not mark report {} READY after its upload — deleting the stored PDF and marking "
+                + "UPLOAD_FAILED", event.reportId(), e);
+            discardStoredPdf(event, storageKey);
+            return;
+        }
+        if (!ready) {
             return;
         }
 
@@ -273,7 +317,45 @@ public class ReportGenerationService {
                 event.playerId(), event.reportId(), e);
         }
 
-        notifyParent(event.playerId(), event.playerName(), event.coachName(), event.generatedAt());
+        // MailManager sends on AFTER_COMMIT with no fallback, so the Envelope must be published inside a transaction.
+        requiresNewTransaction().executeWithoutResult(status ->
+            notifyParent(event.playerId(), event.playerName(), event.coachName(), event.generatedAt()));
+    }
+
+    /**
+     * skillars-deferred-171 AC2: runs inside its own transaction. The erasure check comes first, so the profile lock is
+     * held across the READY flip until commit. Returns {@code false} (and enqueues the stored PDF for deletion) when
+     * the player was erased or the row is already gone.
+     */
+    private boolean markReadyUnlessErased(ReportGeneratedEvent event, String storageKey) {
+        boolean erased = erasureGuard.isErasedUnderLock(event.playerId(), "ReportGenerationService.onReportGenerated");
+        if (!erased && reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.READY, storageKey) > 0) {
+            return true;
+        }
+        log.info("Report {} for player {}: {} — deleting the stored PDF instead of publishing it", event.reportId(),
+            event.playerId(), erased ? "development data was erased" : "the report row no longer exists");
+        blobDeletionOutboxSupport.enqueue(List.of(storageKey));
+        blobDeletionOutboxSupport.requestDrainAfterCommit();
+        return false;
+    }
+
+    private void discardStoredPdf(ReportGeneratedEvent event, String storageKey) {
+        try {
+            requiresNewTransaction().executeWithoutResult(status -> {
+                blobDeletionOutboxSupport.enqueue(List.of(storageKey));
+                blobDeletionOutboxSupport.requestDrainAfterCommit();
+                reportRepository.updateStatusAndStorageKey(event.reportId(), ReportStatus.UPLOAD_FAILED, null);
+            });
+        } catch (RuntimeException e) {
+            log.error("[REPORT_PDF_ORPHANED] report {} key {} — the stored PDF could not be scheduled for deletion",
+                event.reportId(), storageKey, e);
+        }
+    }
+
+    private TransactionTemplate requiresNewTransaction() {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        return template;
     }
 
     public List<PerformanceReportResponse> listReports(Long playerId) {

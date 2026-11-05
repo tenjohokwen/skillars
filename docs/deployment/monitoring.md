@@ -295,7 +295,7 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 
 **Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
 
-**Meaning:** The app logged that money and its records disagree: an amount mismatch, a settle failing after a charge, a refund of unknown amount, an unreconciled pack purchase or a failed payout or refund enqueue.
+**Meaning:** The app logged that money and its records disagree: an amount mismatch, a settle failing after a charge, a refund of unknown amount, an unreconciled pack purchase or a failed payout or refund enqueue, or a paid subscription upgrade that could not be granted (`[SUBSCRIPTION_UPGRADE_UNGRANTED]`; the proration invoice id is in the line and in `payment.subscription_upgrade_reconciliations`; refund or grant by hand, then set `resolved_at`).
 
 **Response:** Read the "Mismatches and failures" log on Payments & Payouts. Each line names the booking or PaymentIntent. Compare with Stripe and correct by hand. Do not retry blindly: the charge may already have succeeded.
 
@@ -412,6 +412,16 @@ docker compose pull node_exporter && docker compose up -d --no-deps node_exporte
 **Meaning:** A cash-out refund outcome has been unknown for over an hour. The recheck job has not been able to confirm it.
 
 **Response:** Find the refund in Stripe by the PaymentIntent on the `CASH_OUT_UNRESOLVED` admin alert and resolve it there.
+
+---
+
+#### PackAttemptsUnresolved
+
+**Source:** `deploy/lgtm/grafana-alerts.yml` (skillars-business-alerts)
+
+**Meaning:** A session-pack purchase attempt (`payment.session_pack_purchase_attempts`, status `IN_PROGRESS`, `UNKNOWN` or `UNRECONCILED`) has been open for over an hour. The resolving job runs every 5 minutes and could not close it, and **while it is open that parent cannot buy any pack** (one open attempt per parent). Typical causes: the Stripe lookup keeps failing, or a captured payment whose pack could not be recorded.
+
+**Response:** `SELECT id, parent_id, status, payment_intent_id, created_at FROM payment.session_pack_purchase_attempts WHERE status IN ('IN_PROGRESS','UNKNOWN','UNRECONCILED') ORDER BY created_at;` then find the PaymentIntent in Stripe (its metadata `chargeKey` is `pack-<parent_id>-<attempt_key>`). Check `payment.stripe_refund_failures` for the same PaymentIntent. **Close-out:** if the money was returned, set `status = 'REFUNDED'`; if a pack exists for the intent, set `status = 'SUCCEEDED'` and `payment_intent_id`; if nothing was charged, the job closes it as `NO_CHARGE` after the absence age. Do not delete the row.
 
 ---
 

@@ -1,6 +1,12 @@
 package com.softropic.skillars.platform.development.service;
 
+import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.security.SecurityError;
+import com.softropic.skillars.platform.development.contract.AssessmentType;
+import com.softropic.skillars.platform.development.contract.RadarAssessmentRequest;
+import com.softropic.skillars.platform.development.contract.RadarEntrySubmittedEvent;
+import com.softropic.skillars.platform.development.contract.SkillScoreItem;
+import com.softropic.skillars.platform.development.repo.SkillDefinition;
 import com.softropic.skillars.platform.development.contract.RadarAssessmentListResponse;
 import com.softropic.skillars.platform.development.repo.RadarAssessmentRepository;
 import com.softropic.skillars.platform.development.repo.SkillDefinitionRepository;
@@ -8,6 +14,7 @@ import com.softropic.skillars.platform.marketplace.contract.CoachSubscriptionTie
 import com.softropic.skillars.platform.marketplace.service.CoachProfileService;
 import com.softropic.skillars.platform.marketplace.service.PlayerProfileService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,12 +22,18 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -41,6 +54,7 @@ class RadarAssessmentServiceTest {
     @Mock private SkillDefinitionRepository skillDefinitionRepository;
     @Mock private ApplicationEventPublisher publisher;
     @Mock private CoachPlayerAuthorizationService coachPlayerAuthorizationService;
+    @Mock private DevelopmentDataErasureGuard erasureGuard;
 
     private RadarAssessmentService service;
 
@@ -53,7 +67,7 @@ class RadarAssessmentServiceTest {
     void setUp() {
         service = new RadarAssessmentService(
             radarRepository, coachProfileService, playerProfileService,
-            skillDefinitionRepository, publisher, coachPlayerAuthorizationService);
+            skillDefinitionRepository, publisher, coachPlayerAuthorizationService, erasureGuard);
         org.mockito.Mockito.lenient().when(coachProfileService.getCoachIdByUserId(COACH_USER_ID)).thenReturn(COACH_ID);
         org.mockito.Mockito.lenient().when(coachProfileService.getCoachSubscriptionTier(COACH_ID))
             .thenReturn(CoachSubscriptionTier.INSTRUCTOR);
@@ -81,5 +95,35 @@ class RadarAssessmentServiceTest {
         assertThatThrownBy(() -> service.getMyEntries(COACH_USER_ID, PLAYER_ID))
             .isInstanceOf(OperationNotAllowedException.class);
         verify(radarRepository, never()).findByPlayerIdAndCoachIdOrderByAssessmentDateDesc(any(), any(), any());
+    }
+
+    // ── skillars-deferred-171 AC1: an erased player's radar gets no new entries ─────────────────────
+
+    private static RadarAssessmentRequest oneSkillRequest() {
+        return new RadarAssessmentRequest(UUID.randomUUID(), LocalDate.now(), AssessmentType.COACH_EVALUATION,
+            List.of(new SkillScoreItem("PASS", 70, null)));
+    }
+
+    @Test
+    void submitAssessment_erasedPlayer_throwsNotFoundAndWritesNothing() {
+        when(skillDefinitionRepository.findAllByCodeIn(Set.of("PASS"))).thenReturn(List.of(mock(SkillDefinition.class)));
+        when(erasureGuard.isErasedUnderLock(eq(PLAYER_ID), anyString())).thenReturn(true);
+
+        assertThatThrownBy(() -> service.submitAssessment(COACH_USER_ID, PLAYER_ID, oneSkillRequest()))
+            .isInstanceOf(ResourceNotFoundException.class)
+            .extracting(e -> ((ResourceNotFoundException) e).getResourceName()).isEqualTo("player_profile");
+        verify(radarRepository, never()).saveAll(anyList());
+        verify(publisher, never()).publishEvent(any(RadarEntrySubmittedEvent.class));
+    }
+
+    @Test
+    void submitAssessment_notErasedPlayer_checksTheGuardThenSaves() {
+        when(skillDefinitionRepository.findAllByCodeIn(Set.of("PASS"))).thenReturn(List.of(mock(SkillDefinition.class)));
+
+        service.submitAssessment(COACH_USER_ID, PLAYER_ID, oneSkillRequest());
+
+        verify(erasureGuard).isErasedUnderLock(eq(PLAYER_ID), anyString());
+        verify(radarRepository).saveAll(anyList());
+        verify(publisher).publishEvent(any(RadarEntrySubmittedEvent.class));
     }
 }

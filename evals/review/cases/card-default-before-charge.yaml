@@ -1,7 +1,7 @@
-id: pending-card-default-before-charge
+id: card-default-before-charge
 kind: pre-fix-snapshot
-fix_pr: pending
-input_rev: 980eff338df6
+fix_pr: 443
+fix_merge: d4fc0aea
 confidence: high
 scope:
   - src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java

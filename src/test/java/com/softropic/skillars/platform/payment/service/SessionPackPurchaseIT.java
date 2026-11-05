@@ -89,4 +89,25 @@ class SessionPackPurchaseIT extends BasePaymentIT {
             .isInstanceOf(PaymentGatewayException.class)
             .hasMessageContaining("payment.packTierInactive");
     }
+
+    /** skillars-deferred-170 AC3: a coach who cannot be paid is refused before the payer's Stripe customer or attempt row exists. */
+    @Test
+    void purchasePack_coachNotPaymentReady_refusedBeforeAnyWrite() {
+        UUID tierId = sessionPackPaymentService
+            .createTier(coachId, "5-Pack", 5, new BigDecimal("100.00"))
+            .packTierId();
+        // The base context's spy over StubPaymentGateway (always ready); reset after each test.
+        org.mockito.Mockito.doReturn(false).when(paymentGateway).isCoachPaymentReady(coachId);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+            () -> sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_test_pi", UUID.randomUUID().toString()))
+            .isInstanceOf(PaymentGatewayException.class)
+            .hasMessageContaining("payment.coachStripeNotConfigured");
+
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.stripe_customers WHERE parent_id = ?", Integer.class, PARENT_ID)).isZero();
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM payment.session_pack_purchase_attempts WHERE parent_id = ?", Integer.class, PARENT_ID)).isZero();
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createStripeCustomer(PARENT_ID);
+    }
 }

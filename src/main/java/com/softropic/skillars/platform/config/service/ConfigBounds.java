@@ -258,6 +258,33 @@ public final class ConfigBounds {
             "out-of-range falls back to the coded default (3); huge → one player can run up Stripe Identity charges", 3L);
 
     /**
+     * skillars-deferred-169 AC1/AC2: how old an open pack-purchase attempt must be before a same-key replay or the resolving job
+     * acts on it, so a request thread that is still legitimately running (SDK timeouts allow several minutes) is not second-guessed.
+     * Mirrors ChargeOutcomeReconciler's charge_reconcile_after_minutes values (default 10, 5-1440).
+     */
+    public static final BoundedKey PACK_ATTEMPT_MIN_AGE_MINUTES =
+        new BoundedKey("payment.packAttempt.minAgeMinutes", 5L, 1440L, false,
+            "out-of-range falls back to the coded default (10); too low → a live request is resolved under its own feet", 10L);
+
+    /**
+     * skillars-deferred-169 AC2 (fourth review, H1): the age at which an EMPTY Stripe lookup may be read as "no charge". Must exceed
+     * the worst-case life of a request thread, or a slow original request could capture after the row was freed for a second attempt.
+     */
+    public static final BoundedKey PACK_ATTEMPT_ABSENCE_AGE_MINUTES =
+        new BoundedKey("payment.packAttempt.absenceAgeMinutes", 15L, 1440L, false,
+            "out-of-range falls back to the coded default (30); too low → a double charge becomes possible", 30L);
+
+    /** skillars-deferred-169 AC1: how long terminal pack-purchase attempts are kept before the job purges them. */
+    public static final BoundedKey PACK_ATTEMPT_RETENTION_DAYS =
+        new BoundedKey("payment.packAttempt.retentionDays", 7L, 3650L, false,
+            "out-of-range falls back to the coded default (30)", 30L);
+
+    /** skillars-deferred-169 AC4: how long a parked subscription webhook event that never linked is kept before purge. */
+    public static final BoundedKey PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS =
+        new BoundedKey("payment.pendingSubscriptionEvent.retentionDays", 1L, 365L, false,
+            "out-of-range falls back to the coded default (30)", 30L);
+
+    /**
      * fix/audit3-wallet-cashout-integrity: {@code CoachPayoutOutboxSupport.enqueuePayout} — a coach with fewer
      * than this many payouts already released (transferred) is "new": their payouts are held
      * {@link #PAYOUT_NEW_COACH_HOLD_HOURS} instead of {@code payment.payout.hold_hours}, so a chargeback inside
@@ -614,7 +641,7 @@ public final class ConfigBounds {
      * <p><strong>This bounds each STATEMENT, not the method's total wait</strong> (Postgres {@code
      * lock_timeout} is per-statement, not per-transaction — the same trap {@link
      * #RADAR_COMPOSITE_LOCK_TIMEOUT_SECONDS}'s own Javadoc already documents for its own method).
-     * {@code deletePlayerDevelopmentData} issues this bound once, before its ~12 independently-
+     * {@code deletePlayerDevelopmentData} issues this bound once, before its ~14 independently-
      * timeout-able statements, so the method's real worst case is {@code N ×} this value, not a
      * method-level ceiling — see that method's own Javadoc for the honest accounting. Read via the
      * 4-arg {@code getBoundedLong} route and registered in {@link #HAS_CODE_DEFAULT}, exactly like
@@ -740,6 +767,10 @@ public final class ConfigBounds {
         PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS.key(),
         PAYOUT_RELATED_PARTY_HOLD_DAYS.key(),
         IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY.key(),
+        PACK_ATTEMPT_MIN_AGE_MINUTES.key(),
+        PACK_ATTEMPT_ABSENCE_AGE_MINUTES.key(),
+        PACK_ATTEMPT_RETENTION_DAYS.key(),
+        PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS.key(),
         COACH_SAFEGUARDING_VALIDITY_YEARS.key(),
         COACH_SAFEGUARDING_UPLOAD_RETENTION_DAYS.key());
 
@@ -805,6 +836,10 @@ public final class ConfigBounds {
             PAYOUT_ACCOUNT_CHANGE_HOLD_HOURS,
             PAYOUT_RELATED_PARTY_HOLD_DAYS,
             IDENTITY_AGE_VERIFICATION_MAX_ATTEMPTS_PER_DAY,
+            PACK_ATTEMPT_MIN_AGE_MINUTES,
+            PACK_ATTEMPT_ABSENCE_AGE_MINUTES,
+            PACK_ATTEMPT_RETENTION_DAYS,
+            PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS,
             COACH_SAFEGUARDING_VALIDITY_YEARS,
             COACH_SAFEGUARDING_UPLOAD_RETENTION_DAYS));
 

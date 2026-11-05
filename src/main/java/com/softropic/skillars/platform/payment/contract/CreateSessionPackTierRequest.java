@@ -1,6 +1,8 @@
 package com.softropic.skillars.platform.payment.contract;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.softropic.skillars.infrastructure.validation.NoContactDetails;
+import com.softropic.skillars.infrastructure.validation.StrictIntegerDeserializer;
 import com.softropic.skillars.platform.marketplace.contract.SessionPackLimits;
 import jakarta.validation.constraints.DecimalMax;
 import jakarta.validation.constraints.DecimalMin;
@@ -20,11 +22,12 @@ import java.math.BigDecimal;
  * price and the amount charged to Stripe can never disagree by rounding.
  *
  * <p>skillars-deferred-168: the bounds are {@link SessionPackLimits}, shared with the profile builder's step 3,
- * which now writes the same offer.
+ * which now writes the same offer. skillars-deferred-170: a fractional {@code sessionCount} is refused, not
+ * truncated ({@link StrictIntegerDeserializer}).
  */
 public record CreateSessionPackTierRequest(
     @NotBlank @Size(max = SessionPackLimits.MAX_LABEL_LENGTH) @NoContactDetails String label,
-    @NotNull @Min(1) @Max(MAX_SESSION_COUNT) Integer sessionCount,
+    @JsonDeserialize(using = StrictIntegerDeserializer.class) @NotNull @Min(1) @Max(MAX_SESSION_COUNT) Integer sessionCount,
     @NotNull @DecimalMin("0.01") @DecimalMax(MAX_TOTAL_PRICE) @Digits(integer = 8, fraction = 2) BigDecimal totalPrice
 ) {
     public static final int MAX_SESSION_COUNT = SessionPackLimits.MAX_SESSION_COUNT;

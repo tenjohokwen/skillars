@@ -11,7 +11,9 @@ import com.softropic.skillars.platform.filestorage.contract.SignUploadRequest;
 import com.softropic.skillars.platform.filestorage.contract.SignUploadResponse;
 import com.softropic.skillars.platform.security.SecurityIT;
 import org.junit.jupiter.api.Test;
+import com.softropic.skillars.infrastructure.blobstore.config.BlobstoreProperties;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpEntity;
@@ -25,7 +27,10 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.web.client.RestTemplate;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.S3Object;
 
 import java.net.URI;
 import java.sql.Date;
@@ -34,7 +39,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +65,9 @@ class ReportGenerationServiceIT extends BaseStorageIT {
     @Autowired private TransactionTemplate transactionTemplate;
     @Autowired private PasswordEncoder passwordEncoder;
     @Autowired private RestTemplate restTemplate;
+    @Autowired private S3Client s3Client;
+    @Autowired private BlobstoreProperties blobstoreProperties;
+    @Autowired @Qualifier("reportExecutor") private ThreadPoolTaskExecutor reportExecutor;
 
     private static final long PARENT_USER_ID = 9576000001L;
     private static final long PLAYER_ID = 9576000010L;
@@ -177,6 +187,45 @@ class ReportGenerationServiceIT extends BaseStorageIT {
             "SELECT COUNT(*) FROM development.player_timeline_events WHERE reference_id = ?",
             Integer.class, reportId);
         assertThat(timelineCount).isEqualTo(1);
+    }
+
+    /**
+     * skillars-deferred-171 AC2: erasure committed while the report row was still PENDING_UPLOAD (marker
+     * stamped, row deleted, no storage key for its scan to find). The handler still uploads the PDF, then must
+     * see the marker and schedule that PDF for deletion: no READY row, no timeline row, and no new object left
+     * under {@code reports/}. Before the fix the PDF stayed in storage with nothing pointing at it.
+     */
+    @Test
+    void onReportGenerated_playerErasedWhileUploadPending_storedPdfIsDeleted() {
+        UUID reportId = UUID.randomUUID();
+        Set<String> reportKeysBefore = reportObjectKeys();
+        long handlerRunsBefore = reportExecutor.getThreadPoolExecutor().getCompletedTaskCount();
+
+        transactionTemplate.execute(status -> {
+            insertParentUser();
+            insertPlayerProfile();
+            jdbcTemplate.update(
+                "UPDATE main.player_profiles SET development_data_erased_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now()), PLAYER_ID);
+            eventPublisher.publishEvent(new ReportGeneratedEvent(
+                reportId, PLAYER_ID, "Test Coach", "Test Player", Instant.now(),
+                "%PDF-1.4 test report bytes".getBytes()));
+            return null;
+        });
+
+        await().atMost(10, SECONDS).until(() ->
+            reportExecutor.getThreadPoolExecutor().getCompletedTaskCount() > handlerRunsBefore);
+        await().atMost(10, SECONDS).untilAsserted(() ->
+            assertThat(reportObjectKeys()).as("the uploaded PDF must be deleted, not left orphaned")
+                .isSubsetOf(reportKeysBefore));
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM development.player_timeline_events WHERE player_id = ?", Integer.class, PLAYER_ID))
+            .isZero();
+    }
+
+    private Set<String> reportObjectKeys() {
+        return s3Client.listObjectsV2Paginator(r -> r.bucket(blobstoreProperties.getBucket()).prefix("reports/"))
+            .contents().stream().map(S3Object::key).collect(Collectors.toSet());
     }
 
     // skillars-deferred-152 AC7/Task 7: a real sign-upload -> S3 PUT -> confirm -> PUT /branding

@@ -5,6 +5,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
+import { createI18n } from 'vue-i18n'
+import enUS from 'src/i18n/en-US'
 
 vi.mock('src/boot/axios', () => ({
   api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), delete: vi.fn(), patch: vi.fn() },
@@ -25,11 +27,16 @@ import SessionPackPurchasePage from 'src/pages/parent/SessionPackPurchasePage.vu
 
 const mounted = []
 
-async function mountPage() {
+// realMessages: mount with the real en-US texts (the global test i18n has none, so te() is always false there).
+async function mountPage({ realMessages = false } = {}) {
   const pinia = createTestingPinia({ createSpy: vi.fn })
+  const plugins = [pinia]
+  if (realMessages) {
+    plugins.push(createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } }))
+  }
   const wrapper = mount(SessionPackPurchasePage, {
     shallow: true,
-    global: { plugins: [pinia], stubs: { QPage: { template: '<div><slot /></div>' } } },
+    global: { plugins, stubs: { QPage: { template: '<div><slot /></div>' } } },
   })
   mounted.push(wrapper)
   await flushPromises()
@@ -58,15 +65,100 @@ describe('SessionPackPurchasePage.vue — purchase attempt key', () => {
     expect(second).toBe(first)
   })
 
-  it('mints a new key once the server answered a failure', async () => {
+  const gatewayError = (errorKey) => ({
+    response: { status: 422, data: { errorMsg: { errorKey, message: errorKey } } },
+  })
+  const statusError = (status, message) => ({
+    response: { status, data: { errorMsg: { errorKey: 'generic.requestError', message } } },
+  })
+
+  // skillars-deferred-169: this used to assert a new key after ANY server answer, which let a retry after an
+  // unknown outcome (5xx, 422 lifecycleFailure) charge twice. An unknown outcome keeps the key.
+  it('keeps the key after an unknown outcome (5xx / unspecific 422)', async () => {
     const { wrapper, store } = await mountPage()
     store.purchasePack.mockRejectedValueOnce({ response: { status: 500, data: {} } })
+    store.purchasePack.mockRejectedValueOnce(gatewayError('payment.lifecycleFailure'))
+
+    await wrapper.vm.confirmPurchase()
+    await wrapper.vm.confirmPurchase()
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second, third] = keysSent(store)
+    expect(second).toBe(first)
+    expect(third).toBe(first)
+  })
+
+  it('mints a new key once the server proved nothing was charged', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(gatewayError('payment.noChargeMade'))
 
     await wrapper.vm.confirmPurchase()
     await wrapper.vm.confirmPurchase()
 
     const [first, second] = keysSent(store)
     expect(second).toBeTruthy()
+    expect(second).not.toBe(first)
+  })
+
+  it('mints a new key after a rejected key (invalidIdempotencyKey / idempotencyKeyReused)', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(statusError(400, 'payment.invalidIdempotencyKey'))
+    store.purchasePack.mockRejectedValueOnce(statusError(409, 'payment.idempotencyKeyReused'))
+
+    await wrapper.vm.confirmPurchase()
+    await wrapper.vm.confirmPurchase()
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second, third] = keysSent(store)
+    expect(second).not.toBe(first)
+    expect(third).not.toBe(second)
+  })
+
+  it('mints a new key after a definite refusal raised before any attempt existed (403 / inactive tier)', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(gatewayError('payment.packTierInactive'))
+
+    await wrapper.vm.confirmPurchase()
+    wrapper.vm.onCardSaved()
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second] = keysSent(store)
+    expect(second).not.toBe(first)
+  })
+
+  it('keeps the key and says "still being confirmed" on attemptInProgress / attemptUnresolved', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(statusError(409, 'payment.attemptUnresolved'))
+
+    await wrapper.vm.confirmPurchase()
+    expect(wrapper.vm.purchaseError).toBe('booking.packs.purchasePending')
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second] = keysSent(store)
+    expect(second).toBe(first)
+  })
+
+  it('does not mint a new key on a card save while the last answer left the outcome unknown', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce({ response: { status: 500, data: {} } })
+
+    await wrapper.vm.confirmPurchase()
+    wrapper.vm.onCardSaved()
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second] = keysSent(store)
+    expect(second).toBe(first)
+  })
+
+  it('mints a new key on a card save after a proven no-charge answer', async () => {
+    const { wrapper, store } = await mountPage()
+    store.purchasePack.mockRejectedValueOnce(gatewayError('payment.noChargeMade'))
+
+    await wrapper.vm.confirmPurchase()
+    wrapper.vm.onCardSaved()
+    await wrapper.vm.confirmPurchase()
+
+    const [first, second] = keysSent(store)
     expect(second).not.toBe(first)
   })
 
@@ -152,5 +244,20 @@ describe('SessionPackPurchasePage.vue — what a failed purchase says', () => {
 
     expect(wrapper.vm.purchaseError).toBe('booking.packs.purchaseError')
     expect(wrapper.vm.cardDeclined).toBe(false)
+  })
+
+  // skillars-deferred-170 AC3: the server refuses a coach who cannot be paid before any attempt exists.
+  it('a coach who cannot be paid yet says so, not "Purchase failed", and the next try gets a new key', async () => {
+    const { wrapper, store } = await mountPage({ realMessages: true })
+    store.purchasePack.mockRejectedValueOnce(apiFailure('payment.coachStripeNotConfigured'))
+
+    await wrapper.vm.confirmPurchase()
+
+    expect(wrapper.vm.purchaseError).toBe('This coach has not completed their payment setup yet')
+    expect(wrapper.vm.cardDeclined).toBe(false)
+    wrapper.vm.onCardSaved()
+    await wrapper.vm.confirmPurchase()
+    const [first, second] = keysSent(store)
+    expect(second).not.toBe(first)
   })
 })

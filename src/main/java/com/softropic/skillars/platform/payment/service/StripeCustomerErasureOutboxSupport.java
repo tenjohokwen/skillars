@@ -32,11 +32,15 @@ public class StripeCustomerErasureOutboxSupport {
     public static final String AGGREGATE_TYPE = "STRIPE_CUSTOMER_ERASURE";
 
     private final StripeCustomerRepository stripeCustomerRepository;
+    private final com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttemptRepository packAttemptRepository;
     private final OutboxService outboxService;
     private final ObjectMapper objectMapper;
 
     @Transactional(propagation = Propagation.MANDATORY)
     public void scheduleErasure(Long userId) {
+        // skillars-deferred-169 AC13: pack-purchase attempt rows are retained like stripe_customers (financial record), but the
+        // payment-method ids tied to the person are not.
+        packAttemptRepository.nullCardsForParent(userId);
         stripeCustomerRepository.findById(userId).ifPresent(customer -> {
             customer.setStripePaymentMethodId(null);
             stripeCustomerRepository.save(customer);

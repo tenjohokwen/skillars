@@ -157,9 +157,10 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223 and V224 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226, V229 and V230 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
-  justified in their headers by "no production deployment exists yet". Once PROD holds real data,
+  justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V229 and V230:
+  a drop in the same release as its last reader's removal, not the release after). Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
 - [ ] **V226 turns builder packs into purchasable tiers, and discards the rest** (skillars-deferred-168). For each
   coach with `marketplace.session_packs` rows, no `payment.session_pack_tiers` row at all and no erasure tombstone, it
@@ -168,9 +169,27 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   "N sessions"): legacy labels were never checked for contact details, so none is copied. The migration first makes
   `payment.session_pack_tiers.label` nullable (metadata-only). Every other builder pack is discarded (none was ever purchasable). Coaches who withdrew an offer, or
   who already sell one, are not touched, but their profile now shows their active tier, not their builder packs. On
-  UAT, tell coaches to check "My Session Pack Offer" after this deploy. `marketplace.session_packs` stays one release
-  and is then dropped (follow-up in `deferred-work.md`). This also relies on "prod is not live": the discard is not
+  UAT, tell coaches to check "My Session Pack Offer" after this deploy. `marketplace.session_packs` is dropped by V229
+  (below). This also relies on "prod is not live": the discard is not
   reversible except from the pre-deploy dump.
+- [ ] **V228 adds three tables with their code, not a release ahead** (skillars-deferred-169):
+  `payment.session_pack_purchase_attempts` (one row per pack purchase attempt, partial unique index = one OPEN attempt per
+  parent), `payment.stripe_pending_subscription_events` (subscription webhooks that raced the signup) and
+  `payment.subscription_upgrade_reconciliations` (a paid proration that could not be granted). All new, empty, additive;
+  `docs/deployment/migration-conventions.md` rule 1 asks for a release between table and code, which this deliberately does not
+  (an old pod never touches them). **After the deploy:** confirm the alerts `PackAttemptsUnresolved` and `MoneyIntegrityEvent`
+  (now also `[SUBSCRIPTION_UPGRADE_UNGRANTED]`) are loaded in Grafana, and that
+  `skillars_backlog_oldest_age_seconds{backlog="pack_attempts"}` appears (absent while there is no open attempt is normal).
+  A parent with an open attempt cannot buy any pack: the close-out SQL is in `monitoring.md` under `PackAttemptsUnresolved`.
+- [ ] **V229 drops `marketplace.session_packs`** (skillars-deferred-170). It ships in the same release window as
+  V226 rather than the release after (`migration-conventions.md` rule 2), by owner decision, because PROD has never
+  been deployed. If PROD is live by the time this migration is released, hold it back a release. Any data a
+  pre-deploy dump still needs from that table must be taken before this deploy.
+- [ ] **V230 drops `booking.session_completion_data.voice_note_text`** (skillars-deferred-171). The JPA field left in
+  #304 (V170); the two GDPR anonymise queries stop naming the column in this same release, so an old pod's erasure
+  would fail with "column does not exist" during the migration window. Owner decision: allowed because PROD has never
+  been deployed. If PROD is live by then, hold V230 back a release. The legacy voice-note text in the column is gone
+  after this deploy (that is the point; nothing reads it).
 
 ---
 
@@ -1127,6 +1146,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `CoachStartReminderScheduler` | 1 min | hard-coded; ShedLock `CoachStartReminderScheduler_remind` (`PT5M` / `PT30S`). Emails the coach (`COACH_START_REMINDER`, plus an inbox row) at an unstarted session's start and at start + 10 min; needs working outbound email like every other booking mail |
 | `PaymentPendingSweeper` | 15 min | hard-coded |
 | `ChargeOutcomeReconciler` | 10 min | hard-coded cadence; age threshold `booking.payment.charge_reconcile_after_minutes` (10). Settles or declines booking charges whose Stripe response was lost; ERROR tags `[CHARGE_RECONCILE_AMOUNT_MISMATCH]` / `[CHARGE_RECONCILE_BOOKING_MOVED]` need an operator |
+| `PaymentRecoveryJob` | 5 min | hard-coded; ShedLock `PaymentRecoveryJob_run` (`PT10M` / `PT1M`). Four duties, each isolated: resolves open pack purchase attempts older than `payment.packAttempt.minAgeMinutes` from Stripe (it never refunds), purges terminal attempts past `payment.packAttempt.retentionDays`, drains parked subscription webhook events whose subscription is now linked, purges parked events past `payment.pendingSubscriptionEvent.retentionDays`. |
 | `CashOutReconciliationService` | 15 min | hard-coded |
 | `SessionPackForfeitureScheduler` | 60 min | hard-coded |
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
@@ -1222,6 +1242,10 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `booking.payment_pending_sweep_grace_minutes` | 120 | V139 | Keep |
 | `booking.payment_pending.capture_pending_max_hours` | 72 (code default, range 6–720) | `PaymentPendingSweeper` | Keep |
 | `booking.payment.charge_reconcile_after_minutes` | 10 (code default, range 5–1440) | `ChargeOutcomeReconciler` | Keep. Age a CAPTURE_PENDING reservation must reach before its unknown charge outcome is looked up at Stripe; keep it well above the Stripe SDK worst case (connect + read timeout × (1 + retries)) |
+| `payment.packAttempt.minAgeMinutes` | 10 (code default, range 5–1440) | `ConfigBounds` | Keep. Age an open pack-purchase attempt must reach before a same-key replay or `PaymentRecoveryJob` resolves it from Stripe (a live request can run 6–8 min) |
+| `payment.packAttempt.absenceAgeMinutes` | 30 (code default, range 15–1440) | `ConfigBounds` | Keep. Age at which an EMPTY Stripe lookup counts as "no charge"; must exceed the worst-case life of a request thread, or a slow original request could capture after a second attempt started |
+| `payment.packAttempt.retentionDays` | 30 (code default, range 7–3650) | `ConfigBounds` | Keep. How long terminal pack-purchase attempts are kept |
+| `payment.pendingSubscriptionEvent.retentionDays` | 30 (code default, range 1–365) | `ConfigBounds` | Keep. How long a parked subscription webhook event that never linked is kept |
 | `booking.batch.maxSize` | 5 | V139 | Keep |
 | `reliability.strike.visibilityThreshold` / `suspensionThreshold` | 3 / 5 | V139 | Keep |
 | `platform.strike_threshold.admin_alert` / `auto_suspension` | 3 / 5 | V139 | Keep |
