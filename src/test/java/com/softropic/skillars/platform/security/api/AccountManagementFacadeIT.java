@@ -119,6 +119,9 @@ class AccountManagementFacadeIT extends AbstractIntegrationTest {
         assertThat(envelope.emailTemplate()).isEqualTo(EmailTemplate.ACTIVATION);
         assertThat(envelope.recipients()).hasSize(1);
         assertThat(envelope.recipients().get(0).getEmail()).isEqualTo("mixedcase@example.com");
+        // skillars-deferred-172 AC1: the login is stored lowercased too, so sign-in (which lowercases) finds it.
+        assertThat(jdbcTemplate.queryForObject("SELECT login FROM main.\"user\" WHERE email = ?", String.class,
+            "mixedcase@example.com")).isEqualTo("mixedcase@example.com");
     }
 
     // -------------------------------------------------------------------------
@@ -153,19 +156,23 @@ class AccountManagementFacadeIT extends AbstractIntegrationTest {
     // -------------------------------------------------------------------------
 
     @Test
-    void changeEmail_success_sendsProfileChangeEmail() {
+    void changeEmail_success_mailsAConfirmationLinkToTheNewAddress_andChangesNothingYet() {
+        // skillars-deferred-172: the change is applied only from the link (EmailChangeServiceIT covers the flow);
+        // the old immediate change and its two PROFILE_CHANGE mails are gone.
         initSecurityContext();
         String newEmail = "changed@example.com";
 
         String helpCode = facade.changeEmail(EXISTING_LOGIN, newEmail, CORRECT_PW);
 
         assertThat(helpCode).isNotBlank();
-        await().until(() -> testMailManager.getEnvelope(helpCode) != null);
-        Envelope envelope = testMailManager.getEnvelope(helpCode);
-        assertThat(envelope.emailTemplate()).isEqualTo(EmailTemplate.PROFILE_CHANGE);
-        assertThat(envelope.data()).containsEntry("action", "EMAIL_CHANGED");
-        assertThat(envelope.data()).containsEntry("oldValue", EXISTING_LOGIN);
-        assertThat(envelope.data()).containsEntry("newValue", newEmail);
+        assertThat(testMailManager.getEnvelopes().values())
+            .filteredOn(e -> e.emailTemplate() == EmailTemplate.EMAIL_CHANGE)
+            .singleElement()
+            .satisfies(e -> assertThat(e.recipients().get(0).getEmail()).isEqualTo(newEmail));
+        assertThat(testMailManager.getEnvelopes().values())
+            .noneMatch(e -> e.emailTemplate() == EmailTemplate.PROFILE_CHANGE);
+        assertThat(jdbcTemplate.queryForObject("SELECT login FROM main.\"user\" WHERE email = ?", String.class,
+            EXISTING_LOGIN)).isEqualTo(EXISTING_LOGIN);
     }
 
     @Test

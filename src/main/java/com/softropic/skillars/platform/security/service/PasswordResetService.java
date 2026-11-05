@@ -30,6 +30,7 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final SecurityProperties securityProperties;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final EmailChangeService emailChangeService;
 
     /**
      * Prepares a user account for password reset by generating a reset key.
@@ -78,6 +79,8 @@ public class PasswordResetService {
                     refreshTokenRepository.markAllUsedByUserId(user.getId());
                     userRepository.invalidateSessionsForUserInCurrentTransaction(
                         user.getId(), Instant.now(ClockProvider.getClock()));
+                    // skillars-deferred-172: a new password ends any pending email change.
+                    emailChangeService.endPendingRequest(user.getId());
                     return user;
                 });
     }

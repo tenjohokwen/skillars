@@ -59,6 +59,7 @@ public class ParentRegistrationService {
     private static final String USER_PHONE_UNIQUE_CONSTRAINT = "user_phone_key";
 
     private final UserRepository userRepository;
+    private final EmailAddressAvailability emailAddressAvailability;
     private final AuthorityRepository authorityRepository;
     private final EmailVerificationTokenRepository emailTokenRepository;
     private final PhoneOtpTokenRepository otpTokenRepository;
@@ -78,7 +79,7 @@ public class ParentRegistrationService {
     public void registerParent(ParentRegistrationRequest req) {
         // Email or phone already on an account: answer exactly like a successful registration and
         // tell the existing account's owner instead (no enumeration oracle).
-        if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, passwordEncoder, publisher, rateLimitingService,
+        if (RegistrationDuplicateGuard.handledAsDuplicate(userRepository, emailAddressAvailability, passwordEncoder, publisher, rateLimitingService,
                 "parent",
                 req.email(), req.phone(), req.password(), req.langKey())) {
             return;

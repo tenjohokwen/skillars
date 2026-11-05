@@ -12,8 +12,10 @@ import com.softropic.skillars.platform.admin.repo.GdprRequestRepository;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
+import com.softropic.skillars.platform.security.contract.exception.RecentEmailChangeException;
 import com.softropic.skillars.platform.security.repo.PlayerProfile;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
+import com.softropic.skillars.platform.security.service.EmailChangeService;
 import com.softropic.skillars.platform.security.service.DevelopmentDataErasureGuard;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -57,6 +59,7 @@ public class GdprRequestService {
     private final PlayerProfileRepository playerProfileRepository;
     private final ApplicationEventPublisher eventPublisher;
     private final DevelopmentDataErasureGuard developmentDataErasureGuard;
+    private final EmailChangeService emailChangeService;
 
     @Transactional
     public UUID requestExport(Long userId) {
@@ -96,6 +99,9 @@ public class GdprRequestService {
 
     @Transactional
     public UUID requestErasure(Long userId) {
+        // skillars-deferred-172 (R3): erasure deletes the email-change rows, so while a change can still be undone
+        // it would make a takeover permanent. Held until the undo window closes.
+        emailChangeService.assertNoOpenUndoWindow(userId, RecentEmailChangeException.ERASURE_KEY);
         if (gdprRequestRepository.existsByUserIdAndPlayerIdIsNullAndRequestTypeAndStatusIn(
                 userId, "ERASURE", ACTIVE_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.requestAlreadyPending");
@@ -151,6 +157,8 @@ public class GdprRequestService {
     @Transactional
     public UUID requestChildErasure(Long parentUserId, Long playerId) {
         requireOwnedLiveChild(parentUserId, playerId);
+        // skillars-deferred-172 (R3): whoever just took over the parent account must not be able to erase a child.
+        emailChangeService.assertNoOpenUndoWindow(parentUserId, RecentEmailChangeException.ERASURE_KEY);
         if (developmentDataErasureGuard.isErasedUnderLock(playerId, "GdprRequestService.requestChildErasure")) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.playerAlreadyErased");
         }

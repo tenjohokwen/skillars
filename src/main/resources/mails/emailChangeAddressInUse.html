@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.change_address_in_use.title}">Someone tried to use your email address on Skillars</title>
+</head>
+<body>
+    <!-- skillars-deferred-172: to the holder of an address another account asked to move onto. 'reserved' = the
+         address is the old one of this account's own recent change (sent to that address, not the current one). -->
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <th:block th:unless="${map['reserved'] == true}">
+        <p th:text="#{email.change_address_in_use.inUse}">Someone tried to change another Skillars account's email to this address. Nothing was changed.</p>
+
+        <p th:text="#{email.change_address_in_use.inUseYou}">If this was you, sign in with this address instead:</p>
+        <p>
+            <a th:href="${map.baseUrl} + '/#/login'" th:text="#{email.change_address_in_use.loginLink}">Sign in</a>
+        </p>
+    </th:block>
+
+    <th:block th:if="${map['reserved'] == true}">
+        <p th:text="#{email.change_address_in_use.reserved}">This address was recently removed from your Skillars account, and someone just tried to use it for an account. Nothing was changed.</p>
+
+        <p th:text="#{email.change_address_in_use.reservedNotYou}">If you didn't change your email yourself, use the undo link we sent to this address.</p>
+    </th:block>
+
+    <p th:text="#{email.change_address_in_use.ignore}">Otherwise you don't need to do anything.</p>
+
+    <hr/>
+    <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>
+</body>
+</html>

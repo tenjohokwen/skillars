@@ -21,6 +21,8 @@ import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.EmailChangeLinkInvalidException;
+import com.softropic.skillars.platform.security.contract.exception.RecentEmailChangeException;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
 import com.softropic.skillars.platform.security.contract.exception.PlayerProfileNotFoundException;
@@ -127,6 +129,25 @@ public class ApiAdvice {
         final String defaultMsg = "Resource not found";
         final String helpCode = ErrorLog.logExpected(log, exception, defaultMsg);
         return toErrorDTO("generic.notFound", defaultMsg, helpCode);
+    }
+
+    /** skillars-deferred-172: one answer for every unusable email-change link (see the exception). */
+    @ExceptionHandler(EmailChangeLinkInvalidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorDto emailChangeLinkInvalidHandler(final EmailChangeLinkInvalidException ex) {
+        final String helpCode = ErrorLog.logExpected(log, ex, "Email-change link refused");
+        return toErrorDTO(EmailChangeLinkInvalidException.ERROR_KEY, "This link can no longer be used.", helpCode);
+    }
+
+    /**
+     * skillars-deferred-172 R1/R3: refused while the last email change can still be undone. The message is the
+     * ISO-8601 instant the refusal ends, for the SPA to format; the key says which action was refused.
+     */
+    @ExceptionHandler(RecentEmailChangeException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto recentEmailChangeHandler(final RecentEmailChangeException ex) {
+        final String helpCode = ErrorLog.logExpected(log, ex, "Refused during an email-change undo window");
+        return new ErrorDto(helpCode, new ErrorMsg(ex.getErrorKey(), ex.getUntil().toString()));
     }
 
     @ExceptionHandler(ResponseStatusException.class)

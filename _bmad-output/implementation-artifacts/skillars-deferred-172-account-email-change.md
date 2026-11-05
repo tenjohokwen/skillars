@@ -348,17 +348,17 @@ add the `frontend-tests` label so the Vitest job runs).
 - [x] T0 (AC9): F14 check (Design 13); fix + test if the gap exists. Record the outcome.
 - [x] T1 (AC1, AC2): V231 (collision check, backfill, `lower()` indexes); `ApiAdvice` mapping; registration lowercasing
       (facade + three role services); reset `currentEmail` lowercasing; tests.
-- [ ] T2 (AC3-AC8): V232 table + CHECK re-union; entity (`@Version`) + repository (open-window query); token helper;
+- [x] T2 (AC3-AC8): V232 table + CHECK re-union; entity (`@Version`) + repository (open-window query); token helper;
       "address is taken" helper replacing the guard's lookup (unit).
-- [ ] T3 (AC3, AC4): request flow (hold, supersede on every path, buckets, generic answer); `EMAIL_CHANGE` html + subject
+- [x] T3 (AC3, AC4): request flow (hold, supersede on every path, buckets, generic answer); `EMAIL_CHANGE` html + subject
       reword; `EMAIL_CHANGE_ADDRESS_IN_USE` (both wordings); `@NotNull` password; password change/reset supersede; tests.
-- [ ] T4 (AC5): new public controller (confirm + undo) + `PUBLIC_ENDPOINTS`; confirm service; session revocation;
+- [x] T4 (AC5): new public controller (confirm + undo) + `PUBLIC_ENDPOINTS`; confirm service; session revocation;
       `EMAIL_CHANGED_NOTICE`; listener action filter; audit fields; remove the facade's `PROFILE_CHANGE` mail; tests.
-- [ ] T5 (AC6): undo service (incl. supersede/kill other tokens, locked/not-activated variant); tests.
-- [ ] T6 (AC7): reservation in `RegistrationDuplicateGuard` and `registerAccount` (`reserved=true` mail); tests.
-- [ ] T7 (AC8): erasure hold in `requestErasure` / `requestChildErasure`; erasure cleanup in `GdprErasureService`
+- [x] T5 (AC6): undo service (incl. supersede/kill other tokens, locked/not-activated variant); tests.
+- [x] T6 (AC7): reservation in `RegistrationDuplicateGuard` and `registerAccount` (`reserved=true` mail); tests.
+- [x] T7 (AC8): erasure hold in `requestErasure` / `requestChildErasure`; erasure cleanup in `GdprErasureService`
       (statement count); tests.
-- [ ] T8 (AC9): rewrite existing email-change tests for the new flow.
+- [x] T8 (AC9): rewrite existing email-change tests for the new flow.
 - [ ] T9 (AC10): frontend dialog, two pages, routes, API, privacy-card mapping, i18n (3 locales), specs.
 - [ ] T10 (AC11): templates' four bundles + guard tests, copy fixes, `security-api-endpoints.md`, checklist, ledger,
       eval case.

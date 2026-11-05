@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <title th:text="#{email.change.title}">Confirm your new email address</title>
+</head>
+<body>
+    <!-- skillars-deferred-172: sent to the NEW address. Nothing changes on the account until the link is used. -->
+    <p th:text="#{email.greeting(${recipient.firstname})}">Hello User,</p>
+
+    <p th:text="#{email.change.text1}">You asked to sign in to Skillars with this email address from now on.</p>
+
+    <p th:text="#{email.change.text2}">Confirm it within 24 hours with the link below. Until you do, nothing changes on your account.</p>
+    <p>
+        <a th:href="${map.confirmUrl}" th:text="#{email.change.link}">Confirm this email address</a>
+    </p>
+
+    <p th:text="#{email.change.notYou}">If you didn't ask for this, ignore this email: nothing will change.</p>
+
+    <hr/>
+    <p><small><span th:text="#{email.common.helpCode}">Help Code:</span> <span th:text="${map.helpCode}">CODE</span></small></p>
+</body>
+</html>

@@ -418,7 +418,7 @@ public class CoachProfileService {
      * storage row is already gone — nothing left to delete, so clearing {@code photoUrl} is the
      * correct idempotent outcome) and {@link AuthorizationException} (the storage row's
      * {@code created_by} is a stale login — reachable via a mundane email change, since
-     * {@code UserProfileService.updateUserEmail} updates the user's login but not any
+     * a confirmed email change ({@code EmailChangeService.confirm}) updates the user's login but not any
      * already-created {@code file_storage_objects} row's {@code created_by}) — without either, this
      * coach could never remove their photo, the exact capability this AC exists to provide. Warn-logs
      * the ownership-mismatch case since it is the more surprising of the two.

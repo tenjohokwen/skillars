@@ -70,7 +70,8 @@ public final class NotificationCatalog {
             case NONE, SES_CUTOVER_PREFLIGHT, VIDEO_MODERATION_ADMIN_ALERT -> emailOnly(NotificationCategory.SYSTEM);
             case ACTIVATION, CREATION_DUP, REGISTRATION_PHONE_IN_USE, PASSWORD_RESET, SEND_OTP,
                  COACH_EMAIL_VERIFY, COACH_OTP, PARENT_EMAIL_VERIFY, PARENT_OTP,
-                 PLAYER_EMAIL_VERIFY, PLAYER_OTP, EMAIL_CHANGE, PROFILE_CHANGE ->
+                 PLAYER_EMAIL_VERIFY, PLAYER_OTP, EMAIL_CHANGE, EMAIL_CHANGED_NOTICE, EMAIL_CHANGE_ADDRESS_IN_USE,
+                 PROFILE_CHANGE ->
                 emailOnly(NotificationCategory.ACCOUNT);
 
             // ── Bookings: transactional, in-app ──
