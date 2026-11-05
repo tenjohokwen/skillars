@@ -2,6 +2,7 @@
   <div>
     <div class="text-label q-mb-sm">{{ t('auth.coach.step3PerSessionPrice') }}</div>
     <q-input
+      ref="priceInput"
       v-model.number="form.perSessionPrice"
       :label="t('auth.coach.step3PerSessionPrice')"
       outlined
@@ -133,6 +134,9 @@ const emit = defineEmits(['submit'])
 // skillars-deferred-109 AC8.1 / skillars-deferred-168: shown when submit() is blocked because the pack
 // was touched but is not one the coach's offer can hold (see packErrorKey).
 const packError = ref('')
+// The price rule only renders after the field is edited, so submit() calls validate() itself;
+// otherwise Next with a never-touched price stays on step 3 with no message.
+const priceInput = ref(null)
 
 // skillars-deferred-168: this screen always starts with no pack (it never shows the current offer), and the
 // builder's step rail lets a coach come back to it. Sending [] would WITHDRAW an offer they set up meanwhile
@@ -194,7 +198,10 @@ function onPackEdited() {
 const packErrorKeyNow = computed(() => form.sessionPacks.map(packErrorKey).find(Boolean) || null)
 
 function submit() {
-  if (!form.perSessionPrice || form.perSessionPrice <= 0) return
+  if (!form.perSessionPrice || form.perSessionPrice <= 0) {
+    priceInput.value?.validate()
+    return
+  }
   // skillars-deferred-109 AC8.1: block rather than silently discard a half-filled pack.
   if (packErrorKeyNow.value) {
     packError.value = t(packErrorKeyNow.value)
