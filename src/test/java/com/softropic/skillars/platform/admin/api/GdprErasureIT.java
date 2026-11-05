@@ -83,6 +83,9 @@ class GdprErasureIT extends AbstractIntegrationTest {
     // pre-fix (B1) code too, since player_profiles.id is a TSID unrelated to main.user.id in production.
     private static final long SELF_PLAYER_USER_ID    = 9210_000_004L;
     private static final long SELF_PLAYER_PROFILE_ID = 9210_777_951_331L;
+    // skillars-deferred-171 AC5: the recap's homework drill ids (a JSON array of drill UUIDs, see HomeworkDrillIds).
+    private static final String ERASED_DRILL_IDS = "[\"3f1e9a52-6f3e-4f1b-9d8e-2b7c1a4d5e60\"]";
+    private static final String OTHER_DRILL_IDS = "[\"8a2b4c6d-1e3f-4a5b-8c7d-9e0f1a2b3c4d\"]";
 
     // skillars-deferred-128 AC1 H3: the PARENT branch (erase()'s eraseParentChildren, exercised via
     // findByParentIdOrderByIdAsc(PARENT_ID)) had ZERO test coverage before this story — no fixture
@@ -758,9 +761,8 @@ class GdprErasureIT extends AbstractIntegrationTest {
      * skillars-deferred-153 AC2: session_completion_data's coach-authored free-text columns
      * (what_we_did/whats_next) must not survive the player's own erasure. Asserts both the erased
      * player's own row is anonymized AND an unrelated player's row is left completely untouched —
-     * anonymizeByPlayerId is scoped by player_id, not by booking/coach. voice_note_text is unmapped
-     * by JPA since skillars-deferred-165 AC12, but legacy rows still hold text in it, so it is still
-     * scrubbed (natively) until the column is dropped.
+     * anonymizeByPlayerId is scoped by player_id, not by booking/coach. skillars-deferred-171: the recap's
+     * homework drill ids are nulled too (AC5); the legacy voice-note column is gone (V230, AC6).
      */
     @Test
     void erase_selfRegisteredPlayer_anonymizesSessionCompletionRecapForThatPlayerOnly() {
@@ -772,19 +774,19 @@ class GdprErasureIT extends AbstractIntegrationTest {
             insertBookingForCompletionData(otherBookingId, otherPlayerId);
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
-                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "(id, booking_id, coach_id, player_id, player_attended, homework_drill_ids, "
                     + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
-                    + "VALUES (?, ?, ?, ?, true, 'Voice note about first touch', "
+                    + "VALUES (?, ?, ?, ?, true, ?, "
                     + "'Worked on first touch', 'Continue weak-foot drills', 'Erased well', 'LIVE', ?)",
-                UUID.randomUUID(), erasedBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID,
+                UUID.randomUUID(), erasedBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID, ERASED_DRILL_IDS,
                 Timestamp.from(Instant.now()));
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
-                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "(id, booking_id, coach_id, player_id, player_attended, homework_drill_ids, "
                     + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
-                    + "VALUES (?, ?, ?, ?, true, 'Unrelated voice note', "
+                    + "VALUES (?, ?, ?, ?, true, ?, "
                     + "'Unrelated recap', 'Unrelated next step', 'Unrelated well', 'LIVE', ?)",
-                UUID.randomUUID(), otherBookingId, coachProfileId, otherPlayerId,
+                UUID.randomUUID(), otherBookingId, coachProfileId, otherPlayerId, OTHER_DRILL_IDS,
                 Timestamp.from(Instant.now()));
             return null;
         });
@@ -792,18 +794,17 @@ class GdprErasureIT extends AbstractIntegrationTest {
         erase(SELF_PLAYER_USER_ID);
 
         Map<String, Object> erasedRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT homework_drill_ids, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             erasedBookingId);
-        // skillars-deferred-165 AC12: unmapped by JPA, but legacy rows still hold text — still scrubbed.
-        assertThat(erasedRow.get("voice_note_text")).isNull();
+        assertThat(erasedRow.get("homework_drill_ids")).isNull();
         assertThat(erasedRow.get("what_we_did")).isNull();
         assertThat(erasedRow.get("whats_next")).isNull();
         assertThat(erasedRow.get("what_went_well")).isNull();
 
         Map<String, Object> otherRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT homework_drill_ids, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             otherBookingId);
-        assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated voice note");
+        assertThat(otherRow.get("homework_drill_ids")).isEqualTo(OTHER_DRILL_IDS);
         assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated recap");
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated next step");
         assertThat(otherRow.get("what_went_well")).isEqualTo("Unrelated well");
@@ -1011,17 +1012,17 @@ class GdprErasureIT extends AbstractIntegrationTest {
             insertBookingForCompletionData(otherCoachBookingId, otherCoachProfileId, SELF_PLAYER_PROFILE_ID);
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
-                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "(id, booking_id, coach_id, player_id, player_attended, "
                     + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
-                    + "VALUES (?, ?, ?, ?, true, 'Coach own voice note', "
+                    + "VALUES (?, ?, ?, ?, true, "
                     + "'Coach own recap', 'Coach own next step', 'Coach own well', 'LIVE', ?)",
                 UUID.randomUUID(), ownBookingId, coachProfileId, SELF_PLAYER_PROFILE_ID,
                 Timestamp.from(Instant.now()));
             jdbcTemplate.update(
                 "INSERT INTO booking.session_completion_data "
-                    + "(id, booking_id, coach_id, player_id, player_attended, voice_note_text, "
+                    + "(id, booking_id, coach_id, player_id, player_attended, "
                     + "what_we_did, whats_next, what_went_well, completion_mode, created_at) "
-                    + "VALUES (?, ?, ?, ?, true, 'Unrelated coach voice note', "
+                    + "VALUES (?, ?, ?, ?, true, "
                     + "'Unrelated coach recap', 'Unrelated coach next step', 'Unrelated coach well', 'LIVE', ?)",
                 UUID.randomUUID(), otherCoachBookingId, otherCoachProfileId, SELF_PLAYER_PROFILE_ID,
                 Timestamp.from(Instant.now()));
@@ -1031,18 +1032,15 @@ class GdprErasureIT extends AbstractIntegrationTest {
         erase(COACH_USER_ID);
 
         Map<String, Object> ownRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             ownBookingId);
-        // skillars-deferred-165 AC12: unmapped by JPA, but legacy rows still hold text — still scrubbed.
-        assertThat(ownRow.get("voice_note_text")).isNull();
         assertThat(ownRow.get("what_we_did")).isNull();
         assertThat(ownRow.get("whats_next")).isNull();
         assertThat(ownRow.get("what_went_well")).isNull();
 
         Map<String, Object> otherRow = jdbcTemplate.queryForMap(
-            "SELECT voice_note_text, what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
+            "SELECT what_we_did, whats_next, what_went_well FROM booking.session_completion_data WHERE booking_id = ?",
             otherCoachBookingId);
-        assertThat(otherRow.get("voice_note_text")).isEqualTo("Unrelated coach voice note");
         assertThat(otherRow.get("what_we_did")).isEqualTo("Unrelated coach recap");
         assertThat(otherRow.get("whats_next")).isEqualTo("Unrelated coach next step");
         assertThat(otherRow.get("what_went_well")).isEqualTo("Unrelated coach well");

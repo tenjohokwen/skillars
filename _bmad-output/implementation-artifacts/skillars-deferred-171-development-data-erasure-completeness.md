@@ -313,8 +313,8 @@ rewritten ITs.
       (`:55-57`, `:95-97`, `SluSaveOutcome`, dispatcher prose); tests.
 - [x] T4 (AC4): `deleteAllByPlayerId` on homework assignments and radar preferences; groups 2 and 3 counts;
       all "12" literals; `GdprErasureServiceTest` constructor; IT.
-- [ ] T5 (AC5): `homework_drill_ids = NULL`; IT.
-- [ ] T6 (AC6): V230 with header, marker and exemption; both queries and all four comments; rewrite the two ITs;
+- [x] T5 (AC5): `homework_drill_ids = NULL`; IT.
+- [x] T6 (AC6): V230 with header, marker and exemption; both queries and all four comments; rewrite the two ITs;
       schema assertion; lint check by hand.
 - [ ] T7 (AC7): docs, checklist, ledger.
 - [ ] T8 (AC8): `/pr-review`, PR.

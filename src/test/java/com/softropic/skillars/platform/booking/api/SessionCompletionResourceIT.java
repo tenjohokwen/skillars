@@ -287,10 +287,20 @@ class SessionCompletionResourceIT extends AbstractIntegrationTest {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+        // skillars-deferred-171 AC6: the voice-note column is gone (V230); the legacy key above is still accepted and
+        // ignored.
         Map<String, Object> row = jdbcTemplate.queryForMap(
-            "SELECT what_went_well, voice_note_text FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
+            "SELECT what_went_well FROM booking.session_completion_data WHERE booking_id = ?", bookingId);
         assertThat(row.get("what_went_well")).isEqualTo("Great tempo");
-        assertThat(row.get("voice_note_text")).isNull();
+    }
+
+    // skillars-deferred-171 AC6: V230 dropped the legacy voice-note column.
+    @Test
+    void sessionCompletionData_hasNoVoiceNoteTextColumn() {
+        assertThat(jdbcTemplate.queryForObject(
+            "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'booking' "
+                + "AND table_name = 'session_completion_data' AND column_name = 'voice_note_text'", Integer.class))
+            .isZero();
     }
 
     // skillars-12-7 AC7a: the resume path for an abandoned quick-complete -- the booking sits in
