@@ -461,7 +461,7 @@
 		<dependency>
 			<groupId>org.instancio</groupId>
 			<artifactId>instancio-core</artifactId>
-			<version>6.1.0</version>
+			<version>6.2.1</version>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
