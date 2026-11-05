@@ -247,6 +247,12 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         assertThat(me.getResetKey()).isNotBlank();
         assertThat(sentTo(EmailTemplate.PASSWORD_RESET)).containsExactly(ME);
         assertThat(onlyEnvelope(EmailTemplate.PASSWORD_RESET).data()).containsEntry("resetKey", me.getResetKey());
+        // V2: the address the account left is told, in case the undo did not come from its owner.
+        assertThat(sentTo(EmailTemplate.EMAIL_CHANGED_NOTICE)).containsExactly(NEW);
+        assertThat(onlyEnvelope(EmailTemplate.EMAIL_CHANGED_NOTICE).data())
+            .containsEntry("revertedAway", true)
+            .containsEntry("oldEmailMasked", EmailChangeService.mask(ME))
+            .doesNotContainKeys("undoUrl", "resetKey");
 
         assertThatThrownBy(() -> emailChangeService.undo(undo)).isInstanceOf(EmailChangeLinkInvalidException.class);
     }
@@ -264,8 +270,9 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         assertThat(me.getEmail()).isEqualTo(ME);
         assertThat(me.isLocked()).isTrue();
         assertThat(passwordEncoder.matches(PASSWORD, me.getPassword())).isTrue();
-        assertThat(sentTo(EmailTemplate.EMAIL_CHANGED_NOTICE)).containsExactly(ME);
-        assertThat(onlyEnvelope(EmailTemplate.EMAIL_CHANGED_NOTICE).data()).containsEntry("undone", true);
+        assertThat(sentTo(EmailTemplate.EMAIL_CHANGED_NOTICE)).containsExactlyInAnyOrder(ME, NEW);
+        assertThat(envelopeTo(EmailTemplate.EMAIL_CHANGED_NOTICE, ME).data()).containsEntry("undone", true);
+        assertThat(envelopeTo(EmailTemplate.EMAIL_CHANGED_NOTICE, NEW).data()).containsEntry("revertedAway", true);
     }
 
     @Test
@@ -361,6 +368,14 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
             .filter(e -> e.emailTemplate() == template).toList();
         assertThat(matching).as("envelopes of " + template).isNotEmpty();
         return matching.get(matching.size() - 1);
+    }
+
+    private Envelope envelopeTo(EmailTemplate template, String address) {
+        return testMailManager.getEnvelopes().values().stream()
+            .filter(e -> e.emailTemplate() == template)
+            .filter(e -> e.recipients().stream().anyMatch(r -> address.equals(r.getEmail())))
+            .reduce((a, b) -> b)
+            .orElseThrow(() -> new AssertionError("no " + template + " envelope to " + address));
     }
 
     private List<String> sentTo(EmailTemplate template) {

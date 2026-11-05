@@ -58,7 +58,8 @@ import static net.logstash.logback.argument.StructuredArguments.kv;
  *   <li><b>Undo</b> (public link): the old address and login come back, every session is revoked, every other
  *       open request and undo link of the account dies, and the password is replaced by an unusable value with
  *       a reset link mailed to the restored address, so whoever changed it is locked out. On a suspended (or
- *       not activated) account the suspension is left alone and no password is touched (R2).</li>
+ *       not activated) account the suspension is left alone and no password is touched (R2). The address the
+ *       account leaves is told the change was undone, with a help code.</li>
  * </ol>
  *
  * <p>One change per undo window (R1): while a confirmed change can still be undone, a new request is refused.
@@ -260,6 +261,14 @@ public class EmailChangeService {
         userRepository.invalidateSessionsForUserInCurrentTransaction(account.getId(), now);
 
         enqueue(template, recipient(account, request.getOldEmail()), data, "requestId", request.getId());
+        // V2: whoever reads the old mailbox can undo, and people often move away from a mailbox because it was
+        // compromised. The address the account just left is told, so a real owner learns at once and has a help
+        // code to quote to support.
+        final Map<String, Object> away = baseData();
+        away.put("revertedAway", true);
+        away.put("oldEmailMasked", mask(request.getOldEmail()));
+        enqueue(EmailTemplate.EMAIL_CHANGED_NOTICE, recipient(account, request.getNewEmail()), away,
+            "requestId", request.getId());
         publisher.publishEvent(new AccountChangeEvent(AccountChangeEvent.Action.EMAIL_CHANGE_UNDONE,
             request.getNewEmail(), request.getOldEmail(), userInfo(account, request.getOldEmail())));
         log.info("[EMAIL_CHANGE_UNDONE] sign-in email restored", kv("requestId", request.getId()),

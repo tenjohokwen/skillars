@@ -439,6 +439,11 @@ Claude Opus 5.5 (claude-opus-5-5)
 - Audit rows for EMAIL_CHANGED / EMAIL_CHANGE_UNDONE are recorded with `authenticated = false`; in the ITs the audit
   insert logs a `url` NOT NULL error because there is no HTTP request (same as the existing password-change path;
   the listener swallows it).
+- /pr-review round 1 (ad3a389e): F1 resend lookups matched the typed casing, F2 password guessing through the request
+  endpoint (per-account attempt bucket, consumed before the check), F4 concurrent requests hit an unmapped constraint;
+  fixed in e7005213. Owner decision V2 (option 1): every undo also mails the `revertedAway` variant of
+  `EMAIL_CHANGED_NOTICE` to the address the account left, because whoever reads the old mailbox can undo. V1 (per-JVM
+  rate limits) is moot on the single-instance deploy.
 
 ### File List
 
