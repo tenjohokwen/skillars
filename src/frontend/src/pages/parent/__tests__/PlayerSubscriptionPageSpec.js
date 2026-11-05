@@ -172,3 +172,43 @@ describe('PlayerSubscriptionPage.vue — banner after saving a card', () => {
     expect(wrapper.text()).toContain('subscription.paymentPaused')
   })
 })
+
+// Pitchside SUB-06: confirm decided between subscribing and changing tier on a stripeSubscriptionId the
+// response never carries, so a family on a paid tier was always sent to subscribe again, which the server
+// refuses as already active. A paid current tier (anything but ATHLETE) now changes tier.
+// Mutation check: restore the stripeSubscriptionId test and the first case turns red.
+describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
+  async function confirmFrom(currentTier, chosenTier) {
+    const { wrapper, pinia } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerSubscription: { tier: currentTier, status: 'ACTIVE', cancelAtPeriodEnd: false },
+      playerTiers: [],
+      savedPaymentMethod: { hasCard: true },
+    })
+    const { usePaymentStore } = await import('src/stores/payment.store')
+    const paymentStore = usePaymentStore(pinia)
+    const setup = wrapper.vm.$.setupState
+    setup.openSubscribeDialog(chosenTier)
+    await setup.confirmSubscribe()
+    await flushPromises()
+    return paymentStore
+  }
+
+  it('a player on a paid tier changes tier instead of subscribing again', async () => {
+    const store = await confirmFrom('SEMI_PRO', 'PRO')
+    expect(store.changePlayerTier).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      newTier: 'PRO',
+    })
+    expect(store.subscribePlayer).not.toHaveBeenCalled()
+  })
+
+  it('a player on the free tier subscribes, with the chosen interval', async () => {
+    const store = await confirmFrom('ATHLETE', 'SEMI_PRO')
+    expect(store.subscribePlayer).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      tier: 'SEMI_PRO',
+      billingInterval: 'YEARLY',
+    })
+    expect(store.changePlayerTier).not.toHaveBeenCalled()
+  })
+})

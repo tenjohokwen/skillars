@@ -33,6 +33,7 @@
               flat
               color="primary"
               :label="t('subscription.updateCard')"
+              data-testid="subscription-update-card-btn"
               @click="addCardDialog = true"
             />
           </template>
@@ -44,6 +45,7 @@
           class="q-mb-md"
           rounded
           style="background: rgba(255, 165, 0, 0.15)"
+          data-testid="subscription-cancel-pending"
         >
           <template #avatar>
             <q-icon name="mdi-alert" color="warning" />
@@ -62,8 +64,12 @@
           </div>
           <div class="row items-center q-gutter-md">
             <div>
-              <q-badge :color="tierColor(subscription?.tier)" class="text-body1 q-px-md q-py-xs">
-                {{ subscription?.tier || 'SCOUT' }}
+              <q-badge
+                :color="tierColor(currentTier)"
+                class="text-body1 q-px-md q-py-xs"
+                data-testid="subscription-current-tier"
+              >
+                {{ currentTier }}
               </q-badge>
             </div>
             <div>
@@ -73,13 +79,16 @@
                 :color="statusColor(subscription?.status)"
                 text-color="white"
                 class="q-ml-xs"
+                data-testid="subscription-status"
               >
                 {{ subscription?.status || 'ACTIVE' }}
               </q-chip>
             </div>
             <div v-if="subscription?.currentPeriodEnd">
               <span class="text-caption text-secondary">{{ t('subscription.renewsOn') }}:</span>
-              <span class="q-ml-xs">{{ formatDate(subscription.currentPeriodEnd) }}</span>
+              <span class="q-ml-xs" data-testid="subscription-period-end">{{
+                formatDate(subscription.currentPeriodEnd)
+              }}</span>
             </div>
           </div>
         </div>
@@ -93,7 +102,9 @@
             v-for="tier in tiers"
             :key="tier.tier"
             class="col tier-card glass-card q-pa-md"
-            :class="{ 'current-tier': tier.tier === subscription?.tier }"
+            :class="{ 'current-tier': tier.tier === currentTier }"
+            data-testid="subscription-tier-card"
+            :data-tier="tier.tier"
           >
             <div class="text-h6 text-weight-bold q-mb-xs">{{ tier.tier }}</div>
             <div v-if="tier.monthlyPrice" class="text-body2 text-secondary q-mb-sm">
@@ -108,29 +119,19 @@
               </q-item>
             </q-list>
             <div class="tier-actions">
-              <!-- Upgrade / Subscribe CTA — gated if current is higher tier -->
-              <div v-if="isTierBlocked(tier.tier)" class="tier-gate-overlay relative-position">
-                <div class="blurred-preview"></div>
-                <div class="overlay-cta absolute-center text-center">
-                  <q-icon name="mdi-lock" size="2rem" />
-                  <div class="text-caption">{{ t('subscription.upgradeToUnlock') }}</div>
-                  <q-btn
-                    size="sm"
-                    color="primary"
-                    :label="t('subscription.upgradeCTA')"
-                    class="q-mt-xs"
-                    @click="openSubscribeDialog(tier.tier)"
-                  />
-                </div>
-              </div>
+              <!-- A Scout coach has no paid subscription yet, so any paid tier subscribes (the dialog
+                   checks for a card first); a paid coach changes tier on the subscription they have.
+                   Moving down to Scout is the Cancel button on the current paid tier. -->
               <q-btn
-                v-else-if="tier.tier !== subscription?.tier && tier.tier !== 'SCOUT'"
+                v-if="tier.tier !== currentTier && tier.tier !== 'SCOUT'"
                 color="primary"
                 :label="
                   isUpgrade(tier.tier) ? t('subscription.upgrade') : t('subscription.downgrade')
                 "
                 class="full-width"
-                @click="handleChangeTier(tier.tier)"
+                :loading="actionLoading"
+                data-testid="subscription-change-btn"
+                @click="chooseTier(tier.tier)"
               />
               <q-btn
                 v-else-if="
@@ -142,6 +143,7 @@
                 outline
                 :label="t('subscription.cancel')"
                 class="full-width"
+                data-testid="subscription-cancel-btn"
                 @click="handleCancel"
               />
               <div
@@ -163,7 +165,11 @@
           <div class="text-h6">{{ t('subscription.subscribeTo', { tier: selectedTier }) }}</div>
         </q-card-section>
         <q-card-section>
-          <div v-if="hasCard === false" class="text-body2 text-warning q-mb-sm">
+          <div
+            v-if="hasCard === false"
+            class="text-body2 text-warning q-mb-sm"
+            data-testid="subscription-add-card-prompt"
+          >
             {{ t('payment.card.addCardPrompt') }}
             <q-btn
               flat
@@ -182,6 +188,7 @@
             :label="t('subscription.confirm')"
             :loading="actionLoading"
             :disable="hasCard === false"
+            data-testid="subscription-confirm-btn"
             @click="confirmSubscribe"
           />
         </q-card-actions>
@@ -220,6 +227,7 @@ const addCardDialog = ref(false)
 const selectedTier = ref('')
 
 const subscription = computed(() => paymentStore.coachSubscription)
+const currentTier = computed(() => subscription.value?.tier || 'SCOUT')
 const tiers = computed(() => paymentStore.coachTiers)
 // AC 3: gate confirm on a saved card instead of a raw, frontend-typed payment-method id — the
 // backend resolves the saved card itself (SubscriptionService.subscribeCoach).
@@ -272,15 +280,16 @@ function statusColor(status) {
 }
 
 function isUpgrade(tier) {
-  const current = TIER_ORDER.indexOf(subscription.value?.tier || 'SCOUT')
+  const current = TIER_ORDER.indexOf(currentTier.value)
   return TIER_ORDER.indexOf(tier) > current
 }
 
-function isTierBlocked(tier) {
-  if (tier === 'SCOUT') return false
-  if (!subscription.value) return false
-  const current = TIER_ORDER.indexOf(subscription.value.tier || 'SCOUT')
-  return TIER_ORDER.indexOf(tier) < current
+// Scout is the free tier with no Stripe subscription behind it (a revoked subscription returns the coach
+// to Scout), so leaving it means subscribing; changeCoachTier would be refused with no subscription to
+// change. A paid coach moves between paid tiers on the subscription they already have.
+function chooseTier(tier) {
+  if (currentTier.value === 'SCOUT') openSubscribeDialog(tier)
+  else handleChangeTier(tier)
 }
 
 function openSubscribeDialog(tier) {
@@ -359,17 +368,5 @@ function formatDate(iso) {
 }
 .current-tier {
   border: 2px solid var(--q-primary);
-}
-.tier-gate-overlay {
-  min-height: 80px;
-}
-.blurred-preview {
-  filter: blur(4px);
-  min-height: 60px;
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 8px;
-}
-.overlay-cta {
-  padding: 8px;
 }
 </style>

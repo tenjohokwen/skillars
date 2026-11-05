@@ -80,8 +80,20 @@ const RESERVED_PHONES = new Set([process.env.E2E_ADMIN_PHONE ?? '+15550000001'])
  * the builders — over HTTP only, plus three narrow SQL writes for state that needs a real Stripe
  * (Connect onboarding, card on file, identity verdict). One instance per Playwright worker.
  */
+/** The price id keys a subscribe or tier change reads (ConfigStartupAssertion lists the same seven). */
+const SUBSCRIPTION_PRICE_KEYS = [
+  'subscription.coach.instructor.monthly.priceId',
+  'subscription.coach.academy.monthly.priceId',
+  'subscription.player.athlete.monthly.priceId',
+  'subscription.player.athlete.quarterly.priceId',
+  'subscription.player.athlete.yearly.priceId',
+  'subscription.player.semi_pro.yearly.priceId',
+  'subscription.player.pro.yearly.priceId',
+]
+
 export class Provisioner {
   private phoneCounter = 0
+  private pricesReady?: Promise<void>
   /**
    * Six random digits drawn once per worker process — not derived from the run id, which workers
    * share in CI and which a reused local stack or a persistent environment sees again run after run.
@@ -469,6 +481,94 @@ export class Provisioner {
     } finally {
       await session.dispose()
     }
+  }
+
+  /**
+   * Give every subscription price key a Stripe price id, as an operator does before launch; the seed
+   * leaves them blank, and a blank price refuses every subscribe (priceNotConfigured). The stack's
+   * WireMock accepts any price. Only blank keys are written, so a value someone set is kept. Once per
+   * worker; through the admin config API, which also drops the config cache.
+   */
+  async subscriptionPrices(): Promise<void> {
+    this.pricesReady ??= (async () => {
+      const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+      try {
+        const entries = await session.api.json<{ key: string; value: string | null }[]>(
+          'GET',
+          '/config/values',
+        )
+        for (const key of SUBSCRIPTION_PRICE_KEYS) {
+          if (entries.find((e) => e.key === key)?.value) continue
+          await session.api.put(`/config/values/${key}`, {
+            data: { value: `price_e2e_${key.split('.').slice(1, 4).join('_')}` },
+            expectStatus: 200,
+          })
+        }
+      } finally {
+        await session.dispose()
+      }
+    })()
+    await this.pricesReady
+  }
+
+  /** Subscribe a coach to a paid tier through the API. Needs a card on file (saveCard). */
+  async subscribeCoach(coach: CoachAccount, tier: 'INSTRUCTOR' | 'ACADEMY'): Promise<void> {
+    await this.subscriptionPrices()
+    const session = await this.login(coach)
+    try {
+      await session.api.post('/payment/subscriptions/coach/subscribe', {
+        data: { tier },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * Subscribe a player to a paid tier through the API, as the payer: the parent, or a self-registered
+   * player for themselves. Needs the payer's card on file (saveCard).
+   */
+  async subscribePlayer(
+    payer: Pick<Account, 'email' | 'password'>,
+    playerId: string,
+    tier: 'SEMI_PRO' | 'PRO',
+  ): Promise<void> {
+    await this.subscriptionPrices()
+    const session = await this.login(payer)
+    try {
+      await session.api.post('/payment/subscriptions/player/subscribe', {
+        // SEMI_PRO and PRO are sold yearly only. The player id as a string: it exceeds MAX_SAFE_INTEGER.
+        data: { playerId, tier, billingInterval: 'YEARLY' },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * Put a subscription into a billing state Stripe would report by webhook (none arrives on the stack).
+   * PAST_DUE starts the grace period now. SQL seam on payment.coach_subscriptions or
+   * payment.player_subscriptions; the subscription must exist (subscribeCoach / subscribePlayer).
+   */
+  async setSubscriptionStatus(
+    owner: { coachId: string } | { playerId: string },
+    status: 'PAST_DUE' | 'UNPAID' | 'PAUSED',
+  ): Promise<void> {
+    const [table, column, id, cast] =
+      'coachId' in owner
+        ? ['coach_subscriptions', 'coach_id', owner.coachId, 'uuid']
+        : ['player_subscriptions', 'player_id', owner.playerId, 'bigint']
+    const sql = await this.sql()
+    const rows = await sql.query<{ status: string }>(
+      `UPDATE payment.${table}
+          SET status = $2::varchar, past_due_since = CASE WHEN $2::varchar = 'PAST_DUE' THEN now() END
+        WHERE ${column} = $1::${cast} AND stripe_subscription_id IS NOT NULL
+        RETURNING status`,
+      [id, status],
+    )
+    if (rows.length !== 1) throw new Error(`No paid subscription for ${JSON.stringify(owner)}`)
   }
 
   /**

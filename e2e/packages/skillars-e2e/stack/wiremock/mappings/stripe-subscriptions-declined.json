@@ -1,0 +1,27 @@
+{
+  "name": "Stripe — create a subscription on a pm_e2e_declined_* card: card_declined (deterministic tier)",
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/subscriptions",
+    "bodyPatterns": [
+      {
+        "contains": "default_payment_method=pm_e2e_declined_"
+      }
+    ]
+  },
+  "response": {
+    "status": 402,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "error": {
+        "type": "card_error",
+        "code": "card_declined",
+        "decline_code": "generic_decline",
+        "message": "Your card was declined."
+      }
+    }
+  }
+}
