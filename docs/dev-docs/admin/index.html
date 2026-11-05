@@ -608,7 +608,8 @@ sequenceDiagram
       blob-deletion outbox, but only keys under their own upload slots (<code>coach_profile/</code>,
       <code>coach_gallery/</code>, <code>coach_branding/</code>), never a legacy URL or a server-written key — recap narrative (session completion data, timeline metadata, performance
       report <code>next_steps</code> — scrubbed, not deleted) and availability-block reasons scrubbed; a PARENT/PLAYER
-      has each child's development data deleted under a per-child lock budget. Child erasure runs the same per-child
+      has each child's development data deleted under a per-child lock budget (since skillars-deferred-171 also
+      their homework assignments and every coach's radar preferences for them). Child erasure runs the same per-child
       hook and also scrubs the profile identity, committed with the <code>developmentDataErasedAt</code> tombstone;
       bookings, payment/credit rows, messages and videos are deliberately kept.
     </p>

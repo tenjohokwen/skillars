@@ -157,10 +157,10 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   `platform_config` row is blank, V139 seeds it blank, and the admin API that edits it needs a bootstrapped admin who cannot exist before
   the first successful boot. Workaround: set the row by SQL after Flyway has run (or boot once with `ALLOW_UNSCANNED_MEDIA=true`), see
   `runbook.md` "Admin alert recipient". A code fix (seed or env-supplied address) would remove the trap **(owner decision)**.
-- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226 and V229 use
+- [ ] **Recent migrations assume "prod is not live".** V186, V192, V193, V195, V198, V199, V200, V205, V206, V208, V209, V210, V212, V213, V214, V215, V219, V221, V223, V224, V226, V229 and V230 use
   validating `CHECK` swaps, non-concurrent unique indexes or a same-release column + first write,
-  justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V229: a drop in
-  the same release as its last reader's removal, not the release after). Once PROD holds real data,
+  justified in their headers by "no production deployment exists yet" (V226: an irreversible discard; V229 and V230:
+  a drop in the same release as its last reader's removal, not the release after). Once PROD holds real data,
   the next migration must follow the full online-safety rules in `migration-conventions.md`, without that exemption.
 - [ ] **V226 turns builder packs into purchasable tiers, and discards the rest** (skillars-deferred-168). For each
   coach with `marketplace.session_packs` rows, no `payment.session_pack_tiers` row at all and no erasure tombstone, it
@@ -185,6 +185,11 @@ needs an owner decision or a code or doc fix before PROD serves real users.
   V226 rather than the release after (`migration-conventions.md` rule 2), by owner decision, because PROD has never
   been deployed. If PROD is live by the time this migration is released, hold it back a release. Any data a
   pre-deploy dump still needs from that table must be taken before this deploy.
+- [ ] **V230 drops `booking.session_completion_data.voice_note_text`** (skillars-deferred-171). The JPA field left in
+  #304 (V170); the two GDPR anonymise queries stop naming the column in this same release, so an old pod's erasure
+  would fail with "column does not exist" during the migration window. Owner decision: allowed because PROD has never
+  been deployed. If PROD is live by then, hold V230 back a release. The legacy voice-note text in the column is gone
+  after this deploy (that is the point; nothing reads it).
 
 ---
 
