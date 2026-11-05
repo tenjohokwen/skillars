@@ -1,0 +1,20 @@
+{
+  "name": "Stripe — a refund on a pi_e2ecap_*_rejects_* PaymentIntent is refused (deterministic tier)",
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPath": "/v1/refunds",
+    "bodyPatterns": [{ "matches": ".*payment_intent=pi_e2ecap_[0-9]+_rejects_.*" }]
+  },
+  "response": {
+    "status": 400,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "error": {
+        "type": "invalid_request_error",
+        "code": "charge_already_refunded",
+        "message": "Charge has already been refunded."
+      }
+    }
+  }
+}

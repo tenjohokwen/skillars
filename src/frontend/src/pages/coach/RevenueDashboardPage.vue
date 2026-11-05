@@ -12,6 +12,7 @@
           outlined
           dense
           class="col"
+          data-testid="revenue-from"
         />
         <q-input
           v-model="toDate"
@@ -20,10 +21,12 @@
           outlined
           dense
           class="col"
+          data-testid="revenue-to"
         />
         <q-btn
           color="primary"
           :label="t('revenue.apply')"
+          data-testid="revenue-apply"
           :loading="paymentStore.loading.revenueSummary || paymentStore.loading.transactions"
           @click="loadRevenue"
         />
@@ -34,6 +37,7 @@
         v-if="payoutHold && payoutHold.newCoach"
         rounded
         class="new-coach-hold-banner glass-card q-mb-lg"
+        data-testid="revenue-hold-banner"
       >
         <template #avatar>
           <q-icon name="mdi-timer-sand" color="warning" />
@@ -60,30 +64,40 @@
       </q-banner>
 
       <!-- Summary cards -->
-      <div v-if="summary" class="row q-gutter-md q-mb-lg">
+      <div v-if="summary" class="row q-gutter-md q-mb-lg" data-testid="revenue-summary">
         <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.gross') }}</div>
-          <div class="text-h5 text-weight-bold">€{{ fmt(summary.grossEarnings) }}</div>
+          <div data-testid="revenue-gross" class="text-h5 text-weight-bold">
+            €{{ fmt(summary.grossEarnings) }}
+          </div>
         </div>
         <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.commission') }}</div>
-          <div class="text-h5 text-negative">– €{{ fmt(summary.commissionDeducted) }}</div>
+          <div data-testid="revenue-commission" class="text-h5 text-negative">
+            – €{{ fmt(summary.commissionDeducted) }}
+          </div>
         </div>
         <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.netPayout') }}</div>
-          <div class="text-h5 text-positive text-weight-bold">€{{ fmt(summary.netPayout) }}</div>
+          <div data-testid="revenue-net" class="text-h5 text-positive text-weight-bold">
+            €{{ fmt(summary.netPayout) }}
+          </div>
         </div>
         <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.refunds') }}</div>
-          <div class="text-h5 text-warning">€{{ fmt(summary.refundsIssued) }}</div>
+          <div data-testid="revenue-refunds" class="text-h5 text-warning">
+            €{{ fmt(summary.refundsIssued) }}
+          </div>
         </div>
         <div v-if="summary.heldCount > 0" class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.held') }}</div>
-          <div class="text-h5 text-warning">€{{ fmt(summary.heldAmount) }}</div>
+          <div data-testid="revenue-held" class="text-h5 text-warning">
+            €{{ fmt(summary.heldAmount) }}
+          </div>
         </div>
         <div class="col summary-card glass-card q-pa-md text-center">
           <div class="text-caption text-secondary">{{ t('revenue.sessions') }}</div>
-          <div class="text-h5">{{ summary.sessionCount }}</div>
+          <div data-testid="revenue-sessions" class="text-h5">{{ summary.sessionCount }}</div>
         </div>
       </div>
 
@@ -95,6 +109,7 @@
         :rows="paymentStore.transactions"
         :columns="columns"
         row-key="bookingId"
+        data-testid="revenue-transactions"
         flat
         :loading="paymentStore.loading.revenueSummary || paymentStore.loading.transactions"
         :pagination="{ rowsPerPage: 20 }"
