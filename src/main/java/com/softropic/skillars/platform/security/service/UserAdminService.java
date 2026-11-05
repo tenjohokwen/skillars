@@ -1,5 +1,7 @@
 package com.softropic.skillars.platform.security.service;
 
+import org.apache.commons.lang3.StringUtils;
+import java.util.Locale;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.security.contract.SecurityProperties;
 import com.softropic.skillars.platform.security.repo.User;
@@ -99,7 +101,8 @@ public class UserAdminService {
      */
     @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     public void deleteUserInformation(final String login) {
-        userRepository.findOneByLogin(login).ifPresent(u -> {
+        // skillars-deferred-172: addresses are stored lowercased (V231); match what the user typed in any casing.
+        userRepository.findOneByLogin(StringUtils.lowerCase(login, Locale.ROOT)).ifPresent(u -> {
             userRepository.delete(u);
         });
     }
@@ -114,7 +117,7 @@ public class UserAdminService {
      */
     @PreAuthorize(SecurityConstants.HAS_FULL_ADMIN_ROLE)
     public Optional<User> lockUserAccount(String login) {
-        return userRepository.findOneByLogin(login)
+        return userRepository.findOneByLogin(StringUtils.lowerCase(login, Locale.ROOT))
                 .map(u -> {
                     u.lock(); // Use domain method
                     return u;

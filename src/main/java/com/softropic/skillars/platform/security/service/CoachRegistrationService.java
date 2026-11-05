@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.service;
 
+import java.util.Locale;
 import com.softropic.skillars.infrastructure.persistence.EntityStatus;
 import com.softropic.skillars.infrastructure.sanitizer.ContactDetailSanitizer;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
@@ -245,7 +246,8 @@ public class CoachRegistrationService {
                 email.toLowerCase(), "coach_resend_verification_email", 3, 30, TimeUnit.MINUTES)) {
             return;
         }
-        userRepository.findOneByEmail(email).ifPresent(user -> {
+        // skillars-deferred-172: addresses are stored lowercased (V231); match what the user typed in any casing.
+        userRepository.findOneByEmail(email.toLowerCase(Locale.ROOT)).ifPresent(user -> {
             // AC11 / code-review decision (2026-08-31): a locked account cannot self-resume.
             // Silent no-op (not a throw) so this endpoint keeps its always-200
             // no-account-enumeration contract — a locked user stays indistinguishable from a

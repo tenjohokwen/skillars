@@ -79,6 +79,12 @@ public class EmailChangeService {
     static final long REQUEST_CAPACITY = 3;
     static final long REQUEST_WINDOW_MINUTES = 60;
 
+    // Per account, every attempt, consumed BEFORE the password check: the endpoint re-checks the password, so
+    // without this a stolen or left-open session could guess it here bounded only by the per-IP limit.
+    static final String ATTEMPT_LIMIT_KEY = "email_change_attempt";
+    static final long ATTEMPT_CAPACITY = 10;
+    static final long ATTEMPT_WINDOW_MINUTES = 60;
+
     // Per target address: stops one account mailing confirmation links to someone else's inbox over and over.
     // Exhaustion is silent (same answer, nothing sent), so it is no oracle.
     static final String CONFIRM_MAIL_LIMIT_KEY = "email_change_confirm_mail";
@@ -118,6 +124,10 @@ public class EmailChangeService {
         final Instant now = Instant.now(ClockProvider.getClock());
         final User user = userRepository.findOneByLogin(securityUtil.getCurrentUser().getUsername())
             .orElseThrow(() -> mismatch(oldEmail, newEmail, false, false));
+        if (!rateLimitingService.tryConsume(String.valueOf(user.getId()), ATTEMPT_LIMIT_KEY, ATTEMPT_CAPACITY,
+                ATTEMPT_WINDOW_MINUTES, TimeUnit.MINUTES)) {
+            throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "email.change.tooManyRequests");
+        }
         final boolean passwordMatch = password != null && passwordEncoder.matches(password, user.getPassword());
         final boolean emailMatch = StringUtils.equalsIgnoreCase(StringUtils.trim(oldEmail), user.getEmail());
         if (!passwordMatch || !emailMatch) {

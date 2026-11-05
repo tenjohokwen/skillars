@@ -160,6 +160,17 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
             .hasMessageContaining("email.change.tooManyRequests");
     }
 
+    @Test
+    void wrongPasswords_countTowardsAnAttemptLimit_soTheEndpointCannotBeUsedToGuessThePassword() {
+        for (int i = 0; i < EmailChangeService.ATTEMPT_CAPACITY; i++) {
+            assertThatThrownBy(() -> emailChangeService.request(ME, NEW, "guess-" + Math.random()))
+                .isInstanceOf(ProfileActionException.class);
+        }
+        // Even the right password is refused now: the limit is consumed before the password is checked.
+        assertThatThrownBy(() -> emailChangeService.request(ME, NEW, PASSWORD))
+            .hasMessageContaining("email.change.tooManyRequests");
+    }
+
     // ── AC1 + AC5: confirming switches the address, revokes sessions, notifies the old address ─────────
 
     @Test

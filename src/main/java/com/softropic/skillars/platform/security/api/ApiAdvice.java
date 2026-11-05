@@ -177,6 +177,8 @@ public class ApiAdvice {
         // skillars-deferred-172 (V231): the case-insensitive twins of the two above.
         "ux_user_login_lower", "user.login.duplicate",
         "ux_user_email_lower", "user.email.duplicate",
+        // skillars-deferred-172 (V232): two simultaneous change requests from one account; the second loses.
+        "ux_ecr_one_open_per_user", "email.change.requestInProgress",
         "excl_bkg_coach_slot_overlap", "booking.slotUnavailable",
         // skillars-deferred-88 AC10: two concurrent OTP-issue calls for one user hit the partial
         // unique index; the retry is itself a resend, so a plain "try again" is the right UX.
@@ -210,7 +212,9 @@ public class ApiAdvice {
         "uq_pcl_booking_refund",
         // skillars-deferred-103 AC1: concurrent tier creation on the same coach is a retryable race,
         // not an input error.
-        "idx_spt_one_active_per_coach"
+        "idx_spt_one_active_per_coach",
+        // skillars-deferred-172: a concurrent duplicate email-change request, retryable.
+        "ux_ecr_one_open_per_user"
     );
 
     // PostgreSQL exclusion-constraint violations (SQLSTATE 23P01) are not in Hibernate's
