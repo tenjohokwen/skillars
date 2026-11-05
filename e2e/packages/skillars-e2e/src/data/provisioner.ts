@@ -451,8 +451,10 @@ export class Provisioner {
    * Run a scheduled job now through the e2e-profile trigger (E2eJobResource), as the bootstrap admin,
    * instead of waiting for its schedule. Seed state that is already due first. The job holds its
    * ShedLock while it runs; a 409 means another run has it, so this retries until its own run lands.
+   * A scheduled run (at boot, then on its schedule) keeps the lock for its `lockAtLeastFor`, 2 minutes
+   * for the forfeiture, so the default wait outlasts that.
    */
-  async runJob(name: 'pack-forfeiture', timeoutMs = 60_000): Promise<void> {
+  async runJob(name: 'pack-forfeiture', timeoutMs = 180_000): Promise<void> {
     const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
     try {
       const deadline = Date.now() + timeoutMs

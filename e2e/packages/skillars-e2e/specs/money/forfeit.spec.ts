@@ -20,14 +20,16 @@ test.describe('G · Pack forfeiture', () => {
       tags: ['@regression', '@parent', '@money'],
     }),
     async ({ actor, suite, mail, provision }) => {
+      test.slow() // runJob may wait out a scheduled run's 2-minute lock
       const coachName = `${provision.uniqueCity()} Coaching`
       const coach = await provision.coach({ displayName: coachName })
       const parent = await provision.parent()
       await provision.saveCard(parent)
       const sessions = await provision.buyPack(parent, coach)
-      await provision.setPackState(parent, coach, { expiresInDays: -1 })
       const ledger = await provision.walletLedger(parent)
+      // Before the expiry is seeded: a scheduled run landing from then on may be the one that mails.
       const since = new Date(Date.now() - 2_000)
+      await provision.setPackState(parent, coach, { expiresInDays: -1 })
 
       await provision.runJob('pack-forfeiture')
 
