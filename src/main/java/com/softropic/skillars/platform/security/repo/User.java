@@ -56,7 +56,7 @@ public class User extends Customer implements Serializable {
 
     //TODO lastLogins (loginTime:LocalDateTime, sessionId:text, explicitLogout:boolean, RequestMetadata:json, logoutTime:localDateTime, credId:uuid, blacklisted:boolean)
     //TODO give the following at registration (username, password, email,langkey)
-    // For an email-login account the login IS the email: a confirmed email change (UserProfileService) moves both together.
+    // For an email-login account the login IS the email: a confirmed email change (EmailChangeService) moves both together.
     @NotNull
     @Email(regexp = "[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,3}", flags = Pattern.Flag.CASE_INSENSITIVE)
     @Size(min = 6, max = 100)

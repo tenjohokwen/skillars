@@ -183,7 +183,7 @@
       its status CHECKs are re-added <code>NOT VALID</code>.)
     </p>
 
-    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V223)</h3>
+    <h3 id="recent-migrations-worth-knowing-v140-v175">Recent migrations worth knowing (V140–V232)</h3>
     <table>
       <thead><tr><th>Migration</th><th>What it does</th></tr></thead>
       <tbody>
@@ -228,6 +228,8 @@
         <tr><td><code>V207</code>, <code>V208</code></td><td><code>booking_payments.charge_idempotency_key</code> (persisted before the Stripe call, partial index <code>idx_bp_charge_key_pending</code> — read by <code>ChargeOutcomeReconciler</code>); <code>subscribe_attempt_key</code>/<code>_at</code> on both subscription tables; <code>idx_bp_stripe_payment_intent</code>.</td></tr>
         <tr><td><code>V209</code></td><td><code>bookings.auto_ended_at</code> and <code>unresolved_alerted_at</code>, written by <code>UnresolvedSessionSweeperService</code>.</td></tr>
         <tr><td><code>V213</code></td><td><code>bookings.confirmation_requested_at</code> (the family was asked to confirm a session that entered <code>COMPLETED_PENDING_CONFIRMATION</code> without a full live run — one email, and the wrap-up is QUICK); <code>coach_cancellation_history.after_start</code> (a coach cancel at/after the start of a never-started booking: always a strike, never counted toward the excused cap); <code>session_completion_data.awaiting_wrap_up</code> (the family confirmed before the coach's wrap-up, which later fills the row in); <code>idx_disputes_unique_open_per_booking</code> replaced by <code>idx_disputes_unique_open_per_booking_side</code> on <code>(booking_id, raised_by_role = 'COACH')</code> — one open dispute per booking per side.</td></tr>
+        <tr><td><code>V231</code></td><td>Case-insensitive account identity (skillars-deferred-172). A <code>DO</code> block first looks for <code>main."user"</code> rows whose <code>email</code> or <code>login</code> differ only by letter case and, if any exist, stops the migration with an exception naming them (merging accounts is an owner decision, so run that query on UAT/PROD data before deploying). Then it lowercases <code>email</code> and <code>login</code> on the rows that are not already lowercase, and adds unique indexes <code>ux_user_email_lower</code> on <code>lower(email)</code> and <code>ux_user_login_lower</code> on <code>lower(login)</code>. The old case-sensitive <code>user_email_key</code>/<code>user_login_key</code> stay; <code>ApiAdvice</code> maps the new indexes to the same error keys. The entity setters now lowercase on every write.</td></tr>
+        <tr><td><code>V232</code></td><td><code>main.email_change_requests</code> (skillars-deferred-172): one row per requested email change (<code>old_email</code>, <code>old_login</code>, <code>new_email</code>, SHA-256 <code>confirm_token_hash</code>/<code>undo_token_hash</code>, both <code>UNIQUE</code>, expiry and <code>confirmed_at</code>/<code>undone_at</code>/<code>superseded_at</code> stamps, <code>version</code>). FK to <code>"user"</code> with no cascade: GDPR erasure deletes the rows itself. CHECKs <code>chk_ecr_new_email_lower</code> and <code>chk_ecr_undo_after_confirm</code>. Indexes: partial unique <code>ux_ecr_one_open_per_user</code> on <code>user_id</code> <code>WHERE confirmed_at IS NULL AND superseded_at IS NULL</code> (one open request per user), <code>idx_ecr_user</code>, and partial <code>idx_ecr_old_email_lower</code> on <code>lower(old_email)</code> for confirmed, not undone rows (the reservation lookup). Also rebuilds <code>envelope_entity_email_template_check</code> as the union of V227's 60 values plus <code>EMAIL_CHANGED_NOTICE</code> and <code>EMAIL_CHANGE_ADDRESS_IN_USE</code> (62).</td></tr>
         <tr><td><code>V211</code></td><td>Data-only: deletes the duplicate <code>platform.commission_rate</code> config row. <code>platform.commission.rate</code> is the one commission key (<code>ProjectedRevenueService</code> now reads it too).</td></tr>
       </tbody>
     </table>
@@ -464,7 +466,7 @@
       <li><a href="../index.html">Home</a></li>
     </ul>
 
-    <footer class="page-footer">Last verified against master <code>cd7136bc</code> (2026-10-31).</footer>
+    <footer class="page-footer">Last verified against master <code>0eaf7e6b</code> (2026-11-05).</footer>
   </main>
 </div>
 <script src="../assets/mermaid.min.js"></script>

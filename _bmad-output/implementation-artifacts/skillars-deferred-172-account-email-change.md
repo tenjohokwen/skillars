@@ -362,7 +362,7 @@ add the `frontend-tests` label so the Vitest job runs).
 - [x] T9 (AC10): frontend dialog, two pages, routes, API, privacy-card mapping, i18n (3 locales), specs.
 - [x] T10 (AC11): templates' four bundles + guard tests, copy fixes, `security-api-endpoints.md`, checklist, ledger,
       eval case.
-- [ ] T10b (AC11): dev docs in `docs/dev-docs` (correct + extend as listed), search index rebuilt, `check-docs` passes.
+- [x] T10b (AC11): dev docs in `docs/dev-docs` (correct + extend as listed), search index rebuilt, `check-docs` passes.
 - [ ] T11 (AC12): `/pr-review`, PR.
 
 ## Dev Notes
@@ -395,11 +395,134 @@ add the `frontend-tests` label so the Vitest job runs).
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5)
+
 ### Debug Log References
+
+- `EmailChangeResourceIT` first failed with 403 on `PUT /api/account/email`: the test used a client id outside the
+  test profile's machine-client allow-list (`ClientIdAccessDecisionManager`); switched to `testClientId`.
+- `ParentRegistrationServiceTest` (2): stubs on the mixed-case address; the shared helper looks up lowercased.
+- `i18nTemplateKeyResolutionSpec`: the two dynamic `t(errorMessageKey(err))` sites became one inside `errorText()`.
 
 ### Completion Notes List
 
+- **T0 / F14 confirmed and fixed.** The DB re-check reloaded the account by the token's username with no id check;
+  the chain-liveness check caught it only for tokens carrying a chain id. `JWTAuthorizationFilter.assertSameAccount`
+  now refuses a token whose `busId` differs from the reloaded account's id (fails open on a blank claim, like
+  `userIdOf`). Covered by a unit test in `JWTAuthorizationFilterTest` (red before the fix), not an IT.
+- **R5:** lowercasing lives in the entity setters (`User.setLogin`, `Customer.setEmail`) instead of each of the five
+  write sites, so every path (registration, change, admin bootstrap, erasure) is covered. V231 = collision guard +
+  backfill + `ux_user_email_lower` / `ux_user_login_lower` (mapped in `ApiAdvice`); `UserIdentityCaseIT` runs the
+  guard against a seeded collision inside a rolled-back transaction. Password reset matches the typed address in any
+  casing.
+- **Deviations from the Design text (deliberate):** public endpoints are `/api/email-change/confirm|undo` (own
+  controller and prefix, not under `/api/account`); the request PK is the project's `BaseEntity` TSID `bigint`, not
+  `uuid`; the double-click guard is a conditional UPDATE (`claimConfirm` / `claimUndo`) rather than `@Version` alone;
+  the 429 is a `ResponseStatusException` with reason `email.change.tooManyRequests` (the `@RateLimited` aspect's own
+  exception maps to 401, which the SPA treats as a session end); the reservation notice at registration goes through
+  a new `ReservedAddressAttemptEvent`.
+- **Verified by mutation:** removing the supersede on the taken path (F1) and disabling the reservation lookup each
+  turned their `EmailChangeServiceIT` test red; restored.
+- **Tests run (targeted, all green):** unit `JWTAuthorizationFilterTest`, `UserIdentityCaseTest`,
+  `EmailAddressAvailabilityTest`, `Parent/Player/CoachRegistrationServiceTest`, `GdprErasureServiceTest`,
+  `RegistrationDuplicateAttemptListenerTest`, `EmailTemplateFileParityTest`, `EmailTemplateSubjectKeyParityTest`,
+  `MessageBundleParityTest`, `NotificationCatalogTest`, `MigrationConventionLintTest`; IT `EmailChangeServiceIT` (15),
+  `EmailChangeResourceIT` (2), `UserIdentityCaseIT`, `PasswordResetIT`, `UserProfileServiceIT`,
+  `AccountManagementFacadeIT`, `ParentRegistrationResourceIT`, `GdprErasureIT`, `GdprChildScopeIT`,
+  `EnvelopeEntitySchemaIT`; full Vitest suite (122 files, 1368 tests), ESLint and Prettier on the changed frontend
+  files. Full `mvn verify` left to CI (project policy).
+- **T10b (dev docs):** `security` (corrected the "sends verification" row; new sections "Account email change" with a
+  sequence diagram and "Case-insensitive identity"; entity/service/endpoint/event tables; `assertSameAccount`; the
+  `EmailAddressAvailability` gotcha), `notification` (corrected "which nothing sends"; the three templates and their
+  variants), `database` (V231, V232), `frontend` (routes, pages, dialog), `glossary` (email-change reservation, undo
+  window); search index rebuilt; `check-docs --render` OK on 26 pages; headless-Chrome Mermaid check clean.
+- Audit rows for EMAIL_CHANGED / EMAIL_CHANGE_UNDONE are recorded with `authenticated = false`; in the ITs the audit
+  insert logs a `url` NOT NULL error because there is no HTTP request (same as the existing password-change path;
+  the listener swallows it).
+
 ### File List
+
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/implementation-artifacts/skillars-deferred-171-development-data-erasure-completeness.md`
+- `_bmad-output/implementation-artifacts/skillars-deferred-172-account-email-change.md` (new)
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/story-review.md`
+- `docs/deployment/provisioning-checklist.md`
+- `docs/security-api-endpoints.md`
+- `evals/review/cases/login-case-normalisation.yaml` (renamed from `evals/review/cases/_drafts/pending-login-case-normalisation.yaml`)
+- `src/frontend/src/api/emailChange.api.js` (new)
+- `src/frontend/src/components/profile/PrivacyDataSection.vue`
+- `src/frontend/src/components/profile/UpdateEmailDialog.vue`
+- `src/frontend/src/components/profile/__tests__/PrivacyDataSectionSpec.js`
+- `src/frontend/src/components/profile/__tests__/UpdateEmailDialogSpec.js` (new)
+- `src/frontend/src/composables/useSession.js`
+- `src/frontend/src/i18n/__tests__/i18nTemplateKeyResolutionSpec.js`
+- `src/frontend/src/i18n/de-DE/index.js`
+- `src/frontend/src/i18n/en-US/index.js`
+- `src/frontend/src/i18n/fr-FR/index.js`
+- `src/frontend/src/pages/EmailChangeConfirmPage.vue` (new)
+- `src/frontend/src/pages/EmailChangeUndoPage.vue` (new)
+- `src/frontend/src/pages/__tests__/EmailChangeLinkPagesSpec.js` (new)
+- `src/frontend/src/router/routes.js`
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprErasureService.java`
+- `src/main/java/com/softropic/skillars/platform/admin/service/GdprRequestService.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java`
+- `src/main/java/com/softropic/skillars/platform/notification/contract/EmailTemplate.java`
+- `src/main/java/com/softropic/skillars/platform/notification/infrastructure/listener/AccountChangeEmailListener.java`
+- `src/main/java/com/softropic/skillars/platform/notification/repo/NotificationRecipientLookup.java`
+- `src/main/java/com/softropic/skillars/platform/notification/service/NotificationCatalog.java`
+- `src/main/java/com/softropic/skillars/platform/security/api/AccountManagementFacade.java`
+- `src/main/java/com/softropic/skillars/platform/security/api/ApiAdvice.java`
+- `src/main/java/com/softropic/skillars/platform/security/api/EmailChangeResource.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/api/EmailChangeResultDto.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/api/EmailChangeTokenDto.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/api/ProfileResource.java`
+- `src/main/java/com/softropic/skillars/platform/security/audit/listener/AccountChangeEventListener.java`
+- `src/main/java/com/softropic/skillars/platform/security/config/AppEndpoints.java`
+- `src/main/java/com/softropic/skillars/platform/security/contract/event/AccountChangeEvent.java`
+- `src/main/java/com/softropic/skillars/platform/security/contract/event/ReservedAddressAttemptEvent.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/contract/exception/EmailChangeLinkInvalidException.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/contract/exception/RecentEmailChangeException.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilter.java`
+- `src/main/java/com/softropic/skillars/platform/security/infrastructure/listener/RegistrationDuplicateAttemptListener.java`
+- `src/main/java/com/softropic/skillars/platform/security/repo/Customer.java`
+- `src/main/java/com/softropic/skillars/platform/security/repo/EmailChangeRequest.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/repo/EmailChangeRequestRepository.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/repo/User.java`
+- `src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java`
+- `src/main/java/com/softropic/skillars/platform/security/service/EmailAddressAvailability.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/service/EmailChangeService.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/service/EmailChangeTokens.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/service/ParentRegistrationService.java`
+- `src/main/java/com/softropic/skillars/platform/security/service/PasswordResetService.java`
+- `src/main/java/com/softropic/skillars/platform/security/service/PlayerRegistrationService.java`
+- `src/main/java/com/softropic/skillars/platform/security/service/RegistrationDuplicateGuard.java`
+- `src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java`
+- `src/main/resources/db/migration/V231__user_email_login_case_insensitive.sql` (new)
+- `src/main/resources/db/migration/V232__email_change_requests.sql` (new)
+- `src/main/resources/i18n/messages.properties`
+- `src/main/resources/i18n/messages_de.properties`
+- `src/main/resources/i18n/messages_en.properties`
+- `src/main/resources/i18n/messages_fr.properties`
+- `src/main/resources/mails/emailChange.html` (new)
+- `src/main/resources/mails/emailChangeAddressInUse.html` (new)
+- `src/main/resources/mails/emailChangedNotice.html` (new)
+- `src/test/java/com/softropic/skillars/platform/admin/service/GdprErasureServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/marketplace/api/CoachProfileSelfEditIT.java`
+- `src/test/java/com/softropic/skillars/platform/notification/service/EmailTemplateFileParityTest.java`
+- `src/test/java/com/softropic/skillars/platform/security/api/AccountManagementFacadeIT.java`
+- `src/test/java/com/softropic/skillars/platform/security/api/EmailChangeResourceIT.java` (new)
+- `src/test/java/com/softropic/skillars/platform/security/infrastructure/jwt/filter/JWTAuthorizationFilterTest.java`
+- `src/test/java/com/softropic/skillars/platform/security/repo/UserIdentityCaseIT.java` (new)
+- `src/test/java/com/softropic/skillars/platform/security/repo/UserIdentityCaseTest.java` (new)
+- `src/test/java/com/softropic/skillars/platform/security/service/CoachRegistrationServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/security/service/EmailAddressAvailabilityTest.java` (new)
+- `src/test/java/com/softropic/skillars/platform/security/service/EmailChangeServiceIT.java` (new)
+- `src/test/java/com/softropic/skillars/platform/security/service/ParentRegistrationServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/security/service/PasswordResetIT.java`
+- `src/test/java/com/softropic/skillars/platform/security/service/PlayerRegistrationServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/security/service/UserProfileServiceIT.java`
+- `docs/dev-docs/**` (T10b, see Completion Notes)
 
 ### Change Log
 
