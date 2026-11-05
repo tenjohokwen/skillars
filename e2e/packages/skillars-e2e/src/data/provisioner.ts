@@ -448,6 +448,28 @@ export class Provisioner {
   }
 
   /**
+   * Run a scheduled job now through the e2e-profile trigger (E2eJobResource), as the bootstrap admin,
+   * instead of waiting for its schedule. Seed state that is already due first. The job holds its
+   * ShedLock while it runs; a 409 means another run has it, so this retries until its own run lands.
+   */
+  async runJob(name: 'pack-forfeiture', timeoutMs = 60_000): Promise<void> {
+    const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const response = await session.api.post(`/e2e/jobs/${name}`, {
+          expectStatus: [204, 409],
+        })
+        if (response.status() === 204) return
+        if (Date.now() > deadline) throw new Error(`Job ${name} stayed locked for ${timeoutMs}ms`)
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+      }
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
    * Publish APPROVED reviews of a coach and refresh the coach's rating aggregate, the way
    * CoachRatingService.recompute does after moderation. SQL seam: a review becomes visible only on a
    * Gemini verdict (C-8), and the stack has no Gemini stub yet. Each author must be a distinct account.
