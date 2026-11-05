@@ -346,7 +346,12 @@ test.describe('G · Pack lifecycle', () => {
           `^(${t('booking.requests.statusConfirmed')}|${t('booking.requests.statusUpcoming')})$`,
         ),
       )
-      await expect(bookings.status(bookings.booking(coachName))).toHaveText(/cancel/i)
+      // A pause cancellation is a system cancel on the family's behalf; it reads as plain cancelled.
+      await expect(bookings.status(bookings.booking(coachName))).toHaveText(
+        new RegExp(
+          `^(${t('booking.requests.statusCancelled')}|${t('booking.requests.statusCancelledParent')})$`,
+        ),
+      )
     },
   )
 })
