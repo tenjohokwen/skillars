@@ -133,6 +133,31 @@ export class AvailabilityScreen extends Screen {
   saveWindow = () => this.tid('availability-window-save')
   windowSaved = () => this.tid('availability-window-saved')
   windowError = () => this.tid('availability-window-error')
+  windowCancel = () => this.tid('availability-window-cancel')
+  prevWeek = () => this.tid('availability-prev-week')
+  nextWeek = () => this.tid('availability-next-week')
+  /** Blocks drawn in one day column; 0 is Monday. */
+  blocksOn = (dayIndex: number) => this.within(this.calendarDays().nth(dayIndex), 'calendar-block')
+  deleteWindow = (window: Locator) => this.within(window, 'calendar-window-delete')
+  deleteBlock = (block: Locator) => this.within(block, 'calendar-block-delete')
+
+  /** Pick the weekday (its long name in the app's locale) in the add/edit panel. */
+  chooseDay = (label: string) => pick(this.windowDay(), label)
+
+  // The personal-time block panel.
+  blockStartDate = () => this.tid('availability-block-start-date')
+  blockStartTime = () => this.tid('availability-block-start-time')
+  blockEndDate = () => this.tid('availability-block-end-date')
+  blockEndTime = () => this.tid('availability-block-end-time')
+  blockReason = () => this.tid('availability-block-reason')
+  saveBlock = () => this.tid('availability-block-save')
+  blockSaved = () => this.tid('availability-block-saved')
+
+  // The confirmation before a delete, or before an edit that leaves booked sessions outside the hours.
+  impactDialog = () => this.tid('availability-impact-dialog')
+  impactMessage = () => this.tid('availability-impact-message')
+  impactConfirm = () => this.tid('availability-impact-confirm')
+  impactCancel = () => this.tid('availability-impact-cancel')
 }
 
 export class PackTiersScreen extends Screen {

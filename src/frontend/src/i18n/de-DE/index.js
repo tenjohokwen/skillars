@@ -539,7 +539,15 @@ export default {
       addWindow: 'Wiederkehrendes Zeitfenster hinzufügen',
       addBlock: 'Persönliche Zeit blockieren',
       editWindow: 'Verfügbarkeitsfenster bearbeiten',
-      deleteConfirm: 'Möchten Sie dies wirklich löschen?',
+      deleteWindowTitle: 'Dieses Zeitfenster löschen?',
+      deleteWindowNoSessions: 'In diesen Zeiten sind keine kommenden Einheiten gebucht.',
+      deleteWindowImpact:
+        '{count} kommende Einheit liegt in diesen Zeiten. Sie bleibt gebucht, aber Familien können diese Zeiten nicht mehr anfragen. | {count} kommende Einheiten liegen in diesen Zeiten. Sie bleiben gebucht, aber Familien können diese Zeiten nicht mehr anfragen.',
+      deleteWindowConfirm: 'Zeitfenster löschen',
+      editWindowTitle: 'Dieses Zeitfenster ändern?',
+      editWindowImpact:
+        '{count} kommende Einheit liegt außerhalb der neuen Zeiten. Sie bleibt gebucht. | {count} kommende Einheiten liegen außerhalb der neuen Zeiten. Sie bleiben gebucht.',
+      editWindowConfirm: 'Änderungen speichern',
       bookingConflictWarning:
         'Sie haben eine Buchung in diesem Zeitraum. Änderungen gelten nur für zukünftige Verfügbarkeit.',
       blockAdded: 'Zeitblock erfolgreich gespeichert.',

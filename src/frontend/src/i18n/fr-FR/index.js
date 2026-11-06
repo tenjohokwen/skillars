@@ -2433,7 +2433,15 @@ export default {
       addWindow: 'Ajouter un créneau récurrent',
       addBlock: 'Bloquer du temps personnel',
       editWindow: 'Modifier le créneau de disponibilité',
-      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer ceci ?',
+      deleteWindowTitle: 'Supprimer ce créneau ?',
+      deleteWindowNoSessions: "Aucune séance à venir n'est réservée sur ces horaires.",
+      deleteWindowImpact:
+        '{count} séance à venir tombe sur ces horaires. Elle reste réservée, mais les familles ne pourront plus demander ces horaires. | {count} séances à venir tombent sur ces horaires. Elles restent réservées, mais les familles ne pourront plus demander ces horaires.',
+      deleteWindowConfirm: 'Supprimer le créneau',
+      editWindowTitle: 'Modifier ce créneau ?',
+      editWindowImpact:
+        '{count} séance à venir tombe hors des nouveaux horaires. Elle reste réservée. | {count} séances à venir tombent hors des nouveaux horaires. Elles restent réservées.',
+      editWindowConfirm: 'Enregistrer',
       bookingConflictWarning:
         "Vous avez une réservation pendant cette période. Les modifications ne s'appliquent qu'à la disponibilité future.",
       blockAdded: 'Bloc horaire enregistré avec succès.',
