@@ -49,7 +49,16 @@ export function tc(
   const forms = t(key, { n, ...params }, locale)
     .split('|')
     .map((form) => form.trim())
+  // Mirrors the app's plural rules (src/frontend/src/i18n/pluralRules.js): French takes the
+  // singular for 0 in a two-form message.
+  const singularForZero = locale.startsWith('fr')
   const index =
-    forms.length === 3 ? Math.min(Math.abs(n), 2) : forms.length === 2 ? (n === 1 ? 0 : 1) : 0
+    forms.length === 3
+      ? Math.min(Math.abs(n), 2)
+      : forms.length === 2
+        ? n === 1 || (singularForZero && n === 0)
+          ? 0
+          : 1
+        : 0
   return forms[index]!
 }
