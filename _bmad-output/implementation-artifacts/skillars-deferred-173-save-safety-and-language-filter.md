@@ -5,8 +5,8 @@ Status: ready-for-dev
 <!-- CREATED 2026-11-06 (/bmad-create-story) from ledger items RS10, RS11 and RS04, split out of
      skillars-deferred-172 by owner choice. Citations read at origin/master 6a19e395. skillars-deferred-172
      (PR #466) is not merged on this base: its sprint-status / deferred-work edits will conflict textually
-     (sprint-status last_updated block, the RS03 ledger line) and are resolved at rebase. Decisions D1-D4 are
-     recommendations until the owner confirms them. -->
+     (sprint-status last_updated block, the RS03 ledger line) and are resolved at rebase. Owner chose option 1
+     on D1-D4 on 2026-11-06. -->
 
 ## Story
 
@@ -90,9 +90,9 @@ rule), and the "RS10 + RS11 … and RS03 + RS04 … stay queued" sentence in its
 - Missed flow: the two lists differ. A coach can pick French, Spanish or Portuguese but no one can search for
   them; search offers Turkish, which no coach can pick.
 
-## Decisions (PENDING owner; recommendation first)
+## Decisions (owner, 2026-11-06: option 1 on each)
 
-- **D1 (RS10) — `@DynamicUpdate` on `Conversation`** (recommended). Each save writes only the columns that
+- **D1 (RS10) — `@DynamicUpdate` on `Conversation`** (OWNER DECIDED 2026-11-06: option 1). Each save writes only the columns that
   transaction changed: `getMessages` writes one last-read column, `sendMessage` writes `last_message_at`, the
   report and the unblock write `status`. Closes every cross-column race with one annotation and no migration,
   and matches the `User` precedent. Leaves same-column races as last-writer-wins (two tabs of one role reading;
@@ -100,14 +100,14 @@ rule), and the "RS10 + RS11 … and RS03 + RS04 … stay queued" sentence in its
   Alternatives: `@Version` + 409 (a GET that marks read would fail whenever the other party sends; needs
   retries); targeted `@Modifying` UPDATEs per writer (most precise, four new queries, and future writers can
   regress by using `save`).
-- **D2 (RS11) — update in place + validate** (recommended). Load, apply the new values to the same row, save:
+- **D2 (RS11) — update in place + validate** (OWNER DECIDED 2026-11-06: option 1). Load, apply the new values to the same row, save:
   one UPDATE, id kept, nothing deleted. Add `@Valid` and constraints to `AlertRuleRequest` for both POST and
   PUT. Alternative: keep delete-then-save but make it `@Transactional` (no loss, but the id still changes).
-- **D3 (RS04) — compare case-insensitively in the query** (recommended):
+- **D3 (RS04) — compare case-insensitively in the query** (OWNER DECIDED 2026-11-06: option 1):
   `EXISTS (SELECT 1 FROM unnest(languages) AS l WHERE lower(l) = lower(:lang))`. Stored values keep their
   display casing; no migration. Alternative: lowercase on save plus a data migration (profiles would then
   show "english").
-- **D4 (RS04 missed flow) — one shared language list** (recommended): a single frontend constant used by
+- **D4 (RS04 missed flow) — one shared language list** (OWNER DECIDED 2026-11-06: option 1): a single frontend constant used by
   the profile builder, the edit dialog and the search filter, = the builder's six plus Turkish (seven).
   Alternatives: the builder's six only (drop Turkish from search); leave the lists alone.
 
@@ -196,4 +196,4 @@ rule), and the "RS10 + RS11 … and RS03 + RS04 … stay queued" sentence in its
 
 ### Change Log
 
-- 2026-11-06: created (ready-for-dev), decisions D1-D4 pending owner.
+- 2026-11-06: created (ready-for-dev); owner decided D1-D4 (option 1 each).
