@@ -1,5 +1,6 @@
 package com.softropic.skillars.platform.security.service;
 
+import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
 import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.infrastructure.security.SecurityError;
@@ -113,6 +114,7 @@ public class EmailChangeService {
     private final SecurityUtil securityUtil;
     private final PasswordEncoder passwordEncoder;
     private final RateLimitingService rateLimitingService;
+    private final PessimisticLockRetryer lockRetryer;
     private final NotificationOutboxSupport notificationOutboxSupport;
     private final FrontendLinkBuilder frontendLinks;
     private final SecurityProperties securityProperties;
@@ -145,10 +147,11 @@ public class EmailChangeService {
                 REQUEST_WINDOW_MINUTES, TimeUnit.MINUTES)) {
             throw new ResponseStatusException(HttpStatus.TOO_MANY_REQUESTS, "email.change.tooManyRequests");
         }
-        // One request at a time per account (NO_WAIT; a concurrent one answers 409 generic.conflict whatever its
-        // target). Without it, two requests sent at once would tell whether an address is registered: only a free
-        // target inserts a row, and only that insert collides with the other's in ux_ecr_one_open_per_user.
-        userRepository.findByIdForUpdate(user.getId());
+        // One request at a time per account (NO_WAIT with bounded retry; one still blocked after the retries answers
+        // 409 generic.conflict whatever its target). Without it, two requests sent at once would tell whether an
+        // address is registered: only a free target inserts a row, and only that insert collides with the other's
+        // in ux_ecr_one_open_per_user.
+        lockRetryer.withBoundedRetry("EmailChangeService", () -> userRepository.findByIdForUpdate(user.getId()));
         final Optional<Instant> windowEnd = requestRepository.findOpenUndoWindowEnd(user.getId(), now);
         if (windowEnd.isPresent()) {
             throw new RecentEmailChangeException(RecentEmailChangeException.EMAIL_CHANGE_KEY, windowEnd.get());
