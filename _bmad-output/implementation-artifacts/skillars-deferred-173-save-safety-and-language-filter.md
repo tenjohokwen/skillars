@@ -152,16 +152,16 @@ rule), and the "RS10 + RS11 … and RS03 + RS04 … stay queued" sentence in its
 
 ## Tasks / Subtasks
 
-- [ ] T1 (AC1, AC2) `@DynamicUpdate` + comment on `Conversation`; new `ConversationLostUpdateIT` with the three
+- [x] T1 (AC1, AC2) `@DynamicUpdate` + comment on `Conversation`; new `ConversationLostUpdateIT` with the three
   interleavings (two threads + latches, or sequential `TransactionTemplate`s holding a loaded entity across a
   committed JDBC write); mutation run; rerun the messaging ITs in AC2.
-- [ ] T2 (AC3) `AlertRule.apply(...)` (or similarly named) and in-place `update`; drop `deleteById`.
-- [ ] T3 (AC4, AC5) Constraints + `@Valid`; `AlertRuleAdminIT` (HTTP, real DB): valid PUT keeps id and
+- [x] T2 (AC3) `AlertRule.apply(...)` (or similarly named) and in-place `update`; drop `deleteById`.
+- [x] T3 (AC4, AC5) Constraints + `@Valid`; `AlertRuleAdminIT` (HTTP, real DB): valid PUT keeps id and
   changes values; invalid PUT → 400 and row unchanged; unknown id → 404; invalid POST → 400. Run
   `AdminTierWebMvcTest`.
-- [ ] T4 (AC6) Query change + IT (extend an existing marketplace search IT if one seeds coach profiles,
+- [x] T4 (AC6) Query change + IT (extend an existing marketplace search IT if one seeds coach profiles,
   else a new `CoachLanguageSearchIT`).
-- [ ] T5 (AC7) Shared language constant, three components switched to it, Vitest; Prettier + ESLint.
+- [x] T5 (AC7) Shared language constant, three components switched to it, Vitest; Prettier + ESLint.
 - [ ] T6 (AC8) Ledger, eval case promotion + validator, docs + search index + check-docs.
 - [ ] T7 `/pr-review`, fix, PR (`PR_REVIEW_SKIP=1 gh pr create ...` first in the command; `frontend-tests` label).
 
@@ -186,14 +186,57 @@ rule), and the "RS10 + RS11 … and RS03 + RS04 … stay queued" sentence in its
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5)
+
 ### Debug Log References
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- T1 (AC1, AC2): `Conversation` is `@DynamicUpdate` with a comment naming the race. `ConversationLostUpdateIT`
+  (3 cases) loads the row, commits a change to another column in a REQUIRES_NEW transaction, then saves:
+  BLOCKED survives a read-mark save, `last_message_at` survives a report, coach and parent read marks both
+  survive. Mutation (annotation removed): all 3 red (status ACTIVE written back; the other two columns
+  overwritten with null). AbuseReportIT 6, ConversationResourceIT 17, MessagingServiceTest 22 green.
+- T2/T3 (AC3-AC5): `AlertRule.apply(...)`; `update` loads, applies, saves (no `deleteById`); `AlertRuleRequest`
+  constraints + `@Valid` on POST and PUT. `AlertRuleAdminIT` (HTTP, real DB, 4 tests): edit keeps the id and
+  writes every field; four invalid bodies (blank metric, threshold 1.5, channel SMS, window 0) answer 400 and
+  leave the row unchanged; unknown id 404; invalid POST 400 and nothing stored. Mutation (old resource): the
+  edit and invalid-edit tests red. `AdminTierWebMvcTest` 8 green with an unchanged bean set. Note: ids are
+  serialised as strings (TSID), so the IT compares the id as a string.
+- T4 (AC6): query uses `EXISTS (SELECT 1 FROM unnest(languages) AS l WHERE lower(l) = lower(:lang))`.
+  `CoachMarketplaceResourceIT`: its seed stored `{english}` in lowercase, which is why the existing language
+  test never caught the bug; it now stores `{English}` as the picker does, and a new test searches english /
+  ENGLISH / English (found) and French (none). Mutation (old query): both language tests red. 19 green.
+- T5 (AC7): `src/frontend/src/utils/coachLanguages.js` (`COACH_LANGUAGES`, seven) used by
+  `ProfileBuilderStep1.vue`, `EditCoachIdentityDialog.vue`, `MarketplacePage.vue`. `coachLanguagesSpec.js`
+  checks the list and scans the three components for the import and for any inline list (red with the old
+  MarketplacePage). Full Vitest 1360/1360, ESLint and Prettier clean. The worktree's `node_modules` is a
+  symlink to the main checkout's (git-ignored).
+- T6 (AC8): ledger lines deleted and header sentence updated; docs updated (notification PUT row and callout,
+  messaging Conversation row, marketplace search row, sequence diagram and callout); search index rebuilt;
+  check-docs OK on 26 pages. Eval case promotion follows the PR number.
 
 ### File List
+
+- src/main/java/com/softropic/skillars/platform/messaging/repo/Conversation.java
+- src/main/java/com/softropic/skillars/platform/notification/repo/AlertRule.java
+- src/main/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminResource.java
+- src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
+- src/test/java/com/softropic/skillars/platform/messaging/repo/ConversationLostUpdateIT.java (new)
+- src/test/java/com/softropic/skillars/platform/notification/api/AlertRuleAdminIT.java (new)
+- src/test/java/com/softropic/skillars/platform/marketplace/api/CoachMarketplaceResourceIT.java
+- src/frontend/src/utils/coachLanguages.js (new)
+- src/frontend/src/utils/__tests__/coachLanguagesSpec.js (new)
+- src/frontend/src/pages/marketplace/MarketplacePage.vue
+- src/frontend/src/components/profileBuilder/ProfileBuilderStep1.vue
+- src/frontend/src/components/profile/EditCoachIdentityDialog.vue
+- docs/dev-docs/notification/index.html, docs/dev-docs/messaging/index.html, docs/dev-docs/marketplace/index.html,
+  docs/dev-docs/assets/search-index.js
+- _bmad-output/implementation-artifacts/deferred-work.md, sprint-status.yaml, this story
+- evals/review/cases/language-filter-case.yaml (promoted from _drafts/pending-language-filter-case.yaml)
 
 ### Change Log
 
 - 2026-11-06: created (ready-for-dev); owner decided D1-D4 (option 1 each).
+- 2026-11-06: T1-T6 implemented with targeted tests and mutation checks.
