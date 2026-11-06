@@ -1,6 +1,6 @@
 # Story skillars-deferred-173: Saves that lose data, and the coach language filter
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-06 (/bmad-create-story) from ledger items RS10, RS11 and RS04, split out of
      skillars-deferred-172 by owner choice. Citations read at origin/master 6a19e395. skillars-deferred-172
@@ -241,3 +241,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 - 2026-11-06: created (ready-for-dev); owner decided D1-D4 (option 1 each).
 - 2026-11-06: T1-T7 done; /pr-review clean; PR #469; status review.
+- 2026-11-06: PR #469 merged as cfbf2cf0 (CI green); eval case language-filter-case gets fix_merge; status done.
