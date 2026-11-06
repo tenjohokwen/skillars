@@ -225,7 +225,7 @@ class AvailabilityServiceTest {
     // ----- windowImpact (owner decision 2026-11-06, Pitchside SES-10 option A) -----
 
     /** Monday 09:00-17:00 Berlin, with sessions next week at Mon 10:00, Mon 16:00 and Tue 10:00. */
-    private record ImpactFixture(UUID windowId) {}
+    private record ImpactFixture(UUID windowId, UUID coachId) {}
 
     private ImpactFixture stubImpact() {
         UUID coachId = UUID.randomUUID();
@@ -243,7 +243,7 @@ class AvailabilityServiceTest {
                 makeBooking(coachId, monday.toInstant()),
                 makeBooking(coachId, monday.withHour(16).toInstant()),
                 makeBooking(coachId, monday.plusDays(1).toInstant())));
-        return new ImpactFixture(windowId);
+        return new ImpactFixture(windowId, coachId);
     }
 
     @Test
@@ -262,6 +262,27 @@ class AvailabilityServiceTest {
         // Moving the window to Tuesday leaves both Monday sessions outside.
         assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), 2, LocalTime.of(9, 0), LocalTime.of(17, 0))
             .sessionsLeftOutside()).isEqualTo(2);
+    }
+
+    @Test
+    void windowImpact_forAnEdit_countsASessionThatWouldRunPastTheNewEnd() {
+        ImpactFixture f = stubImpact();
+        // Monday 09:00-10:30: the 10:00-11:00 session starts inside but ends outside; 16:00 is outside.
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), 1, LocalTime.of(9, 0), LocalTime.of(10, 30))
+            .sessionsLeftOutside()).isEqualTo(2);
+    }
+
+    @Test
+    void windowImpact_doesNotCountASessionAnotherWindowStillCovers() {
+        ImpactFixture f = stubImpact();
+        CoachAvailabilityWindow afternoon = makeWindow(UUID.randomUUID(), f.coachId());
+        afternoon.setStartTime(LocalTime.of(15, 0));
+        afternoon.setEndTime(LocalTime.of(18, 0));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(f.coachId()))
+            .thenReturn(List.of(makeWindow(f.windowId(), f.coachId()), afternoon));
+        // Deleting 09:00-17:00 leaves 10:00 outside; 16:00 is still inside the 15:00-18:00 window.
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), null, null, null).sessionsLeftOutside())
+            .isEqualTo(1);
     }
 
     @Test

@@ -411,6 +411,8 @@ class AvailabilityResourceIT extends AbstractIntegrationTest {
         assertThat(impact(impactUrl, coach)).isEqualTo(1);
         assertThat(impact(impactUrl + "?dayOfWeek=2&startTime=12:00&endTime=17:00", coach)).isEqualTo(1);
         assertThat(impact(impactUrl + "?dayOfWeek=2&startTime=09:00&endTime=12:00", coach)).isZero();
+        // 10:00-11:00 starts inside 09:00-10:30 but runs past its end.
+        assertThat(impact(impactUrl + "?dayOfWeek=2&startTime=09:00&endTime=10:30", coach)).isEqualTo(1);
         // A preview only: the window is still there.
         assertThat(jdbcTemplate.queryForObject(
             "SELECT COUNT(*) FROM marketplace.coach_availability_windows WHERE id = ?", Integer.class, windowId))

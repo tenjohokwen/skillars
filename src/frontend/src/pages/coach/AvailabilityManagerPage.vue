@@ -29,9 +29,18 @@
         <q-spinner size="48px" color="primary" />
       </div>
 
+      <!-- A failed or empty lookup leaves no coach to save for: say so instead of offering the panel. -->
+      <q-banner
+        v-else-if="!coachId"
+        rounded
+        class="q-mt-lg bg-negative text-white"
+        data-testid="availability-load-error"
+      >
+        {{ t('common.errorGeneric') }}
+      </q-banner>
+
       <template v-else>
         <WeeklyCalendar
-          v-if="coachId"
           :week-start="currentWeekStart"
           :windows="store.windows"
           :blocks="store.blocks"
@@ -271,7 +280,7 @@ const { t, te, locale } = useI18n()
 const store = useBookingStore()
 
 const coachId = ref(null)
-// True once the coach's id has been looked up (found or not).
+// True once the coach's id has been looked up (found or not); a miss shows an error, not the panel.
 const ready = ref(false)
 const coachTimezone = ref('UTC')
 

@@ -283,9 +283,11 @@ public class AvailabilityService {
     /**
      * Owner decision 2026-11-06 (Pitchside SES-10, option A): deleting or changing a window never
      * touches its bookings, but the coach is told first how many upcoming sessions would end up
-     * outside their hours. With no proposed hours this answers for a deletion (every session inside
-     * the window); with all three it answers for an edit (sessions inside now, outside afterwards).
-     * Read-only and unlocked: a preview, not a guard; the delete and update stay as they were.
+     * outside their hours. A session counts when it starts in this window and, after the change, no
+     * window covers it from start to end: not the coach's other windows (they may overlap) and, for
+     * an edit (all three proposed values), not the proposed hours either. With no proposed values
+     * this answers for a deletion. Read-only and unlocked: a preview, not a guard; the delete and
+     * update stay as they were.
      */
     @Transactional(readOnly = true)
     public WindowImpactResponse windowImpact(Long userId, UUID windowId, Integer dayOfWeek,
@@ -307,11 +309,22 @@ public class AvailabilityService {
         Instant now = Instant.now(ClockProvider.getClock());
         List<Booking> upcoming = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
             profile.getId(), SESSION_HOLDING_STATUSES, now, now.plus(3650, ChronoUnit.DAYS));
+        List<CoachAvailabilityWindow> remaining = windowRepository
+            .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).stream()
+            .filter(w -> !w.getId().equals(window.getId()))
+            .toList();
         long outside = upcoming.stream()
-            .map(b -> b.getRequestedStartTime().atZone(zone))
-            .filter(start -> startsInside(start, window.getDayOfWeek(), window.getStartTime(), window.getEndTime()))
-            .filter(start -> !allProposed
-                || !startsInside(start, dayOfWeek.shortValue(), startTime, endTime))
+            .filter(b -> startsInside(b.getRequestedStartTime().atZone(zone),
+                window.getDayOfWeek(), window.getStartTime(), window.getEndTime()))
+            .filter(b -> {
+                ZonedDateTime start = b.getRequestedStartTime().atZone(zone);
+                ZonedDateTime end = b.getRequestedEndTime() == null ? start : b.getRequestedEndTime().atZone(zone);
+                boolean coveredByOther = remaining.stream().anyMatch(w ->
+                    covers(start, end, w.getDayOfWeek(), w.getStartTime(), w.getEndTime()));
+                boolean coveredByProposal = allProposed
+                    && covers(start, end, dayOfWeek.shortValue(), startTime, endTime);
+                return !coveredByOther && !coveredByProposal;
+            })
             .count();
         return new WindowImpactResponse((int) outside);
     }
@@ -319,6 +332,13 @@ public class AvailabilityService {
     private static boolean startsInside(ZonedDateTime start, short dayOfWeek, LocalTime from, LocalTime to) {
         LocalTime time = start.toLocalTime();
         return start.getDayOfWeek().getValue() == dayOfWeek && !time.isBefore(from) && time.isBefore(to);
+    }
+
+    /** The whole session, start to end, falls on the window's day and within its hours. */
+    private static boolean covers(ZonedDateTime start, ZonedDateTime end, short dayOfWeek, LocalTime from, LocalTime to) {
+        return startsInside(start, dayOfWeek, from, to)
+            && end.toLocalDate().equals(start.toLocalDate())
+            && !end.toLocalTime().isAfter(to);
     }
 
     @Transactional
