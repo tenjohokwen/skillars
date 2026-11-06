@@ -98,6 +98,48 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
     expect(findStep5SubmitBtn(wrapper)).toBeTruthy()
   })
 
+  // Found by Pitchside SES-05: the auto-advance lived in the template and called setTimeout, which Vue
+  // template expressions cannot reach, so five technique stars threw and left the coach stuck (Next
+  // only renders for 1–4 stars). Driven through the rating's own event, not a setupState assignment.
+  it('five stars for technique moves on to the homework step by itself', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountComponent()
+      await flushPromises()
+      wrapper.vm.$.setupState.step = 2
+      wrapper.vm.$.setupState.currentRating = 'technique'
+      await flushPromises()
+
+      wrapper.findComponent({ name: 'QRating' }).vm.$emit('update:modelValue', 5)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(2)
+      vi.advanceTimersByTime(200)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(3)
+      expect(wrapper.text()).toContain('booking.wrapUp.step4Title')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('four stars for technique waits for Next', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mountComponent()
+      await flushPromises()
+      wrapper.vm.$.setupState.step = 2
+      wrapper.vm.$.setupState.currentRating = 'technique'
+      await flushPromises()
+
+      wrapper.findComponent({ name: 'QRating' }).vm.$emit('update:modelValue', 4)
+      vi.advanceTimersByTime(1000)
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('has no voice-note step, recorder or upload any more', async () => {
     const wrapper = mountComponent()
     await flushPromises()

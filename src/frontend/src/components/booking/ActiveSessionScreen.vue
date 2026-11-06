@@ -1,5 +1,5 @@
 <template>
-  <div class="active-session">
+  <div class="active-session" data-testid="active-session">
     <!-- Back button — only before 5 minutes have elapsed (coach tapped Start by accident) -->
     <q-btn
       v-if="!isPaused && elapsed < 300"
@@ -17,7 +17,9 @@
     </div>
 
     <!-- Timer -->
-    <div class="active-session__timer">{{ formattedElapsed }}</div>
+    <div class="active-session__timer" data-testid="active-session-timer">
+      {{ formattedElapsed }}
+    </div>
 
     <!-- Block progress pips -->
     <div class="active-session__pips">
@@ -62,6 +64,7 @@
       v-if="!isPaused"
       unelevated
       class="active-session__end-btn"
+      data-testid="active-session-end"
       :label="
         endAllowed ? t('booking.completion.endSession') : t('booking.completion.endSessionDisabled')
       "

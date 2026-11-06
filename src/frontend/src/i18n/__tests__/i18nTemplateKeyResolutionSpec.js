@@ -194,11 +194,11 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'same packErrorKey-chosen pack error message as ProfileBuilderStep3',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:898',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:913',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:909',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:924',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
@@ -325,12 +325,12 @@ const DYNAMIC_KEY_CALL_SITES = [
       'subject-summary field label: te()-guarded admin.appeals.subjectField.<backend map key>, raw key fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:675',
+    at: 'src/pages/parent/ParentBookingsPage.vue:676',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real no-show copy key, with a literal fallback',
   },
   {
-    at: 'src/pages/parent/ParentBookingsPage.vue:715',
+    at: 'src/pages/parent/ParentBookingsPage.vue:716',
     reason:
       't on a lookup-table value mapping a backend errorKey to a real proposal/withdraw copy key, with a literal-key fallback argument',
   },

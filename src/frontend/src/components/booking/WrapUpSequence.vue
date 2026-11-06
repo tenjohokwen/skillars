@@ -1,5 +1,5 @@
 <template>
-  <div class="wrap-up">
+  <div class="wrap-up" data-testid="wrap-up" :data-step="step">
     <!-- Step pip indicator -->
     <div class="wrap-up__pips">
       <div
@@ -18,6 +18,7 @@
         :label="t('booking.wrapUp.step1Label') + ': ' + playerName"
         class="q-mb-xl"
         size="xl"
+        data-testid="wrap-up-attended"
         @update:model-value="
           () => {
             attendanceTouched = true
@@ -29,6 +30,7 @@
         class="wrap-up__next-btn"
         :label="t('common.next')"
         :disable="!attendanceTouched"
+        data-testid="wrap-up-next"
         @click="step = 2"
       />
     </div>
@@ -41,6 +43,7 @@
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.wrapUp.step2Effort') }}</div>
         <q-rating
           v-model="effortRating"
+          data-testid="wrap-up-rating-effort"
           size="48px"
           color="amber"
           icon="star_border"
@@ -66,6 +69,7 @@
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.wrapUp.step2Focus') }}</div>
         <q-rating
           v-model="focusRating"
+          data-testid="wrap-up-rating-focus"
           size="48px"
           color="amber"
           icon="star_border"
@@ -91,19 +95,13 @@
         <div class="text-subtitle1 q-mb-sm">{{ t('booking.wrapUp.step2Technique') }}</div>
         <q-rating
           v-model="techniqueRating"
+          data-testid="wrap-up-rating-technique"
           size="48px"
           color="amber"
           icon="star_border"
           icon-selected="star"
           :max="5"
-          @update:model-value="
-            (v) => {
-              if (v === 5)
-                setTimeout(() => {
-                  if (techniqueRating === 5) step = 3
-                }, 200)
-            }
-          "
+          @update:model-value="onTechniqueRated"
         />
         <q-btn
           v-if="techniqueRating > 0 && techniqueRating < 5"
@@ -158,7 +156,13 @@
         </q-card>
       </div>
 
-      <q-btn unelevated class="wrap-up__next-btn" :label="t('common.next')" @click="step = 4" />
+      <q-btn
+        unelevated
+        class="wrap-up__next-btn"
+        :label="t('common.next')"
+        data-testid="wrap-up-next"
+        @click="step = 4"
+      />
     </div>
 
     <!-- Step 4: Session Recap (i18n keys keep their historical step5* names) -->
@@ -173,6 +177,7 @@
         maxlength="500"
         counter
         class="q-mb-md full-width"
+        data-testid="recap-what-we-did"
         :label="t('booking.wrapUp.step5WhatWeDidLabel')"
         :placeholder="t('booking.wrapUp.step5WhatWeDidPlaceholder')"
       />
@@ -184,6 +189,7 @@
         maxlength="500"
         counter
         class="q-mb-md full-width"
+        data-testid="recap-whats-next"
         :label="t('booking.wrapUp.step5WhatsNextLabel')"
         :placeholder="t('booking.wrapUp.step5WhatsNextPlaceholder')"
       />
@@ -204,6 +210,7 @@
         unelevated
         class="wrap-up__next-btn"
         :label="t('booking.wrapUp.step5Done')"
+        data-testid="wrap-up-done"
         :loading="submitting"
         :disable="
           !recapWhatWeDid.trim() ||
@@ -250,6 +257,16 @@ const effortRating = ref(0)
 const focusRating = ref(0)
 const techniqueRating = ref(0)
 const currentRating = ref('effort')
+
+// Five stars on the last axis moves on by itself, after a beat so the fifth star is seen. In the script,
+// not the template: Vue template expressions cannot reach setTimeout (not on its globals allow-list), so
+// the inline version threw and left a coach who gave five stars with no way forward (Next shows for 1–4).
+function onTechniqueRated(v) {
+  if (v !== 5) return
+  setTimeout(() => {
+    if (techniqueRating.value === 5) step.value = 3
+  }, 200)
+}
 const homeworkDrillIds = ref([])
 const recapWhatWeDid = ref('')
 const recapWhatsNext = ref('')
