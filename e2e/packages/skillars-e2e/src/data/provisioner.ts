@@ -484,10 +484,11 @@ export class Provisioner {
   async ensureConfigRow(key: string, codeDefault: string): Promise<void> {
     const sql = await this.sql()
     await sql.query(
-      `INSERT INTO main.platform_config (id, key, value, value_type, description, updated_at)
-       SELECT (SELECT COALESCE(max(id), 0) + 1 FROM main.platform_config), $1::varchar, $2::text,
-              'STRING', 'Seeded by the Pitchside e2e suite with its code default', now()
-        WHERE NOT EXISTS (SELECT 1 FROM main.platform_config WHERE key = $1::varchar)`,
+      // The id is the table's identity; ON CONFLICT (key) makes concurrent callers safe.
+      `INSERT INTO main.platform_config (key, value, value_type, description, updated_at)
+       VALUES ($1::varchar, $2::text, 'STRING',
+               'Seeded by the Pitchside e2e suite with its code default', now())
+       ON CONFLICT (key) DO NOTHING`,
       [key, codeDefault],
     )
   }

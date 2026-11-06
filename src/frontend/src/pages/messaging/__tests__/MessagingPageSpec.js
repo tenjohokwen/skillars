@@ -381,37 +381,39 @@ describe('MessagingPage.vue — messaging completion (feat/messaging-completion)
 
     // Pitchside MSG-17: the own list leaves out BLOCKED threads, so the side that did not report one
     // opened it by link with no summary and was offered a composer the server refuses.
-    it('a linked thread missing from the own list, whose history loads, is shown as blocked', async () => {
+    it('a linked thread missing from the own list has its summary fetched before it opens', async () => {
       routeState.query = { conversation: 'conv-9' }
       mountPage(undefined, { messaging: { activeConversationId: null } })
       const store = useMessagingStore()
       store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
       await flushPromises()
 
-      expect(store.markConversationBlocked).toHaveBeenCalledWith('conv-9')
+      expect(store.loadConversationSummary).toHaveBeenCalledWith('conv-9')
+      expect(store.loadConversationSummary.mock.invocationCallOrder[0]).toBeLessThan(
+        store.loadMessages.mock.invocationCallOrder[0],
+      )
     })
 
-    it('a linked thread in the own list is not marked blocked', async () => {
+    it('a linked thread already listed, or already summarised, is not fetched again', async () => {
       routeState.query = { conversation: 'conv-1' }
       mountPage(undefined, { messaging: { activeConversationId: null } })
-      const store = useMessagingStore()
+      let store = useMessagingStore()
       store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
       await flushPromises()
+      expect(store.loadConversationSummary).not.toHaveBeenCalled()
 
-      expect(store.markConversationBlocked).not.toHaveBeenCalled()
-    })
-
-    it('a linked thread whose history fails to load is not taken for blocked', async () => {
-      routeState.query = { conversation: 'conv-9' }
-      mountPage(undefined, { messaging: { activeConversationId: null } })
-      const store = useMessagingStore()
-      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
-      store.loadMessages.mockImplementation(async () => {
-        store.error = new Error('403')
+      while (mounted.length) mounted.pop().unmount()
+      routeState.query = { conversation: 'conv-5' }
+      mountPage(undefined, {
+        messaging: {
+          activeConversationId: null,
+          conversationMeta: { 'conv-5': { conversationId: 'conv-5', status: 'ACTIVE' } },
+        },
       })
+      store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
       await flushPromises()
-
-      expect(store.markConversationBlocked).not.toHaveBeenCalled()
+      expect(store.loadConversationSummary).not.toHaveBeenCalled()
     })
   })
 

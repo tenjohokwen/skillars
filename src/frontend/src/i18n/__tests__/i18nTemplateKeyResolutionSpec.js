@@ -224,7 +224,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'composerLockKey picks messaging.blockedBanner or messaging.cannotSend',
   },
   {
-    at: 'src/pages/messaging/MessagingPage.vue:483',
+    at: 'src/pages/messaging/MessagingPage.vue:479',
     reason: 'send error: messagingErrorI18nKey maps a backend code to a messaging.errors.* key',
   },
   {

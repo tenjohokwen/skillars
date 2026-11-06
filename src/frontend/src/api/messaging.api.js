@@ -8,6 +8,9 @@ export const initiateConversation = (coachId, playerId) =>
   api.post('/api/messaging/conversations', coachId ? { coachId, playerId } : { playerId })
 
 export const fetchConversations = () => api.get('/api/messaging/conversations')
+// One conversation's summary, whatever its status: the lists above leave BLOCKED threads out.
+export const fetchConversation = (conversationId) =>
+  api.get(`/api/messaging/conversations/${conversationId}`)
 
 export const sendMessage = (conversationId, content) =>
   api.post(`/api/messaging/conversations/${conversationId}/messages`, { content })
