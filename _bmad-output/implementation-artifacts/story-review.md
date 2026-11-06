@@ -1,192 +1,97 @@
-# Story review: skillars-deferred-172 (account email change: verified, reversible, safe)
+# Story review: skillars-deferred-174 (payment follow-ups)
 
-- **Audit date:** 2026-11-05
-- **Real HEAD:** `70aae81d docs(story): deferred-172 spells out the dev-docs updates` (worktree `skillars-deferred-168`, branch
-  `skillars-deferred-172-account-email-change`). `src` is identical to master `b80569ec` (`git diff --quiet origin/master HEAD -- src`).
-- Every citation was checked against this HEAD, not against any SHA the story names.
-- Method: four read-only verification agents (citations, ledger/precedent, mechanistic, corner cases), then my own
-  adversarial re-read of the findings that change the story (section 6).
+- Audit date: 2026-11-06
+- Real HEAD: `38f7d215 docs(story): create skillars-deferred-174 (payment follow-ups)` (source identical to master `c6d88a63`; `git diff c6d88a63 HEAD -- src` is empty).
+- Every citation was checked against this HEAD, not against any SHA the story states.
+- Method: four read-only agents (citations, ledger/precedents, Part A mechanics, Part B mechanics and corner cases), then my own second look at the findings that change the design (step 4b).
 
-## 1. Citation verification (Layer 1: 60 citations)
+## 1. Citation verification
 
-56 MATCH, 4 DRIFTED by a few lines, 0 missing.
+About 110 citations and named files were checked. **No line citation drifted.**
 
 | Citation | Verdict | Note |
 |---|---|---|
-| `AccountManagementFacade.registerAccount:129-150` | DRIFTED | Method runs to `:158` |
-| `changeEmail:171-188` | MATCH (ends `:187`) | `@RateLimited(key="change_email", capacity=5, duration=60)` |
-| `UserProfileService.updateUserEmail:115-150` | MATCH (ends `:151`) | |
-| `UpdateEmailDialog.vue:156-171` | MATCH (ends `:172`) | |
-| All others (`:231`, `:143`, `:218`, `:81-98`, `ParentRegistrationService:94`, `LoadUserByUserNameService:31-32`, `ApiAdvice:154-155`, `ProfileResource:85/89-99`, the 5 `findOneByLogin` sites, `:175-178`, `AccountChangeEmailListener:40-77`, `User.java:58`, `:445-456`, `RegistrationDuplicateGuard`, its listener, `enqueueEmail`, `AuthService:156/224/742-750`, `RandomUtil`, `EmailVerificationToken`, `PasswordResetService:41-52/74-76`, `RefreshTokenRepository`/`UserRepository` revocation methods, `DB_REFRESH_TOKEN_INTERVAL`, `UnsubscribePage`, `AppEndpoints`, `EmailTemplate:41`, `EmailTemplateFileParityTest:42`, V227, `SecurityUtil:381`, `FrontendLinkBuilder`, V230, `deferred-work.md:22-28/:336`, the eval case, i18n keys) | MATCH | |
+| `grafana-alerts.yml:793-815` | MATCH (off by one) | uid at 792, title 793, threshold 814, block runs to 816 |
+| `Svc:273-275` (absence age config) | DRIFTED | the config is `platform/config/service/ConfigBounds.java:273-275`; `Svc:273-275` is a REFUNDED comment. The story writes `ConfigBounds.PACK_ATTEMPT_ABSENCE_AGE_MINUTES, :273-275` right after `Svc`, so it reads ambiguously |
+| `OperationalBacklogMetrics`, `AdminTierGuard`, `ConfigBounds` | MATCH, wrong base | live under `infrastructure/` and `platform/config/`, not `platform/payment/` as the story's "relative to" rule implies |
+| `Svc.recordCardFingerprint` "retrieves the pm" | MATCH (wording) | goes through `paymentGateway.cardFingerprint` (`StripePaymentGateway:255`) |
+| all other `file:line` ranges, test names, docs, V232 as latest migration, 68 lock-audit sites | MATCH | |
+| Outbox "`platform.outbox`" | WRONG name | the table is `main.outbox_messages`; the module is `platform.outbox`. Cosmetic |
 
-**Factual claims the citations disprove (story text to correct):**
-- Background says the account facade lowercases `login`. It does not: `:140` sets login to the typed email, `toUser:227`
-  copies it raw; only `email` is lowercased (`:231`). `RegistrationDuplicateGuard:76` says so itself.
-- The template checklist says to add an `EMAIL_CHANGE` `NotificationCatalog.of` case. It exists (`NotificationCatalog:73`), and
-  the subject key `email.change.title` exists in all four bundles with the wrong wording for a confirm mail ("Email Address
-  Changed", `messages.properties:55`).
+## 2. Ledger and precedent attribution
 
-## 2. Ledger and precedent attribution (Layer 2)
+| Claim | Verdict |
+|---|---|
+| Nine ledger ids exist, severity/category match the mapping table | CONFIRMED |
+| "RS lines 159-175" | CONFIRMED but loose: the range also holds RS03d, RS05b, RS06c, RS06d (not in scope) |
+| RS05c "ledger fix idea (`Subscription.getCreated()`) is wrong" | PARTIAL: the ledger says "anchor at persist time from the create response", never `getCreated()`. The story's own corrected anchor matches the ledger's idea. Reword to avoid saying the ledger was wrong |
+| RS09d ledger wording is "off" | CONFIRMED as fair |
+| "No eval case is tied to these items" | PARTIAL: `evals/review/cases/337-subscription-entitlement-integrity.yaml` and `_drafts/340-card-sync-not-repointed.yaml` touch the same code (169's RS05/RS09). Not tied to these ids, but say so |
+| Skillars-deferred-167 "showed what a ten-item security story costs" | **WRONG**: 167 was a five-item bundle with 12 ACs, closed after seven `/pr-review` rounds |
+| 169 (V228, parking table, AC8 revert, ShedLock job, 30-min absence), 172 (`EMAIL_CHANGED` :241, `EMAIL_CHANGE_UNDONE` :293) | CONFIRMED |
+| release-held precedent (log-only audit, `requireFullAdmin`), `StripeCustomerErasureOutboxSupport` MANDATORY, `OutboxRowProcessor:55-58`, rule 5, count 68 | CONFIRMED |
+| Player-path comment at SubSvc:504-512 repeats the "already attached" claim | PARTIAL: :512 only says "see subscribeCoach"; the quote is at :183-184 |
+| Other open payment items not in scope | RS05b (invoice events not parked, "left on purpose"), RS06c (optional Idempotency-Key), RS06d (partial refund counted as captured). The story does not mention why they are out |
 
-| Claim | Sources checked | Verdict |
+## 3. Mechanistic claims
+
+Confirmed as written: the RS09b flow (no ownership check anywhere, fingerprint planted by `recordCardFingerprint`, SetupIntent id never reaches the server, `attachPaymentMethod` has no main callers, `PaymentMethod.getCustomer()` exists in stripe-java 28.4.0); the gateway full-row save (detached `save()` is a merge that writes the stale card; holds even if the entity were managed because there is no `@DynamicUpdate`); revert-before-CAS order; value-matching revert query; the three stall scenarios of RS09d; the stuck-attempt branches and statuses; the release-held pattern; the drain/purge mechanics for RS-poison; `recordUngrantedUpgrade` being safe to call after the persist transaction has rolled back; the EmailChangeService transaction scope.
+
+Corrections (verified by me, step 4b):
+
+| Claim | Evidence | Verdict |
 |---|---|---|
-| RS03 at `deferred-work.md:336`, tagged picked up | ledger, git log | Accurate |
-| `:22-28` "flip `fix_pr: pending` to the PR number" | ledger `:22-32`, `evals/review/README.md:110-120`, `validate.py`, #413/#414 precedent | **Incomplete**: closing a case also moves it out of `_drafts/`, drops the `pending-` prefix (file and `id`), keeps `input_rev` until merge, then adds `fix_merge` and removes `input_rev` |
-| The eval case is RS03's | case file, `real-sample.md` S04/S16 | Accurate, but it expects **two** findings: F1 email change (this story) and **F2 `registerAccount`/`toUser` raw-case login** (not in the story) |
-| RS10+RS11 / RS03+RS04 queued behind payments (`:35-40`) | ledger, sprint-status | Accurate ("Bundle 1" is conversation wording, not ledger) |
-| No other open ledger bullet to bundle or that contradicts | wide ledger greps | Accurate (`:3586` supports D1; `:307-323` supports the revocation order; `:324-334` related note) |
-| `CREATION_DUP` owner notice precedent | guard + listener, git log (#441) | Accurate paraphrase |
-| sha256 token hashing, `EmailVerificationToken` shape, revocation order, V227, `UnsubscribePage` | source, git log | Accurate |
-| New public endpoints go in `PUBLIC_ENDPOINTS` (`AppEndpointsConventionTest`) | `AppEndpoints`, test | Partly: the test only checks pattern anchoring; the class-level `@PreAuthorize` on `ProfileResource` is the real obstacle (F6) |
-| "New table, empty, additive: no lint opt-out needed" | `MigrationLint:793-809`, rules 1/3/5/7, V220/V222/V227/V228 | **False** (F5) |
+| D2(c): CAS `SET pm=:attempted WHERE pm IS NOT DISTINCT FROM :previous` | `getOrCreateStripeCustomer` (Svc:814-820) already wrote `attempted` before the charge, so on a normal success the column holds `attempted`, not `previous`; the CAS updates 0 rows. `scheduleSubscriptionCardSync` (Svc:577-588) also owns the outbox enqueue via `savePaymentMethodAndScheduleSync` in one transaction | **DEFECT**: as specified the sync is skipped on every ordinary purchase. The condition must also accept `pm = :attempted`, and the enqueue must stay with it |
+| AC1 "400 `payment.paymentMethodNotOwned` ... existing `PaymentGatewayException` handling" | `PaymentApiAdvice:18-28` maps every `PaymentGatewayException` to `unprocessableEntity()` (422) | **WRONG status**. A 400 needs `ResponseStatusException(BAD_REQUEST, key)` (the convention `Svc` uses); a Stripe outage during the check will answer 422. Pick and state both |
+| D1 impact: foreign pm "becomes the default on live subscriptions" | Stripe rejects a pm not attached to the customer; `syncPaymentMethod` catches it. The column is poisoned and the fingerprint planted, but the money impact is smaller | PARTIAL: lead with the fingerprint planting and the poisoned column |
+| D3: close to NO_CHARGE "if no PaymentIntent or nothing captured" | resolver treats a pending (processing) intent as UNKNOWN, and an absence verdict is age-gated (Svc:~369, ~397). A raw CAS ignores both, and skips `revertDeclinedCard` | **DEFECT**: close must refuse or hold on `pending()`, keep the absence-age gate, and go through `noCharge()` so the card revert runs |
+| D3: "refuse captured-no-pack with 409" | the job already retries `createPurchase` every cycle | PARTIAL: try `createPurchase` first and refuse only if it still fails |
+| D3: call `resolveAttempt(id)` from the resource | returns package-private `Resolution`; an unknown id returns UNKNOWN rather than throwing | needs a public service wrapper and an explicit `findById` for the 404 |
+| D4: skip such rows forever | record-failed (DB blip) and unreadable-charge (Stripe read) are recoverable by a later cycle | **DEFECT**: tier-deleted is permanent, the other two are not. Use a bounded retry before `needs_operator_since`, skip immediately only for tier-deleted |
+| D4/AC6 "no repeated tags" | `answerKnownAttempt` (client replay) still calls `resolveAttempt` on a skipped row | PARTIAL: true for the job only |
+| D4: tags in the regex | only `PACK_PURCHASE_RECORD_FAILED` (and `..._UNRECONCILED`) is in the MoneyIntegrity regex; `CHARGE_UNREADABLE`, `UNRESOLVABLE`, `LOOKUP_FAILED` are not | CONFIRMED for the story's focus; it also fires once on the request path (~:245) |
+| D5: anchor = persist time, skip parked events with `created <= anchor` | `handleSubscriptionUpdated` (:1456) applies a parked `incomplete` with no regression guard, so the bug is real. But creation uses `ERROR_IF_INCOMPLETE` (StripeClient:281) and the persisted state is always active/trialing | PARTIAL: bug confirmed, but see §5 for two holes in the fix |
 
-## 3. Mechanistic claims (Layer 3)
+## 4. Ledger-level observations
 
-| Claim | Verdict | Evidence |
-|---|---|---|
-| Two `PROFILE_CHANGE` mails today, neither via the outbox | HOLDS | `AccountChangeEmailListener:40-42` is `@Transactional @EventListener` (synchronous, no action filter); facade `buildRecipient:218` reads the mutated entity |
-| Mixed-case login locks the user out | HOLDS | `AuthService.login:113` and `LoadUserByUserNameService:31-32` both lowercase then exact-match; no case-insensitive lookup exists; registration services store `req.email()` raw, so such accounts already exist |
-| `businessId` = user id, `requireCurrentUserId` works | HOLDS | `Principal.instanceFrom:185` |
-| The 5 `UserProfileService` lookups are the stale-login sites | PARTIAL | Also `UserService:56` (`GET /v1/account`) and `:65` (`GET /api/account/profile`) |
-| Revocation order and propagation; no self-deadlock | HOLDS | `markAllUsedByUserId` REQUIRES_NEW touches only `refresh_tokens.used/version` (no FK re-check on `main.user`); `suspendUser` precedent locks, writes the user row, then revokes |
-| Access tokens die at the next DB re-check (≤ 5 min) | HOLDS | `JWTAuthorizationFilter` re-check every `DB_REFRESH_TOKEN_INTERVAL` |
-| Reset destination is `user.getEmail()` via the facade; completion looks up by key only | HOLDS | `sendPasswordResetMail:87` → `buildRecipient`; `completePasswordReset:63-65` |
-| `RegistrationDuplicateGuard` reusable | PARTIAL | Same package as `UserProfileService` but wired to registration (bcrypt timing, `flow`, phone, hard-coded bucket, mails `user.getEmail()`, exact-case lookup); `AccountManagementFacade` (`security.api`) cannot reach it |
-| `enqueueEmail` usable from the public endpoints | HOLDS | `MANDATORY`, no principal dependency. Note: raw tokens end up in the outbox payload JSON (no purge), so "only the hash is stored" is not true there |
-| A random encoded password is harmless | HOLDS, with a trap | No password history or counters; but `preparePasswordReset` throws for a locked or not-activated user (F3) |
-| Envelope CHECK re-union method | PARTIAL | `EMAIL_CHANGE` already present; V227 used a single DROP/ADD with `allow-validating-constraint` and `SET LOCAL lock_timeout`, not NOT VALID + VALIDATE |
+Nothing else needed beyond §2.
 
-## 4. Findings that survived re-verification
+## 5. Corner cases, false assumptions and missed flows (survived step 4b)
 
-### F1 (HIGH): the request endpoint leaks whether an address is registered
-Design 5: a free address supersedes the user's open request and writes a new one; a taken address writes nothing and
-supersedes nothing. A signed-in user who owns mailbox X requests X (gets a link), then requests Y, then clicks the X link: if it
-still works, Y is registered. Re-verified from the story's own Design 5 text. **Fix:** supersede any open request on every
-non-mismatch path (taken or free), and make the taken path's work (row write vs not) indistinguishable in effect.
+Ranked by consequence.
 
-### F2 (HIGH): an undo does not cancel the attacker's other requests, so they can take the account back
-Design 6 never checks that the request's `old_email` still equals the user's current email; Design 7 restores email and login
-but leaves other open requests and other confirmed requests' undo tokens alive; the partial unique index covers only
-unconfirmed rows. Trigger: attacker (knows the password) confirms A→B, requests B→C, owner undoes the first change (back to
-A), attacker confirms C; or attacker confirms A→B→C and, after the owner's undo, uses the second change's undo token (mailed
-to B) to restore B with the reset mail going to B. Re-verified from Design 6/7 text. **Fix (needs an owner rule):** undo
-supersedes every open request and invalidates every other undo token of the user; confirm refuses when `old_email` ≠ the
-current email; and either allow only one change per undo window or make the reservation/cool-off use the latest request.
+1. **D2(c) CAS never matches** (§3). Rewrite the condition and keep the enqueue in the same transaction. Evidence: Svc:577-588, Svc:814-820.
+2. **D5 / AC7 would skip cancellations.** A parked `deleted` is final by design, and a parked `updated` carrying `canceled` or `incomplete_expired` is routed to the deletion path. A `<= anchor` skip applied to those loses a cancellation made in the window between Stripe's response and the persist. The skip must apply only to non-terminal `updated` events. Same-second `past_due` and `cancel_at_period_end=true` events are also lost, because `persist*` hard-sets `cancelAtPeriodEnd=false`.
+3. **D5 leaves the live path open.** A live `incomplete` created in the anchor's second passes the strict `isBefore` and regresses `active`, while the same event parked would be skipped. A status-regression guard ("ignore `incomplete` when the row is not already INCOMPLETE") is simpler, needs no clock, and works for live and parked events. Recommend it as D5 option 3. Also: `SubscriptionService` uses `Instant.now()` throughout, not `ClockProvider`.
+4. **AC1 status code** (422 vs 400, §3). Also an unstubbed `PaymentGateway` mock returns `false` from the new `paymentMethodBelongsTo`, so existing `save-payment-method` WebMvc cases turn into 400s unless stubbed.
+5. **D2(b) needs an interface change.** `chargeAndCapture(UUID, Long, UUID, BigDecimal[, String])` takes no payment method; the gateway reads it from the row (:145). Use a new overload, not a changed signature: about 99 references in six test files, and `SessionPackPaymentServiceTest` stubs the 5-arg form with `anyString()` at eight places. Charging `attemptedCard` makes D1 mandatory, not optional.
+6. **D3 and D4 interplay.** If D4 skips a row, D3 must clear `needs_operator_since` on close.
+7. **AC12 migration**: rule 7 requires `SET LOCAL lock_timeout` before the `ALTER TABLE` (the lint enforces it) and rule 9 a header naming the lock. Neither is in AC12.
+8. **D7 retry safety is unresolved.** `recordUngrantedUpgrade`'s own javadoc says a client retry "is a NEW upgrade key - a second proration". After a successful retry the reconciliation row stays open (resolved only by hand), repeated failures create duplicate rows (no unique key), and the runbook line "refund or grant by hand" should first say "check whether a retry already granted it". Add an AC.
+9. **D6**: with `purgeOlderThan` no longer deleting linked rows, a poison row logs `[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED]` at error every 5 minutes forever; nothing alerts on the tag. Rate-limit it or fold it into the alert. No index on `stripe_subscription_id` in either subscription table (small tables, fine, but the class javadoc says every branch reads an indexed status). Query needs `HAVING COUNT(*) > 0`, as `awaited_wrap_ups` does, or an empty backlog reads age 0.
+10. **D8**: `undo` does not refuse a locked account (only `confirm` does), so the handler's locked/erased check is mandatory. The listener should enqueue only for users with a `stripe_customers` row. `AccountManagementFacade:255` updates an email through a DTO; check whether it is a real change path. `EmailChangeServiceIT` drains the outbox synchronously after commit, so "row enqueued" cannot be asserted from the table: assert on the handler or a spy. T9 has no rollback test for AC10's "none when the change rolls back".
+11. **Part A/B ownership if D0 = 1**: AC12 names "the new alert" (Part B) yet sits with Part A; AC11 and AC13 both edit `docs/dev-docs/payment/index.html` and the search index; no task covers the provisioning-checklist edit (T7 lists runbook only); AC8 omits the checklist. AC13 and AC12 need splitting along the D0 line.
+12. **Context cache gate** (`IntegrationTestConventionTest`, 14 pinned keys): the story's note is right, but the one real risk is the new IT "beside `SubscriptionLifecycleIT`" (T6): it must reuse that class's `@MockitoBean StripeClient` set exactly, or the pinned count rises to 15. `OperationalBacklogMetricsIT` and `EmailChangeServiceIT` are safe if they add no mocks.
+13. **Pre-existing, out of scope but worth a ledger line**: once an attempt is NO_CHARGE the open-per-parent index is free, so a second purchase can start while a stalled first thread is still alive (double pack). Other stale full-row writers exist at `Svc:817` and `StripeCustomerErasureOutboxSupport:45`; the gateway's stale write can also resurrect a GDPR-erased pm.
+14. **Story text**: the 167 comparison is wrong (§2); AC7 has no test for "live event older than the anchor"; the purge test in AC8 names no class.
 
-### F3 (HIGH): GDPR erasure and locked accounts are not handled
-Erasure keeps the user row and tombstones it (`GdprErasureService:422-429`: login and email `deleted.<id>@erased.io`,
-`locked`), so `ON DELETE CASCADE` never fires. An open request could then be confirmed, writing the erased person's real
-address back over the tombstone; `old_email`/`new_email`/`old_login` survive in the table and keep reserving the address. Undo
-on a locked account throws (`User.preparePasswordReset:450-452`), so an admin-suspended owner can never undo. **Fix:** confirm
-and undo refuse locked/erased users (owner decides what undo does for a suspended account); erasure deletes or scrubs the
-user's rows (V222 precedent).
+## 6. What did not survive re-verification
 
-### F4 (MEDIUM): the 72 h cool-off protects very little as designed
-Re-verified: `changePassword` needs only the current password (`UserProfileService:166`), so an attacker who switched the
-email (they had to know the password) does not need a reset at all. The owner who knows only the old address cannot start a
-reset either: `prepareForPasswordReset` finds the user by `currentEmail` (`PasswordResetService:42`) and the frontend sends the
-typed value as `currentEmail` (`account.api.js:43-47`), which is now the new address. The real protection is the undo link
-(which randomises the password and sends the reset to the old address). Also reset matching is exact-case, so AC1's "any
-casing" does not carry over. **Owner decision:** keep D4 as is, drop it, or replace it (e.g. block `changePassword` and reset
-for 72 h after a change unless initiated from the undo flow).
-
-### F5 (MEDIUM): V231 needs lint opt-outs and a lock timeout
-`MigrationLint` flags each non-concurrent `CREATE INDEX` without `-- migration-lint: allow-blocking-index` (V220/V222/V228
-precedent, even on a new table) and the validating `CHECK` re-union without `allow-validating-constraint` (V227); `SET LOCAL
-lock_timeout = '5s'` is needed (the FK locks `main.user`; `EmailRetryScheduler` polls `envelope_entity`); the header must state
-the "prod not live, table and code in one release" waiver (rules 1 and 5). The re-union must keep V227's values plus the two
-new ones.
-
-### F6 (MEDIUM): the public endpoints cannot live in `ProfileResource`
-It has a class-level `@PreAuthorize(HAS_ANY_ROLE)` (`ProfileResource:47-48`), so listing the paths in `PUBLIC_ENDPOINTS` is not
-enough. Put confirm and undo in their own controller. "The public axios client" does not exist: use the one `api` instance
-(`boot/axios.js:94`), as `UnsubscribePage` does.
-
-### F7 (MEDIUM): `AccountChangeEmailListener` mails `PROFILE_CHANGE` for every action
-It has no action filter, so re-publishing `EMAIL_CHANGED` at confirm and adding `EMAIL_CHANGE_UNDONE` would still send
-`PROFILE_CHANGE` (with an empty body for the new action, `profileChange.html:10-17`). The story must say the listener skips both.
-The audit listener records `login = userInfo.email` and `authenticated = true`; say which address to record and that confirm
-and undo are anonymous.
-
-### F8 (MEDIUM): design 9 (id lookups) works against session revocation
-Stale tokens only exist after confirm or undo, when the user's sessions were deliberately revoked. Today the login lookups fail
-closed for them; id lookups would let a revoked session keep editing the profile (including `changePassword`) for up to 5
-minutes. The list of 5 also misses `UserService:56/65`. **Recommendation:** drop design 9 (and its AC8 test) and let the
-login lookups fail; or, if kept, apply it everywhere and add a revocation check.
-
-### F9 (MEDIUM): RS03's second half (registration) is not in the story
-The eval case's F2 and the ledger bullet (`also S16: AccountManagementFacade.java`) cover `registerAccount`/`toUser` storing the
-login as typed; the role registration services do the same. The fix is small (lowercase at `:140`/`toUser`, and in the three
-registration services) and shares the root cause; without it the eval case cannot be closed as fixed. The guard's exact-case
-lookup also lets `Anna@X.com` register next to `anna@x.com` (case-sensitive constraints).
-
-### F10 (MEDIUM): the shared "taken" helper must not expect one row, and must replace the guard's lookup
-Mixed-case duplicates can already exist (case-sensitive constraints, raw storage), so a single-result `lower(email)` query can
-throw `IncorrectResultSizeDataAccessException`; use an exists/limit-1 query. Design 10 adds only the reservation check; say the
-helper replaces the guard's exact-case lookup, and that a reservation notice goes to the **reserved old address** (the guard
-and `notifyUserExists` both mail `user.getEmail()`, which after the change is the new, possibly attacker's, address), with
-wording fit for an address the account no longer uses.
-
-### F11 (MEDIUM): rate limiting and the user's own reservation
-- `change_email` is per IP and in memory per server; a signed-in user can send confirmation mails to many addresses. Add a
-  per-user (and per-target-address) bucket, as registration does.
-- A user who changed A→B and wants A back by a new request (not undo) is blocked by their own reservation and mailed the "in
-  use" notice; design 3 exempts only the current address. Exempt the user's own reservations.
-
-### F12 (MEDIUM): after confirm or undo the browser may still think it is signed in
-`/login` and `/reset-password` are guest-only routes; with the JWT fast path the old session lives up to 5 minutes, so the
-"sign in with the new address" step or the undo's reset link redirects to the dashboard and drops the reset key. Both new pages
-should clear the local session on success.
-
-### F13 (MEDIUM): AC9's "no page describes the email change today" is false
-Re-verified: `docs/dev-docs/security/index.html:186` ("Change email (sends verification)") and
-`docs/dev-docs/notification/index.html:456` (`EMAIL_CHANGE`, "which nothing sends"); also `docs/security-api-endpoints.md:183`
-and `docs/deployment/provisioning-checklist.md:569`. These must be corrected, not just added to.
-
-### F14 (MEDIUM, pre-existing, needs a check): a stale token can re-authorise as another account
-On the DB re-check the filter reloads the user by the token's username (`DaoAuthProvider:34`, `retrieveUser(username)`);
-Layer 3 found no comparison of the reloaded user id with the token's `busId`. Once an old address is free again (after undo, or
-after the 7-day reservation) and someone registers it, a stale token carrying that login would re-authorise as the new account.
-I re-read the username-based retrieval but did not trace the whole filter, so treat this as **verify before dev**: if
-confirmed, add a `busId` equality check (small, security-relevant).
-
-### F15 (LOW, story precision)
-- AC2 says the owner is notified "once"; with capacity 2 the third attempt is the first dropped.
-- Missing guard tests: `MessageBundleParityTest` (all bundles, no English in de/fr, MessageFormat quoting), frontend
-  `localeKeyParitySpec.js` and `i18nTemplateKeyResolutionSpec.js`, `NotificationCatalogTest:48`.
-- `ChangeEmailDto.password` has no `@NotNull` (BCrypt 500 on null; pre-existing).
-- The dialog's `notSameEmail` check is case-sensitive.
-- Unspecified: HTTP status for `linkInvalid`, masking of a one-character local part, what an open request does on a password
-  change or reset, the request's answer when the notice bucket is exhausted.
-- Not covered, worth a ledger line: the Stripe customer email is set only at creation (`StripePaymentGateway:647-648`);
-  `FileStorageService.softDelete:328` compares `created_by` with the current login, so pre-change files can't be deleted
-  through the generic path after a change.
-
-## 5. Corrections to the story text
-- Background: the facade does not lowercase `login`.
-- Template checklist: `EMAIL_CHANGE`'s catalog case and subject key exist; reword the subject, don't add.
-- AC9 docs: correct the existing statements (F13).
-- Eval case: the full close-out procedure (Layer 2 row 2), and it needs F2 too (F9).
-
-## 6. What did not survive re-verification, or was downgraded
-- **"Timing difference on the taken path"** (Layer 4 low): the notice is enqueued via the outbox in both cases' transaction; the
-  remaining difference is one INSERT. Folded into F1's fix rather than a separate finding.
-- **"Outbox keeps raw tokens"** (Layer 3): true, but the same already holds for OTPs and the outbox rows are internal. Kept as a
-  note in section 3, not a finding.
-- **"NOWAIT lock on double-click confirm"** (Layers 3 and 4): a story-precision point (wrap in `PessimisticLockRetryer` or map
-  the error to `linkInvalid`); folded into F15's "unspecified" list.
-- **"No FK self-deadlock"**: Layer 3 raised it as a risk to check and refuted it itself; confirmed by the `suspendUser`
-  precedent. Not a finding.
-- **Queued mails to the old address / opt-outs** (Layer 4 low): pre-existing behaviour of any email change; not specific to
-  this design. Dropped.
-- **Admin bootstrap does not check reservations** (Layer 4 low): only the bootstrap admin, at boot, with a fixed address. Dropped.
+- "A foreign pm becomes the default on live subscriptions": downgraded to PARTIAL (Stripe rejects the attach-less pm). The planted fingerprint stands.
+- Part B agent's remark that RS05c "persisted state is always active, so the story's scenario is only partly right": the underlying bug survives (a parked `incomplete` event does overwrite `active`, `handleSubscriptionUpdated` has no guard), so I kept it as a PARTIAL on the narrative, not a refutation. Same-second misordering is an extra hazard, not a replacement.
+- Part A agent's "double-pack after NO_CHARGE" and "other stale writers": real but outside this story's scope, kept as note 13 only.
+- Part A agent's "payment must not import `admin.repo` is only a convention, not a test": I did not independently re-search for an ArchUnit rule; treated as unverified.
+- Part B agent's "AccountManagementFacade:255 is a possible email path": unverified, left as a check item.
 
 ## 7. Recommendation
 
-- **Re-read by me against HEAD:** F1 and F2 (from the story's own Design text), F3 (erasure tombstone code), F4
-  (`changePassword` and the reset request inputs), F7 (listener has no filter), F13 (both doc lines). High confidence.
-- **Taken from the agents, not re-read by me:** F5 lint rules, F6 `@PreAuthorize`, F9/F10 registration storage and guard
-  lookup, F11, F12 route guards, F15 items. Medium-high (two agents agreed on F5, F6, F9).
-- **Needs a check before dev:** F14.
-- **Verdict:** do not start implementation as written. F1-F3 change the design; F4 and F8 need an owner call; F9 is a scope
-  call (recommend including it); F5-F7 and F10-F13 are corrections the story must carry.
+| Area | Confidence | Basis |
+|---|---|---|
+| Citations and file existence | High | checked line by line at HEAD, no drift |
+| Ledger mapping | High, one wording fix | 167 comparison is wrong; RS05c attribution is imprecise |
+| Part A: ownership check (D1), gateway save fix (D2a), admin close (D3), needs-operator (D4) | Medium | mechanics confirmed, but D2(c), D3 and D4 each have a concrete defect (§3, §5) |
+| Part B: D5 | Low as written | holes 2 and 3 above; the status-regression guard looks better |
+| Part B: D6, D7, D8 | Medium | mechanics confirmed; gaps in alerting, retry semantics and test design |
+| Not independently re-checked by me | | the `PaymentApiAdvice` and CAS findings I re-read; the rest rest on agent quotes. The Stripe-side behaviour of a repeated upgrade (zero proration) is unconfirmed from code. The ArchUnit question and the AccountManagementFacade path are open |
+
+Suggested story edits before dev: fix D2(c) and D3, split D4 into bounded-retry plus immediate skip, add D5 option 3, specify AC1's status code, add lock_timeout to AC12, add the D7 retry AC, and re-split AC11-AC13 along D0.
