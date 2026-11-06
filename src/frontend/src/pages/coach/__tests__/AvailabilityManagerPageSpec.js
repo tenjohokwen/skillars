@@ -87,6 +87,22 @@ describe('AvailabilityManagerPage.vue: booked sessions before a delete or edit',
     expect(useBookingStore().loadAvailability).not.toHaveBeenCalled()
   })
 
+  it('a coach with no profile yet is pointed to the builder, not offered the panel', async () => {
+    getProfileBuilderStatus.mockResolvedValueOnce({ coachId: null })
+    const wrapper = mount(AvailabilityManagerPage, {
+      global: {
+        plugins: [createTestingPinia({ createSpy: vi.fn })],
+        stubs: { WeeklyCalendar: true },
+      },
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+    expect(wrapper.find('[data-testid="availability-no-profile"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="availability-load-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="availability-window-save"]').exists()).toBe(false)
+    expect(useBookingStore().loadAvailability).not.toHaveBeenCalled()
+  })
+
   it('a delete states how many booked sessions fall in the window, and deletes only on confirm', async () => {
     getAvailabilityWindowImpact.mockResolvedValue({ sessionsLeftOutside: 2 })
     const { wrapper, store } = await mountPage()

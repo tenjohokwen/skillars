@@ -134,6 +134,9 @@ export class AvailabilityScreen extends Screen {
   windowSaved = () => this.tid('availability-window-saved')
   windowError = () => this.tid('availability-window-error')
   windowCancel = () => this.tid('availability-window-cancel')
+  /** Shown instead of the panel to a coach who has not started a profile. */
+  noProfile = () => this.tid('availability-no-profile')
+  openBuilder = () => this.tid('availability-open-builder')
   prevWeek = () => this.tid('availability-prev-week')
   nextWeek = () => this.tid('availability-next-week')
   /** Blocks drawn in one day column; 0 is Monday. */

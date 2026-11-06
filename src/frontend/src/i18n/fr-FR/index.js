@@ -2433,6 +2433,8 @@ export default {
       addWindow: 'Ajouter un créneau récurrent',
       addBlock: 'Bloquer du temps personnel',
       editWindow: 'Modifier le créneau de disponibilité',
+      profileFirst: 'Commencez votre profil de coach pour définir vos horaires de la semaine.',
+      openProfileBuilder: 'Ouvrir le créateur de profil',
       deleteWindowTitle: 'Supprimer ce créneau ?',
       deleteWindowNoSessions: "Aucune séance à venir n'est réservée sur ces horaires.",
       deleteWindowImpact:

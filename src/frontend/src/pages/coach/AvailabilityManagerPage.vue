@@ -29,7 +29,21 @@
         <q-spinner size="48px" color="primary" />
       </div>
 
-      <!-- A failed or empty lookup leaves no coach to save for: say so instead of offering the panel. -->
+      <!-- No coach profile yet (the builder was never started): every availability call needs one,
+           so point the coach there. The page itself stays open (AUTH-13, decision 2026-11-04). -->
+      <div v-else-if="noProfile" class="q-mt-lg text-center" data-testid="availability-no-profile">
+        <div class="text-body1 q-mb-md">{{ t('booking.availability.profileFirst') }}</div>
+        <q-btn
+          unelevated
+          color="primary"
+          no-caps
+          :label="t('booking.availability.openProfileBuilder')"
+          to="/coach/profile-builder"
+          data-testid="availability-open-builder"
+        />
+      </div>
+
+      <!-- A failed lookup leaves no coach to save for: say so instead of offering the panel. -->
       <q-banner
         v-else-if="!coachId"
         rounded
@@ -282,6 +296,8 @@ const store = useBookingStore()
 const coachId = ref(null)
 // True once the coach's id has been looked up (found or not); a miss shows an error, not the panel.
 const ready = ref(false)
+// The lookup worked but this coach has no profile yet.
+const noProfile = ref(false)
 const coachTimezone = ref('UTC')
 
 const editingWindow = ref(null)
@@ -534,7 +550,7 @@ onMounted(async () => {
     const res = await getProfileBuilderStatus()
     coachId.value = res?.coachId ?? null
     if (!coachId.value) {
-      store.error = new Error('No coach profile found for this account')
+      noProfile.value = true
       return
     }
   } catch (e) {

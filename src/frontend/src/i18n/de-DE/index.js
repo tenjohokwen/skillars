@@ -539,6 +539,8 @@ export default {
       addWindow: 'Wiederkehrendes Zeitfenster hinzufügen',
       addBlock: 'Persönliche Zeit blockieren',
       editWindow: 'Verfügbarkeitsfenster bearbeiten',
+      profileFirst: 'Legen Sie zuerst Ihr Trainerprofil an, um Ihre Wochenzeiten festzulegen.',
+      openProfileBuilder: 'Profil vervollständigen',
       deleteWindowTitle: 'Dieses Zeitfenster löschen?',
       deleteWindowNoSessions: 'In diesen Zeiten sind keine kommenden Einheiten gebucht.',
       deleteWindowImpact:

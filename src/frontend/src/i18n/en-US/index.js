@@ -1906,6 +1906,8 @@ export default {
       addWindow: 'Add Recurring Window',
       addBlock: 'Block Personal Time',
       editWindow: 'Edit Availability Window',
+      profileFirst: 'Start your coach profile to set your weekly hours.',
+      openProfileBuilder: 'Go to profile builder',
       deleteWindowTitle: 'Delete this window?',
       deleteWindowNoSessions: 'No upcoming sessions are booked in these hours.',
       deleteWindowImpact:
