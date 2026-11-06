@@ -233,7 +233,7 @@ describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
     expect(store.subscribePlayer).not.toHaveBeenCalled()
   })
 
-  it('offers no paid downgrade, and no change at all while the plan is set to cancel', async () => {
+  it('offers a paid downgrade but never the free tier, and no change while the plan is set to end', async () => {
     const tiers = ['ATHLETE', 'SEMI_PRO', 'PRO'].map((tier) => ({ tier, features: [] }))
     const offered = async (playerSubscription) => {
       const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
@@ -252,7 +252,9 @@ describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
       cancelAtPeriodEnd: false,
       billingInterval: 'YEARLY',
     }
-    expect(await offered({ ...plan, tier: 'PRO' })).toEqual([])
+    // PRO moves down to SEMI_PRO; ATHLETE is reached by cancelling.
+    expect(await offered({ ...plan, tier: 'PRO' })).toEqual(['SEMI_PRO'])
+    expect(await offered({ ...plan, tier: 'PRO', pendingTier: 'SEMI_PRO' })).toEqual([])
     expect(await offered({ ...plan, tier: 'SEMI_PRO' })).toEqual(['PRO'])
     expect(await offered({ ...plan, tier: 'SEMI_PRO', cancelAtPeriodEnd: true })).toEqual([])
     // A change keeps the interval, and SEMI_PRO and PRO are yearly only.
@@ -261,6 +263,66 @@ describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
       'SEMI_PRO',
       'PRO',
     ])
+  })
+
+  async function mountPaid(extra = {}) {
+    const { wrapper, pinia } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerSubscription: {
+        tier: 'PRO',
+        status: 'ACTIVE',
+        subscribed: true,
+        cancelAtPeriodEnd: false,
+        billingInterval: 'YEARLY',
+        currentPeriodEnd: '2027-03-12T00:00:00Z',
+        ...extra,
+      },
+      playerTiers: ['ATHLETE', 'SEMI_PRO', 'PRO'].map((tier) => ({ tier, features: [] })),
+      savedPaymentMethod: { hasCard: true },
+    })
+    const { usePaymentStore } = await import('src/stores/payment.store')
+    return { wrapper, store: usePaymentStore(pinia), setup: wrapper.vm.$.setupState }
+  }
+
+  it('a downgrade is confirmed first, then changes the tier on the subscription', async () => {
+    const { store, setup } = await mountPaid()
+    setup.openDowngrade('SEMI_PRO')
+    expect(setup.downgradeDialog).toBe(true)
+    expect(store.changePlayerTier).not.toHaveBeenCalled()
+    await setup.confirmDowngrade()
+    expect(store.changePlayerTier).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      newTier: 'SEMI_PRO',
+    })
+    expect(setup.downgradeDialog).toBe(false)
+  })
+
+  it('a pending downgrade is shown with a way to keep the current tier', async () => {
+    const { wrapper, store, setup } = await mountPaid({
+      pendingTier: 'SEMI_PRO',
+      pendingEffectiveAt: '2027-03-12T00:00:00Z',
+    })
+    expect(wrapper.find('[data-testid="subscription-change-pending"]').exists()).toBe(true)
+    await setup.handleKeepTier()
+    expect(store.changePlayerTier).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      newTier: 'PRO',
+    })
+  })
+
+  it('Cancel opens a confirmation; only its confirm cancels', async () => {
+    const { wrapper, store, setup } = await mountPaid()
+    await wrapper.find('[data-testid="subscription-cancel-btn"]').trigger('click')
+    expect(setup.cancelDialog).toBe(true)
+    expect(store.cancelPlayerSubscription).not.toHaveBeenCalled()
+    await setup.handleCancel()
+    expect(store.cancelPlayerSubscription).toHaveBeenCalledWith(LARGE_PLAYER_ID)
+    expect(setup.cancelDialog).toBe(false)
+  })
+
+  it('a plan set to end offers Keep my plan, which takes the cancel back', async () => {
+    const { store, setup } = await mountPaid({ cancelAtPeriodEnd: true })
+    await setup.handleKeepPlan()
+    expect(store.keepPlayerSubscription).toHaveBeenCalledWith(LARGE_PLAYER_ID)
   })
 
   it('a paid ATHLETE plan can be cancelled and is not labelled free', async () => {

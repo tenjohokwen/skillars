@@ -2442,6 +2442,21 @@ export default {
     paymentRetrying:
       'Karte gespeichert. Wir versuchen die Abonnementzahlung damit erneut; Ihr Tarif wird wiederhergestellt, sobald die Zahlung erfolgt ist. Das kann einige Minuten dauern.',
     updateCard: 'Karte aktualisieren',
+    keepPlan: 'Abonnement behalten',
+    keepTier: '{tier} behalten',
+    keepPlanSuccess: 'Ihr Abonnement verlängert sich wie gewohnt.',
+    keepTierSuccess: 'Sie bleiben bei {tier}.',
+    keepError: 'Ihr Abonnement konnte nicht beibehalten werden. Bitte versuchen Sie es erneut.',
+    changePending: 'Ihr Abonnement wechselt am {date} zu {tier}. Bis dahin behalten Sie {current}.',
+    downgradeTitle: 'Zu {tier} wechseln?',
+    downgradeBody:
+      'Sie behalten {current} bis zum {date} und wechseln dann zu {tier}. Der für diesen Zeitraum gezahlte Betrag wird nicht erstattet.',
+    downgradeConfirm: 'Zu {tier} wechseln',
+    downgradeSuccess: 'Ihr Abonnement wechselt am {date} zu {tier}.',
+    cancelTitle: 'Ihr {tier}-Abonnement kündigen?',
+    cancelBody:
+      'Sie behalten {tier} bis zum {date} und wechseln dann zum kostenlosen {free}-Tarif. Bis dahin können Sie Ihr Abonnement jederzeit behalten.',
+    cancelConfirm: 'Abonnement kündigen',
     errors: {
       paymentDeclined:
         'Ihre Karte wurde abgelehnt oder erfordert eine zusätzliche Authentifizierung. Bitte aktualisieren Sie Ihre Zahlungsmethode und versuchen Sie es erneut.',
@@ -2452,6 +2467,8 @@ export default {
       alreadyActive: 'Sie haben bereits ein aktives Abonnement.',
       inProgress:
         'Ihr Abonnement wird bereits eingerichtet. Bitte warten Sie einen Moment und laden Sie die Seite neu.',
+      cancelPending:
+        'Ihr Abonnement endet bald. Wählen Sie zuerst „Abonnement behalten“ und ändern Sie es dann.',
     },
     coach: {
       pageTitle: 'Coach-Abonnement',

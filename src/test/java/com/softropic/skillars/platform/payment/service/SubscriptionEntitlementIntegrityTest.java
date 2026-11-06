@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachProfile;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscription;
 import com.softropic.skillars.platform.marketplace.repo.CoachSubscriptionRepository;
+import com.softropic.skillars.platform.payment.contract.CoachSubscriptionResponse;
 import com.softropic.skillars.platform.payment.contract.SubscriptionEntitlement;
 import com.softropic.skillars.platform.payment.contract.event.SubscriptionExpiredEvent;
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
@@ -695,7 +696,180 @@ class SubscriptionEntitlementIntegrityTest {
         assertThat(marketplace.getTier()).isEqualTo(CoachSubscriptionTier.INSTRUCTOR);
     }
 
+    // ─── Owner decisions 2026-11-06: no change while a plan is set to end; a cancel can be taken back ─────
+
+    @Test
+    void cancelPending_upgradeRefusedWithoutStripeCall() throws StripeException {
+        coachSub.setTier("INSTRUCTOR");
+        coachSub.setCancelAtPeriodEnd(true);
+
+        assertThatThrownBy(() -> service.changeCoachTier(COACH_ID, "ACADEMY"))
+            .hasMessage("payment.subscription.cancelPending");
+        verify(stripeClient, never()).updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString());
+        assertThat(coachSub.getTier()).isEqualTo("INSTRUCTOR");
+    }
+
+    @Test
+    void cancelPending_downgradeRefused_noChangeScheduled() throws StripeException {
+        coachSub.setCancelAtPeriodEnd(true);
+
+        assertThatThrownBy(() -> service.changeCoachTier(COACH_ID, "INSTRUCTOR"))
+            .hasMessage("payment.subscription.cancelPending");
+        verify(stripeClient, never()).updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString());
+        verify(coachSubscriptionChangeRepository, never()).save(any());
+    }
+
+    @Test
+    void cancelPending_playerChangeRefused() throws StripeException {
+        PaymentPlayerSubscription playerSub = cancellingPlayerPlan();
+
+        assertThatThrownBy(() -> service.changePlayerTier(PARENT_ID, PLAYER_ID, "PRO"))
+            .hasMessage("payment.subscription.cancelPending");
+        verify(stripeClient, never()).updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString());
+        assertThat(playerSub.getTier()).isEqualTo("SEMI_PRO");
+    }
+
+    @Test
+    void keep_takesBackTheCancelAtStripeAndLocally() throws StripeException {
+        coachSub.setCancelAtPeriodEnd(true);
+
+        service.keepCoachSubscription(COACH_ID);
+
+        verify(stripeClient).keepSubscription(eq(SUB_ID), startsWith("sub-keep-"));
+        assertThat(coachSub.isCancelAtPeriodEnd()).isFalse();
+        // Kept, it can be changed again.
+        service.changeCoachTier(COACH_ID, "INSTRUCTOR");
+        verify(stripeClient).updateSubscriptionTier(eq(SUB_ID), eq("price_instr"), eq(false), startsWith("sub-downgrade-"));
+    }
+
+    @Test
+    void cancelAfterDowngrade_restoresThePriceFirst_soAKeptPlanRenewsAtItsOwnPrice() throws StripeException {
+        when(coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(COACH_ID)).thenReturn(true);
+        when(stripeClient.cancelSubscriptionAtPeriodEnd(SUB_ID)).thenReturn(Instant.now().plus(5, ChronoUnit.DAYS));
+
+        service.cancelCoachSubscription(COACH_ID);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeClient);
+        order.verify(stripeClient).updateSubscriptionTier(eq(SUB_ID), eq("price_acad"), eq(false), startsWith("sub-restore-"));
+        order.verify(stripeClient).cancelSubscriptionAtPeriodEnd(SUB_ID);
+        verify(coachSubscriptionChangeRepository, org.mockito.Mockito.atLeastOnce()).voidAllPendingForCoach(eq(COACH_ID), any());
+    }
+
+    @Test
+    void cancelWithoutPendingDowngrade_leavesThePriceAlone() throws StripeException {
+        when(stripeClient.cancelSubscriptionAtPeriodEnd(SUB_ID)).thenReturn(Instant.now().plus(5, ChronoUnit.DAYS));
+
+        service.cancelCoachSubscription(COACH_ID);
+
+        verify(stripeClient, never()).updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void cancelAfterDowngrade_priceRestoreFails_nothingIsCancelled() throws StripeException {
+        when(coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(COACH_ID)).thenReturn(true);
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
+            .thenThrow(new ApiConnectionException("down"));
+
+        assertThatThrownBy(() -> service.cancelCoachSubscription(COACH_ID))
+            .hasMessage("payment.subscription.stripeError");
+        verify(stripeClient, never()).cancelSubscriptionAtPeriodEnd(anyString());
+        assertThat(coachSub.isCancelAtPeriodEnd()).isFalse();
+    }
+
+    @Test
+    void keep_planNotSetToEnd_isLeftAlone() throws StripeException {
+        service.keepCoachSubscription(COACH_ID);
+
+        verify(stripeClient, never()).keepSubscription(anyString(), anyString());
+    }
+
+    @Test
+    void keep_stripeFailure_leavesTheCancelInPlace() throws StripeException {
+        coachSub.setCancelAtPeriodEnd(true);
+        when(stripeClient.keepSubscription(anyString(), anyString())).thenThrow(new ApiConnectionException("down"));
+
+        assertThatThrownBy(() -> service.keepCoachSubscription(COACH_ID))
+            .hasMessage("payment.subscription.stripeError");
+        assertThat(coachSub.isCancelAtPeriodEnd()).isTrue();
+    }
+
+    @Test
+    void keep_pastDuePlan_refused() throws StripeException {
+        coachSub.setCancelAtPeriodEnd(true);
+        coachSub.setStatus("PAST_DUE");
+
+        assertThatThrownBy(() -> service.keepCoachSubscription(COACH_ID))
+            .hasMessage("payment.subscription.notActive");
+        verify(stripeClient, never()).keepSubscription(anyString(), anyString());
+    }
+
+    @Test
+    void keep_supersededSubscription_notWritten() throws StripeException {
+        coachSub.setCancelAtPeriodEnd(true);
+        when(stripeClient.keepSubscription(anyString(), anyString())).thenAnswer(inv -> {
+            coachSub.setStripeSubscriptionId("sub_newer");
+            return null;
+        });
+
+        service.keepCoachSubscription(COACH_ID);
+
+        assertThat(coachSub.isCancelAtPeriodEnd()).isTrue();
+    }
+
+    @Test
+    void keep_playerNotOwned_refusedBeforeStripe() throws StripeException {
+        cancellingPlayerPlan();
+        when(parentPlayerLinkRepository.existsByParentIdAndPlayerId(9999L, PLAYER_ID)).thenReturn(false);
+
+        assertThatThrownBy(() -> service.keepPlayerSubscription(9999L, PLAYER_ID))
+            .hasMessage("payment.subscription.playerOwnership");
+        verify(stripeClient, never()).keepSubscription(anyString(), anyString());
+    }
+
+    @Test
+    void keep_playerPlan_takesBackTheCancel() throws StripeException {
+        PaymentPlayerSubscription playerSub = cancellingPlayerPlan();
+
+        service.keepPlayerSubscription(PARENT_ID, PLAYER_ID);
+
+        verify(stripeClient).keepSubscription(eq("sub_player"), startsWith("sub-keep-"));
+        assertThat(playerSub.isCancelAtPeriodEnd()).isFalse();
+    }
+
+    @Test
+    void response_showsThePendingDowngrade_untilAPlanIsSetToEnd() {
+        CoachSubscriptionChange change = new CoachSubscriptionChange();
+        change.setToTier("INSTRUCTOR");
+        change.setEffectiveAt(coachSub.getCurrentPeriodEnd());
+        when(coachSubscriptionChangeRepository
+            .findFirstByCoachIdAndAppliedFalseAndVoidedAtIsNullOrderByEffectiveAtDesc(COACH_ID))
+            .thenReturn(Optional.of(change));
+
+        CoachSubscriptionResponse shown = service.getCoachSubscription(COACH_ID);
+        assertThat(shown.pendingTier()).isEqualTo("INSTRUCTOR");
+        assertThat(shown.pendingEffectiveAt()).isEqualTo(coachSub.getCurrentPeriodEnd());
+
+        coachSub.setCancelAtPeriodEnd(true);
+        assertThat(service.getCoachSubscription(COACH_ID).pendingTier()).isNull();
+    }
+
     // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+    private PaymentPlayerSubscription cancellingPlayerPlan() {
+        PaymentPlayerSubscription playerSub = new PaymentPlayerSubscription();
+        playerSub.setPlayerId(PLAYER_ID);
+        playerSub.setTier("SEMI_PRO");
+        playerSub.setBillingInterval("YEARLY");
+        playerSub.setStatus("ACTIVE");
+        playerSub.setStripeSubscriptionId("sub_player");
+        playerSub.setCancelAtPeriodEnd(true);
+        when(parentPlayerLinkRepository.existsByParentIdAndPlayerId(PARENT_ID, PLAYER_ID))
+            .thenReturn(true);
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(PLAYER_ID)).thenReturn(Optional.of(playerSub));
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(PLAYER_ID))
+            .thenReturn(Optional.of(playerSub));
+        return playerSub;
+    }
 
     private CoachSubscriptionChange pendingChange(String toTier) {
         CoachSubscriptionChange change = new CoachSubscriptionChange();

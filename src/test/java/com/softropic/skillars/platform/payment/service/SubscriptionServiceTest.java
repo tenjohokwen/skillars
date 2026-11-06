@@ -4,6 +4,8 @@ import com.softropic.skillars.platform.payment.contract.PlayerSubscriptionRespon
 import com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscription;
 import com.softropic.skillars.platform.payment.repo.PaymentPlayerSubscriptionRepository;
+import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChange;
+import com.softropic.skillars.platform.payment.repo.PlayerSubscriptionChangeRepository;
 import com.softropic.skillars.platform.security.repo.ParentPlayerLinkRepository;
 import com.softropic.skillars.platform.security.repo.PlayerProfileRepository;
 import org.junit.jupiter.api.Test;
@@ -12,6 +14,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +31,7 @@ class SubscriptionServiceTest {
     @Mock ParentPlayerLinkRepository parentPlayerLinkRepository;
     @Mock PlayerProfileRepository playerProfileRepository;
     @Mock PaymentPlayerSubscriptionRepository paymentPlayerSubscriptionRepository;
+    @Mock PlayerSubscriptionChangeRepository playerSubscriptionChangeRepository;
 
     @InjectMocks SubscriptionService subscriptionService;
 
@@ -71,6 +75,28 @@ class SubscriptionServiceTest {
         // A CANCELLED row that kept its Stripe id subscribes afresh (assertCanSubscribe cancels the stale one).
         sub.setStatus("CANCELLED");
         assertThat(subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID).subscribed()).isFalse();
+    }
+
+    // Owner decision 2026-11-06: the plan page shows a pending paid downgrade and offers to take it back.
+    @Test
+    void getPlayerSubscription_reportsAPendingDowngrade() {
+        when(parentPlayerLinkRepository.existsByParentIdAndPlayerId(CALLER_ID, OWN_PLAYER_ID)).thenReturn(true);
+        PaymentPlayerSubscription sub = new PaymentPlayerSubscription();
+        sub.setPlayerId(OWN_PLAYER_ID);
+        sub.setTier("PRO");
+        when(paymentPlayerSubscriptionRepository.findByPlayerId(OWN_PLAYER_ID)).thenReturn(Optional.of(sub));
+        Instant periodEnd = Instant.parse("2027-03-12T00:00:00Z");
+        PlayerSubscriptionChange change = new PlayerSubscriptionChange();
+        change.setToTier("SEMI_PRO");
+        change.setEffectiveAt(periodEnd);
+        when(playerSubscriptionChangeRepository
+            .findFirstByPlayerIdAndAppliedFalseAndVoidedAtIsNullOrderByEffectiveAtDesc(OWN_PLAYER_ID))
+            .thenReturn(Optional.of(change));
+
+        PlayerSubscriptionResponse shown = subscriptionService.getPlayerSubscription(CALLER_ID, OWN_PLAYER_ID);
+
+        assertThat(shown.pendingTier()).isEqualTo("SEMI_PRO");
+        assertThat(shown.pendingEffectiveAt()).isEqualTo(periodEnd);
     }
 
     @Test

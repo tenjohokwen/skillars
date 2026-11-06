@@ -35,6 +35,10 @@ public interface PlayerSubscriptionChangeRepository extends JpaRepository<Player
 
     boolean existsByPlayerIdAndAppliedFalseAndVoidedAtIsNull(Long playerId);
 
+    /** The pending change a read shows the payer (no lock, unlike findPendingForPlayer). */
+    Optional<PlayerSubscriptionChange> findFirstByPlayerIdAndAppliedFalseAndVoidedAtIsNullOrderByEffectiveAtDesc(
+        Long playerId);
+
     // fix/payment-subscription-entitlements: voids EVERY pending change (findPendingForPlayer only ever
     // returned one, and its SKIP LOCKED silently missed a row the applicator was holding). Callers
     // lock the owning subscription row first, matching the applicator's subscription -> change order.
