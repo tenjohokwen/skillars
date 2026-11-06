@@ -401,11 +401,52 @@ class MessagingServiceTest {
         Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
         c.setParentId(PARENT_USER_ID);
         when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.supervised());
         when(messageRepository.findByConversationIdAndNotDeleted(any(), any()))
             .thenReturn(org.springframework.data.domain.Page.empty());
 
         assertThat(messagingService.getMessages(CONVERSATION_ID, PARENT_USER_ID, "PARENT",
             org.springframework.data.domain.PageRequest.of(0, 20))).isEmpty();
+    }
+
+    @Test
+    void getMessages_parentOnceThePlayerIsAnAdult_isRefusedBeforeAnyRead() {
+        // The thread keeps the parent's id after the 18th birthday; being on it no longer grants access.
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setParentId(PARENT_USER_ID);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
+
+        assertThatThrownBy(() -> messagingService.getMessages(CONVERSATION_ID, PARENT_USER_ID, "PARENT",
+                org.springframework.data.domain.PageRequest.of(0, 20)))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE));
+        verify(messageRepository, never()).findByConversationIdAndNotDeleted(any(), any());
+        verify(conversationRepository, never()).save(any());
+    }
+
+    @Test
+    void getConversationForSse_parentOnceThePlayerIsAnAdult_isRefused() {
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setParentId(PARENT_USER_ID);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
+
+        assertThatThrownBy(() -> messagingService.getConversationForSse(CONVERSATION_ID, PARENT_USER_ID, "PARENT"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE));
+    }
+
+    @Test
+    void getConversationForSse_parentOfAMinor_isAllowed() {
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setParentId(PARENT_USER_ID);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.supervised());
+
+        assertThat(messagingService.getConversationForSse(CONVERSATION_ID, PARENT_USER_ID, "PARENT")).isSameAs(c);
     }
 
     @Test
