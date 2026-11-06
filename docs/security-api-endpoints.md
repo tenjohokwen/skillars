@@ -180,7 +180,7 @@ Every method requires an authenticated session (any role).
 | Method | Path | Body | Success key |
 |--------|------|------|-------------|
 | GET | `/api/account/profile` | - | `UserDto` |
-| PUT | `/api/account/email` | `{"oldEmail", "newEmail", "password"}` | `email.change.requested` (same answer whether or not the address is free; nothing changes until the link mailed to it is used. 409 `email.change.recentChange` while the last change can still be undone, message = the ISO end; 429 after 3 requests an hour) |
+| PUT | `/api/account/email` | `{"oldEmail", "newEmail", "password"}` | `email.change.requested` (same answer whether or not the address is free; nothing changes until the link mailed to it is used. 409 `email.change.recentChange` while the last change can still be undone, message = the ISO end; 409 `generic.conflict` while another request of the same account is running; 429 after 3 requests an hour) |
 | PUT | `/api/account/password` | `{"currentPassword", "newPassword"}` | `password.changed` |
 | PUT | `/api/account/phone` | `{"phone"}` | `phone.changed` |
 | PUT | `/api/account/address` | `AddressDto` (`name`, `addressLine1`, `city`, `stateProvince`, ...) | `address.changed` |
@@ -194,7 +194,7 @@ skillars-deferred-172). Both answer 400 `email.change.linkInvalid` for any unusa
 | Method | Path | Body | Success |
 |--------|------|------|---------|
 | POST | `/api/email-change/confirm` | `{"token"}` | `{"code": "email.change.confirmed"}`; every session of the account is revoked |
-| POST | `/api/email-change/undo` | `{"token"}` | `{"code": "email.change.undone", "passwordResetSent"}`; `false` = suspended or not activated, password left alone |
+| POST | `/api/email-change/undo` | `{"token"}` | `{"code": "email.change.undone", "passwordResetSent"}`; `false` = suspended or not activated: password still replaced and any reset key cleared, but no reset link sent |
 
 ---
 
