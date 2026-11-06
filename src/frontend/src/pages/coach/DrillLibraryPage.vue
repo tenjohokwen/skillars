@@ -16,8 +16,16 @@
 
     <!-- Tab bar -->
     <q-tabs v-model="selectedLibrary" dense class="q-mb-md" @update:model-value="onTabChange">
-      <q-tab name="PLATFORM" :label="t('session.drillLibrary.platformTab')" />
-      <q-tab name="PRIVATE" :label="t('session.drillLibrary.myLibraryTab')" />
+      <q-tab
+        name="PLATFORM"
+        :label="t('session.drillLibrary.platformTab')"
+        data-testid="drill-tab-platform"
+      />
+      <q-tab
+        name="PRIVATE"
+        :label="t('session.drillLibrary.myLibraryTab')"
+        data-testid="drill-tab-private"
+      />
     </q-tabs>
 
     <!-- Search + Filter bar -->
@@ -29,6 +37,7 @@
         outlined
         clearable
         class="col"
+        data-testid="drill-search"
         @update:model-value="onSearchInput"
       >
         <template #prepend>
@@ -40,6 +49,7 @@
         outline
         :label="t('session.drillLibrary.filterButton')"
         icon="filter_list"
+        data-testid="drill-filter"
         @click="showFilters = true"
       >
         <q-badge v-if="activeFilterCount > 0" color="primary" floating>
@@ -59,6 +69,7 @@
       <div
         v-if="sessionStore.drills.length === 0 && (localSearchQuery || activeFilterCount > 0)"
         class="flex flex-center column q-pa-xl text-center"
+        data-testid="drill-no-results"
       >
         <q-icon name="search_off" size="64px" color="grey" class="q-mb-md" />
         <div class="text-h6 q-mb-sm">{{ t('session.drillLibrary.noResults') }}</div>
@@ -76,6 +87,7 @@
             v-if="activeFilterCount > 0"
             outline
             :label="t('session.drillLibrary.clearFilters')"
+            data-testid="drill-no-results-clear-filters"
             @click="clearFilters"
           />
         </div>
@@ -85,6 +97,7 @@
       <div
         v-else-if="sessionStore.drills.length === 0 && !localSearchQuery && activeFilterCount === 0"
         class="flex flex-center column q-pa-xl text-center"
+        data-testid="drill-library-empty"
       >
         <q-icon name="sports_soccer" size="64px" color="grey" class="q-mb-md" />
         <div class="text-h6 q-mb-md">{{ t('session.drillLibrary.emptyLibrary') }}</div>
@@ -99,7 +112,7 @@
       </div>
 
       <!-- Drill cards grid -->
-      <div v-else class="drill-library-page__grid">
+      <div v-else class="drill-library-page__grid" data-testid="drill-grid">
         <DrillCard
           v-for="drill in sessionStore.drills"
           :key="drill.id"
@@ -115,7 +128,7 @@
 
     <!-- Filter sheet -->
     <q-dialog v-model="showFilters" position="bottom">
-      <q-card style="width: 100%; max-width: 600px">
+      <q-card style="width: 100%; max-width: 600px" data-testid="drill-filter-dialog">
         <q-card-section>
           <div class="text-h6">{{ t('session.drillLibrary.filterButton') }}</div>
         </q-card-section>
@@ -137,6 +150,7 @@
             outlined
             dense
             class="q-mb-sm"
+            data-testid="drill-filter-difficulty"
           />
           <q-select
             v-model="localFilters.equipment"
@@ -154,8 +168,18 @@
           />
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat :label="t('session.drillLibrary.clearFilters')" @click="clearFilters" />
-          <q-btn color="primary" :label="t('session.drillLibrary.apply')" @click="applyFilters" />
+          <q-btn
+            flat
+            :label="t('session.drillLibrary.clearFilters')"
+            data-testid="drill-filter-clear"
+            @click="clearFilters"
+          />
+          <q-btn
+            color="primary"
+            :label="t('session.drillLibrary.apply')"
+            data-testid="drill-filter-apply"
+            @click="applyFilters"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>

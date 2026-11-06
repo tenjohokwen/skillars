@@ -1299,6 +1299,114 @@ export class Provisioner {
     return phone
   }
 
+  // ─── Suite I part 4: drills, session plans, templates ─────────────────────────────────────────
+
+  /** A drill the coach authored (their PRIVATE library), through the product's own API. */
+  async privateDrill(
+    coach: CoachAccount,
+    drill: { name: string; difficultyTier?: string; primarySkill?: string },
+  ): Promise<string> {
+    const session = await this.login(coach)
+    try {
+      const created = await session.api.json<{ id: string }>('POST', '/session/drills', {
+        data: {
+          name: drill.name,
+          description: 'Authored by an e2e test.',
+          primarySkills: [drill.primarySkill ?? 'passing'],
+          secondarySkills: [],
+          repDensity: 20,
+          intensity: 5,
+          pressureLevel: 3,
+          cognitiveLoad: 3,
+          matchRealism: 3,
+          weakFootBias: false,
+          difficultyTier: drill.difficultyTier ?? 'U12',
+          equipmentRequired: ['ball'],
+          coachingPoints: ['Head up before the first touch'],
+        },
+      })
+      return created.id
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** The platform library as a coach sees it, name and id. */
+  async platformDrills(coach: CoachAccount): Promise<{ id: string; name: string }[]> {
+    const session = await this.login(coach)
+    try {
+      return await session.api.json<{ id: string; name: string }[]>(
+        'GET',
+        '/session/drills?library=PLATFORM',
+      )
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * A saved session plan on a CONFIRMED booking: the four default blocks, with `drillIds` in the
+   * first. Needs a coach whose tier has the session builder (subscribeCoach INSTRUCTOR).
+   */
+  async sessionPlan(coach: CoachAccount, bookingId: string, drillIds: string[]): Promise<string> {
+    const session = await this.login(coach)
+    try {
+      const plan = await session.api.json<{ id: string }>('POST', '/session/sessions', {
+        data: {
+          bookingId,
+          status: 'SAVED',
+          developmentFocus: ['technical'],
+          blocks: [
+            ['WARM_UP', 'Warm-Up', 10],
+            ['TECHNICAL_FOUNDATION', 'Technical Foundation', 15],
+            ['GAME_INTENSITY', 'Game Intensity', 25],
+            ['COOL_DOWN_REVIEW', 'Cool-Down & Review', 10],
+          ].map(([blockType, blockName, durationMinutes], i) => ({
+            blockType,
+            blockName,
+            durationMinutes,
+            drills: i === 0 ? drillIds.map((drillId, order) => ({ drillId, order })) : [],
+          })),
+        },
+      })
+      return plan.id
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** A template saved from an existing session plan. */
+  async sessionTemplate(coach: CoachAccount, sessionId: string, name: string): Promise<string> {
+    const session = await this.login(coach)
+    try {
+      const template = await session.api.json<{ id: string }>('POST', '/session/templates', {
+        data: { sessionId, name },
+      })
+      return template.id
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** The booking's saved plan as the server holds it: block types in order, drill ids per block. */
+  async sessionPlanOf(
+    coach: CoachAccount,
+    bookingId: string,
+  ): Promise<{ blockType: string; drills: string[] }[]> {
+    const session = await this.login(coach)
+    try {
+      const plan = await session.api.json<{
+        blocks: { blockType: string; drills: { drillId: string; order: number }[] }[]
+      }>('GET', `/session/sessions/by-booking/${bookingId}`)
+      return plan.blocks.map((b) => ({
+        blockType: b.blockType,
+        drills: [...b.drills].sort((x, y) => x.order - y.order).map((d) => d.drillId),
+      }))
+    } finally {
+      await session.dispose()
+    }
+  }
+
   private api(context: APIRequestContext): ApiClient {
     return new ApiClient(context, { baseUrl: API_BASE_URL, requestIdPrefix: 'e2e-provision' })
   }

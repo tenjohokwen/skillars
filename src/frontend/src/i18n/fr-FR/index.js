@@ -758,9 +758,9 @@ export default {
       deployAction: 'Créer le plan de séance',
       deployAlreadyExists: 'Un plan de séance existe déjà pour cette réservation',
       deployBookingInvalid: 'Réservation introuvable ou non confirmée',
-      deployCount: '{count} utilisations',
+      deployCount: '{count} utilisation | {count} utilisations',
       lastDeployed: 'Dernière utilisation le {date}',
-      drillCount: '{count} exercices',
+      drillCount: '{count} exercice | {count} exercices',
       rename: 'Renommer',
       delete: 'Supprimer',
       confirmDelete:
