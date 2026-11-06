@@ -6,6 +6,7 @@ import com.softropic.skillars.platform.notification.contract.Recipient;
 import com.softropic.skillars.platform.notification.service.NotificationOutboxSupport;
 import com.softropic.skillars.platform.security.contract.event.RegistrationDuplicateAttemptEvent;
 import com.softropic.skillars.platform.security.contract.event.RegistrationPhoneInUseEvent;
+import com.softropic.skillars.platform.security.contract.event.ReservedAddressAttemptEvent;
 import com.softropic.skillars.platform.security.contract.util.ShortCode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -74,6 +75,35 @@ public class RegistrationDuplicateAttemptListener {
             notificationOutboxSupport.enqueueEmail(EmailTemplate.CREATION_DUP, recipient, data, sendId);
         } catch (Exception e) {
             log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.CREATION_DUP),
+                kv("sendId", sendId), e);
+        }
+    }
+
+    /**
+     * skillars-deferred-172: the typed address is the OLD address of the reserving account's recent email change
+     * (still undoable). Mailed to that address, in the email-change wording ({@code reserved=true}).
+     */
+    @TransactionalEventListener(phase = TransactionPhase.BEFORE_COMMIT)
+    public void onReservedAddressAttempt(ReservedAddressAttemptEvent event) {
+        String sendId = UUID.randomUUID().toString();
+        try {
+            Map<String, Object> data = new HashMap<>();
+            data.put("baseUrl", frontendLinks.base());
+            String helpCode = ShortCode.shortenInt(UUID.randomUUID().hashCode());
+            data.put("helpCode", helpCode);
+            data.put("reserved", true);
+            log.info("[REGISTRATION_RESERVED_ADDRESS_NOTICE] reserved-address notice queued",
+                kv("helpCode", helpCode), kv("reservingUserId", event.reservingUserId()), kv("sendId", sendId));
+
+            Recipient recipient = new Recipient();
+            recipient.setEmail(event.toAddress());
+            recipient.setLangKey(event.langKey());
+            recipient.setFirstname(event.firstName());
+            recipient.setLastname(event.lastName());
+
+            notificationOutboxSupport.enqueueEmail(EmailTemplate.EMAIL_CHANGE_ADDRESS_IN_USE, recipient, data, sendId);
+        } catch (Exception e) {
+            log.error("Failed to prepare/publish notification", kv("template", EmailTemplate.EMAIL_CHANGE_ADDRESS_IN_USE),
                 kv("sendId", sendId), e);
         }
     }

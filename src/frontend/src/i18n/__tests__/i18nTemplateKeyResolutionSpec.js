@@ -286,12 +286,9 @@ const DYNAMIC_KEY_CALL_SITES = [
       't on each entry of consequenceKeys, a computed list of literal privacy.consequence* keys',
   },
   {
-    at: 'src/components/profile/PrivacyDataSection.vue:308',
-    reason: 't on errorMessageKey(), which maps a backend error to a literal privacy.errors.* key',
-  },
-  {
-    at: 'src/components/profile/PrivacyDataSection.vue:349',
-    reason: 't on errorMessageKey(), the erasure-dialog twin of the call above',
+    at: 'src/components/profile/PrivacyDataSection.vue:293',
+    reason:
+      't on errorMessageKey(), which maps a backend error to a literal privacy.errors.* key (errorText(), shared by the export notice and the erasure dialog since skillars-deferred-172)',
   },
   {
     at: 'src/pages/admin/AdminAppealsPage.vue:36',

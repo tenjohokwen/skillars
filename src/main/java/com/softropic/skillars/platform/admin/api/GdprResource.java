@@ -4,6 +4,7 @@ import com.softropic.skillars.infrastructure.security.SecurityConstants;
 import com.softropic.skillars.platform.admin.contract.GdprRequestCreatedResponse;
 import com.softropic.skillars.platform.admin.contract.GdprRequestStatusDto;
 import com.softropic.skillars.platform.admin.service.GdprRequestService;
+import com.softropic.skillars.platform.security.service.CurrentSessionGuard;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
@@ -17,6 +18,8 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
+
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/gdpr")
@@ -34,6 +37,7 @@ public class GdprResource {
 
     private final GdprRequestService gdprRequestService;
     private final SecurityUtil securityUtil;
+    private final CurrentSessionGuard currentSessionGuard;
 
     @PostMapping("/export")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
@@ -53,8 +57,8 @@ public class GdprResource {
     @PostMapping("/erasure")
     @PreAuthorize(SecurityConstants.IS_AUTHENTICATED)
     @Observed(name = "gdpr.requestErasure")
-    public ResponseEntity<GdprRequestCreatedResponse> requestErasure() {
-        UUID requestId = gdprRequestService.requestErasure(resolveCurrentUserId());
+    public ResponseEntity<GdprRequestCreatedResponse> requestErasure(HttpServletRequest request) {
+        UUID requestId = gdprRequestService.requestErasure(resolveLiveSessionUserId(request));
         return ResponseEntity.accepted().body(new GdprRequestCreatedResponse(requestId));
     }
 
@@ -77,8 +81,9 @@ public class GdprResource {
     @PostMapping("/players/{playerId}/erasure")
     @PreAuthorize(PARENT_OF_CHILD)
     @Observed(name = "gdpr.requestChildErasure")
-    public ResponseEntity<GdprRequestCreatedResponse> requestChildErasure(@PathVariable Long playerId) {
-        UUID requestId = gdprRequestService.requestChildErasure(resolveCurrentUserId(), playerId);
+    public ResponseEntity<GdprRequestCreatedResponse> requestChildErasure(@PathVariable Long playerId,
+                                                                          HttpServletRequest request) {
+        UUID requestId = gdprRequestService.requestChildErasure(resolveLiveSessionUserId(request), playerId);
         return ResponseEntity.accepted().body(new GdprRequestCreatedResponse(requestId));
     }
 
@@ -91,5 +96,16 @@ public class GdprResource {
 
     private Long resolveCurrentUserId() {
         return securityUtil.requireCurrentUserId();
+    }
+
+    /**
+     * Erasure cannot be taken back, so it does not trust a token the filter has not re-checked for up to 5 min:
+     * after an email-change undo the party who had taken the account must not still be able to erase it
+     * (skillars-deferred-172).
+     */
+    private Long resolveLiveSessionUserId(HttpServletRequest request) {
+        Long userId = resolveCurrentUserId();
+        currentSessionGuard.assertNotRevoked(request, userId);
+        return userId;
     }
 }

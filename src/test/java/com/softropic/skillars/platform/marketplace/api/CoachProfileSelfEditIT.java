@@ -596,7 +596,7 @@ class CoachProfileSelfEditIT extends AbstractIntegrationTest {
         saveStep4(cookies);
         String photoKey = "coach_profile/" + COACH_ID + "/2026/06/" + java.util.UUID.randomUUID() + ".jpg";
         // created_by deliberately NOT this coach's login — mirrors the reachable real-world case of
-        // an email change (UserProfileService.updateUserEmail updates the user's login but not any
+        // an email change (EmailChangeService.confirm updates the user's login but not any
         // already-created file_storage_objects row's created_by). owner_id is still the coach.
         insertFileStorageObject(photoKey, "someone-else@skillars-test.com");
         httpTestClient.makeHttpRequest(

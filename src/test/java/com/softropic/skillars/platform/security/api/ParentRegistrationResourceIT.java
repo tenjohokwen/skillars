@@ -416,6 +416,24 @@ class ParentRegistrationResourceIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void resendVerification_matchesTheAddressInTheCasingItWasTyped() {
+        // skillars-deferred-172: the address is stored lowercased; the pending page sends back what was typed.
+        String typed = "Mixed.Case@Skillars-Test.com";
+        httpTestClient.makeHttpRequest(
+            baseUrl() + REGISTER_ENDPOINT, HttpMethod.POST, registrationBody(typed), jsonHeaders(), String.class);
+        testMailManager.clear();
+
+        httpTestClient.makeHttpRequest(
+            baseUrl() + RESEND_ENDPOINT, HttpMethod.POST, Map.of("email", typed), jsonHeaders(), Void.class);
+
+        assertThat(testMailManager.getEnvelopes().values())
+            .filteredOn(e -> e.emailTemplate() == EmailTemplate.PARENT_EMAIL_VERIFY)
+            .singleElement()
+            .satisfies(e -> assertThat(e.recipients()).extracting(Recipient::getEmail)
+                .containsExactly("mixed.case@skillars-test.com"));
+    }
+
+    @Test
     void resendVerification_alwaysReturns200_noAccountEnumeration() {
         ResponseEntity<Void> response = httpTestClient.makeHttpRequest(
             baseUrl() + RESEND_ENDPOINT,

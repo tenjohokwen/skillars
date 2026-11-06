@@ -197,6 +197,23 @@ describe('PrivacyDataSection.vue', () => {
     )
   })
 
+  it('maps an erasure held by a recent email change to an inline error with the date', async () => {
+    // skillars-deferred-172 R3: the message is the ISO instant the hold ends.
+    gdprApi.requestMyErasure.mockRejectedValue(
+      apiError('2026-11-12T10:00:00Z', 'gdpr.recentEmailChange'),
+    )
+    const wrapper = await mountSection()
+    wrapper.vm.$.setupState.confirmText = 'privacy.confirmWord'
+
+    await wrapper.vm.$.setupState.handleErasure()
+    await flushPromises()
+
+    expect(handleLogoutSpy).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="privacy-erasure-error"]').text()).toBe(
+      'privacy.errors.recentEmailChange',
+    )
+  })
+
   it('child scope uses the child endpoints, refreshes the child list and never logs out', async () => {
     gdprApi.requestChildExport.mockResolvedValue({ requestId: 'x1' })
     gdprApi.requestChildErasure.mockResolvedValue({ requestId: 'x2' })

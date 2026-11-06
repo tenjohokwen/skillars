@@ -60,7 +60,18 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActivatedFalseAndCreatedDateBeforeAndCleanupFailedAtIsNullOrderByIdAsc(
         Instant cutoffDate, Pageable pageable);
 
-    Optional<User> findOneByResetKey(final String resetKey);
+    /**
+     * The account a reset key belongs to, row-locked ({@code FOR UPDATE}, waiting) for the caller's transaction.
+     * Only password-reset completion uses it, and the lock is what makes the key check hold at write time: when
+     * another transaction is replacing the key (an email-change undo issues a new one and an unusable password,
+     * skillars-deferred-172), this waits, and Postgres re-evaluates {@code resetKey = :resetKey} against the
+     * committed row, so the superseded key finds nothing. An unlocked read would see the old key and then
+     * overwrite the undo's password. JPQL like {@link #findByIdForUpdate}, so the EAGER {@code addresses} are
+     * not joined into the locking statement. Must run inside the caller's transaction.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT u FROM User u WHERE u.resetKey = :resetKey")
+    Optional<User> findOneByResetKey(@Param("resetKey") final String resetKey);
 
     Optional<User> findOneByEmail(final String email);
 

@@ -21,7 +21,10 @@ import com.softropic.skillars.platform.security.contract.event.UserRegisteredEve
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.service.UserService;
 import com.softropic.skillars.platform.security.service.UserRegistrationService;
-import com.softropic.skillars.platform.security.service.UserProfileService;
+import com.softropic.skillars.platform.security.service.EmailChangeService;
+import com.softropic.skillars.platform.security.service.EmailAddressAvailability;
+import com.softropic.skillars.platform.security.contract.event.ReservedAddressAttemptEvent;
+import com.softropic.skillars.infrastructure.security.RateLimitingService;
 import com.softropic.skillars.platform.security.service.PasswordResetService;
 
 import org.slf4j.Logger;
@@ -37,6 +40,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import io.micrometer.common.util.StringUtils;
 
@@ -52,28 +56,34 @@ public class AccountManagementFacade {
 
     private final UserService userService;
     private final UserRegistrationService userRegistrationService;
-    private final UserProfileService userProfileService;
     private final PasswordResetService passwordResetService;
     private final ApplicationEventPublisher publisher;
     private final EmailRegistrationStrategy emailStrategy;
     private final SmsRegistrationStrategy smsStrategy;
+    private final EmailChangeService emailChangeService;
+    private final EmailAddressAvailability emailAddressAvailability;
+    private final RateLimitingService rateLimitingService;
     private final String host;
 
     public AccountManagementFacade(final UserService userService,
                                    final UserRegistrationService userRegistrationService,
-                                   final UserProfileService userProfileService,
                                    final PasswordResetService passwordResetService,
                                    final ApplicationEventPublisher publisher,
                                    final EmailRegistrationStrategy emailStrategy,
                                    final SmsRegistrationStrategy smsStrategy,
+                                   final EmailChangeService emailChangeService,
+                                   final EmailAddressAvailability emailAddressAvailability,
+                                   final RateLimitingService rateLimitingService,
                                    final FrontendLinkBuilder frontendLinks) {
         this.userService = userService;
         this.userRegistrationService = userRegistrationService;
-        this.userProfileService = userProfileService;
         this.passwordResetService = passwordResetService;
         this.publisher = publisher;
         this.emailStrategy = emailStrategy;
         this.smsStrategy = smsStrategy;
+        this.emailChangeService = emailChangeService;
+        this.emailAddressAvailability = emailAddressAvailability;
+        this.rateLimitingService = rateLimitingService;
         // Frontend origin: the mail templates append '/#/reset-password?…', '/#/login', etc.
         this.host = frontendLinks.base();
     }
@@ -128,10 +138,18 @@ public class AccountManagementFacade {
      */
     @RateLimited(key = "account_registration", capacity = 5, duration = 60) // 5 registrations per hour per IP
     public String registerAccount(final UserDto userDTO) {
-        final Optional<User> optionalUser = userRegistrationService.findUserByEmailOrLogin(
-            userDTO.getEmail() != null ? userDTO.getEmail().toLowerCase() : null,
-            userDTO.getLogin() != null ? userDTO.getLogin().toLowerCase() : null
-        );
+        // skillars-deferred-172: the shared answer first, so the old address of a recent email change (still
+        // undoable) counts as taken; its owner is told at that address, never at the account's current one.
+        final Optional<EmailAddressAvailability.Holder> holder =
+            emailAddressAvailability.holderOf(userDTO.getEmail(), null, Instant.now(ClockProvider.getClock()));
+        if (holder.isPresent() && holder.get().reserved()) {
+            notifyReservedAddress(holder.get());
+            return ShortCode.shortenInt(UUID.randomUUID().hashCode());
+        }
+        final Optional<User> optionalUser = holder.map(EmailAddressAvailability.Holder::user)
+            .or(() -> userRegistrationService.findUserByEmailOrLogin(
+                userDTO.getEmail() != null ? userDTO.getEmail().toLowerCase() : null,
+                userDTO.getLogin() != null ? userDTO.getLogin().toLowerCase() : null));
 
         final RegistrationNotificationStrategy strategy;
 
@@ -168,22 +186,16 @@ public class AccountManagementFacade {
                         EMAIL_OR_PW_MISMATCH));
     }
 
+    /**
+     * Starts an email change (skillars-deferred-172): nothing changes until the link mailed to the new address
+     * is used. Answers the same whether or not the new address is free; see {@link EmailChangeService#request}.
+     *
+     * @return a support code for the response
+     */
     @RateLimited(key = "change_email", capacity = 5, duration = 60)
     public String changeEmail(String oldEmail, String newEmail, String password) {
-        return userProfileService.updateUserEmail(oldEmail, newEmail, password)
-                .map(user -> {
-                    Map<String, Object> dataMap = ClientContextProvider.getClientContextMap();
-                    dataMap.put("action", "EMAIL_CHANGED");
-                    dataMap.put("oldValue", oldEmail);
-                    dataMap.put("newValue", newEmail);
-                    return sendMail(EmailTemplate.PROFILE_CHANGE,
-                            Instant.now(ClockProvider.getClock()).plus(Duration.ofDays(7)),
-                            dataMap,
-                            user);
-                })
-                .orElseThrow(() -> new OperationNotAllowedException("Email change not allowed.",
-                        Map.of("oldEmail", oldEmail, "newEmail", newEmail),
-                        EMAIL_OR_PW_MISMATCH));
+        emailChangeService.request(oldEmail, newEmail, password);
+        return ShortCode.shortenInt(UUID.randomUUID().hashCode());
     }
 
     private String sendMail(EmailTemplate emailTemplate,
@@ -205,6 +217,18 @@ public class AccountManagementFacade {
             LOGGER.info("Notification email queued: userId={}", user.getId());
         }
         return shortCode;
+    }
+
+    private void notifyReservedAddress(final EmailAddressAvailability.Holder holder) {
+        final User user = holder.user();
+        // The same per-account bucket as RegistrationDuplicateGuard's notices ("registration_duplicate_notice",
+        // 2 per hour): many IPs must not be able to flood one inbox. Exhaustion is silent.
+        if (!rateLimitingService.tryConsume(String.valueOf(user.getId()), "registration_duplicate_notice", 2, 60,
+                TimeUnit.MINUTES)) {
+            return;
+        }
+        publisher.publishEvent(new ReservedAddressAttemptEvent(
+            user.getId(), holder.notifyAddress(), user.getFirstName(), user.getLastName(), user.getLangKey()));
     }
 
     private User persistUser(final UserDto userDTO){

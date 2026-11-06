@@ -1,6 +1,6 @@
 # Story skillars-deferred-171: Development-data erasure completeness (guards on every development write, homework rows, the last recap column)
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-04 (/bmad-create-story equivalent, written by hand), right after skillars-deferred-170
      (#446, merged debd4dca) and the Dependabot batch #341-#348. Bundles the five still-open GDPR items
@@ -447,3 +447,4 @@ Claude Opus 5.5 (claude-opus-5-5)
   report's READY flip, both lost only when the profile lock stays held past the retry budget) are D2's busy-lock
   tradeoff. Owner accepted D2 (option A) after reviewing how rare it is and that `LockRetriesExhausted` and the
   Database dashboard's "Retries exhausted by lock" panel already surface it by lock name. Status -> review.
+- 2026-11-05: merged as 78bb2c9e (PR #451); PR CI and master CI green, image published. Status -> done.

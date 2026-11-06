@@ -21,6 +21,8 @@ import com.softropic.skillars.platform.session.contract.InvalidParamException;
 import com.softropic.skillars.platform.booking.contract.BookingStateTransitionException;
 import com.softropic.skillars.platform.marketplace.contract.MarketplaceException;
 import com.softropic.skillars.platform.security.contract.exception.CoachRegistrationException;
+import com.softropic.skillars.platform.security.contract.exception.EmailChangeLinkInvalidException;
+import com.softropic.skillars.platform.security.contract.exception.RecentEmailChangeException;
 import com.softropic.skillars.platform.security.contract.exception.FeatureGatedException;
 import com.softropic.skillars.platform.security.contract.exception.UserNotFoundException;
 import com.softropic.skillars.platform.security.contract.exception.PlayerProfileNotFoundException;
@@ -129,6 +131,25 @@ public class ApiAdvice {
         return toErrorDTO("generic.notFound", defaultMsg, helpCode);
     }
 
+    /** skillars-deferred-172: one answer for every unusable email-change link (see the exception). */
+    @ExceptionHandler(EmailChangeLinkInvalidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public ErrorDto emailChangeLinkInvalidHandler(final EmailChangeLinkInvalidException ex) {
+        final String helpCode = ErrorLog.logExpected(log, ex, "Email-change link refused");
+        return toErrorDTO(EmailChangeLinkInvalidException.ERROR_KEY, "This link can no longer be used.", helpCode);
+    }
+
+    /**
+     * skillars-deferred-172 R1/R3: refused while the last email change can still be undone. The message is the
+     * ISO-8601 instant the refusal ends, for the SPA to format; the key says which action was refused.
+     */
+    @ExceptionHandler(RecentEmailChangeException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorDto recentEmailChangeHandler(final RecentEmailChangeException ex) {
+        final String helpCode = ErrorLog.logExpected(log, ex, "Refused during an email-change undo window");
+        return new ErrorDto(helpCode, new ErrorMsg(ex.getErrorKey(), ex.getUntil().toString()));
+    }
+
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ErrorDto> responseStatusExceptionHandler(final ResponseStatusException ex) {
         return ResponseEntity.status(ex.getStatusCode())
@@ -153,6 +174,11 @@ public class ApiAdvice {
     private static final Map<String, String> CONSTRAINT_MAPPINGS = Map.of(
         "user_login_key", "user.login.duplicate",
         "user_email_key", "user.email.duplicate",
+        // skillars-deferred-172 (V231): the case-insensitive twins of the two above.
+        "ux_user_login_lower", "user.login.duplicate",
+        "ux_user_email_lower", "user.email.duplicate",
+        // skillars-deferred-172 (V232): two simultaneous change requests from one account; the second loses.
+        "ux_ecr_one_open_per_user", "email.change.requestInProgress",
         "excl_bkg_coach_slot_overlap", "booking.slotUnavailable",
         // skillars-deferred-88 AC10: two concurrent OTP-issue calls for one user hit the partial
         // unique index; the retry is itself a resend, so a plain "try again" is the right UX.
@@ -186,7 +212,9 @@ public class ApiAdvice {
         "uq_pcl_booking_refund",
         // skillars-deferred-103 AC1: concurrent tier creation on the same coach is a retryable race,
         // not an input error.
-        "idx_spt_one_active_per_coach"
+        "idx_spt_one_active_per_coach",
+        // skillars-deferred-172: a concurrent duplicate email-change request, retryable.
+        "ux_ecr_one_open_per_user"
     );
 
     // PostgreSQL exclusion-constraint violations (SQLSTATE 23P01) are not in Hibernate's

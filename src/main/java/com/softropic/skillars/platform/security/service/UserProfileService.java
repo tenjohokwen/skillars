@@ -45,6 +45,7 @@ public class UserProfileService {
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher publisher;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final EmailChangeService emailChangeService;
 
     /**
      * Updates the current user's basic information (name and language preference).
@@ -102,55 +103,6 @@ public class UserProfileService {
     }
 
     /**
-     * Updates the current user's email address.
-     * Requires the old email and current password for verification.
-     *
-     * @param oldEmail the current email address
-     * @param newEmail the new email address
-     * @param password the current password (for verification)
-     * @return the updated user if successful
-     * @throws ProfileActionException if email or password doesn't match
-     */
-    @PreAuthorize(SecurityConstants.HAS_ANY_ROLE)
-    public Optional<User> updateUserEmail(String oldEmail, final String newEmail, String password) {
-        return userRepository.findOneByLogin(securityUtil.getCurrentUser().getUsername()).map(u -> {
-            if (passwordEncoder.matches(password, u.getPassword()) && StringUtils.equals(oldEmail, u.getEmail())) {
-                String capturedOldEmail = u.getEmail();
-                u.setEmail(newEmail);
-                u.setLogin(newEmail);
-                log.debug("User profile updated",
-                    kv("operation", "user_profile"),
-                    kv("field", "email"),
-                    kv("status", "UPDATED"));
-
-                // Publish event for notification and audit (send to old email address)
-                AccountChangeUserInfo userInfo = new AccountChangeUserInfo(
-                        capturedOldEmail, // Override to send notification to OLD email for security
-                        u.getFirstName(),
-                        u.getLastName(),
-                        u.getLangKey(),
-                        u.getTitle(),
-                        u.getGender() != null ? u.getGender().name() : null
-                );
-                AccountChangeEvent event = new AccountChangeEvent(
-                        AccountChangeEvent.Action.EMAIL_CHANGED,
-                        capturedOldEmail,
-                        newEmail,
-                        userInfo
-                );
-                publisher.publishEvent(event);
-
-                return u;
-            }
-            final Map<String, Object> ctx = Map.of("oldEmail", oldEmail,
-                    "newEmail", newEmail,
-                    "passwordMatch", passwordEncoder.matches(password, u.getPassword()),
-                    "emailMatch", StringUtils.equals(oldEmail, u.getEmail()));
-            throw new ProfileActionException("Cannot update email address", ctx, SecurityError.EMAIL_OR_PW_MISMATCH);
-        });
-    }
-
-    /**
      * Changes the current user's password.
      * Requires the current password for verification.
      *
@@ -173,6 +125,8 @@ public class UserProfileService {
                     // SPA sends them back to sign in with the new password. Refresh tokens first (REQUIRES_NEW,
                     // rows this transaction has not touched), then the session epoch inside this transaction.
                     refreshTokenRepository.markAllUsedByUserId(user.getId());
+                    // skillars-deferred-172: a new password ends any pending email change.
+                    emailChangeService.endPendingRequest(user.getId());
                     user.setPassword(passwordEncoder.encode(newPassword));
                     userRepository.invalidateSessionsForUserInCurrentTransaction(
                         user.getId(), Instant.now(ClockProvider.getClock()));

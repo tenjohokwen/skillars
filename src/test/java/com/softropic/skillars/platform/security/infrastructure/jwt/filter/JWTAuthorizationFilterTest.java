@@ -576,6 +576,37 @@ class JWTAuthorizationFilterTest {
     }
 
     @Test
+    @DisplayName("skillars-deferred-172 AC9: a JWT whose login now belongs to a different account is denied "
+        + "on the DB-reauth branch")
+    void testLoginReassignedToAnotherAccount_isDenied() throws ServletException, IOException {
+        // An email change frees the old address (after an undo or the reservation window) and someone
+        // registers it. authorize() reloads by username, so a stale JWT carrying that login would come back
+        // as the NEW account. No chain claim here: that is the case the chain check skips (AC5 fail-open).
+        Principal authorizedPrincipal = new Principal.Builder()
+            .username("testuser").password("N/A").enabled(true)
+            .otpEnabled(false)
+            .authorities(List.of())
+            .businessId("2")
+            .build();
+        Authentication authorized = new UsernamePasswordAuthenticationToken(
+            authorizedPrincipal, null, authorizedPrincipal.getAuthorities());
+        ((UsernamePasswordAuthenticationToken) authorized).setDetails(authorizedPrincipal);
+
+        when(principal.getBusinessId()).thenReturn("1");
+        when(loginTokenManager.extractPrincipal(request)).thenReturn(principal);
+        when(loginTokenManager.isTokenFixed(request)).thenReturn(false);
+        when(loginTokenManager.hasDbRefreshTokenExpired(request)).thenReturn(true);
+        when(daoAuthProvider.authorize(any(), any())).thenReturn(authorized);
+        when(loginTokenManager.extractRefreshSessionId(request)).thenReturn(null);
+
+        filter.doFilterInternal(request, response, filterChain);
+
+        verify(response).setStatus(HttpServletResponse.SC_UNAUTHORIZED);
+        verify(filterChain, never()).doFilter(request, response);
+        verify(loginTokenManager, never()).renewLoginToken(any(), any(), any());
+    }
+
+    @Test
     @DisplayName("skillars-deferred-167 AC5: a JWT with no chain claim skips the check entirely — the "
         + "deliberate fail-open for tokens minted before that story")
     void testNoChainClaim_skipsTheCheck() throws ServletException, IOException {

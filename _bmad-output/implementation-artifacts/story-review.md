@@ -1,116 +1,192 @@
-# Story review: skillars-deferred-171 (development-data erasure completeness)
+# Story review: skillars-deferred-172 (account email change: verified, reversible, safe)
 
 - **Audit date:** 2026-11-05
-- **Real HEAD (git rev-parse / git log, run before reading the story):** `576e96d6 docs(story): create skillars-deferred-171 ...` (worktree `skillars-deferred-168`, branch `skillars-deferred-171-development-data-erasure-completeness`; code content is `3f6afc94` plus the story commit).
-- Every citation below was checked against this HEAD, not against any SHA the story names.
-- Method: four read-only verification agents (citations, ledger/precedent, mechanistic, corner cases), then my own adversarial re-read of the findings that matter (section 6).
+- **Real HEAD:** `70aae81d docs(story): deferred-172 spells out the dev-docs updates` (worktree `skillars-deferred-168`, branch
+  `skillars-deferred-172-account-email-change`). `src` is identical to master `b80569ec` (`git diff --quiet origin/master HEAD -- src`).
+- Every citation was checked against this HEAD, not against any SHA the story names.
+- Method: four read-only verification agents (citations, ledger/precedent, mechanistic, corner cases), then my own
+  adversarial re-read of the findings that change the story (section 6).
 
-## 1. Citation verification (Layer 1, 15 items)
+## 1. Citation verification (Layer 1: 60 citations)
 
-| Citation | Verdict | Evidence / corrected location |
+56 MATCH, 4 DRIFTED by a few lines, 0 missing.
+
+| Citation | Verdict | Note |
 |---|---|---|
-| Guard `isErasedUnderLock`, MANDATORY, retryer, refresh (`DevelopmentDataErasureGuard:44-55`) | MATCH | `:44` MANDATORY, `:49` `withBoundedRetry`, `:55` `refresh(..., PESSIMISTIC_WRITE)`; NOWAIT is the repo's `findByIdForUpdate` lock hint |
-| Erasure tombstone `:1820` | MATCH | `setDevelopmentDataErasedAt(Instant.now())` |
-| Callers `:156`, `:252`, `HomeworkAssignmentService:132`, `BookingService` | MATCH (one drift) | `assignOne` is declared at `:131`; the guard call is `:132` |
-| `RadarCompositeCalculationService` "own equivalent check" | MATCH | `:230` plain field check after its own lock, not the guard |
-| `RadarAssessmentService:47`, saveAll `:89` | MATCH | `@Transactional` `:46`, `saveAll` `:89`, publish `:92` |
-| `TimelineEventListener` `:275` / `:290` / `:301` / `:277` | MATCH | Both `writeTimelineEvent` overloads are `REQUIRES_NEW`; neither has a guard. 5-arg `:289-290` delegates to 6-arg `:300-301` |
-| `ReportGenerationService` `:155`, `:235`, `:253`, `:258`, `:266`, `:276` | MATCH (minor drift) | `@Transactional` is `:153`; `onReportGenerated` annotations `:249-253`, method `:254` |
-| `updateStatusAndStorageKey` returns `int`, unread | MATCH | `PerformanceReportRepository:32`; both main callers discard it |
-| SLU chain, `saveSluWithRetry :125`, `saveAll :153`, Javadoc `:55-57`, `:95-97` | MATCH | |
-| `SnapshotBatchWriter :28 / :42`; no `development.repo` import of `security.service` | MATCH | |
-| Group 3 `:1737-1744`, "12 fixed" `:1583`, comment `:470-476` | MATCH | |
-| V138 `:4567` cascade | MATCH | `homework_completions_assignment_id_fkey ... ON DELETE CASCADE` |
-| `anonymizeByPlayerId` / `anonymizeByCoachId` | MATCH, **story wording wrong** | `anonymizeByCoachId` nulls the same four columns as the player query, not "voice_note_text too" |
-| deferred-165 step 2, `604f7e67`, latest migration V170; V230 next free | MATCH | V229 is the latest on disk today |
-| V229 shape, rule 2; module-rule tests | MATCH | Only `MarketplaceDoesNotDependOnPaymentTest` exists; nothing forbids `development` to `filestorage` or `development.repo` to `security.service` |
+| `AccountManagementFacade.registerAccount:129-150` | DRIFTED | Method runs to `:158` |
+| `changeEmail:171-188` | MATCH (ends `:187`) | `@RateLimited(key="change_email", capacity=5, duration=60)` |
+| `UserProfileService.updateUserEmail:115-150` | MATCH (ends `:151`) | |
+| `UpdateEmailDialog.vue:156-171` | MATCH (ends `:172`) | |
+| All others (`:231`, `:143`, `:218`, `:81-98`, `ParentRegistrationService:94`, `LoadUserByUserNameService:31-32`, `ApiAdvice:154-155`, `ProfileResource:85/89-99`, the 5 `findOneByLogin` sites, `:175-178`, `AccountChangeEmailListener:40-77`, `User.java:58`, `:445-456`, `RegistrationDuplicateGuard`, its listener, `enqueueEmail`, `AuthService:156/224/742-750`, `RandomUtil`, `EmailVerificationToken`, `PasswordResetService:41-52/74-76`, `RefreshTokenRepository`/`UserRepository` revocation methods, `DB_REFRESH_TOKEN_INTERVAL`, `UnsubscribePage`, `AppEndpoints`, `EmailTemplate:41`, `EmailTemplateFileParityTest:42`, V227, `SecurityUtil:381`, `FrontendLinkBuilder`, V230, `deferred-work.md:22-28/:336`, the eval case, i18n keys) | MATCH | |
+
+**Factual claims the citations disprove (story text to correct):**
+- Background says the account facade lowercases `login`. It does not: `:140` sets login to the typed email, `toUser:227`
+  copies it raw; only `email` is lowercased (`:231`). `RegistrationDuplicateGuard:76` says so itself.
+- The template checklist says to add an `EMAIL_CHANGE` `NotificationCatalog.of` case. It exists (`NotificationCatalog:73`), and
+  the subject key `email.change.title` exists in all four bundles with the wrong wording for a confirm mail ("Email Address
+  Changed", `messages.properties:55`).
 
 ## 2. Ledger and precedent attribution (Layer 2)
 
 | Claim | Sources checked | Verdict |
 |---|---|---|
-| Ledger `:3527-:3530`, `:3537` say what the mapping table says, tagged `[PICKED UP by skillars-deferred-171]` | deferred-work.md, 162/163 story files, code | CONFIRMED. No other open erasure bullet was missed |
-| Not-in-story bullets `:3532`, `:3533`, chargeback | ledger, `TimelineEventListener`, guard | CONFIRMED |
-| 162 AC5 is the guard's design; 165 step 1 / step 2 | story files, `BookingCompletionService:707`, `git cat-file 604f7e67` | CONFIRMED (step 1 = 163 AC6.1) |
-| `PLAYER_NOT_BOOKABLE` exists; "existing guard callers log INFO and skip" | `BookingError:167`, callers | CODE EXISTS; **wording imprecise**: the INFO line is written by the guard, only the background callers skip, `BookingService` throws and `GdprRequestService` throws 409. 409 status mapping not traced |
-| `drop-prepared-in: V170` valid for DROP COLUMN | `MigrationLint` | Mechanically valid (170 < 230); see finding F5 for truthfulness |
-| REQUIRES_NEW row-lock note | `SecurityUtil:205/254`, `RefreshTokenRevocationService:46` etc. | CONFIRMED in code |
+| RS03 at `deferred-work.md:336`, tagged picked up | ledger, git log | Accurate |
+| `:22-28` "flip `fix_pr: pending` to the PR number" | ledger `:22-32`, `evals/review/README.md:110-120`, `validate.py`, #413/#414 precedent | **Incomplete**: closing a case also moves it out of `_drafts/`, drops the `pending-` prefix (file and `id`), keeps `input_rev` until merge, then adds `fix_merge` and removes `input_rev` |
+| The eval case is RS03's | case file, `real-sample.md` S04/S16 | Accurate, but it expects **two** findings: F1 email change (this story) and **F2 `registerAccount`/`toUser` raw-case login** (not in the story) |
+| RS10+RS11 / RS03+RS04 queued behind payments (`:35-40`) | ledger, sprint-status | Accurate ("Bundle 1" is conversation wording, not ledger) |
+| No other open ledger bullet to bundle or that contradicts | wide ledger greps | Accurate (`:3586` supports D1; `:307-323` supports the revocation order; `:324-334` related note) |
+| `CREATION_DUP` owner notice precedent | guard + listener, git log (#441) | Accurate paraphrase |
+| sha256 token hashing, `EmailVerificationToken` shape, revocation order, V227, `UnsubscribePage` | source, git log | Accurate |
+| New public endpoints go in `PUBLIC_ENDPOINTS` (`AppEndpointsConventionTest`) | `AppEndpoints`, test | Partly: the test only checks pattern anchoring; the class-level `@PreAuthorize` on `ProfileResource` is the real obstacle (F6) |
+| "New table, empty, additive: no lint opt-out needed" | `MigrationLint:793-809`, rules 1/3/5/7, V220/V222/V227/V228 | **False** (F5) |
 
 ## 3. Mechanistic claims (Layer 3)
 
 | Claim | Verdict | Evidence |
 |---|---|---|
-| Guard is MANDATORY, takes NOWAIT lock, held to caller commit; erasure stamps under the same lock | HOLDS | Guard returns **false** (not throws) for a missing player row (`:51-54`); lock exhaustion rethrows `PessimisticLockingFailureException` after 8 tries (~3.2 s) |
-| `submitAssessment` is `@Transactional`, nothing writes before `:89` | HOLDS | Guard slot between the tier check and `saveAll` is right |
-| Guard at the top of the 6-arg `writeTimelineEvent` covers both callers | HOLDS | Callers use the 5-arg through the proxy (`self.` / injected bean); the 5-arg's own `REQUIRES_NEW` tx satisfies MANDATORY; the 5-arg to 6-arg hop is self-invocation, harmless. A stale comment at `:224` says `writeHomeworkAssigned` uses the 5-arg; it does not |
-| `onReportGenerated`: "the row cannot be deleted between upload and update without the update returning 0" | **PARTIAL: true but does not close the window** | See F1 |
-| No self-deadlock between `onReportGenerated`'s tx and `writeTimelineEvent`'s guard | HOLDS **for the design as written only** | `performance_reports.player_id` has no FK to `player_profiles`, so the outer UPDATE takes no profile lock. Stops holding the moment F1's fix puts a guard in the outer tx |
-| `BlobDeletionOutboxSupport.enqueue(Collection<String>)` usable in the 0-row path | HOLDS | No `@Transactional` of its own; `requestDrainAfterCommit()` is a separate call (F7) |
-| Retrier: not `@Transactional`, 23505 caught in the `try`, catch can stay outside `template.execute` | HOLDS | Catch is `DataIntegrityViolationException` whose cause is Hibernate `ConstraintViolationException` named `uq_player_skill_stats_session_skill`; the same translation applies on template commit |
-| "Dispatcher skips the snapshot write" on the new outcome | **PARTIAL** | Dispatcher (`SluPersistenceDispatcher:70-92`) skips only on `FAILED` / `ALREADY_PERSISTED` and falls through to `writeAllWithRetry` otherwise; a `PLAYER_ERASED` value needs an explicit branch (F6) |
-| `writeAllDeltas` guard per distinct player | HOLDS | Erased player: return quietly so the outbox row completes. Lock-busy there is retried (3 tries then outbox), not lost |
-| Group 3 arithmetic 3 to 4 | HOLDS | Literal `3` at `:1738`; helper is `min(timeout, remaining / n)`; no test pins the group counts. Other "12" literals: `:1585`, `:1595`, `:1599`, `:1663`, `:1669`, `:1747-1750`, `ConfigBounds:644` |
-| `homework_assignments`: only incoming FK is the completions cascade | HOLDS | `player_id` has no FK; `pack_id` is an outgoing `SET NULL` |
+| Two `PROFILE_CHANGE` mails today, neither via the outbox | HOLDS | `AccountChangeEmailListener:40-42` is `@Transactional @EventListener` (synchronous, no action filter); facade `buildRecipient:218` reads the mutated entity |
+| Mixed-case login locks the user out | HOLDS | `AuthService.login:113` and `LoadUserByUserNameService:31-32` both lowercase then exact-match; no case-insensitive lookup exists; registration services store `req.email()` raw, so such accounts already exist |
+| `businessId` = user id, `requireCurrentUserId` works | HOLDS | `Principal.instanceFrom:185` |
+| The 5 `UserProfileService` lookups are the stale-login sites | PARTIAL | Also `UserService:56` (`GET /v1/account`) and `:65` (`GET /api/account/profile`) |
+| Revocation order and propagation; no self-deadlock | HOLDS | `markAllUsedByUserId` REQUIRES_NEW touches only `refresh_tokens.used/version` (no FK re-check on `main.user`); `suspendUser` precedent locks, writes the user row, then revokes |
+| Access tokens die at the next DB re-check (≤ 5 min) | HOLDS | `JWTAuthorizationFilter` re-check every `DB_REFRESH_TOKEN_INTERVAL` |
+| Reset destination is `user.getEmail()` via the facade; completion looks up by key only | HOLDS | `sendPasswordResetMail:87` → `buildRecipient`; `completePasswordReset:63-65` |
+| `RegistrationDuplicateGuard` reusable | PARTIAL | Same package as `UserProfileService` but wired to registration (bcrypt timing, `flow`, phone, hard-coded bucket, mails `user.getEmail()`, exact-case lookup); `AccountManagementFacade` (`security.api`) cannot reach it |
+| `enqueueEmail` usable from the public endpoints | HOLDS | `MANDATORY`, no principal dependency. Note: raw tokens end up in the outbox payload JSON (no purge), so "only the hash is stored" is not true there |
+| A random encoded password is harmless | HOLDS, with a trap | No password history or counters; but `preparePasswordReset` throws for a locked or not-activated user (F3) |
+| Envelope CHECK re-union method | PARTIAL | `EMAIL_CHANGE` already present; V227 used a single DROP/ADD with `allow-validating-constraint` and `SET LOCAL lock_timeout`, not NOT VALID + VALIDATE |
 
 ## 4. Findings that survived re-verification
 
-### F1 (HIGH): D4 does not close the orphaned-PDF race
-`onReportGenerated` runs in one `REQUIRES_NEW` tx: upload, `updateStatusAndStorageKey(READY, key)` (`ReportGenerationService:257-258`), timeline write, `notifyParent`. The tx stays open until after the notification. Erasure group 3 does a plain SELECT `findStorageKeysByPlayerId` (WHERE `storage_key IS NOT NULL`, `GdprErasureService:1741`) and then `deleteAllByPlayerId` (`:1742`), under READ COMMITTED.
+### F1 (HIGH): the request endpoint leaks whether an address is registered
+Design 5: a free address supersedes the user's open request and writes a new one; a taken address writes nothing and
+supersedes nothing. A signed-in user who owns mailbox X requests X (gets a link), then requests Y, then clicks the X link: if it
+still works, Y is registered. Re-verified from the story's own Design 5 text. **Fix:** supersede any open request on every
+non-mismatch path (taken or free), and make the taken path's work (row write vs not) indistinguishable in effect.
 
-Trigger: erasure's scan runs while the row is still `PENDING_UPLOAD` with a null key, so nothing is enqueued. `onReportGenerated` updates to READY (returns **1**). Erasure's DELETE blocks on that row lock, then deletes the committed READY row after the handler commits. The PDF (name, age, skills, recap excerpts) stays in storage with no key anywhere. The story's `0`-row branch never fires. The window is update to commit, which includes the timeline write and the notification.
+### F2 (HIGH): an undo does not cancel the attacker's other requests, so they can take the account back
+Design 6 never checks that the request's `old_email` still equals the user's current email; Design 7 restores email and login
+but leaves other open requests and other confirmed requests' undo tokens alive; the partial unique index covers only
+unconfirmed rows. Trigger: attacker (knows the password) confirms A→B, requests B→C, owner undoes the first change (back to
+A), attacker confirms C; or attacker confirms A→B→C and, after the owner's undo, uses the second change's undo token (mailed
+to B) to restore B with the reset mail going to B. Re-verified from Design 6/7 text. **Fix (needs an owner rule):** undo
+supersedes every open request and invalidates every other undo token of the user; confirm refuses when `old_email` ≠ the
+current email; and either allow only one change per undo window or make the reservation/cool-off use the latest request.
 
-Fix direction: run `isErasedUnderLock` in `onReportGenerated` after the upload and before the update, so the update is serialized against erasure on the `player_profiles` lock; if erased, enqueue the key and return. **Consequence the story must also decide:** the outer tx then holds the profile lock, so the inner `REQUIRES_NEW` `writeTimelineEvent` guard (NOWAIT) will always fail against its own caller's lock. The timeline row for the report must then be written inside the outer tx without a second guard, or the order restructured. Dev Notes `:220-223` ("no self-deadlock") must be rewritten. (This race pre-exists; the defect is that the story claims to close it.)
+### F3 (HIGH): GDPR erasure and locked accounts are not handled
+Erasure keeps the user row and tombstones it (`GdprErasureService:422-429`: login and email `deleted.<id>@erased.io`,
+`locked`), so `ON DELETE CASCADE` never fires. An open request could then be confirmed, writing the erased person's real
+address back over the tombstone; `old_email`/`new_email`/`old_login` survive in the table and keep reserving the address. Undo
+on a locked account throws (`User.preparePasswordReset:450-452`), so an admin-suspended owner can never undo. **Fix:** confirm
+and undo refuse locked/erased users (owner decides what undo does for a suspended account); erasure deletes or scrubs the
+user's rows (V222 precedent).
 
-### F2 (HIGH): V230 as specified fails CI in three ways
-1. **Lint reference scan.** `MigrationLint.referencesIn` (`MigrationLint.java:1027-1043`) matches a file that contains the table name and either `voice_note_text` or the camelCase `voiceNoteText`; comments are not stripped. `BookingCompletionService.java:707` has `{@code voiceNoteText}` and the same file has `"session_completion_data"` at `:574` and `:594`. The story lists only `SessionCompletionDataRepository` and `GdprErasureService:470-476`.
-2. **ITs use the column.** `GdprErasureIT` (INSERT at `:725`, `:733`, `:964`, `:972`; SELECT and assert at `:745-756`, `:984-995`, including "Unrelated voice note") and `SessionCompletionResourceIT:291-293`. They fail with "column does not exist". AC6's "both anonymise queries still pass their ITs" cannot hold; no task rewrites them.
-3. **Header comment.** `MigrationLint.java:740` requires a leading header comment on any migration that drops a column (`BARE_DROP_NO_HEADER`). Design 8 specifies only `SET LOCAL` plus the marker.
+### F4 (MEDIUM): the 72 h cool-off protects very little as designed
+Re-verified: `changePassword` needs only the current password (`UserProfileService:166`), so an attacker who switched the
+email (they had to know the password) does not need a reset at all. The owner who knows only the old address cannot start a
+reset either: `prepareForPasswordReset` finds the user by `currentEmail` (`PasswordResetService:42`) and the frontend sends the
+typed value as `currentEmail` (`account.api.js:43-47`), which is now the new address. The real protection is the undo link
+(which randomises the password and sends the reset to the old address). Also reset matching is exact-case, so AC1's "any
+casing" does not carry over. **Owner decision:** keep D4 as is, drop it, or replace it (e.g. block `changePassword` and reset
+for 72 h after a change unless initiated from the undo flow).
 
-### F3 (MEDIUM): D1's premise is wrong for reports
-For a really erased player, `generateReport` never reaches the new guard. Erasure deletes the SLU rows and the timeline rows, and `CoachPlayerLastSessionResolver.resolve` is computed from exactly those (`sluRepository.findLastSessionDate`, SESSION_COMPLETED timeline lookup). So `lastSession == null` and the method throws `AccessDeniedException` (403) at `ReportGenerationService:~200` before the PDF is built. The guard is reachable only in the race where erasure commits after the resolver read. AC2's unit test (guard mocked `true`) passes while saying nothing about the real path. Radar behaves differently (relationship survives, reaches the guard, 404), so an erased player gets 403 on reports and 404 on radar. "Same answer an unknown player gets" is also wrong: an unrelated player gets 403 from the relationship check first. State the real behaviour in D1 and test the race separately.
+### F5 (MEDIUM): V231 needs lint opt-outs and a lock timeout
+`MigrationLint` flags each non-concurrent `CREATE INDEX` without `-- migration-lint: allow-blocking-index` (V220/V222/V228
+precedent, even on a new table) and the validating `CHECK` re-union without `allow-validating-constraint` (V227); `SET LOCAL
+lock_timeout = '5s'` is needed (the FK locks `main.user`; `EmailRetryScheduler` polls `envelope_entity`); the header must state
+the "prod not live, table and code in one release" waiver (rules 1 and 5). The re-union must keep V227's values plus the two
+new ones.
 
-### F4 (MEDIUM): coach-initiated writers still unguarded after this story
-- `SluTargetService.setTargets` (`:36-50`) upserts `player_slu_targets` after only `requireCoachPlayerRelationship`. Erasure empties that table, but the coach's booking relationship survives, so an erased child can get new rows. `NeglectedSkillDetectionService` is driven by that table and can then write `neglected_skill_flags`.
-- `RadarDisplayService.savePreferences` writes `coach_radar_preferences`, unguarded.
-Both are the same class as the ledger bullet at `:3527` that AC1/AC2 close. Either add them to AC1 or add an explicit ledger bullet and name them as out of scope.
+### F6 (MEDIUM): the public endpoints cannot live in `ProfileResource`
+It has a class-level `@PreAuthorize(HAS_ANY_ROLE)` (`ProfileResource:47-48`), so listing the paths in `PUBLIC_ENDPOINTS` is not
+enough. Put confirm and undo in their own controller. "The public axios client" does not exist: use the one `api` instance
+(`boot/axios.js:94`), as `UnsubscribePage` does.
 
-### F5 (MEDIUM): D3's "met without the pre-launch exemption" is not accurate, and there is a rolling-deploy hazard
-Step 2 (#304) left the two native queries naming the column, so the last code reference is removed in the same change as the drop (the compress-removal-and-drop case rule 2 exists to prevent). The V170 marker passes the lint mechanically but is not truthful. Old pods keep running `anonymizeByPlayerId` / `anonymizeByCoachId` with `voice_note_text = NULL` during the migration window; an erasure in that window throws "column does not exist" and surfaces as an `UNCLASSIFIED_FAILURE` alert. V229 handled this with an explicit owner-exemption header and a checklist entry. Adopt the same: header stating the exemption, owner decision recorded, V230 entry in the "prod is not live" list.
+### F7 (MEDIUM): `AccountChangeEmailListener` mails `PROFILE_CHANGE` for every action
+It has no action filter, so re-publishing `EMAIL_CHANGED` at confirm and adding `EMAIL_CHANGE_UNDONE` would still send
+`PROFILE_CHANGE` (with an empty body for the new action, `profileChange.html:10-17`). The story must say the listener skips both.
+The audit listener records `login = userInfo.email` and `authenticated = true`; say which address to record and that confirm
+and undo are anonymous.
 
-### F6 (MEDIUM): behaviour the story does not specify
-- Dispatcher needs an explicit `PLAYER_ERASED` branch (see section 3); update the "tri-state" prose and `SluSaveOutcome` Javadoc.
-- **Lock-busy:** the guard throws `PessimisticLockingFailureException` after ~3.2 s. In `saveSluWithRetry` that is a `DataAccessException`, so it is retried 3 times and then `@Recover` returns `FAILED` ("rows lost ... manual recovery needed", ERROR). A non-erased player now loses detail rows to a transient profile-lock collision, which cannot happen today. `onRadarEntrySubmitted` (catch at `:283`) and the report timeline (catch `:265-273`) drop the row; submit and `generateReport` return 409 (`ApiAdvice:711`). The ledger bullet `:3533` accepts this tradeoff only for SESSION_COMPLETED / HOMEWORK_ASSIGNED; extend it to RADAR_ASSESSMENT, PERFORMANCE_REPORT and SLU, and decide whether the SLU ERROR is acceptable.
-- Multi-player batches in `writeAllDeltas`: pin a sorted order (in practice one player per session, so low).
+### F8 (MEDIUM): design 9 (id lookups) works against session revocation
+Stale tokens only exist after confirm or undo, when the user's sessions were deliberately revoked. Today the login lookups fail
+closed for them; id lookups would let a revoked session keep editing the profile (including `changePassword`) for up to 5
+minutes. The list of 5 also misses `UserService:56/65`. **Recommendation:** drop design 9 (and its AC8 test) and let the
+login lookups fail; or, if kept, apply it everywhere and add a revocation check.
 
-### F7 (LOW-MEDIUM): implementation traps
-- `GdprErasureServiceTest:161` calls `new GdprErasureService(...)` positionally; the new `HomeworkAssignmentRepository` breaks compilation until a mock and argument are added. Eight hand-construction sites need updating in total: `RadarAssessmentServiceTest:54`, `ReportGenerationServiceTest:99` and `:817`, `SluPersistenceRetrierTest:35`, `SluRetrierProxyRetryTest:69` (a `@Configuration` needing a tx manager or template bean), `SnapshotBatchWriterTest:28`, `GdprErasureServiceTest:161`. `ReportGenerationService` also gains a `BlobDeletionOutboxSupport` field.
-- Call `BlobDeletionOutboxSupport.requestDrainAfterCommit()` after `enqueue`, or the key waits for the 5-minute sweep.
-- Place the new `0`-row branch outside the existing `try`; an exception from `enqueue` inside it falls into `catch (Exception)` at `:259`, which marks UPLOAD_FAILED and leaves the blob orphaned.
-- Test recipe: there is no stub `FileStorage`. `ReportGenerationServiceIT` extends `BaseStorageIT` (real MinIO); `SluCalculationServiceIT:80` uses a `@MockitoBean` whose field name is part of the context-cache key. `onReportGenerated` is `@Async`, so the IT needs an await or the event path used at `ReportGenerationServiceIT:~148`. For AC6 there is no existing `information_schema` assertion IT to extend; a small new one is simpler.
-- Group-3 Javadoc/literal updates listed in section 3.
+### F9 (MEDIUM): RS03's second half (registration) is not in the story
+The eval case's F2 and the ledger bullet (`also S16: AccountManagementFacade.java`) cover `registerAccount`/`toUser` storing the
+login as typed; the role registration services do the same. The fix is small (lowercase at `:140`/`toUser`, and in the three
+registration services) and shares the root cause; without it the eval case cannot be closed as fixed. The guard's exact-case
+lookup also lets `Anna@X.com` register next to `anna@x.com` (case-sensitive constraints).
 
-### F8 (LOW): player data erasure still does not clear
-`development.coach_radar_preferences`, `development.radar_composite_dlq` (player id, `last_error` text), and `booking.session_completion_data.plan_blocks_snapshot` (V170; drill/block detail, at least as strong as `homework_drill_ids`). Ledger them or name them out of scope.
+### F10 (MEDIUM): the shared "taken" helper must not expect one row, and must replace the guard's lookup
+Mixed-case duplicates can already exist (case-sensitive constraints, raw storage), so a single-result `lower(email)` query can
+throw `IncorrectResultSizeDataAccessException`; use an exists/limit-1 query. Design 10 adds only the reservation check; say the
+helper replaces the guard's exact-case lookup, and that a reservation notice goes to the **reserved old address** (the guard
+and `notifyUserExists` both mail `user.getEmail()`, which after the change is the new, possibly attacker's, address), with
+wording fit for an address the account no longer uses.
+
+### F11 (MEDIUM): rate limiting and the user's own reservation
+- `change_email` is per IP and in memory per server; a signed-in user can send confirmation mails to many addresses. Add a
+  per-user (and per-target-address) bucket, as registration does.
+- A user who changed A→B and wants A back by a new request (not undo) is blocked by their own reservation and mailed the "in
+  use" notice; design 3 exempts only the current address. Exempt the user's own reservations.
+
+### F12 (MEDIUM): after confirm or undo the browser may still think it is signed in
+`/login` and `/reset-password` are guest-only routes; with the JWT fast path the old session lives up to 5 minutes, so the
+"sign in with the new address" step or the undo's reset link redirects to the dashboard and drops the reset key. Both new pages
+should clear the local session on success.
+
+### F13 (MEDIUM): AC9's "no page describes the email change today" is false
+Re-verified: `docs/dev-docs/security/index.html:186` ("Change email (sends verification)") and
+`docs/dev-docs/notification/index.html:456` (`EMAIL_CHANGE`, "which nothing sends"); also `docs/security-api-endpoints.md:183`
+and `docs/deployment/provisioning-checklist.md:569`. These must be corrected, not just added to.
+
+### F14 (MEDIUM, pre-existing, needs a check): a stale token can re-authorise as another account
+On the DB re-check the filter reloads the user by the token's username (`DaoAuthProvider:34`, `retrieveUser(username)`);
+Layer 3 found no comparison of the reloaded user id with the token's `busId`. Once an old address is free again (after undo, or
+after the 7-day reservation) and someone registers it, a stale token carrying that login would re-authorise as the new account.
+I re-read the username-based retrieval but did not trace the whole filter, so treat this as **verify before dev**: if
+confirmed, add a `busId` equality check (small, security-relevant).
+
+### F15 (LOW, story precision)
+- AC2 says the owner is notified "once"; with capacity 2 the third attempt is the first dropped.
+- Missing guard tests: `MessageBundleParityTest` (all bundles, no English in de/fr, MessageFormat quoting), frontend
+  `localeKeyParitySpec.js` and `i18nTemplateKeyResolutionSpec.js`, `NotificationCatalogTest:48`.
+- `ChangeEmailDto.password` has no `@NotNull` (BCrypt 500 on null; pre-existing).
+- The dialog's `notSameEmail` check is case-sensitive.
+- Unspecified: HTTP status for `linkInvalid`, masking of a one-character local part, what an open request does on a password
+  change or reset, the request's answer when the notice bucket is exhausted.
+- Not covered, worth a ledger line: the Stripe customer email is set only at creation (`StripePaymentGateway:647-648`);
+  `FileStorageService.softDelete:328` compares `created_by` with the current login, so pre-change files can't be deleted
+  through the generic path after a change.
 
 ## 5. Corrections to the story text
-- `anonymizeByCoachId` nulls all four columns (Background, last bullet).
-- `assignOne` is `:131` (guard call `:132`); `generateReport` annotation `:153`; `onReportGenerated` method `:254`.
-- D2: the INFO line comes from the guard, and only background callers skip.
-- D1: drop "same answer an unknown player gets / learns nothing".
-- Stale comment at `TimelineEventListener:224` (pre-existing; fix opportunistically).
+- Background: the facade does not lowercase `login`.
+- Template checklist: `EMAIL_CHANGE`'s catalog case and subject key exist; reword the subject, don't add.
+- AC9 docs: correct the existing statements (F13).
+- Eval case: the full close-out procedure (Layer 2 row 2), and it needs F2 too (F9).
 
 ## 6. What did not survive re-verification, or was downgraded
+- **"Timing difference on the taken path"** (Layer 4 low): the notice is enqueued via the outbox in both cases' transaction; the
+  remaining difference is one INSERT. Folded into F1's fix rather than a separate finding.
+- **"Outbox keeps raw tokens"** (Layer 3): true, but the same already holds for OTPs and the outbox rows are internal. Kept as a
+  note in section 3, not a finding.
+- **"NOWAIT lock on double-click confirm"** (Layers 3 and 4): a story-precision point (wrap in `PessimisticLockRetryer` or map
+  the error to `linkInvalid`); folded into F15's "unspecified" list.
+- **"No FK self-deadlock"**: Layer 3 raised it as a risk to check and refuted it itself; confirmed by the `suspendUser`
+  precedent. Not a finding.
+- **Queued mails to the old address / opt-outs** (Layer 4 low): pre-existing behaviour of any email change; not specific to
+  this design. Dropped.
+- **Admin bootstrap does not check reservations** (Layer 4 low): only the bootstrap admin, at boot, with a fixed address. Dropped.
 
-- **L3 "possible lock wait between erasure's `performance_reports` DELETE and the inner guard's NOWAIT retry"**: real but pre-existing and bounded (~3.2 s, then the inner catch swallows it). Not a story defect; folded into F1's note.
-- **L4 "erasure may hit `CHILD_DELETE_LOCK_TIMEOUT` because the handler holds the report row lock"**: depends on timing against the 5 s per-statement timeout; I did not reproduce it. Kept only as a reason to prefer the F1 fix, not as its own finding.
-- **L4 "no PENDING_UPLOAD sweeper, so a retry cannot re-upload after erasure"**: this is a reassurance, not a defect. `DevelopmentConfig:95` says abandoned uploads stay PENDING_UPLOAD. Dropped.
-- **L1 row 1 "NOWAIT location not checked"**: L3 found it in `PlayerProfileRepository` (`lock.timeout=0`). Closed.
-- **L2 "D3 rule-2 wording is a judgement call"**: upgraded to F5 once L4 showed the queries still name the column at step 2.
-- **L4 "radar and report 404 vs 403 disclosure"**: kept inside F3 only; the disclosure to a coach who already has a relationship is minor and not a standalone finding.
+## 7. Recommendation
 
-## 7. Recommendation (per claim, not blanket)
-
-- **Independently re-read by me against HEAD:** F1 (onReportGenerated body and erasure group 3 statements), F2 items 1-3 (`BookingCompletionService` hits, the IT file list, the `hasHeaderComment` rule), F3 (report pre-guard flow and `CoachPlayerLastSessionResolver`), the F4 `setTargets` body, the F6 dispatcher branches, the F7 constructor site. High confidence on these.
-- **Taken from the agents, not re-read by me:** the line numbers inside `GdprErasureIT` / `SessionCompletionResourceIT`, the `ApiAdvice:711` 409 mapping, `RadarDisplayService.savePreferences` and the F8 tables, the exact list of eight hand-construction sites, the neglected-skill cascade in F4. Medium confidence; the dev should re-grep before editing.
-- **Not checked by anyone:** the `PLAYER_NOT_BOOKABLE` HTTP status, actual lock timings under load, and whether `provisioning-checklist.md` already has a V230 placeholder.
-- **Verdict:** do not start implementation as written. F1 changes the design of AC2 and the Dev Notes; F2 makes AC6/T6 incomplete and CI-red; F3 and F5 need an owner call (404 vs 403 wording, exemption for V230). F4 needs a scope decision. F6-F8 are fixes to the task list. The remaining ACs (AC1 radar guard, AC3 core mechanics, AC4, AC5) are sound.
+- **Re-read by me against HEAD:** F1 and F2 (from the story's own Design text), F3 (erasure tombstone code), F4
+  (`changePassword` and the reset request inputs), F7 (listener has no filter), F13 (both doc lines). High confidence.
+- **Taken from the agents, not re-read by me:** F5 lint rules, F6 `@PreAuthorize`, F9/F10 registration storage and guard
+  lookup, F11, F12 route guards, F15 items. Medium-high (two agents agreed on F5, F6, F9).
+- **Needs a check before dev:** F14.
+- **Verdict:** do not start implementation as written. F1-F3 change the design; F4 and F8 need an owner call; F9 is a scope
+  call (recommend including it); F5-F7 and F10-F13 are corrections the story must carry.

@@ -73,40 +73,7 @@ class UserProfileServiceIT extends AbstractIntegrationTest {
         });
     }
 
-    // -------------------------------------------------------------------------
-    // updateUserEmail
-    // -------------------------------------------------------------------------
-
-    @Test
-    void updateUserEmail_success_updatesEmailAndPublishesEvent() {
-        String newEmail = "newemail@example.com";
-
-        Optional<User> result = userProfileService.updateUserEmail(LOGIN, newEmail, CORRECT_PW);
-
-        assertThat(result).isPresent();
-        User updated = result.get();
-        assertThat(updated.getEmail()).isEqualTo(newEmail);
-        assertThat(updated.getLogin()).isEqualTo(newEmail);
-
-        AccountChangeEvent event = lastEventOf(AccountChangeEvent.Action.EMAIL_CHANGED);
-        assertThat(event).isNotNull();
-        assertThat(event.getOldValue()).isEqualTo(LOGIN);
-        assertThat(event.getNewValue()).isEqualTo(newEmail);
-        // Notification should go to OLD email address for security
-        assertThat(event.getUserInfo().email()).isEqualTo(LOGIN);
-    }
-
-    @Test
-    void updateUserEmail_wrongPassword_throwsProfileActionException() {
-        assertThatThrownBy(() -> userProfileService.updateUserEmail(LOGIN, "new@example.com", "wrongPassword"))
-                .isInstanceOf(ProfileActionException.class);
-    }
-
-    @Test
-    void updateUserEmail_wrongOldEmail_throwsProfileActionException() {
-        assertThatThrownBy(() -> userProfileService.updateUserEmail("wrong@example.com", "new@example.com", CORRECT_PW))
-                .isInstanceOf(ProfileActionException.class);
-    }
+    // The email change moved to EmailChangeService (skillars-deferred-172): see EmailChangeServiceIT.
 
     // -------------------------------------------------------------------------
     // changePassword

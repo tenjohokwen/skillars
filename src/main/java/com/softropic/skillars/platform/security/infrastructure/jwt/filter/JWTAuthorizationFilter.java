@@ -212,6 +212,7 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
             final Authentication auth = daoAuthProvider.authorize(authentication,
                                                                   httpEndpointGuard.requiredAuthorities(req));
             final Principal authorizedPrincipal = (Principal) auth.getDetails();
+            assertSameAccount(authentication.getPrincipal(), authorizedPrincipal);
             // skillars-deferred-149 AC3 code review (2026-10-08): the actual theft-revocation
             // enforcement, moved here from Principal/DaoAuthProvider (see those classes' own
             // comments for why a per-account credentialsNonExpired flag was wrong). This JWT's own
@@ -272,6 +273,26 @@ public class JWTAuthorizationFilter extends OncePerRequestFilter {
         if (sessionIssuedAt == null || sessionIssuedAt < invalidatedAt.toEpochMilli()) {
             throw new AuthorizationException(
                 "Session predates a refresh-token-theft revocation", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
+        }
+    }
+
+    /**
+     * skillars-deferred-172 AC9: refuses a JWT whose login now names a different account.
+     *
+     * <p>{@code authorize} reloads the user by the token's username. Since an email change also changes the
+     * login, an address can move between accounts: once the old one is free again (after an undo, or after
+     * its reservation window) and someone registers it, a stale JWT carrying it would re-authorise as the new
+     * account. The chain check below catches that only when the token carries a chain id; this one does not
+     * depend on it. Fails open on a missing {@code busId} claim, like {@link #userIdOf}: every token this
+     * server mints carries one ({@code TokenCreatorImpl}), so a blank value is a different fault.
+     */
+    private static void assertSameAccount(final Object tokenPrincipal, final Principal authorizedPrincipal) {
+        if (!(tokenPrincipal instanceof Principal claimed) || StringUtils.isBlank(claimed.getBusinessId())) {
+            return;
+        }
+        if (!claimed.getBusinessId().equals(authorizedPrincipal.getBusinessId())) {
+            throw new AuthorizationException(
+                "Token's login now belongs to a different account", SecurityError.ACCOUNT_NOT_LOGIN_ABLE);
         }
     }
 

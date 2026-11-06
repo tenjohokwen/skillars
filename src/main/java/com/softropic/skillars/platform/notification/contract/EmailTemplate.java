@@ -38,7 +38,12 @@ public enum EmailTemplate {
     PARENT_OTP("email.parent.otp.title", Duration.ofMinutes(8), "registrationEmailService"),
     PLAYER_EMAIL_VERIFY("email.player.verify.title", Duration.ofHours(12), "registrationEmailService"),
     PLAYER_OTP("email.player.otp.title", Duration.ofMinutes(8), "registrationEmailService"),
+    // skillars-deferred-172: the confirmation link, to the NEW address (EmailChangeService).
     EMAIL_CHANGE("email.change.title"),
+    // To the OLD address once a change is confirmed (undo link), or once it is undone on a suspended account.
+    EMAIL_CHANGED_NOTICE("email.changed_notice.title"),
+    // To the holder of an address someone tried to move another account onto (in use, or reserved).
+    EMAIL_CHANGE_ADDRESS_IN_USE("email.change_address_in_use.title"),
     PROFILE_CHANGE("email.profile_change.title"),
     BOOKING_REQUESTED("email.booking.requested.title"),
     BOOKING_CONFIRMED("email.booking.confirmed.title"),
