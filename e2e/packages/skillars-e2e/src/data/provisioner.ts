@@ -780,13 +780,13 @@ export class Provisioner {
   }
 
   /**
-   * A CONFIRMED one-hour booking, paid per session with the family's card: requested through the API
-   * as the family, for a slot next week inside the coach's published hours, and accepted as the coach.
+   * A CONFIRMED one-hour booking, paid per session with the payer's card: requested through the API
+   * as the payer (a parent for their first child, or a self-registered player for themselves), for a slot next week inside the coach's published hours, and accepted as the coach.
    * Needs a card on file (saveCard). Returns the booking id. Distinct slots (weekday, time) keep two
    * bookings with one coach apart. Move it in time afterwards with setBooking.
    */
   async confirmedBooking(
-    parent: ParentAccount,
+    payer: ParentAccount | PlayerAccount,
     coach: CoachAccount,
     options: {
       playerId?: string
@@ -794,6 +794,8 @@ export class Provisioner {
       time?: string
       /** The coach's zone (onboardCoach's default). */
       timezone?: string
+      /** false: leave it REQUESTED (the coach never answers). */
+      accept?: boolean
     } = {},
   ): Promise<string> {
     if (!coach.coachId) throw new Error('confirmedBooking needs a published coach')
@@ -802,14 +804,17 @@ export class Provisioner {
       options.timezone ?? 'Europe/Berlin',
     )
     const end = new Date(start.getTime() + 3_600_000)
-    const family = await this.login(parent)
+    const playerId =
+      options.playerId ?? (payer.kind === 'parent' ? payer.children[0]!.playerId : payer.playerId)
+    if (!playerId) throw new Error('confirmedBooking needs a player')
+    const family = await this.login(payer)
     let bookingId: string
     try {
       const created = await family.api.json<{ id: string }>('POST', '/bookings/requests', {
         data: {
           coachId: coach.coachId,
           // As a string: player ids exceed Number.MAX_SAFE_INTEGER.
-          playerId: options.playerId ?? parent.children[0]!.playerId,
+          playerId,
           requestedStartTime: start.toISOString(),
           requestedEndTime: end.toISOString(),
         },
@@ -818,6 +823,7 @@ export class Provisioner {
     } finally {
       await family.dispose()
     }
+    if (options.accept === false) return bookingId
     const self = await this.login(coach)
     try {
       await self.api.put(`/bookings/requests/${bookingId}/accept`, {
@@ -901,6 +907,96 @@ export class Provisioner {
     )
     if (rows.length !== 1) throw new Error(`No booking ${bookingId}`)
     return start
+  }
+
+  /**
+   * Open (or find) the conversation between a coach and a player through the API, as either party:
+   * the coach, the player's parent or the self-registered player. Needs a booking in CONFIRMED,
+   * UPCOMING, IN_PROGRESS or COMPLETED. Returns the conversation id (a TSID, as a string).
+   */
+  async conversation(
+    caller: CoachAccount | ParentAccount | PlayerAccount,
+    coach: CoachAccount,
+    playerId: string,
+  ): Promise<string> {
+    const session = await this.login(caller)
+    try {
+      const created = await session.api.post('/messaging/conversations', {
+        // Ids as strings: TSIDs exceed Number.MAX_SAFE_INTEGER.
+        data: caller.kind === 'coach' ? { playerId } : { coachId: coach.coachId, playerId },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+      // Read the id from the raw text: JSON.parse would round a TSID.
+      const id = /"conversationId"\s*:\s*"?(\d+)/.exec(await created.text())?.[1]
+      if (!id) throw new Error(`No conversationId in ${await created.text()}`)
+      return id
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** The HTTP status of opening a conversation as `caller` (for the refusals: 403 and its reason). */
+  async conversationRefusal(
+    caller: CoachAccount | ParentAccount | PlayerAccount,
+    coach: CoachAccount,
+    playerId: string,
+  ): Promise<{ status: number; errorKey?: string }> {
+    const session = await this.login(caller)
+    try {
+      const response = await session.api.post('/messaging/conversations', {
+        data: caller.kind === 'coach' ? { playerId } : { coachId: coach.coachId, playerId },
+        expectStatus: (status) => status >= 400,
+      })
+      const body = (await response.json().catch(() => ({}))) as {
+        errorMsg?: { errorKey?: string }
+      }
+      return { status: response.status(), errorKey: body.errorMsg?.errorKey }
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * Put messages straight into a conversation, as `sender` with `role`, oldest first, one second apart
+   * and ending now. SQL seam for a state the API cannot hold still (a PENDING message, whose verdict
+   * arrives inside the send request) or for volume (more than a page of history). Returns their ids.
+   */
+  async seedMessages(
+    conversationId: string,
+    sender: Account,
+    role: 'COACH' | 'PARENT' | 'PLAYER',
+    contents: string[],
+    status: 'PENDING' | 'APPROVED' | 'UNDER_REVIEW' | 'BLOCKED' = 'APPROVED',
+  ): Promise<string[]> {
+    const sql = await this.sql()
+    const ids: string[] = []
+    for (const [index, content] of contents.entries()) {
+      const [row] = await sql.query<{ id: string }>(
+        `INSERT INTO messaging.messages
+           (id, conversation_id, sender_id, sender_role, content, moderation_status, delivered_at, created_at)
+         VALUES ($7::bigint, $1::bigint, $2::bigint, $3::varchar, $4::text, $5::varchar,
+                 CASE WHEN $5::varchar = 'APPROVED' THEN now() END,
+                 now() - make_interval(secs => $6::int))
+         RETURNING id::text AS id`,
+        [
+          conversationId,
+          sender.userId,
+          role,
+          content,
+          status,
+          contents.length - index,
+          // Ids are app-generated TSIDs with no database default: a random 62-bit id, unique enough
+          // across workers seeding at once.
+          (BigInt(randomInt(1, 2 ** 31)) * 2n ** 31n + BigInt(randomInt(0, 2 ** 31))).toString(),
+        ],
+      )
+      ids.push(row!.id)
+    }
+    await sql.query(
+      'UPDATE messaging.conversations SET last_message_at = now() WHERE id = $1::bigint',
+      [conversationId],
+    )
+    return ids
   }
 
   /** Raise a dispute through the API, as the family (or the coach). Returns its id. */

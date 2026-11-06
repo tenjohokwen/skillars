@@ -1,0 +1,26 @@
+{
+  "name": "Gemini moderation \u2014 e2e-verdict-outage gets a 500 (an outage)",
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/v1beta/models/[^/]+:generateContent",
+    "bodyPatterns": [
+      {
+        "contains": "e2e-verdict-outage"
+      }
+    ]
+  },
+  "response": {
+    "status": 500,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "error": {
+        "code": 500,
+        "message": "e2e outage",
+        "status": "INTERNAL"
+      }
+    }
+  }
+}

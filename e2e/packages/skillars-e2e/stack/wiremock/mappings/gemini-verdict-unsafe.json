@@ -1,0 +1,33 @@
+{
+  "name": "Gemini moderation \u2014 a message carrying e2e-verdict-unsafe is ruled UNSAFE",
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/v1beta/models/[^/]+:generateContent",
+    "bodyPatterns": [
+      {
+        "contains": "e2e-verdict-unsafe"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "UNSAFE"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

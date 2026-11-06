@@ -8,6 +8,7 @@ export * from './marketplace.js'
 export * from './booking.js'
 export * from './money.js'
 export * from './subscription.js'
+export * from './messaging.js'
 
 // One screen object per page under test. Thin by policy: locators and composite actions, never
 // assertions. Only pages that already carry data-testids are modelled; the rest wait for the
@@ -101,6 +102,8 @@ export class CoachPublicProfileScreen extends Screen {
   /** A parent's remaining credits with this coach (only once they hold or held a pack). */
   credits = () => this.tid('coach-profile-credits')
   reviews = () => this.tid('coach-profile-review')
+  /** Shown only once the family (or player) has a CONFIRMED, UPCOMING, IN_PROGRESS or COMPLETED booking. */
+  messageCoach = () => this.tid('message-coach-btn')
 
   /** Open the profile through a coach's shared-slot link; its CTAs carry the slot onwards. */
   async openWithSlot(coachId: string, slot: string): Promise<this> {
