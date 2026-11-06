@@ -2505,7 +2505,8 @@ export default {
         'Paiement en cours de traitement — ne peut pas être annulée par une pause',
       pauseBlockedPaymentPending:
         'Une séance dont le paiement est en cours de traitement ne peut pas être annulée par une pause. Réessayez la pause dans quelques minutes.',
-      pauseDurationHint: '1 à 90 jours',
+      pauseDurationHint: '1 à {max} jours',
+      pauseDurationInvalid: 'Une pause peut durer de 1 à {max} jours.',
       pauseConflictsTitle: 'Séances en conflit',
       pauseConflictsWarning:
         'Ces séances seront annulées. Le coach sera averti. Confirmez pour continuer.',

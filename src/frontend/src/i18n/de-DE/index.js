@@ -627,7 +627,8 @@ export default {
         'Zahlung wird noch verarbeitet – kann nicht durch eine Pause storniert werden',
       pauseBlockedPaymentPending:
         'Eine Sitzung, deren Zahlung noch verarbeitet wird, kann nicht durch eine Pause storniert werden. Versuche die Pause in ein paar Minuten erneut.',
-      pauseDurationHint: '1–90 Tage',
+      pauseDurationHint: '1–{max} Tage',
+      pauseDurationInvalid: 'Eine Pause kann 1 bis {max} Tage dauern.',
       pauseConflictsTitle: 'Widersprüchliche Sitzungen',
       pauseConflictsWarning:
         'Diese Sitzungen werden storniert. Der Trainer wird benachrichtigt. Zum Fortfahren bestätigen.',

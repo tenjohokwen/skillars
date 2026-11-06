@@ -1998,7 +1998,8 @@ export default {
         'Payment is still being processed — cannot be cancelled by a pause',
       pauseBlockedPaymentPending:
         'A session whose payment is still being processed cannot be cancelled by a pause. Try the pause again in a few minutes.',
-      pauseDurationHint: '1–90 days',
+      pauseDurationHint: '1–{max} days',
+      pauseDurationInvalid: 'A pause can last from 1 to {max} days.',
       pauseConflictsTitle: 'Conflicting sessions',
       pauseConflictsWarning:
         'These sessions will be cancelled. The coach will be notified. Confirm to proceed.',
