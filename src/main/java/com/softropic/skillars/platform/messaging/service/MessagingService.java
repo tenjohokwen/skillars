@@ -341,6 +341,7 @@ public class MessagingService {
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
 
         verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
 
         Page<Message> page = messageRepository.findByConversationIdAndNotDeleted(conversationId, pageable);
 
@@ -469,6 +470,7 @@ public class MessagingService {
         var conv = conversationRepository.findById(conversationId)
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
         verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
         return conv;
     }
 
@@ -500,6 +502,22 @@ public class MessagingService {
         return coachId != null && coachProfileRepository.findById(coachId)
             .map(c -> c.getStatus() == CoachProfileStatus.SUSPENDED)
             .orElse(false);
+    }
+
+    /**
+     * A thread keeps the parent's id after the player turns 18, so {@link #verifyIsParty} alone still
+     * admits them. Once the player is an adult the parent is out: the lists, oversight and sending
+     * already refuse them, and reading by id (history, live stream) must too.
+     */
+    private void requireParentReadAccess(Conversation conv, String role) {
+        // findMessagingPolicy: a thread whose player profile row is gone has no adult to protect, and a
+        // missing row must not cost the parent the thread (nor a report) with a not-found error.
+        if ("PARENT".equals(role) && agePolicyService.findMessagingPolicy(conv.getPlayerId())
+                .map(p -> AgeMessagingPolicy.from(p).parentIsBlocked()).orElse(false)) {
+            throw new OperationNotAllowedException(
+                "Parental access does not apply to an adult player's conversations",
+                MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
+        }
     }
 
     private void verifyIsParty(Conversation conv, Long callerUserId, String role) {
