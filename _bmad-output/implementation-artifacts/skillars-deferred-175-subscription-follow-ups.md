@@ -6,7 +6,7 @@ Status: ready-for-dev
      Part B, moved verbatim: RS05c, RS-poison, RS07b, RS03c. Decision ids D5-D8 keep their 174 numbers so the
      discussion stays traceable; ACs and tasks are renumbered (174 AC7-AC11 = AC1-AC5 here). Code read at
      origin/master c6d88a63 and checked by /mto-story-review (story-review.md, 2026-11-06). Citations are line
-     numbers at c6d88a63; re-verify before editing. No migration. Decisions D5-D8 PENDING OWNER. -->
+     numbers at c6d88a63; re-verify before editing. No migration. Owner decided D5-D8 (option 1 each). -->
 
 ## Story
 
@@ -129,10 +129,10 @@ Paths below are relative to `src/main/java/com/softropic/skillars/platform/payme
   `OutboxRowProcessor:55-58`); the enqueue template is `StripeCustomerErasureOutboxSupport` (`Propagation.MANDATORY`).
   The test profile drains the outbox synchronously after commit, so an IT cannot see the row in the table.
 
-## Decisions (PENDING OWNER; recommendation first in each)
+## Decisions (DECIDED 2026-11-06: option 1 in each)
 
-- **D5 (RS05c): stopping an old `incomplete` from overwriting `active`.**
-  - (1, recommended) A status-regression guard in `handleSubscriptionUpdated`, on the live and the parked path
+- **D5 (RS05c): stopping an old `incomplete` from overwriting `active`. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) A status-regression guard in `handleSubscriptionUpdated`, on the live and the parked path
     alike: an update whose normalised status is INCOMPLETE is ignored when the local row is not INCOMPLETE, logged
     as `[STRIPE_WEBHOOK_STATUS_REGRESSION_IGNORED]` and, on the parked path, deleted like any applied row. Grounded in
     Stripe's model: `incomplete` exists only before the first payment, and our creation never persists it
@@ -144,8 +144,8 @@ Paths below are relative to `src/main/java/com/softropic/skillars/platform/payme
     and depends on the server clock (SubSvc uses `Instant.now()`).
   - (3) Anchor on the Stripe response's `Date` header. Same exclusions as (2) without the skew; unconfirmed that
     stripe-java 28.4.0 exposes it (`getLastResponse().headers()`).
-- **D6 (RS-poison): detect, and stop the silent purge.**
-  - (1, recommended) A `parked_events_linked` backlog branch in `OperationalBacklogMetrics` (parked rows whose
+- **D6 (RS-poison): detect, and stop the silent purge. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) A `parked_events_linked` backlog branch in `OperationalBacklogMetrics` (parked rows whose
     Stripe subscription id exists on a coach or player subscription; `HAVING COUNT(*) > 0`), an alert
     `ParkedSubscriptionEventsStuck` when its oldest age exceeds 1 h, a runbook entry in `monitoring.md` and a
     provisioning-checklist line. `purgeOlderThan` no longer deletes linked rows; each purge run that kept any logs
@@ -154,8 +154,8 @@ Paths below are relative to `src/main/java/com/softropic/skillars/platform/payme
     javadoc's "each branch reads an indexed status").
   - (2) Also an attempt counter and quarantine after N failures. Unblocks later events, but applies them out of
     order and needs a migration.
-- **D7 (RS07b): a failed persist after Stripe upgraded.**
-  - (1, recommended) Record it: in `change*Tier`, catch a `RuntimeException` from `persist*TierUpgrade`, call
+- **D7 (RS07b): a failed persist after Stripe upgraded. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) Record it: in `change*Tier`, catch a `RuntimeException` from `persist*TierUpgrade`, call
     `recordUngrantedUpgrade(...)` (REQUIRES_NEW, never throws), then rethrow. This also catches a lock timeout,
     which is right: the tier is not granted and Stripe has billed. The existing reconciliation row, tag and alert
     then cover it. `PaymentRecoveryRecorder` skips the insert when an open row (no `resolved_at`) already exists for
@@ -163,8 +163,8 @@ Paths below are relative to `src/main/java/com/softropic/skillars/platform/payme
     first step: compare the local tier with Stripe; if a retry already granted it, mark the row resolved and stop.
   - (2) Self-heal: a price-to-tier reverse map from the `coachPriceKey`/`playerPriceKey` config, used by the
     `subscription.updated` webhook. Larger, and changes what the webhook trusts.
-- **D8 (RS03c): carrying the change to Stripe.**
-  - (1, recommended) A new event `AccountEmailChangedEvent(userId)` in `security.contract.event`, published by
+- **D8 (RS03c): carrying the change to Stripe. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) A new event `AccountEmailChangedEvent(userId)` in `security.contract.event`, published by
     `EmailChangeService.confirm` and `undo` inside their transactions (leaves `AccountChangeEvent`'s six
     constructors alone). A payment `@EventListener` enqueues `STRIPE_CUSTOMER_EMAIL_SYNC {userId}` on the outbox
     (MANDATORY, same transaction) only when the user has a `stripe_customers` row. The handler re-reads the user's
@@ -209,7 +209,7 @@ Written with the recommended option of every decision.
 
 ## Tasks / Subtasks
 
-- [ ] T0 Owner decisions D5-D8 recorded in this file.
+- [x] T0 Owner decisions D5-D8 recorded in this file (option 1 each).
 - [ ] T1 (AC1) Status-regression guard. Tests: `SubscriptionEntitlementIntegrityTest` (`drain_*` and live cases),
       a new IT beside `SubscriptionLifecycleIT` that extends `BasePaymentIT` and adds no mock (its context key must
       match, or the pinned count in `IntegrationTestConventionTest` rises).
@@ -263,3 +263,4 @@ Written with the recommended option of every decision.
 ### Change Log
 
 - 2026-11-06: created (ready-for-dev) by splitting skillars-deferred-174 (D0 = 1); decisions D5-D8 pending owner.
+- 2026-11-06: owner decided D5-D8 (option 1 each).
