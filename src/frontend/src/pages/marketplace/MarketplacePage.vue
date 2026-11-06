@@ -156,6 +156,7 @@ import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { useMarketplaceStore } from 'src/stores/marketplace.store'
 import CoachCard from 'src/components/marketplace/CoachCard.vue'
+import { COACH_LANGUAGES } from 'src/utils/coachLanguages'
 
 const { t } = useI18n()
 const router = useRouter()
@@ -179,7 +180,7 @@ const ageGroupOptions = [
   { label: t('marketplace.ageGroupAdult'), value: 'ADULT' },
 ]
 
-const languageOptions = ['German', 'English', 'Turkish', 'Arabic'].map((l) => ({
+const languageOptions = COACH_LANGUAGES.map((l) => ({
   label: l,
   value: l,
 }))

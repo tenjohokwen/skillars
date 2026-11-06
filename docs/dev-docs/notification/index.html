@@ -207,7 +207,7 @@
         <tr><td>POST</td><td><code>/api/notifications/unsubscribe?token=</code></td><td>RFC 8058 one-click unsubscribe (token in query string or form body). POST only — no GET, so link scanners cannot unsubscribe anyone. Returns the category.</td><td>Public (exact path in <code>AppEndpoints.PUBLIC_ENDPOINTS</code>); rate-limited</td></tr>
         <tr><td>POST</td><td><code>/v1/admin/alerts</code></td><td>Create an alert rule.</td><td><code>HAS_FULL_ADMIN_ROLE</code> (<code>ROLE_ADMIN</code> only)</td></tr>
         <tr><td>GET</td><td><code>/v1/admin/alerts</code></td><td>List enabled rules (from the in-memory cache).</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
-        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update (delete-then-save) and refresh the cache.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
+        <tr><td>PUT</td><td><code>/v1/admin/alerts/{id}</code></td><td>Update the rule in place (same row, same id) and refresh the cache. The body is validated on POST and PUT: 400 for a blank metric name, a threshold outside 0–1, a non-positive window or a channel other than LOG/EMAIL, and the stored rule is left as it was.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
         <tr><td>POST</td><td><code>/v1/admin/ses/preflight</code></td><td>Body <code>{recipientEmail}</code>. Live (uncached) SES <code>GetAccount</code> via <code>SesAccountChecker.checkLive()</code> plus a real test send of <code>SES_CUTOVER_PREFLIGHT</code> through <code>sendEmailSync</code> with a fresh <code>sendId</code>; returns <code>{accountCheck, testSend, ready}</code>. Bean only exists when <code>app.email.transport=ses</code>.</td><td><code>HAS_FULL_ADMIN_ROLE</code></td></tr>
       </tbody>
     </table>
@@ -516,9 +516,10 @@ sequenceDiagram
       startup on an unrecognised transport value but accepts an absent one (falls back to <code>log</code>).</p>
     </div>
     <div class="callout warn">
-      <p><code>AlertRule</code> has no setters (Lombok <code>@SuperBuilder</code> only), so
-      <code>AlertRuleAdminResource.update()</code> is delete-then-recreate — the row's id and audit history are not
-      preserved across an update.</p>
+      <p><code>AlertRule</code> has no per-field setters (Lombok <code>@SuperBuilder</code>); edits go through its one
+      <code>apply(...)</code> method, so <code>AlertRuleAdminResource.update()</code> is a single UPDATE of the same row.
+      It used to delete the rule and save a new one in a separate transaction, which lost the rule when the save failed
+      and changed its id even when it worked (skillars-deferred-173).</p>
     </div>
     <div class="callout">
       <p><code>EnvelopeEntity</code> has no <code>@Table(schema=...)</code>, but Hibernate's <code>default_schema</code> is

@@ -30,7 +30,7 @@ case from `fix_pr: pending` to the PR number. Not a story yet: bundle per the us
 RS01 and RS02 (the two auth items) were implemented by **skillars-deferred-166** and deleted from this
 list per this file's "deleted outright once implemented" rule; their eval cases moved to
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
-not renumber, so the list below starts at RS04. RS03 (email change / registration storing the login in the
+not renumber, so the list below starts at RS05. RS03 (email change / registration storing the login in the
 typed case) was implemented by **skillars-deferred-172** and deleted; its eval case moved to `evals/review/cases/`.
 
 **OWNER DECIDED 2026-11-03: the next bundle after skillars-deferred-167 is the payments/Stripe cluster** —
@@ -38,7 +38,8 @@ RS05, RS06, RS07 and RS09, optionally RS08. Chosen because RS06 is the only high
 away the idempotency key on any server response lets a retry double-charge after the server's own failure) and
 RS09 compounds it (the parent's saved default card is overwritten before the charge). One domain, so one story's
 context covers all four. RS10 + RS11 (the "a save loses data" pair) and RS03 + RS04 (the small logic pair) were
-the alternatives and stay queued behind it.
+the alternatives. RS03 went to skillars-deferred-172; RS04, RS10 and RS11 were implemented by skillars-deferred-173
+and deleted from the list below.
 
 - **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a), IMPLEMENTATION PENDING A DATE, medium/security]** Flip the per-session JWT check from
   fail-open to fail-closed on a missing session claim — and the trigger cannot be "wait 7 days", which is
@@ -344,7 +345,6 @@ the alternatives and stay queued behind it.
 - RS03d [low/logic] `FileStorageService.softDelete` (`:328`) compares `created_by` with the current login, so files
   uploaded before an email change can no longer be deleted through the generic path (`CoachProfileService.deletePhoto`
   tolerates this for the profile photo only).
-- RS04 [medium/logic] findIdsByLanguage lowercases only the input, not the stored array elements. `lower(:lang) = ANY(languages)` matches only if stored values are already lowercase. Owner: frontend stores 'English' etc., so the filter never matches for anyone. [`CoachProfileRepository.java` `findIdsByLanguage`; input rev `deefa90f6d10`; sample S05]
 - RS05b [medium/concurrency] `invoice.paid` (a silent no-op without a local row) and `invoice.payment_failed` have the same race shape as the subscription events skillars-deferred-169 now parks, and are not parked. Left on purpose: they carry no state the signup does not re-derive from the Stripe subscription it just created.
 - RS06b [medium/logic] A pack purchase attempt that needs a human (`UNRECONCILED` where the pack cannot be recorded, or a Stripe lookup that fails forever) is closed by an operator with SQL (monitoring.md, `PackAttemptsUnresolved`); there is no pack-specific reconciler or admin action. Until it is closed, that parent cannot buy any pack (one open attempt per parent).
 - RS06c [low/logic] The `Idempotency-Key` header is still optional on the pack purchase endpoint: a keyless request gets a server-minted attempt key, so it is serialised by the open-attempt index but has no client dedup (today's behaviour). Requiring the header is a contract change for every client.
@@ -356,8 +356,6 @@ the alternatives and stay queued behind it.
 - RS05c [medium/logic] A parked `customer.subscription.updated` is replayed onto a freshly linked row whose `lastStripeEventAt` is null (`persist*Subscription` never sets it), so the staleness guard passes: an OLDER parked event (e.g. `incomplete` from before the first invoice was paid) can overwrite the `active` state the signup just persisted until the next Stripe event. Found by /pr-review round 1 of skillars-deferred-169 (security arm, outside its category). Fix idea: anchor `lastStripeEventAt` at persist time from the create response and skip parked events older than it.
 - RS06e [low/logic] A succeeded PaymentIntent whose tier was deleted, or whose latest charge object is unreadable, keeps the parent's attempt open every job cycle; only `PackAttemptsUnresolved` (after an hour) tells an operator. The `PACK_PURCHASE_ATTEMPT_UNRESOLVABLE` / `_CHARGE_UNREADABLE` tags are not in the MoneyIntegrityEvent regex on purpose (they repeat every cycle).
 - RS09d [low/concurrency] The resolver reverts the saved card BEFORE its NO_CHARGE compare-and-set (a crash must not leave a declined card saved). If it reaches an absence verdict while the original request thread is still running (stalled past the 30 min absence age) and that thread later captures, the pack exists but the saved default card is back on the previous one. Found by /pr-review round 2 of skillars-deferred-169.
-- RS10 [high/concurrency] Saving the whole Conversation row can undo a concurrent BLOCKED status (report is lost). Conversation has no @Version and no @DynamicUpdate, so each save() writes every column. Owner: no @Version anywhere; getMessages/sendMessage still full-row save at HEAD. [`MessagingService.java` `getMessages / sendMessage (transactionTemplate block)`; input rev `a4b3ed40c542`; sample S18]
-- RS11 [medium/database] AlertRule update deletes the old rule before saving the new one in separate transactions, so a failed save loses the rule. update() is not @Transactional. Owner: no @Transactional/@Valid at HEAD; delete commits before failing save. [`AlertRuleAdminResource.java` `AlertRuleAdminResource.update`; input rev `4899534f12a1`; sample S20]
 
 ## Last audit: 2026-09-15 (full-file re-audit + premature-prune correction)
 

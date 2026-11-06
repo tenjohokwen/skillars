@@ -135,7 +135,7 @@
     <h3 id="key-services">Key services</h3>
     <table>
       <tr><th>Service</th><th>Orchestrates</th></tr>
-      <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code> and paginates in the DB. A <code>language</code> is resolved to the city's matching ids by a native <code>ANY(languages)</code> query and ANDed into the paged query as <code>id IN (…)</code>. Batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
+      <tr><td><code>CoachSearchService</code></td><td>Builds the <code>Specification</code> and paginates in the DB. A <code>language</code> is resolved to the city's matching ids by a native query that lowercases both the searched language and each stored one (<code>unnest(languages)</code>), and ANDed into the paged query as <code>id IN (…)</code>. Batch-loads specialties/prices/90-day strike counts/badges for the page only, signs photo keys, and sorts by price within the page.</td></tr>
       <tr><td><code>CoachSearchSpecification</code></td><td>Composable predicates: status ACTIVE/REDUCED, city, district, skill, age group, min/max price (<code>EXISTS</code> subqueries on <code>coach_pricing</code>), and <code>averageRating &gt;= minRating</code> when <code>minRating &gt; 0</code>.</td></tr>
       <tr><td><code>CoachProfileService</code></td><td>Wizard steps 1–5 + publish, <code>getOwnProfile</code> (DRAFT-safe full profile), <code>deletePhoto</code>, <code>getPublicProfile</code> (4 queries, guarded by <code>CoachPublicProfileQueryCountIT</code>), <code>getSupportedTimezones</code>, and lookups used across the platform (<code>getCoachIdByUserId</code>, <code>getCoachSubscriptionTier</code>, <code>getDisplayNamesByIds</code>, <code>validateReadyForActivation</code> for admin reinstatement). <code>getCoachSubscriptionTier</code> returns <code>SCOUT</code> instead of a projected paid tier when <code>CoachSubscriptionEntitlementPort.isPaidTierEntitled</code> is false. That port is implemented by <code>payment.adapter.CoachSubscriptionEntitlementAdapter</code>: false only when a payment-side subscription row exists and its status is not <code>ACTIVE</code>/<code>TRIALLING</code>/<code>PAST_DUE</code> (<code>payment.contract.SubscriptionEntitlement</code>), so admin-provisioned rows with no payment row keep their tier. This one method gates the tier checks in <code>development</code>, <code>session</code>, <code>video</code> quotas and <code>GET /me/tier</code>.</td></tr>
       <tr><td><code>CoachGalleryService</code></td><td>The coach's own gallery (#312): list, add an uploaded image, delete. Re-validates the confirmed storage object server-side and serialises adds/deletes on the profile row lock.</td></tr>
@@ -211,7 +211,7 @@ sequenceDiagram
   Search->>Spec: build(params)
   Spec-->>Search: Specification (status, city, district, skill, ageGroup, price, minRating)
   opt language given
-    Search->>DB: findIdsByLanguage(lang, city) native ANY(languages)
+    Search->>DB: findIdsByLanguage(lang, city) native, case-insensitive
     Search->>Spec: and(idIn(ids))
   end
   Search->>DB: findAll(spec, pageable sorted status ASC then name or rating)
@@ -419,8 +419,10 @@ sequenceDiagram
     </div>
     <div class="callout warn">
       <p><strong>Search always needs a city, and language goes through an id list.</strong> Keep new filters
-      city-scoped. <code>findIdsByLanguage</code> (native, because <code>ANY(languages)</code> on the
-      <code>ListArrayType</code> column is not expressible in Criteria) returns the city's matching ids, restricted to the
+      city-scoped. <code>findIdsByLanguage</code> (native, because a match against the elements of the
+      <code>ListArrayType</code> column is not expressible in Criteria) returns the city's matching ids, comparing in
+      lowercase on both sides because languages are stored as picked (<code>'English'</code>; the profile builder, the
+      identity edit dialog and the search filter all take their options from <code>src/utils/coachLanguages.js</code>), restricted to the
       searchable statuses (ACTIVE, REDUCED) so the bind list stays bounded; that list must mirror
       <code>CoachSearchSpecification.isActive()</code>. The paged <code>Specification</code> ANDs the ids in with
       <code>idIn</code>, so pagination and totals come from the DB. Until
