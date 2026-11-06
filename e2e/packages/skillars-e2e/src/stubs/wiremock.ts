@@ -82,3 +82,25 @@ export async function refundsOn(paymentIntents: string[]): Promise<RefundRequest
     await context.dispose()
   }
 }
+
+/**
+ * How many moderation calls reached the Gemini stub with `text` in their prompt. Every message is
+ * moderated with its text verbatim inside the prompt, so a unique token per test makes this per-test
+ * even though every worker shares one WireMock.
+ */
+export async function geminiCallsContaining(text: string): Promise<number> {
+  const context = await request.newContext()
+  try {
+    const response = await context.post(`${E2E.wiremockUrl}/__admin/requests/count`, {
+      data: {
+        method: 'POST',
+        urlPathPattern: '/v1beta/models/[^/]+:generateContent',
+        bodyPatterns: [{ contains: text }],
+      },
+    })
+    if (!response.ok()) throw new Error(`WireMock count failed: ${response.status()}`)
+    return ((await response.json()) as { count: number }).count
+  } finally {
+    await context.dispose()
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "Gemini moderation \u2014 e2e-verdict-uncertain is ruled UNCERTAIN",
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/v1beta/models/[^/]+:generateContent",
+    "bodyPatterns": [
+      {
+        "contains": "e2e-verdict-uncertain"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "UNCERTAIN"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

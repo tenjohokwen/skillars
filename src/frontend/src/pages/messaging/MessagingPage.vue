@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="messaging-page glass-card q-pa-lg">
+    <div class="messaging-page glass-card q-pa-lg" data-testid="messaging-page">
       <div class="row items-center q-mb-md q-gutter-sm">
         <div class="text-h6 col">{{ t('messaging.pageTitle') }}</div>
         <!-- Parent oversight (story 8.2): view one child's conversations (adult children excluded —

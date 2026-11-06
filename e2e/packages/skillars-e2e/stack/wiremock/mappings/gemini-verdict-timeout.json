@@ -1,0 +1,34 @@
+{
+  "name": "Gemini moderation \u2014 e2e-verdict-timeout answers SAFE after 8 s, past the stack's 5 s timeout",
+  "priority": 5,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/v1beta/models/[^/]+:generateContent",
+    "bodyPatterns": [
+      {
+        "contains": "e2e-verdict-timeout"
+      }
+    ]
+  },
+  "response": {
+    "status": 200,
+    "fixedDelayMilliseconds": 8000,
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "jsonBody": {
+      "candidates": [
+        {
+          "content": {
+            "role": "model",
+            "parts": [
+              {
+                "text": "SAFE"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
