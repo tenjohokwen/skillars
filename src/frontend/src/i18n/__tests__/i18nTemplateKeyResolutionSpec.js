@@ -233,17 +233,27 @@ const DYNAMIC_KEY_CALL_SITES = [
       'start-conversation error: messagingErrorI18nKey maps a backend code to messaging.errors.*',
   },
   {
-    at: 'src/pages/coach/CoachSubscriptionPage.vue:324',
+    at: 'src/pages/coach/CoachSubscriptionPage.vue:433',
+    reason:
+      'downgrade / keep / cancel error (runAction): subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
+  },
+  {
+    at: 'src/pages/coach/CoachSubscriptionPage.vue:469',
     reason:
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/coach/CoachSubscriptionPage.vue:342',
+    at: 'src/pages/coach/CoachSubscriptionPage.vue:487',
     reason:
       'tier-change error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },
   {
-    at: 'src/pages/parent/PlayerSubscriptionPage.vue:368',
+    at: 'src/pages/parent/PlayerSubscriptionPage.vue:480',
+    reason:
+      'downgrade / keep / cancel error (runAction): subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
+  },
+  {
+    at: 'src/pages/parent/PlayerSubscriptionPage.vue:517',
     reason:
       'subscribe error: subscriptionErrorI18nKey maps a backend code to subscription.errors.*',
   },

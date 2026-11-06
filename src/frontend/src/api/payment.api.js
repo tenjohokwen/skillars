@@ -85,6 +85,7 @@ export const subscribeCoach = (payload) =>
 export const changeCoachTier = (payload) =>
   api.post('/api/payment/subscriptions/coach/change-tier', payload)
 export const cancelCoachSubscription = () => api.delete('/api/payment/subscriptions/coach')
+export const keepCoachSubscription = () => api.post('/api/payment/subscriptions/coach/keep')
 
 // Player subscriptions
 export const fetchPlayerTiers = () => api.get('/api/payment/subscriptions/player/tiers')
@@ -96,6 +97,8 @@ export const changePlayerTier = (payload) =>
   api.post('/api/payment/subscriptions/player/change-tier', payload)
 export const cancelPlayerSubscription = (playerId) =>
   api.delete('/api/payment/subscriptions/player', { params: { playerId } })
+export const keepPlayerSubscription = (playerId) =>
+  api.post('/api/payment/subscriptions/player/keep', null, { params: { playerId } })
 
 // Revenue dashboard (coach)
 export const fetchCoachRevenueSummary = (from, to) =>

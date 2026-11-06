@@ -14,11 +14,13 @@ import {
   subscribeCoach,
   changeCoachTier,
   cancelCoachSubscription,
+  keepCoachSubscription,
   fetchPlayerTiers,
   fetchMyPlayerSubscription,
   subscribePlayer,
   changePlayerTier,
   cancelPlayerSubscription,
+  keepPlayerSubscription,
   fetchCoachRevenueSummary,
   fetchCoachTransactions,
   fetchCreditStatement,
@@ -230,6 +232,10 @@ export const usePaymentStore = defineStore('payment', {
       await cancelCoachSubscription()
       await this.fetchCoachSubscription()
     },
+    async keepCoachSubscription() {
+      await keepCoachSubscription()
+      await this.fetchCoachSubscription()
+    },
 
     // Player subscription actions
     async fetchPlayerSubscription(playerId) {
@@ -265,6 +271,10 @@ export const usePaymentStore = defineStore('payment', {
     },
     async cancelPlayerSubscription(playerId) {
       await cancelPlayerSubscription(playerId)
+      await this.fetchPlayerSubscription(playerId)
+    },
+    async keepPlayerSubscription(playerId) {
+      await keepPlayerSubscription(playerId)
       await this.fetchPlayerSubscription(playerId)
     },
 

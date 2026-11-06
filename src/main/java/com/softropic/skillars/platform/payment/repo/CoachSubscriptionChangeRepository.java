@@ -35,6 +35,10 @@ public interface CoachSubscriptionChangeRepository extends JpaRepository<CoachSu
 
     boolean existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(UUID coachId);
 
+    /** The pending change a read shows the coach (no lock, unlike findPendingForCoach). */
+    Optional<CoachSubscriptionChange> findFirstByCoachIdAndAppliedFalseAndVoidedAtIsNullOrderByEffectiveAtDesc(
+        UUID coachId);
+
     // fix/payment-subscription-entitlements: voids EVERY pending change (findPendingForCoach only ever
     // returned one, and its SKIP LOCKED silently missed a row the applicator was holding). Callers
     // lock the owning subscription row first, matching the applicator's subscription -> change order.

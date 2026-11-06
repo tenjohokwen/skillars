@@ -291,6 +291,9 @@ public class SubscriptionService {
      * applyPendingChanges — changing the price only once the period had ended would bill one more
      * period at the old price, because Stripe renews before the daily applicator runs. A downgrade to
      * SCOUT (free) is a cancel-at-period-end. Re-selecting the current tier cancels a pending downgrade.
+     * A plan set to end is refused any change (cancelPending): an upgrade would charge the proration on a
+     * plan that still ends, and a downgrade would sit beside the cancel. The owner keeps the plan first
+     * ({@link #keepCoachSubscription}), then changes it.
      */
     public void changeCoachTier(UUID coachId, String newTier) {
         PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId)
@@ -304,6 +307,7 @@ public class SubscriptionService {
             throw new PaymentGatewayException("payment.subscription.invalidTier");
         }
         String stripeSubId = requireBillingHealthy(sub.getStatus(), sub.getStripeSubscriptionId());
+        requireNotCancelling(sub.isCancelAtPeriodEnd());
         boolean pendingDowngrade =
             coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(coachId);
 
@@ -421,6 +425,12 @@ public class SubscriptionService {
         if (stripeSubId == null) {
             throw new PaymentGatewayException("payment.subscription.noActiveStripeSubscription");
         }
+        // A pending downgrade already moved the Stripe price down. The cancel voids that change, and a plan
+        // can now be kept after a cancel (keepCoachSubscription), so the price goes back to the tier the
+        // coach keeps first; otherwise a kept plan would renew on the higher tier at the lower price.
+        if (coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(coachId)) {
+            restoreCoachPriceAndVoidDowngrade(coachId, stripeSubId, sub.getTier().toUpperCase());
+        }
 
         try {
             Instant periodEnd = stripeClient.cancelSubscriptionAtPeriodEnd(stripeSubId);
@@ -446,6 +456,34 @@ public class SubscriptionService {
         // cancellation (applied after the deletion it re-granted a paid tier with no subscription).
         coachSubscriptionChangeRepository.voidAllPendingForCoach(coachId, Instant.now());
         log.info("[COACH_CANCEL_AT_PERIOD_END coachId={} periodEnd={}]", coachId, periodEnd);
+    }
+
+    // ─── Coach Keep (undo a cancel) ──────────────────────────────────────────────
+
+    /**
+     * Takes back a cancel-at-period-end: Stripe renews the subscription again. A plan that is not set to end
+     * is left as it is. Needs a billing-healthy subscription, like a tier change.
+     */
+    public void keepCoachSubscription(UUID coachId) {
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachId(coachId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
+        if (!sub.isCancelAtPeriodEnd()) return;
+        String stripeSubId = requireBillingHealthy(sub.getStatus(), sub.getStripeSubscriptionId());
+        keepStripeSubscription(stripeSubId, "COACH_KEEP", coachId);
+        self.persistCoachKeep(coachId, stripeSubId);
+    }
+
+    @Transactional
+    public void persistCoachKeep(UUID coachId, String stripeSubId) {
+        PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
+        if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
+            log.warn("[COACH_KEEP_SUPERSEDED coachId={} stripeSubId={}]", coachId, stripeSubId);
+            return;
+        }
+        sub.setCancelAtPeriodEnd(false);
+        paymentCoachSubscriptionRepository.save(sub);
+        log.info("[COACH_CANCEL_TAKEN_BACK coachId={}]", coachId);
     }
 
     // ─── Player Subscribe ────────────────────────────────────────────────────────
@@ -565,6 +603,7 @@ public class SubscriptionService {
             throw new PaymentGatewayException("payment.subscription.invalidTier");
         }
         String stripeSubId = requireBillingHealthy(sub.getStatus(), sub.getStripeSubscriptionId());
+        requireNotCancelling(sub.isCancelAtPeriodEnd());
         String interval = sub.getBillingInterval();
         boolean pendingDowngrade =
             playerSubscriptionChangeRepository.existsByPlayerIdAndAppliedFalseAndVoidedAtIsNull(playerId);
@@ -652,6 +691,11 @@ public class SubscriptionService {
         if (stripeSubId == null) {
             throw new PaymentGatewayException("payment.subscription.noActiveStripeSubscription");
         }
+        // See cancelCoachSubscription: put the price a pending downgrade lowered back before cancelling.
+        if (playerSubscriptionChangeRepository.existsByPlayerIdAndAppliedFalseAndVoidedAtIsNull(playerId)) {
+            restorePlayerPriceAndVoidDowngrade(playerId, stripeSubId, sub.getTier().toUpperCase(),
+                sub.getBillingInterval());
+        }
 
         try {
             Instant periodEnd = stripeClient.cancelSubscriptionAtPeriodEnd(stripeSubId);
@@ -675,6 +719,33 @@ public class SubscriptionService {
         paymentPlayerSubscriptionRepository.save(sub);
         playerSubscriptionChangeRepository.voidAllPendingForPlayer(playerId, Instant.now());
         log.info("[PLAYER_CANCEL_AT_PERIOD_END playerId={} periodEnd={}]", playerId, periodEnd);
+    }
+
+    // ─── Player Keep (undo a cancel) ─────────────────────────────────────────────
+
+    /** Same rules as {@link #keepCoachSubscription}, owner-scoped like every player mutation. */
+    public void keepPlayerSubscription(Long callerUserId, Long playerId) {
+        assertPlayerOwnership(callerUserId, playerId);
+
+        PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerId(playerId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
+        if (!sub.isCancelAtPeriodEnd()) return;
+        String stripeSubId = requireBillingHealthy(sub.getStatus(), sub.getStripeSubscriptionId());
+        keepStripeSubscription(stripeSubId, "PLAYER_KEEP", playerId);
+        self.persistPlayerKeep(playerId, stripeSubId);
+    }
+
+    @Transactional
+    public void persistPlayerKeep(Long playerId, String stripeSubId) {
+        PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
+            .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
+        if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
+            log.warn("[PLAYER_KEEP_SUPERSEDED playerId={} stripeSubId={}]", playerId, stripeSubId);
+            return;
+        }
+        sub.setCancelAtPeriodEnd(false);
+        paymentPlayerSubscriptionRepository.save(sub);
+        log.info("[PLAYER_CANCEL_TAKEN_BACK playerId={}]", playerId);
     }
 
     // ─── Payment Method Sync ──────────────────────────────────────────────────────
@@ -1702,6 +1773,20 @@ public class SubscriptionService {
         return new PaymentGatewayException("payment.subscription.stripeError", e);
     }
 
+    private static void requireNotCancelling(boolean cancelAtPeriodEnd) {
+        if (cancelAtPeriodEnd) {
+            throw new PaymentGatewayException("payment.subscription.cancelPending");
+        }
+    }
+
+    private void keepStripeSubscription(String stripeSubId, String logTag, Object ownerId) {
+        try {
+            stripeClient.keepSubscription(stripeSubId, "sub-keep-" + UUID.randomUUID());
+        } catch (StripeException e) {
+            throw stripeFailure(logTag, ownerId, e);
+        }
+    }
+
     /** Tier changes act on the live Stripe subscription, so they require it to be billing-healthy. */
     private static String requireBillingHealthy(String status, String stripeSubId) {
         if (stripeSubId == null) {
@@ -1886,18 +1971,29 @@ public class SubscriptionService {
     }
 
     private CoachSubscriptionResponse toCoachResponse(PaymentCoachSubscription sub) {
+        // A cancel voids pending changes, so a plan set to end shows none.
+        Optional<CoachSubscriptionChange> pending = sub.isCancelAtPeriodEnd() ? Optional.empty()
+            : coachSubscriptionChangeRepository
+                .findFirstByCoachIdAndAppliedFalseAndVoidedAtIsNullOrderByEffectiveAtDesc(sub.getCoachId());
         return new CoachSubscriptionResponse(
             sub.getSubscriptionId(), sub.getTier(), sub.getStatus(),
-            sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd());
+            sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd(),
+            pending.map(CoachSubscriptionChange::getToTier).orElse(null),
+            pending.map(CoachSubscriptionChange::getEffectiveAt).orElse(null));
     }
 
     private PlayerSubscriptionResponse toPlayerResponse(PaymentPlayerSubscription sub) {
+        Optional<PlayerSubscriptionChange> pending = sub.isCancelAtPeriodEnd() ? Optional.empty()
+            : playerSubscriptionChangeRepository
+                .findFirstByPlayerIdAndAppliedFalseAndVoidedAtIsNullOrderByEffectiveAtDesc(sub.getPlayerId());
         return new PlayerSubscriptionResponse(
             sub.getSubscriptionId(), sub.getPlayerId(), sub.getTier(),
             sub.getBillingInterval(), sub.getStatus(),
             sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd(),
             // A CANCELLED row can still carry its old Stripe id (see assertCanSubscribe); a new tier is a
             // fresh subscribe there, not a change.
-            sub.getStripeSubscriptionId() != null && !"CANCELLED".equals(sub.getStatus()));
+            sub.getStripeSubscriptionId() != null && !"CANCELLED".equals(sub.getStatus()),
+            pending.map(PlayerSubscriptionChange::getToTier).orElse(null),
+            pending.map(PlayerSubscriptionChange::getEffectiveAt).orElse(null));
     }
 }

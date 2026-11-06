@@ -63,7 +63,7 @@ class PlayerSubscriptionOwnershipWebMvcTest {
 
     private static final PlayerSubscriptionResponse STUB_RESPONSE = new PlayerSubscriptionResponse(
         UUID.randomUUID(), OWN_PLAYER, "SEMI_PRO", "YEARLY", "ACTIVE",
-        Instant.now().plusSeconds(86400), false, true
+        Instant.now().plusSeconds(86400), false, true, null, null
     );
 
     @Autowired MockMvc mockMvc;

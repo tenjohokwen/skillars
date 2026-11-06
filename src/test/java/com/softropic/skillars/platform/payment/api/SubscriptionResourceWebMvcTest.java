@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -127,7 +128,7 @@ class SubscriptionResourceWebMvcTest {
     void getMyCoachSubscription_happyPath_returns200() throws Exception {
         stubCoachIdentity();
         when(subscriptionService.getCoachSubscription(COACH_PROFILE_ID)).thenReturn(
-            new CoachSubscriptionResponse(UUID.randomUUID(), "PRO", "ACTIVE", Instant.now().plusSeconds(86400), false));
+            new CoachSubscriptionResponse(UUID.randomUUID(), "PRO", "ACTIVE", Instant.now().plusSeconds(86400), false, null, null));
 
         mockMvc.perform(get("/api/payment/subscriptions/coach/me"))
             .andExpect(status().isOk())
@@ -148,7 +149,7 @@ class SubscriptionResourceWebMvcTest {
     void subscribeCoach_happyPath_returns200() throws Exception {
         stubCoachIdentity();
         when(subscriptionService.subscribeCoach(COACH_PROFILE_ID, COACH_USER_ID, "PRO")).thenReturn(
-            new CoachSubscriptionResponse(UUID.randomUUID(), "PRO", "ACTIVE", Instant.now().plusSeconds(86400), false));
+            new CoachSubscriptionResponse(UUID.randomUUID(), "PRO", "ACTIVE", Instant.now().plusSeconds(86400), false, null, null));
 
         mockMvc.perform(post("/api/payment/subscriptions/coach/subscribe")
                 .contentType("application/json")
@@ -181,6 +182,26 @@ class SubscriptionResourceWebMvcTest {
             .andExpect(status().isNoContent());
     }
 
+    // ─── POST /coach/keep ───────────────────────────────────────────────────────
+
+    @Test
+    @WithMockUser(roles = "COACH")
+    void keepCoachSubscription_happyPath_returns204() throws Exception {
+        stubCoachIdentity();
+
+        mockMvc.perform(post("/api/payment/subscriptions/coach/keep"))
+            .andExpect(status().isNoContent());
+        verify(subscriptionService).keepCoachSubscription(any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void keepCoachSubscription_parentCaller_returns403() throws Exception {
+        mockMvc.perform(post("/api/payment/subscriptions/coach/keep"))
+            .andExpect(status().isForbidden());
+        verifyNoInteractions(subscriptionService);
+    }
+
     // ─── GET /player/tiers — permitAll(), but this test's own filter chain still requires auth ──
 
     @Test
@@ -208,7 +229,7 @@ class SubscriptionResourceWebMvcTest {
         RequestPostProcessor parent = parentOfPlayer();
         when(subscriptionService.subscribePlayer(PARENT_ID, PLAYER_ID, "SEMI_PRO", "YEARLY")).thenReturn(
             new PlayerSubscriptionResponse(UUID.randomUUID(), PLAYER_ID, "SEMI_PRO", "YEARLY", "ACTIVE",
-                Instant.now().plusSeconds(86400), false, true));
+                Instant.now().plusSeconds(86400), false, true, null, null));
 
         mockMvc.perform(post("/api/payment/subscriptions/player/subscribe")
                 .contentType("application/json")
@@ -265,7 +286,7 @@ class SubscriptionResourceWebMvcTest {
     void subscribePlayer_selfRegisteredPlayerOwnProfile_returns200() throws Exception {
         when(subscriptionService.subscribePlayer(SELF_PLAYER_USER_ID, PLAYER_ID, "SEMI_PRO", "YEARLY")).thenReturn(
             new PlayerSubscriptionResponse(UUID.randomUUID(), PLAYER_ID, "SEMI_PRO", "YEARLY", "ACTIVE",
-                Instant.now().plusSeconds(86400), false, true));
+                Instant.now().plusSeconds(86400), false, true, null, null));
 
         mockMvc.perform(post("/api/payment/subscriptions/player/subscribe")
                 .contentType("application/json")
@@ -313,6 +334,35 @@ class SubscriptionResourceWebMvcTest {
         mockMvc.perform(delete("/api/payment/subscriptions/player")
                 .param("playerId", String.valueOf(OTHER_PLAYER_ID))
                 .with(parent))
+            .andExpect(status().isForbidden());
+        verifyNoInteractions(subscriptionService);
+    }
+
+    // ─── POST /player/keep ──────────────────────────────────────────────────────
+
+    @Test
+    void keepPlayerSubscription_parent_returns204() throws Exception {
+        mockMvc.perform(post("/api/payment/subscriptions/player/keep")
+                .param("playerId", String.valueOf(PLAYER_ID))
+                .with(parentOfPlayer()))
+            .andExpect(status().isNoContent());
+        verify(subscriptionService).keepPlayerSubscription(PARENT_ID, PLAYER_ID);
+    }
+
+    @Test
+    void keepPlayerSubscription_selfRegisteredPlayerOwnProfile_returns204() throws Exception {
+        mockMvc.perform(post("/api/payment/subscriptions/player/keep")
+                .param("playerId", String.valueOf(PLAYER_ID))
+                .with(selfRegisteredPlayerOwning(PLAYER_ID)))
+            .andExpect(status().isNoContent());
+        verify(subscriptionService).keepPlayerSubscription(SELF_PLAYER_USER_ID, PLAYER_ID);
+    }
+
+    @Test
+    void keepPlayerSubscription_parentOfAnotherPlayer_returns403() throws Exception {
+        mockMvc.perform(post("/api/payment/subscriptions/player/keep")
+                .param("playerId", String.valueOf(OTHER_PLAYER_ID))
+                .with(parentOfPlayer()))
             .andExpect(status().isForbidden());
         verifyNoInteractions(subscriptionService);
     }
