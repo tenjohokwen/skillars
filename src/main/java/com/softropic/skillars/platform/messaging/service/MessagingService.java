@@ -336,6 +336,20 @@ public class MessagingService {
         }
     }
 
+    /**
+     * One conversation's summary for a party to it, whatever its status. The own lists leave BLOCKED
+     * conversations out (and, for a parent, those the player's age tier closes to them), so a page opened
+     * on a deep link to such a thread had no summary to say it is blocked or read-only.
+     */
+    @Transactional(readOnly = true)
+    public ConversationSummaryDto getConversation(Long conversationId, Long callerUserId, String role) {
+        var conv = conversationRepository.findById(conversationId)
+            .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
+        verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
+        return toSummary(conv, callerUserId, role);
+    }
+
     public Page<MessageDto> getMessages(Long conversationId, Long callerUserId, String role, Pageable pageable) {
         var conv = conversationRepository.findById(conversationId)
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
@@ -500,6 +514,21 @@ public class MessagingService {
         return coachId != null && coachProfileRepository.findById(coachId)
             .map(c -> c.getStatus() == CoachProfileStatus.SUSPENDED)
             .orElse(false);
+    }
+
+    /**
+     * A parent stays the conversation's parentId after the player turns 18, but loses access with the
+     * age tier (privacy at 18): the own list and the oversight view already leave such threads out, and
+     * sending is refused. The summary by id is refused the same way (its preview quotes the latest
+     * message). getMessages and the SSE stream do not apply this yet: they check verifyIsParty only.
+     */
+    private void requireParentReadAccess(Conversation conv, String role) {
+        if ("PARENT".equals(role)
+                && AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(conv.getPlayerId())).parentIsBlocked()) {
+            throw new OperationNotAllowedException(
+                "Parental access does not apply to an adult player's conversations",
+                MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
+        }
     }
 
     private void verifyIsParty(Conversation conv, Long callerUserId, String role) {
