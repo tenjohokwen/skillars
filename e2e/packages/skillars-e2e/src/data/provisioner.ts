@@ -477,6 +477,40 @@ export class Provisioner {
   }
 
   /**
+   * Give a config key with no platform_config row one, holding its code default, so the admin config
+   * API (which 404s a key with neither a row nor a ConfigBounds code default) can then set and restore
+   * it. SQL seam; changes nothing the app reads, since the row repeats the default.
+   */
+  async ensureConfigRow(key: string, codeDefault: string): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO main.platform_config (id, key, value, value_type, description, updated_at)
+       SELECT (SELECT COALESCE(max(id), 0) + 1 FROM main.platform_config), $1::varchar, $2::text,
+              'STRING', 'Seeded by the Pitchside e2e suite with its code default', now()
+        WHERE NOT EXISTS (SELECT 1 FROM main.platform_config WHERE key = $1::varchar)`,
+      [key, codeDefault],
+    )
+  }
+
+  /**
+   * Record a completed Stripe Identity check for a self-registered player, as the verification
+   * webhook would. SQL seam: the check itself runs on a Stripe-hosted page.
+   */
+  async markAgeVerified(player: PlayerAccount): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO main.age_verifications
+         (id, user_id, stripe_session_id, status, verified_tier, verified_at, created_at, updated_at)
+       VALUES ($1::bigint, $2::bigint, $3, 'VERIFIED', 'ADULT', now(), now(), now())`,
+      [
+        (BigInt(randomInt(1, 2 ** 31)) * 2n ** 31n + BigInt(randomInt(0, 2 ** 31))).toString(),
+        player.userId,
+        `vs_e2e_${this.names.token('vs').replace(/-/g, '_')}`,
+      ],
+    )
+  }
+
+  /**
    * Run a scheduled job now through the e2e-profile trigger (E2eJobResource), as the bootstrap admin,
    * instead of waiting for its schedule. Seed state that is already due first. The job holds its
    * ShedLock while it runs; a 409 means another run has it, so this retries until its own run lands.

@@ -378,6 +378,41 @@ describe('MessagingPage.vue — messaging completion (feat/messaging-completion)
       expect(store.loadMessages).toHaveBeenCalledWith('conv-7', { reset: true })
       expect(store.connectSse).toHaveBeenCalledWith('conv-7')
     })
+
+    // Pitchside MSG-17: the own list leaves out BLOCKED threads, so the side that did not report one
+    // opened it by link with no summary and was offered a composer the server refuses.
+    it('a linked thread missing from the own list, whose history loads, is shown as blocked', async () => {
+      routeState.query = { conversation: 'conv-9' }
+      mountPage(undefined, { messaging: { activeConversationId: null } })
+      const store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
+      await flushPromises()
+
+      expect(store.markConversationBlocked).toHaveBeenCalledWith('conv-9')
+    })
+
+    it('a linked thread in the own list is not marked blocked', async () => {
+      routeState.query = { conversation: 'conv-1' }
+      mountPage(undefined, { messaging: { activeConversationId: null } })
+      const store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
+      await flushPromises()
+
+      expect(store.markConversationBlocked).not.toHaveBeenCalled()
+    })
+
+    it('a linked thread whose history fails to load is not taken for blocked', async () => {
+      routeState.query = { conversation: 'conv-9' }
+      mountPage(undefined, { messaging: { activeConversationId: null } })
+      const store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
+      store.loadMessages.mockImplementation(async () => {
+        store.error = new Error('403')
+      })
+      await flushPromises()
+
+      expect(store.markConversationBlocked).not.toHaveBeenCalled()
+    })
   })
 
   describe('remount', () => {

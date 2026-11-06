@@ -18,6 +18,7 @@ export const R = {
   availability: '/coach/availability',
   bookingRequests: '/coach/booking-requests',
   coachPlayers: '/coach/players',
+  coachPlayerDetail: '/coach/players/:playerId(\\d+)',
   packTiers: '/coach/session-pack-tiers',
   revenue: '/coach/revenue',
   coachSubscription: '/coach/subscription',
