@@ -30,7 +30,7 @@ case from `fix_pr: pending` to the PR number. Not a story yet: bundle per the us
 RS01 and RS02 (the two auth items) were implemented by **skillars-deferred-166** and deleted from this
 list per this file's "deleted outright once implemented" rule; their eval cases moved to
 `evals/review/cases/` carrying that PR's number. Item ids are the ones the original review used and do
-not renumber, so the list below starts at RS05. RS03 (email change / registration storing the login in the
+not renumber; the list below starts with the RS03 residuals (RS03b–d). RS03 (email change / registration storing the login in the
 typed case) was implemented by **skillars-deferred-172** and deleted; its eval case moved to `evals/review/cases/`.
 
 **OWNER DECIDED 2026-11-03: the next bundle after skillars-deferred-167 is the payments/Stripe cluster** —
@@ -991,15 +991,11 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 - D4: `completionLoading` flag shared across pause/resume/end — consumers cannot distinguish which operation is in-flight; component uses local `pausing`/`resuming` refs for buttons so user-visible impact is nil; pre-existing store design [`booking.store.js`]
 
 ## Deferred from: code review of skillars-3-6-session-completion-live-mode-quick-complete (2026-06-16)
-- W3: `BookingCompletedEvent` has no retry/DLQ mechanism if listener fails after commit — infrastructure limitation, pre-existing across all event consumers [`BookingEmailListener.java`]
 - W5: Auto-return after wrap-up reloads `selectedWeek` instead of current week — minor UX edge case when coach was browsing a different week [`CoachCommandCenterPage.vue:305`]
 - W6: V33 migration uses hardcoded `id = 39` for `platform_config` insert — low collision risk given sequential pattern; validate before deploying to environments with manual config inserts [`V33__session_completion_data.sql:3`]
 
 ## Deferred from: code review of skillars-3-5-scheduling-views-timezone-management (2026-06-15)
 - W1: Revenue gross calculation ignores variable session pricing (pack discounts, multi-session rates) — spec defines gross as `perSessionPrice × count` (AC 2), variable pricing is out of scope; revisit in a pricing-model story [ProjectedRevenueService.java]
-
-## Deferred from: code review of skillars-2-3-coach-public-profile-page (2026-06-13)
-- N+1 queries — `getPublicProfile` fires 8 sequential DB round-trips; acceptable for single-entity load now, but batch loading or `@EntityGraph` should be considered before Epic 3 traffic ramp [CoachProfileService.java] `[RE-EVALUATED by skillars-deferred-70: not a classic N+1 — getPublicProfile(coachId) is called once per single-coach page view, not once per row in a larger collection. 8 small, indexed, single-row queries for one profile view is unlikely to be the bottleneck it was originally framed as. Left open and unpicked rather than closed — a real fix (EntityGraph/batch-loading) is still reasonable if this page's latency is ever actually measured and found wanting, but should wait for that evidence rather than being done speculatively.]`
 
 ## Deferred from: code review of skillars-1-6-age-tier-enforcement-family-data-isolation (2026-06-12)
 - Flyway V25 hardcoded IDs 112–114 — `ON CONFLICT (key) DO NOTHING` does not guard against PK collision if those IDs are already taken by different rows with different keys; spec explicitly verified the ID range is safe; established codebase Flyway seed pattern [V25__age_policy_config_seed.sql:1–6]
@@ -1055,7 +1051,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 
 ## Deferred from: code review of skillars-1-2-skillars-design-system-foundation (2026-06-11)
 - W3: `app-bg` class has no boot-failure fallback in `App.vue` — boot file is the canonical owner per spec design; fallback in App.vue would duplicate logic; acceptable exceptional-case gap
-- W4: `onSessionExpired` in MainLayout clears username but does not redirect to `/login` — pre-existing behaviour not introduced by this story
 - W7: No CSP header coverage for `fonts.googleapis.com` — infrastructure/deployment concern outside story scope
 
 ## Deferred from: code review of skillars-1-1-feature-gate-configuration-layer (2026-06-11)
@@ -1139,10 +1134,6 @@ Found or deliberately left while implementing the story. The first item is an **
 - **D3 — `CAPTURE_PENDING` has no automated exit.** A reserved row that never completes blocks the parent's cancel (AC2 returns 409 for as long as it stands), holds the coach's slot, and is refused by the sweeper. AC5 escalates it on every 15-minute sweep via `booking.payment_pending.unrecoverable{reason="CAPTURE_UNCONFIRMED"}` and Scenario 4 of `runbook.md` documents the manual resolution, but nothing times it out. **Deliberate.** Every automatic option is worse: declining could charge a parent for nothing, confirming could give away an unpaid session, and re-charging could take the money twice. Only a human can read the Stripe side. Recorded so the absence reads as a decision rather than an oversight.
 
 - **D7 — `PaymentWebhookIdempotencyIT` seeded no `booking.bookings` rows at all.** Found in Task 0's triage; the story's regression table predicted only that it might assert "exactly N rows". The class mocks `BookingService` specifically so transitions do not need a real booking, which meant `reserveCapture`'s locked read found nothing, returned `BOOKING_NOT_PENDING`, and left zero payment rows. Fixed by seeding a real `PAYMENT_PENDING` booking in the one test that reaches Stripe — the fixture, not the check, per `uat-2`'s recorded lesson. Recorded because it generalises: **any test that drives a settlement path now needs a real booking row**, which was not true before this story, and the other two tests in that class pass only because they never reach Stripe (full credit cover and pack-funded both skip the reservation).
-
-## Deferred from: code review of skillars-uat-3-payment-capture-integrity-and-backup-retention (2026-08-11)
-
-All 13 patch findings were applied; these are the review's own deferrals plus one item the patch round produced.
 
 ## Deferred from: skillars-uat-5-player-self-booking story creation (2026-08-12)
 
@@ -1288,7 +1279,6 @@ The following ledger items were verified against current source and found alread
 
 skillars-deferred-91 closed the genuine one-off bugs (AC12–AC19), the rolling-deploy bucket (AC6–AC8), the i18n bucket (AC9–AC10), the N+1 bucket (AC11), a generic transactional outbox (AC1) wired onto the money / notification / SLU AFTER_COMMIT paths (AC2–AC4), and `CAPTURE_PENDING`'s slot-hold harm (AC5 Part A). The following residuals remain:
 
-- **de-DE wording is AI-authored to native quality, not yet human-verified by a native German speaker.** AC9 rewrote every informal `du`/`dein…` and informal imperative to formal `Sie` across the whole `de-DE/index.js` (54 replacement groups, 0 informal forms left) and the frontend bundle parity check confirms 1022/1022 keys with 0 `{placeholder}` drift, but a native-speaker review of register/idiom is still owed. (Carried forward from skillars-deferred-90.)
 - **`getPublicProfile` — leave as-is, measured.** AC11 measured `CoachProfileService.getPublicProfile` at exactly **8** JDBC round-trips, **constant** in profile size (`CoachPublicProfileQueryCountIT` doubles every collection → still 8). Every read is index-covered on `coach_id`; there is no N+1 and the endpoint is a single page view. A `JOIN FETCH` / `@EntityGraph` collapse across the six `@OneToMany` collections would risk `MultipleBagFetchException` / a cartesian row explosion for no measurable gain. The IT stays as the regression guard.
 - **No frontend test framework.** ~6 recorded coverage gaps (`5-4` W9, `deferred-17`/`-18`/`-30`/`-37`/`-38`/`-43` D6) depend on standing up Vitest / Vue Test Utils. Out of scope — its own initiative. Every `.vue` / `.js` change in skillars-deferred-91 (AC14 `handleLogout`, AC9/AC10 i18n) was verified by ESLint + `quasar build` + code reading. `[FRAMEWORK AVAILABLE 2026-09-09 (skillars-deferred-104): Vitest runner now stood up (`5-4` W9 closed by its AC7); ~~the `deferred-91` `handleLogout` / i18n coverage is now in-scope for its own follow-up story~~ — **CLOSED by skillars-deferred-108 AC6 (2026-09-10)**: `src/frontend/src/composables/__tests__/useSessionSpec.js` (handleLogout order + `rint` double-clear + bounded wait) and `MainLayoutSpec.js` locale block (`changeLanguage` / `loadLanguagePreference`). The native-DE/FR register review (`:1149`) is untouched — that is not a dev-closable item.]`
 - **`AFTER_COMMIT` reliability catalogue — corrected by `skillars-deferred-92` AC6 (2026-09-04).** The list below supersedes the skillars-deferred-91 version, which is now wrong in two places: it described the email listeners as merely "wired onto the outbox" (they are now `BEFORE_COMMIT`, so the enqueue is *atomic* with the business work — AC4), and it listed `ModerationSlaMonitorService` as not migrated (it now is — AC5). **On the generic outbox and enqueuing inside the producing transaction:** the refund path (`BOOKING_REFUND` — deferred-91 AC2; the enqueue moved off `CancellationRefundService`'s `AFTER_COMMIT` listeners into a dedicated `RefundEnqueueListener` `@TransactionalEventListener(BEFORE_COMMIT)` with `enqueueBookingRefund` on `Propagation.MANDATORY`, so it commits atomically with the booking `CANCELLED` write — deferred-101 AC4; the sibling `AFTER_COMMIT` listeners keep pack-restore / cancellation-history / strike issuance), transactional email (`BookingEmailListener` × 20 + `SessionPackEmailListener` × 3, all 23 now `@TransactionalEventListener(BEFORE_COMMIT)` with `enqueueEmail` on `Propagation.MANDATORY` — deferred-92 AC4/AC29), the SLU snapshot (`SnapshotPersistenceRetrier.@Recover` — deferred-91 AC4), and video-moderation retry + admin alert (`ModerationSlaMonitorService`, each enqueued inside the same `REQUIRES_NEW` chunk as the state change it describes — deferred-92 AC5). **Deliberately NOT migrated, unchanged from deferred-91:** ~~`PendingBlobDeletionService` (its own reviewed outbox; re-expressing it on the generic one is a nice-to-have)~~ `[skillars-deferred-100 AC6 (2026-09-08): DONE — PendingBlobDeletionService / PendingBlobDeletionChunkProcessor / BlobDeletionsEnqueuedEvent deleted; GdprErasureService now enqueues via BlobDeletionOutboxSupport onto the generic platform.outbox, drained by BlobDeletionOutboxHandler. PendingBlobDeletionResidualDrainRunner one-shots any residual pending_blob_deletions rows onto the generic outbox at startup. Table drop is a follow-up — see the deferred-100 AC6 follow-up bullet below.]`; `CancellationRefundService`'s `packSessionService.restoreSession(...)` calls (a pack-session-restore idempotency concern, distinct from the money refund); the registration-email listeners (`{Parent,Coach,Player}RegistrationEmailListener` — they publish inside a live transaction and work today); and the SSE / video / development / admin / reviews / session `@TransactionalEventListener` sites that are neither money- nor compliance-relevant.
@@ -1321,7 +1311,8 @@ and the booking-reminder blocker (AC29). What genuinely remains:
   probably true when this codebase had fewer executor beans, which is why it is recorded rather than
   silently dropped. The real risk — correctness resting on a bean-*name* string — is closed: all 11 sites
   now carry `@Async("taskExecutor")` and `AsyncExecutorQualifierTest` fails on a new bare one.
-  (project-owner decision: configurable per-market, default permissive international). `app.validation.phone`
+- **Phone validation and its hint strings were Cameroon-specific.** (The opening of this bullet was lost
+  in an earlier edit; the rest is kept as the decision record.) `[...` (project-owner decision: configurable per-market, default permissive international). `app.validation.phone`
   (`PhoneValidationProperties`) + `MarketResolver` + `PhoneRuleRegistry`; `CamPhoneValidator` rewritten
   config-driven (name kept, noted misnomer); `PhoneNumberUtil.fromString` made best-effort. Backend
   `validation.phone.{digitCount,firstDigit,operator}` neutralised + `hintDefault` added (4 bundles);
@@ -2719,7 +2710,8 @@ skillars-deferred-136 AC2, and has been pruned per this file's delete-outright c
   assumed today (e.g. NTP disabled or unavailable), or if a `DEAD`-lettered video-deletion row with no
   corresponding provider error is ever actually observed in the wild.
 
-- **`[DECIDED: accepted risk — skillars-deferred-127]` `radar_composite_dlq` rows for an erased
+- **`[DECIDED: accepted risk — skillars-deferred-127; REOPENED 2026-11-05 by skillars-deferred-171, see its
+  erasure bullet near the end of this file]` `radar_composite_dlq` rows for an erased
   player are not cleared by `GdprErasureService.deletePlayerDevelopmentData`, and will still process
   after skillars-deferred-127 AC1's fix ships.** Not a data-integrity issue post-fix — but the
   original safety argument recorded here was itself wrong in one window, corrected below (code
@@ -2781,7 +2773,8 @@ here, rather than treating physical adjacency to every touched section as achiev
   GDPR_ERASE_STATEMENT_LOCK_TIMEOUT_SECONDS`, honestly documented as `N ×` the configured seconds
   per statement, not a method-level ceiling). Its second, distinct hazard — the inner `REQUIRES_NEW`
   transaction's own pooled-connection-*acquisition* wait, unaffected by `lock_timeout` — remains
-  genuinely open; this story does not touch it.
+  genuinely open; this story does not touch it. `[Since CLOSED by skillars-deferred-132 Fix 4 (a
+  `HikariPoolMXBean` pre-check), recorded further down.]`
 - **`## Deferred from: code review of skillars-deferred-108…` (`:2049-2071` in this revision):** the
   "a red frontend suite still does not block a merge unless someone remembers the label" bullet is
   narrowed. AC2 closes the "unless someone remembers the label" clause (a new `git diff`-based
@@ -2807,13 +2800,6 @@ here, rather than treating physical adjacency to every touched section as achiev
   candidate, `markFailed`'s generic alerting gap, the `radar_composite_dlq` cleanup gap, the
   `main."user"` index gap, and the declined cumulative-lock-wait-budget mechanism) remains correctly
   untouched — none of those five were closed or reworded by this story.
-
-## Deferred from: code review of skillars-deferred-128-gdpr-lock-scope-erase-deadline-scheduler-lock-and-claim-clock-fixes (2026-09-22)
-
-Surfaced by `/bmad-code-review` across four parallel layers (Blind Hunter, Edge Case Hunter,
-Acceptance Auditor, and `/txn-and-concurrency-audit` run as a fourth layer). All other findings from
-that review were either patched in-story or resolved as owner decisions — see the story's own
-`## Review Findings` section for the full set.
 
 ## Last audit: 2026-09-23 (skillars-deferred-130 dev-story completion)
 
@@ -3288,12 +3274,6 @@ User asked to find and expose backend coach functionality missing from the UI. I
 
 Also found but explicitly out of scope for this pass (not coach-specific, or likely superseded):
 - **`GET /api/session/sessions/{sessionId}` — re-verified at skillars-deferred-165 drafting (2026-10-27): no realistic non-invented caller exists.** This bullet originally bundled this endpoint with `GET /api/development/players/{id}/slu/skill-trends`; the skill-trends half is now closed by code (skillars-deferred-165 AC4) and deleted from here. Every `sessionId` usage in the frontend is derived from a prior booking-id-based load; no screen anywhere holds a session-plan id without a resolvable booking id. Building a caller would mean inventing a flow that doesn't exist today (D165-A correction, taken live with the user). Not built; kept here standalone.
-
-## Deferred from: code review of skillars-deferred-155 (2026-10-20)
-
-Five pre-existing or low-impact items surfaced by `/bmad-code-review` (3 parallel layers, 39 raw findings
-→ 22 actionable). The four decisions and thirteen patches from that review are tracked in the story file's
-own `### Review Findings` section, not here.
 
 ## Deferred from: code review of skillars-deferred-156-booking-notes-gdpr-coverage-pdf-font-encoding-player-privacy-and-hardening-sweep (2026-10-20)
 
