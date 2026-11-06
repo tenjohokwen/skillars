@@ -69,74 +69,18 @@ and deleted from the list below.
   early return in `JWTAuthorizationFilter.assertSessionChainStillLive` and rewriting its javadoc, which
   currently documents the fail-open as deliberate.
 
-- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option b) -> APPLIED, high/security]** The AC7 downgrade also destroyed the
-  victim's only remediation, which neither the story nor the AC7 decision anticipated. Both reviewer arms
-  raised it independently in round 3 of that story's PR review.
-  The shape: an attacker who steals an `rtkn` and rotates it first leaves the victim holding a `used` row
-  in front of the attacker's live chain. The victim's next refresh past the 30 s window now answers 401
-  with no writes — and calls `clearAuthCookies`, which **deletes the victim's `rtkn`**. That cookie was the
-  only value `SecurityUtil.terminateSession` could hash to start a chain walk, and that walk was the one
-  remaining thing that would have reached the attacker's successor and revoked it. So after that 401 the
-  victim's Logout revokes nothing, a fresh login starts an unrelated chain, and the attacker's chain keeps
-  rotating (each rotation writes a fresh `expires_at`, so it never expires). AC4 cannot help: attacker and
-  victim share the same `session_id` and the chain is live. Before this story the victim's own refresh
-  remediated automatically, because it escalated to revoke-all. What remains is a `warn` line and the
-  `security.refresh.stale_live_chain` counter; the only user-reachable fix is a password change.
-  **Options.** (a) Stop clearing the cookies on this branch — one line. The victim keeps a `used` cookie
-  that cannot be traded in for anything, but Logout can still walk the chain and kill the attacker. Cost:
-  a client that believes it is still signed in (its JWT does keep working, since the chain is live).
-  (b) Have the branch revoke the chain from the presented row forward, which kills the attacker and the
-  victim's own live end — correct for theft, and for a benign double-refresh it is the forced re-login AC7
-  set out to avoid, though scoped to one chain rather than the whole account. (c) Keep AC7 as shipped and
-  accept that this theft shape is unremediable short of a password change. **Recommend (b)**: it keeps
-  AC7's blast radius inside one chain, which was the point, while restoring a revocation the victim's own
-  client triggers.
-  **APPLIED.** The branch now calls `securityUtil.terminateSession`, which walks forward from the presented
-  cookie's row and so reaches the thief's live successor. The account-wide revocation AC7 removed stays
-  removed — that was always the distinction that mattered — so a benign double-refresh costs that one chain
-  a re-login rather than every device. This supersedes AC7's written text (`401 + clearAuthCookies`); the
-  AC was left as approved and the amendment is recorded in the story's Completion Notes and Change Log.
-  Residual, accepted: revoking one chain does not kill a JWT the thief holds from a DIFFERENT chain of the
-  same account, which only the account-wide epoch would — that is the trade AC7 exists to make.
-
-- **[skillars-deferred-167, OWNER DECIDED 2026-11-03 (option a) -> APPLIED, medium/logic]** The chain cap introduced by that story
-  logs every continuously active WEB user out 7 days after login, and does not cap API clients at all.
-  The SPA has no caller for `POST /api/auth/refresh` (`src/frontend/src/api/auth.api.js` records that the
-  helper was removed), so an SPA session's chain is the single row created at login. Seven days later it
-  expires, `existsLiveBySessionId` answers false, and the standing JWT is refused on the next DB-reauth
-  cycle — a hard logout, possibly mid-form, with no client-side way to extend and no warning (the existing
-  countdown dialog covers the 15-minute JWT, not this). A client that *does* rotate is never capped,
-  because each rotation writes a fresh `expires_at`. So the cap binds exactly the population the story did
-  not have in mind and misses the one it did. AC10 declared the cap intended, but on the understanding
-  that it affected long-lived API clients.
-  **Options.** (a) Let the SPA refresh — restore a `POST /api/auth/refresh` caller (ideally on the existing
-  countdown, which already knows when the JWT is near expiry), so a web session rotates and is never
-  capped. (b) Treat an unrotated chain as live for as long as its JWT keeps sliding, i.e. only apply the
-  cap to chains that have rotated at least once — keeps the logout-kill, drops the cap. (c) Accept the
-  7-day logout and tell users, which needs at least a warning state in the SPA. **Recommend (a)**: it makes
-  the chain do what the design assumed it already did, and the cap then means what AC10 said it meant.
-  **(a) WAS APPLIED AND THEN REVERTED; (b) APPLIED INSTEAD — owner re-decided 2026-11-03 after round 4
-  of the PR review.** Option (a) added `authApi.rotateRefreshToken()` to
-  `sessionManager.refreshSession()`. Round 4 showed it failed on three counts, all verified in code:
-   1. **It did not protect the target population.** `refreshSession()`'s only non-test caller is
-      `useSession.handleRefresh()`, bound solely to `SessionWarningDialog.vue`'s "Continue session" button.
-      That dialog needs ~10 minutes with no authenticated response (every response rewrites `rint`), so a
-      tab that keeps polling never reaches it, never rotates, and was still capped at 7 days — exactly the
-      continuously active web user (a) was chosen to save.
-   2. **"Best-effort and swallowed" was wrong.** The teardown does not come from the `errorKey` gate that
-      reasoning relied on: every failure branch of `AuthService.refresh` except `Unknown` clears cookies
-      BEFORE throwing, so a failed rotation's 401 deletes `potc`/`rtkn`/`rint`/`user`/`skp`; the axios
-      interceptor then finds no `rint` and fires `session:expired`. Clicking "Continue session" could log
-      the user out, with `refreshFailed` left false so nothing explained it. On the `Reuse` branch the
-      swallowed call had also revoked every device.
-   3. **It made the `StaleChain` branch reachable from the web**, which AC7's blast-radius argument
-      explicitly assumed it was not. A stripped or lost `Set-Cookie`, or two tabs extending together,
-      leaves the browser one hop behind, and the next extension then revokes the chain all its tabs use.
-  **OWNER RE-DECIDED 2026-11-03 (final): ship skillars-deferred-167 WITH the cap, and fix it in its own
-  story.** Three attempts to remove it were made and all withdrawn, each for a different reason, and the
-  third actively broke logout. The cap is therefore the shipped behaviour: a web session ends
-  `REFRESH_TOKEN_TTL` after login, which errs toward security and is documented in
-  `docs/session-refresh-mechanism.md` and the provisioning checklist.
+- **[NEW STORY NEEDED, filed 2026-11-03, medium/logic]** Let an actively-used web session rotate its
+  refresh chain, so it is not logged out every `REFRESH_TOKEN_TTL`. This is the real fix for the cap
+  skillars-deferred-167 shipped, and it is frontend work: a rotation call driven by a trigger an active
+  session actually reaches (a timer, or the sliding-TTL path — NOT the idle-warning dialog, which a polling
+  tab never sees), with real handling for the fact that every failure branch of `AuthService.refresh`
+  except `Unknown` returns cookie-deletion headers, so a failed rotation must be treated as a session
+  teardown rather than swallowed. Two constraints from that story's reviews: rotating makes the
+  `StaleChain` branch reachable from the web, so its behaviour has to be acceptable for browsers before
+  this ships; and `POST /api/auth/refresh` is `permitAll` and filter-exempt, so whichever `rtkn` is in the
+  jar decides whose session is issued — calling it unconditionally turns a planted cookie into a session,
+  which wants an owner check or a rethink of that endpoint's exposure. Sizing: small backend surface, real
+  frontend design, and it should carry its own `/pr-review` rounds.
 
   **The three withdrawn attempts, so none is retried blind:**
   1. *SPA rotation.* Its only trigger was `sessionManager.refreshSession()`, reachable solely from the
@@ -165,29 +109,6 @@ and deleted from the list below.
   that identifies it.** Extending the row's life requires issuing a fresh `Set-Cookie`, which only a
   rotation does, so there is no server-only fix.
 
-- **[NEW STORY NEEDED, filed 2026-11-03, medium/logic]** Let an actively-used web session rotate its
-  refresh chain, so it is not logged out every `REFRESH_TOKEN_TTL`. This is the real fix for the cap
-  skillars-deferred-167 shipped, and it is frontend work: a rotation call driven by a trigger an active
-  session actually reaches (a timer, or the sliding-TTL path — NOT the idle-warning dialog, which a polling
-  tab never sees), with real handling for the fact that every failure branch of `AuthService.refresh`
-  except `Unknown` returns cookie-deletion headers, so a failed rotation must be treated as a session
-  teardown rather than swallowed. Two constraints from that story's reviews: rotating makes the
-  `StaleChain` branch reachable from the web, so its behaviour has to be acceptable for browsers before
-  this ships; and `POST /api/auth/refresh` is `permitAll` and filter-exempt, so whichever `rtkn` is in the
-  jar decides whose session is issued — calling it unconditionally turns a planted cookie into a session,
-  which wants an owner check or a rethink of that endpoint's exposure. Sizing: small backend surface, real
-  frontend design, and it should carry its own `/pr-review` rounds.
-
-  **Option (b) was then tried in two forms; neither shipped.**
-  The first was an exemption: skip the expiry test for a row with no `rotated_at` and no `replaced_by_id`.
-  It was dead on arrival and an IT caught it — a rotated chain's LIVE END is itself always such a row
-  (`decideAndRotate` creates the successor with both null), so it exempted every chain and the cap applied
-  to nothing. Keying on sibling rows instead fails too, because the hourly sweep deletes the expired
-  predecessors that would be the evidence.
-  **Neither form shipped.** The exemption was dead on arrival (above); the slide was withdrawn in
-  round 5 because it broke logout — see the three withdrawn attempts recorded on this item. The 7-day
-  cap is the shipped behaviour and this follow-up story is the fix.
-
 - **[skillars-deferred-167 residual, low/logic]** A benign stale cookie more than `MAX_GRACE_HOPS` (8)
   rotations behind an intact, live chain still gets the whole account revoked. The walk gives up after 8
   `replaced_by_id` hops with no live end found, which is indistinguishable from genuine reuse at that
@@ -201,18 +122,6 @@ and deleted from the list below.
   bound-exceeded as its own outcome and answer 401 without revoking, accepting that a genuinely deep
   replay then goes undetected too.
 
-- **[skillars-deferred-167 residual, low/performance — SUPERSEDED by the AC7 amendment, kept for the
-  record]** This was filed when the `StaleChain` outcome wrote nothing: the presented token stayed
-  replayable, and each replay took `findByTokenHashForUpdate` plus up to `MAX_GRACE_HOPS` (8)
-  `findByIdForUpdate` `PESSIMISTIC_WRITE` reads over a still-live chain, on an endpoint with no rate
-  limiter, plus one unthrottled `warn` per attempt.
-  **The owner's AC7 amendment removed the amplification.** The branch now calls `terminateSession`, which
-  stamps `revoked_at` on the presented row, so a second replay short-circuits at `decideAndRotate`'s
-  `presented.getRevokedAt() != null` check and returns `Revoked` — no chain walk, no warn. What remains is
-  the first replay's walk, which is the same cost any refresh pays, and the pre-existing
-  unrate-limited-`/api/auth/refresh` residual that deferred-166 already filed with the same two fixes
-  (rate-limit the endpoint, or a session `lock_timeout` on application connections).
-
 - **[skillars-deferred-167 residual, low/performance]** `extendTtlOfToken` now performs a FOURTH full JWT
   parse and HMAC verification per authenticated request (`extractPrincipal`, `extractDbRefreshToken`,
   `extractSessionIssuedAt`, and now `extractRefreshSessionId`), on the path the code repeatedly documents
@@ -220,72 +129,6 @@ and deleted from the list below.
   rather than inventing a one-off, which is why it shipped this way. Parsing once and threading the claims
   through fixes all four together and would reshape `ClaimsExtractor`'s API — deliberately not done inside
   a security story.
-- **[skillars-deferred-166 -> skillars-deferred-167, OWNER DECIDED 2026-11-03, medium/security]** A replay of a revoked refresh token
-  no longer bumps `security_session_invalidated_at`, which removes the only trigger that killed a standing
-  JWT after a logout. Both reviewer arms raised it independently on that story's PR. Before the story, such
-  a replay was "used with no recent rotation", took the theft branch, and called
-  `invalidateSessionsForUser`; `AuthService.refresh`'s new REVOKED outcome answers 401 and deliberately
-  runs no account-wide revocation (that story's AC3, so a stale tab retrying after Logout cannot sign the
-  user out of their other devices). Consequence: anyone holding a copy of that session's JWT cookie — an
-  exfiltrated cookie, a shared machine, or an attacker who stole the `rtkn`, refreshed once and then called
-  logout specifically to suppress detection — keeps passing the JWT filter's re-auth, because
-  `SecurityUtil.terminateSession` has never stamped the epoch and nothing else does now. Note the baseline:
-  logout never killed standing JWTs; the victim's replay was the only thing that did.
-  **Options.** (a) Keep AC3 and accept the detection loss, which is the current state. (b) Bump the epoch
-  on REVOKED, which restores the control but logs the user out of every device (the harm AC3 was written to
-  prevent, since the epoch check then refuses the other devices' older tokens). (c) Have logout stamp the
-  epoch for its own session only, which needs a per-session epoch the schema does not have.
-  **OWNER DECIDED 2026-11-03: (c), scheduled as skillars-deferred-167.** The deciding facts, re-verified
-  against HEAD rather than taken from the filed note: `JWT_TTL` is 15 min but **sliding**
-  (`extendTtlOfToken` renews it on every request with no DB work), so shortening it bounds nobody who is
-  actively using a stolen cookie — the (a)-plus-TTL-review recommendation this entry originally carried was
-  wrong on that point. Conversely `assertSessionNotRevoked` already runs on the filter's DB-reauth branch
-  every `DB_REFRESH_TOKEN_INTERVAL` (5 min), so the enforcement machinery exists and is cheap; after
-  deferred-166 nothing triggers it. (b) was rejected because the epoch is account-wide: a backgrounded tab
-  retrying a revoked token would sign the user out of every device, the exact harm AC3 was written to
-  prevent, on benign behaviour. Chosen shape for (c): the rotation chain carries a session id, the JWT
-  carries it as a claim, and the re-auth branch rejects a JWT whose chain has no live token — per-session
-  granularity, reusing `revoked_at` and `replaced_by_id` as deferred-166 built them.
-- **[skillars-deferred-166, pre-existing, medium/logic]** After a grace-window redirect, one client is left
-  holding a token that becomes account-wide theft 30 s later. Two concurrent refreshes of one cookie from
-  the same browser (a double submit, an axios retry) serialise on the row lock: the winner is issued A1, the
-  loser is redirected and rotates A1 into A2. Both responses carry `Set-Cookie: rtkn`, so the jar keeps
-  whichever arrived last; if that is the winner's, the client now holds A1, which is `used` with
-  `replaced_by_id -> A2`. A refresh more than `REFRESH_GRACE_WINDOW` (30 s) later fails the window test even
-  though the chain is intact and live, so it is answered as reuse: `markAllUsedByUserId` plus
-  `invalidateSessionsForUser`, signing the user out of every device over a benign race. Pre-existing — the
-  old newest-live grace branch behaved the same way — but it lives in the method deferred-166 rewrote, and
-  that story's two-device IT only checks the other device immediately after the redirect, never after the
-  window closes. **Options:** allow a redirect for a chain that is intact and exactly one hop behind
-  regardless of the window (weakens theft detection for a token one hop stale); make the window relative to
-  the chain's live end rather than the presented row's `rotatedAt`; or leave it and accept that a client
-  which keeps a superseded cookie is logged out everywhere once.
-  **OWNER DECIDED 2026-11-03: measure the window from the chain's live end, scheduled as
-  skillars-deferred-167.** A client one hop behind an intact chain then keeps working while the session is
-  active, and replay of a long-dead token still reads as theft, so the time bound is kept rather than
-  dropped. The one-hop-regardless option was rejected for having no time bound at all. The IT gap this
-  entry names (the two-device test never re-checks after the window closes) is part of that story.
-  **AMENDED 2026-11-03, same day, during skillars-deferred-167's story creation and review: the live-end
-  measurement above was found NOT to fix the reported case** (the live end's createdAt is rotatedAt plus rotation
-  latency, so the window expires at the same moment under either rule). The owner re-decided: keep the window and
-  the rotation, and stop answering an intact-live-chain-outside-the-window with account-wide revocation (401 +
-  cookies, no writes). Known cost, found in the story review: that case was the canonical theft signal for a stolen
-  refresh token rotated by the attacker first; it is now a warn log and a metric only.
-- **[skillars-deferred-166, low/database]** The self-referential FK and the new multi-row walks give
-  `AuthCleanupService.purgeExpiredRefreshTokens` a deadlock partner it did not have. Both
-  `AuthService.resolveGraceSuccessor` and `RefreshTokenRevocationService.revokeChainByTokenHash` take
-  `PESSIMISTIC_WRITE` locks on several rows of `refresh_tokens` in chain order and hold them for the whole
-  transaction, while `deleteExpiredTokens` is a bulk `DELETE` locking the same rows in physical scan order.
-  A chain whose rows are all expired (an expired `rtkn` presented, or a logout with a long-swept chain) can
-  cycle: the walk holds the predecessor and waits for a successor the `DELETE` already holds. Postgres kills
-  one side, and if that is the sweep, the `@Scheduled` method throws with no try/catch and skips an hour of
-  cleanup. Before deferred-166 logout took one single-row lock, which can wait but cannot cycle. **Options:**
-  make the delete acquire in ascending `id` order (chain order is ascending id in practice, since a
-  successor is always created later, so aligning the two removes the cycle), or wrap the scheduled sweep so
-  a lost deadlock is logged and retried next hour instead of propagating. Remote — it needs an expired chain
-  being walked during the hourly sweep — but cheap to close.
-  **OWNER DECIDED 2026-11-03: do both, scheduled as skillars-deferred-167** (ascending-id delete order
-  removes the cycle; the guard keeps one lost deadlock from costing an hour of cleanup).
 - **[skillars-deferred-166 residual, low]** `findByTokenHashForUpdate`/`findByIdForUpdate` take
   `PESSIMISTIC_WRITE` locks that WAIT without a bound. A finite `jakarta.persistence.lock.timeout` is inert
   on PostgreSQL (Hibernate's dialect special-cases only `NO_WAIT`/`SKIP_LOCKED`, as
@@ -297,32 +140,6 @@ and deleted from the list below.
   that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
   practice because every holder is a short transaction. A real fix is a session `lock_timeout` on
   application connections, or rate-limiting those two endpoints.
-- **[skillars-deferred-166 follow-up]** V224 added `main.refresh_tokens.replaced_by_id` with its
-  self-referential FK as `NOT VALID` (migration-conventions rule 3: the table grows). The
-  `ALTER TABLE main.refresh_tokens VALIDATE CONSTRAINT fk_refresh_tokens_replaced_by` still has to ship
-  in a later migration. Cheap and non-blocking (a `SHARE UPDATE EXCLUSIVE` scan); until then Postgres
-  does not enforce the link for rows written before the constraint, which only matters if something
-  writes `replaced_by_id` outside `AuthService.refresh` — nothing does today. Same shape as the other
-  outstanding `NOT VALID` constraints in this file; bundle it with the next one.
-  **OWNER DECIDED 2026-11-03: ships in skillars-deferred-167**, which already adds a `refresh_tokens`
-  migration, so the VALIDATE rides that migration instead of waiting for an unrelated one.
-- **[skillars-deferred-166 residual, medium]** Three revoke-all callers stamp
-  `security_session_invalidated_at` BEFORE `markAllUsedByUserId`, not after: `AdminUserService.suspendUser`,
-  `AgeVerificationService` and `AccountSuspensionEventListener.suspend`. A refresh that commits a successor
-  between those two statements produces a token whose `created_at` is after the epoch, so
-  `AuthService.refresh`'s epoch check (deferred-166 AC6) passes it, and the bulk UPDATE's snapshot never saw
-  it either. While the account stays suspended `locked = true` keeps it out via `ensureAccountIsLive`, but
-  `AdminUserService.reactivateUser` clears `locked` without revoking tokens or re-stamping the epoch, so a
-  suspend-then-reactivate can restore the very session the suspension was meant to kill, for the rest of its
-  7-day TTL. The window is two statements inside one transaction, so this is narrow, and the reactivate half
-  is pre-existing. Fix: swap the two statements in those three callers (the revoke is REQUIRES_NEW on
-  `refresh_tokens`, the stamp is MANDATORY on the user row, so the order is free), and/or revoke on
-  reactivate. Found by the security reviewer on deferred-166's own PR; left out of that story because it
-  touches three services outside its scope, and `AuthService.isBeforeSessionEpoch`'s javadoc now states the
-  limit precisely rather than overclaiming.
-  **OWNER DECIDED 2026-11-03: fix both halves in skillars-deferred-167** (swap the two statements in the
-  three callers, and revoke on `reactivateUser`). Scoped in deliberately despite touching three services:
-  the suspend-then-reactivate half is an authorisation hole, not a latent risk.
 - **[skillars-deferred-166 residual, low]** `RefreshTokenRepository.markAllUsedByUserId` sets
   `used = true` but not `revoked_at`, so a token killed by a revoke-all (password change, reset,
   suspension, GDPR erasure, admin action) still reads as "rotated, successor unknown" rather than
@@ -1203,7 +1020,6 @@ re-verified genuinely still open and became `skillars-deferred-60`'s one Accepta
 
 ## Deferred from: code review of skillars-1-3-coach-account-registration-email-verification Group D (2026-06-11)
 - D4: SES failure during `/resend-verification` creates valid DB token with no email delivery — logged at ERROR; resend button available [CoachRegistrationEmailListener.java]
-- **NEW (skillars-deferred-164, 2026-10-27): `CoachRegistrationService` never discriminates a phone collision from an email collision at all — every `DataIntegrityViolationException` is reported as `security.emailInUse`, so a phone collision during coach registration is misreported.** Found while fixing the identical, sibling bug in `ParentRegistrationService` (phone-collision detection via message-sniffing) for this story — `CoachRegistrationService` doesn't even attempt message-sniffing; it just always reports `emailInUse`. Has the same latent no-flush gap `ParentRegistrationService`'s fix needed (`save`, not `saveAndFlush`, so even adding a constraint-name check would be dead code without that too). Not fixed here — out of this story's scope (its own ledger bullet only named the parent-side heuristic). [`src/main/java/com/softropic/skillars/platform/security/service/CoachRegistrationService.java:101-105`]
 - D5: Frontend 60s cooldown resets on page refresh — UI-only throttle; server-side rate limit is authoritative [CoachEmailPendingPage.vue]
 - D7: `ON CONFLICT (name) DO NOTHING` in authority seed does not protect against PK collision on `id` — already tracked Group A D4; id=100/101 safe for this project [V21__skillars_security_extension.sql]
 
@@ -1332,7 +1148,6 @@ All 13 patch findings were applied; these are the review's own deferrals plus on
 
 Recorded per AC5 — items explicitly excluded from this story's scope, not fixed.
 
-
 - **D2 — Credit wallet (`payment.parent_credit_ledger`) has no player-self-booking equivalent.** Keyed by `parent_id` alone with no `player_id` dimension — it is a per-parent shared balance across children, a concept that does not map onto a single self-booking adult. `CreditWalletResource` stays parent-only; a self-booking player's `effectiveCreditsRemaining` correctly reads 0/none since they will never have ledger rows. No fix needed unless/until a product decision creates a player-scoped credit concept. [`src/main/java/com/softropic/skillars/platform/payment/service/CreditWalletService.java`]
 
 ## Deferred from: skillars-uat-6-coach-subscription-and-volume-backup (2026-08-13)
@@ -1457,8 +1272,6 @@ Four pre-existing issues identified during code review:
 - **The `/resend-otp` → 409 mapping is proven at the `ApiAdvice` slice level only** (AC9). No end-to-end two-connection collision harness — a sequential endpoint call can never collide and `@RateLimited` would mask it (F21).
 - **Backend `messages_de` / `messages_fr` are brought to `messages_en` parity for the keys that exist at story time** (AC12). A later story that adds new `_en` keys re-opens the gap until it also adds the DE/FR rows; `MessageBundleParityTest` will fail the build if it doesn't.
 - **`deferred-work.md` / `sprint-status.yaml` 40k-char single-line hygiene** — explicitly out of scope (project-owner decision 4).
-- **No bulk-delete capability in the storage stack** (R1). `StorageService.java:11`, `S3StorageService.java:115-116` and `FileStorageService.java:324` are all single-key; AWS `DeleteObjects` (up to 1000 keys/call) is not wired in. Any future high-volume blob purge will want it. Still open deliberately. `[skillars-deferred-100 AC6 (2026-09-08): the bespoke PendingBlobDeletionService mini-outbox this originally pointed at is GONE — folded onto the generic platform.outbox (BlobDeletionOutboxHandler + BlobDeletionOutboxSupport). The pure DeleteObjects bulk-API gap is unchanged; AC6 did not wire it.]`
-  `[DECIDED 2026-10-27 (skillars-deferred-164 AC11): the capability now exists — StorageService.deleteAll(List<String>) added to the interface and all three implementations (S3 via real DeleteObjects, batched/chunked ≤1000/call; LocalFileSystemStorageService via a loop over the existing path-traversal-guarded delete(key); ReplicatedStorageService delegating to the primary only). Still unwired — no current caller needs it: BlobDeletionOutboxHandler processes exactly one storage key per generic-outbox row by that outbox's own one-row-at-a-time contract, and wiring bulk deletion into it would mean redesigning that outbox's drain/batching model, its own separate change. Re-annotated rather than deleted: the gap this bullet names is capability-absence, which is now closed; wiring is a distinct, still-open future step.]`
 
 ### Confirmed already-done and closed as stale by the skillars-deferred-90 senior-dev audit (2026-09-02)
 
@@ -3476,18 +3289,11 @@ User asked to find and expose backend coach functionality missing from the UI. I
 Also found but explicitly out of scope for this pass (not coach-specific, or likely superseded):
 - **`GET /api/session/sessions/{sessionId}` — re-verified at skillars-deferred-165 drafting (2026-10-27): no realistic non-invented caller exists.** This bullet originally bundled this endpoint with `GET /api/development/players/{id}/slu/skill-trends`; the skill-trends half is now closed by code (skillars-deferred-165 AC4) and deleted from here. Every `sessionId` usage in the frontend is derived from a prior booking-id-based load; no screen anywhere holds a session-plan id without a resolvable booking id. Building a caller would mean inventing a flow that doesn't exist today (D165-A correction, taken live with the user). Not built; kept here standalone.
 
-
 ## Deferred from: code review of skillars-deferred-155 (2026-10-20)
 
 Five pre-existing or low-impact items surfaced by `/bmad-code-review` (3 parallel layers, 39 raw findings
 → 22 actionable). The four decisions and thirteen patches from that review are tracked in the story file's
 own `### Review Findings` section, not here.
-
-
-
-
-
-
 
 ## Deferred from: code review of skillars-deferred-156-booking-notes-gdpr-coverage-pdf-font-encoding-player-privacy-and-hardening-sweep (2026-10-20)
 
@@ -3554,57 +3360,9 @@ Eight items deferred as pre-existing, disclosed, or cosmetic. Line numbers verif
 - **Admin dispute detail polish.** `AdminDisputesPage.vue` renders `raisedByRole` and `bookingStatus` as raw enum values and hardcodes "€" for every amount.
 - **Coach-side dispute action is reachable only for COMPLETED bookings.** `BookingService.getCoachWeekSchedule` fetches only `CONFIRMED, UPCOMING, REQUESTED, IN_PROGRESS, COMPLETED_PENDING_CONFIRMATION, COMPLETED`, so `CoachCommandCenterPage`'s `DisputeAction` never renders for the CANCELLED*/NO_SHOW_* statuses `DisputeService.ELIGIBLE_STATUSES` allows (a coach cannot dispute a player no-show). Owner decision 2026-10-27: accept; parents cover every eligible status. Fix needs a coach-facing list of cancelled/no-show bookings, not a widened week schedule.
 
-## Deferred from: Pitchside UI tests, spec REG-03 (2026-11-03)
-
-- **Adult players can't finish email verification: the verify page shows "Network error".** `playerRegistrationApi` uses the `api` axios instance, whose response interceptor already returns the body (`boot/axios.js:142`). `PlayerEmailVerifyPage.vue:75` then destructures `response.data` from that body, which is `undefined`, so a `TypeError` lands in its `catch`, which `setError` shows as "Network error". The server has verified the account (200), but the player never reaches `/login?verified=true` (or `/player/verify-phone` when the phone OTP is on). The coach and parent verify pages use plain `axios` and are unaffected. `PlayerEmailVerifyPageSpec.js` mocks `{ data: {...} }`, which matches the bug, so the unit suite stays green. A sweep of every `api`-instance caller found no other `.data` read on an unwrapped body. Found by the Pitchside spec REG-03. Fixed in commit `95d4e9d6` (the page plus a spec that resolves the body and fails against the old code), which is in PR #416 into `feature/pitchside`, not master. Fix on master by cherry-picking `95d4e9d6`.
-
-  **RESOLVED 2026-11-03:** `95d4e9d6` cherry-picked to master on `fix/player-email-verify-network-error`; `feature/pitchside` already had it through #416.
-
 ## Deferred from: skillars-deferred-168 (builder packs become the purchasable tier, 2026-11-04)
 
-- **Pitchside ONB-06 hand-off (on `feature/pitchside`).** Remove `test.fail(true, ...)` from ONB-06 (`e2e/packages/skillars-e2e/specs/onboarding/onboarding.spec.ts:150`) and delete the separate `POST /payment/coaches/me/session-pack-tiers` in the provisioner (`e2e/packages/skillars-e2e/src/data/provisioner.ts:281`): its step-3 PUT (`:262`) already sends the pack, which now creates the tier, so the extra POST only churns a second tier row and hides the path ONB-06 exists to cover.
-
-  **RESOLVED 2026-11-04:** done on `feature/pitchside` in #440 (merge `c4e80360`): ONB-06 no longer carries `test.fail`, and the provisioner's extra tier POST is gone, so the step-3 PUT is the only path that creates the tier. The provisioner's remaining `session-pack-tiers` call is the GET in `buyPack`.
 - **The public profile offers "Buy sessions" and "Book" for a coach who cannot be paid.** `CoachPublicProfilePage.vue:617` decides the CTA from price and packs only, so a coach with no COMPLETE, charges-enabled Connect account still shows both; the parent is refused only on submit (booking with a translated toast, `BookingRequestPage.vue:656`; a pack purchase, after skillars-deferred-170 AC3, before anything is written). Hiding them needs a payment-readiness field on the public profile, reached through a marketplace port (marketplace must not import payment, `MarketplaceDoesNotDependOnPaymentTest`), the way `CoachSubscriptionEntitlementPort` works. Filed by skillars-deferred-170 (D3: out of scope there).
-
-## Deferred from: Pitchside UI tests, booking, payment and auth specs (2026-11-04)
-
-- **Booking slot labels render blank on the request-booking page (live on master).**
-  - **Cause:** `BookingRequestPage.formatInZone` (`BookingRequestPage.vue:467`) combines `dateStyle`/`timeStyle` with `timeZoneName` (`:473`). ECMA-402 forbids that, and every engine throws "Invalid option" (Chrome 156, Firefox, Safari, Node). The UTC fallback (`:483`) uses the same options and throws too.
-  - **Effect:** every slot row renders with no text, so parents pick from blank rows.
-  - **Why tests missed it:** the page's own spec assumed Chrome accepted the options and skipped rendering the labels.
-  - **Fix:** `e51b84f1` on `feature/pitchside` (PR #425) uses explicit date and time components and adds a Vitest case that fails against the old code. It can be cherry-picked to master on its own.
-  - **Resolved (2026-11-04):** owner chose to cherry-pick now; `e51b84f1` is on master as its own PR (`fix/booking-slot-labels-blank`).
-  - Found by the Pitchside spec BKG-04.
-- **A family holding pack credits gets "Per session" preselected, and is charged by card.**
-  - **Cause:** `selectedPackId` starts as `null` (`BookingRequestPage.vue:393`), and "Per session" is the first option (`:403`), even when the family holds credits with this coach.
-  - **Effect:** a parent who submits with the default is charged per session when the coach accepts, and the credits go unused. Reproduced on the E2E stack: 2 charges, credits still 5/5.
-  - **The decision needed:** whether holding credits should preselect the pack.
-  - BKG-01 and BKG-11 choose the pack explicitly until this is decided.
-  - **Resolved (2026-11-04):** owner chose to preselect the pack. The soonest-expiring usable pack starts selected and "Per session" moves last; a parent's own choice is kept across reloads. On `feature/pitchside` in #433 (BKG-01 and BKG-11 now check the preselection), on master in the cherry-pick PR `fix/pitchside-findings-q2-q3-q5`.
-- **A declined card shows only "Purchase failed. Please try again."**
-  - **Cause:** `StripePaymentGateway` turns a card error into the catch-all `payment.lifecycleFailure` (`StripePaymentGateway.java:187`, `:201`), and `PaymentApiAdvice` returns that as a 422 `ErrorDto`. `SessionPackPurchasePage` then reads `e.response.data.message` (`SessionPackPurchasePage.vue:189`), which `ErrorDto` never has (its text is under `errorMsg`). This is the same mistake fixed on the profile builder in deferred-140 AC3.3.
-  - **Effect:** every purchase failure shows the generic text, and the existing "card was declined" copy (`subscription.errors.paymentDeclined`) is never reached.
-  - **No money impact:** no pack is created and nothing is captured. PAY-06 asserts the current behaviour.
-  - **Resolved (2026-11-04):** the gateway maps a card decline to `payment.cardDeclined`, and the purchase page shows the declined text with an "Update card" action. `translatedErrorMessage` (`utils/errorHandler.js`) translates only the key the server sent, and `AvailabilityManagerPage` uses it too. On `feature/pitchside` in #435 (PAY-06 updated), on master in the same cherry-pick PR.
-- **Registration discloses whether an email or phone number is already registered.**
-  - **Cause:** all three registration services throw `security.emailInUse` (for example `CoachRegistrationService.java:75`, `:104`), and each register page shows "This email is already registered." (`auth.*.emailInUse`; the phone number gets `phoneInUse`).
-  - **Effect:** anyone can test whether an address has an account. Elsewhere the app defends against this deliberately (the resend banner, D8 above).
-  - **The decision needed:** whether registration should hide it. If it should, the Pitchside plan's REG-08 is the regression test, and it is not written yet.
-  - **Resolved (2026-11-04):** owner chose to hide it. `RegistrationDuplicateGuard` answers a taken email, login or phone exactly like a fresh registration and emails the existing account instead (`CREATION_DUP`). On a phone-only match, the typed address also gets the new `REGISTRATION_PHONE_IN_USE` email (migration `V227`). Notices are capped at 2 per hour per account and per typed address. On `feature/pitchside` in #437 with REG-08, on master in the same cherry-pick PR.
-- **The coach completeness gate guards only `/coach/command-center`.**
-  - **Cause:** the router's async check (`router/index.js:93`) matches that one path.
-  - **Effect:** an incomplete coach (builder unfinished, profile unpublished) can open other coach pages, such as `/coach/availability`. Observed while writing AUTH-13. It may be intended (the Pitchside plan's C-11 describes the command-centre guard), but it is unconfirmed.
-  - **Resolved (2026-11-04):** owner confirmed it is intended: an unpublished coach can't be booked, so the set-up pages stay open. No code change; AUTH-13 on `feature/pitchside` (#437) now asserts an incomplete coach can open `/coach/availability`.
-
-## Deferred from: Pitchside UI tests, phase 2 P0 specs (2026-11-05)
-
-- **Profile builder step 3: Next does nothing, silently, when the per-session price was never touched.**
-  - **Cause:** `ProfileBuilderStep3.submit()` returns early on an empty price (`ProfileBuilderStep3.vue:197` on master, `:216` on `feature/pitchside`) without validating the field. The price input's rule (`:10`) only shows "Required" once the field has been edited, so a coach who never typed a price gets no message.
-  - **Effect:** the coach clicks Next and stays on step 3 with no explanation. Nothing is saved, so there is no data impact, only a confusing dead end.
-  - **Owner decision (2026-11-05):** the per-session price is required and must not be left empty on step 3. That matches the server (`perSessionPrice` is `@NotNull`). What is missing is the message: Next should trigger the field's validation, so "Required" shows even when the field is untouched.
-  - **Test:** Pitchside ONB-07 (`e2e/packages/skillars-e2e/specs/onboarding/onboarding.spec.ts:154`, on `feature/pitchside`) asserts that Next stays on step 3 and sends no step-3 PUT. It only checks the "Required" message after typing a price and clearing it. Once this is fixed, it should also assert the message after a click on an untouched field.
-  - **Resolved (2026-11-05):** `submit()` now calls the price input's `validate()` before returning, so Next on an untouched price shows "Required". `ProfileBuilderStep3Spec` gained a case that fails without the call. On master in `fix/builder-step3-price-required`; ONB-07 on `feature/pitchside` gets the untouched-field assertion when the fix reaches that branch.
 
 ## Deferred from: CI Trivy install workaround (2026-11-04)
 
