@@ -1,6 +1,7 @@
 package com.softropic.skillars.infrastructure.e2e;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
+import com.softropic.skillars.platform.booking.service.StuckCompletionSweeperService;
 import com.softropic.skillars.platform.booking.service.UnresolvedSessionSweeperService;
 import com.softropic.skillars.platform.payment.service.SessionPackForfeitureScheduler;
 import net.javacrumbs.shedlock.core.LockConfiguration;
@@ -29,11 +30,12 @@ class E2eJobResourceTest {
     private final LockProvider lockProvider = mock(LockProvider.class);
     private final SessionPackForfeitureScheduler forfeiture = mock(SessionPackForfeitureScheduler.class);
     private final UnresolvedSessionSweeperService sweeper = mock(UnresolvedSessionSweeperService.class);
+    private final StuckCompletionSweeperService stuck = mock(StuckCompletionSweeperService.class);
 
     private E2eJobResource resource(String... profiles) {
         MockEnvironment env = new MockEnvironment();
         env.setActiveProfiles(profiles);
-        return new E2eJobResource(env, lockProvider, forfeiture, sweeper);
+        return new E2eJobResource(env, lockProvider, forfeiture, sweeper, stuck);
     }
 
     @Test
@@ -62,6 +64,20 @@ class E2eJobResourceTest {
         ArgumentCaptor<LockConfiguration> config = ArgumentCaptor.forClass(LockConfiguration.class);
         verify(lockProvider).lock(config.capture());
         assertThat(config.getValue().getName()).isEqualTo("UnresolvedSessionSweeperService_sweep");
+        verify(forfeiture, never()).forfeitExpiredPacks();
+    }
+
+    @Test
+    void runsTheStuckCompletionSweeperUnderItsSchedulerLockName() {
+        SimpleLock lock = mock(SimpleLock.class);
+        when(lockProvider.lock(any())).thenReturn(Optional.of(lock));
+
+        assertThat(resource("dev", "e2e").run("stuck-completions").getStatusCode()).isEqualTo(HttpStatus.NO_CONTENT);
+
+        verify(stuck).processStuckCompletions();
+        ArgumentCaptor<LockConfiguration> config = ArgumentCaptor.forClass(LockConfiguration.class);
+        verify(lockProvider).lock(config.capture());
+        assertThat(config.getValue().getName()).isEqualTo("StuckCompletionSweeperService_processStuckCompletions");
         verify(forfeiture, never()).forfeitExpiredPacks();
     }
 

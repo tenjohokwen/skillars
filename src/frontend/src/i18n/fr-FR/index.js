@@ -2729,7 +2729,9 @@ export default {
     },
     wrapUp: {
       step1Title: 'Présence',
-      step1Label: 'Le joueur était présent',
+      step1Question: 'Présence de {name} ?',
+      step1Attended: 'Présent',
+      step1Absent: 'Absent',
       step2Title: 'Évaluations de séance',
       step2Effort: 'Effort',
       step2Focus: 'Concentration',

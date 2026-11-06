@@ -518,9 +518,12 @@ export class Provisioner {
    * A scheduled run (at boot, then on its schedule) keeps the lock for its `lockAtLeastFor`, 2 minutes
    * for the forfeiture, so the default wait outlasts that. `unresolved-sessions` is the sweeper that
    * auto-refunds a session nobody started, claimed or completed 48 hours after its start.
+   * `stuck-completions` force-completes a Quick Complete whose wrap-up never came
+   * (`booking.stuck_completion_timeout_hours` after its last update): COMPLETED, attendance not
+   * recorded, no recap.
    */
   async runJob(
-    name: 'pack-forfeiture' | 'unresolved-sessions',
+    name: 'pack-forfeiture' | 'unresolved-sessions' | 'stuck-completions',
     timeoutMs = 180_000,
   ): Promise<void> {
     const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
@@ -898,6 +901,17 @@ export class Provisioner {
     return row.status
   }
 
+  /** When a booking ends (`requested_end_time`), the anchor of its recap edit window. */
+  async bookingEnd(bookingId: string): Promise<Date> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ end: string }>(
+      'SELECT requested_end_time AS "end" FROM booking.bookings WHERE id = $1::uuid',
+      [bookingId],
+    )
+    if (!row) throw new Error(`No booking ${bookingId}`)
+    return new Date(row.end)
+  }
+
   /**
    * Time travel for one booking: start it `startMinutesFromNow` minutes from now (negative = in the past;
    * a one-hour session), and optionally put it in a status its scheduler or the coach would have set.
@@ -942,6 +956,105 @@ export class Provisioner {
     )
     if (rows.length !== 1) throw new Error(`No booking ${bookingId}`)
     return start
+  }
+
+  /** The coach Quick Completes a started session (no wrap-up yet): COMPLETED_PENDING_CONFIRMATION. */
+  async quickComplete(coach: CoachAccount, bookingId: string): Promise<void> {
+    const session = await this.login(coach)
+    try {
+      await session.api.post(`/bookings/${bookingId}/quick-complete`, {
+        expectStatus: (s) => s >= 200 && s < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** The coach's wrap-up, as the wizard sends it: attended, five stars each, no homework. */
+  async submitWrapUp(
+    coach: CoachAccount,
+    bookingId: string,
+    recap: { whatWeDid: string; whatsNext: string },
+  ): Promise<void> {
+    const session = await this.login(coach)
+    try {
+      await session.api.post(`/bookings/${bookingId}/complete`, {
+        data: {
+          playerAttended: true,
+          effortRating: 5,
+          focusRating: 5,
+          techniqueRating: 5,
+          homeworkDrillIds: [],
+          mode: 'QUICK',
+          recapWhatWeDid: recap.whatWeDid,
+          recapWhatsNext: recap.whatsNext,
+        },
+        expectStatus: (s) => s >= 200 && s < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** The family's "Confirm session" on a Quick Complete. */
+  async confirmCompletion(family: ParentAccount | PlayerAccount, bookingId: string): Promise<void> {
+    const session = await this.login(family)
+    try {
+      await session.api.put(`/bookings/${bookingId}/confirm-completion`, {
+        expectStatus: (s) => s >= 200 && s < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * A booked session that ended `endedMinutesAgo` minutes ago and is COMPLETED through the product's
+   * own path: Quick Complete, then (unless `recap` is null) the wrap-up, then the family confirms.
+   * With `recap: null` the family confirms before any wrap-up: COMPLETED, awaiting the wrap-up.
+   */
+  async completedSession(
+    parent: ParentAccount,
+    coach: CoachAccount,
+    options: {
+      endedMinutesAgo?: number
+      weekday?: 1 | 2 | 3 | 4 | 5
+      recap?: { whatWeDid: string; whatsNext: string } | null
+    } = {},
+  ): Promise<string> {
+    const bookingId = await this.confirmedBooking(parent, coach, { weekday: options.weekday })
+    await this.setBooking(bookingId, {
+      startMinutesFromNow: -60 - (options.endedMinutesAgo ?? 30),
+      status: 'UPCOMING',
+    })
+    await this.quickComplete(coach, bookingId)
+    const recap =
+      options.recap === undefined
+        ? { whatWeDid: 'Passing patterns', whatsNext: 'Weak-foot finishing' }
+        : options.recap
+    if (recap) await this.submitWrapUp(coach, bookingId, recap)
+    await this.confirmCompletion(parent, bookingId)
+    const status = await this.bookingStatus(bookingId)
+    if (status !== 'COMPLETED') throw new Error(`Booking ${bookingId} is ${status}, not COMPLETED`)
+    return bookingId
+  }
+
+  /**
+   * A Quick Complete whose wrap-up never came, swept by the stuck-completion job: COMPLETED with an
+   * empty recap the coach can still add. The booking is put `daysAgo` days back (past the 72-hour
+   * sweep timeout) before the job runs.
+   */
+  async sweptSession(parent: ParentAccount, coach: CoachAccount, daysAgo = 4): Promise<string> {
+    const bookingId = await this.confirmedBooking(parent, coach, { weekday: 1 })
+    await this.setBooking(bookingId, {
+      startMinutesFromNow: -daysAgo * 1440,
+      status: 'COMPLETED_PENDING_CONFIRMATION',
+      statusChangedDaysAgo: daysAgo,
+    })
+    await this.runJob('stuck-completions')
+    const status = await this.bookingStatus(bookingId)
+    if (status !== 'COMPLETED') throw new Error(`Swept booking ${bookingId} is ${status}`)
+    return bookingId
   }
 
   /**

@@ -51,6 +51,38 @@ export class CommandCentreScreen extends Screen {
   start = (booking: Locator) => this.within(booking, 'coach-booking-start-btn')
   quickComplete = (booking: Locator) => this.within(booking, 'coach-booking-quick-complete-btn')
   resumeWrapUp = (booking: Locator) => this.within(booking, 'resume-wrap-up-btn')
+  recap = (booking: Locator) => this.within(booking, 'recap-btn')
+
+  // The missing-recaps nudge: a count, then a list whose rows say "Add recap" or "Resume wrap-up".
+  missingRecapsBanner = () => this.tid('missing-recaps-banner')
+  missingRecapsToggle = () => this.tid('missing-recaps-toggle')
+  missingRecapItems = () => this.tid('missing-recap-item')
+  missingRecap = (bookingId: string) =>
+    this.page.locator(`[data-testid="missing-recap-item"][data-booking-id="${bookingId}"]`)
+  missingRecapAction = (item: Locator) => this.within(item, 'missing-recap-add')
+
+  // The recap dialog (add or correct a completed session's recap).
+  recapDialog = () => this.tid('recap-dialog')
+  recapDialogField = (field: 'what-we-did' | 'whats-next' | 'what-went-well') =>
+    this.within(this.recapDialog(), `recap-${field}`)
+  recapEditableUntil = () => this.within(this.recapDialog(), 'recap-editable-until')
+  recapClosed = () => this.within(this.recapDialog(), 'recap-closed')
+  recapSave = () => this.within(this.recapDialog(), 'recap-save')
+
+  /** Step back through earlier weeks (at most `maxWeeks`) until `bookingId` is on screen. */
+  async findInPastWeeks(bookingId: string, maxWeeks = 6): Promise<Locator> {
+    const row = this.booking(bookingId)
+    const loaded = row
+      .or(this.emptyWeek())
+      .or(this.page.locator('[data-testid="schedule-day"]').first())
+    for (let week = 0; week <= maxWeeks; week++) {
+      // The week's bookings are in (or it says it has none) before the row is looked for.
+      await loaded.first().waitFor()
+      if (await row.isVisible()) return row
+      await this.prevWeek().click()
+    }
+    throw new Error(`Booking ${bookingId} not found in the last ${maxWeeks} weeks`)
+  }
 
   // The live-session overlay. End stays disabled for the first 5 minutes on its own timer.
   activeSession = () => this.tid('active-session')
@@ -60,6 +92,7 @@ export class CommandCentreScreen extends Screen {
   // The wrap-up: attendance, three star ratings, homework, recap. `data-step` is 1–4.
   wrapUp = () => this.tid('wrap-up')
   attended = () => this.tid('wrap-up-attended')
+  absent = () => this.tid('wrap-up-absent')
   wrapUpNext = () => this.tid('wrap-up-next')
   rating = (axis: 'effort' | 'focus' | 'technique') => this.tid(`wrap-up-rating-${axis}`)
   recapWhatWeDid = () => this.tid('recap-what-we-did')
@@ -68,14 +101,16 @@ export class CommandCentreScreen extends Screen {
   postWrapUpSummary = () => this.tid('post-wrap-up-summary')
 
   /**
-   * Attendance confirmed, five stars on each axis (each fifth star moves on by itself), no homework.
-   * The attendance box starts ticked but Next waits until it is touched, so "attended" takes two clicks.
+   * One click on Attended (or Didn't attend, with `attended: false`), five stars on each axis (each
+   * fifth star moves on by itself), no homework.
    */
-  async wrapUpWith(recap: { whatWeDid: string; whatsNext: string }): Promise<void> {
-    await this.attended().click()
-    await this.attended().click()
-    await this.page.locator('[data-testid="wrap-up-attended"][aria-checked="true"]').waitFor()
-    await this.wrapUpNext().click()
+  async wrapUpWith(recap: {
+    whatWeDid: string
+    whatsNext: string
+    attended?: boolean
+  }): Promise<void> {
+    await (recap.attended === false ? this.absent() : this.attended()).click()
+    await this.page.locator('[data-testid="wrap-up"][data-step="2"]').waitFor()
     for (const axis of ['effort', 'focus', 'technique'] as const) {
       await this.rating(axis).getByRole('radio').nth(4).click()
     }

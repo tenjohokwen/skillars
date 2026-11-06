@@ -103,6 +103,7 @@
           v-for="item in missingRecaps.items"
           :key="item.bookingId"
           data-testid="missing-recap-item"
+          :data-booking-id="item.bookingId"
         >
           <q-item-section>
             <q-item-label>{{ item.playerName }}</q-item-label>

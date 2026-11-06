@@ -13,30 +13,40 @@
     <!-- Step 1: Attendance -->
     <div v-if="step === 1" class="wrap-up__step">
       <div class="text-h6 q-mb-lg">{{ t('booking.wrapUp.step1Title') }}</div>
-      <q-checkbox
-        v-model="playerAttended"
-        :label="t('booking.wrapUp.step1Label') + ': ' + playerName"
-        class="q-mb-xl"
-        size="xl"
-        data-testid="wrap-up-attended"
-        @update:model-value="
-          () => {
-            attendanceTouched = true
-          }
-        "
-      />
-      <q-btn
-        unelevated
-        class="wrap-up__next-btn"
-        :label="t('common.next')"
-        :disable="!attendanceTouched"
-        data-testid="wrap-up-next"
-        @click="step = 2"
-      />
+      <div class="text-subtitle1 q-mb-lg">
+        {{ t('booking.wrapUp.step1Question', { name: playerName }) }}
+      </div>
+      <div class="wrap-up__attendance">
+        <q-btn
+          unelevated
+          class="wrap-up__next-btn"
+          :label="t('booking.wrapUp.step1Attended')"
+          data-testid="wrap-up-attended"
+          @click="recordAttendance(true)"
+        />
+        <q-btn
+          outline
+          class="wrap-up__next-btn"
+          :label="t('booking.wrapUp.step1Absent')"
+          data-testid="wrap-up-absent"
+          @click="recordAttendance(false)"
+        />
+      </div>
     </div>
 
     <!-- Step 2: Ratings -->
     <div v-else-if="step === 2" class="wrap-up__step">
+      <!-- One click answers attendance, so a mistaken answer must be easy to take back. -->
+      <q-btn
+        flat
+        dense
+        no-caps
+        icon="chevron_left"
+        class="self-start q-mb-sm"
+        data-testid="wrap-up-back"
+        :label="t('common.back')"
+        @click="step = 1"
+      />
       <div class="text-h6 q-mb-md">{{ t('booking.wrapUp.step2Title') }}</div>
 
       <div v-if="currentRating === 'effort'" class="wrap-up__rating-row">
@@ -251,8 +261,12 @@ const $q = useQuasar()
 const bookingStore = useBookingStore()
 
 const step = ref(1)
-const playerAttended = ref(true)
-const attendanceTouched = ref(false)
+// Nothing is preselected: the coach answers with one click, and that answer moves the wizard on.
+const playerAttended = ref(null)
+function recordAttendance(attended) {
+  playerAttended.value = attended
+  step.value = 2
+}
 const effortRating = ref(0)
 const focusRating = ref(0)
 const techniqueRating = ref(0)
@@ -424,6 +438,13 @@ onMounted(() => {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+}
+
+.wrap-up__attendance {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .wrap-up__next-btn {
