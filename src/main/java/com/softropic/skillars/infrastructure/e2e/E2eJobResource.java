@@ -2,6 +2,7 @@ package com.softropic.skillars.infrastructure.e2e;
 
 import com.softropic.skillars.infrastructure.exception.AppSetupException;
 import com.softropic.skillars.infrastructure.security.SecurityConstants;
+import com.softropic.skillars.platform.booking.service.StuckCompletionSweeperService;
 import com.softropic.skillars.platform.booking.service.UnresolvedSessionSweeperService;
 import com.softropic.skillars.platform.payment.service.SessionPackForfeitureScheduler;
 import jakarta.annotation.PostConstruct;
@@ -62,16 +63,20 @@ public class E2eJobResource {
 
     public E2eJobResource(Environment environment, LockProvider lockProvider,
                           SessionPackForfeitureScheduler packForfeiture,
-                          UnresolvedSessionSweeperService unresolvedSessions) {
+                          UnresolvedSessionSweeperService unresolvedSessions,
+                          StuckCompletionSweeperService stuckCompletions) {
         this.environment = environment;
         this.lockingTaskExecutor = new DefaultLockingTaskExecutor(lockProvider);
         SessionPackForfeitureScheduler forfeiture = target(packForfeiture);
         UnresolvedSessionSweeperService sweeper = target(unresolvedSessions);
+        StuckCompletionSweeperService stuck = target(stuckCompletions);
         this.jobs = Map.of(
             "pack-forfeiture", new Job("SessionPackForfeitureScheduler_expire", Duration.ofMinutes(15),
                 forfeiture::forfeitExpiredPacks),
             "unresolved-sessions", new Job("UnresolvedSessionSweeperService_sweep", Duration.ofMinutes(15),
-                sweeper::sweep));
+                sweeper::sweep),
+            "stuck-completions", new Job("StuckCompletionSweeperService_processStuckCompletions",
+                Duration.ofMinutes(15), stuck::processStuckCompletions));
     }
 
     @PostConstruct

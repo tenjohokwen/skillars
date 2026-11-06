@@ -98,6 +98,45 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
     expect(findStep5SubmitBtn(wrapper)).toBeTruthy()
   })
 
+  // Owner decision 2026-11-06 (option A): the old checkbox started ticked but Next waited for a
+  // touch, so one click recorded a no-show. Now two buttons, nothing preselected, one click each.
+  it('attendance has no preselected answer and Next is gone', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="wrap-up-attended"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="wrap-up-absent"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="wrap-up-next"]').exists()).toBe(false)
+    expect(wrapper.vm.$.setupState.playerAttended).toBeNull()
+    expect(wrapper.vm.$.setupState.step).toBe(1)
+  })
+
+  it.each([
+    ['wrap-up-attended', true],
+    ['wrap-up-absent', false],
+  ])(
+    'one click on %s records %s, moves to the ratings and is what gets submitted',
+    async (id, attended) => {
+      const wrapper = mountComponent()
+      await flushPromises()
+      await wrapper.find(`[data-testid="${id}"]`).trigger('click')
+      await flushPromises()
+      expect(wrapper.vm.$.setupState.step).toBe(2)
+      expect(wrapper.text()).toContain('booking.wrapUp.step2Title')
+
+      wrapper.vm.$.setupState.step = 4
+      await flushPromises()
+      await wrapper.find('textarea').setValue('Rondos')
+      const areas = wrapper.findAll('textarea')
+      await areas[1].setValue('Weak foot')
+      await findStep5SubmitBtn(wrapper).trigger('click')
+      await flushPromises()
+      expect(storeOf(wrapper).handleSubmitWrapUp).toHaveBeenCalledWith(
+        'booking-1',
+        expect.objectContaining({ playerAttended: attended }),
+      )
+    },
+  )
+
   // Found by Pitchside SES-05: the auto-advance lived in the template and called setTimeout, which Vue
   // template expressions cannot reach, so five technique stars threw and left the coach stuck (Next
   // only renders for 1–4 stars). Driven through the rating's own event, not a setupState assignment.
