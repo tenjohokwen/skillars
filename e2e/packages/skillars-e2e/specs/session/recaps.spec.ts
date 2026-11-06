@@ -184,7 +184,9 @@ test.describe('I · Recaps', () => {
       await expect(centre.recapDialog()).toBeHidden()
 
       // Past the window: when it closed, and no Save.
-      await (await centre.findInPastWeeks(old)).getByTestId('recap-btn').click()
+      // Far enough back for the configured window, plus the week it started in.
+      const weeksBack = Math.ceil((windowDays + 1) / 7) + 1
+      await (await centre.findInPastWeeks(old, weeksBack)).getByTestId('recap-btn').click()
       const closedOn = await recapDateLabel(self.page, await provision.bookingEnd(old), windowDays)
       await expect(centre.recapClosed()).toHaveText(
         t('booking.recap.closedWindow', { date: closedOn }),

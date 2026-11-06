@@ -36,6 +36,17 @@
 
     <!-- Step 2: Ratings -->
     <div v-else-if="step === 2" class="wrap-up__step">
+      <!-- One click answers attendance, so a mistaken answer must be easy to take back. -->
+      <q-btn
+        flat
+        dense
+        no-caps
+        icon="chevron_left"
+        class="self-start q-mb-sm"
+        data-testid="wrap-up-back"
+        :label="t('common.back')"
+        @click="step = 1"
+      />
       <div class="text-h6 q-mb-md">{{ t('booking.wrapUp.step2Title') }}</div>
 
       <div v-if="currentRating === 'effort'" class="wrap-up__rating-row">

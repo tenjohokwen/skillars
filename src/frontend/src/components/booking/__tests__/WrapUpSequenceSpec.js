@@ -137,6 +137,20 @@ describe('WrapUpSequence.vue — session recap step (skillars-12-2)', () => {
     },
   )
 
+  it('a mistaken attendance answer can be taken back from the ratings step', async () => {
+    const wrapper = mountComponent()
+    await flushPromises()
+    await wrapper.find('[data-testid="wrap-up-absent"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="wrap-up-back"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$.setupState.step).toBe(1)
+    await wrapper.find('[data-testid="wrap-up-attended"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.vm.$.setupState.playerAttended).toBe(true)
+    expect(wrapper.vm.$.setupState.step).toBe(2)
+  })
+
   // Found by Pitchside SES-05: the auto-advance lived in the template and called setTimeout, which Vue
   // template expressions cannot reach, so five technique stars threw and left the coach stuck (Next
   // only renders for 1–4 stars). Driven through the rating's own event, not a setupState assignment.
