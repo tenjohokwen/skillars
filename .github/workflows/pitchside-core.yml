@@ -93,6 +93,15 @@ jobs:
           tar -C e2e/packages/pitchside-core --exclude=node_modules --exclude=dist -cf - . | tar -C "$alone" -xf -
           cd "$alone"
           npx --yes npm@11.6.2 install --no-audit --no-fund --no-package-lock
+          # One playwright-core only: @axe-core/playwright's open peer range otherwise takes the newest
+          # release while @playwright/test brings its own, and the a11y gate's Page types split. The
+          # kernel pins playwright-core to @playwright/test's version; bump the two together.
+          copies=$(npm ls playwright-core --all --parseable | sort -u)
+          if [ "$(printf '%s\n' "$copies" | wc -l)" -ne 1 ]; then
+            echo "::error::more than one playwright-core installed; keep pitchside-core's playwright-core devDependency equal to @playwright/test"
+            printf '%s\n' "$copies"
+            exit 1
+          fi
           npm run build
           npm test
 
