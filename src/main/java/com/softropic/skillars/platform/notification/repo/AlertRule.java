@@ -56,4 +56,18 @@ public class AlertRule extends AbstractAuditingEntity {
     /** Human-readable description of the rule's purpose. */
     @Column(length = 500)
     private String description;
+
+    /**
+     * Replaces every editable value in place, so an admin edit is one UPDATE of this row and keeps its id
+     * (skillars-deferred-173 RS11: the old delete-then-save lost the rule when the save failed).
+     */
+    public void apply(final String metricName, final BigDecimal threshold, final int windowSeconds,
+                      final String notificationChannel, final boolean enabled, final String description) {
+        this.metricName = metricName;
+        this.threshold = threshold;
+        this.windowSeconds = windowSeconds;
+        this.notificationChannel = notificationChannel;
+        this.enabled = enabled;
+        this.description = description;
+    }
 }
