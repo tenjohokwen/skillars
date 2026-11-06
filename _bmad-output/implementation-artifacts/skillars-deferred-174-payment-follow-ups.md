@@ -172,7 +172,7 @@ base: `ConfigBounds` is `platform/config/service/ConfigBounds.java`; `Operationa
   `ResponseStatusException(CONFLICT, key)`; `@Valid` body failure 400 (`ApiAdvice:527`); a Stripe failure
   (`PaymentGatewayException`) 422.
 
-## Decisions (PENDING OWNER; recommendation first in each)
+## Decisions (DECIDED 2026-11-06: option 1 in each)
 
 - **D0: scope. DECIDED 2026-11-06: option 1** (Part B is skillars-deferred-175).
   - (1, recommended, chosen) Two stories: this one keeps Part A (cards and pack attempts, the money-adjacent half),
@@ -180,8 +180,8 @@ base: `ConfigBounds` is `platform/config/service/ConfigBounds.java`; `Operationa
     split is mechanical. For comparison, skillars-deferred-167 (five items, twelve ACs) took seven `/pr-review`
     rounds; this story has nine items and fourteen ACs.
   - (2) One story, both parts. One migration and one PR, but a long review.
-- **D1 (RS09b): how the server proves the card is the caller's.**
-  - (1, recommended) Ownership check: retrieve the pm and require `pm.customer == caller's stripe_customer_id`.
+- **D1 (RS09b): how the server proves the card is the caller's. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) Ownership check: retrieve the pm and require `pm.customer == caller's stripe_customer_id`.
     Blocks foreign and unattached ids, the poisoned column and the fingerprint planting. Needs no API or frontend
     change beyond showing the new error. The resource's "no row: create a customer and save the pm" branch then
     answers 400 (a fresh customer cannot own it; the real flow always creates the row through `/setup-intent`
@@ -193,8 +193,8 @@ base: `ConfigBounds` is `platform/config/service/ConfigBounds.java`; `Operationa
     DTO change, a new Stripe call, and frontend changes in `payment.api.js` and `PaymentMethodCard.vue`.
   - Either way, apply the same check to the pack-purchase card write (`Svc.getOrCreateStripeCustomer`). It becomes
     mandatory if D2 charges the attempted card directly.
-- **D2 (new finding, RS09c, RS09d): card-column writes.**
-  - (1, recommended) Three targeted fixes:
+- **D2 (new finding, RS09c, RS09d): card-column writes. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) Three targeted fixes:
     - (a) Replace the gateway's :227 `save` with
       `UPDATE stripe_customers SET last_payment_intent_id = :id WHERE parent_id = :p`.
     - (b) The pack charge uses the attempt's own card (`attemptedCard`, falling back to the column only when the
@@ -211,8 +211,8 @@ base: `ConfigBounds` is `platform/config/service/ConfigBounds.java`; `Operationa
     - Leaves the crash window between a failed charge and the revert documented (no outbox for it).
   - (2) Also add a `payment_method_version` column bumped by every card writer, with the revert matching its own
     version. Closes the same-card ambiguity fully, but touches every writer, for a path only API clients reach.
-- **D3 (RS06b): closing a stuck attempt.**
-  - (1, recommended) API-only admin action, `POST /api/admin/payment/pack-attempts/{id}/close` on
+- **D3 (RS06b): closing a stuck attempt. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) API-only admin action, `POST /api/admin/payment/pack-attempts/{id}/close` on
     `AdminFinanceResource` (class-level `HAS_FULL_ADMIN_ROLE`) plus `AdminTierGuard.requireFullAdmin()` in the
     service, body `{reason}` (required, max 500). A new public service method does, in order:
     1. `findById`, else 404; a terminal row is 409 `payment.packAttempt.notOpen`.
@@ -234,8 +234,8 @@ base: `ConfigBounds` is `platform/config/service/ConfigBounds.java`; `Operationa
        would otherwise force a two-release rollout).
   - (2) Same, plus a "stuck pack purchases" table on `AdminFinancePage.vue`.
   - (3) A new `MANUALLY_CLOSED` status. Needs the CHECK widened one release before any code writes it.
-- **D4 (RS06e): stop the repeat.**
-  - (1, recommended) New nullable column `needs_operator_since timestamptz`, set once by CAS where it is null:
+- **D4 (RS06e): stop the repeat. DECIDED 2026-11-06: option 1.**
+  - (1, recommended, chosen) New nullable column `needs_operator_since timestamptz`, set once by CAS where it is null:
     - tier-deleted: at once (it cannot heal);
     - unreadable-charge and record-failed: only once the attempt is older than
       `payment.packAttempt.operatorAfterMinutes` (new `ConfigBounds` key, default 60, bounds 15-1440); before that
@@ -313,7 +313,7 @@ Written with the recommended option of every decision. The [A] tags and the AC7-
 ## Tasks / Subtasks
 
 - [x] T0a D0 recorded (option 1); Part B moved to skillars-deferred-175.
-- [ ] T0 Owner decisions D1-D4 recorded in this file.
+- [x] T0 Owner decisions D1-D4 recorded in this file (option 1 each).
 - [ ] T1 [A] (AC1) Gateway `paymentMethodBelongsTo(customerId, pmId)` (Stripe + stub); resource check before save;
       no-row branch rejects; pack-purchase write checks too; error key in backend bundles and frontend locales;
       `PaymentMethodCard.vue` error mapping. Tests: `SessionPackPaymentResourceWebMvcTest` (mismatch, unattached,
@@ -384,3 +384,4 @@ Written with the recommended option of every decision. The [A] tags and the AC7-
 - 2026-11-06: created (ready-for-dev); decisions D0-D8 pending owner.
 - 2026-11-06: revised after /mto-story-review (story-review.md): D2(c) two-state CAS, D3 close rules and refusals, D4 bounded marking, D5 status-regression guard recommended, D6 log volume, D7 retry dedupe and runbook, D8 enqueue only with a customer; AC1 400/422, AC12 lock_timeout, [A]/[B] tags, docs and checklist ownership; background corrections.
 - 2026-11-06: D0 = 1; Part B moved to skillars-deferred-175.
+- 2026-11-06: owner decided D1-D4 (option 1 each).
