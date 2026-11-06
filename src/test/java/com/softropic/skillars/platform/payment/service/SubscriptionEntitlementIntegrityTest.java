@@ -743,6 +743,40 @@ class SubscriptionEntitlementIntegrityTest {
     }
 
     @Test
+    void cancelAfterDowngrade_restoresThePriceFirst_soAKeptPlanRenewsAtItsOwnPrice() throws StripeException {
+        when(coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(COACH_ID)).thenReturn(true);
+        when(stripeClient.cancelSubscriptionAtPeriodEnd(SUB_ID)).thenReturn(Instant.now().plus(5, ChronoUnit.DAYS));
+
+        service.cancelCoachSubscription(COACH_ID);
+
+        org.mockito.InOrder order = org.mockito.Mockito.inOrder(stripeClient);
+        order.verify(stripeClient).updateSubscriptionTier(eq(SUB_ID), eq("price_acad"), eq(false), startsWith("sub-restore-"));
+        order.verify(stripeClient).cancelSubscriptionAtPeriodEnd(SUB_ID);
+        verify(coachSubscriptionChangeRepository, org.mockito.Mockito.atLeastOnce()).voidAllPendingForCoach(eq(COACH_ID), any());
+    }
+
+    @Test
+    void cancelWithoutPendingDowngrade_leavesThePriceAlone() throws StripeException {
+        when(stripeClient.cancelSubscriptionAtPeriodEnd(SUB_ID)).thenReturn(Instant.now().plus(5, ChronoUnit.DAYS));
+
+        service.cancelCoachSubscription(COACH_ID);
+
+        verify(stripeClient, never()).updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString());
+    }
+
+    @Test
+    void cancelAfterDowngrade_priceRestoreFails_nothingIsCancelled() throws StripeException {
+        when(coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(COACH_ID)).thenReturn(true);
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
+            .thenThrow(new ApiConnectionException("down"));
+
+        assertThatThrownBy(() -> service.cancelCoachSubscription(COACH_ID))
+            .hasMessage("payment.subscription.stripeError");
+        verify(stripeClient, never()).cancelSubscriptionAtPeriodEnd(anyString());
+        assertThat(coachSub.isCancelAtPeriodEnd()).isFalse();
+    }
+
+    @Test
     void keep_planNotSetToEnd_isLeftAlone() throws StripeException {
         service.keepCoachSubscription(COACH_ID);
 

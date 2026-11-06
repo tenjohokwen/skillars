@@ -425,6 +425,12 @@ public class SubscriptionService {
         if (stripeSubId == null) {
             throw new PaymentGatewayException("payment.subscription.noActiveStripeSubscription");
         }
+        // A pending downgrade already moved the Stripe price down. The cancel voids that change, and a plan
+        // can now be kept after a cancel (keepCoachSubscription), so the price goes back to the tier the
+        // coach keeps first; otherwise a kept plan would renew on the higher tier at the lower price.
+        if (coachSubscriptionChangeRepository.existsByCoachIdAndAppliedFalseAndVoidedAtIsNull(coachId)) {
+            restoreCoachPriceAndVoidDowngrade(coachId, stripeSubId, sub.getTier().toUpperCase());
+        }
 
         try {
             Instant periodEnd = stripeClient.cancelSubscriptionAtPeriodEnd(stripeSubId);
@@ -684,6 +690,11 @@ public class SubscriptionService {
         String stripeSubId = sub.getStripeSubscriptionId();
         if (stripeSubId == null) {
             throw new PaymentGatewayException("payment.subscription.noActiveStripeSubscription");
+        }
+        // See cancelCoachSubscription: put the price a pending downgrade lowered back before cancelling.
+        if (playerSubscriptionChangeRepository.existsByPlayerIdAndAppliedFalseAndVoidedAtIsNull(playerId)) {
+            restorePlayerPriceAndVoidDowngrade(playerId, stripeSubId, sub.getTier().toUpperCase(),
+                sub.getBillingInterval());
         }
 
         try {
