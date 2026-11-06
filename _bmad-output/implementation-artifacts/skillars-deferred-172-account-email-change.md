@@ -1,6 +1,6 @@
 # Story skillars-deferred-172: Account email change — verified, reversible, safe
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-05 (/bmad-create-story equivalent, written by hand), right after skillars-deferred-171
      (#451, merged 78bb2c9e) and Dependabot #452-#455. Built from ledger item RS03 plus owner decisions taken in
@@ -563,3 +563,4 @@ Claude Opus 5.5 (claude-opus-5-5)
   (erasure cleanup; suspended-account undo keeps the suspension), R3 (erasure hold replaces the 72 h cool-off), R4 (no id
   lookups; F14 check first), R5 (registration half + V231 lowercase backfill and `lower()` unique indexes).
 - 2026-11-05: implemented (T0-T11); /pr-review rounds 1-4 with owner decisions V2, F3, C, D, E, F, G folded in; status review.
+- 2026-11-06: PR #466 merged as e6d765a0 (CI green); eval case login-case-normalisation gets fix_merge; status done.

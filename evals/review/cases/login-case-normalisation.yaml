@@ -1,7 +1,7 @@
 id: login-case-normalisation
 kind: pre-fix-snapshot
 fix_pr: 466
-input_rev: fa62da9dc634
+fix_merge: e6d765a0
 confidence: high
 scope:
   - src/main/java/com/softropic/skillars/platform/security/service/UserProfileService.java
@@ -43,6 +43,6 @@ expected_findings:
         symbol: toUser
 source: results/baseline-2026-11-02/real-sample.md S04 and S16, owner-verified 2026-11-03
 notes: >
-  Open bug, no fix PR yet. S04 saw updateUserEmail at 651ed1effc04 (319 input) and S16 saw
+  Fixed by PR #466 (skillars-deferred-172), merged as e6d765a0. S04 saw updateUserEmail at 651ed1effc04 (319 input) and S16 saw
   registerAccount at fa62da9dc634 (381 input); updateUserEmail is unchanged between the two, so the
   case is pinned to the later revision and carries both siblings of the one root cause.
