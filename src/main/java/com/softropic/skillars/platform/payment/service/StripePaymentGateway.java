@@ -108,13 +108,44 @@ public class StripePaymentGateway implements PaymentGateway {
     @Override
     public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount,
                                    String idempotencyKey) {
+        return chargeAndCapture(referenceId, parentId, coachId, amount, idempotencyKey, null);
+    }
+
+    @Override
+    public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount,
+                                   String idempotencyKey, String paymentMethodId) {
         if (idempotencyKey == null || idempotencyKey.isBlank()) {
             throw new IllegalArgumentException("idempotencyKey is required");
         }
-        return charge(referenceId, parentId, coachId, amount, idempotencyKey);
+        return charge(referenceId, parentId, coachId, amount, idempotencyKey, paymentMethodId);
+    }
+
+    @Override
+    public boolean paymentMethodBelongsTo(String stripeCustomerId, String paymentMethodId) {
+        if (stripeCustomerId == null || paymentMethodId == null || paymentMethodId.isBlank()) {
+            return false;
+        }
+        try {
+            return stripeCustomerId.equals(stripeClient.retrievePaymentMethod(paymentMethodId).getCustomer());
+        } catch (StripeException e) {
+            Integer status = e.getStatusCode();
+            if (status != null && (status == 400 || status == 404)) {
+                // Stripe rejects or does not know the id: it cannot be this customer's card.
+                log.warn("[PAYMENT_METHOD_OWNERSHIP_UNKNOWN_ID] paymentMethodId={} status={}", paymentMethodId, status);
+                return false;
+            }
+            log.error("Stripe payment method ownership lookup failed: paymentMethodId={} status={} error={}",
+                paymentMethodId, status, e.getMessage());
+            throw new PaymentGatewayException("payment.lifecycleFailure", e);
+        }
     }
 
     private String charge(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount, String explicitKey) {
+        return charge(referenceId, parentId, coachId, amount, explicitKey, null);
+    }
+
+    private String charge(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount, String explicitKey,
+                          String explicitPaymentMethodId) {
         // Fail fast: throws payment.coachStripeNotConfigured if the coach has no COMPLETE +
         // charges_enabled connected account. The returned id is intentionally discarded — B-1 does
         // not put it on the PaymentIntent.
@@ -142,7 +173,9 @@ public class StripePaymentGateway implements PaymentGateway {
         if (parentId != null) {
             stripeCustomer = stripeCustomerRepository.findById(parentId)
                 .orElseThrow(() -> new PaymentGatewayException("payment.noStripeCustomer"));
-            String paymentMethodId = stripeCustomer.getStripePaymentMethodId();
+            // skillars-deferred-174 AC3: a pack purchase names its card; everything else charges the saved one.
+            String paymentMethodId = explicitPaymentMethodId != null
+                ? explicitPaymentMethodId : stripeCustomer.getStripePaymentMethodId();
             if (paymentMethodId == null) {
                 throw new PaymentGatewayException("payment.noPaymentMethod");
             }
@@ -221,10 +254,11 @@ public class StripePaymentGateway implements PaymentGateway {
             recordCardFingerprint(parentId, intent);
             // fix/payment-session-pack-integrity: bookkeeping only, AFTER the money is captured. A failure here
             // used to escape before the intent id reached the caller — captured with no record and no
-            // compensating refund. Never let it fail the charge.
+            // compensating refund. Never let it fail the charge. skillars-deferred-174 AC2: one column only. Saving the
+            // entity read above was a full-row merge (no @Version, no @DynamicUpdate) that wrote back the card read
+            // before the charge, undoing any card saved (or reverted) in between.
             try {
-                stripeCustomer.setLastPaymentIntentId(intent.getId());
-                stripeCustomerRepository.save(stripeCustomer);
+                stripeCustomerRepository.updateLastPaymentIntentId(parentId, intent.getId());
             } catch (RuntimeException e) {
                 log.error("[STRIPE_LAST_INTENT_SAVE_FAILED] charge captured but stripe_customers.last_payment_intent_id "
                     + "not updated: parentId={} intentId={}", parentId, intent.getId(), e);

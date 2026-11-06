@@ -44,7 +44,8 @@ class SessionPackPurchaseIT extends BasePaymentIT {
             .packTierId();
 
         SessionPackPurchaseResponse purchase =
-            sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, "pm_test_pi");
+            // skillars-deferred-174 AC1: a first-time payer has no Stripe customer, so cannot name a card (the UI never does)
+            sessionPackPaymentService.purchasePack(PARENT_ID, tierId, PLAYER_ID, null);
 
         assertThat(purchase.pricePerSession())
             .as("pricePerSession must be locked at tier's rate")

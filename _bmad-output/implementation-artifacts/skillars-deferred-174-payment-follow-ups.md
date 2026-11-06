@@ -1,6 +1,6 @@
 # Story skillars-deferred-174: Payment follow-ups (card ownership, card-column writes, stuck pack attempts)
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- CREATED 2026-11-06 (/bmad-create-story) from the deferred-work.md payment residuals left by
      skillars-deferred-169 and skillars-deferred-172: RS09b, RS09c, RS09d, RS06b, RS06e, RS05c, RS-poison, RS07b,
@@ -314,22 +314,22 @@ Written with the recommended option of every decision. The [A] tags and the AC7-
 
 - [x] T0a D0 recorded (option 1); Part B moved to skillars-deferred-175.
 - [x] T0 Owner decisions D1-D4 recorded in this file (option 1 each).
-- [ ] T1 [A] (AC1) Gateway `paymentMethodBelongsTo(customerId, pmId)` (Stripe + stub); resource check before save;
+- [x] T1 [A] (AC1) Gateway `paymentMethodBelongsTo(customerId, pmId)` (Stripe + stub); resource check before save;
       no-row branch rejects; pack-purchase write checks too; error key in backend bundles and frontend locales;
       `PaymentMethodCard.vue` error mapping. Tests: `SessionPackPaymentResourceWebMvcTest` (mismatch, unattached,
       no row, Stripe down = 422; stub the new method in existing cases), `StripePaymentGatewayTest`,
       `PaymentMethodCardSpec.js`; check the no-row cases in `SubscriptionLifecycleIT` and `CaptureReservationIT`.
-- [ ] T2 [A] (AC2-AC4) Targeted `last_payment_intent_id` update; `chargeAndCapture` overload with a payment method;
+- [x] T2 [A] (AC2-AC4) Targeted `last_payment_intent_id` update; `chargeAndCapture` overload with a payment method;
       the two-state CAS re-apply plus enqueue in one transaction. Tests: `StripeCustomerRepositoryIT`,
       `SessionPackPaymentServiceTest` (:740, :767, :771, :929-948; the purchase mocks move to the overload),
       `StripePaymentGatewayTest`.
-- [ ] T3 [A] (AC12) Migration V233.
-- [ ] T4 [A] (AC5) Public close method in `SessionPackPaymentService`, endpoint, runbook. Tests:
+- [x] T3 [A] (AC12) Migration V233.
+- [x] T4 [A] (AC5) Public close method in `SessionPackPaymentService`, endpoint, runbook. Tests:
       `AdminFinanceResourceWebMvcTest` (role gate, validation, 404/409/422 mapping), a service test (each Stripe
       state, each refusal, CAS loss, `needs_operator_since` cleared), `PackPurchaseAttemptIT` (index released).
-- [ ] T5 [A] (AC6) Needs-operator marking, threshold key, job-query skip, regex. Tests: `SessionPackPaymentServiceTest`
+- [x] T5 [A] (AC6) Needs-operator marking, threshold key, job-query skip, regex. Tests: `SessionPackPaymentServiceTest`
       (each branch before and after the threshold, including the missing tier-gone test), `PackPurchaseAttemptIT`.
-- [ ] T10 [A] (AC13) Docs; `node docs/dev-docs/tools/build-search-index.mjs`, then `check-docs.mjs`.
+- [x] T10 [A] (AC13) Docs; `node docs/dev-docs/tools/build-search-index.mjs`, then `check-docs.mjs`.
 - [ ] T11 [A] (AC14) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
 
 ## Dev Notes
@@ -371,13 +371,99 @@ Written with the recommended option of every decision. The [A] tags and the AC7-
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5)
+
 ### Debug Log References
+
+- Targeted runs only (no local `mvn verify` of the whole suite). Unit: `SessionPackPaymentServiceTest` (73),
+  `PackPriceLockedOnPurchaseTest`, `StripePaymentGatewayTest` (61), `SessionPackPaymentResourceWebMvcTest` (30),
+  `AdminFinanceResourceWebMvcTest` (14), the guards `MigrationConventionLintTest`, `ConfigStartupAssertionTest`,
+  `ConfigBoundsEnumCoverageTest`, `ConfigServiceTest`, `AlertDocumentationParityTest`,
+  `PessimisticLockRetryerCallSiteAuditTest` (68, unchanged), `IntegrationTestConventionTest`, `MessageBundleParityTest`,
+  and the payment neighbours (247 tests: credit wallet, cash-out, subscriptions, webhooks). IT:
+  `PackPurchaseAttemptIT` (14), `StripeCustomerRepositoryIT` (6), `SessionPackIntegrityIT` (11), `SessionPackPurchaseIT`,
+  `ChargeIdempotencyIT`, `CaptureReservationIT`, `SubscriptionLifecycleIT`, `SubscriptionServiceStripeReconciliationIT`,
+  `CoachProfileSelfEditIT`. Vitest: `PaymentMethodCardSpec.js` (15) and the i18n specs. `check-docs` OK.
+- First IT run: five pack ITs bought with a named card for a payer with no Stripe customer, which AC1 now refuses (400).
+  They now name no card, as the shipped UI does.
 
 ### Completion Notes List
 
 - Ultimate context engine analysis completed - comprehensive developer guide created.
+- AC1 (D1): `PaymentGateway.paymentMethodBelongsTo` (Stripe: `PaymentMethod.customer` equals the caller's customer; an id
+  Stripe answers 400/404 for is "not owned"; any other Stripe failure is a `PaymentGatewayException`, so 422). Checked in
+  `POST /save-payment-method` before the save's transaction (the no-row branch that created a customer is gone: 400), and in
+  `purchasePack` before the attempt row (a payer without a customer cannot name a card). Card form maps the key to
+  `payment.card.notOwned` (en, fr, de).
+- AC2 (D2a): the gateway's post-capture write is `StripeCustomerRepository.updateLastPaymentIntentId` (one column). The IT
+  shows the old full-row save undoing a card saved meanwhile, and the new update keeping it.
+- AC3 (D2b): `PaymentGateway.chargeAndCapture(..., idempotencyKey, paymentMethodId)` overload; `purchasePack` charges the card
+  it named (null charges the saved card). Booking and batch callers keep their signatures.
+- AC4 (D2c): `SubscriptionService.reapplyPaymentMethodAndScheduleSync` = `reapplyPaymentMethod` (native CAS accepting the
+  attempted or previous card, `IS NOT DISTINCT FROM` for a null previous) plus the outbox enqueue in one transaction; a third
+  card is kept (`[PACK_PURCHASE_CARD_SUPERSEDED]`). The request path's SUCCEEDED writes go through `markSucceeded` (open
+  statuses first, then NO_CHARGE with `[PACK_PURCHASE_CAS_LOST] key=NO_CHARGE_TO_SUCCEEDED`). The accepted gaps are in
+  `revertDeclinedCard`'s javadoc.
+- AC5/AC6 (D3/D4): `resolveAttempt` now returns why a row stays open (`OpenReason`). One source drives both the job's
+  needs-operator marking (`markNeedsOperatorIfDue`: TIER_GONE at once, CHARGE_UNREADABLE/RECORD_FAILED past
+  `payment.packAttempt.operatorAfterMinutes`, never LOOKUP_FAILED/TOO_RECENT/CHARGE_PENDING) and the admin close's refusals.
+  The close needs no CAS of its own: everything Stripe supports is already closed by the resolver it runs first (which also
+  retries `createPurchase` and runs `noCharge()` with the card revert); what remains open maps to 409 tooRecent /
+  chargePending / capturedNoPack, or 422 for a failed lookup. `closed_by`/`close_reason` written and `needs_operator_since`
+  cleared only when the action closed the row. `findOpenOlderThan` skips marked rows; a client replay still resolves them.
+- AC12: V233, three nullable columns, `SET LOCAL lock_timeout`, rule-9 lock header, same-release note.
+- AC13: `docs/dev-docs/payment/index.html` (endpoint rows, two new paragraphs, job row), `monitoring.md`
+  (PackAttemptsUnresolved runbook now uses the close action; MoneyIntegrityEvent names the new tag),
+  `provisioning-checklist.md` (new key row, job row, dated entry). Search index rebuilt. The dev-docs footer stamp was not
+  bumped (the page was not re-verified as a whole).
+- Deviations from the story text: (1) AC1 said "every backend bundle": payment error keys are not translated in the backend
+  bundles (none of the existing `payment.*` keys are), so only the frontend locales gained the key. (2) AC13 named
+  `docs/security-api-endpoints.md`, which documents only the `platform.security` module's endpoints; the payment endpoints are
+  documented in the payment dev-docs page instead. (3) The new tag was also added to the Payments dashboard's log panel.
+- AC14: RS06b, RS06e, RS09b, RS09c, RS09d deleted from `deferred-work.md`; residuals filed as RS09e (revert crash window),
+  RS09f (same-card ambiguity), RS06f (double pack after a NO_CHARGE verdict on a stalled thread), RS09g (the other detached
+  full-row card writer), RS06g (an unreadable charge that stays unreadable after a refund cannot be closed by the action).
 
 ### File List
+
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+- `_bmad-output/implementation-artifacts/skillars-deferred-174-payment-follow-ups.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/story-review.md`
+- `deploy/lgtm/dashboards/payments.json`
+- `deploy/lgtm/grafana-alerts.yml`
+- `docs/deployment/monitoring.md`
+- `docs/deployment/provisioning-checklist.md`
+- `docs/dev-docs/assets/search-index.js`
+- `docs/dev-docs/payment/index.html`
+- `src/frontend/src/components/payment/PaymentMethodCard.vue`
+- `src/frontend/src/components/payment/__tests__/PaymentMethodCardSpec.js`
+- `src/frontend/src/i18n/de-DE/index.js`
+- `src/frontend/src/i18n/en-US/index.js`
+- `src/frontend/src/i18n/fr-FR/index.js`
+- `src/main/java/com/softropic/skillars/platform/config/service/ConfigBounds.java`
+- `src/main/java/com/softropic/skillars/platform/payment/api/AdminFinanceResource.java`
+- `src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java`
+- `src/main/java/com/softropic/skillars/platform/payment/contract/PackAttemptCloseRequest.java` (new)
+- `src/main/java/com/softropic/skillars/platform/payment/contract/PackAttemptCloseResponse.java` (new)
+- `src/main/java/com/softropic/skillars/platform/payment/contract/PaymentGateway.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseAttempt.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SessionPackPurchaseAttemptRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripePaymentGateway.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java`
+- `src/main/resources/db/migration/V233__pack_purchase_attempt_admin_close_and_needs_operator.sql` (new)
+- `src/test/java/com/softropic/skillars/config/StubPaymentGateway.java`
+- `src/test/java/com/softropic/skillars/platform/payment/api/AdminFinanceResourceWebMvcTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResourceWebMvcTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepositoryIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/PackPriceLockedOnPurchaseTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/PackPurchaseAttemptIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackIntegrityIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentServiceTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SessionPackPurchaseIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/StripePaymentGatewayTest.java`
 
 ### Change Log
 
@@ -385,3 +471,4 @@ Written with the recommended option of every decision. The [A] tags and the AC7-
 - 2026-11-06: revised after /mto-story-review (story-review.md): D2(c) two-state CAS, D3 close rules and refusals, D4 bounded marking, D5 status-regression guard recommended, D6 log volume, D7 retry dedupe and runbook, D8 enqueue only with a customer; AC1 400/422, AC12 lock_timeout, [A]/[B] tags, docs and checklist ownership; background corrections.
 - 2026-11-06: D0 = 1; Part B moved to skillars-deferred-175.
 - 2026-11-06: owner decided D1-D4 (option 1 each).
+- 2026-11-07: implemented T1-T5, T10 and the ledger/sprint-status part of T11 (dev-story). `/pr-review` and the PR pending.

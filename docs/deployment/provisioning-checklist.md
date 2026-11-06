@@ -1169,7 +1169,7 @@ Detail: [`scheduler-lock-tuning.md`](scheduler-lock-tuning.md), `docs/dev-docs/s
 | `CoachStartReminderScheduler` | 1 min | hard-coded; ShedLock `CoachStartReminderScheduler_remind` (`PT5M` / `PT30S`). Emails the coach (`COACH_START_REMINDER`, plus an inbox row) at an unstarted session's start and at start + 10 min; needs working outbound email like every other booking mail |
 | `PaymentPendingSweeper` | 15 min | hard-coded |
 | `ChargeOutcomeReconciler` | 10 min | hard-coded cadence; age threshold `booking.payment.charge_reconcile_after_minutes` (10). Settles or declines booking charges whose Stripe response was lost; ERROR tags `[CHARGE_RECONCILE_AMOUNT_MISMATCH]` / `[CHARGE_RECONCILE_BOOKING_MOVED]` need an operator |
-| `PaymentRecoveryJob` | 5 min | hard-coded; ShedLock `PaymentRecoveryJob_run` (`PT10M` / `PT1M`). Four duties, each isolated: resolves open pack purchase attempts older than `payment.packAttempt.minAgeMinutes` from Stripe (it never refunds), purges terminal attempts past `payment.packAttempt.retentionDays`, drains parked subscription webhook events whose subscription is now linked, purges parked events past `payment.pendingSubscriptionEvent.retentionDays`. |
+| `PaymentRecoveryJob` | 5 min | hard-coded; ShedLock `PaymentRecoveryJob_run` (`PT10M` / `PT1M`). Four duties, each isolated: resolves open pack purchase attempts older than `payment.packAttempt.minAgeMinutes` from Stripe (it never refunds; it skips the rows it has marked `needs_operator_since`), purges terminal attempts past `payment.packAttempt.retentionDays`, drains parked subscription webhook events whose subscription is now linked, purges parked events past `payment.pendingSubscriptionEvent.retentionDays`. |
 | `CashOutReconciliationService` | 15 min | hard-coded |
 | `SessionPackForfeitureScheduler` | 60 min | hard-coded |
 | `SessionPackExpiryNotifier` | daily 08:00 | hard-coded |
@@ -1268,6 +1268,7 @@ row: the coded default applies until an admin stores a value (`ConfigBounds.HAS_
 | `payment.packAttempt.minAgeMinutes` | 10 (code default, range 5–1440) | `ConfigBounds` | Keep. Age an open pack-purchase attempt must reach before a same-key replay or `PaymentRecoveryJob` resolves it from Stripe (a live request can run 6–8 min) |
 | `payment.packAttempt.absenceAgeMinutes` | 30 (code default, range 15–1440) | `ConfigBounds` | Keep. Age at which an EMPTY Stripe lookup counts as "no charge"; must exceed the worst-case life of a request thread, or a slow original request could capture after a second attempt started |
 | `payment.packAttempt.retentionDays` | 30 (code default, range 7–3650) | `ConfigBounds` | Keep. How long terminal pack-purchase attempts are kept |
+| `payment.packAttempt.operatorAfterMinutes` | 60 (code default, range 15–1440) | `ConfigBounds` | Keep. Age past which `PaymentRecoveryJob` stops retrying an attempt whose charge is unreadable or whose pack could not be recorded, and marks it for an operator (`[PACK_PURCHASE_ATTEMPT_NEEDS_OPERATOR]`); a deleted tier is marked at once |
 | `payment.pendingSubscriptionEvent.retentionDays` | 30 (code default, range 1–365) | `ConfigBounds` | Keep. How long a parked subscription webhook event that never linked is kept |
 | `booking.batch.maxSize` | 5 | V139 | Keep |
 | `reliability.strike.visibilityThreshold` / `suspensionThreshold` | 3 / 5 | V139 | Keep |
@@ -1606,3 +1607,9 @@ an operator must now do.
 - 2026-11-05: skillars-deferred-172 (V231, V232): run the V231 case-collision check before deploying; email changes are
   confirmed from the new address and can be undone from the old one for 7 days (two public endpoints and SPA routes,
   three account mails).
+- 2026-11-06: skillars-deferred-174 (V233, additive nullable columns on `payment.session_pack_purchase_attempts`, runs
+  automatically). New admin endpoint `POST /api/admin/payment/pack-attempts/{id}/close` (full admin), which replaces the
+  `PackAttemptsUnresolved` runbook's hand-written `UPDATE`s. New code-default key `payment.packAttempt.operatorAfterMinutes`
+  (60) ([section 7](#7-application-config-and-policy-keys)). The MoneyIntegrityEvent alert also matches
+  `[PACK_PURCHASE_ATTEMPT_NEEDS_OPERATOR]` (recreate Grafana after pulling). `POST /api/payment/save-payment-method` now
+  saves only a card attached to the caller's own Stripe customer. No new job, webhook or env var.

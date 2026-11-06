@@ -129,6 +129,71 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         assertThat(row.getAttemptedCard()).isNull();
     }
 
+    // ── skillars-deferred-174 AC5/AC6 (RS06b, RS06e): the needs-operator mark and the admin close ──
+
+    @Autowired SessionPackPaymentService sessionPackPaymentService;
+
+    private void ageAttempts(long parent, String interval) {
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("UPDATE payment.session_pack_purchase_attempts SET created_at = now() - CAST(? AS interval) "
+                + "WHERE parent_id = ?", interval, parent);
+            return null;
+        });
+    }
+
+    @Test
+    void needsOperator_isSetOnce_onlyOnAnOpenRow_andTheJobsWorkListSkipsIt() {
+        Long marked = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        Long other = attempts.saveAndFlush(newAttempt(OTHER_PARENT, "key-aaaaaaaa")).getId();
+        ageAttempts(PARENT, "2 hours");
+        ageAttempts(OTHER_PARENT, "2 hours");
+        var open = Status.OPEN.stream().map(Enum::name).toList();
+
+        assertThat(attempts.markNeedsOperator(marked, open)).isEqualTo(1);
+        assertThat(attempts.markNeedsOperator(marked, open)).as("one-shot").isZero();
+        assertThat(attempts.findById(marked).orElseThrow().getNeedsOperatorSince()).isNotNull();
+
+        assertThat(attempts.findOpenOlderThan(Status.OPEN, java.time.Instant.now()))
+            .extracting(SessionPackPurchaseAttempt::getId).contains(other).doesNotContain(marked);
+        // still open: it keeps holding the parent's one open attempt
+        assertThatThrownBy(() -> attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb")))
+            .isInstanceOf(DataIntegrityViolationException.class);
+
+        attempts.transition(other, Status.SUCCEEDED, "pi_1", EnumSet.of(Status.IN_PROGRESS));
+        assertThat(attempts.markNeedsOperator(other, open)).as("never on a closed row").isZero();
+    }
+
+    @Test
+    void adminClose_nothingChargedPastTheAbsenceAge_closesAsNoCharge_recordsWhoAndWhy_andFreesTheParent() {
+        Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+        ageAttempts(PARENT, "2 hours");
+        attempts.markNeedsOperator(id, Status.OPEN.stream().map(Enum::name).toList());
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "parent blocked; nothing in Stripe");
+
+        assertThat(response.status()).isEqualTo("NO_CHARGE");
+        SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(Status.NO_CHARGE);
+        assertThat(row.getClosedBy()).isEqualTo(42L);
+        assertThat(row.getCloseReason()).isEqualTo("parent blocked; nothing in Stripe");
+        assertThat(row.getNeedsOperatorSince()).as("cleared by the close").isNull();
+        // AC5e: the partial unique index no longer holds the parent
+        attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb"));
+    }
+
+    @Test
+    void adminClose_tooRecentToTrustTheAbsence_isRefused_rowUnchanged() {
+        Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.tooRecent");
+
+        SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
+        assertThat(row.getStatus()).isEqualTo(Status.IN_PROGRESS);
+        assertThat(row.getClosedBy()).isNull();
+    }
+
     // ── RS05: the parked event commits independently of the webhook's own transaction ──
 
     private PaymentRecoveryRecorder.ParkedSubscriptionEvent parked(String eventId, String subId, long created) {

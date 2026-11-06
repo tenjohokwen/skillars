@@ -24,7 +24,9 @@ public interface SessionPackPurchaseAttemptRepository extends JpaRepository<Sess
     Optional<SessionPackPurchaseAttempt> findOpenByParentId(@Param("parentId") Long parentId,
                                                             @Param("open") Collection<Status> open);
 
-    @Query("SELECT a FROM SessionPackPurchaseAttempt a WHERE a.status IN :open AND a.createdAt <= :cutoff ORDER BY a.createdAt")
+    /** The job's work list: open rows old enough to resolve, minus those marked as needing an operator (skillars-deferred-174 AC6). */
+    @Query("SELECT a FROM SessionPackPurchaseAttempt a WHERE a.status IN :open AND a.createdAt <= :cutoff "
+        + "AND a.needsOperatorSince IS NULL ORDER BY a.createdAt")
     List<SessionPackPurchaseAttempt> findOpenOlderThan(@Param("open") Collection<Status> open,
                                                        @Param("cutoff") Instant cutoff);
 
@@ -43,6 +45,26 @@ public interface SessionPackPurchaseAttemptRepository extends JpaRepository<Sess
     default boolean transition(Long id, Status newStatus, String paymentIntentId, Collection<Status> expected) {
         return transitionRaw(id, newStatus.name(), paymentIntentId, expected.stream().map(Enum::name).toList()) == 1;
     }
+
+    /**
+     * skillars-deferred-174 AC6: marks an open row as needing an operator, once. Returns 0 when it was already marked or is no
+     * longer open, so the caller logs the one-shot tag only on the write that set it.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query(value = "UPDATE payment.session_pack_purchase_attempts SET needs_operator_since = now() "
+        + "WHERE id = :id AND needs_operator_since IS NULL AND status IN (:open)", nativeQuery = true)
+    int markNeedsOperator(@Param("id") Long id, @Param("open") Collection<String> open);
+
+    /**
+     * skillars-deferred-174 AC5: who closed the row with the admin close action, and why. The status itself is only ever
+     * written by {@link #transition}; this runs after the row closed, and clears the needs-operator mark.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query(value = "UPDATE payment.session_pack_purchase_attempts SET closed_by = :adminUserId, close_reason = :reason, "
+        + "needs_operator_since = NULL WHERE id = :id", nativeQuery = true)
+    int recordAdminClose(@Param("id") Long id, @Param("adminUserId") Long adminUserId, @Param("reason") String reason);
 
     @Modifying
     @Transactional
