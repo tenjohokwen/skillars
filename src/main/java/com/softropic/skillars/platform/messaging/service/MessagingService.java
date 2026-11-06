@@ -346,6 +346,7 @@ public class MessagingService {
         var conv = conversationRepository.findById(conversationId)
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
         verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
         return toSummary(conv, callerUserId, role);
     }
 
@@ -513,6 +514,21 @@ public class MessagingService {
         return coachId != null && coachProfileRepository.findById(coachId)
             .map(c -> c.getStatus() == CoachProfileStatus.SUSPENDED)
             .orElse(false);
+    }
+
+    /**
+     * A parent stays the conversation's parentId after the player turns 18, but loses access with the
+     * age tier (privacy at 18): the own list and the oversight view already leave such threads out, and
+     * sending is refused. The summary by id is refused the same way (its preview quotes the latest
+     * message). getMessages and the SSE stream do not apply this yet: they check verifyIsParty only.
+     */
+    private void requireParentReadAccess(Conversation conv, String role) {
+        if ("PARENT".equals(role)
+                && AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(conv.getPlayerId())).parentIsBlocked()) {
+            throw new OperationNotAllowedException(
+                "Parental access does not apply to an adult player's conversations",
+                MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
+        }
     }
 
     private void verifyIsParty(Conversation conv, Long callerUserId, String role) {

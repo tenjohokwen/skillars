@@ -242,6 +242,19 @@ class MessagingServiceTest {
     }
 
     @Test
+    void getConversation_parentOfAPlayerNowAdult_isRefused() {
+        Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
+        c.setParentId(PARENT_USER_ID);
+        when(conversationRepository.findById(CONVERSATION_ID)).thenReturn(Optional.of(c));
+        when(agePolicyService.getMessagingPolicy(PLAYER_ID)).thenReturn(MessagingPolicy.unrestricted());
+
+        assertThatThrownBy(() -> messagingService.getConversation(CONVERSATION_ID, PARENT_USER_ID, "PARENT"))
+            .isInstanceOf(OperationNotAllowedException.class)
+            .satisfies(e -> assertThat(((OperationNotAllowedException) e).getErrorCode())
+                .isEqualTo(MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE));
+    }
+
+    @Test
     void getConversation_nonParty_isRefused() {
         Conversation c = conv(CONVERSATION_ID, coachId, PLAYER_ID);
         c.setParentId(PARENT_USER_ID);
