@@ -305,6 +305,7 @@
             size="sm"
             class="q-mt-sm"
             :label="t('booking.completion.confirmCompletion')"
+            data-testid="parent-booking-confirm-completion"
             :loading="confirmingId === booking.id"
             @click="handleConfirmCompletion(booking.id)"
           />

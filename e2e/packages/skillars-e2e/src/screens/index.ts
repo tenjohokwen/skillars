@@ -32,8 +32,59 @@ export class CommandCentreScreen extends Screen {
 
   /** `label` is the reason's visible text (resolve it through `t()`). */
   async chooseCancelReason(label: string): Promise<void> {
-    await this.tid('cancel-coach-reason').click()
+    await this.cancelReason().click()
     await this.page.getByRole('option', { name: label, exact: true }).click()
+  }
+  cancelReason = () => this.tid('cancel-coach-reason')
+
+  // Week navigation. The grid has seven day columns, Monday first, in the coach's zone.
+  prevWeek = () => this.tid('schedule-prev-week')
+  nextWeek = () => this.tid('schedule-next-week')
+  weekLabel = () => this.tid('schedule-week-label')
+  /** Shown instead of the grid when the week has no bookings. */
+  emptyWeek = () => this.tid('schedule-empty')
+  /** The bookings drawn in one day column; 0 is Monday. */
+  bookingsOn = (dayIndex: number) =>
+    this.page
+      .locator(`[data-testid="schedule-day"][data-day-index="${dayIndex}"]`)
+      .getByTestId('coach-schedule-booking')
+  start = (booking: Locator) => this.within(booking, 'coach-booking-start-btn')
+  quickComplete = (booking: Locator) => this.within(booking, 'coach-booking-quick-complete-btn')
+  resumeWrapUp = (booking: Locator) => this.within(booking, 'resume-wrap-up-btn')
+
+  // The live-session overlay. End stays disabled for the first 5 minutes on its own timer.
+  activeSession = () => this.tid('active-session')
+  timer = () => this.tid('active-session-timer')
+  endSession = () => this.tid('active-session-end')
+
+  // The wrap-up: attendance, three star ratings, homework, recap. `data-step` is 1–4.
+  wrapUp = () => this.tid('wrap-up')
+  attended = () => this.tid('wrap-up-attended')
+  wrapUpNext = () => this.tid('wrap-up-next')
+  rating = (axis: 'effort' | 'focus' | 'technique') => this.tid(`wrap-up-rating-${axis}`)
+  recapWhatWeDid = () => this.tid('recap-what-we-did')
+  recapWhatsNext = () => this.tid('recap-whats-next')
+  wrapUpDone = () => this.tid('wrap-up-done')
+  postWrapUpSummary = () => this.tid('post-wrap-up-summary')
+
+  /**
+   * Attendance confirmed, five stars on each axis (each fifth star moves on by itself), no homework.
+   * The attendance box starts ticked but Next waits until it is touched, so "attended" takes two clicks.
+   */
+  async wrapUpWith(recap: { whatWeDid: string; whatsNext: string }): Promise<void> {
+    await this.attended().click()
+    await this.attended().click()
+    await this.page.locator('[data-testid="wrap-up-attended"][aria-checked="true"]').waitFor()
+    await this.wrapUpNext().click()
+    for (const axis of ['effort', 'focus', 'technique'] as const) {
+      await this.rating(axis).getByRole('radio').nth(4).click()
+    }
+    // The last fifth star moves on after a 200 ms delay.
+    await this.page.locator('[data-testid="wrap-up"][data-step="3"]').waitFor()
+    await this.wrapUpNext().click()
+    await this.recapWhatWeDid().fill(recap.whatWeDid)
+    await this.recapWhatsNext().fill(recap.whatsNext)
+    await this.wrapUpDone().click()
   }
 }
 
