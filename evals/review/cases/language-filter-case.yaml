@@ -1,7 +1,7 @@
 id: language-filter-case
 kind: pre-fix-snapshot
 fix_pr: 469
-input_rev: deefa90f6d10
+fix_merge: cfbf2cf0
 confidence: high
 scope:
   - src/main/java/com/softropic/skillars/platform/marketplace/repo/CoachProfileRepository.java
@@ -33,6 +33,6 @@ expected_findings:
         symbol: languageOptions
 source: results/baseline-2026-11-02/real-sample.md S05, owner-verified 2026-11-03
 notes: >
-  Fixed by #469 (skillars-deferred-173). input_rev is the 330-missing-version-lost-updates input revision. The
+  Fixed by #469 (skillars-deferred-173), merged as cfbf2cf0. The case was pinned to the 330-missing-version-lost-updates input revision. The
   frontend picker is in scope so a reviewer can see that stored values are capitalised; the
   EditCoachIdentityDialog uses the same option list.
