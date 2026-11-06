@@ -55,6 +55,46 @@
               date: formatDate(subscription.currentPeriodEnd),
             })
           }}
+          <template v-if="canManage" #action>
+            <q-btn
+              flat
+              color="primary"
+              :label="t('subscription.keepPlan')"
+              :loading="actionLoading"
+              data-testid="subscription-keep-plan-btn"
+              @click="handleKeepPlan"
+            />
+          </template>
+        </q-banner>
+
+        <!-- A paid downgrade waits for the period end; until then the payer can take it back. -->
+        <q-banner
+          v-if="subscription?.pendingTier"
+          class="q-mb-md"
+          rounded
+          style="background: rgba(33, 150, 243, 0.15)"
+          data-testid="subscription-change-pending"
+        >
+          <template #avatar>
+            <q-icon name="mdi-calendar-arrow-right" color="info" />
+          </template>
+          {{
+            t('subscription.changePending', {
+              tier: subscription.pendingTier,
+              date: formatDate(subscription.pendingEffectiveAt),
+              current: currentTier,
+            })
+          }}
+          <template v-if="canManage" #action>
+            <q-btn
+              flat
+              color="primary"
+              :label="t('subscription.keepTier', { tier: currentTier })"
+              :loading="actionLoading"
+              data-testid="subscription-keep-tier-btn"
+              @click="handleKeepTier"
+            />
+          </template>
         </q-banner>
 
         <!-- Current tier card -->
@@ -141,6 +181,15 @@
                 @click="openSubscribeDialog(tier.tier)"
               />
               <q-btn
+                v-else-if="canManage && canDowngrade(tier.tier)"
+                color="primary"
+                outline
+                :label="t('subscription.downgrade')"
+                class="full-width"
+                data-testid="subscription-change-btn"
+                @click="openDowngrade(tier.tier)"
+              />
+              <q-btn
                 v-else-if="
                   canManage &&
                   tier.tier === currentTier &&
@@ -152,7 +201,7 @@
                 :label="t('subscription.cancel')"
                 class="full-width"
                 data-testid="subscription-cancel-btn"
-                @click="handleCancel"
+                @click="cancelDialog = true"
               />
               <!-- ATHLETE is free unless a subscription pays for it (the Cancel above then shows). -->
               <div
@@ -216,6 +265,41 @@
       </q-card>
     </q-dialog>
 
+    <PlanChangeDialog
+      v-model="downgradeDialog"
+      testid="subscription-downgrade-dialog"
+      :title="t('subscription.downgradeTitle', { tier: selectedTier })"
+      :body="
+        t('subscription.downgradeBody', {
+          tier: selectedTier,
+          current: currentTier,
+          date: formatDate(subscription?.currentPeriodEnd),
+        })
+      "
+      :confirm-label="t('subscription.downgradeConfirm', { tier: selectedTier })"
+      :dismiss-label="t('subscription.keepTier', { tier: currentTier })"
+      :loading="actionLoading"
+      @confirm="confirmDowngrade"
+    />
+
+    <PlanChangeDialog
+      v-model="cancelDialog"
+      testid="subscription-cancel-dialog"
+      :title="t('subscription.cancelTitle', { tier: currentTier })"
+      :body="
+        t('subscription.cancelBody', {
+          tier: currentTier,
+          free: 'ATHLETE',
+          date: formatDate(subscription?.currentPeriodEnd),
+        })
+      "
+      :confirm-label="t('subscription.cancelConfirm')"
+      :dismiss-label="t('subscription.keepPlan')"
+      confirm-color="negative"
+      :loading="actionLoading"
+      @confirm="handleCancel"
+    />
+
     <q-dialog v-model="addCardDialog">
       <q-card class="glass-card" style="min-width: 340px">
         <q-card-section>
@@ -237,6 +321,7 @@ import { useRoute } from 'vue-router'
 import { usePaymentStore } from 'src/stores/payment.store'
 import { useAuthStore } from 'src/stores/auth.store'
 import PaymentMethodCard from 'src/components/payment/PaymentMethodCard.vue'
+import PlanChangeDialog from 'src/components/payment/PlanChangeDialog.vue'
 import { subscriptionErrorI18nKey } from 'src/utils/subscriptionErrors'
 
 const { t, locale } = useI18n()
@@ -253,6 +338,8 @@ const loading = ref(false)
 const actionLoading = ref(false)
 const subscribeDialog = ref(false)
 const addCardDialog = ref(false)
+const downgradeDialog = ref(false)
+const cancelDialog = ref(false)
 const selectedTier = ref('')
 const billingInterval = ref('MONTHLY')
 
@@ -322,10 +409,8 @@ function isUpgrade(tier) {
   return TIER_ORDER.indexOf(tier) > current
 }
 
-// Subscribe from the free plan, or upgrade a paid one. A paid downgrade moves the Stripe price at once and
-// the tier at period end, and this page can neither show that it is pending nor undo it, so it is not
-// offered; nor is any change once the plan is set to cancel (an upgrade would charge proration on a plan
-// that still ends).
+// Subscribe from the free plan, or upgrade a paid one. No change is offered once the plan is set to end (the
+// server refuses it as cancelPending: an upgrade would charge proration on a plan that still ends).
 function canChoose(tier) {
   if (tier === 'ATHLETE' || tier === currentTier.value) return false
   if (subscription.value?.cancelAtPeriodEnd) return false
@@ -333,6 +418,70 @@ function canChoose(tier) {
   // A change keeps the plan's interval, and SEMI_PRO and PRO are sold yearly only.
   if (YEARLY_ONLY.includes(tier) && subscription.value?.billingInterval !== 'YEARLY') return false
   return isUpgrade(tier)
+}
+
+// A paid downgrade (PRO -> SEMI_PRO) moves the Stripe price at once and the tier at period end; the pending
+// banner shows it and takes it back. The free ATHLETE plan is reached by cancelling, not here, even though
+// ATHLETE is also sold: a paid plan on the tier the cancel gives for free is not worth offering.
+function canDowngrade(tier) {
+  if (!hasPaidPlan.value || tier === 'ATHLETE') return false
+  if (subscription.value?.cancelAtPeriodEnd) return false
+  if (tier === subscription.value?.pendingTier) return false
+  return TIER_ORDER.indexOf(tier) < TIER_ORDER.indexOf(currentTier.value)
+}
+
+function openDowngrade(tier) {
+  selectedTier.value = tier
+  downgradeDialog.value = true
+}
+
+async function confirmDowngrade() {
+  const tier = selectedTier.value
+  const changed = await runAction(
+    () => paymentStore.changePlayerTier({ playerId: playerId.value, newTier: tier }),
+    'subscription.player.subscribeError',
+  )
+  if (!changed) return
+  downgradeDialog.value = false
+  $q.notify({
+    type: 'positive',
+    message: t('subscription.downgradeSuccess', {
+      tier,
+      date: formatDate(subscription.value?.pendingEffectiveAt),
+    }),
+  })
+}
+
+// Re-selecting the current tier takes back a pending downgrade (SubscriptionService.changePlayerTier).
+async function handleKeepTier() {
+  const tier = currentTier.value
+  const kept = await runAction(
+    () => paymentStore.changePlayerTier({ playerId: playerId.value, newTier: tier }),
+    'subscription.keepError',
+  )
+  if (kept) $q.notify({ type: 'positive', message: t('subscription.keepTierSuccess', { tier }) })
+}
+
+async function handleKeepPlan() {
+  const kept = await runAction(
+    () => paymentStore.keepPlayerSubscription(playerId.value),
+    'subscription.keepError',
+  )
+  if (kept) $q.notify({ type: 'positive', message: t('subscription.keepPlanSuccess') })
+}
+
+/** Runs one plan action with the shared spinner; a failure is named when the server says why. */
+async function runAction(action, fallbackKey) {
+  actionLoading.value = true
+  try {
+    await action()
+    return true
+  } catch (err) {
+    $q.notify({ type: 'negative', message: t(subscriptionErrorI18nKey(err, fallbackKey)) })
+    return false
+  } finally {
+    actionLoading.value = false
+  }
 }
 
 function openSubscribeDialog(tier) {
@@ -373,20 +522,18 @@ async function confirmSubscribe() {
 }
 
 async function handleCancel() {
-  actionLoading.value = true
-  try {
-    await paymentStore.cancelPlayerSubscription(playerId.value)
-    $q.notify({
-      type: 'info',
-      message: t('subscription.player.cancelSuccess', {
-        date: formatDate(subscription.value?.currentPeriodEnd),
-      }),
-    })
-  } catch {
-    $q.notify({ type: 'negative', message: t('subscription.player.cancelError') })
-  } finally {
-    actionLoading.value = false
-  }
+  const cancelled = await runAction(
+    () => paymentStore.cancelPlayerSubscription(playerId.value),
+    'subscription.player.cancelError',
+  )
+  if (!cancelled) return
+  cancelDialog.value = false
+  $q.notify({
+    type: 'info',
+    message: t('subscription.player.cancelSuccess', {
+      date: formatDate(subscription.value?.currentPeriodEnd),
+    }),
+  })
 }
 
 function formatDate(iso) {

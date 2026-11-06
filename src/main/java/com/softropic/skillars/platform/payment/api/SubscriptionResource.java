@@ -80,6 +80,15 @@ public class SubscriptionResource {
         return ResponseEntity.noContent().build();
     }
 
+    /** Takes back a cancel: the plan renews again. A plan that is not set to end is left as it is. */
+    @PostMapping("/coach/keep")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<Void> keepCoachSubscription() {
+        UUID coachId = resolveCoachId();
+        subscriptionService.keepCoachSubscription(coachId);
+        return ResponseEntity.noContent().build();
+    }
+
     // ─── Player Tiers ─────────────────────────────────────────────────────────────
 
     @GetMapping("/player/tiers")
@@ -126,6 +135,14 @@ public class SubscriptionResource {
     public ResponseEntity<Void> cancelPlayerSubscription(@RequestParam Long playerId) {
         Long callerUserId = currentCallerUserId();
         subscriptionService.cancelPlayerSubscription(callerUserId, playerId);
+        return ResponseEntity.noContent().build();
+    }
+
+    @PostMapping("/player/keep")
+    @PreAuthorize("@playerOwnershipGuard.check(authentication, #playerId)")
+    public ResponseEntity<Void> keepPlayerSubscription(@RequestParam Long playerId) {
+        Long callerUserId = currentCallerUserId();
+        subscriptionService.keepPlayerSubscription(callerUserId, playerId);
         return ResponseEntity.noContent().build();
     }
 

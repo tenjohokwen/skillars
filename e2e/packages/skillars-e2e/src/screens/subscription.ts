@@ -13,12 +13,24 @@ abstract class SubscriptionScreen extends Screen {
   /** "Renews on" — the end of the paid period. */
   periodEnd = () => this.tid('subscription-period-end')
   cancelPending = () => this.tid('subscription-cancel-pending')
+  /** On the cancel-pending banner: take the cancel back. */
+  keepPlan = () => this.tid('subscription-keep-plan-btn')
+  /** A paid downgrade waiting for the period end. */
+  changePending = () => this.tid('subscription-change-pending')
+  /** On the change-pending banner: stay on the current tier. */
+  keepTier = () => this.tid('subscription-keep-tier-btn')
+  downgradeDialog = () => this.tid('subscription-downgrade-dialog')
+  confirmDowngrade = () => this.tid('subscription-downgrade-dialog-confirm')
+  cancelDialog = () => this.tid('subscription-cancel-dialog')
+  confirmCancel = () => this.tid('subscription-cancel-dialog-confirm')
+  /** The cancel dialog's way out: Keep my plan, which changes nothing. */
+  dismissCancel = () => this.tid('subscription-cancel-dialog-dismiss')
   tierCards = () => this.tid('subscription-tier-card')
   tierCard = (tier: string): Locator =>
     this.page.locator(`[data-testid="subscription-tier-card"][data-tier="${tier}"]`)
   /** Upgrade or Downgrade on a tier that is not the current one. */
   choose = (tier: string) => this.within(this.tierCard(tier), 'subscription-change-btn')
-  /** Cancel, on the current paid tier. */
+  /** Cancel, on the current paid tier. Opens the cancel dialog; nothing is cancelled until it confirms. */
   cancel = (tier: string) => this.within(this.tierCard(tier), 'subscription-cancel-btn')
   addCardPrompt = () => this.tid('subscription-add-card-prompt')
   confirm = () => this.tid('subscription-confirm-btn')

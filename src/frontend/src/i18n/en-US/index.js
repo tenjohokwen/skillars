@@ -2594,6 +2594,21 @@ export default {
     paymentRetrying:
       'Card saved. We are retrying your subscription payment with it; your plan is restored as soon as the payment goes through, which can take a few minutes.',
     updateCard: 'Update card',
+    keepPlan: 'Keep my plan',
+    keepTier: 'Keep {tier}',
+    keepPlanSuccess: 'Your plan will renew as usual.',
+    keepTierSuccess: 'You stay on {tier}.',
+    keepError: 'Could not keep your plan. Please try again.',
+    changePending: 'Your plan changes to {tier} on {date}. You keep {current} until then.',
+    downgradeTitle: 'Move to {tier}?',
+    downgradeBody:
+      'You keep {current} until {date}, then move to {tier}. What you paid for this period is not refunded.',
+    downgradeConfirm: 'Move to {tier}',
+    downgradeSuccess: 'Your plan will change to {tier} on {date}.',
+    cancelTitle: 'Cancel your {tier} plan?',
+    cancelBody:
+      'You keep {tier} until {date}, then move to the free {free} plan. You can keep your plan any time before then.',
+    cancelConfirm: 'Cancel plan',
     errors: {
       paymentDeclined:
         'Your card was declined or needs extra authentication. Please update your payment method and try again.',
@@ -2603,6 +2618,7 @@ export default {
         'Your subscription is not active right now. Settle the outstanding payment before changing your plan.',
       alreadyActive: 'You already have an active subscription.',
       inProgress: 'Your subscription is already being set up. Please wait a moment and refresh.',
+      cancelPending: 'Your plan is set to end. Choose Keep my plan first, then change it.',
     },
     coach: {
       pageTitle: 'Coach Subscription',

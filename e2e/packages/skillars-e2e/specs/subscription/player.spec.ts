@@ -44,7 +44,7 @@ test.describe('H · Player subscription', () => {
   )
 
   test(
-    "a parent moves a child's paid plan to another tier on the same subscription",
+    "a parent moves a child's paid plan up at once, and down at the end of the paid period",
     scenario({
       id: 'SUB-06',
       priority: 'P1',
@@ -68,13 +68,30 @@ test.describe('H · Player subscription', () => {
 
       await expect(plans.currentTier()).toHaveText('PRO')
       await expect(family.page.getByText(t('subscription.errors.alreadyActive'))).toHaveCount(0)
-      // No paid downgrade is offered: the page could neither show it pending nor undo it.
-      await expect(plans.choose('SEMI_PRO')).toHaveCount(0)
+
+      // Down: confirmed first, then pending until the period ends, and it can be taken back.
+      const periodEnd = (await plans.periodEnd().textContent())!.trim()
+      await expect(plans.choose('SEMI_PRO')).toHaveText(t('subscription.downgrade'))
+      // The free tier is reached by cancelling, not as a downgrade.
+      await expect(plans.choose('ATHLETE')).toHaveCount(0)
+      await plans.choose('SEMI_PRO').click()
+      await expect(plans.downgradeDialog()).toContainText(
+        t('subscription.downgradeBody', { tier: 'SEMI_PRO', current: 'PRO', date: periodEnd }),
+      )
+      await plans.confirmDowngrade().click()
+      await expect(plans.changePending()).toContainText(
+        t('subscription.changePending', { tier: 'SEMI_PRO', date: periodEnd, current: 'PRO' }),
+      )
+      await expect(plans.currentTier()).toHaveText('PRO')
+
+      await plans.keepTier().click()
+      await expect(plans.changePending()).toHaveCount(0)
+      await expect(plans.currentTier()).toHaveText('PRO')
     },
   )
 
   test(
-    "a parent cancels a child's plan, which runs to the end of the paid period",
+    'a parent confirms a cancel, which runs to the end of the paid period and can be taken back',
     scenario({
       id: 'SUB-07',
       priority: 'P1',
@@ -90,15 +107,29 @@ test.describe('H · Player subscription', () => {
       const family = await actor(asRole(parent))
       const plans = await new PlayerSubscriptionScreen(family.page, suite).open({ playerId })
       const periodEnd = (await plans.periodEnd().textContent())!.trim()
-      await plans.cancel('SEMI_PRO').click()
 
-      await expect(plans.cancelPending()).toHaveText(
+      // Nothing is cancelled until the dialog confirms; its way out changes nothing.
+      await plans.cancel('SEMI_PRO').click()
+      await expect(plans.cancelDialog()).toContainText(
+        t('subscription.cancelBody', { tier: 'SEMI_PRO', free: 'ATHLETE', date: periodEnd }),
+      )
+      await plans.dismissCancel().click()
+      await expect(plans.cancelPending()).toHaveCount(0)
+      await plans.cancel('SEMI_PRO').click()
+      await plans.confirmCancel().click()
+
+      await expect(plans.cancelPending()).toContainText(
         t('subscription.player.cancelPending', { date: periodEnd }),
       )
       await expect(plans.currentTier()).toHaveText('SEMI_PRO')
       await expect(plans.cancel('SEMI_PRO')).toHaveCount(0)
       // Nor can a plan that is ending be upgraded: that would charge for an upgrade that still ends.
       await expect(plans.choose('PRO')).toHaveCount(0)
+
+      // Keep my plan: it renews again, and can be changed again.
+      await plans.keepPlan().click()
+      await expect(plans.cancelPending()).toHaveCount(0)
+      await expect(plans.choose('PRO')).toHaveText(t('subscription.upgrade'))
     },
   )
 
@@ -130,6 +161,7 @@ test.describe('H · Player subscription', () => {
       await expect(plans.currentTier()).toHaveText('PRO')
 
       await plans.cancel('PRO').click()
+      await plans.confirmCancel().click()
       await expect(plans.cancelPending()).toBeVisible()
     },
   )

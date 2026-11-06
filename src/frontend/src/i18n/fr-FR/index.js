@@ -2141,6 +2141,21 @@ export default {
     paymentRetrying:
       'Carte enregistrée. Nous retentons le paiement de votre abonnement avec elle ; votre formule sera rétablie dès que le paiement aura abouti, ce qui peut prendre quelques minutes.',
     updateCard: 'Mettre à jour la carte',
+    keepPlan: 'Conserver mon abonnement',
+    keepTier: 'Conserver {tier}',
+    keepPlanSuccess: 'Votre abonnement sera renouvelé normalement.',
+    keepTierSuccess: 'Vous restez sur {tier}.',
+    keepError: 'Impossible de conserver votre abonnement. Veuillez réessayer.',
+    changePending: 'Votre abonnement passe à {tier} le {date}. Vous gardez {current} jusque-là.',
+    downgradeTitle: 'Passer à {tier} ?',
+    downgradeBody:
+      'Vous gardez {current} jusqu’au {date}, puis vous passez à {tier}. Le montant payé pour cette période n’est pas remboursé.',
+    downgradeConfirm: 'Passer à {tier}',
+    downgradeSuccess: 'Votre abonnement passera à {tier} le {date}.',
+    cancelTitle: 'Résilier votre abonnement {tier} ?',
+    cancelBody:
+      'Vous gardez {tier} jusqu’au {date}, puis vous passez à l’offre gratuite {free}. Vous pouvez conserver votre abonnement à tout moment d’ici là.',
+    cancelConfirm: 'Résilier',
     errors: {
       paymentDeclined:
         'Votre carte a été refusée ou nécessite une authentification supplémentaire. Veuillez mettre à jour votre moyen de paiement et réessayer.',
@@ -2151,6 +2166,8 @@ export default {
       alreadyActive: 'Vous avez déjà un abonnement actif.',
       inProgress:
         'Votre abonnement est déjà en cours de création. Veuillez patienter un instant puis actualiser.',
+      cancelPending:
+        'Votre abonnement va prendre fin. Choisissez d’abord Conserver mon abonnement, puis modifiez-le.',
     },
     coach: {
       pageTitle: 'Abonnement Coach',
