@@ -10,4 +10,11 @@ public record PlayerSubscriptionResponse(
         String billingInterval,
         String status,
         Instant currentPeriodEnd,
-        boolean cancelAtPeriodEnd) {}
+        boolean cancelAtPeriodEnd,
+        /*
+         * A Stripe subscription backs this plan (and it is not CANCELLED), so a new tier is a change of it,
+         * not a fresh subscribe.
+         * The tier alone cannot say so: ATHLETE is both the free fallback and a priced tier (a scheduled
+         * downgrade can leave a paying player on it).
+         */
+        boolean subscribed) {}

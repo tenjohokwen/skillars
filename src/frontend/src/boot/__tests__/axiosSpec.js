@@ -26,7 +26,7 @@
 // sessionRedirect.js's `__resetSessionRedirectGuardForTests`) because a fresh module instance is
 // simpler and does not require adding a test-only export to production code for one boot flag.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@rajesh896/broprint.js', () => ({
   getCurrentBrowserFingerPrint: vi.fn().mockResolvedValue('test-fingerprint'),
@@ -155,5 +155,38 @@ describe('boot/axios — 403 age-verification gate redirects to the verification
   it('any other 403 does not redirect', async () => {
     await expect(rejectedHandler(build403('MISSING_RIGHTS'))).rejects.toBeDefined()
     expect(fakeRouter.push).not.toHaveBeenCalled()
+  })
+})
+
+// Pitchside SUB-03: a request the app aborts itself (EditCoachIdentityDialog's debounced bio preview,
+// aborted when /profile unmounts) was logged as "[Network Error] Unable to reach server". It is still
+// rejected, but not reported. Mutation check: drop the isCancel branch and the first case turns red.
+describe('boot/axios — a request the app cancelled is not reported as a network error', () => {
+  let rejectedHandler
+  let errorSpy
+
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.clearAllMocks()
+    const { api } = await import('src/boot/axios')
+    rejectedHandler = api.interceptors.response.handlers[0].rejected
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+
+  afterEach(() => errorSpy.mockRestore())
+
+  it('rejects a cancelled request without logging it', async () => {
+    const { default: axios } = await import('axios')
+    const cancelled = new axios.CanceledError('canceled', 'ERR_CANCELED', {}, {})
+    await expect(rejectedHandler(cancelled)).rejects.toBe(cancelled)
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('still reports a request that got no response', async () => {
+    const lost = { request: {}, message: 'Network Error' }
+    await expect(rejectedHandler(lost)).rejects.toBe(lost)
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[Network Error] Unable to reach server. Please check your connection.',
+    )
   })
 })

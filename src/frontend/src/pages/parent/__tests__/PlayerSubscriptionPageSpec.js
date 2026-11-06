@@ -88,7 +88,13 @@ describe('PlayerSubscriptionPage.vue — mutating controls by role', () => {
       { tier: 'SEMI_PRO', features: [] },
       { tier: 'PRO', features: [] },
     ],
-    playerSubscription: { tier: 'SEMI_PRO', status: 'ACTIVE', cancelAtPeriodEnd: false },
+    playerSubscription: {
+      tier: 'SEMI_PRO',
+      status: 'ACTIVE',
+      cancelAtPeriodEnd: false,
+      subscribed: true,
+      billingInterval: 'YEARLY',
+    },
   }
 
   function actionButtons(wrapper) {
@@ -170,5 +176,107 @@ describe('PlayerSubscriptionPage.vue — banner after saving a card', () => {
     })
 
     expect(wrapper.text()).toContain('subscription.paymentPaused')
+  })
+})
+
+// Pitchside SUB-06: confirm decided between subscribing and changing tier on a stripeSubscriptionId the
+// response never carries, so a family on a paid tier was always sent to subscribe again, which the server
+// refuses as already active. It now reads the response's `subscribed` flag (ATHLETE is both the free
+// fallback and a priced tier, so the tier cannot say). Mutation check: restore the stripeSubscriptionId
+// test and the first case turns red.
+describe('PlayerSubscriptionPage.vue — subscribe or change tier', () => {
+  async function confirmFrom(currentTier, chosenTier, subscribed = currentTier !== 'ATHLETE') {
+    const { wrapper, pinia } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerSubscription: {
+        tier: currentTier,
+        status: 'ACTIVE',
+        cancelAtPeriodEnd: false,
+        subscribed,
+      },
+      playerTiers: [],
+      savedPaymentMethod: { hasCard: true },
+    })
+    const { usePaymentStore } = await import('src/stores/payment.store')
+    const paymentStore = usePaymentStore(pinia)
+    const setup = wrapper.vm.$.setupState
+    setup.openSubscribeDialog(chosenTier)
+    await setup.confirmSubscribe()
+    await flushPromises()
+    return paymentStore
+  }
+
+  it('a player on a paid tier changes tier instead of subscribing again', async () => {
+    const store = await confirmFrom('SEMI_PRO', 'PRO')
+    expect(store.changePlayerTier).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      newTier: 'PRO',
+    })
+    expect(store.subscribePlayer).not.toHaveBeenCalled()
+  })
+
+  it('a player on the free tier subscribes, with the chosen interval', async () => {
+    const store = await confirmFrom('ATHLETE', 'SEMI_PRO')
+    expect(store.subscribePlayer).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      tier: 'SEMI_PRO',
+      billingInterval: 'YEARLY',
+    })
+    expect(store.changePlayerTier).not.toHaveBeenCalled()
+  })
+
+  it('a player paying for ATHLETE changes tier: the flag decides, not the tier', async () => {
+    const store = await confirmFrom('ATHLETE', 'SEMI_PRO', true)
+    expect(store.changePlayerTier).toHaveBeenCalledWith({
+      playerId: LARGE_PLAYER_ID,
+      newTier: 'SEMI_PRO',
+    })
+    expect(store.subscribePlayer).not.toHaveBeenCalled()
+  })
+
+  it('offers no paid downgrade, and no change at all while the plan is set to cancel', async () => {
+    const tiers = ['ATHLETE', 'SEMI_PRO', 'PRO'].map((tier) => ({ tier, features: [] }))
+    const offered = async (playerSubscription) => {
+      const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+        playerSubscription,
+        playerTiers: tiers,
+        savedPaymentMethod: { hasCard: true },
+      })
+      return wrapper
+        .findAll('[data-testid="subscription-tier-card"]')
+        .filter((card) => card.find('[data-testid="subscription-change-btn"]').exists())
+        .map((card) => card.attributes('data-tier'))
+    }
+    const plan = {
+      status: 'ACTIVE',
+      subscribed: true,
+      cancelAtPeriodEnd: false,
+      billingInterval: 'YEARLY',
+    }
+    expect(await offered({ ...plan, tier: 'PRO' })).toEqual([])
+    expect(await offered({ ...plan, tier: 'SEMI_PRO' })).toEqual(['PRO'])
+    expect(await offered({ ...plan, tier: 'SEMI_PRO', cancelAtPeriodEnd: true })).toEqual([])
+    // A change keeps the interval, and SEMI_PRO and PRO are yearly only.
+    expect(await offered({ ...plan, tier: 'ATHLETE', billingInterval: 'MONTHLY' })).toEqual([])
+    expect(await offered({ ...plan, tier: 'ATHLETE', billingInterval: 'YEARLY' })).toEqual([
+      'SEMI_PRO',
+      'PRO',
+    ])
+  })
+
+  it('a paid ATHLETE plan can be cancelled and is not labelled free', async () => {
+    const { wrapper } = await mountPage(LARGE_PLAYER_ID, 'PARENT', {
+      playerSubscription: {
+        tier: 'ATHLETE',
+        status: 'ACTIVE',
+        subscribed: true,
+        cancelAtPeriodEnd: false,
+        billingInterval: 'MONTHLY',
+      },
+      playerTiers: [{ tier: 'ATHLETE', features: [] }],
+      savedPaymentMethod: { hasCard: true },
+    })
+    const card = wrapper.find('[data-testid="subscription-tier-card"]')
+    expect(card.find('[data-testid="subscription-cancel-btn"]').exists()).toBe(true)
+    expect(card.text()).not.toContain(wrapper.vm.$t('subscription.freePlan'))
   })
 })
