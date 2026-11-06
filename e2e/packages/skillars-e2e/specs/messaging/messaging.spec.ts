@@ -44,18 +44,28 @@ async function childThread(provision: Provisioner, age: number) {
   return { coach, parent, child, conversationId }
 }
 
-/** Every messaging response body this page receives, to prove what never left the server. */
-function messagingPayloads(page: Page): string[] {
-  const bodies: string[] = []
+/**
+ * Records every messaging JSON response this page receives; the returned function waits for all of
+ * their bodies (a failed read fails the test) and insists that a message list was among them, so a
+ * leak check can never pass by having read nothing. The live-update stream (`/events`) is left out:
+ * its body never completes while the page is open.
+ */
+function messagingPayloads(page: Page): () => Promise<string> {
+  const reads: Promise<string>[] = []
   page.on('response', (response) => {
-    if (response.url().includes('/api/messaging/')) {
-      response
-        .text()
-        .then((body) => bodies.push(body))
-        .catch(() => undefined)
+    const url = new URL(response.url())
+    if (url.pathname.startsWith('/api/messaging/') && !url.pathname.endsWith('/events')) {
+      reads.push(response.text())
     }
   })
-  return bodies
+  return async () => {
+    const bodies = await Promise.all(reads)
+    expect(
+      bodies.some((body) => body.includes('"moderationStatus"')),
+      'a message list response was read',
+    ).toBe(true)
+    return bodies.join('\n')
+  }
 }
 
 async function send(screen: MessagingScreen, text: string, via: 'button' | 'enter' = 'button') {
@@ -264,7 +274,7 @@ test.describe('K · Moderation', () => {
       await expect(chat.notices()).toHaveCount(1)
       await expect(chat.notices().first()).toContainText(t('messaging.moderation.underReview'))
       await expect(family.page.getByText(secret)).toHaveCount(0)
-      expect(payloads.join('\n')).not.toContain(secret)
+      expect(await payloads()).not.toContain(secret)
     },
   )
 
@@ -311,7 +321,7 @@ test.describe('K · Moderation', () => {
         )
         await expect(playerChat.notices().last()).toContainText(t(theirs))
         await expect(other.page.getByText(text)).toHaveCount(0)
-        expect(payloads.join('\n')).not.toContain(text)
+        expect(await payloads()).not.toContain(text)
       },
     )
   }
