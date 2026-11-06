@@ -1895,6 +1895,9 @@ public class SubscriptionService {
         return new PlayerSubscriptionResponse(
             sub.getSubscriptionId(), sub.getPlayerId(), sub.getTier(),
             sub.getBillingInterval(), sub.getStatus(),
-            sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd());
+            sub.getCurrentPeriodEnd(), sub.isCancelAtPeriodEnd(),
+            // A CANCELLED row can still carry its old Stripe id (see assertCanSubscribe); a new tier is a
+            // fresh subscribe there, not a change.
+            sub.getStripeSubscriptionId() != null && !"CANCELLED".equals(sub.getStatus()));
     }
 }

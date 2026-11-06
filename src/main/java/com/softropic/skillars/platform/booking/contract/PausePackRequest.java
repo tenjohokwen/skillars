@@ -10,6 +10,8 @@ import java.util.UUID;
 
 public record PausePackRequest(
     @NotNull Instant pauseStartDate,
-    @Min(1) @Max(90) int pauseDurationDays,
+    // The real maximum is runtime config (pack.pause.maxDays), checked by PackSessionService; this is only
+    // that key's own upper bound (ConfigBounds), so raising the config above 90 takes effect.
+    @Min(1) @Max(3650) int pauseDurationDays,
     List<UUID> confirmedCancellationIds
 ) {}

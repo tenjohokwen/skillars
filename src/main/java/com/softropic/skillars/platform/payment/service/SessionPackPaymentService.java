@@ -880,7 +880,8 @@ public class SessionPackPaymentService {
             purchase.getPausedUntil(),
             computeStatus(purchase),
             purchase.getPausedFrom(),
-            purchase.getRevokedReason()
+            purchase.getRevokedReason(),
+            (int) configService.getBoundedLong(ConfigBounds.PACK_PAUSE_MAX_DAYS)
         );
     }
 

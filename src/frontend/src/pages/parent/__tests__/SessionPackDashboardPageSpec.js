@@ -204,6 +204,43 @@ describe('SessionPackDashboardPage.vue — pack status badges (fix/pack-status-b
     }
   })
 
+  // Pitchside MNY-05: the dialog hard-coded a 90-day limit (and "1–90 days") while the server reads
+  // pack.pause.maxDays. It now takes the limit the pack carries, refuses to send anything above it, and a
+  // server refusal names it. Mutation check: put `:max`/the check back to 90 and the first case turns red.
+  it('the pause dialog enforces and states the configured maximum, not 90', async () => {
+    const wrapper = await mountPage([{ ...BASE, pauseMaxDays: 30 }])
+    const setup = wrapper.vm.$.setupState
+    setup.openPauseDialog({ ...BASE, pauseMaxDays: 30 })
+    expect(setup.pauseMaxDays).toBe(30)
+    expect(setup.pauseForm.durationDays).toBe(30)
+    setup.pauseForm.durationDays = 45
+    expect(setup.pauseDaysValid).toBe(false)
+    setup.pauseForm.durationDays = 30
+    expect(setup.pauseDaysValid).toBe(true)
+  })
+
+  it('a server refusal of the duration re-reads the limit and names it', async () => {
+    const wrapper = await mountPage([{ ...BASE, pauseMaxDays: 30 }])
+    const { useBookingStore } = await import('src/stores/booking.store')
+    const store = useBookingStore()
+    store.initiatePausePack.mockRejectedValue({
+      response: { data: { errorMsg: { errorKey: 'booking.pauseDurationInvalid' } } },
+    })
+    // An admin lowered the limit after the page loaded: the reload carries the new one.
+    store.loadPlayerPacks.mockImplementation(async () => {
+      store.sessionPacks = [{ ...BASE, pauseMaxDays: 14 }]
+    })
+    const setup = wrapper.vm.$.setupState
+    setup.openPauseDialog({ ...BASE, pauseMaxDays: 30 })
+    setup.pauseForm.startDate = '2099-01-01'
+    await setup.submitPause()
+    await flushPromises()
+    expect(notifyMock).toHaveBeenCalledWith({
+      message: wrapper.vm.$t('booking.packs.pauseDurationInvalid', { max: 14 }),
+      type: 'negative',
+    })
+  })
+
   // Pitchside MNY-03: a pause applied on the first attempt (no conflicts) reloads the packs, so the card
   // shows the moved expiry and drops the Pause action. Before the fix only the conflict path reloaded.
   // Mutation check: drop the loadPlayerPacks call in submitPause's no-conflict branch and this turns red.
