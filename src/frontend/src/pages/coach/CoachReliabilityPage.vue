@@ -1,6 +1,6 @@
 <template>
   <q-page class="q-pa-md">
-    <div class="reliability-page glass-card q-pa-lg">
+    <div class="reliability-page glass-card q-pa-lg" data-testid="reliability-page">
       <div class="text-h6 q-mb-md">{{ t('reliability.pageTitle') }}</div>
 
       <q-banner
@@ -8,6 +8,7 @@
         class="q-mb-md"
         rounded
         style="background: rgba(255, 165, 0, 0.15)"
+        data-testid="reliability-reduced-banner"
       >
         <template #avatar>
           <q-icon name="mdi-eye-off" color="warning" />
@@ -31,14 +32,26 @@
         <q-spinner size="48px" />
       </div>
 
-      <div v-else-if="!strikes.length" class="text-center q-py-xl text-body2 text-secondary">
+      <div
+        v-else-if="!strikes.length"
+        class="text-center q-py-xl text-body2 text-secondary"
+        data-testid="reliability-no-strikes"
+      >
         {{ t('reliability.noStrikes') }}
       </div>
 
       <q-list v-else separator>
-        <q-item v-for="strike in strikes" :key="strike.strikeId" class="q-py-sm">
+        <q-item
+          v-for="strike in strikes"
+          :key="strike.strikeId"
+          class="q-py-sm"
+          data-testid="reliability-strike"
+          :data-booking-id="strike.bookingId"
+        >
           <q-item-section>
-            <q-item-label>{{ formatReason(strike.reason) }}</q-item-label>
+            <q-item-label data-testid="reliability-strike-reason">{{
+              formatReason(strike.reason)
+            }}</q-item-label>
             <q-item-label caption>
               {{ t('reliability.strikeDate') }}: {{ formatDate(strike.issuedAt) }}
             </q-item-label>
@@ -70,6 +83,7 @@
               color="warning"
               outline
               :label="t('reliability.acknowledgeBtn')"
+              data-testid="reliability-acknowledge-btn"
               @click="handleAcknowledge(strike.strikeId)"
             />
           </q-item-section>

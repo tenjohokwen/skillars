@@ -30,6 +30,7 @@ export const R = {
   parentDashboard: '/parent/dashboard',
   createPlayer: '/parent/create-player',
   parentBookings: '/parent/bookings',
+  coachReliability: '/coach/reliability',
   childHub: '/parent/players/:playerId(\\d+)/sessions',
   childPacks: '/parent/players/:playerId(\\d+)/packs',
   wallet: '/parent/credit-wallet',
