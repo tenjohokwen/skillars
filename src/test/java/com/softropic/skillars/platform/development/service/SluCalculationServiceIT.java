@@ -18,9 +18,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -28,6 +30,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.math.BigDecimal;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -73,6 +76,8 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     @Autowired private SluPersistenceRetrier sluPersistenceRetrier;
     @Autowired private SluPersistenceDispatcher sluPersistenceDispatcher;
     @Autowired private javax.sql.DataSource dataSource;
+    @Autowired @Qualifier("taskExecutor") private ThreadPoolTaskExecutor taskExecutor;
+    @Autowired @Qualifier("sluRetryExecutor") private ThreadPoolTaskExecutor sluRetryExecutor;
 
     @MockitoBean
     VideoProviderAdapter videoProviderAdapter;
@@ -115,8 +120,17 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
     // countStats()'s global per-player count leaks across test methods and makes the "writesNoRows"
     // assertions order-dependent on which tests happened to run first (JUnit 5's default ordering is
     // deterministic per JVM but not declaration-order, and can differ between environments).
+    //
+    // A test that awaits countStats() > 0 can return while its chain is still running (the snapshot write, or a
+    // saveSluWithRetry attempt backing off after 55P03 on the player_profiles lock this cleanup's DELETE holds).
+    // If the cleanup ran first, the chain's later attempt found no rows for its session and saved them again,
+    // after the cleanup: master CI #453 failed onBookingCompleted_draftSession_writesNoRows with 2 such rows.
+    // So wait until both SLU pools have been idle for a moment before deleting. DatabaseResetTestExecutionListener
+    // quiesces only before the next test, which is after this delete.
     @AfterEach
     void cleanUpSluRows() {
+        await().atMost(10, SECONDS).during(Duration.ofMillis(200)).pollInterval(Duration.ofMillis(25))
+            .until(() -> idle(taskExecutor) && idle(sluRetryExecutor));
         transactionTemplate.execute(status -> {
             jdbcTemplate.update("DELETE FROM development.player_skill_stats WHERE player_id = ?", TEST_PLAYER_ID);
             jdbcTemplate.update("DELETE FROM development.player_slu_weekly_snapshot WHERE player_id = ?", TEST_PLAYER_ID);
@@ -776,6 +790,11 @@ class SluCalculationServiceIT extends AbstractIntegrationTest {
             ));
             return null;
         });
+    }
+
+    // Held for during(...) above: a task handed to a fresh worker is neither queued nor active until its thread starts.
+    private static boolean idle(ThreadPoolTaskExecutor executor) {
+        return executor.getActiveCount() == 0 && executor.getThreadPoolExecutor().getQueue().isEmpty();
     }
 
     private int countStats() {
