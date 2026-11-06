@@ -567,6 +567,34 @@ export class Provisioner {
     }
   }
 
+  /** Cancel a coach's paid plan at period end through the API, as the coach. */
+  async cancelCoachPlan(coach: CoachAccount): Promise<void> {
+    const session = await this.login(coach)
+    try {
+      await session.api.delete('/payment/subscriptions/coach', { expectStatus: 204 })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * Leave a coach's subscribe attempt marked as running, the way a first click does while Stripe answers,
+   * so the next subscribe is refused as in progress. SQL seam: the window between claim and release is
+   * too short to hit from a test. The marker expires on its own (SUBSCRIBE_ATTEMPT_WINDOW).
+   */
+  async markCoachSubscribeInProgress(coach: CoachAccount): Promise<void> {
+    if (!coach.coachId) throw new Error('markCoachSubscribeInProgress needs a published coach')
+    const sql = await this.sql()
+    const rows = await sql.query(
+      `UPDATE payment.coach_subscriptions
+          SET subscribe_attempt_key = 'e2e-in-flight', subscribe_attempt_at = now()
+        WHERE coach_id = $1::uuid
+        RETURNING coach_id`,
+      [coach.coachId],
+    )
+    if (rows.length !== 1) throw new Error(`No subscription row for coach ${coach.coachId}`)
+  }
+
   /**
    * Put a subscription into a billing state Stripe would report by webhook (none arrives on the stack).
    * PAST_DUE starts the grace period now. SQL seam on payment.coach_subscriptions or

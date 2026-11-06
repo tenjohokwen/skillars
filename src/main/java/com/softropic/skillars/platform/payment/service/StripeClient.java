@@ -34,6 +34,7 @@ import com.stripe.param.identity.VerificationSessionRetrieveParams;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Thin wrapper around the Stripe SDK static calls so they can be mocked in unit tests.
@@ -317,10 +318,13 @@ public class StripeClient {
 
     /**
      * Cancels the subscription at period end. Returns the new currentPeriodEnd.
+     * The idempotency key is per attempt: a plan can be cancelled, kept ({@link #keepSubscription}) and
+     * cancelled again, and a key fixed per subscription would replay the first cancel's cached response for
+     * 24h instead of setting the flag again.
      */
     public Instant cancelSubscriptionAtPeriodEnd(String stripeSubscriptionId) throws StripeException {
         RequestOptions options = RequestOptions.builder()
-            .setIdempotencyKey("sub-cancel-" + stripeSubscriptionId)
+            .setIdempotencyKey("sub-cancel-" + stripeSubscriptionId + "-" + UUID.randomUUID())
             .build();
         Subscription sub = Subscription.retrieve(stripeSubscriptionId);
         SubscriptionUpdateParams params = SubscriptionUpdateParams.builder()
@@ -328,6 +332,18 @@ public class StripeClient {
             .build();
         Subscription updated = sub.update(params, options);
         return Instant.ofEpochSecond(updated.getCurrentPeriodEnd());
+    }
+
+    /**
+     * Takes back a cancel-at-period-end ({@code cancel_at_period_end=false}): the subscription renews again.
+     * The idempotency key is the caller's, per attempt.
+     */
+    public Subscription keepSubscription(String stripeSubscriptionId, String idempotencyKey) throws StripeException {
+        RequestOptions options = RequestOptions.builder()
+            .setIdempotencyKey(idempotencyKey)
+            .build();
+        Subscription sub = Subscription.retrieve(stripeSubscriptionId);
+        return sub.update(SubscriptionUpdateParams.builder().setCancelAtPeriodEnd(false).build(), options);
     }
 
     /**

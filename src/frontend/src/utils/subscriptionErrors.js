@@ -11,6 +11,7 @@ const KNOWN_CODES = {
   'payment.subscription.notActive': 'subscription.errors.notActive',
   'payment.subscription.alreadyActive': 'subscription.errors.alreadyActive',
   'payment.subscription.inProgress': 'subscription.errors.inProgress',
+  'payment.subscription.cancelPending': 'subscription.errors.cancelPending',
 }
 
 export function subscriptionErrorCode(err) {

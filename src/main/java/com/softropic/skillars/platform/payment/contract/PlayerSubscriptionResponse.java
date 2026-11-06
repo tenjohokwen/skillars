@@ -17,4 +17,7 @@ public record PlayerSubscriptionResponse(
          * The tier alone cannot say so: ATHLETE is both the free fallback and a priced tier (a scheduled
          * downgrade can leave a paying player on it).
          */
-        boolean subscribed) {}
+        boolean subscribed,
+        /* A paid downgrade waiting for the period end (null when none); see CoachSubscriptionResponse. */
+        String pendingTier,
+        Instant pendingEffectiveAt) {}
