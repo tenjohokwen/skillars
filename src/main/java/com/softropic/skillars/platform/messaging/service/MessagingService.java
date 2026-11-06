@@ -510,8 +510,10 @@ public class MessagingService {
      * already refuse them, and reading by id (history, live stream) must too.
      */
     private void requireParentReadAccess(Conversation conv, String role) {
-        if ("PARENT".equals(role)
-                && AgeMessagingPolicy.from(agePolicyService.getMessagingPolicy(conv.getPlayerId())).parentIsBlocked()) {
+        // findMessagingPolicy: a thread whose player profile row is gone has no adult to protect, and a
+        // missing row must not cost the parent the thread (nor a report) with a not-found error.
+        if ("PARENT".equals(role) && agePolicyService.findMessagingPolicy(conv.getPlayerId())
+                .map(p -> AgeMessagingPolicy.from(p).parentIsBlocked()).orElse(false)) {
             throw new OperationNotAllowedException(
                 "Parental access does not apply to an adult player's conversations",
                 MessagingErrorCode.PARENTAL_OVERSIGHT_NOT_APPLICABLE);
