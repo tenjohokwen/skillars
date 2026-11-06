@@ -1,6 +1,6 @@
 # Story skillars-deferred-173: Saves that lose data, and the coach language filter
 
-Status: ready-for-dev
+Status: review
 
 <!-- CREATED 2026-11-06 (/bmad-create-story) from ledger items RS10, RS11 and RS04, split out of
      skillars-deferred-172 by owner choice. Citations read at origin/master 6a19e395. skillars-deferred-172
@@ -162,8 +162,8 @@ rule), and the "RS10 + RS11 … and RS03 + RS04 … stay queued" sentence in its
 - [x] T4 (AC6) Query change + IT (extend an existing marketplace search IT if one seeds coach profiles,
   else a new `CoachLanguageSearchIT`).
 - [x] T5 (AC7) Shared language constant, three components switched to it, Vitest; Prettier + ESLint.
-- [ ] T6 (AC8) Ledger, eval case promotion + validator, docs + search index + check-docs.
-- [ ] T7 `/pr-review`, fix, PR (`PR_REVIEW_SKIP=1 gh pr create ...` first in the command; `frontend-tests` label).
+- [x] T6 (AC8) Ledger, eval case promotion + validator, docs + search index + check-docs.
+- [x] T7 `/pr-review`, fix, PR (`PR_REVIEW_SKIP=1 gh pr create ...` first in the command; `frontend-tests` label).
 
 ## Dev Notes
 
@@ -215,7 +215,8 @@ Claude Opus 5.5 (claude-opus-5-5)
   symlink to the main checkout's (git-ignored).
 - T6 (AC8): ledger lines deleted and header sentence updated; docs updated (notification PUT row and callout,
   messaging Conversation row, marketplace search row, sequence diagram and callout); search index rebuilt;
-  check-docs OK on 26 pages. Eval case promotion follows the PR number.
+  check-docs OK on 26 pages. Eval case promoted to `cases/language-filter-case.yaml` with `fix_pr: 469`.
+- T7: /pr-review at 955e4011, both arms 0 findings. PR #469.
 
 ### File List
 
@@ -239,4 +240,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 ### Change Log
 
 - 2026-11-06: created (ready-for-dev); owner decided D1-D4 (option 1 each).
-- 2026-11-06: T1-T6 implemented with targeted tests and mutation checks.
+- 2026-11-06: T1-T7 done; /pr-review clean; PR #469; status review.
