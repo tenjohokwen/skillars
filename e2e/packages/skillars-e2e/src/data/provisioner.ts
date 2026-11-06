@@ -9,6 +9,7 @@ import {
   type SqlExecutor,
 } from 'pitchside-core'
 import { API_BASE_URL, E2E } from '../env.js'
+import { nextWeekSlot, slotInstant } from './slots.js'
 
 export type AccountKind = 'coach' | 'parent' | 'player'
 
@@ -480,9 +481,13 @@ export class Provisioner {
    * instead of waiting for its schedule. Seed state that is already due first. The job holds its
    * ShedLock while it runs; a 409 means another run has it, so this retries until its own run lands.
    * A scheduled run (at boot, then on its schedule) keeps the lock for its `lockAtLeastFor`, 2 minutes
-   * for the forfeiture, so the default wait outlasts that.
+   * for the forfeiture, so the default wait outlasts that. `unresolved-sessions` is the sweeper that
+   * auto-refunds a session nobody started, claimed or completed 48 hours after its start.
    */
-  async runJob(name: 'pack-forfeiture', timeoutMs = 180_000): Promise<void> {
+  async runJob(
+    name: 'pack-forfeiture' | 'unresolved-sessions',
+    timeoutMs = 180_000,
+  ): Promise<void> {
     const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
     try {
       const deadline = Date.now() + timeoutMs
@@ -771,6 +776,233 @@ export class Provisioner {
         WHERE parent_id = $1::bigint
         ORDER BY created_at, tx_id`,
       [account.userId],
+    )
+  }
+
+  /**
+   * A CONFIRMED one-hour booking, paid per session with the family's card: requested through the API
+   * as the family, for a slot next week inside the coach's published hours, and accepted as the coach.
+   * Needs a card on file (saveCard). Returns the booking id. Distinct slots (weekday, time) keep two
+   * bookings with one coach apart. Move it in time afterwards with setBooking.
+   */
+  async confirmedBooking(
+    parent: ParentAccount,
+    coach: CoachAccount,
+    options: {
+      playerId?: string
+      weekday?: 1 | 2 | 3 | 4 | 5
+      time?: string
+      /** The coach's zone (onboardCoach's default). */
+      timezone?: string
+    } = {},
+  ): Promise<string> {
+    if (!coach.coachId) throw new Error('confirmedBooking needs a published coach')
+    const start = slotInstant(
+      nextWeekSlot(options.weekday ?? 2, options.time ?? '10:00'),
+      options.timezone ?? 'Europe/Berlin',
+    )
+    const end = new Date(start.getTime() + 3_600_000)
+    const family = await this.login(parent)
+    let bookingId: string
+    try {
+      const created = await family.api.json<{ id: string }>('POST', '/bookings/requests', {
+        data: {
+          coachId: coach.coachId,
+          // As a string: player ids exceed Number.MAX_SAFE_INTEGER.
+          playerId: options.playerId ?? parent.children[0]!.playerId,
+          requestedStartTime: start.toISOString(),
+          requestedEndTime: end.toISOString(),
+        },
+      })
+      bookingId = created.id
+    } finally {
+      await family.dispose()
+    }
+    const self = await this.login(coach)
+    try {
+      await self.api.put(`/bookings/requests/${bookingId}/accept`, {
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await self.dispose()
+    }
+    // Acceptance charges the card and confirms the booking in a transaction after the accept commits.
+    const deadline = Date.now() + 20_000
+    for (;;) {
+      const status = await this.bookingStatus(bookingId)
+      if (status === 'CONFIRMED') return bookingId
+      if (Date.now() > deadline) throw new Error(`Booking ${bookingId} stuck in ${status}`)
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
+  }
+
+  /** The per-session fee locked when the booking was requested. */
+  async agreedPrice(bookingId: string): Promise<number> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ price: string }>(
+      'SELECT agreed_price::text AS price FROM booking.bookings WHERE id = $1::uuid',
+      [bookingId],
+    )
+    if (!row) throw new Error(`No booking ${bookingId}`)
+    return Number(row.price)
+  }
+
+  async bookingStatus(bookingId: string): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ status: string }>(
+      'SELECT status FROM booking.bookings WHERE id = $1::uuid',
+      [bookingId],
+    )
+    if (!row) throw new Error(`No booking ${bookingId}`)
+    return row.status
+  }
+
+  /**
+   * Time travel for one booking: start it `startMinutesFromNow` minutes from now (negative = in the past;
+   * a one-hour session), and optionally put it in a status its scheduler or the coach would have set.
+   * SQL seam, like moveBookingStart.
+   * - UPCOMING: what the reminder job sets a day before; it is marked reminded so the job leaves it.
+   * - COMPLETED_PENDING_CONFIRMATION: a Quick Complete with no live start (live_started_at stays NULL).
+   * - COMPLETED: settled long enough ago to anchor the dispute window (`statusChangedDaysAgo`).
+   */
+  async setBooking(
+    bookingId: string,
+    change: {
+      startMinutesFromNow: number
+      status?: 'UPCOMING' | 'COMPLETED_PENDING_CONFIRMATION' | 'COMPLETED'
+      statusChangedDaysAgo?: number
+    },
+  ): Promise<Date> {
+    const start = new Date(Date.now() + change.startMinutesFromNow * 60_000)
+    start.setUTCSeconds(0, 0)
+    const end = new Date(start.getTime() + 3_600_000)
+    const changedAt = new Date(Date.now() - (change.statusChangedDaysAgo ?? 0) * 86_400_000)
+    const sql = await this.sql()
+    const rows = await sql.query(
+      `UPDATE booking.bookings
+          SET requested_start_time = $2::timestamptz, requested_end_time = $3::timestamptz,
+              original_start_time = CASE WHEN original_start_time IS NULL THEN NULL ELSE $2::timestamptz END,
+              status = COALESCE($4::varchar, status),
+              status_changed_at = CASE WHEN $4::varchar IS NULL THEN status_changed_at ELSE $5::timestamptz END,
+              updated_at = CASE WHEN $4::varchar IS NULL THEN updated_at ELSE $5::timestamptz END,
+              primary_reminder_sent_at = COALESCE(primary_reminder_sent_at, now()),
+              live_started_at = NULL,
+              confirmation_requested_at = CASE WHEN $4::varchar = 'COMPLETED_PENDING_CONFIRMATION'
+                                               THEN now() ELSE confirmation_requested_at END
+        WHERE id = $1::uuid
+        RETURNING id`,
+      [
+        bookingId,
+        start.toISOString(),
+        end.toISOString(),
+        change.status ?? null,
+        changedAt.toISOString(),
+      ],
+    )
+    if (rows.length !== 1) throw new Error(`No booking ${bookingId}`)
+    return start
+  }
+
+  /** Raise a dispute through the API, as the family (or the coach). Returns its id. */
+  async raiseDispute(
+    raiser: Pick<Account, 'email' | 'password'>,
+    bookingId: string,
+    reason: 'COACH_NO_SHOW' | 'SESSION_QUALITY' | 'SAFETY_CONCERN' | 'OTHER' = 'SESSION_QUALITY',
+  ): Promise<string> {
+    const session = await this.login(raiser)
+    try {
+      const raised = await session.api.json<{ disputeId: string }>('POST', '/disputes', {
+        data: { bookingId, reason, details: 'Raised by the e2e provisioner.' },
+      })
+      return raised.disputeId
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** The latest dispute raised on a booking (e.g. through the UI), or undefined. */
+  async disputeOn(bookingId: string): Promise<{ id: string; status: string } | undefined> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string; status: string }>(
+      `SELECT id::text AS id, status FROM admin.disputes WHERE booking_id = $1::uuid
+        ORDER BY created_at DESC LIMIT 1`,
+      [bookingId],
+    )
+    return row
+  }
+
+  /** Close a dispute as the bootstrap admin: dismiss it, or resolve it with no money moved. */
+  async closeDispute(
+    disputeId: string,
+    how: { dismiss: string } | { resolveNote: string },
+  ): Promise<void> {
+    const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      if ('dismiss' in how) {
+        await session.api.post(`/admin/disputes/${disputeId}/dismiss`, {
+          data: { reason: how.dismiss },
+          expectStatus: (status) => status >= 200 && status < 300,
+        })
+      } else {
+        await session.api.post(`/admin/disputes/${disputeId}/resolve`, {
+          data: { resolution: 'NO_ACTION', resolutionNote: how.resolveNote },
+          expectStatus: (status) => status >= 200 && status < 300,
+        })
+      }
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /** Decide the one appeal on a subject (a dispute or a strike) as the bootstrap admin. */
+  async decideAppeal(
+    subjectId: string,
+    outcome: 'UPHELD' | 'OVERTURNED',
+    note: string,
+  ): Promise<void> {
+    const sql = await this.sql()
+    const [appeal] = await sql.query<{ id: string }>(
+      "SELECT id::text AS id FROM admin.appeals WHERE subject_id = $1::uuid AND status = 'OPEN'",
+      [subjectId],
+    )
+    if (!appeal) throw new Error(`No open appeal on ${subjectId}`)
+    const session = await this.login({ email: E2E.adminEmail, password: E2E.adminPassword })
+    try {
+      await session.api.post(`/admin/appeals/${appeal.id}/decide`, {
+        data: { outcome, note },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * Record excused coach cancellations (reason HEALTH_MEDICAL) within the cap's window, as earlier
+   * bookings would have left them. SQL seam: each needs a booking of its own to cancel otherwise.
+   */
+  async seedExcusedCancellations(coach: CoachAccount, count: number): Promise<void> {
+    if (!coach.coachId) throw new Error('seedExcusedCancellations needs a published coach')
+    const sql = await this.sql()
+    for (let i = 0; i < count; i++) {
+      await sql.query(
+        `INSERT INTO payment.coach_cancellation_history (id, coach_id, booking_id, cancel_reason, created_at, after_start)
+         VALUES (gen_random_uuid(), $1::uuid, gen_random_uuid(), 'HEALTH_MEDICAL', now() - make_interval(days => $2), false)`,
+        [coach.coachId, i + 1],
+      )
+    }
+  }
+
+  /** The coach's reliability strikes, oldest first. */
+  async strikes(coach: CoachAccount): Promise<{ reason: string; bookingId: string | null }[]> {
+    if (!coach.coachId) throw new Error('strikes needs a published coach')
+    const sql = await this.sql()
+    return sql.query(
+      `SELECT reason, booking_id::text AS "bookingId"
+         FROM marketplace.coach_reliability_strikes
+        WHERE coach_id = $1::uuid
+        ORDER BY created_at`,
+      [coach.coachId],
     )
   }
 

@@ -1,3 +1,4 @@
+import type { Locator } from '@playwright/test'
 import { Screen } from 'pitchside-core'
 import { R } from '../routes.js'
 
@@ -17,6 +18,33 @@ export class CommandCentreScreen extends Screen {
   readonly readyTestId = 'booking-requests-link'
   bookingRequestsLink = () => this.tid('booking-requests-link')
   stripeSetupBanner = () => this.tid('stripe-setup-banner')
+
+  // The week schedule: one block per booking of the selected week.
+  booking = (bookingId: string) =>
+    this.page.locator(`[data-testid="coach-schedule-booking"][data-booking-id="${bookingId}"]`)
+  /** Report a player no-show (UPCOMING sessions). */
+  reportNoShow = (booking: Locator) => this.within(booking, 'coach-booking-no-show-btn')
+  confirmNoShow = () => this.tid('no-show-player-confirm-btn')
+  cancelSession = (booking: Locator) => this.within(booking, 'coach-booking-cancel-btn')
+  cancelDialog = () => this.tid('cancel-coach-dialog')
+  confirmCancel = () => this.tid('cancel-coach-confirm-btn')
+
+  /** `label` is the reason's visible text (resolve it through `t()`). */
+  async chooseCancelReason(label: string): Promise<void> {
+    await this.tid('cancel-coach-reason').click()
+    await this.page.getByRole('option', { name: label, exact: true }).click()
+  }
+}
+
+/** The coach's reliability strikes, each with its reason, an acknowledge button and an appeal. */
+export class ReliabilityScreen extends Screen {
+  readonly route = R.coachReliability
+  readonly readyTestId = 'reliability-page'
+  strikes = () => this.tid('reliability-strike')
+  strike = (bookingId: string) =>
+    this.page.locator(`[data-testid="reliability-strike"][data-booking-id="${bookingId}"]`)
+  reason = (strike: Locator) => this.within(strike, 'reliability-strike-reason')
+  noStrikes = () => this.tid('reliability-no-strikes')
 }
 
 export class ParentDashboardScreen extends Screen {

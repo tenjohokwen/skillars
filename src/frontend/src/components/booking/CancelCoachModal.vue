@@ -1,6 +1,10 @@
 <template>
   <q-dialog v-model="open" persistent>
-    <q-card class="glass-card cancel-coach-modal q-pa-md" style="min-width: 340px">
+    <q-card
+      class="glass-card cancel-coach-modal q-pa-md"
+      style="min-width: 340px"
+      data-testid="cancel-coach-dialog"
+    >
       <q-card-section>
         <div class="text-h6">{{ t('cancellation.title') }}</div>
       </q-card-section>
@@ -14,6 +18,7 @@
           map-options
           outlined
           dense
+          data-testid="cancel-coach-reason"
         />
       </q-card-section>
 
@@ -24,6 +29,7 @@
           :label="t('cancellation.confirmCancel')"
           :loading="loading"
           :disable="!selectedReason"
+          data-testid="cancel-coach-confirm-btn"
           @click="confirm"
         />
       </q-card-actions>

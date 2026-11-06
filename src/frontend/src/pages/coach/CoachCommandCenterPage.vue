@@ -191,6 +191,8 @@
               v-for="booking in bookingsByDay[dayIndex - 1] ?? []"
               :key="booking.bookingId"
               class="week-grid__booking-block"
+              data-testid="coach-schedule-booking"
+              :data-booking-id="booking.bookingId"
             >
               <BookingStateChip :status="booking.status" :booking-id="booking.bookingId" />
               <div class="text-caption">{{ booking.playerName }}</div>
@@ -203,6 +205,7 @@
                 v-if="booking.status === 'UPCOMING'"
                 unelevated
                 class="start-session-btn q-mt-xs"
+                data-testid="coach-booking-start-btn"
                 :label="t('booking.schedule.startSession')"
                 :loading="startingSessionId === booking.bookingId"
                 :disable="startingSessionId !== null || quickCompletingId !== null"
@@ -215,6 +218,7 @@
                 size="sm"
                 :label="t('booking.completion.quickComplete')"
                 class="q-mt-xs"
+                data-testid="coach-booking-quick-complete-btn"
                 :loading="quickCompletingId === booking.bookingId"
                 :disable="startingSessionId !== null || quickCompletingId !== null"
                 @click="handleQuickComplete(booking)"
@@ -279,6 +283,7 @@
                 color="negative"
                 :label="t('booking.schedule.reportNoShow')"
                 class="q-mt-xs"
+                data-testid="coach-booking-no-show-btn"
                 :loading="noShowActionId === booking.bookingId"
                 @click="openNoShowPlayerDialog(booking)"
               />
@@ -290,6 +295,7 @@
                 color="negative"
                 :label="t('booking.schedule.cancelSession')"
                 class="q-mt-xs"
+                data-testid="coach-booking-cancel-btn"
                 :loading="coachCancelActionId === booking.bookingId"
                 @click="openCancelCoachDialog(booking)"
               />
@@ -443,7 +449,7 @@
 
     <!-- Report No-Show confirm dialog -->
     <q-dialog v-model="noShowPlayerDialogOpen">
-      <q-card style="min-width: 320px">
+      <q-card style="min-width: 320px" data-testid="no-show-player-dialog">
         <q-card-section>
           <div class="text-h6">{{ t('cancellation.noShowPlayerConfirmTitle') }}</div>
         </q-card-section>
@@ -456,6 +462,7 @@
             unelevated
             color="negative"
             :label="t('common.confirm')"
+            data-testid="no-show-player-confirm-btn"
             @click="confirmNoShowPlayer"
           />
         </q-card-actions>

@@ -68,4 +68,33 @@ export class ParentBookingsScreen extends ListScreen {
   cancelDialog = () => this.tid('cancel-booking-dialog')
   cancelDialogBody = () => this.tid('cancel-booking-body')
   confirmCancel = () => this.tid('cancel-booking-confirm')
+
+  // A coach no-show claim: from start + grace until the report window closes, on an unstarted session.
+  /** "You can report a coach no-show from {time}", between the start and the grace's end. */
+  noShowPending = (booking: Locator) => this.within(booking, 'no-show-coach-pending')
+  noShowClaim = (booking: Locator) => this.within(booking, 'no-show-coach-btn')
+  /** After the window: refunded automatically if nobody records the session. */
+  noShowClosed = (booking: Locator) => this.within(booking, 'no-show-window-closed')
+  noShowDialog = () => this.tid('no-show-coach-dialog')
+  confirmNoShow = () => this.tid('no-show-coach-confirm-btn')
+
+  // Disputes (DisputeAction) and the appeal of a closed one (AppealAction).
+  raiseDispute = (booking: Locator) => this.within(booking, 'dispute-raise-btn')
+  /** Shown instead of Raise once this tab raised one (the link lives in sessionStorage). */
+  viewDispute = (booking: Locator) => this.within(booking, 'dispute-view-btn')
+  disputeDialog = () => this.tid('dispute-raise-dialog')
+  disputeReasonSelect = () => this.tid('dispute-reason-select')
+  disputeDetails = () => this.tid('dispute-details-input')
+  submitDispute = () => this.tid('dispute-submit-btn')
+  disputeStatus = () => this.tid('dispute-status-content')
+  appealOpen = () => this.tid('appeal-open-btn')
+  appealReason = () => this.tid('appeal-reason-input')
+  appealSubmit = () => this.tid('appeal-submit-btn')
+  appealChip = () => this.tid('appeal-status-chip')
+
+  /** `label` is the reason's visible text (resolve it through `t()`). */
+  async chooseDisputeReason(label: string): Promise<void> {
+    await this.disputeReasonSelect().click()
+    await this.page.getByRole('option', { name: label, exact: true }).click()
+  }
 }

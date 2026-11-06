@@ -194,11 +194,11 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'same packErrorKey-chosen pack error message as ProfileBuilderStep3',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:891',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:898',
     reason: 'notify message keyed by a successMessage key chosen earlier in the handler',
   },
   {
-    at: 'src/pages/coach/CoachCommandCenterPage.vue:902',
+    at: 'src/pages/coach/CoachCommandCenterPage.vue:909',
     reason: 'notify message keyed by a messageKey chosen earlier in the handler',
   },
   {
