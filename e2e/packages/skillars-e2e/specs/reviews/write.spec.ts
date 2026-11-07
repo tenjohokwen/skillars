@@ -41,7 +41,39 @@ async function write(profile: CoachPublicProfileScreen, stars: number, body: str
   await profile.writeReview().click()
   await profile.dialogStars(stars).click()
   await profile.dialogBody().fill(body)
+  await submit(profile)
+}
+
+/**
+ * Opens the edit dialog and waits until it holds the current review (it opens with a transition,
+ * and a click during it can be lost).
+ */
+async function openEdit(profile: CoachPublicProfileScreen, current: string) {
+  await profile.editReview().click()
+  await expect(profile.dialogBody()).toHaveValue(current)
+  await expect(profile.dialogSubmit()).toBeEnabled()
+}
+
+/** Clicks Save and waits for the request to go out (once more if the first click was lost). */
+async function save(profile: CoachPublicProfileScreen, page: Page) {
+  const sent = () =>
+    page.waitForRequest((r) => r.method() === 'PATCH' && r.url().includes('/api/reviews/'), {
+      timeout: 5_000,
+    })
+  const first = sent()
   await profile.dialogSubmit().click()
+  if (!(await first.then(() => true).catch(() => false))) {
+    const second = sent()
+    await profile.dialogSubmit().click()
+    await second
+  }
+}
+
+/** Moderation runs inside the submit request, so the dialog can take a while to close. */
+const MODERATED = { timeout: 30_000 }
+async function submit(profile: CoachPublicProfileScreen) {
+  await profile.dialogSubmit().click()
+  await expect(profile.dialogSubmit()).toBeHidden(MODERATED)
 }
 
 test.describe('M · Writing a review', () => {
@@ -118,18 +150,20 @@ test.describe('M · Writing a review', () => {
       tags: ['@regression', '@parent', '@coach', '@reviews'],
     }),
     async ({ actor, suite, provision }) => {
+      test.slow() // three submits, each moderated in the request, and a second session
       const { coach, parent, bookingId } = await reviewer(provision)
       const self = await actor(asRole(parent))
       const profile = await openProfile(self.page, suite, coach)
-      await write(profile, 3, words('Good start'))
+      const first = words('Good start')
+      await write(profile, 3, first)
       await expect(profile.editReview()).toBeVisible()
       const review = (await provision.reviewOf(coach, parent))!
 
       // Straight away: within the cooldown.
-      await profile.editReview().click()
+      await openEdit(profile, first)
       await profile.dialogBody().fill(words('Second thoughts'))
-      await profile.dialogSubmit().click()
-      await expect(profile.dialogError()).toHaveText(t('reviews.updateTooSoon'))
+      await save(profile, self.page)
+      await expect(profile.dialogError()).toHaveText(t('reviews.updateTooSoon'), MODERATED)
       await self.page.keyboard.press('Escape')
 
       // Past the cooldown, but no session since the review: still refused.
@@ -140,20 +174,21 @@ test.describe('M · Writing a review', () => {
         statusChangedDaysAgo: 40,
       })
       await self.page.reload()
-      await profile.editReview().click()
+      await openEdit(profile, first)
       await profile.dialogBody().fill(words('Second thoughts'))
-      await profile.dialogSubmit().click()
-      await expect(profile.dialogError()).toHaveText(t('reviews.noQualifyingSession'))
+      await save(profile, self.page)
+      await expect(profile.dialogError()).toHaveText(t('reviews.noQualifyingSession'), MODERATED)
       await self.page.keyboard.press('Escape')
 
       // A new session since: the edit goes through, replaces the text and is moderated again.
       await provision.reviewableSession(parent, coach)
       await self.page.reload()
       const edited = words(`Even better now. ${UNCERTAIN}`)
-      await profile.editReview().click()
+      await openEdit(profile, first)
       await profile.dialogStars(5).click()
       await profile.dialogBody().fill(edited)
-      await profile.dialogSubmit().click()
+      await save(profile, self.page)
+      await expect(profile.dialogSubmit()).toBeHidden(MODERATED)
       await expect(profile.myReviewBody()).toHaveText(edited)
       await expect(profile.myReviewPending()).toBeVisible()
       const after = (await provision.reviewOf(coach, parent))!
@@ -184,7 +219,7 @@ test.describe('M · Writing a review', () => {
       if (held.length > 1000) {
         // Typed past the field's limit: the server refuses it.
         await profile.dialogSubmit().click()
-        await expect(profile.dialogError()).toHaveText(t('reviews.bodyTooLong'))
+        await expect(profile.dialogError()).toHaveText(t('reviews.bodyTooLong'), MODERATED)
         expect(await provision.reviewOf(coach, parent)).toBeNull()
       } else {
         expect(held).toHaveLength(1000)
@@ -192,7 +227,7 @@ test.describe('M · Writing a review', () => {
 
       // Exactly 1000 is saved whole.
       await profile.dialogBody().fill('b'.repeat(1000))
-      await profile.dialogSubmit().click()
+      await submit(profile)
       await expect(profile.myReviewBody()).toBeVisible()
       expect((await provision.reviewOf(coach, parent))?.body).toHaveLength(1000)
     },
