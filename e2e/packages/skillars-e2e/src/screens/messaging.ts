@@ -59,6 +59,9 @@ export class CoachPlayersScreen extends Screen {
   readonly route = R.coachPlayers
   readonly readyTestId = 'my-players-page'
   message = (playerId: string) => this.tid(`roster-message-${playerId}`)
+  players = () => this.tid('roster-player')
+  player = (playerId: string) =>
+    this.page.locator(`[data-testid="roster-player"][data-player-id="${playerId}"]`)
 }
 
 /** /coach/players/:playerId: one player's page, with "Send message". */
@@ -66,6 +69,17 @@ export class CoachPlayerDetailScreen extends Screen {
   readonly route = R.coachPlayerDetail
   readonly readyTestId = 'coach-message-player'
   message = () => this.tid('coach-message-player')
+  error = () => this.tid('coach-player-error')
+  radarCard = () => this.tid('coach-radar-card')
+  addAssessment = () => this.tid('coach-add-assessment')
+  /** Shown to a Scout coach instead of the radar history (FeatureGateOverlay). */
+  radarHistoryGate = () => this.tid('coach-radar-history-gate')
+  radarHistory = () => this.tid('coach-radar-history-card')
+  gateUpgrade = (card: Locator) => this.within(card, 'feature-gate-upgrade')
+  reportsCard = () => this.tid('coach-reports-card')
+  homeworkCard = () => this.tid('coach-homework-card')
+  homeworkRows = () => this.tid('coach-homework-row')
+  homeworkCompleted = (row: Locator) => this.within(row, 'coach-homework-completed')
 }
 
 /** /player/age-verification: where the age gate sends an unverified adult player (C-17). */

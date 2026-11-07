@@ -45,6 +45,8 @@
           v-for="player in openPlayers"
           :key="player.playerId"
           class="player-item clickable q-mb-md q-pb-md row items-center justify-between"
+          data-testid="roster-player"
+          :data-player-id="player.playerId"
           role="button"
           tabindex="0"
           @click="goToPlayerDetail(player)"
