@@ -1,6 +1,6 @@
 # Story skillars-deferred-174: Payment follow-ups (card ownership, card-column writes, stuck pack attempts)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-06 (/bmad-create-story) from the deferred-work.md payment residuals left by
      skillars-deferred-169 and skillars-deferred-172: RS09b, RS09c, RS09d, RS06b, RS06e, RS05c, RS-poison, RS07b,
@@ -330,7 +330,7 @@ Written with the recommended option of every decision. The [A] tags and the AC7-
 - [x] T5 [A] (AC6) Needs-operator marking, threshold key, job-query skip, regex. Tests: `SessionPackPaymentServiceTest`
       (each branch before and after the threshold, including the missing tier-gone test), `PackPurchaseAttemptIT`.
 - [x] T10 [A] (AC13) Docs; `node docs/dev-docs/tools/build-search-index.mjs`, then `check-docs.mjs`.
-- [ ] T11 [A] (AC14) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
+- [x] T11 [A] (AC14) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
 
 ## Dev Notes
 
@@ -486,3 +486,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-07: implemented T1-T5, T10 and the ledger/sprint-status part of T11 (dev-story). `/pr-review` and the PR pending.
 - 2026-11-07: addressed `/pr-review` round 1 (F1, V1 fixed; F2, V2, V3 filed as RS06j, RS09h, RS06h; RS06i added).
 - 2026-11-07: addressed `/pr-review` round 2 (F1 fixed, F2 docs corrected, V1 added to RS09f).
+- 2026-11-07: `/pr-review` round 3 (5b0baa59) clean; status review; PR opened.
