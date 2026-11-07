@@ -96,3 +96,25 @@ export async function stubBunnyTus(
 
   return { uploads, release: () => releaseHeld() }
 }
+
+/**
+ * Bunny's CDN for playback (APP_VIDEO_BUNNY_CDN_HOSTNAME in the stack). Every signed URL is an HLS
+ * playlist (`…/playlist.m3u8?token=…`), and Chrome parses it as HLS, so a canned video file would
+ * fail to decode. Requests are therefore held, unanswered: the player's <video> stays loading, which
+ * is enough to assert that playback went through the signed URL. While `failNext()` returns true, a
+ * request is answered 404 instead (a media load error). Returns the URLs the page asked for.
+ */
+export async function stubBunnyCdn(
+  page: Page,
+  failNext: () => boolean = () => false,
+): Promise<string[]> {
+  const requested: string[] = []
+  await page.route('https://bunny-cdn.e2e.test/**', async (route) => {
+    requested.push(route.request().url())
+    if (failNext()) {
+      await route.fulfill({ status: 404, headers: { 'Access-Control-Allow-Origin': '*' } })
+    }
+    // Otherwise left pending: the page is closed with the test.
+  })
+  return requested
+}

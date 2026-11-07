@@ -183,9 +183,9 @@ describe('VideoManagementPage.vue — role-aware upload (A17)', () => {
 
     const { wrapper } = await mountPage({ role: 'COACH' })
     expect(wrapper.find('[data-testid="player-upload-btn"]').exists()).toBe(false)
-    expect(wrapper.find('[data-testid="coach-upload-HOMEWORK"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="coach-upload-homework"]').exists()).toBe(false)
 
-    await wrapper.find('[data-testid="coach-upload-DRILL_DEMO"]').trigger('click')
+    await wrapper.find('[data-testid="coach-upload-drill-demo"]').trigger('click')
     await selectFile(wrapper, fakeFile())
 
     expect(videoApi.initiateUpload).toHaveBeenCalledWith(
@@ -303,7 +303,7 @@ describe('VideoManagementPage.vue — minors never upload / coach video subject 
     videoApi.createTusUpload.mockReturnValue({ start: vi.fn() })
 
     const { wrapper } = await mountPage({ role: 'COACH' })
-    await wrapper.find('[data-testid="coach-upload-COACH_REVIEW"]').trigger('click')
+    await wrapper.find('[data-testid="coach-upload-coach-review"]').trigger('click')
     await flushPromises()
 
     expect(videoApi.listSubjectBookings).toHaveBeenCalled()
@@ -328,7 +328,7 @@ describe('VideoManagementPage.vue — minors never upload / coach video subject 
     videoApi.listSubjectBookings.mockResolvedValue([])
 
     const { wrapper } = await mountPage({ role: 'COACH' })
-    await wrapper.find('[data-testid="coach-upload-COACH_REVIEW"]').trigger('click')
+    await wrapper.find('[data-testid="coach-upload-coach-review"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="no-subject-bookings"]').exists()).toBe(true)
