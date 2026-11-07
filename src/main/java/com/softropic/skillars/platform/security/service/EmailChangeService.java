@@ -14,6 +14,7 @@ import com.softropic.skillars.platform.notification.service.NotificationOutboxSu
 import com.softropic.skillars.platform.security.contract.LoginIdType;
 import com.softropic.skillars.platform.security.contract.SecurityProperties;
 import com.softropic.skillars.platform.security.contract.event.AccountChangeEvent;
+import com.softropic.skillars.platform.security.contract.event.AccountEmailChangedEvent;
 import com.softropic.skillars.platform.security.contract.event.AccountChangeUserInfo;
 import com.softropic.skillars.platform.security.contract.exception.EmailChangeLinkInvalidException;
 import com.softropic.skillars.platform.security.contract.exception.ProfileActionException;
@@ -240,6 +241,7 @@ public class EmailChangeService {
             "requestId", request.getId());
         publisher.publishEvent(new AccountChangeEvent(AccountChangeEvent.Action.EMAIL_CHANGED,
             request.getOldEmail(), request.getNewEmail(), userInfo(account, request.getOldEmail())));
+        publisher.publishEvent(new AccountEmailChangedEvent(account.getId()));
         log.info("[EMAIL_CHANGE_CONFIRMED] sign-in email changed", kv("requestId", request.getId()),
             kv("userId", account.getId()));
     }
@@ -292,6 +294,7 @@ public class EmailChangeService {
             "requestId", request.getId());
         publisher.publishEvent(new AccountChangeEvent(AccountChangeEvent.Action.EMAIL_CHANGE_UNDONE,
             request.getNewEmail(), request.getOldEmail(), userInfo(account, request.getOldEmail())));
+        publisher.publishEvent(new AccountEmailChangedEvent(account.getId()));
         log.info("[EMAIL_CHANGE_UNDONE] sign-in email restored", kv("requestId", request.getId()),
             kv("userId", account.getId()), kv("passwordReset", resetPassword));
         return new UndoOutcome(resetPassword);

@@ -1,6 +1,6 @@
 # Story skillars-deferred-175: Subscription follow-ups (stale incomplete webhooks, parked-event poison, ungranted upgrades, Stripe email)
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- CREATED 2026-11-06 by splitting skillars-deferred-174 (owner decision D0 = 1: two stories). This is 174's
      Part B, moved verbatim: RS05c, RS-poison, RS07b, RS03c. Decision ids D5-D8 keep their 174 numbers so the
@@ -210,16 +210,16 @@ Written with the recommended option of every decision.
 ## Tasks / Subtasks
 
 - [x] T0 Owner decisions D5-D8 recorded in this file (option 1 each).
-- [ ] T1 (AC1) Status-regression guard. Tests: `SubscriptionEntitlementIntegrityTest` (`drain_*` and live cases),
+- [x] T1 (AC1) Status-regression guard. Tests: `SubscriptionEntitlementIntegrityTest` (`drain_*` and live cases),
       a new IT beside `SubscriptionLifecycleIT` that extends `BasePaymentIT` and adds no mock (its context key must
       match, or the pinned count in `IntegrationTestConventionTest` rises).
-- [ ] T2 (AC2) Gauge branch, alert, runbook, provisioning-checklist line, purge change, javadoc correction. Tests:
+- [x] T2 (AC2) Gauge branch, alert, runbook, provisioning-checklist line, purge change, javadoc correction. Tests:
       `OperationalBacklogMetricsIT`, purge test.
-- [ ] T3 (AC3) Record a failed upgrade persist; recorder duplicate skip; runbook first step. Tests:
+- [x] T3 (AC3) Record a failed upgrade persist; recorder duplicate skip; runbook first step. Tests:
       `SubscriptionEntitlementIntegrityTest`, recorder test.
-- [ ] T4 (AC4) Event, listener, outbox support and handler. Tests: `EmailChangeServiceIT` (confirm, undo,
+- [x] T4 (AC4) Event, listener, outbox support and handler. Tests: `EmailChangeServiceIT` (confirm, undo,
       rollback), listener unit test, handler unit test beside `StripeCustomerErasureOutboxHandlerTest`.
-- [ ] T5 (AC5) Docs; `node docs/dev-docs/tools/build-search-index.mjs`, then `check-docs.mjs`.
+- [x] T5 (AC5) Docs; `node docs/dev-docs/tools/build-search-index.mjs`, then `check-docs.mjs`.
 - [ ] T6 (AC6) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
 
 ## Dev Notes
@@ -254,13 +254,78 @@ Written with the recommended option of every decision.
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5), via /bmad-dev-story, 2026-11-07.
+
 ### Debug Log References
+
+- `OperationalBacklogMetricsIT` / `PackPurchaseAttemptIT` first failed on `fk_pps_player` (a `player_subscriptions` FK to
+  `player_profiles` added after the V138 baseline): the tests now seed a parent user and a player profile.
+- `EmailChangeServiceIT`: the test profile's `StripeClient` calls the real Stripe API with the dummy key `test_key`
+  (`payment.stripe.base-url` is not applied to the SDK), so a WireMock assertion saw nothing (`AuthenticationException`).
+  The test now declares `@MockitoBean StripeClient stripeClient` exactly as `SubscriptionLifecycleIT` does, which shares
+  that cached context; `IntegrationTestConventionTest` (pinned count) stays green.
 
 ### Completion Notes List
 
+- AC1 (D5 option 1): `SubscriptionService.isStatusRegression` in `handleSubscriptionUpdated` (coach and player): an
+  `incomplete` update on a row that is not INCOMPLETE is ignored whole (status, period end, cancel flag) and logged
+  `[STRIPE_WEBHOOK_STATUS_REGRESSION_IGNORED]`; on the parked path the row is still claimed. Tests: 4 unit tests in
+  `SubscriptionEntitlementIntegrityTest`; 2 ITs. Deviation: the ITs were added to `SubscriptionLifecycleIT` itself rather
+  than a new class beside it (same context key by construction, and its subscribe fixture is what the test needs).
+  Red run without the guard not performed.
+- AC2 (D6 option 1): `parked_events_linked` branch in `OperationalBacklogMetrics` (`HAVING COUNT(*) > 0`; class javadoc
+  corrected for the unindexed semi-join); alert `ParkedSubscriptionEventsStuck` (> 1 h, high) with runbook entry and
+  provisioning-checklist entry; `purgeOlderThan` deletes only never-linked rows and `purgeStaleParkedEvents` logs one
+  `[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED] count=N` per run that kept any (`countLinkedOlderThan`). Tests:
+  `OperationalBacklogMetricsIT` (linked counted, unlinked not, absent when empty); purge IT in `PackPurchaseAttemptIT`.
+- AC3 (D7 option 1): `change*Tier` catches a `RuntimeException` from `persist*TierUpgrade`, calls `recordUngrantedUpgrade`
+  and rethrows; `PaymentRecoveryRecorder.recordUngrantedUpgradeTx` skips the insert while an open row exists for the same
+  subscription and target tier. Runbook (MoneyIntegrityEvent) starts with "check whether a retry already granted it".
+  Tests: 4 unit tests (coach/player × row gone/DB error); recorder IT (duplicate skipped, a new row after resolve kept).
+- AC4 (D8 option 1): `AccountEmailChangedEvent(userId)` published by `confirm` and `undo`;
+  `StripeCustomerEmailSyncOutboxSupport` (`@EventListener`, `MANDATORY`) enqueues `STRIPE_CUSTOMER_EMAIL_SYNC {userId}` when
+  a `stripe_customers` row exists; `StripeCustomerEmailSyncOutboxHandler` re-reads the current email, skips gone, locked
+  or erased users, a missing customer row and a customer Stripe no longer has, and calls the new
+  `StripeClient.updateCustomerEmail`. Tests: `EmailChangeServiceIT` (confirm then undo, rollback, no customer), listener
+  unit test (2), handler unit test (7).
+- AC5: payment dev-docs (four paragraphs, job row); search index rebuilt; `check-docs` OK.
+- AC6: RS05c, RS-poison, RS07b, RS03c deleted from `deferred-work.md`; residual RS07c filed (retried-upgrade proration
+  unconfirmed; the open-row check is not a constraint).
+- Not run: the eval case `evals/review/cases/337-subscription-entitlement-integrity.yaml` (the story asks for a re-run
+  if T1 changes the webhook guard; skipped for cost, owner's call).
+- Regression (targeted; CI is the full gate): 1597 unit tests across payment, security service, db and config guards;
+  ITs `SubscriptionLifecycleIT` (28), `OperationalBacklogMetricsIT` (6), `PackPurchaseAttemptIT` (16),
+  `EmailChangeServiceIT` (23), `SubscriptionServiceStripeReconciliationIT`, `PaymentWebhookIdempotencyIT`,
+  `StripeConnectWebhookIT`, `CoachProfileSelfEditIT`, all green.
+
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/PaymentRecoveryRecorder.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerEmailSyncOutboxSupport.java` (new)
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerEmailSyncOutboxHandler.java` (new)
+- `src/main/java/com/softropic/skillars/platform/payment/repo/StripePendingSubscriptionEventRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SubscriptionUpgradeReconciliationRepository.java`
+- `src/main/java/com/softropic/skillars/platform/security/contract/event/AccountEmailChangedEvent.java` (new)
+- `src/main/java/com/softropic/skillars/platform/security/service/EmailChangeService.java`
+- `src/main/java/com/softropic/skillars/infrastructure/persistence/OperationalBacklogMetrics.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionEntitlementIntegrityTest.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/SubscriptionLifecycleIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/PackPurchaseAttemptIT.java`
+- `src/test/java/com/softropic/skillars/platform/payment/service/StripeCustomerEmailSyncOutboxHandlerTest.java` (new)
+- `src/test/java/com/softropic/skillars/platform/payment/service/StripeCustomerEmailSyncOutboxSupportTest.java` (new)
+- `src/test/java/com/softropic/skillars/platform/security/service/EmailChangeServiceIT.java`
+- `src/test/java/com/softropic/skillars/infrastructure/persistence/OperationalBacklogMetricsIT.java`
+- `deploy/lgtm/grafana-alerts.yml`
+- `docs/deployment/monitoring.md`
+- `docs/deployment/provisioning-checklist.md`
+- `docs/dev-docs/payment/index.html`, `docs/dev-docs/assets/search-index.js`
+- `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this file;
+  `skillars-deferred-174-payment-follow-ups.md` (status done)
 
 ### Change Log
 
 - 2026-11-06: created (ready-for-dev) by splitting skillars-deferred-174 (D0 = 1); decisions D5-D8 pending owner.
 - 2026-11-06: owner decided D5-D8 (option 1 each).
+- 2026-11-07: implemented T1-T5 and the ledger/sprint-status part of T6 (dev-story). `/pr-review` and the PR pending.

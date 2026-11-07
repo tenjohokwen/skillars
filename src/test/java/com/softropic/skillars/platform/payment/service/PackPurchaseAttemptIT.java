@@ -232,6 +232,37 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         assertThat(pendingEvents.claim(id)).isEqualTo(0);
     }
 
+    // ── skillars-deferred-175 AC2 (RS-poison): the retention purge keeps a linked row ──
+
+    @Test
+    void thePurge_keepsALinkedRowPastRetention_andDeletesANeverLinkedOne() {
+        recorder.parkSubscriptionEvent(parked("evt_it169_5", "sub_it169_linked", 100L));
+        recorder.parkSubscriptionEvent(parked("evt_it169_6", "sub_it169_orphan", 100L));
+        insertTestParent(175002L, "it175.parent@test.com");
+        insertTestPlayer(175002L, 175002L);
+        transactionTemplate.execute(s -> {
+            jdbcTemplate.update("INSERT INTO payment.player_subscriptions (player_id, stripe_subscription_id) VALUES (175002, 'sub_it169_linked')");
+            jdbcTemplate.update("UPDATE payment.stripe_pending_subscription_events SET created_at = now() - interval '40 days' "
+                + "WHERE stripe_subscription_id LIKE 'sub_it169_%'");
+            return null;
+        });
+        try {
+            java.time.Instant cutoff = java.time.Instant.now().minus(30, java.time.temporal.ChronoUnit.DAYS);
+
+            assertThat(pendingEvents.purgeOlderThan(cutoff)).isEqualTo(1);
+            assertThat(pendingEvents.countLinkedOlderThan(cutoff)).isEqualTo(1);
+            assertThat(pendingEvents.findBySubscriptionOrdered("sub_it169_linked")).hasSize(1);
+            assertThat(pendingEvents.findBySubscriptionOrdered("sub_it169_orphan")).isEmpty();
+        } finally {
+            transactionTemplate.execute(s -> {
+                jdbcTemplate.update("DELETE FROM payment.player_subscriptions WHERE player_id = 175002");
+                jdbcTemplate.update("DELETE FROM main.player_profiles WHERE id = 175002");
+                jdbcTemplate.update("DELETE FROM main.\"user\" WHERE id = 175002");
+                return null;
+            });
+        }
+    }
+
     // ── RS07: the ungranted-upgrade record cannot be rolled back with the failed request ──
 
     @Test
@@ -245,5 +276,25 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         Integer count = jdbcTemplate.queryForObject(
             "SELECT count(*) FROM payment.subscription_upgrade_reconciliations WHERE stripe_subscription_id = 'sub_it169_d'", Integer.class);
         assertThat(count).isEqualTo(1);
+    }
+
+    // skillars-deferred-175 AC3: a retried failure adds no row while one is open; a resolved one does not block a new record
+    @Test
+    void anUngrantedUpgrade_recordedTwiceWhileOpen_isOneRow_andANewOneAfterResolveIsKept() {
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_2");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "INSTRUCTOR", "in_3");
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(2);
+
+        transactionTemplate.execute(s -> jdbcTemplate.update(
+            "UPDATE payment.subscription_upgrade_reconciliations SET resolved_at = now() WHERE stripe_subscription_id = 'sub_it169_e'"));
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_4");
+
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(3);
+    }
+
+    private int upgradeRows(String subId) {
+        return jdbcTemplate.queryForObject(
+            "SELECT count(*) FROM payment.subscription_upgrade_reconciliations WHERE stripe_subscription_id = ?", Integer.class, subId);
     }
 }

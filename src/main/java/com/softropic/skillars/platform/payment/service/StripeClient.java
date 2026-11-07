@@ -244,6 +244,11 @@ public class StripeClient {
             .build());
     }
 
+    /** skillars-deferred-175 AC4 (RS03c): the receipt address follows the account's email change. */
+    public void updateCustomerEmail(String stripeCustomerId, String email) throws StripeException {
+        Customer.retrieve(stripeCustomerId).update(com.stripe.param.CustomerUpdateParams.builder().setEmail(email).build());
+    }
+
     public PaymentMethod retrievePaymentMethod(String id) throws StripeException {
         return PaymentMethod.retrieve(id);
     }

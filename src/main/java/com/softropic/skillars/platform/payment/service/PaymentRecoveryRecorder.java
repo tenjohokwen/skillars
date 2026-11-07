@@ -72,9 +72,18 @@ public class PaymentRecoveryRecorder {
         }
     }
 
+    /**
+     * skillars-deferred-175 AC3: a client retry of a failed upgrade, or a second failure, adds no row while one for the same
+     * subscription and target tier is still open. A check, not a constraint: two failures in the same instant may still add two.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordUngrantedUpgradeTx(String kind, String subscriberRef, String stripeSubscriptionId, String targetTier,
                                          String latestInvoiceId) {
+        if (upgradeReconciliationRepository.existsByStripeSubscriptionIdAndTargetTierAndResolvedAtIsNull(stripeSubscriptionId, targetTier)) {
+            log.info("Ungranted upgrade already recorded and open, no new row: stripeSubId={} targetTier={} invoiceId={}",
+                stripeSubscriptionId, targetTier, latestInvoiceId);
+            return;
+        }
         upgradeReconciliationRepository.save(new SubscriptionUpgradeReconciliation(
             kind, subscriberRef, stripeSubscriptionId, targetTier, latestInvoiceId));
     }

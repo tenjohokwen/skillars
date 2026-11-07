@@ -408,6 +408,78 @@ class EmailChangeServiceIT extends AbstractIntegrationTest {
         assertThat(envelopeTo(EmailTemplate.EMAIL_CHANGED_NOTICE, NEW).data()).containsEntry("revertedAway", true);
     }
 
+    // ── skillars-deferred-175 AC4 (RS03c): the Stripe customer's email follows the change ─────────────────
+    // The test profile drains the outbox synchronously after commit, so the handler has run when the call returns. The
+    // StripeClient mock is declared exactly as SubscriptionLifecycleIT's, so this class shares that cached context.
+
+    @org.springframework.test.context.bean.override.mockito.MockitoBean
+    com.softropic.skillars.platform.payment.service.StripeClient stripeClient;
+
+    private static final String CUSTOMER = "cus_it175_me";
+
+    private void withStripeCustomer(Runnable test) {
+        commit("INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id) VALUES (?, ?)", ME_ID, CUSTOMER);
+        try {
+            test.run();
+        } finally {
+            commit("DELETE FROM payment.stripe_customers WHERE parent_id = ?", ME_ID);
+        }
+    }
+
+    @Test
+    void confirmThenUndo_setsTheStripeCustomerEmail_toTheNewThenTheRestoredAddress() {
+        withStripeCustomer(() -> {
+            String undo = confirmChangeTo(NEW);
+            verifyEmailSync(1, NEW);
+
+            emailChangeService.undo(undo);
+
+            verifyEmailSync(1, ME);
+        });
+    }
+
+    @Test
+    void aConfirmThatRollsBack_neverReachesStripe() {
+        withStripeCustomer(() -> {
+            emailChangeService.request(ME, NEW, PASSWORD);
+            String token = confirmToken();
+
+            transactionTemplate.executeWithoutResult(status -> {
+                emailChangeService.confirm(token);
+                status.setRollbackOnly();
+            });
+
+            assertThat(user(ME_ID).getEmail()).isEqualTo(ME);
+            verifyNoEmailSync();
+            assertThat(jdbcTemplate.queryForObject("SELECT count(*) FROM main.outbox_messages WHERE aggregate_type = ?",
+                Integer.class, "STRIPE_CUSTOMER_EMAIL_SYNC")).isZero();
+        });
+    }
+
+    @Test
+    void aUserWithoutAStripeCustomer_enqueuesNoSync() {
+        confirmChangeTo(NEW);
+
+        verifyNoEmailSync();
+    }
+
+    private void verifyEmailSync(int times, String email) {
+        try {
+            org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.times(times)).updateCustomerEmail(CUSTOMER, email);
+        } catch (com.stripe.exception.StripeException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    private void verifyNoEmailSync() {
+        try {
+            org.mockito.Mockito.verify(stripeClient, org.mockito.Mockito.never())
+                .updateCustomerEmail(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString());
+        } catch (com.stripe.exception.StripeException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
     @Test
     void anExpiredUndoLink_isRefused() {
         String undo = confirmChangeTo(NEW);

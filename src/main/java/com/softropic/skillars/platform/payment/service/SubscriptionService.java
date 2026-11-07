@@ -318,7 +318,12 @@ public class SubscriptionService {
             }
             Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "COACH_UPGRADE", coachId);
-            self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
+            try {
+                self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
+            } catch (RuntimeException e) {
+                recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, targetTier, updated);
+                throw e;
+            }
         } else if (newRank == currentRank) {
             if (pendingDowngrade) {
                 restoreCoachPriceAndVoidDowngrade(coachId, stripeSubId, currentTier);
@@ -356,7 +361,9 @@ public class SubscriptionService {
      * error-level tag line, the alert source that works even if the insert fails, and a metric; (2) a best-effort durable row in a
      * REQUIRES_NEW on the payment routed pool (the caller holds the subscription row lock; the table is FK-free so it cannot
      * deadlock on it). Nothing here may fail the request: a thrown insert would roll back this transaction after Stripe has billed,
-     * and a client retry is a NEW upgrade key - a second proration.
+     * and a client retry is a NEW upgrade key - a second proration. skillars-deferred-175 AC3 (RS07b): {@code change*Tier} also calls
+     * this when {@code persist*TierUpgrade} throws after Stripe upgraded (row gone, DB error, lock timeout), then rethrows; the
+     * recorder skips a second open row for the same subscription and target tier, so client retries do not stack rows.
      */
     private void recordUngrantedUpgrade(String kind, String subscriberRef, String stripeSubId, String targetTier,
                                         Subscription updated) {
@@ -615,7 +622,12 @@ public class SubscriptionService {
             }
             Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "PLAYER_UPGRADE", playerId);
-            self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
+            try {
+                self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
+            } catch (RuntimeException e) {
+                recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, targetTier, updated);
+                throw e;
+            }
         } else if (newRank == currentRank) {
             if (pendingDowngrade) {
                 restorePlayerPriceAndVoidDowngrade(playerId, stripeSubId, currentTier, interval);
@@ -1426,13 +1438,21 @@ public class SubscriptionService {
     /**
      * Job duty (d): purge parked events past the retention window. Never-linked rows exist by design (a duplicate subscription that
      * {@code cancelDuplicateSubscription} cancelled was never linked), so a purge is info-level with a metric, not a warning.
+     * skillars-deferred-175 AC2 (RS-poison): a linked row is kept (its apply keeps failing; the ParkedSubscriptionEventsStuck alert
+     * watches it), with one warn line per run that kept any rather than a per-row error every cycle.
      */
     public int purgeStaleParkedEvents() {
         long days = configService.getBoundedLong(ConfigBounds.PENDING_SUBSCRIPTION_EVENT_RETENTION_DAYS);
-        int purged = pendingSubscriptionEventRepository.purgeOlderThan(Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS));
+        Instant cutoff = Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS);
+        int purged = pendingSubscriptionEventRepository.purgeOlderThan(cutoff);
         if (purged > 0) {
             meterRegistry.counter("payment.subscription.parked_events_purged_unapplied").increment(purged);
             log.info("Purged parked subscription events that never linked: count={} retentionDays={}", purged, days);
+        }
+        long kept = pendingSubscriptionEventRepository.countLinkedOlderThan(cutoff);
+        if (kept > 0) {
+            log.warn("[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED] count={} retentionDays={} — linked parked events past retention are kept; "
+                + "see the ParkedSubscriptionEventsStuck runbook", kept, days);
         }
         return purged;
     }
@@ -1476,6 +1496,7 @@ public class SubscriptionService {
         paymentCoachSubscriptionRepository.findByStripeSubscriptionIdForUpdate(stripeSubscriptionId)
             .ifPresent(sub -> {
                 if (isStaleEvent(sub.getLastStripeEventAt(), eventCreated, "COACH", stripeSubscriptionId)) return;
+                if (isStatusRegression(sub.getStatus(), newStatus, "COACH", stripeSubscriptionId)) return;
                 String entitledBefore = SubscriptionEntitlement.effectiveCoachTier(sub.getTier(), sub.getStatus());
                 if (newStatus != null) applyStripeStatus(sub::getPastDueSince, sub::setPastDueSince,
                     sub::setStatus, normalizeStripeStatus(newStatus));
@@ -1489,6 +1510,7 @@ public class SubscriptionService {
         paymentPlayerSubscriptionRepository.findByStripeSubscriptionIdForUpdate(stripeSubscriptionId)
             .ifPresent(sub -> {
                 if (isStaleEvent(sub.getLastStripeEventAt(), eventCreated, "PLAYER", stripeSubscriptionId)) return;
+                if (isStatusRegression(sub.getStatus(), newStatus, "PLAYER", stripeSubscriptionId)) return;
                 if (newStatus != null) applyStripeStatus(sub::getPastDueSince, sub::setPastDueSince,
                     sub::setStatus, normalizeStripeStatus(newStatus));
                 if (periodEnd != null) sub.setCurrentPeriodEnd(periodEnd);
@@ -1588,6 +1610,21 @@ public class SubscriptionService {
         if (lastApplied != null && eventCreated != null && eventCreated.isBefore(lastApplied)) {
             log.info("[{}_STRIPE_EVENT_STALE stripeSubId={} eventCreated={} lastApplied={}] ignored",
                 kind, stripeSubscriptionId, eventCreated, lastApplied);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * skillars-deferred-175 AC1 (RS05c): Stripe's {@code incomplete} exists only before the first payment, and creation never
+     * persists it ({@code ERROR_IF_INCOMPLETE}), so an update carrying it for a row that is not INCOMPLETE is an old event: a
+     * parked one replayed after the link (whose {@code lastStripeEventAt} is still null), or a live one created in the same second
+     * as the last applied. The whole event is ignored; a parked row is still claimed (deleted) by its caller.
+     */
+    private boolean isStatusRegression(String localStatus, String stripeStatus, String kind, String stripeSubscriptionId) {
+        if ("INCOMPLETE".equals(normalizeStripeStatus(stripeStatus)) && !"INCOMPLETE".equals(localStatus)) {
+            log.warn("[STRIPE_WEBHOOK_STATUS_REGRESSION_IGNORED] kind={} stripeSubId={} localStatus={} eventStatus={}",
+                kind, stripeSubscriptionId, localStatus, stripeStatus);
             return true;
         }
         return false;

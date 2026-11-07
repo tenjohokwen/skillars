@@ -1,6 +1,6 @@
 # Story skillars-deferred-174: Payment follow-ups (card ownership, card-column writes, stuck pack attempts)
 
-Status: review
+Status: done
 
 <!-- CREATED 2026-11-06 (/bmad-create-story) from the deferred-work.md payment residuals left by
      skillars-deferred-169 and skillars-deferred-172: RS09b, RS09c, RS09d, RS06b, RS06e, RS05c, RS-poison, RS07b,
