@@ -1,0 +1,13 @@
+{
+  "name": "Bunny Stream — delete a video (purge after a user deletes it).",
+  "priority": 10,
+  "request": {
+    "method": "DELETE",
+    "urlPathPattern": "/bunny/library/[0-9]+/videos/[^/]+"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "success": true }
+  }
+}

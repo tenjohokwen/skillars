@@ -1,0 +1,19 @@
+{
+  "name": "Bunny Stream — get a video. Always 'processing' (2), so the reconciliation job never moves a video on its own: the specs drive state with signed webhooks. storageSize feeds the quota at READY.",
+  "priority": 10,
+  "request": {
+    "method": "GET",
+    "urlPathPattern": "/bunny/library/[0-9]+/videos/[^/]+"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": {
+      "guid": "{{request.pathSegments.[4]}}",
+      "status": 2,
+      "length": 12,
+      "storageSize": 204800
+    },
+    "transformers": ["response-template"]
+  }
+}

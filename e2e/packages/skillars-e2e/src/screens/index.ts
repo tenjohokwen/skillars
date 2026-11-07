@@ -9,6 +9,7 @@ export * from './booking.js'
 export * from './money.js'
 export * from './subscription.js'
 export * from './messaging.js'
+export * from './video.js'
 export * from './development.js'
 export * from './session.js'
 

@@ -1858,7 +1858,7 @@ export default {
       emptyState: 'Aucune vidéo téléversée pour le moment',
       accessDenied: "La gestion des vidéos n'est disponible que pour les joueurs et les coachs.",
       loadError: 'Impossible de charger vos vidéos. Veuillez réessayer.',
-      fileTooLarge: 'Le fichier est trop volumineux. La taille maximale est de {size} Mo.',
+      fileTooLarge: 'Le fichier est trop volumineux. La taille maximale est de {size}.',
       fileTypeNotAllowed:
         'Ce type de fichier ne peut pas être envoyé. Utilisez une vidéo MP4, MOV, WebM ou AVI.',
       quotaExceeded:

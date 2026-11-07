@@ -31,7 +31,7 @@
         icon="upload"
         :label="t('video.management.coachUploadButton')"
         :loading="uploadBusy"
-        :disable="uploadBusy"
+        :disable="uploadBusy || quotaLoading"
         data-testid="coach-upload-dropdown"
       >
         <q-list>
@@ -56,11 +56,14 @@
         icon="upload"
         :label="t('video.management.uploadButton')"
         :loading="uploadBusy"
+        :disable="quotaLoading"
         data-testid="player-upload-btn"
         @click="openUpload('HOMEWORK')"
       />
       <q-linear-progress
         v-if="uploadState === 'uploading'"
+        data-testid="video-upload-progress"
+        :data-progress="uploadProgress"
         :value="uploadProgress / 100"
         color="primary"
         class="q-mt-sm"
@@ -81,7 +84,7 @@
       <q-skeleton v-for="i in 3" :key="i" type="QCard" height="80px" />
     </div>
 
-    <div v-else-if="videos.length === 0" class="text-secondary">
+    <div v-else-if="videos.length === 0" class="text-secondary" data-testid="videos-empty">
       {{ t('video.management.emptyState') }}
     </div>
 
@@ -207,8 +210,9 @@ const COACH_VIDEO_TYPES = ['COACH_REVIEW', 'DRILL_DEMO']
 // Owner decision 2026-11-07 (Pitchside VID-05, option A): the size limit (per video type) and the
 // allowed MIME types come from the server with the quota, so the page refuses a file the server
 // would refuse, before any upload starts. The server still enforces both.
-function megabytes(bytes) {
-  return Math.floor(bytes / (1024 * 1024))
+function sizeLimitLabel(bytes) {
+  const mib = 1024 * 1024
+  return bytes >= mib ? `${Math.floor(bytes / mib)} MB` : `${Math.floor(bytes / 1024)} KB`
 }
 
 const videos = ref([])
@@ -383,6 +387,8 @@ function uploadErrorMessage(err) {
   return t('video.management.uploadError')
 }
 
+// Uploads wait for the quota: it carries the server's size limit and allowed types, which the
+// checks below need (found by Pitchside VID-05 — a fast pick skipped them).
 async function onFileSelected(event) {
   const file = event.target.files?.[0]
   // Reset the input so the same file can be re-selected after an error
@@ -392,11 +398,11 @@ async function onFileSelected(event) {
   if (!file || !selection) return
 
   const videoType = selection.retryVideo ? selection.retryVideo.videoType : selection.videoType
-  const maxBytes = quota.value.maxUploadBytes?.[videoType]
+  const maxBytes = Number(quota.value.maxUploadBytes?.[videoType] ?? 0)
   if (maxBytes && file.size > maxBytes) {
     $q.notify({
       type: 'negative',
-      message: t('video.management.fileTooLarge', { size: megabytes(maxBytes) }),
+      message: t('video.management.fileTooLarge', { size: sizeLimitLabel(maxBytes) }),
     })
     return
   }

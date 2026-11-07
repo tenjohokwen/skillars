@@ -915,7 +915,7 @@ export default {
       emptyState: 'Noch keine Videos hochgeladen',
       accessDenied: 'Die Videoverwaltung ist nur für Spieler und Trainer verfügbar.',
       loadError: 'Ihre Videos konnten nicht geladen werden. Bitte erneut versuchen.',
-      fileTooLarge: 'Die Datei ist zu groß. Die maximale Größe beträgt {size} MB.',
+      fileTooLarge: 'Die Datei ist zu groß. Die maximale Größe beträgt {size}.',
       fileTypeNotAllowed:
         'Dieser Dateityp kann nicht hochgeladen werden. Verwenden Sie ein MP4-, MOV-, WebM- oder AVI-Video.',
       quotaExceeded:
