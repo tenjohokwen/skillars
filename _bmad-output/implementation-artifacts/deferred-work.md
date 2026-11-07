@@ -156,8 +156,6 @@ and deleted from the list below.
   undone only from the old address (skillars-deferred-172), and a password reset goes to the account's current
   address; someone who lost access to the old mailbox and whose account was taken over needs a support/admin path
   that does not exist. Owner decision (2026-11-05): out of scope for 172, needs its own design.
-  (`StripePaymentGateway.java:647-648`) and is not updated when the account's email changes, so Stripe receipts keep
-  going to the old address.
 - RS03d [low/logic] `FileStorageService.softDelete` (`:328`) compares `created_by` with the current login, so files
   uploaded before an email change can no longer be deleted through the generic path (`CoachProfileService.deletePhoto`
   tolerates this for the profile photo only).
