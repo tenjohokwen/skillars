@@ -72,9 +72,20 @@ public class PaymentRecoveryRecorder {
         }
     }
 
+    /**
+     * skillars-deferred-175 AC3: a client retry of a failed upgrade that Stripe did not bill again adds no row while one for the
+     * same subscription, target tier and invoice is still open. A retry that produced a new invoice gets its own row, so every
+     * billed proration stays visible to the operator. A check, not a constraint: two failures in the same instant may still add two.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void recordUngrantedUpgradeTx(String kind, String subscriberRef, String stripeSubscriptionId, String targetTier,
                                          String latestInvoiceId) {
+        if (upgradeReconciliationRepository.existsByStripeSubscriptionIdAndTargetTierAndLatestInvoiceIdAndResolvedAtIsNull(
+                stripeSubscriptionId, targetTier, latestInvoiceId)) {
+            log.info("Ungranted upgrade already recorded and open, no new row: stripeSubId={} targetTier={} invoiceId={}",
+                stripeSubscriptionId, targetTier, latestInvoiceId);
+            return;
+        }
         upgradeReconciliationRepository.save(new SubscriptionUpgradeReconciliation(
             kind, subscriberRef, stripeSubscriptionId, targetTier, latestInvoiceId));
     }

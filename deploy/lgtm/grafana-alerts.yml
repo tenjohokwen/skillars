@@ -820,6 +820,37 @@ groups:
         labels:
           severity: high
 
+      - uid: parked_subscription_events_stuck
+        title: ParkedSubscriptionEventsStuck
+        condition: C
+        noDataState: OK
+        execErrState: Error
+        data:
+          - refId: A
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: Prometheus
+            model:
+              expr: 'max(skillars_backlog_oldest_age_seconds{backlog="parked_events_linked"}) or vector(0)'
+              instant: true
+              range: false
+              refId: A
+          - refId: C
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: A
+              refId: C
+              conditions:
+                - evaluator: { type: gt, params: [3600] }
+        for: 0s
+        annotations:
+          summary: 'A parked Stripe subscription event for a linked subscription has not applied for over an hour'
+          runbook: 'docs/deployment/monitoring.md#parkedsubscriptioneventsstuck'
+          dashboard: /d/skillars-payments
+        labels:
+          severity: high
+
       - uid: admin_alerts_aging
         title: AdminAlertsAging
         condition: C

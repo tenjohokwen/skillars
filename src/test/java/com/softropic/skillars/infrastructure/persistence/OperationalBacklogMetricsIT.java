@@ -167,6 +167,39 @@ class OperationalBacklogMetricsIT extends AbstractIntegrationTest {
         assertThat(refreshAge()).isZero();
     }
 
+    // skillars-deferred-175 AC2 (RS-poison): parked subscription events whose subscription is linked
+    @Test
+    void parkedEventsLinked_countsOnlyRowsWhoseSubscriptionIsLinked_andIsAbsentWhenNone() {
+        try {
+            metrics.refresh();
+            assertThat(registry.find("skillars.backlog.count").tags("backlog", "parked_events_linked").gauge())
+                .as("absent when empty").isNull();
+
+            commit("INSERT INTO main.\"user\" (id, login, login_id_type, password_hash, activated, first_name, last_name, gender, dob, email) "
+                + "VALUES (175001, 'it175@test.com', 'EMAIL', '{noop}x', true, 'T', 'P', 'MALE', '1985-01-01', 'it175@test.com')");
+            commit("INSERT INTO main.player_profiles (id, name, date_of_birth, position, age_tier, parent_id, "
+                + "independent_account_allowed, created_at, created_by) "
+                + "VALUES (175001, 'P', '2010-01-01', 'MIDFIELDER', 'ADULT', 175001, true, now(), 'system')");
+            commit("INSERT INTO payment.player_subscriptions (player_id, stripe_subscription_id) VALUES (175001, 'sub_it175_linked')");
+            commit("INSERT INTO payment.stripe_pending_subscription_events (event_id, stripe_subscription_id, event_type, created_at) "
+                + "VALUES ('evt_it175_1', 'sub_it175_linked', 'customer.subscription.updated', now() - interval '2 hours')");
+            commit("INSERT INTO payment.stripe_pending_subscription_events (event_id, stripe_subscription_id, event_type) "
+                + "VALUES ('evt_it175_2', 'sub_it175_never_linked', 'customer.subscription.updated')");
+
+            metrics.refresh();
+
+            assertThat(registry.get("skillars.backlog.count").tags("backlog", "parked_events_linked", "detail", "all").gauge().value())
+                .isEqualTo(1);
+            assertThat(registry.get("skillars.backlog.oldest.age").tags("backlog", "parked_events_linked", "detail", "all").gauge().value())
+                .isCloseTo(7200, within(60.0));
+        } finally {
+            commit("DELETE FROM payment.stripe_pending_subscription_events WHERE event_id LIKE 'evt_it175_%'");
+            commit("DELETE FROM payment.player_subscriptions WHERE player_id = 175001");
+            commit("DELETE FROM main.player_profiles WHERE id = 175001");
+            commit("DELETE FROM main.\"user\" WHERE id = 175001");
+        }
+    }
+
     @Test
     void theRefreshAge_runsFromStartupUntilTheFirstSuccess() {
         clock.advance(Duration.ofMinutes(3));

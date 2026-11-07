@@ -39,8 +39,23 @@ public interface StripePendingSubscriptionEventRepository extends JpaRepository<
     @Query("DELETE FROM StripePendingSubscriptionEvent e WHERE e.id = :id")
     int claim(@Param("id") Long id);
 
+    /** A parked row's subscription is linked: a coach or player subscription carries its Stripe id. */
+    String LINKED = "EXISTS (SELECT 1 FROM payment.coach_subscriptions c WHERE c.stripe_subscription_id = e.stripe_subscription_id) "
+        + "OR EXISTS (SELECT 1 FROM payment.player_subscriptions p WHERE p.stripe_subscription_id = e.stripe_subscription_id)";
+
+    String NOT_LINKED = "AND NOT (" + LINKED + ")";
+
+    /**
+     * skillars-deferred-175 AC2 (RS-poison): only rows whose subscription never linked are purged. A linked row past retention is
+     * an apply that keeps failing; deleting it would hide that (the ParkedSubscriptionEventsStuck alert watches it instead).
+     */
     @Modifying
     @Transactional
-    @Query(value = "DELETE FROM payment.stripe_pending_subscription_events WHERE created_at < :cutoff", nativeQuery = true)
+    @Query(value = "DELETE FROM payment.stripe_pending_subscription_events e WHERE e.created_at < :cutoff " + NOT_LINKED, nativeQuery = true)
     int purgeOlderThan(@Param("cutoff") Instant cutoff);
+
+    @Query(value = "SELECT COUNT(*) FROM payment.stripe_pending_subscription_events e WHERE e.created_at < :cutoff AND ("
+        + LINKED + ")", nativeQuery = true)
+    long countLinkedOlderThan(@Param("cutoff") Instant cutoff);
+
 }

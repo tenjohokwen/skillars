@@ -644,6 +644,55 @@ class SubscriptionEntitlementIntegrityTest {
         verify(pendingSubscriptionEventRepository, never()).claim(2L);
     }
 
+    // ─── skillars-deferred-175 AC1 (RS05c): an old `incomplete` never overwrites a row that is past it ─────────────
+
+    @Test
+    void drain_aParkedIncomplete_replayedOntoAnActiveRow_isIgnored_butItsRowIsClaimed() {
+        var incomplete = parkedRow(1, "customer.subscription.updated");
+        when(incomplete.getStatus()).thenReturn("incomplete");
+        when(pendingSubscriptionEventRepository.findBySubscriptionOrdered(SUB_ID)).thenReturn(java.util.List.of(incomplete));
+        when(pendingSubscriptionEventRepository.findById(1L)).thenReturn(java.util.Optional.of(incomplete));
+        when(pendingSubscriptionEventRepository.claim(1L)).thenReturn(1);
+
+        service.drainParkedEvents(SUB_ID);
+
+        verify(pendingSubscriptionEventRepository).claim(1L);
+        assertThat(coachSub.getStatus()).isEqualTo("ACTIVE");
+        assertThat(marketplace.getTier()).isEqualTo(CoachSubscriptionTier.ACADEMY);
+        verify(paymentCoachSubscriptionRepository, never()).save(any());
+    }
+
+    @Test
+    void live_anIncompleteUpdate_onAnActiveRow_isIgnored_withItsOtherFields() {
+        Instant periodEnd = coachSub.getCurrentPeriodEnd();
+
+        service.handleSubscriptionWebhook("customer.subscription.updated", SUB_ID,
+            Map.of("status", "incomplete", "cancel_at_period_end", true));
+
+        assertThat(coachSub.getStatus()).isEqualTo("ACTIVE");
+        assertThat(coachSub.isCancelAtPeriodEnd()).isFalse();
+        assertThat(coachSub.getCurrentPeriodEnd()).isEqualTo(periodEnd);
+        verify(paymentCoachSubscriptionRepository, never()).save(any());
+    }
+
+    @Test
+    void live_anIncompleteUpdate_onAnIncompleteRow_stillApplies() {
+        coachSub.setStatus("INCOMPLETE");
+
+        service.handleSubscriptionWebhook("customer.subscription.updated", SUB_ID,
+            Map.of("status", "incomplete", "cancel_at_period_end", true));
+
+        assertThat(coachSub.isCancelAtPeriodEnd()).isTrue();
+        verify(paymentCoachSubscriptionRepository).save(coachSub);
+    }
+
+    @Test
+    void live_aPastDueUpdate_onAnActiveRow_stillApplies() {
+        service.handleSubscriptionWebhook("customer.subscription.updated", SUB_ID, Map.of("status", "past_due"));
+
+        assertThat(coachSub.getStatus()).isEqualTo("PAST_DUE");
+    }
+
     @Test
     void applyParkedEvent_aRowAnotherDrainerAlreadyClaimed_isNotAppliedAgain() {
         var row = parkedRow(5, "customer.subscription.updated");
@@ -694,6 +743,69 @@ class SubscriptionEntitlementIntegrityTest {
             .hasMessage("payment.subscription.paymentDeclined");
         assertThat(coachSub.getTier()).isEqualTo("INSTRUCTOR");
         assertThat(marketplace.getTier()).isEqualTo(CoachSubscriptionTier.INSTRUCTOR);
+    }
+
+    // ─── skillars-deferred-175 AC3 (RS07b): a persist that fails after Stripe upgraded is recorded, then rethrown ─────
+
+    private void coachUpgradeBilled() throws StripeException {
+        coachSub.setTier("INSTRUCTOR");
+        Subscription updated = stripeSub(SUB_ID, "active");
+        when(updated.getLatestInvoice()).thenReturn("in_upgrade_1");
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), eq(true), anyString())).thenReturn(updated);
+        when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(org.mockito.Mockito.mock(io.micrometer.core.instrument.Counter.class));
+    }
+
+    @Test
+    void upgrade_coachRowGoneAtPersist_isRecorded_andTheErrorStillReachesTheCaller() throws StripeException {
+        coachUpgradeBilled();
+        when(paymentCoachSubscriptionRepository.findByCoachIdForUpdate(COACH_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.changeCoachTier(COACH_ID, "ACADEMY")).hasMessage("payment.subscription.notFound");
+
+        verify(paymentRecoveryRecorder).recordUngrantedUpgrade("COACH", String.valueOf(COACH_ID), SUB_ID, "ACADEMY", "in_upgrade_1");
+    }
+
+    @Test
+    void upgrade_coachPersistDbError_isRecorded_andRethrown() throws StripeException {
+        coachUpgradeBilled();
+        when(paymentCoachSubscriptionRepository.save(any())).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+
+        assertThatThrownBy(() -> service.changeCoachTier(COACH_ID, "ACADEMY"))
+            .isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+
+        verify(paymentRecoveryRecorder).recordUngrantedUpgrade("COACH", String.valueOf(COACH_ID), SUB_ID, "ACADEMY", "in_upgrade_1");
+    }
+
+    private PaymentPlayerSubscription playerUpgradeBilled() throws StripeException {
+        PaymentPlayerSubscription playerSub = cancellingPlayerPlan();
+        playerSub.setCancelAtPeriodEnd(false);
+        when(configService.getString(startsWith("subscription.player."))).thenReturn("price_pro");
+        Subscription updated = stripeSub("sub_player", "active");
+        when(updated.getLatestInvoice()).thenReturn("in_upgrade_2");
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), eq(true), anyString())).thenReturn(updated);
+        when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(org.mockito.Mockito.mock(io.micrometer.core.instrument.Counter.class));
+        return playerSub;
+    }
+
+    @Test
+    void upgrade_playerRowGoneAtPersist_isRecorded_andRethrown() throws StripeException {
+        playerUpgradeBilled();
+        when(paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(PLAYER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.changePlayerTier(PARENT_ID, PLAYER_ID, "PRO")).hasMessage("payment.subscription.notFound");
+
+        verify(paymentRecoveryRecorder).recordUngrantedUpgrade("PLAYER", String.valueOf(PLAYER_ID), "sub_player", "PRO", "in_upgrade_2");
+    }
+
+    @Test
+    void upgrade_playerPersistDbError_isRecorded_andRethrown() throws StripeException {
+        playerUpgradeBilled();
+        when(paymentPlayerSubscriptionRepository.save(any())).thenThrow(new org.springframework.dao.DataAccessResourceFailureException("db down"));
+
+        assertThatThrownBy(() -> service.changePlayerTier(PARENT_ID, PLAYER_ID, "PRO"))
+            .isInstanceOf(org.springframework.dao.DataAccessResourceFailureException.class);
+
+        verify(paymentRecoveryRecorder).recordUngrantedUpgrade("PLAYER", String.valueOf(PLAYER_ID), "sub_player", "PRO", "in_upgrade_2");
     }
 
     // ─── Owner decisions 2026-11-06: no change while a plan is set to end; a cancel can be taken back ─────

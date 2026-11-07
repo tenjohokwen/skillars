@@ -1613,3 +1613,9 @@ an operator must now do.
   (60) ([section 7](#7-application-config-and-policy-keys)). The MoneyIntegrityEvent alert also matches
   `[PACK_PURCHASE_ATTEMPT_NEEDS_OPERATOR]` (recreate Grafana after pulling). `POST /api/payment/save-payment-method` now
   saves only a card attached to the caller's own Stripe customer. No new job, webhook or env var.
+- 2026-11-07: skillars-deferred-175 (no migration). New high alert `ParkedSubscriptionEventsStuck` on the backlog gauge
+  `skillars_backlog_oldest_age_seconds{backlog="parked_events_linked"}` (recreate Grafana after pulling; the series is absent
+  while nothing is stuck, which is normal); the parked-event retention purge now keeps rows whose subscription is linked and
+  logs `[STRIPE_WEBHOOK_PARKED_LINKED_NOT_PURGED]`. `[SUBSCRIPTION_UPGRADE_UNGRANTED]` (MoneyIntegrityEvent) also fires when
+  recording an upgrade fails after Stripe upgraded. A confirmed or undone email change now updates the Stripe customer's
+  email through the outbox (`STRIPE_CUSTOMER_EMAIL_SYNC`). No new job, webhook, config key or env var.
