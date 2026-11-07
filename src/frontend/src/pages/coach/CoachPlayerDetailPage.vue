@@ -29,7 +29,12 @@
       />
     </div>
 
-    <q-banner v-if="pageError" class="bg-negative text-white q-mb-md" rounded>
+    <q-banner
+      v-if="pageError"
+      class="bg-negative text-white q-mb-md"
+      rounded
+      data-testid="coach-player-error"
+    >
       {{ pageError }}
     </q-banner>
 

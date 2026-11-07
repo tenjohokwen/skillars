@@ -11,6 +11,7 @@ export * from './subscription.js'
 export * from './messaging.js'
 export * from './development.js'
 export * from './session.js'
+export * from './lockerRoom.js'
 
 // One screen object per page under test. Thin by policy: locators and composite actions, never
 // assertions. Only pages that already carry data-testids are modelled; the rest wait for the

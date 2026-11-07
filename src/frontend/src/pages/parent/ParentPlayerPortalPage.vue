@@ -34,6 +34,7 @@
           icon="sports_soccer"
           :to="links.lockerRoom"
           :label="t('parent.hub.lockerRoom')"
+          data-testid="child-locker-room-link"
         />
         <q-btn
           v-bind="hubLinkProps"
