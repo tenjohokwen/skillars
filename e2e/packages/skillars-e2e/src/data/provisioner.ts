@@ -1550,6 +1550,54 @@ export class Provisioner {
     }
   }
 
+  // ─── Suite M: reviews ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * A COMPLETED session the family may review: completed through the product, then aged past
+   * reviews.minSessionAgeDays (7) — a session only qualifies a week after it ends.
+   */
+  async reviewableSession(parent: ParentAccount, coach: CoachAccount): Promise<string> {
+    const bookingId = await this.completedSession(parent, coach)
+    await this.setBooking(bookingId, {
+      startMinutesFromNow: -8 * 24 * 60,
+      status: 'COMPLETED',
+      statusChangedDaysAgo: 8,
+    })
+    return bookingId
+  }
+
+  /** The review an author wrote for a coach, as stored (null if none). */
+  async reviewOf(
+    coach: CoachAccount,
+    author: { userId: string },
+  ): Promise<{ id: string; status: string; rating: number; body: string | null } | null> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{
+      id: string
+      status: string
+      rating: number
+      body: string | null
+    }>(
+      `SELECT review_id AS id, moderation_status AS status, rating, body
+         FROM reviews.coach_reviews WHERE coach_id = $1::uuid AND author_id = $2::bigint`,
+      [coach.coachId, author.userId],
+    )
+    return row ?? null
+  }
+
+  /** SQL seam: ages a review so the edit cooldown (reviews.updateCooldownDays, 30) has passed. */
+  async ageReview(reviewId: string, days: number): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `UPDATE reviews.coach_reviews
+          SET last_modified_at = now() - make_interval(days => $2::int),
+              created_at = now() - make_interval(days => $2::int),
+              author_last_edited_at = now() - make_interval(days => $2::int)
+        WHERE review_id = $1::uuid`,
+      [reviewId, days],
+    )
+  }
+
   private api(context: APIRequestContext): ApiClient {
     return new ApiClient(context, { baseUrl: API_BASE_URL, requestIdPrefix: 'e2e-provision' })
   }

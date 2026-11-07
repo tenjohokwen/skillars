@@ -191,6 +191,29 @@ export class CoachPublicProfileScreen extends Screen {
   /** A parent's remaining credits with this coach (only once they hold or held a pack). */
   credits = () => this.tid('coach-profile-credits')
   reviews = () => this.tid('coach-profile-review')
+  reviewBodies = () => this.tid('coach-profile-review-body')
+  reviewResponses = () => this.tid('coach-profile-review-response')
+  sortSelect = () => this.tid('review-sort-select')
+  loadMore = () => this.tid('reviews-load-more')
+  // The viewer's own review, or the way to write one.
+  writeSection = () => this.tid('review-write-section')
+  writeReview = () => this.tid('review-write-btn')
+  ineligible = () => this.tid('review-ineligible')
+  myReviewRating = () => this.tid('my-review-rating')
+  myReviewBody = () => this.tid('my-review-body')
+  myReviewPending = () => this.tid('my-review-pending')
+  myReviewBlocked = () => this.tid('my-review-blocked')
+  relatedPartyHidden = () => this.tid('review-related-party-hidden')
+  editReview = () => this.tid('review-edit-btn')
+  // The write/edit dialog.
+  dialogBody = () => this.tid('review-dialog-body')
+  dialogSubmit = () => this.tid('review-dialog-submit')
+  dialogError = () => this.tid('review-dialog-error')
+  /** Picks 1–5 stars in the dialog's rating control. */
+  dialogStars = (stars: number) =>
+    this.tid('review-dialog-rating')
+      .getByRole('radio')
+      .nth(stars - 1)
   /** Shown only once the family (or player) has a CONFIRMED, UPCOMING, IN_PROGRESS or COMPLETED booking. */
   messageCoach = () => this.tid('message-coach-btn')
 
