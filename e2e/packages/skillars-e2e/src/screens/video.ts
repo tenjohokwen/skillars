@@ -28,7 +28,7 @@ export class VideosScreen extends Screen {
   coachVideosEmpty = () => this.tid('coach-videos-empty')
   // The coach's upload menu and the session picker for a review.
   coachUpload = () => this.tid('coach-upload-dropdown')
-  coachUploadType = (type: 'COACH_REVIEW' | 'DRILL_DEMO') => this.tid(`coach-upload-${type}`)
+  coachUploadType = (type: 'coach-review' | 'drill-demo') => this.tid(`coach-upload-${type}`)
   noSubjectBookings = () => this.tid('no-subject-bookings')
   subjectBooking = () => this.tid('subject-booking-select')
   subjectConfirm = () => this.tid('subject-confirm-btn')
@@ -36,6 +36,8 @@ export class VideosScreen extends Screen {
   playerDialog = () => this.tid('video-play-dialog')
   playerError = () => this.tid('video-play-error')
   playerRetry = () => this.tid('video-play-retry')
+  playerVideo = () => this.tid('video-play-element')
+  deleteConfirm = () => this.tid('video-delete-confirm')
 
   /** Starts the player's homework upload with this file (the hidden input takes it directly). */
   async uploadHomework(file: { name: string; mimeType: string; buffer: Buffer }): Promise<void> {
@@ -60,4 +62,12 @@ export class ParentChildVideosScreen extends Screen {
   empty = () => this.tid('child-videos-empty')
   coachVideos = () => this.tid('child-coach-videos-section')
   coachVideosEmpty = () => this.tid('child-coach-videos-empty')
+  item = (title: string) =>
+    this.items().filter({
+      has: this.page.getByTestId('video-title').getByText(title, { exact: true }),
+    })
+  delete = (item: Locator) => this.within(item, 'video-delete-btn')
+  deleteConfirm = () => this.tid('video-delete-confirm')
+  play = (item: Locator) => this.within(item, 'video-play-btn')
+  playerVideo = () => this.tid('video-play-element')
 }
