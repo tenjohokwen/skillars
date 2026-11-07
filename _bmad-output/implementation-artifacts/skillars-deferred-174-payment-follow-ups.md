@@ -430,6 +430,11 @@ Claude Opus 5.5 (claude-opus-5-5)
   recorded as the admin's close. Filed as residuals: RS06h (a lookup that always fails, the RS06b residual), RS06i (an
   UNRECONCILED row Stripe shows no charge for), RS06j (F2, same-key race against the ownership check), RS09h (V2, GDPR
   erasure race on the re-apply). Runbook and dev-docs list the new refusals. 3 new unit tests.
+- `/pr-review` round 2 (a85fc2f4): F1 fixed: the close's audit line is logged before `recordAdminClose`, and a failure of that
+  write is caught (`[PACK_ATTEMPT_ADMIN_CLOSE_UNRECORDED]`), so a committed close is never answered 500. F2: docs corrected:
+  a processing charge is refused but the resolver still records it (IN_PROGRESS to UNKNOWN with the PaymentIntent id); AC5d's
+  "row unchanged" holds for the status being open, not for that bookkeeping. V1: RS09f extended to the re-apply direction
+  (same D2 option 1 ambiguity). 1 new unit test.
 
 ### File List
 
@@ -480,3 +485,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-06: owner decided D1-D4 (option 1 each).
 - 2026-11-07: implemented T1-T5, T10 and the ledger/sprint-status part of T11 (dev-story). `/pr-review` and the PR pending.
 - 2026-11-07: addressed `/pr-review` round 1 (F1, V1 fixed; F2, V2, V3 filed as RS06j, RS09h, RS06h; RS06i added).
+- 2026-11-07: addressed `/pr-review` round 2 (F1 fixed, F2 docs corrected, V1 added to RS09f).

@@ -1305,6 +1305,20 @@ class SessionPackPaymentServiceTest {
     }
 
     @Test
+    void close_whenRecordingWhoClosedItFails_theCloseStillStands() {
+        minAgeAndAbsenceAge(10, 30);
+        var open = attempt(UNRECONCILED, 120);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(open));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(attemptRepository.recordAdminClose(any(), any(), any())).thenThrow(new IllegalStateException("db blip"));
+
+        var response = sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck");
+
+        assertThat(response.status()).isEqualTo("NO_CHARGE");
+    }
+
+    @Test
     void close_aRowClosedElsewhereMeanwhile_is409NotOpen_andIsNotRecordedAsThisAdminsClose() {
         minAgeAndAbsenceAge(10, 30);
         var open = attempt(UNRECONCILED, 120);
@@ -1336,7 +1350,7 @@ class SessionPackPaymentServiceTest {
     }
 
     @Test
-    void close_aProcessingCharge_isRefused409_rowUnchanged() {
+    void close_aProcessingCharge_isRefused409_andStaysOpen() {
         minAgeAndAbsenceAge(10, 30);
         openAttemptInDb(UNRECONCILED, 120);
         when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("processing")));

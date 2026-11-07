@@ -671,9 +671,10 @@ public class SessionPackPaymentService {
      * skillars-deferred-174 AC5 (RS06b): the operator's way out for an attempt the job cannot close, replacing the runbook's
      * hand-written UPDATE. Runs the resolver first (which also retries recording the pack; it ignores the needs-operator
      * skip), so the row only ever closes to what Stripe supports: SUCCEEDED with a pack, REFUNDED, or NO_CHARGE through the
-     * declined-card revert. Whatever still holds it open is refused with 409, the row unchanged: a processing charge, an
-     * absence too recent to trust, captured money with no pack (refund it in Stripe, then close again), or a verdict whose
-     * status write did not land. A Stripe failure is a 422. A row the job or a replay closed meanwhile is a 409 notOpen, not
+     * declined-card revert. Whatever still holds it open is refused with 409 and the row left open: a processing charge (the
+     * resolver still records it, IN_PROGRESS to UNKNOWN with the PaymentIntent id, as the job would; the action skips the
+     * job's minimum age, and the request thread's own SUCCEEDED write accepts UNKNOWN), an absence too recent to trust,
+     * captured money with no pack (refund it in Stripe, then close again), or a verdict whose status write did not land. A Stripe failure is a 422. A row the job or a replay closed meanwhile is a 409 notOpen, not
      * recorded as this admin's close. Who closed it and why are kept on the row, and the log tag is the audit (the
      * release-held precedent).
      */
@@ -693,9 +694,16 @@ public class SessionPackPaymentService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.notOpen");
         }
         if (!r.status().isOpen()) {
-            attemptRepository.recordAdminClose(attemptId, adminUserId, reason);
+            // The status write already committed: the audit line goes first, and a failed bookkeeping write never turns
+            // the close into an error the admin would retry into a 409 notOpen.
             log.warn("[PACK_ATTEMPT_ADMIN_CLOSED] attemptId={} parentId={} status={} admin={} reason={}",
                 attemptId, a.getParentId(), r.status(), adminUserId, loggedReason);
+            try {
+                attemptRepository.recordAdminClose(attemptId, adminUserId, reason);
+            } catch (RuntimeException e) {
+                log.error("[PACK_ATTEMPT_ADMIN_CLOSE_UNRECORDED] closed, but closed_by/close_reason were not written: "
+                    + "attemptId={} admin={}", attemptId, adminUserId, e);
+            }
             return new PackAttemptCloseResponse(attemptId, r.status().name());
         }
         OpenReason why = r.openReason() == null ? OpenReason.LOOKUP_FAILED : r.openReason();
