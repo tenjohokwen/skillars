@@ -280,17 +280,22 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
 
     // skillars-deferred-175 AC3: a retried failure adds no row while one is open; a resolved one does not block a new record
     @Test
-    void anUngrantedUpgrade_recordedTwiceWhileOpen_isOneRow_andANewOneAfterResolveIsKept() {
+    void anUngrantedUpgrade_recordedTwiceForOneInvoiceWhileOpen_isOneRow_butEachBilledInvoiceGetsItsOwn() {
         recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(1);
+
         recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_2");
         recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "INSTRUCTOR", "in_3");
-        assertThat(upgradeRows("sub_it169_e")).isEqualTo(2);
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", null);
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", null);
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(4);
 
         transactionTemplate.execute(s -> jdbcTemplate.update(
             "UPDATE payment.subscription_upgrade_reconciliations SET resolved_at = now() WHERE stripe_subscription_id = 'sub_it169_e'"));
-        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_4");
+        recorder.recordUngrantedUpgrade("COACH", "coach-1", "sub_it169_e", "ACADEMY", "in_1");
 
-        assertThat(upgradeRows("sub_it169_e")).isEqualTo(3);
+        assertThat(upgradeRows("sub_it169_e")).isEqualTo(5);
     }
 
     private int upgradeRows(String subId) {

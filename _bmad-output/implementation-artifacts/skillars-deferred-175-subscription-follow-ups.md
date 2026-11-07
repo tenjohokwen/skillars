@@ -280,17 +280,27 @@ Claude Opus 5.5 (claude-opus-5-5), via /bmad-dev-story, 2026-11-07.
   `OperationalBacklogMetricsIT` (linked counted, unlinked not, absent when empty); purge IT in `PackPurchaseAttemptIT`.
 - AC3 (D7 option 1): `change*Tier` catches a `RuntimeException` from `persist*TierUpgrade`, calls `recordUngrantedUpgrade`
   and rethrows; `PaymentRecoveryRecorder.recordUngrantedUpgradeTx` skips the insert while an open row exists for the same
-  subscription and target tier. Runbook (MoneyIntegrityEvent) starts with "check whether a retry already granted it".
-  Tests: 4 unit tests (coach/player × row gone/DB error); recorder IT (duplicate skipped, a new row after resolve kept).
+  subscription, target tier and invoice (review round 1, V2: keyed on the invoice too, so a second billed proration
+  gets its own row). Runbook (MoneyIntegrityEvent) starts with "check whether a retry already granted it".
+  Tests: 4 unit tests (coach/player × row gone/DB error); recorder IT (same invoice skipped, a new invoice kept, a new
+  row after resolve kept).
 - AC4 (D8 option 1): `AccountEmailChangedEvent(userId)` published by `confirm` and `undo`;
   `StripeCustomerEmailSyncOutboxSupport` (`@EventListener`, `MANDATORY`) enqueues `STRIPE_CUSTOMER_EMAIL_SYNC {userId}` when
-  a `stripe_customers` row exists; `StripeCustomerEmailSyncOutboxHandler` re-reads the current email, skips gone, locked
-  or erased users, a missing customer row and a customer Stripe no longer has, and calls the new
+  a `stripe_customers` row exists; `StripeCustomerEmailSyncOutboxHandler` re-reads the current email, skips gone or
+  erased users, a missing customer row and a customer Stripe no longer has, and calls the new
   `StripeClient.updateCustomerEmail`. Tests: `EmailChangeServiceIT` (confirm then undo, rollback, no customer), listener
-  unit test (2), handler unit test (7).
+  unit test (2), handler unit test (9).
+- `/pr-review` round 1 (970f1efa), fixes approved by the owner 2026-11-07:
+  - V1 (amends D8's "skips locked or erased users"): the handler no longer skips a locked account. GDPR erasure sets
+    the `@erased.io` tombstone in the same transaction as the lock, so a locked account with a real address is a
+    suspension, and an undo on a suspended account must still reach Stripe.
+  - V2: the upgrade recorder's open-row check includes the invoice id.
+  - V4: an `InvalidRequestException` other than `resource_missing` is logged `[STRIPE_CUSTOMER_EMAIL_SYNC_REJECTED]`
+    and not retried; `RateLimitException` (a subclass of it in stripe-java 28.4.0) still retries.
+  - V3 and the dropped parallel-drain finding: ledger RS03e and RS03f.
 - AC5: payment dev-docs (four paragraphs, job row); search index rebuilt; `check-docs` OK.
 - AC6: RS05c, RS-poison, RS07b, RS03c deleted from `deferred-work.md`; residual RS07c filed (retried-upgrade proration
-  unconfirmed; the open-row check is not a constraint).
+  unconfirmed; the open-row check is not a constraint), and RS03e/RS03f from review round 1.
 - Not run: the eval case `evals/review/cases/337-subscription-entitlement-integrity.yaml` (the story asks for a re-run
   if T1 changes the webhook guard; skipped for cost, owner's call).
 - Regression (targeted; CI is the full gate): 1597 unit tests across payment, security service, db and config guards;
@@ -329,3 +339,4 @@ Claude Opus 5.5 (claude-opus-5-5), via /bmad-dev-story, 2026-11-07.
 - 2026-11-06: created (ready-for-dev) by splitting skillars-deferred-174 (D0 = 1); decisions D5-D8 pending owner.
 - 2026-11-06: owner decided D5-D8 (option 1 each).
 - 2026-11-07: implemented T1-T5 and the ledger/sprint-status part of T6 (dev-story). `/pr-review` and the PR pending.
+- 2026-11-07: `/pr-review` round 1 fixes (V1 amends D8: locked accounts are synced; V2 invoice-keyed dedupe; V4 permanent 4xx); RS03e/RS03f ledgered.

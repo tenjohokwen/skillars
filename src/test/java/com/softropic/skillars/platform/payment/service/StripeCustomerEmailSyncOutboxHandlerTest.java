@@ -7,6 +7,7 @@ import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.stripe.exception.ApiConnectionException;
 import com.stripe.exception.InvalidRequestException;
+import com.stripe.exception.RateLimitException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -72,12 +73,13 @@ class StripeCustomerEmailSyncOutboxHandlerTest {
     }
 
     @Test
-    void aLockedUser_isANoOp() throws Exception {
-        user("now@example.com", true);
+    void aSuspendedUser_isStillSynced_soAnUndoReachesStripe() throws Exception {
+        user("restored@example.com", true);
+        customer();
 
         handler().handle(PAYLOAD);
 
-        verify(stripeClient, never()).updateCustomerEmail(anyString(), anyString());
+        verify(stripeClient).updateCustomerEmail(CUS, "restored@example.com");
     }
 
     @Test
@@ -107,6 +109,26 @@ class StripeCustomerEmailSyncOutboxHandlerTest {
             .when(stripeClient).updateCustomerEmail(CUS, "now@example.com");
 
         assertThatCode(() -> handler().handle(PAYLOAD)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void anEmailStripeRejects_isDone_notRetried() throws Exception {
+        user("now@example.com", false);
+        customer();
+        doThrow(new InvalidRequestException("Invalid email address", "email", "req_2", "email_invalid", 400, null))
+            .when(stripeClient).updateCustomerEmail(CUS, "now@example.com");
+
+        assertThatCode(() -> handler().handle(PAYLOAD)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aRateLimit_throws_soTheRowIsRetried() throws Exception {
+        user("now@example.com", false);
+        customer();
+        doThrow(new RateLimitException("slow down", null, "req_3", "rate_limit", 429, null))
+            .when(stripeClient).updateCustomerEmail(CUS, "now@example.com");
+
+        assertThatThrownBy(() -> handler().handle(PAYLOAD)).isInstanceOf(IllegalStateException.class);
     }
 
     @Test

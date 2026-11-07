@@ -9,6 +9,7 @@ import com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOu
 import com.softropic.skillars.platform.security.repo.User;
 import com.softropic.skillars.platform.security.repo.UserRepository;
 import com.stripe.exception.InvalidRequestException;
+import com.stripe.exception.RateLimitException;
 import com.stripe.exception.StripeException;
 
 import lombok.extern.slf4j.Slf4j;
@@ -20,9 +21,11 @@ import java.util.Optional;
 /**
  * Runs a {@code STRIPE_CUSTOMER_EMAIL_SYNC} enqueued by {@link StripeCustomerEmailSyncOutboxSupport}: sets the Stripe customer's
  * email to the user's CURRENT email, so a confirm followed by an undo ends on the restored address whatever order the two rows
- * drain in. A no-op for a user or customer row that is gone, for a locked account (an undo does not refuse one) and for an erased
- * account (its address is the {@code @erased.io} tombstone, and the erasure scrubs the Stripe customer itself), and for a customer
- * Stripe no longer has. Any other Stripe failure throws, leaving the row for the next drain.
+ * drain in. A no-op for a user or customer row that is gone, for an erased account (its address is the {@code @erased.io}
+ * tombstone, set in the same transaction as the erasure's lock, and the erasure scrubs the Stripe customer itself), and for a
+ * customer Stripe no longer has. A locked account is synced: a suspension is not an erasure, and an undo that restores the
+ * owner's address must reach Stripe even while the account is suspended. Any other request Stripe rejects is logged and dropped,
+ * since retrying it cannot succeed; a rate limit or outage throws, leaving the row for the next drain.
  */
 @Slf4j
 @Component
@@ -58,9 +61,9 @@ public class StripeCustomerEmailSyncOutboxHandler implements OutboxMessageHandle
             throw new UncheckedIOException(e);
         }
         Optional<User> user = userRepository.findOneById(userId);
-        if (user.isEmpty() || user.get().isLocked() || user.get().getEmail() == null || user.get().getEmail().isBlank()
+        if (user.isEmpty() || user.get().getEmail() == null || user.get().getEmail().isBlank()
                 || user.get().getEmail().endsWith(ERASED_EMAIL_DOMAIN)) {
-            log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SKIPPED userId={}] account gone, locked or erased", userId);
+            log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SKIPPED userId={}] account gone or erased", userId);
             return;
         }
         Optional<String> customerId = stripeCustomerRepository.findById(userId).map(StripeCustomer::getStripeCustomerId);
@@ -70,12 +73,16 @@ public class StripeCustomerEmailSyncOutboxHandler implements OutboxMessageHandle
         try {
             stripeClient.updateCustomerEmail(customerId.get(), user.get().getEmail());
             log.info("[STRIPE_CUSTOMER_EMAIL_SYNCED userId={} stripeCustomerId={}]", userId, customerId.get());
+        } catch (RateLimitException e) {
+            // A subclass of InvalidRequestException in this SDK, but transient.
+            throw new IllegalStateException("[STRIPE_CUSTOMER_EMAIL_SYNC_FAILED] userId=" + userId, e);
         } catch (InvalidRequestException e) {
             if (RESOURCE_MISSING.equals(e.getCode())) {
                 log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SKIPPED userId={}] Stripe no longer has the customer", userId);
                 return;
             }
-            throw new IllegalStateException("[STRIPE_CUSTOMER_EMAIL_SYNC_FAILED] userId=" + userId, e);
+            log.error("[STRIPE_CUSTOMER_EMAIL_SYNC_REJECTED userId={} stripeCustomerId={} code={} status={}] not retried",
+                userId, customerId.get(), e.getCode(), e.getStatusCode(), e);
         } catch (StripeException e) {
             throw new IllegalStateException("[STRIPE_CUSTOMER_EMAIL_SYNC_FAILED] userId=" + userId, e);
         }
