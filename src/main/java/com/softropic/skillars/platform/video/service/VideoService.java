@@ -65,6 +65,25 @@ public class VideoService {
     private final com.softropic.skillars.platform.video.repo.PendingProviderAssetRepository pendingProviderAssetRepository;
     private final PlayerProfileRepository playerProfileRepository;
 
+    /** The server's per-type upload size limits; a type whose limit is not configured is left out. */
+    public java.util.Map<com.softropic.skillars.platform.video.contract.VideoType, Long> maxUploadBytesByType() {
+        java.util.Map<com.softropic.skillars.platform.video.contract.VideoType, Long> limits =
+            new java.util.EnumMap<>(com.softropic.skillars.platform.video.contract.VideoType.class);
+        for (com.softropic.skillars.platform.video.contract.VideoType type : com.softropic.skillars.platform.video.contract.VideoType.values()) {
+            try {
+                limits.put(type, videoTypeConstraints.getMaxSizeBytes(type));
+            } catch (RuntimeException missingConfig) {
+                log.warn("No upload size limit configured for video type {}", type);
+            }
+        }
+        return limits;
+    }
+
+    /** The upload MIME types the server accepts. */
+    public java.util.List<String> allowedMimeTypes() {
+        return java.util.List.copyOf(properties.getUpload().getAllowedMimeTypes());
+    }
+
     @Transactional(readOnly = true)
     public Video findById(UUID videoId) {
         return videoRepository.findById(videoId)

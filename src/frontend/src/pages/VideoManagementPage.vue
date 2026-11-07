@@ -204,9 +204,12 @@ const authStore = useAuthStore()
 // Shared by the PLAYER route (player/videos) and the COACH route (coach/videos).
 const isCoach = computed(() => authStore.isCoach)
 const COACH_VIDEO_TYPES = ['COACH_REVIEW', 'DRILL_DEMO']
-// Client-side pre-check for player HOMEWORK only; coach types have their own (larger, config-driven)
-// server limits, which the initiate call reports as a validation error.
-const HOMEWORK_MAX_BYTES = 500 * 1024 * 1024
+// Owner decision 2026-11-07 (Pitchside VID-05, option A): the size limit (per video type) and the
+// allowed MIME types come from the server with the quota, so the page refuses a file the server
+// would refuse, before any upload starts. The server still enforces both.
+function megabytes(bytes) {
+  return Math.floor(bytes / (1024 * 1024))
+}
 
 const videos = ref([])
 const videosLoading = ref(true)
@@ -373,6 +376,7 @@ function uploadErrorMessage(err) {
   const code = err?.response?.data?.errorMsg?.errorKey
   if (code === 'VIDEO_MINOR_UPLOAD_REFUSED') return t('video.management.minorUploadRefused')
   if (code === 'VIDEO_SUBJECT_INVALID') return t('video.management.subjectInvalid')
+  if (code === 'QUOTA_EXCEEDED') return t('video.management.quotaExceeded')
   if (status === 429) return t('video.management.quotaOrRateLimited')
   if (status === 409) return t('video.management.retryConflict')
   if (status === 422 || status === 400) return t('video.management.uploadRejected')
@@ -387,11 +391,21 @@ async function onFileSelected(event) {
   pendingSelection = null
   if (!file || !selection) return
 
-  const isHomework = selection.retryVideo
-    ? selection.retryVideo.videoType === 'HOMEWORK'
-    : selection.videoType === 'HOMEWORK'
-  if (isHomework && file.size > HOMEWORK_MAX_BYTES) {
-    $q.notify({ type: 'negative', message: t('video.management.fileTooLarge') })
+  const videoType = selection.retryVideo ? selection.retryVideo.videoType : selection.videoType
+  const maxBytes = quota.value.maxUploadBytes?.[videoType]
+  if (maxBytes && file.size > maxBytes) {
+    $q.notify({
+      type: 'negative',
+      message: t('video.management.fileTooLarge', { size: megabytes(maxBytes) }),
+    })
+    return
+  }
+  const allowedTypes = quota.value.allowedMimeTypes ?? []
+  if (
+    allowedTypes.length &&
+    !allowedTypes.some((type) => type.toLowerCase() === (file.type || '').toLowerCase())
+  ) {
+    $q.notify({ type: 'negative', message: t('video.management.fileTypeNotAllowed') })
     return
   }
 

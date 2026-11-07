@@ -33,6 +33,8 @@ class VideoSubjectServiceTest {
 
     @Mock BookingQueryService bookingQueryService;
     @Mock PlayerProfileRepository playerProfileRepository;
+    @Mock com.softropic.skillars.platform.video.repo.VideoRepository videoRepository;
+    @Mock VideoSharingPolicy videoSharingPolicy;
 
     private VideoSubjectService service;
 
@@ -41,7 +43,7 @@ class VideoSubjectServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new VideoSubjectService(bookingQueryService, playerProfileRepository);
+        service = new VideoSubjectService(bookingQueryService, playerProfileRepository, videoRepository, videoSharingPolicy);
     }
 
     private static PlayerProfile profile(long id, boolean erased) {
@@ -151,5 +153,30 @@ class VideoSubjectServiceTest {
         when(playerProfileRepository.findAllById(any())).thenReturn(List.of(profile(1L, true), profile(2L, false)));
 
         assertThat(service.listSubjectBookings(COACH)).containsExactly(live);
+    }
+
+    // Owner decision 2026-11-07 (Pitchside VID-08, option A): unshareable coach videos are not listed.
+    @Test
+    void shareableForSubject_leavesOutVideosThatMayNotBeSharedAndExcludesFailedOrHidden() {
+        com.softropic.skillars.platform.video.repo.Video shareable = new com.softropic.skillars.platform.video.repo.Video();
+        com.softropic.skillars.platform.video.repo.Video unscanned = new com.softropic.skillars.platform.video.repo.Video();
+        org.mockito.Mockito.when(videoRepository.findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(
+                org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.any()))
+            .thenReturn(List.of(shareable, unscanned));
+        org.mockito.Mockito.when(videoSharingPolicy.maySharePastOwner(shareable)).thenReturn(true);
+        org.mockito.Mockito.when(videoSharingPolicy.maySharePastOwner(unscanned)).thenReturn(false);
+
+        org.assertj.core.api.Assertions.assertThat(service.shareableForSubject(7L)).containsExactly(shareable);
+
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<java.util.Collection<com.softropic.skillars.platform.video.contract.OperationalState>> excluded =
+            org.mockito.ArgumentCaptor.forClass(java.util.Collection.class);
+        org.mockito.Mockito.verify(videoRepository).findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(
+            org.mockito.ArgumentMatchers.eq(7L), excluded.capture());
+        org.assertj.core.api.Assertions.assertThat(excluded.getValue()).contains(
+            com.softropic.skillars.platform.video.contract.OperationalState.FAILED,
+            com.softropic.skillars.platform.video.contract.OperationalState.HIDDEN,
+            com.softropic.skillars.platform.video.contract.OperationalState.LOCKED,
+            com.softropic.skillars.platform.video.contract.OperationalState.PURGED);
     }
 }
