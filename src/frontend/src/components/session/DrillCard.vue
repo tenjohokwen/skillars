@@ -1,5 +1,11 @@
 <template>
-  <q-card class="drill-card glass-card" @click.self="emit('open-detail')">
+  <q-card
+    class="drill-card glass-card"
+    data-testid="drill-card"
+    :data-drill-id="drill.id"
+    :data-library="drill.libraryType"
+    @click.self="emit('open-detail')"
+  >
     <!-- Video / Thumbnail area -->
     <div class="drill-card__media" @click="emit('open-detail')">
       <video
@@ -28,9 +34,15 @@
     <q-card-section class="drill-card__content">
       <!-- Header row: name + badges -->
       <div class="drill-card__header">
-        <div class="text-subtitle1 text-weight-bold drill-card__name">{{ drill.name }}</div>
+        <div class="text-subtitle1 text-weight-bold drill-card__name" data-testid="drill-name">
+          {{ drill.name }}
+        </div>
         <div class="drill-card__badges row items-center q-gutter-xs">
-          <q-badge :color="difficultyColor" class="drill-card__difficulty">
+          <q-badge
+            :color="difficultyColor"
+            class="drill-card__difficulty"
+            data-testid="drill-difficulty"
+          >
             {{ drill.metadata?.difficultyTier }}
           </q-badge>
           <q-badge v-if="drill.addressesNeglectedSkill" color="warning">
@@ -160,6 +172,7 @@
           v-if="context === 'session-builder'"
           color="primary"
           :label="t('session.drillLibrary.addToSession')"
+          data-testid="drill-add-to-session"
           @click.stop="emit('add-to-session', drill)"
         />
         <q-btn

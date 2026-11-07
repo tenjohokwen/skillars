@@ -23,6 +23,7 @@
           :label="t('session.templates.browseTemplates')"
           :to="{ name: 'coach-session-templates' }"
           class="q-mr-xs"
+          data-testid="plan-browse-templates"
         />
         <!-- feat/coach-workflow-gaps A19: start this booking's plan from a saved template. Only
              before a plan exists — deploy refuses a booking that already has one. -->
@@ -42,6 +43,7 @@
           :label="t('session.templates.saveAsTemplate')"
           :disable="builderStore.saving"
           class="q-mr-sm"
+          data-testid="plan-save-template"
           @click="saveAsTemplateDialog = true"
         />
         <q-btn
@@ -50,6 +52,7 @@
           :loading="builderStore.saving"
           :disable="builderStore.developmentFocus.length === 0"
           class="q-mr-sm"
+          data-testid="plan-save-draft"
           @click="save('DRAFT')"
         />
         <q-btn
@@ -58,6 +61,7 @@
           :label="t('session.builder.saveSession')"
           :loading="builderStore.saving"
           :disable="builderStore.developmentFocus.length === 0"
+          data-testid="plan-save"
           @click="save('SAVED')"
         />
       </div>
@@ -72,7 +76,11 @@
 
           <q-tabs v-model="selectedLibrary" dense class="q-mb-sm" @update:model-value="fetchDrills">
             <q-tab name="PLATFORM" :label="t('session.drillLibrary.platformTab')" />
-            <q-tab name="PRIVATE" :label="t('session.drillLibrary.myLibraryTab')" />
+            <q-tab
+              name="PRIVATE"
+              :label="t('session.drillLibrary.myLibraryTab')"
+              data-testid="plan-tab-private"
+            />
             <q-tab name="SUGGESTED" :label="t('session.suggestions.tabLabel')" />
           </q-tabs>
 
@@ -95,6 +103,7 @@
               clearable
               :placeholder="t('session.drillLibrary.searchPlaceholder')"
               class="q-mb-sm"
+              data-testid="plan-drill-search"
               @update:model-value="fetchDrills"
             >
               <template #prepend><q-icon name="search" /></template>
@@ -137,6 +146,7 @@
           <div
             v-if="builderStore.sourceTemplateName && !builderStore.templateBannerDismissed"
             class="session-builder-page__template-banner row items-center q-mb-sm q-pa-sm"
+            data-testid="plan-template-banner"
           >
             <q-icon name="bookmark" color="primary" class="q-mr-sm" />
             <router-link
@@ -165,10 +175,17 @@
             :prep="builderStore.prep"
           />
 
-          <draggable v-model="builderStore.blocks" item-key="_uid" handle="[data-drag-handle]">
+          <draggable
+            v-model="builderStore.blocks"
+            item-key="_uid"
+            handle="[data-drag-handle]"
+            data-testid="plan-blocks"
+          >
             <template #item="{ element, index }">
               <div
                 class="cursor-pointer"
+                data-testid="plan-block"
+                :data-active="builderStore.activeBlockIndex === index"
                 :class="{
                   'session-builder-page__block--active': builderStore.activeBlockIndex === index,
                 }"
@@ -197,7 +214,11 @@
         <div class="session-builder-page__col-sidebar">
           <q-tabs v-model="sidebarTab" dense align="left" class="q-px-sm">
             <q-tab name="dna" :label="t('session.builder.sessionDna')" />
-            <q-tab name="focus" :label="t('session.builder.developmentFocus')" />
+            <q-tab
+              name="focus"
+              :label="t('session.builder.developmentFocus')"
+              data-testid="plan-tab-focus"
+            />
             <q-tab name="equipment" :label="t('session.builder.equipment')" />
           </q-tabs>
           <q-separator />
@@ -265,12 +286,15 @@
               :key="tmpl.id"
               clickable
               :disable="deployingTemplateId !== null"
+              data-testid="use-template-item"
               @click="useTemplate(tmpl)"
             >
               <q-item-section>
                 <q-item-label>{{ tmpl.name }}</q-item-label>
                 <q-item-label caption>
-                  {{ t('session.templates.drillCount', { count: tmpl.drillCount }) }}
+                  {{
+                    t('session.templates.drillCount', { count: tmpl.drillCount }, tmpl.drillCount)
+                  }}
                 </q-item-label>
               </q-item-section>
               <q-item-section v-if="deployingTemplateId === tmpl.id" side>
@@ -298,11 +322,17 @@
             autofocus
             maxlength="200"
             :label="t('session.templates.nameLabel')"
+            data-testid="template-name-input"
           />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat :label="t('common.cancel')" v-close-popup />
-          <q-btn color="primary" :label="t('session.templates.saveAction')" @click="saveTemplate" />
+          <q-btn
+            color="primary"
+            :label="t('session.templates.saveAction')"
+            data-testid="template-name-save"
+            @click="saveTemplate"
+          />
         </q-card-actions>
       </q-card>
     </q-dialog>

@@ -116,7 +116,7 @@ const DYNAMIC_KEY_CALL_SITES = [
     reason: 'tooltip text keyed by the same tier enum',
   },
   {
-    at: 'src/components/session/DevelopmentFocusSelector.vue:14',
+    at: 'src/components/session/DevelopmentFocusSelector.vue:17',
     reason: 'option label keyed by the focus-area enum value being iterated',
   },
   {

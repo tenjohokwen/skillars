@@ -758,9 +758,9 @@ export default {
       deployAction: 'Créer le plan de séance',
       deployAlreadyExists: 'Un plan de séance existe déjà pour cette réservation',
       deployBookingInvalid: 'Réservation introuvable ou non confirmée',
-      deployCount: '{count} utilisations',
+      deployCount: '{count} utilisation | {count} utilisations',
       lastDeployed: 'Dernière utilisation le {date}',
-      drillCount: '{count} exercices',
+      drillCount: '{count} exercice | {count} exercices',
       rename: 'Renommer',
       delete: 'Supprimer',
       confirmDelete:
@@ -2433,7 +2433,17 @@ export default {
       addWindow: 'Ajouter un créneau récurrent',
       addBlock: 'Bloquer du temps personnel',
       editWindow: 'Modifier le créneau de disponibilité',
-      deleteConfirm: 'Êtes-vous sûr de vouloir supprimer ceci ?',
+      profileFirst: 'Commencez votre profil de coach pour définir vos horaires de la semaine.',
+      openProfileBuilder: 'Ouvrir le créateur de profil',
+      deleteWindowTitle: 'Supprimer ce créneau ?',
+      deleteWindowNoSessions: "Aucune séance à venir n'est réservée sur ces horaires.",
+      deleteWindowImpact:
+        '{count} séance à venir tombe sur ces horaires. Elle reste réservée, mais les familles ne pourront plus demander ces horaires. | {count} séances à venir tombent sur ces horaires. Elles restent réservées, mais les familles ne pourront plus demander ces horaires.',
+      deleteWindowConfirm: 'Supprimer le créneau',
+      editWindowTitle: 'Modifier ce créneau ?',
+      editWindowImpact:
+        '{count} séance à venir tombe hors des nouveaux horaires. Elle reste réservée. | {count} séances à venir tombent hors des nouveaux horaires. Elles restent réservées.',
+      editWindowConfirm: 'Enregistrer',
       bookingConflictWarning:
         "Vous avez une réservation pendant cette période. Les modifications ne s'appliquent qu'à la disponibilité future.",
       blockAdded: 'Bloc horaire enregistré avec succès.',
