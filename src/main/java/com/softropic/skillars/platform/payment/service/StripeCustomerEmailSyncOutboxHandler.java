@@ -36,7 +36,6 @@ import java.util.Optional;
 public class StripeCustomerEmailSyncOutboxHandler implements OutboxMessageHandler {
 
     private static final String RESOURCE_MISSING = "resource_missing";
-    private static final String ERASED_EMAIL_DOMAIN = "@erased.io";
 
     private final StripeClient stripeClient;
     private final StripeCustomerRepository stripeCustomerRepository;
@@ -73,7 +72,7 @@ public class StripeCustomerEmailSyncOutboxHandler implements OutboxMessageHandle
         stripeCustomerRepository.acquireCustomerOutboxLock(customerId.get());
         Optional<User> user = userRepository.findOneById(userId);
         if (user.isEmpty() || user.get().getEmail() == null || user.get().getEmail().isBlank()
-                || user.get().getEmail().endsWith(ERASED_EMAIL_DOMAIN)) {
+                || StripeCustomerCardWrites.isErasureTombstone(userId, user.get().getEmail())) {
             log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SKIPPED userId={}] account gone or erased", userId);
             return;
         }

@@ -317,8 +317,9 @@ public class SubscriptionService {
             if (pendingDowngrade) {
                 restoreCoachPriceAndVoidDowngrade(coachId, stripeSubId, currentTier);
             }
-            Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
+            StripeClient.TierUpdate change = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "COACH_UPGRADE", coachId);
+            Subscription updated = change.subscription();
             final boolean granted;
             try {
                 granted = self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
@@ -326,8 +327,10 @@ public class SubscriptionService {
                 recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, targetTier, updated);
                 throw e;
             }
-            if (granted) {
-                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record.
+            if (granted && !change.sent()) {
+                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record. Only
+                // when nothing was billed now (round-2 V1): Stripe already carried the price an earlier, ungranted upgrade
+                // paid for, so this grant honours that charge. A grant that billed again leaves the earlier one owed back.
                 paymentRecoveryRecorder.resolveUngrantedUpgrades(stripeSubId, targetTier);
             }
         } else if (newRank == currentRank) {
@@ -628,8 +631,9 @@ public class SubscriptionService {
             if (pendingDowngrade) {
                 restorePlayerPriceAndVoidDowngrade(playerId, stripeSubId, currentTier, interval);
             }
-            Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
+            StripeClient.TierUpdate change = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "PLAYER_UPGRADE", playerId);
+            Subscription updated = change.subscription();
             final boolean granted;
             try {
                 granted = self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
@@ -637,8 +641,10 @@ public class SubscriptionService {
                 recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, targetTier, updated);
                 throw e;
             }
-            if (granted) {
-                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record.
+            if (granted && !change.sent()) {
+                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record. Only
+                // when nothing was billed now (round-2 V1): Stripe already carried the price an earlier, ungranted upgrade
+                // paid for, so this grant honours that charge. A grant that billed again leaves the earlier one owed back.
                 paymentRecoveryRecorder.resolveUngrantedUpgrades(stripeSubId, targetTier);
             }
         } else if (newRank == currentRank) {
@@ -1826,7 +1832,7 @@ public class SubscriptionService {
     }
 
     /** Stripe price change with a per-attempt idempotency key; a declined proration charge is not granted. */
-    private Subscription updateStripePrice(String stripeSubId, String priceId, boolean chargeNow,
+    private StripeClient.TierUpdate updateStripePrice(String stripeSubId, String priceId, boolean chargeNow,
                                            String keyPrefix, String logTag, Object ownerId) {
         try {
             return stripeClient.updateSubscriptionTier(stripeSubId, priceId, chargeNow, keyPrefix + UUID.randomUUID());

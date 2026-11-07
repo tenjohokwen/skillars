@@ -302,8 +302,8 @@ public class StripeClient {
      * already paid at the higher price, the next renewal bills the new one. Idempotency key is
      * caller-supplied (per attempt, or per scheduled change for the retry-safe applicator).
      */
-    public Subscription updateSubscriptionTier(String stripeSubscriptionId, String newPriceId, boolean chargeNow,
-                                               String idempotencyKey) throws StripeException {
+    public TierUpdate updateSubscriptionTier(String stripeSubscriptionId, String newPriceId, boolean chargeNow,
+                                             String idempotencyKey) throws StripeException {
         RequestOptions options = RequestOptions.builder()
             .setIdempotencyKey(idempotencyKey)
             .build();
@@ -312,7 +312,7 @@ public class StripeClient {
             // skillars-deferred-176 AC5 (RS07c): a retry after a lost persist would send the same price again with
             // always_invoice under a fresh key. Nothing to change at Stripe; the caller persists the tier.
             log.info("[STRIPE_SUBSCRIPTION_PRICE_UNCHANGED] stripeSubId={} priceId={} no update sent", stripeSubscriptionId, newPriceId);
-            return existing;
+            return new TierUpdate(existing, false);
         }
         String itemId = existing.getItems().getData().get(0).getId();
         SubscriptionUpdateParams.Builder params = SubscriptionUpdateParams.builder()
@@ -326,7 +326,15 @@ public class StripeClient {
         } else {
             params.setProrationBehavior(SubscriptionUpdateParams.ProrationBehavior.NONE);
         }
-        return existing.update(params.build(), options);
+        return new TierUpdate(existing.update(params.build(), options), true);
+    }
+
+    /**
+     * The subscription after {@link #updateSubscriptionTier}, and whether an update was sent: false when it already carried
+     * the price, so nothing was billed (skillars-deferred-176 round-2 V1: only then may an earlier ungranted upgrade's
+     * charge count as honoured).
+     */
+    public record TierUpdate(Subscription subscription, boolean sent) {
     }
 
     /** True when the subscription's first item (the only one this app creates) already carries {@code priceId}. */

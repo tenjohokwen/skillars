@@ -25,8 +25,6 @@ import java.util.Optional;
 @RequiredArgsConstructor
 public class StripeCustomerCardWrites {
 
-    private static final String ERASED_EMAIL_DOMAIN = "@erased.io";
-
     private final StripeCustomerRepository stripeCustomerRepository;
     private final UserRepository userRepository;
 
@@ -40,12 +38,19 @@ public class StripeCustomerCardWrites {
             return false;
         }
         Optional<User> user = userRepository.findOneById(userId);
-        boolean live = user.isPresent()
-            && (user.get().getEmail() == null || !user.get().getEmail().endsWith(ERASED_EMAIL_DOMAIN));
+        boolean live = user.isPresent() && !isErasureTombstone(userId, user.get().getEmail());
         if (!live) {
             log.info("[STRIPE_CUSTOMER_CARD_WRITE_SKIPPED userId={}] account gone or erased", userId);
         }
         return live;
+    }
+
+    /**
+     * The exact address {@code GdprErasureService} writes for this user. Round-2 V2: not just the {@code @erased.io} domain,
+     * which a live user may register under.
+     */
+    static boolean isErasureTombstone(Long userId, String email) {
+        return email != null && email.equals("deleted." + userId + "@erased.io");
     }
 
     /** RS09g: a pack purchase's card on an existing customer row, as a one-column UPDATE rather than a full-row save. */

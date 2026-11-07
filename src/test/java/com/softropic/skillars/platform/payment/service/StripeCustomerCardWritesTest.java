@@ -64,6 +64,24 @@ class StripeCustomerCardWritesTest {
         verify(stripeCustomerRepository, never()).updatePaymentMethod(any(), any());
     }
 
+    // round-2 V2: a live payer registered at the erased.io domain is not the erasure tombstone
+    @Test
+    void aLivePayerAtTheErasedDomain_getsTheCard() {
+        row();
+        user("bob@erased.io");
+        when(stripeCustomerRepository.updatePaymentMethod(USER_ID, "pm_new")).thenReturn(1);
+
+        assertThat(cardWrites.writeCardIfPayerLive(USER_ID, "pm_new")).isTrue();
+    }
+
+    @Test
+    void anotherUsersTombstone_isNotThisPayersErasure() {
+        row();
+        user("deleted.43@erased.io");
+
+        assertThat(cardWrites.lockIfPayerLive(USER_ID)).isTrue();
+    }
+
     @Test
     void aGonePayer_orNoRow_isNotLive() {
         when(stripeCustomerRepository.findByIdForUpdateWaiting(USER_ID)).thenReturn(Optional.empty());

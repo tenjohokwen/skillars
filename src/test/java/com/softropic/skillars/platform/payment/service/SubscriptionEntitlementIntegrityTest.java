@@ -724,13 +724,28 @@ class SubscriptionEntitlementIntegrityTest {
         coachSub.setTier("INSTRUCTOR");
         Subscription updated = stripeSub(SUB_ID, "active");
         when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
-            .thenReturn(updated);
+            .thenReturn(new StripeClient.TierUpdate(updated, true));
 
         service.changeCoachTier(COACH_ID, "ACADEMY");
 
         verify(stripeClient).updateSubscriptionTier(eq(SUB_ID), eq("price_acad"), eq(true), startsWith("sub-upgrade-"));
         assertThat(coachSub.getTier()).isEqualTo("ACADEMY");
-        // skillars-deferred-176 AC5 (RS07c): a granted upgrade resolves an earlier attempt's open reconciliation row
+        // skillars-deferred-176 round-2 V1: this grant billed its own proration, so an earlier ungranted charge stays owed
+        verify(paymentRecoveryRecorder, never()).resolveUngrantedUpgrades(any(), any());
+    }
+
+    // skillars-deferred-176 AC5 (RS07c): a grant with nothing billed now (Stripe already carried the price an earlier,
+    // ungranted upgrade paid for) honours that charge and resolves its open reconciliation row
+    @Test
+    void upgrade_grantedWithoutANewCharge_resolvesTheEarlierUngrantedUpgrade() throws StripeException {
+        coachSub.setTier("INSTRUCTOR");
+        Subscription atPrice = stripeSub(SUB_ID, "active");
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
+            .thenReturn(new StripeClient.TierUpdate(atPrice, false));
+
+        service.changeCoachTier(COACH_ID, "ACADEMY");
+
+        assertThat(coachSub.getTier()).isEqualTo("ACADEMY");
         verify(paymentRecoveryRecorder).resolveUngrantedUpgrades(SUB_ID, "ACADEMY");
     }
 
@@ -753,7 +768,7 @@ class SubscriptionEntitlementIntegrityTest {
         coachSub.setTier("INSTRUCTOR");
         Subscription updated = stripeSub(SUB_ID, "active");
         when(updated.getLatestInvoice()).thenReturn("in_upgrade_1");
-        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), eq(true), anyString())).thenReturn(updated);
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), eq(true), anyString())).thenReturn(new StripeClient.TierUpdate(updated, true));
         when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(org.mockito.Mockito.mock(io.micrometer.core.instrument.Counter.class));
     }
 
@@ -785,7 +800,7 @@ class SubscriptionEntitlementIntegrityTest {
         when(configService.getString(startsWith("subscription.player."))).thenReturn("price_pro");
         Subscription updated = stripeSub("sub_player", "active");
         when(updated.getLatestInvoice()).thenReturn("in_upgrade_2");
-        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), eq(true), anyString())).thenReturn(updated);
+        when(stripeClient.updateSubscriptionTier(anyString(), anyString(), eq(true), anyString())).thenReturn(new StripeClient.TierUpdate(updated, true));
         when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(org.mockito.Mockito.mock(io.micrometer.core.instrument.Counter.class));
         return playerSub;
     }

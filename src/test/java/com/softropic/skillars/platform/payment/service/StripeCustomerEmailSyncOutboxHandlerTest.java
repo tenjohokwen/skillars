@@ -109,6 +109,17 @@ class StripeCustomerEmailSyncOutboxHandlerTest {
         verify(stripeClient, never()).updateCustomerEmail(anyString(), anyString());
     }
 
+    // round-2 V2: only the exact tombstone counts as erased, not the domain a live user may register under
+    @Test
+    void aLiveUserAtTheErasedDomain_isSynced() throws Exception {
+        user("bob@erased.io", false);
+        customer();
+
+        handler().handle(PAYLOAD);
+
+        verify(stripeClient).updateCustomerEmail(CUS, "bob@erased.io");
+    }
+
     @Test
     void noCustomerRow_isANoOp() throws Exception {
         when(stripeCustomerRepository.findById(USER_ID)).thenReturn(Optional.empty());

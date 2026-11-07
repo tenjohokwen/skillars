@@ -101,7 +101,7 @@ class SubscriptionLifecycleIT extends BasePaymentIT {
         when(stripeClient.createSubscription(anyString(), anyString(), anyString(), anyString()))
             .thenReturn(mockStripeSub);
         when(stripeClient.updateSubscriptionTier(anyString(), anyString(), anyBoolean(), anyString()))
-            .thenReturn(mockStripeSub);
+            .thenReturn(new StripeClient.TierUpdate(mockStripeSub, true));
         when(stripeClient.cancelSubscriptionAtPeriodEnd(anyString()))
             .thenReturn(Instant.now().plus(30, ChronoUnit.DAYS));
     }
