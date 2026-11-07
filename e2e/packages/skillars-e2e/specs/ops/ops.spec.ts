@@ -150,7 +150,9 @@ test.describe('N · Health dashboard', () => {
           `for i in $(seq 1 30); do [ "$(docker inspect -f '{{.State.Health.Status}}' skillars-e2e-storage-1)" = healthy ] && exit 0; sleep 2; done; exit 1`,
           { stdio: 'ignore', shell: '/bin/sh' },
         )
-        // The stack's storage keeps no data across a restart: recreate the bucket.
+        // The stack's storage keeps no data across a restart: recreate the bucket. Every object
+        // stored before this test is gone, so a serial-lane test that runs after it must not read
+        // files seeded earlier (none does today: only video/upload's @config test, which uses Bunny).
         execSync(`${compose} up storage-init`, { stdio: 'ignore' })
       }
     },

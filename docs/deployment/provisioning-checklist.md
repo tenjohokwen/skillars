@@ -103,9 +103,10 @@ curl -s https://<DOMAIN>/actuator/health                                 # {"sta
 curl -s -o /dev/null -w '%{http_code}\n' https://<STORAGE_DOMAIN>/       # 403 with a valid certificate
 docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'    # PONG
 docker compose exec app wget -qO- http://localhost:8367/manage/health/notification   # UP once SES has production access
-docker compose exec app wget -qO- http://localhost:8367/manage/health/storage        # UP: the app reaches its bucket (counts towards the overall status; not in the public smoke check)
 docker compose logs app | grep -E "AppSetupException|STARTUP ABORTED|MEDIA_SCANNING_UNSAFE|config.value.misconfigured"   # nothing
 ```
+
+As an admin, the System Health page lists `storage` as UP (the app reaches its bucket; the `/manage/health/storage` detail is admin-only). It counts towards the overall status, not towards the `smoke` liveness check.
 
 Then the SES preflight (`ready: true`), a Stripe test delivery to each endpoint (200), Grafana at `https://<MONITORING_DOMAIN>` with the alert rules healthy,
 and the [section 9](#9-release-and-post-deploy-smoke-tests) smoke tests.

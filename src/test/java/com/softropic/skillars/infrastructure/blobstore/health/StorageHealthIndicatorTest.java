@@ -46,4 +46,23 @@ class StorageHealthIndicatorTest {
         assertThat(health.getStatus()).isEqualTo(Status.DOWN);
         assertThat(health.getDetails()).containsKey("error");
     }
+
+    @Test
+    void forbidden_isUpWithANote_becauseTheStorageAnswered() {
+        when(s3.headBucket(any(HeadBucketRequest.class))).thenThrow(
+            (Throwable) software.amazon.awssdk.services.s3.model.S3Exception.builder().statusCode(403).message("Access Denied").build());
+
+        Health health = indicator.health();
+
+        assertThat(health.getStatus()).isEqualTo(Status.UP);
+        assertThat(health.getDetails()).containsKey("note");
+    }
+
+    @Test
+    void missingBucket_isDown() {
+        when(s3.headBucket(any(HeadBucketRequest.class))).thenThrow(
+            (Throwable) software.amazon.awssdk.services.s3.model.NoSuchBucketException.builder().statusCode(404).message("NoSuchBucket").build());
+
+        assertThat(indicator.health().getStatus()).isEqualTo(Status.DOWN);
+    }
 }
