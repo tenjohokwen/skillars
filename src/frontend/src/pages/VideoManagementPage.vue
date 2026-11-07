@@ -40,7 +40,7 @@
             :key="type"
             v-close-popup
             clickable
-            :data-testid="`coach-upload-${type}`"
+            :data-testid="`coach-upload-${type.toLowerCase().replace('_', '-')}`"
             @click="openUpload(type)"
           >
             <q-item-section>
@@ -488,7 +488,8 @@ async function confirmDelete(videoId) {
     $q.dialog({
       title: t('video.management.deleteConfirmTitle'),
       message: t('video.management.deleteConfirm'),
-      cancel: true,
+      ok: { 'data-testid': 'video-delete-confirm' },
+      cancel: { flat: true, 'data-testid': 'video-delete-cancel' },
       persistent: true,
     })
       .onOk(() => resolve(true))

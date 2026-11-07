@@ -1603,6 +1603,31 @@ export class Provisioner {
     return row!.id
   }
 
+  /** A video's operational state right now. */
+  async videoStateNow(videoId: string): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ state: string }>(
+      'SELECT operational_state AS state FROM main.videos WHERE id = $1::uuid',
+      [videoId],
+    )
+    if (!row) throw new Error(`No video ${videoId}`)
+    return row.state
+  }
+
+  /** Who a coach video is about: its session and that session's player (both null if none). */
+  async videoSubject(
+    videoId: string,
+  ): Promise<{ bookingId: string | null; playerId: string | null }> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ booking_id: string | null; player_id: string | null }>(
+      `SELECT subject_booking_id AS booking_id, subject_player_id::text AS player_id
+         FROM main.videos WHERE id = $1::uuid`,
+      [videoId],
+    )
+    if (!row) throw new Error(`No video ${videoId}`)
+    return { bookingId: row.booking_id, playerId: row.player_id }
+  }
+
   /** SQL seam: an owner's used storage (the quota bar and the over-quota check read it). */
   async setVideoQuotaUsed(ownerId: string, storageUsedBytes: number): Promise<void> {
     const sql = await this.sql()
