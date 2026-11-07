@@ -71,6 +71,9 @@ async function save(profile: CoachPublicProfileScreen, page: Page) {
 
 /** Moderation runs inside the submit request, so the dialog can take a while to close. */
 const MODERATED = { timeout: 30_000 }
+
+// Every review spec completes and ages a session and waits on moderated submits.
+test.beforeEach(() => test.slow())
 async function submit(profile: CoachPublicProfileScreen) {
   await profile.dialogSubmit().click()
   await expect(profile.dialogSubmit()).toBeHidden(MODERATED)

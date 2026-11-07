@@ -1,5 +1,5 @@
 <template>
-  <q-page class="q-pa-md">
+  <q-page class="q-pa-md" data-testid="coach-reviews-page">
     <div class="coach-reviews-page glass-card q-pa-lg">
       <div class="text-h6 q-mb-md">{{ t('reviews.myReviewsTitle') }}</div>
 
@@ -27,12 +27,22 @@
         {{ t('common.errorGeneric') }}
       </div>
 
-      <div v-else-if="!reviews.length" class="text-center q-py-xl text-body2 text-secondary">
+      <div
+        v-else-if="!reviews.length"
+        class="text-center q-py-xl text-body2 text-secondary"
+        data-testid="coach-reviews-empty"
+      >
         {{ t('marketplace.noReviewsYet') }}
       </div>
 
       <template v-else>
-        <div v-for="review in reviews" :key="review.reviewId" class="review-item q-mb-md q-pb-md">
+        <div
+          v-for="review in reviews"
+          :key="review.reviewId"
+          class="review-item q-mb-md q-pb-md"
+          data-testid="coach-review"
+          :data-review-id="review.reviewId"
+        >
           <div class="row items-center q-gutter-sm q-mb-xs">
             <q-rating :model-value="review.rating" readonly size="16px" color="amber" />
             <span class="text-caption" style="color: var(--text-secondary)">
@@ -65,7 +75,11 @@
           </div>
 
           <!-- Existing response -->
-          <div v-if="review.coachResponseBody?.trim()" class="coach-response q-mt-sm q-pa-sm">
+          <div
+            v-if="review.coachResponseBody?.trim()"
+            class="coach-response q-mt-sm q-pa-sm"
+            data-testid="coach-review-response"
+          >
             <div class="text-caption text-weight-bold" style="color: var(--text-secondary)">
               {{ t('reviews.coachResponseLabel') }}
             </div>
@@ -83,6 +97,7 @@
               filled
               :label="t('reviews.respondLabel')"
               maxlength="500"
+              data-testid="coach-review-response-input"
             />
             <div v-if="responseErrors[review.reviewId]" class="text-negative text-caption q-mt-xs">
               {{ responseErrors[review.reviewId] }}
@@ -94,6 +109,7 @@
               color="primary"
               class="q-mt-xs"
               :label="t('reviews.respondSubmit')"
+              data-testid="coach-review-response-submit"
               :disable="!responseDrafts[review.reviewId]?.trim()"
               :loading="submittingReviewId === review.reviewId"
               @click="submitResponse(review)"

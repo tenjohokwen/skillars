@@ -21,6 +21,7 @@ export const R = {
   sessionTemplates: '/coach/session-templates',
   bookingRequests: '/coach/booking-requests',
   coachPlayers: '/coach/players',
+  coachReviews: '/coach/reviews',
   coachPlayerDetail: '/coach/players/:playerId(\\d+)',
   packTiers: '/coach/session-pack-tiers',
   revenue: '/coach/revenue',

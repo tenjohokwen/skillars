@@ -1740,6 +1740,71 @@ export class Provisioner {
     return row ?? null
   }
 
+  /**
+   * SQL seam: approved reviews by made-up authors (author ids have no foreign key), newest first in
+   * the order given, for lists long enough to sort and page. Recomputes the coach's aggregate.
+   */
+  async seedReviewList(
+    coach: CoachAccount,
+    reviews: { rating: 1 | 2 | 3 | 4 | 5; body: string }[],
+  ): Promise<void> {
+    const sql = await this.sql()
+    const base = randomInt(1_000_000_000, 2_000_000_000)
+    for (const [i, review] of reviews.entries()) {
+      await sql.query(
+        `INSERT INTO reviews.coach_reviews
+           (coach_id, author_id, author_role, rating, body, moderation_status, created_at, last_modified_at)
+         VALUES ($1::uuid, $2::bigint, 'PARENT', $3, $4, 'APPROVED',
+                 now() - make_interval(hours => $5::int), now() - make_interval(hours => $5::int))`,
+        [coach.coachId, base + i, review.rating, review.body, i + 1],
+      )
+    }
+    await sql.query(
+      `UPDATE marketplace.coach_profiles p
+          SET review_count = agg.n, average_rating = ROUND(agg.avg, 1)
+         FROM (SELECT COUNT(*) AS n, AVG(rating)::numeric AS avg FROM reviews.coach_reviews
+                WHERE coach_id = $1::uuid AND moderation_status = 'APPROVED' AND related_party = false) agg
+        WHERE p.id = $1::uuid`,
+      [coach.coachId],
+    )
+  }
+
+  /**
+   * SQL seam: marks a family's booking with a coach as related-party (S-06), as the detector does
+   * when the payer and the coach share an identity signal. A review the family then writes is
+   * stored but never published or counted.
+   */
+  async markRelatedParty(bookingId: string, coach: CoachAccount, payer: { userId: string }) {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO payment.related_party_bookings
+         (booking_id, coach_id, payer_user_id, matched_kinds, payout_hold_until)
+       VALUES ($1::uuid, $2::uuid, $3::bigint, 'BROWSER', now() + interval '60 days')
+       ON CONFLICT (booking_id) DO NOTHING`,
+      [bookingId, coach.coachId, payer.userId],
+    )
+  }
+
+  /**
+   * SQL seam: a coach who is also a parent (one person, two roles), holding `child`: what it takes
+   * for the coach to try to book their own sessions. The front end then treats them as a parent.
+   */
+  async coachAsParentOf(coach: CoachAccount, child: { playerId: string }): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO main.user_authority (user_id, authority_id) VALUES ($1::bigint, 101)
+       ON CONFLICT DO NOTHING`,
+      [coach.userId],
+    )
+    await sql.query(`UPDATE main."user" SET skillars_role = 'PARENT' WHERE id = $1::bigint`, [
+      coach.userId,
+    ])
+    await sql.query(
+      `UPDATE main.player_profiles SET parent_id = $1::bigint, user_id = NULL WHERE id = $2::bigint`,
+      [coach.userId, child.playerId],
+    )
+  }
+
   /** SQL seam: ages a review so the edit cooldown (reviews.updateCooldownDays, 30) has passed. */
   async ageReview(reviewId: string, days: number): Promise<void> {
     const sql = await this.sql()
