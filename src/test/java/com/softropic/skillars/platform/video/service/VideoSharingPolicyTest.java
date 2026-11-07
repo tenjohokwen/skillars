@@ -57,4 +57,30 @@ class VideoSharingPolicyTest {
         properties.getModeration().setRequiresRealScanner(false);
         assertThat(policy.maySharePastOwner(video)).isTrue();
     }
+
+    // The batch form (one scan query for a list): only a PASSED VIDEOINTEL scan shares a video.
+    @Test
+    void shareable_keepsOnlyVideosWithAPassedScannerScan_inOneQuery() {
+        Video other = new Video();
+        other.setId(UUID.randomUUID());
+        VideoModerationScan passed = mock(VideoModerationScan.class);
+        when(passed.getVideoId()).thenReturn(video.getId());
+        when(passed.getLayer()).thenReturn("VIDEOINTEL");
+        VideoModerationScan otherLayer = mock(VideoModerationScan.class);
+        when(otherLayer.getVideoId()).thenReturn(other.getId());
+        when(otherLayer.getLayer()).thenReturn("ARACHNID");
+        when(scans.findByVideoIdInAndOutcome(java.util.List.of(video.getId(), other.getId()), "PASSED"))
+            .thenReturn(java.util.List.of(passed, otherLayer));
+
+        assertThat(policy.shareable(java.util.List.of(video, other))).containsExactly(video);
+        org.mockito.Mockito.verify(scans, org.mockito.Mockito.never()).findByVideoIdAndLayer(
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void shareable_gateSwitchedOff_keepsEverythingWithoutQuerying() {
+        properties.getModeration().setRequiresRealScanner(false);
+        assertThat(policy.shareable(java.util.List.of(video))).containsExactly(video);
+        org.mockito.Mockito.verifyNoInteractions(scans);
+    }
 }

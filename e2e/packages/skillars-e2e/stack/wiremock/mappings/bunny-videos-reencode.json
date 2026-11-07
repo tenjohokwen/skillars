@@ -1,0 +1,13 @@
+{
+  "name": "Bunny Stream — re-encode (sent after moderation when encoding has not finished yet).",
+  "priority": 10,
+  "request": {
+    "method": "POST",
+    "urlPathPattern": "/bunny/library/[0-9]+/videos/[^/]+/reencode"
+  },
+  "response": {
+    "status": 200,
+    "headers": { "Content-Type": "application/json" },
+    "jsonBody": { "success": true }
+  }
+}

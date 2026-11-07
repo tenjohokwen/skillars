@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomBytes, randomInt, randomUUID } from 'node:crypto'
 import { request, type APIRequestContext } from '@playwright/test'
 import {
   ApiClient,
@@ -1507,6 +1507,136 @@ export class Provisioner {
     } finally {
       await session.dispose()
     }
+  }
+
+  // ─── Suite L: video ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * A Bunny Stream webhook, signed the way the app verifies it (hex HMAC-SHA256 of the raw body,
+   * keyed by APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET in the stack). Status 7 = upload finished,
+   * 3 = encoding finished, 5 = encoding failed, 8 = upload failed.
+   */
+  async bunnyWebhook(guid: string, status: 3 | 5 | 7 | 8): Promise<void> {
+    const body = JSON.stringify({ VideoLibraryId: 123456, VideoGuid: guid, Status: status })
+    const signature = createHmac('sha256', 'e2e-webhook-signing-secret').update(body).digest('hex')
+    const context = await request.newContext()
+    try {
+      const response = await context.post(`${API_BASE_URL}/video/webhooks/bunny`, {
+        headers: { 'Content-Type': 'application/json', 'X-BunnyStream-Signature': signature },
+        data: body,
+      })
+      if (!response.ok()) {
+        throw new Error(`bunnyWebhook ${status} for ${guid}: HTTP ${response.status()}`)
+      }
+    } finally {
+      await context.dispose()
+    }
+  }
+
+  /** The newest video an owner has (owner id: a PlayerProfile id, or a coach-profile UUID). */
+  async latestVideo(
+    ownerId: string,
+  ): Promise<{ id: string; guid: string | null; state: string; storageBytes: number | null }> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{
+      id: string
+      guid: string | null
+      state: string
+      storage_bytes: string | null
+    }>(
+      `SELECT id, provider_asset_id AS guid, operational_state AS state, storage_bytes
+         FROM main.videos WHERE owner_id = $1 ORDER BY created_at DESC LIMIT 1`,
+      [ownerId],
+    )
+    if (!row) throw new Error(`No video for owner ${ownerId}`)
+    return {
+      id: row.id,
+      guid: row.guid,
+      state: row.state,
+      storageBytes: row.storage_bytes === null ? null : Number(row.storage_bytes),
+    }
+  }
+
+  /** Polls a video's operational state until it is `state` (webhooks are processed every 5 s). */
+  async videoState(videoId: string, state: string, timeoutMs = 45_000): Promise<void> {
+    const sql = await this.sql()
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      const [row] = await sql.query<{ state: string }>(
+        'SELECT operational_state AS state FROM main.videos WHERE id = $1::uuid',
+        [videoId],
+      )
+      if (row?.state === state) return
+      if (Date.now() > deadline) {
+        throw new Error(`videoState: ${videoId} is ${row?.state ?? 'missing'}, not ${state}`)
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500))
+    }
+  }
+
+  /**
+   * SQL seam: a video row in a settled state (READY or FAILED), skipping upload and processing.
+   * `storageBytes` is what a delete gives back to the quota.
+   */
+  async seedVideo(video: {
+    ownerId: string
+    title?: string
+    state?: 'READY' | 'FAILED'
+    type?: 'HOMEWORK' | 'COACH_REVIEW' | 'DRILL_DEMO'
+    storageBytes?: number
+    subject?: { bookingId: string; playerId: string }
+  }): Promise<string> {
+    const sql = await this.sql()
+    const [row] = await sql.query<{ id: string }>(
+      `INSERT INTO main.videos
+         (owner_id, provider, provider_asset_id, operational_state, access_state, title, visibility,
+          video_type, storage_bytes, subject_booking_id, subject_player_id, created_at, updated_at)
+       VALUES ($1, 'bunny', $2, $3, 'ACTIVE', $4, 'PRIVATE', $5, $6, $7::uuid, $8::bigint, now(), now())
+       RETURNING id`,
+      [
+        video.ownerId,
+        randomUUID(),
+        video.state ?? 'READY',
+        video.title ?? `clip-${randomUUID().slice(0, 6)}.mp4`,
+        video.type ?? 'HOMEWORK',
+        video.storageBytes ?? 204800,
+        video.subject?.bookingId ?? null,
+        video.subject?.playerId ?? null,
+      ],
+    )
+    return row!.id
+  }
+
+  /** SQL seam: an owner's used storage (the quota bar and the over-quota check read it). */
+  async setVideoQuotaUsed(ownerId: string, storageUsedBytes: number): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO main.video_quotas (user_id, storage_used_bytes, bandwidth_used_bytes, bandwidth_period_start)
+       VALUES ($1, $2, 0, date_trunc('month', now()))
+       ON CONFLICT (user_id) DO UPDATE SET storage_used_bytes = EXCLUDED.storage_used_bytes`,
+      [ownerId, storageUsedBytes],
+    )
+  }
+
+  /** SQL seam: a passed scan, so the video may be shared past its uploader (the S-18 gate). */
+  async markVideoScanned(videoId: string): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO main.video_moderation_scans (video_id, layer, outcome)
+       VALUES ($1::uuid, 'VIDEOINTEL', 'PASSED')
+       ON CONFLICT (video_id, layer) DO UPDATE SET outcome = 'PASSED'`,
+      [videoId],
+    )
+  }
+
+  /** SQL seam: a player's date of birth (minors cannot register themselves). */
+  async setDateOfBirth(playerId: string, age: number): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `UPDATE main.player_profiles SET date_of_birth = (now() - make_interval(years => $2::int, days => 40))::date
+        WHERE id = $1::bigint`,
+      [playerId, age],
+    )
   }
 
   /**

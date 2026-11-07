@@ -2,6 +2,7 @@
   <q-card
     v-if="statusConfig"
     class="video-status-card glass-card"
+    data-testid="video-status-card"
     role="region"
     :aria-label="t('video.statusCard.title')"
     aria-live="polite"
@@ -15,7 +16,7 @@
       />
       <div>
         <div class="text-caption text-secondary">{{ t('video.statusCard.title') }}</div>
-        <div class="text-subtitle2" :aria-atomic="true">
+        <div class="text-subtitle2" :aria-atomic="true" data-testid="video-status">
           {{ statusLabel }}
         </div>
       </div>
