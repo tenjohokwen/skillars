@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt } from 'node:crypto'
+import { createHash, randomBytes, randomInt, randomUUID } from 'node:crypto'
 import { request, type APIRequestContext } from '@playwright/test'
 import {
   ApiClient,
@@ -1297,6 +1297,104 @@ export class Provisioner {
     const phone = `+1${this.phoneNonce}${worker}${String(this.phoneCounter).padStart(4, '0')}`
     if (RESERVED_PHONES.has(phone)) throw new Error(`Generated phone ${phone} is reserved`)
     return phone
+  }
+
+  // ─── Suite J: development ────────────────────────────────────────────────────────────────────
+
+  /**
+   * One radar assessment by a coach, through the product's API. Needs an Instructor or Academy coach
+   * with a live booking for the player (confirmedBooking). The composite is computed asynchronously:
+   * follow with radarScores() to wait for it.
+   */
+  async radarAssessment(
+    coach: CoachAccount,
+    playerId: string,
+    type: 'OBJECTIVE' | 'MATCH_OBSERVATION' | 'COACH_EVALUATION',
+    scores: Record<string, number>,
+  ): Promise<void> {
+    const session = await this.login(coach)
+    try {
+      await session.api.post(`/development/players/${playerId}/radar/entries`, {
+        data: {
+          assessmentGroupId: randomUUID(),
+          assessmentDate: new Date().toISOString().slice(0, 10),
+          assessmentType: type,
+          entries: Object.entries(scores).map(([skillCode, score]) => ({ skillCode, score })),
+        },
+        expectStatus: (status) => status >= 200 && status < 300,
+      })
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * The radar's composite and baseline per skill as the viewer's /radar/display returns them,
+   * polled until `until` holds (the composite is written after the assessment commits).
+   */
+  async radarScores(
+    viewer: Pick<Account, 'email' | 'password'>,
+    playerId: string,
+    until: (skills: Record<string, { score: number | null; baseline: number | null }>) => boolean,
+  ): Promise<Record<string, { score: number | null; baseline: number | null }>> {
+    const session = await this.login(viewer)
+    try {
+      const deadline = Date.now() + 30_000
+      for (;;) {
+        const display = await session.api.json<{
+          skills: {
+            skillCode: string
+            compositeScore: number | null
+            baselineScore: number | null
+          }[]
+        }>('GET', `/development/players/${playerId}/radar/display`)
+        const skills = Object.fromEntries(
+          display.skills.map((s) => [
+            s.skillCode,
+            {
+              score: s.compositeScore === null ? null : Number(s.compositeScore),
+              baseline: s.baselineScore === null ? null : Number(s.baselineScore),
+            },
+          ]),
+        )
+        if (until(skills)) return skills
+        if (Date.now() > deadline)
+          throw new Error(`radarScores: timed out (${JSON.stringify(skills)})`)
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    } finally {
+      await session.dispose()
+    }
+  }
+
+  /**
+   * SQL seam: weekly skill exposure (SLU). The product writes these only when a completed session
+   * with a saved plan is attended; `weeksAgo` 0 is the current UTC ISO week.
+   */
+  async seedExposure(
+    playerId: string,
+    rows: { skill: string; weeksAgo: number; slu: number }[],
+  ): Promise<void> {
+    const sql = await this.sql()
+    for (const row of rows) {
+      await sql.query(
+        `INSERT INTO development.player_slu_weekly_snapshot (player_id, skill_code, iso_year, iso_week, total_slu)
+         SELECT $1::bigint, $2,
+                extract(isoyear FROM w)::smallint, extract(week FROM w)::smallint, $3
+           FROM (SELECT (now() AT TIME ZONE 'UTC') - make_interval(weeks => $4::int) AS w) t
+         ON CONFLICT (player_id, skill_code, iso_year, iso_week) DO UPDATE SET total_slu = EXCLUDED.total_slu`,
+        [playerId, row.skill, row.slu, row.weeksAgo],
+      )
+    }
+  }
+
+  /** SQL seam: an open neglected-skill flag (the detector is a weekly job with a warm-up). */
+  async flagNeglected(playerId: string, skill: string): Promise<void> {
+    const sql = await this.sql()
+    await sql.query(
+      `INSERT INTO development.neglected_skill_flags (player_id, skill_code) VALUES ($1::bigint, $2)`,
+      [playerId, skill],
+    )
   }
 
   // ─── Suite I part 4: drills, session plans, templates ─────────────────────────────────────────

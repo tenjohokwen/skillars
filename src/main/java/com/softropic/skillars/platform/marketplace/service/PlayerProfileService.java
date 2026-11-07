@@ -19,6 +19,19 @@ public class PlayerProfileService {
     private final PlayerProfileRepository playerProfileRepository;
     private final UserRepository userRepository;
 
+    /**
+     * The player's parent, or {@code null} for a self-registered player (who has none). Unlike
+     * {@link #getParentIdByPlayerId}, a missing parent is not "player not found": only a missing
+     * player is. Found by Pitchside DEV-01 — the radar used the throwing lookup, so no coach could
+     * ever assess a self-registered player.
+     */
+    @Transactional(readOnly = true)
+    public Long findParentIdByPlayerId(Long playerId) {
+        return playerProfileRepository.findById(playerId)
+            .orElseThrow(() -> new ResourceNotFoundException("Player not found: " + playerId, "player_profile"))
+            .getParentId();
+    }
+
     @Transactional(readOnly = true)
     public Long getParentIdByPlayerId(Long playerId) {
         return playerProfileRepository.findById(playerId)
