@@ -44,6 +44,12 @@ services:
       - APP_PAYMENT_STRIPE_PUBLISHABLE_KEY=pk_test_e2e_placeholder
       - APP_VIDEO_BUNNY_LIBRARY_ID=123456
       - APP_VIDEO_BUNNY_WEBHOOK_SIGNING_SECRET=e2e-webhook-signing-secret
+      # Bunny Stream API calls go to WireMock (stack/wiremock/mappings/bunny-*.json). The browser's
+      # TUS upload goes to a hard-coded https://video.bunnycdn.com/tusupload, which specs intercept
+      # with page.route; processing is driven by signed webhooks (provision.bunnyWebhook).
+      - APP_VIDEO_BUNNY_API_BASE_URL=http://wiremock:8080/bunny
+      - APP_VIDEO_BUNNY_API_KEY=e2e-bunny-api-key
+      - APP_VIDEO_BUNNY_CDN_HOSTNAME=bunny-cdn.e2e.test
       - JWT_SIGNING_KEY=ZTJlLW9ubHktand0LXNpZ25pbmcta2V5LS1OT1QtZm9yLXByb2Qtb3ItdWF0LS1lMmUtc3VpdGUtb25seSEhIQ==
       - LOKI_ENABLED=false
       - MANAGEMENT_TRACING_ENABLED=false
