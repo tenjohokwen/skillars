@@ -4,6 +4,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createTestingPinia } from '@pinia/testing'
+import { createI18n } from 'vue-i18n'
+import enUS from 'src/i18n/en-US/index.js'
 import SessionTemplateVault from 'src/pages/coach/SessionTemplateVault.vue'
 
 const TEMPLATE = { id: 't1', name: 'My Template', drillCount: 3, deployCount: 1 }
@@ -42,6 +44,29 @@ describe('SessionTemplateVault.vue (skillars-deferred-165 AC7)', () => {
 
     const input = wrapper.find('input[maxlength="200"]')
     expect(input.exists()).toBe(true)
+  })
+
+  // Found by Pitchside SES-13: the counts had no singular form ("1 uses").
+  it('counts drills and uses with singular and plural forms', async () => {
+    const i18n = createI18n({ legacy: false, locale: 'en-US', messages: { 'en-US': enUS } })
+    const wrapper = mount(SessionTemplateVault, {
+      global: {
+        plugins: [
+          createTestingPinia({
+            createSpy: vi.fn,
+            initialState: { sessionTemplate: { templates: [TEMPLATE] } },
+          }),
+          i18n,
+        ],
+        stubs: { SessionDNAChart: true },
+      },
+    })
+    mounted.push(wrapper)
+    await flushPromises()
+    const meta = wrapper.find('[data-testid="template-meta"]').text()
+    expect(meta).toContain('3 drills')
+    expect(meta).toMatch(/\b1 use\b/)
+    expect(meta).not.toContain('1 uses')
   })
 })
 

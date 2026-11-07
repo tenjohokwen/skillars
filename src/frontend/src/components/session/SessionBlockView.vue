@@ -1,7 +1,15 @@
 <template>
-  <q-card class="session-block-view glass-card q-mb-md">
+  <q-card
+    class="session-block-view glass-card q-mb-md"
+    data-testid="session-block"
+    :data-block-type="block.blockType"
+  >
     <q-card-section class="session-block-view__header row items-center no-wrap q-py-sm">
-      <div class="session-block-view__drag-handle q-mr-sm cursor-grab" data-drag-handle>
+      <div
+        class="session-block-view__drag-handle q-mr-sm cursor-grab"
+        data-drag-handle
+        data-testid="block-drag-handle"
+      >
         <q-icon name="drag_indicator" size="20px" color="grey-6" />
       </div>
 
@@ -23,6 +31,7 @@
         outlined
         :placeholder="t('session.builder.blockNamePlaceholder')"
         class="col q-mr-sm"
+        data-testid="block-name"
         @update:model-value="emitMeta"
       />
 
@@ -60,8 +69,12 @@
         @change="onDrillsChanged"
       >
         <template #item="{ element, index }">
-          <div class="session-block-view__drill-row row items-center no-wrap q-py-xs q-px-sm">
-            <div data-drill-handle class="cursor-grab q-mr-sm">
+          <div
+            class="session-block-view__drill-row row items-center no-wrap q-py-xs q-px-sm"
+            data-testid="block-drill"
+            :data-drill-id="element.drillId"
+          >
+            <div data-drill-handle class="cursor-grab q-mr-sm" data-testid="block-drill-handle">
               <q-icon name="drag_indicator" size="16px" color="grey-5" />
             </div>
             <div class="col text-body2 ellipsis">{{ element.drill?.name ?? element.drillId }}</div>
