@@ -2,7 +2,12 @@
   <q-page class="q-pa-md">
     <div class="text-h5 q-mb-md">{{ $t('development.dashboardTitle') }}</div>
 
-    <q-banner v-if="store.error" class="bg-negative text-white q-mb-md" rounded>
+    <q-banner
+      v-if="store.error"
+      class="bg-negative text-white q-mb-md"
+      rounded
+      data-testid="development-error"
+    >
       {{ store.error }}
     </q-banner>
 
@@ -11,12 +16,13 @@
     <template v-if="!store.loading">
       <!-- Skills Radar card — hero element above exposure chart. Read-only: the player sees the
            coaches' composite scores but cannot change the displayed subset. -->
-      <q-card id="dev-section-radar" class="q-mb-md">
+      <q-card id="dev-section-radar" class="q-mb-md" data-testid="radar-card">
         <q-card-section>
           <div class="text-subtitle1">{{ $t('development.radar.displayTitle') }}</div>
           <q-toggle
             v-if="hasBaseline"
             v-model="showBaseline"
+            data-testid="radar-baseline-toggle"
             :label="$t('development.radar.compareBaselineLabel')"
           />
         </q-card-section>

@@ -1,15 +1,32 @@
 <template>
   <div class="skill-exposure-bar-chart">
     <v-chart :option="chartOption" autoresize style="height: 320px" />
+    <!-- The chart is a canvas: its neglected-skill labels are invisible to assistive tech (and to
+         tests). This list carries the same alerts as text. Found by Pitchside DEV-04. -->
+    <ul v-if="neglectedCodes.length" class="sr-only" data-testid="exposure-neglected">
+      <li v-for="code in neglectedCodes" :key="code" data-testid="exposure-neglected-skill">
+        {{ $t('development.neglectedSkillAlert', { skill: code }) }}
+      </li>
+    </ul>
     <div v-if="hasZeroSkills" class="zero-skills-row">
+      <!-- A neglected skill with no exposure at all this week is the most neglected of all: it
+           never reaches the bar chart, so its chip carries the alert instead of a neutral grey. -->
       <q-chip
         v-for="skill in zeroExposureSkills"
         :key="skill"
-        color="grey-3"
-        text-color="grey-7"
+        :color="neglectedCodes.includes(skill) ? 'warning' : 'grey-3'"
+        :text-color="neglectedCodes.includes(skill) ? 'white' : 'grey-7'"
         size="sm"
+        data-testid="exposure-zero-skill"
+        :data-skill="skill"
+        :data-neglected="neglectedCodes.includes(skill)"
       >
-        {{ skill }} — {{ $t('development.noExposureYet') }}
+        {{ skill }} —
+        {{
+          neglectedCodes.includes(skill)
+            ? $t('development.neglectedSkillAlert', { skill })
+            : $t('development.noExposureYet')
+        }}
       </q-chip>
     </div>
   </div>
