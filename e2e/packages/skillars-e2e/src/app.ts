@@ -58,12 +58,15 @@ export const skillars = defineSuite({
   runId: E2E.runId,
   mail: new MailpitSink({ baseUrl: E2E.mailpitUrl }),
   // Allowed beyond the app's own origin: the Google Fonts the SPA's index.html loads (intentional), and
-  // object storage, which the browser talks to directly through presigned URLs. Everything else
+  // object storage, which the browser talks to directly through presigned URLs, and the app's own
+  // management port (the health dashboard). Everything else
   // third-party is blocked and recorded by the network gate.
   thirdPartyAllowList: [
     /^https:\/\/fonts\.googleapis\.com\//,
     /^https:\/\/fonts\.gstatic\.com\//,
     originPattern(E2E.storageUrl),
+    // The admin health dashboard reads the actuator on the management port.
+    originPattern(E2E.managementUrl),
   ],
   // Default Stripe tier: serve a local Stripe.js stub; js.stripe.com is never reached.
   prepareContext: stubStripeJs,

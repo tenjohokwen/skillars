@@ -103,6 +103,7 @@ curl -s https://<DOMAIN>/actuator/health                                 # {"sta
 curl -s -o /dev/null -w '%{http_code}\n' https://<STORAGE_DOMAIN>/       # 403 with a valid certificate
 docker compose exec redis sh -c 'redis-cli -a "$REDIS_PASSWORD" ping'    # PONG
 docker compose exec app wget -qO- http://localhost:8367/manage/health/notification   # UP once SES has production access
+docker compose exec app wget -qO- http://localhost:8367/manage/health/storage        # UP: the app reaches its bucket (counts towards the overall status; not in the public smoke check)
 docker compose logs app | grep -E "AppSetupException|STARTUP ABORTED|MEDIA_SCANNING_UNSAFE|config.value.misconfigured"   # nothing
 ```
 
