@@ -408,7 +408,7 @@ public class CoachProfileService {
     /**
      * AC3: the genuine gap {@code saveStep5} leaves — it can only ever SET a non-null photoUrl, never
      * clear one. {@code FileStorageService.softDelete} enforces the project's file-deletion ownership
-     * convention (comparing {@code fso.getCreatedBy()} against the caller's own login) — belt-and-
+     * convention (comparing {@code fso.getOwnerId()} against the caller's own business id) — belt-and-
      * suspenders with {@code requireProfile(userId)}'s own ownership lookup. Idempotent: a no-op when
      * the profile has no photo. Atomic with the {@code photoUrl} clear: {@code softDelete} makes no
      * external storage call (a pure DB soft-delete), so both writes join this method's own ambient
@@ -416,12 +416,10 @@ public class CoachProfileService {
      *
      * <p>skillars-deferred-139 review D2: tolerates both {@link StorageObjectNotFoundException} (the
      * storage row is already gone — nothing left to delete, so clearing {@code photoUrl} is the
-     * correct idempotent outcome) and {@link AuthorizationException} (the storage row's
-     * {@code created_by} is a stale login — reachable via a mundane email change, since
-     * a confirmed email change ({@code EmailChangeService.confirm}) updates the user's login but not any
-     * already-created {@code file_storage_objects} row's {@code created_by}) — without either, this
-     * coach could never remove their photo, the exact capability this AC exists to provide. Warn-logs
-     * the ownership-mismatch case since it is the more surprising of the two.
+     * correct idempotent outcome) and {@link AuthorizationException} (the storage row belongs to someone
+     * else; until skillars-deferred-176 AC6 the check compared the login, so an email change also landed
+     * here) — without either, this coach could never remove their photo, the exact capability this AC
+     * exists to provide. Warn-logs the ownership-mismatch case since it is the more surprising of the two.
      *
      * <p>skillars-deferred-139 review Patch 4: locks and refreshes before mutating, mirroring
      * {@link #saveStep4}'s own lock-then-refresh pattern — without it, this method's unlocked
@@ -431,7 +429,7 @@ public class CoachProfileService {
      * C5 the {@code @Version} would turn that race into a 409; the lock keeps it a wait-and-recheck.
      */
     @Transactional
-    public void deletePhoto(Long userId, String currentUserLogin) {
+    public void deletePhoto(Long userId) {
         CoachProfile profile = requireProfile(userId);
         if (profile.getPhotoUrl() == null) {
             return;
@@ -455,13 +453,13 @@ public class CoachProfileService {
         }
 
         try {
-            fileStorageService.softDelete(profile.getPhotoUrl(), currentUserLogin);
+            fileStorageService.softDelete(profile.getPhotoUrl());
         } catch (StorageObjectNotFoundException e) {
             log.warn("deletePhoto: storage object for coachId={} already gone, clearing photoUrl anyway",
                 profile.getId());
         } catch (AuthorizationException e) {
-            log.warn("deletePhoto: storage object for coachId={} is foreign-owned (likely a stale "
-                + "created_by from a since-changed login), clearing photoUrl anyway", profile.getId());
+            log.warn("deletePhoto: storage object for coachId={} is owned by someone else, clearing photoUrl anyway",
+                profile.getId());
         }
 
         profile.setPhotoUrl(null);
@@ -655,7 +653,7 @@ public class CoachProfileService {
      * ({@code coach_profile/{userId}/{yyyy}/{MM}/{uuid}.{ext}}, see {@code StorageKeyGenerator}) —
      * the bucket is private, so a browser {@code <img src>} cannot load that key directly without
      * going through {@code fileStorageService.signedDownloadUrl}. This profile's own {@code
-     * softDelete(profile.getPhotoUrl(), ...)} call above already uses the raw key correctly (deletion
+     * softDelete(profile.getPhotoUrl())} call above already uses the raw key correctly (deletion
      * operates on the key, not a URL); only the value handed to the frontend needs resolving.
      */
     private String resolvePhotoUrl(String storageKey) {

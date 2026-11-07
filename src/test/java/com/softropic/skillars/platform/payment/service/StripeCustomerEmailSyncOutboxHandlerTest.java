@@ -10,6 +10,7 @@ import com.stripe.exception.InvalidRequestException;
 import com.stripe.exception.RateLimitException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -20,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,9 +65,24 @@ class StripeCustomerEmailSyncOutboxHandlerTest {
         verify(stripeClient).updateCustomerEmail(CUS, "now@example.com");
     }
 
+    // skillars-deferred-176 AC1 (RS03f): the user is read under the lock shared with the erasure handler.
+    @Test
+    void readsTheUser_onlyAfterTakingTheCustomerOutboxLock() throws Exception {
+        user("now@example.com", false);
+        customer();
+
+        handler().handle(PAYLOAD);
+
+        InOrder order = inOrder(stripeCustomerRepository, userRepository, stripeClient);
+        order.verify(stripeCustomerRepository).acquireCustomerOutboxLock(CUS);
+        order.verify(userRepository).findOneById(USER_ID);
+        order.verify(stripeClient).updateCustomerEmail(CUS, "now@example.com");
+    }
+
     @Test
     void aGoneUser_isANoOp() throws Exception {
         when(userRepository.findOneById(USER_ID)).thenReturn(Optional.empty());
+        customer();
 
         handler().handle(PAYLOAD);
 
@@ -85,6 +102,7 @@ class StripeCustomerEmailSyncOutboxHandlerTest {
     @Test
     void anErasedUser_isANoOp() throws Exception {
         user("deleted.42@erased.io", false);
+        customer();
 
         handler().handle(PAYLOAD);
 
@@ -93,7 +111,6 @@ class StripeCustomerEmailSyncOutboxHandlerTest {
 
     @Test
     void noCustomerRow_isANoOp() throws Exception {
-        user("now@example.com", false);
         when(stripeCustomerRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
         handler().handle(PAYLOAD);

@@ -22,6 +22,7 @@ import com.softropic.skillars.platform.payment.repo.StripeCustomerRepository;
 import com.softropic.skillars.platform.payment.service.CoachSoldPackQueryService;
 import com.softropic.skillars.platform.payment.service.PackSessionService;
 import com.softropic.skillars.platform.payment.service.SessionPackPaymentService;
+import com.softropic.skillars.platform.payment.service.StripeCustomerEmailSyncOutboxSupport;
 import com.softropic.skillars.platform.payment.service.SubscriptionService;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
@@ -65,6 +66,7 @@ public class SessionPackPaymentResource {
     private final PaymentProperties paymentProperties;
     private final CoachSoldPackQueryService coachSoldPackQueryService;
     private final SubscriptionService subscriptionService;
+    private final StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
 
     // ─── Parent: purchase a session pack ──────────────────────────────────────
 
@@ -176,15 +178,20 @@ public class SessionPackPaymentResource {
         Long parentId = securityUtil.getCurrentCoachUserId();
         StripeCustomer customer = stripeCustomerRepository.findById(parentId)
             .orElseGet(() -> {
+                String emailBefore = stripeCustomerEmailSync.currentEmail(parentId);
                 String stripeCustomerId = paymentGateway.createStripeCustomer(parentId);
                 StripeCustomer sc = new StripeCustomer();
                 sc.setParentId(parentId);
                 sc.setStripeCustomerId(stripeCustomerId);
+                StripeCustomer saved;
                 try {
-                    return stripeCustomerRepository.save(sc);
+                    saved = stripeCustomerRepository.save(sc);
                 } catch (DataIntegrityViolationException e) {
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }
+                // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
+                stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore);
+                return saved;
             });
         String clientSecret = paymentGateway.createSetupIntent(customer.getStripeCustomerId());
         return ResponseEntity.ok(new SetupIntentResponse(clientSecret));

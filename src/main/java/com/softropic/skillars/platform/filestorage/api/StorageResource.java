@@ -70,7 +70,7 @@ public class StorageResource {
     public ResponseEntity<Void> deleteFile(HttpServletRequest request) {
         String fullPath = (String) request.getAttribute(HandlerMapping.PATH_WITHIN_HANDLER_MAPPING_ATTRIBUTE);
         String key = fullPath.substring("/api/storage/".length());
-        fileStorageService.softDelete(key, securityUtil.getCurrentUserName());
+        fileStorageService.softDelete(key);
         return ResponseEntity.noContent().build();
     }
 }

@@ -161,9 +161,9 @@ class CoachGalleryServiceTest {
         CoachMediaItem item = items(1).get(0);
         when(coachMediaItemRepository.findById(item.getId())).thenReturn(Optional.of(item));
 
-        service.deleteItem(USER_ID, item.getId(), "coach@x.com");
+        service.deleteItem(USER_ID, item.getId());
 
-        verify(fileStorageService).softDelete(item.getFileUrl(), "coach@x.com");
+        verify(fileStorageService).softDelete(item.getFileUrl());
         verify(coachMediaItemRepository).delete(item);
     }
 
@@ -173,7 +173,7 @@ class CoachGalleryServiceTest {
         item.setCoachId(UUID.randomUUID());
         when(coachMediaItemRepository.findById(item.getId())).thenReturn(Optional.of(item));
 
-        assertThatThrownBy(() -> service.deleteItem(USER_ID, item.getId(), "coach@x.com"))
+        assertThatThrownBy(() -> service.deleteItem(USER_ID, item.getId()))
             .isInstanceOf(ResourceNotFoundException.class);
         verify(coachMediaItemRepository, never()).delete(any());
     }

@@ -1,11 +1,11 @@
 # Story skillars-deferred-176: Payment residuals (Stripe email serialisation, card writes on erased rows, unreconciled no-charge, upgrade retry, file ownership)
 
-Status: ready-for-dev
+Status: in-progress
 
 <!-- CREATED 2026-11-07 from deferred-work.md (RS section), owner-chosen bundle "payment residuals": RS03d, RS03e,
      RS03f, RS06i, RS07c, RS09g, RS09h. Code read at origin/master 0df391d5 (skillars-deferred-175 merged, PR #489);
      all seven items re-verified OPEN at that HEAD. Citations are line numbers at 0df391d5; re-verify before editing.
-     Decisions D9-D14 continue 174/175's numbering and are PENDING OWNER; each lists a recommendation. -->
+     Decisions D9-D14 continue 174/175's numbering; owner decided option 1 in each (2026-11-07). -->
 
 ## Story
 
@@ -131,9 +131,9 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
   D14 changes the check. So does `CoachProfileService.deletePhoto`'s javadoc (:408-424, the skillars-deferred-139 D2
   paragraph explaining the `AuthorizationException` tolerance as a stale login); rewrite it with the check.
 
-## Decisions (PENDING OWNER)
+## Decisions (DECIDED 2026-11-07: option 1 in each)
 
-- **D9 (RS03f): serialising a user's Stripe-customer outbox work.**
+- **D9 (RS03f): serialising a user's Stripe-customer outbox work. DECIDED 2026-11-07: option 1.**
   1. *(Recommended)* Both handlers take a blocking `pg_advisory_xact_lock(<NS>, hashtext(:stripeCustomerId))` before
      reading anything, keyed on the Stripe customer id (the erasure payload carries only that; the sync resolves it from
      its `stripe_customers` row, then re-reads the user under the lock). Pro: strict — whichever runs second reads state
@@ -144,7 +144,7 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
      backoff interval; contention shows up as outbox failures/`last_error` noise.
   3. No lock: after its Stripe call the sync re-reads the user and, if now erased or the email changed, enqueues a
      follow-up (re-scrub / re-sync). Pro: no locking. Con: eventual, not strict; can loop under churn; more code.
-- **D10 (RS03e): the email change missed during first customer creation.**
+- **D10 (RS03e): the email change missed during first customer creation. DECIDED 2026-11-07: option 1.**
   1. *(Recommended)* `createStripeCustomer` returns the email it sent; each caller, after inserting the
      `stripe_customers` row, re-reads the user's email and, if it differs, enqueues `STRIPE_CUSTOMER_EMAIL_SYNC` (in a
      transaction, since the enqueue is `MANDATORY`). Pro: one extra read, no Stripe call in the common case. Con: leaves a
@@ -152,7 +152,7 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
   2. Always enqueue a sync after inserting a new customer row. Pro: simpler. Con: one extra Stripe call per new customer;
      same residual.
   3. Accept and close the ledger line as won't-fix. Pro: free. Con: receipts go to the old address until the next change.
-- **D11 (RS09g, RS09h): card writes onto an erased row.**
+- **D11 (RS09g, RS09h): card writes onto an erased row. DECIDED 2026-11-07: option 1.**
   1. *(Recommended)* One `StripeCustomerRepository`/service helper used by `getOrCreateStripeCustomer` (existing-row
      branch) and `reapplyPaymentMethodAndScheduleSync`: in a transaction, `findByIdForUpdateWaiting(parentId)`, then read
      the user; if the email is the `@erased.io` tombstone (or the user is gone), write nothing and enqueue nothing;
@@ -163,7 +163,7 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
      write. Pro: the WHERE re-check handles it without a lock. Con: migration + provisioning entry; every future write
      must remember the predicate.
   3. RS09g only (targeted update), accept RS09h. Con: leaves the GDPR write-back.
-- **D12 (RS06i): an UNRECONCILED attempt Stripe shows no charge for.**
+- **D12 (RS06i): an UNRECONCILED attempt Stripe shows no charge for. DECIDED 2026-11-07: option 1.**
   1. *(Recommended)* `markNoCharge` skips `revertDeclinedCard` when the attempt is UNRECONCILED (fix the javadoc to say
      "never on UNRECONCILED"; UNKNOWN keeps the revert, because the resolver has just confirmed no succeeded charge). The
      job keeps leaving it open (WRITE_LOST → NEEDS_OPERATOR, unchanged). `closeAttemptByAdmin` alone may CAS UNRECONCILED
@@ -173,7 +173,7 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
   2. Skip the revert only; closing stays SQL. Pro: smallest. Con: the "only SQL closes it" half stays open.
   3. Also let the job CAS UNRECONCILED → NO_CHARGE. Con: lets an inference from absence override a capture the request
      thread saw; contradicts the enum's documented design.
-- **D13 (RS07c): the retried upgrade.**
+- **D13 (RS07c): the retried upgrade. DECIDED 2026-11-07: option 1.**
   1. *(Recommended)* `StripeClient.updateSubscriptionTier` returns without updating when item 0 already has the target
      price (a signal to the caller, e.g. a result flag), so the retry only persists the tier; and a successful persist
      resolves any open `subscription_upgrade_reconciliations` row for that subscription and target tier (`resolved_at`,
@@ -187,7 +187,7 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
      a provisioning entry, for a duplicate that needs two concurrent failures.
   3. Only verify with Stripe test mode that a same-price update bills zero, and document it. Con: depends on Stripe
      behaviour staying that way; no code guard.
-- **D14 (RS03d): who may delete a stored file.**
+- **D14 (RS03d): who may delete a stored file. DECIDED 2026-11-07: option 1.**
   1. *(Recommended)* `softDelete` compares `owner_id` with the caller's business id
      (`securityUtil.requireCurrentBusinessId()`), and the three callers pass that instead of the login. The
      `deletePhoto`/`deleteItem` catches stay (they now fire only for a genuinely foreign object) with the "stale
@@ -227,7 +227,7 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
 
 ## Tasks / Subtasks
 
-- [ ] T0 Owner decisions D9-D14 recorded in this file.
+- [x] T0 Owner decisions D9-D14 recorded in this file (option 1 each).
 - [ ] T1 (AC1) Advisory lock in both Stripe-customer handlers; IT.
 - [ ] T2 (AC2) Post-insert email compare and sync enqueue in both customer-creation callers; tests.
 - [ ] T3 (AC3) Erased-row-safe targeted card writes for `getOrCreateStripeCustomer` and the reapply; tests.

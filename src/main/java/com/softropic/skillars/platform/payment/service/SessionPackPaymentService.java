@@ -93,6 +93,8 @@ public class SessionPackPaymentService {
     private final UserIdentitySignalService userIdentitySignalService;
     /** S-27: Stripe Identity age gate for self-registered players. */
     private final AgeVerificationService ageVerificationService;
+    private final StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
+    private final StripeCustomerCardWrites stripeCustomerCardWrites;
 
     /**
      * Purchase a session pack for a player.
@@ -393,7 +395,8 @@ public class SessionPackPaymentService {
         RECORD_FAILED,
         /**
          * The verdict's status write did not land and the row is still open: it failed, or its compare-and-set found a status
-         * the verdict may not replace (an UNRECONCILED row, which a capture was seen for, never becomes NO_CHARGE).
+         * the verdict may not replace (an UNRECONCILED row, which a capture was seen for, never becomes NO_CHARGE except
+         * through {@code closeAttemptByAdmin}, skillars-deferred-176 AC4).
          */
         WRITE_LOST
     }
@@ -404,6 +407,14 @@ public class SessionPackPaymentService {
      * every write is its own compare-and-set.
      */
     public Resolution resolveAttempt(Long attemptId) {
+        return resolve(attemptId, false);
+    }
+
+    /**
+     * {@code byAdmin}: skillars-deferred-176 AC4 (RS06i), only {@link #closeAttemptByAdmin} may close an UNRECONCILED row
+     * (a capture was seen) as NO_CHARGE when Stripe now shows no succeeded charge; the job and a replay leave it open.
+     */
+    private Resolution resolve(Long attemptId, boolean byAdmin) {
         SessionPackPurchaseAttempt a = attemptRepository.findById(attemptId).orElse(null);
         if (a == null) {
             return new Resolution(Status.UNKNOWN, null);
@@ -427,7 +438,7 @@ public class SessionPackPaymentService {
         // No customer row: charge() throws payment.noStripeCustomer before any Stripe call. But a live request thread may be about to
         // create that row and charge, so, like every absence verdict, it needs the absence age.
         if (stripeCustomerRepository.findById(parentId).isEmpty()) {
-            return pastAbsenceAge ? noCharge(a) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
+            return pastAbsenceAge ? noCharge(a, byAdmin) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
         }
 
         final Optional<ChargeLookup> found;
@@ -440,7 +451,7 @@ public class SessionPackPaymentService {
         }
         if (found.isEmpty()) {
             // "Not found" is not proof: only a successful empty lookup at or past the absence age counts as no charge.
-            return pastAbsenceAge ? noCharge(a) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
+            return pastAbsenceAge ? noCharge(a, byAdmin) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
         }
         ChargeLookup charge = found.get();
         // Order is an invariant: a requires_payment_method intent must never reach getCaptureState.
@@ -449,7 +460,7 @@ public class SessionPackPaymentService {
             return new Resolution(Status.UNKNOWN, null, OpenReason.CHARGE_PENDING, false);
         }
         if (!charge.succeeded()) {
-            return noCharge(a);
+            return noCharge(a, byAdmin);
         }
         Optional<SessionPackPurchase> existingForIntent = sessionPackPurchaseRepository.findByStripePaymentIntentId(charge.paymentIntentId());
         if (existingForIntent.isPresent()) {
@@ -536,8 +547,28 @@ public class SessionPackPaymentService {
     }
 
     /** Proven no charge: revert the declined card FIRST (a replay never rewrites it), then write NO_CHARGE. */
-    private Resolution noCharge(SessionPackPurchaseAttempt a) {
+    private Resolution noCharge(SessionPackPurchaseAttempt a, boolean byAdmin) {
+        if (a.getStatus() == Status.UNRECONCILED) {
+            return byAdmin && closeUnreconciledAsNoCharge(a) ? Resolution.closed(Status.NO_CHARGE, null) : reread(a.getId());
+        }
         return markNoCharge(a) ? Resolution.closed(Status.NO_CHARGE, null) : reread(a.getId());
+    }
+
+    /**
+     * skillars-deferred-176 AC4 (RS06i): an operator closes an UNRECONCILED attempt that Stripe now shows no succeeded charge
+     * for. The card is never reverted (a capture was seen with it), and the refund-failure row recorded with the
+     * UNRECONCILED write is resolved, since there is nothing left to refund.
+     */
+    private boolean closeUnreconciledAsNoCharge(SessionPackPurchaseAttempt a) {
+        if (!markQuietly(a, Status.NO_CHARGE, null, EnumSet.of(Status.UNRECONCILED))) {
+            return false;
+        }
+        log.warn("[PACK_PURCHASE_UNRECONCILED_NO_CHARGE] closed by an operator, Stripe shows no succeeded charge: attemptId={} "
+            + "parentId={} intentId={}", a.getId(), a.getParentId(), a.getPaymentIntentId());
+        if (a.getPaymentIntentId() != null) {
+            closeRefundFailure(a.getPaymentIntentId());
+        }
+        return true;
     }
 
     private boolean markNoCharge(SessionPackPurchaseAttempt a) {
@@ -552,7 +583,8 @@ public class SessionPackPaymentService {
     /**
      * AC8: restore the card a declined purchase overwrote, conditional on the column still holding the attempted card.
      * Skipped when no card was attempted (null or blank): the shipped UI always sends none, and the match could never succeed.
-     * Never on UNKNOWN/UNRECONCILED (the charge may have captured with that card).
+     * Never on UNRECONCILED (a capture was seen with that card; skillars-deferred-176 AC4 keeps it off that path). On
+     * UNKNOWN only once the resolver has found no succeeded charge, which is the only way {@link #markNoCharge} is reached.
      *
      * <p>skillars-deferred-174 AC4, accepted gaps: this is compensation, not prevention. A crash between a refused charge and
      * this revert leaves the attempted card saved (no outbox carries the revert), and the match is by value, so a payer who
@@ -671,7 +703,9 @@ public class SessionPackPaymentService {
      * skillars-deferred-174 AC5 (RS06b): the operator's way out for an attempt the job cannot close, replacing the runbook's
      * hand-written UPDATE. Runs the resolver first (which also retries recording the pack; it ignores the needs-operator
      * skip), so the row only ever closes to what Stripe supports: SUCCEEDED with a pack, REFUNDED, or NO_CHARGE through the
-     * declined-card revert. Whatever still holds it open is refused with 409 and the row left open: a processing charge (the
+     * declined-card revert. An UNRECONCILED row (a capture was seen, recording the pack failed) that Stripe now shows no
+     * succeeded charge for closes as NO_CHARGE here only, without the revert, and its refund-failure row is resolved
+     * (skillars-deferred-176 AC4). Whatever still holds it open is refused with 409 and the row left open: a processing charge (the
      * resolver still records it, IN_PROGRESS to UNKNOWN with the PaymentIntent id, as the job would; the action skips the
      * job's minimum age, and the request thread's own SUCCEEDED write accepts UNKNOWN), an absence too recent to trust,
      * captured money with no pack (refund it in Stripe, then close again), or a verdict whose status write did not land. A Stripe failure is a 422. A row the job or a replay closed meanwhile is a 409 notOpen, not
@@ -686,7 +720,7 @@ public class SessionPackPaymentService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.notOpen");
         }
         String loggedReason = Objects.toString(reason, "").replaceAll("[\\r\\n]+", " ");
-        Resolution r = resolveAttempt(attemptId);
+        Resolution r = resolve(attemptId, true);
         if (!r.status().isOpen() && !r.closedHere()) {
             // The job or a client replay closed it between the check above and the resolver's write: not this admin's close.
             log.warn("[PACK_ATTEMPT_ADMIN_CLOSE_REFUSED] closed concurrently: attemptId={} parentId={} status={} admin={}",
@@ -988,17 +1022,21 @@ public class SessionPackPaymentService {
     private StripeCustomer getOrCreateStripeCustomer(Long parentId, String paymentMethodId) {
         return stripeCustomerRepository.findById(parentId).map(existing -> {
             if (paymentMethodId != null && !paymentMethodId.isBlank()) {
-                existing.setStripePaymentMethodId(paymentMethodId);
-                stripeCustomerRepository.save(existing);
+                // skillars-deferred-176 AC3 (RS09g): one column, under the row lock, never onto an erased payer's row.
+                stripeCustomerCardWrites.writeCardIfPayerLive(parentId, paymentMethodId);
             }
             return existing;
         }).orElseGet(() -> {
+            String emailBefore = stripeCustomerEmailSync.currentEmail(parentId);
             String stripeCustomerId = paymentGateway.createStripeCustomer(parentId);
             StripeCustomer sc = new StripeCustomer();
             sc.setParentId(parentId);
             sc.setStripeCustomerId(stripeCustomerId);
             sc.setStripePaymentMethodId(paymentMethodId);
-            return stripeCustomerRepository.save(sc);
+            StripeCustomer saved = stripeCustomerRepository.save(sc);
+            // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
+            stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore);
+            return saved;
         });
     }
 

@@ -581,7 +581,7 @@ class SubscriptionEntitlementIntegrityTest {
         when(updated.getLatestInvoice()).thenReturn("in_proration_1");
         when(meterRegistry.counter(anyString(), any(String[].class))).thenReturn(org.mockito.Mockito.mock(io.micrometer.core.instrument.Counter.class));
 
-        service.persistCoachTierUpgrade(COACH_ID, SUB_ID, "ACADEMY", updated);
+        assertThat(service.persistCoachTierUpgrade(COACH_ID, SUB_ID, "ACADEMY", updated)).as("not granted").isFalse();
 
         verify(paymentRecoveryRecorder).recordUngrantedUpgrade("COACH", String.valueOf(COACH_ID), SUB_ID, "ACADEMY", "in_proration_1");
         assertThat(coachSub.getTier()).isEqualTo("SCOUT");
@@ -730,6 +730,8 @@ class SubscriptionEntitlementIntegrityTest {
 
         verify(stripeClient).updateSubscriptionTier(eq(SUB_ID), eq("price_acad"), eq(true), startsWith("sub-upgrade-"));
         assertThat(coachSub.getTier()).isEqualTo("ACADEMY");
+        // skillars-deferred-176 AC5 (RS07c): a granted upgrade resolves an earlier attempt's open reconciliation row
+        verify(paymentRecoveryRecorder).resolveUngrantedUpgrades(SUB_ID, "ACADEMY");
     }
 
     @Test
@@ -763,6 +765,7 @@ class SubscriptionEntitlementIntegrityTest {
         assertThatThrownBy(() -> service.changeCoachTier(COACH_ID, "ACADEMY")).hasMessage("payment.subscription.notFound");
 
         verify(paymentRecoveryRecorder).recordUngrantedUpgrade("COACH", String.valueOf(COACH_ID), SUB_ID, "ACADEMY", "in_upgrade_1");
+        verify(paymentRecoveryRecorder, never()).resolveUngrantedUpgrades(any(), any());
     }
 
     @Test

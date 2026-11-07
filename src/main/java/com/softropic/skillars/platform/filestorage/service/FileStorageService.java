@@ -315,7 +315,12 @@ public class FileStorageService {
         }
     }
 
-    public void softDelete(String key, String currentUserLogin) {
+    /**
+     * Soft-deletes the caller's own file. skillars-deferred-176 AC6 (RS03d): ownership is the stable {@code owner_id} (the
+     * caller's business id, as {@link #signDownload} checks it), not {@code created_by}: that holds the login at upload time,
+     * which an email change rewrites and a storage migration never set to the owner.
+     */
+    public void softDelete(String key) {
         long start = System.nanoTime();
         FileStorageObject fso = fileStorageObjectRepository.findByKeyAndDeletedAtIsNull(key)
             .orElseThrow(() -> new StorageObjectNotFoundException(key));
@@ -325,7 +330,7 @@ public class FileStorageService {
         MDC.put("operation", "soft_delete");
         MDC.put("provider", storageProperties.getProvider());
         try {
-            if (!fso.getCreatedBy().equals(currentUserLogin)) {
+            if (!fso.getOwnerId().equals(getOwnerId())) {
                 throw new AuthorizationException("User not authorized to delete this file", SecurityError.MISSING_RIGHTS);
             }
 

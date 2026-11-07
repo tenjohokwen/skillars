@@ -85,6 +85,7 @@ public class SubscriptionService {
     // skillars-deferred-169: parked webhook events (AC4) and the unrecoverable-upgrade record (AC6).
     private final StripePendingSubscriptionEventRepository pendingSubscriptionEventRepository;
     private final PaymentRecoveryRecorder paymentRecoveryRecorder;
+    private final StripeCustomerCardWrites stripeCustomerCardWrites;
     private final MeterRegistry meterRegistry;
 
     /** Self-reference so @Transactional on persist* methods is honoured via the Spring proxy. */
@@ -318,11 +319,16 @@ public class SubscriptionService {
             }
             Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "COACH_UPGRADE", coachId);
+            final boolean granted;
             try {
-                self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
+                granted = self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
             } catch (RuntimeException e) {
                 recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, targetTier, updated);
                 throw e;
+            }
+            if (granted) {
+                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record.
+                paymentRecoveryRecorder.resolveUngrantedUpgrades(stripeSubId, targetTier);
             }
         } else if (newRank == currentRank) {
             if (pendingDowngrade) {
@@ -378,13 +384,14 @@ public class SubscriptionService {
         }
     }
 
+    /** Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted). */
     @Transactional
-    public void persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated) {
+    public boolean persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated) {
         PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
             recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, newTier, updated);
-            return;
+            return false;
         }
         coachSubscriptionChangeRepository.voidAllPendingForCoach(coachId, Instant.now());
         sub.setTier(newTier);
@@ -399,6 +406,7 @@ public class SubscriptionService {
         // temporary staleness this defer creates.
         syncMarketplaceTierDeferrable(coachId, newTier, "COACH_TIER_UPGRADE_SYNC_DEFERRED");
         log.info("[COACH_TIER_UPGRADED coachId={} newTier={}]", coachId, newTier);
+        return true;
     }
 
     @Transactional
@@ -622,11 +630,16 @@ public class SubscriptionService {
             }
             Subscription updated = updateStripePrice(stripeSubId, newPriceId, true, "sub-upgrade-",
                 "PLAYER_UPGRADE", playerId);
+            final boolean granted;
             try {
-                self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
+                granted = self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
             } catch (RuntimeException e) {
                 recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, targetTier, updated);
                 throw e;
+            }
+            if (granted) {
+                // skillars-deferred-176 AC5 (RS07c): after commit, so a rolled-back persist never resolves the record.
+                paymentRecoveryRecorder.resolveUngrantedUpgrades(stripeSubId, targetTier);
             }
         } else if (newRank == currentRank) {
             if (pendingDowngrade) {
@@ -653,13 +666,14 @@ public class SubscriptionService {
         log.info("[PLAYER_PENDING_CHANGES_VOIDED playerId={} count={}]", playerId, voided);
     }
 
+    /** Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted). */
     @Transactional
-    public void persistPlayerTierUpgrade(Long playerId, String stripeSubId, String newTier, Subscription updated) {
+    public boolean persistPlayerTierUpgrade(Long playerId, String stripeSubId, String newTier, Subscription updated) {
         PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
             recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, newTier, updated);
-            return;
+            return false;
         }
         playerSubscriptionChangeRepository.voidAllPendingForPlayer(playerId, Instant.now());
         sub.setTier(newTier);
@@ -668,6 +682,7 @@ public class SubscriptionService {
         }
         paymentPlayerSubscriptionRepository.save(sub);
         log.info("[PLAYER_TIER_UPGRADED playerId={} newTier={}]", playerId, newTier);
+        return true;
     }
 
     @Transactional
@@ -783,11 +798,15 @@ public class SubscriptionService {
      * skillars-deferred-174 AC4 (RS09c): the card sync of a successful pack purchase. Re-applies the purchase's card only
      * while the column holds that card or {@code previousCard} (compare-and-set), and enqueues the subscription sync in
      * the same transaction. Returns false, writing and enqueuing nothing, when another card was saved meanwhile.
+     *
+     * <p>skillars-deferred-176 AC3 (RS09h): also false when the payer was erased. The row lock is taken and the user read
+     * before the compare-and-set, because a NULL previous card would otherwise match the column an erasure just NULLed.
      */
     @Transactional
     public boolean reapplyPaymentMethodAndScheduleSync(Long userId, String previousCard, String paymentMethodId) {
         StripeIdFormat.requirePaymentMethodId(paymentMethodId);
-        if (stripeCustomerRepository.reapplyPaymentMethod(userId, previousCard, paymentMethodId) != 1) {
+        if (!stripeCustomerCardWrites.lockIfPayerLive(userId)
+                || stripeCustomerRepository.reapplyPaymentMethod(userId, previousCard, paymentMethodId) != 1) {
             return false;
         }
         paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);

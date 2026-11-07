@@ -124,4 +124,71 @@ class StripeCustomerRepositoryIT extends AbstractIntegrationTest {
         org.assertj.core.api.Assertions.assertThat(updated).isEqualTo(1);
         org.assertj.core.api.Assertions.assertThat(cardOf()).isEqualTo("pm_new");
     }
+
+    // ── skillars-deferred-176 AC3 (RS09h): a card reapply racing a GDPR erasure ────────────────────────────────
+
+    private static final long ERASED = 9_640_000_176L;
+
+    @Autowired private com.softropic.skillars.platform.payment.service.SubscriptionService subscriptionService;
+    @Autowired private org.springframework.jdbc.core.JdbcTemplate jdbcTemplate;
+    @Autowired private org.springframework.transaction.support.TransactionTemplate transactionTemplate;
+
+    private void commit(String sql, Object... args) {
+        transactionTemplate.executeWithoutResult(status -> jdbcTemplate.update(sql, args));
+    }
+
+    /**
+     * The erasure NULLs the card and sets the tombstone in one transaction. A reapply with a NULL previous card that
+     * blocks on that row would match the NULL afterwards; it must instead see the committed tombstone and write nothing.
+     */
+    @Test
+    void aReapplyWaitingOnAnErasure_seesTheTombstone_andWritesNoCard() throws Exception {
+        commit("INSERT INTO main.\"user\" (id, login, login_id_type, password_hash, activated, first_name, last_name, gender, dob, email) "
+            + "VALUES (?, 'it176@test.com', 'EMAIL', '{noop}x', true, 'T', 'P', 'MALE', '1985-01-01', 'it176@test.com')", ERASED);
+        commit("INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id) VALUES (?, 'cus_it176_erased')", ERASED);
+        java.util.concurrent.CountDownLatch erasing = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        String tombstone = "deleted." + ERASED + "@erased.io";
+        try {
+            java.util.concurrent.Future<?> erasure = pool.submit(() -> transactionTemplate.executeWithoutResult(status -> {
+                jdbcTemplate.update("UPDATE main.\"user\" SET email = ?, login = ? WHERE id = ?", tombstone, tombstone, ERASED);
+                jdbcTemplate.update("UPDATE payment.stripe_customers SET stripe_payment_method_id = NULL WHERE parent_id = ?", ERASED);
+                erasing.countDown();
+                try {
+                    release.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            erasing.await(10, java.util.concurrent.TimeUnit.SECONDS);
+            java.util.concurrent.Future<Boolean> reapply = pool.submit(
+                () -> subscriptionService.reapplyPaymentMethodAndScheduleSync(ERASED, null, "pm_after_erasure"));
+            waitUntilABackendWaitsOnALock();
+
+            release.countDown();
+            erasure.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+            org.assertj.core.api.Assertions.assertThat(reapply.get(10, java.util.concurrent.TimeUnit.SECONDS)).isFalse();
+            org.assertj.core.api.Assertions.assertThat(
+                stripeCustomerRepository.findById(ERASED).orElseThrow().getStripePaymentMethodId()).isNull();
+        } finally {
+            release.countDown();
+            pool.shutdownNow();
+            commit("DELETE FROM payment.stripe_customers WHERE parent_id = ?", ERASED);
+            commit("DELETE FROM main.\"user\" WHERE id = ?", ERASED);
+        }
+    }
+
+    private void waitUntilABackendWaitsOnALock() throws InterruptedException {
+        for (int i = 0; i < 100; i++) {
+            Integer waiting = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'", Integer.class);
+            if (waiting != null && waiting > 0) {
+                return;
+            }
+            Thread.sleep(100);
+        }
+        throw new AssertionError("the reapply never waited on the row lock");
+    }
 }
