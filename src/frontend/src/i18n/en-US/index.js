@@ -2411,6 +2411,7 @@ export default {
       updateCardCta: 'Update card',
       save: 'Save card',
       saveError: 'Could not save your card. Please try again.',
+      notOwned: 'This card could not be linked to your account. Please enter it again.',
       savedRefreshFailed:
         'Your card was saved, but we could not refresh the view. Reload to see it.',
       subscriptionNote:

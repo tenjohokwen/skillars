@@ -32,6 +32,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -158,10 +160,77 @@ class StripePaymentGatewayTest {
         stubStripeCustomer(1001L, "cus_1001");
         when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
             .thenReturn(mockIntent("pi_captured"));
-        when(stripeCustomerRepository.save(any())).thenThrow(new org.springframework.dao.QueryTimeoutException("lock timeout"));
+        when(stripeCustomerRepository.updateLastPaymentIntentId(1001L, "pi_captured"))
+            .thenThrow(new org.springframework.dao.QueryTimeoutException("lock timeout"));
 
         assertThat(stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-b"))
             .isEqualTo("pi_captured");
+    }
+
+    /** skillars-deferred-174 AC2: the post-capture bookkeeping writes one column, never the entity read before the charge. */
+    @Test
+    void chargeAndCapture_afterCapture_updatesOnlyTheLastIntentColumn() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_captured"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-c");
+
+        verify(stripeCustomerRepository).updateLastPaymentIntentId(1001L, "pi_captured");
+        verify(stripeCustomerRepository, never()).save(any());
+    }
+
+    /** skillars-deferred-174 AC3: a named card is charged instead of the saved one. */
+    @Test
+    void chargeAndCapture_withANamedCard_chargesThatCard_notTheSavedOne() throws StripeException {
+        stubCoachAndCommission();
+        stubStripeCustomer(1001L, "cus_1001");
+        when(stripeClient.createPaymentIntent(any(PaymentIntentCreateParams.class), any(String.class)))
+            .thenReturn(mockIntent("pi_named"));
+
+        stripePaymentGateway.chargeAndCapture(PACK_TIER_ID, 1001L, COACH_ID, AMOUNT, "pack-1001-attempt-d", "pm_named");
+
+        ArgumentCaptor<PaymentIntentCreateParams> params = ArgumentCaptor.forClass(PaymentIntentCreateParams.class);
+        verify(stripeClient).createPaymentIntent(params.capture(), any(String.class));
+        assertThat(params.getValue().getPaymentMethod()).isEqualTo("pm_named");
+        assertThat(params.getValue().getCustomer()).isEqualTo("cus_1001");
+    }
+
+    // ── skillars-deferred-174 AC1: payment method ownership ────────────────────────────────────────────────────────
+
+    @Test
+    void paymentMethodBelongsTo_sameCustomer_isTrue_otherOrNone_isFalse() throws StripeException {
+        com.stripe.model.PaymentMethod mine = new com.stripe.model.PaymentMethod();
+        mine.setCustomer("cus_mine");
+        com.stripe.model.PaymentMethod theirs = new com.stripe.model.PaymentMethod();
+        theirs.setCustomer("cus_other");
+        com.stripe.model.PaymentMethod unattached = new com.stripe.model.PaymentMethod();
+        when(stripeClient.retrievePaymentMethod("pm_mine")).thenReturn(mine);
+        when(stripeClient.retrievePaymentMethod("pm_theirs")).thenReturn(theirs);
+        when(stripeClient.retrievePaymentMethod("pm_loose")).thenReturn(unattached);
+
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_mine")).isTrue();
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_theirs")).isFalse();
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_loose")).isFalse();
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo(null, "pm_mine")).isFalse();
+    }
+
+    @Test
+    void paymentMethodBelongsTo_anIdStripeDoesNotKnow_isFalse() throws StripeException {
+        when(stripeClient.retrievePaymentMethod("pm_ghost")).thenThrow(
+            new com.stripe.exception.InvalidRequestException("No such PaymentMethod", "id", "req_1", "resource_missing", 404, null));
+
+        assertThat(stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_ghost")).isFalse();
+    }
+
+    @Test
+    void paymentMethodBelongsTo_stripeUnreachable_failsClosedWithAGatewayError() throws StripeException {
+        when(stripeClient.retrievePaymentMethod("pm_mine")).thenThrow(
+            new com.stripe.exception.ApiConnectionException("timeout"));
+
+        assertThatThrownBy(() -> stripePaymentGateway.paymentMethodBelongsTo("cus_mine", "pm_mine"))
+            .isInstanceOf(PaymentGatewayException.class);
     }
 
     @Test

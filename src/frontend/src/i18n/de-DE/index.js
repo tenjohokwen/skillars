@@ -1631,6 +1631,8 @@ export default {
       updateCardCta: 'Karte aktualisieren',
       save: 'Karte speichern',
       saveError: 'Ihre Karte konnte nicht gespeichert werden. Bitte versuchen Sie es erneut.',
+      notOwned:
+        'Diese Karte konnte nicht mit Ihrem Konto verknüpft werden. Bitte geben Sie sie erneut ein.',
       savedRefreshFailed:
         'Ihre Karte wurde gespeichert, aber die Ansicht konnte nicht aktualisiert werden. Bitte laden Sie die Seite neu.',
       subscriptionNote:

@@ -27,6 +27,7 @@ import com.softropic.skillars.platform.security.service.SecurityUtil;
 import io.micrometer.observation.annotation.Observed;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
@@ -41,12 +42,14 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.util.List;
 import java.util.UUID;
 
+@Slf4j
 @RestController
 @RequestMapping("/api/payment")
 @RequiredArgsConstructor
@@ -191,18 +194,14 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_PLAYER_OR_COACH_ROLE)
     public ResponseEntity<Void> savePaymentMethod(@Valid @RequestBody SavedPaymentMethodRequest request) {
         Long parentId = securityUtil.getCurrentCoachUserId();
-        if (stripeCustomerRepository.findById(parentId).isEmpty()) {
-            // The Stripe customer is created outside any transaction (it is a Stripe call); a concurrent
-            // request that inserted the row first wins and its customer is kept.
-            StripeCustomer sc = new StripeCustomer();
-            sc.setParentId(parentId);
-            sc.setStripeCustomerId(paymentGateway.createStripeCustomer(parentId));
-            sc.setStripePaymentMethodId(request.paymentMethodId());
-            try {
-                stripeCustomerRepository.save(sc);
-            } catch (DataIntegrityViolationException e) {
-                // Created concurrently by another request; the update below sets the card on that row.
-            }
+        // skillars-deferred-174 AC1 (RS09b): only a card Stripe reports attached to the caller's own customer is saved.
+        // The card form always creates that customer first (POST /setup-intent), so a caller without one cannot own the
+        // card. Checked before the save's transaction (it is a Stripe call); a Stripe failure answers 422 and saves nothing.
+        StripeCustomer customer = stripeCustomerRepository.findById(parentId).orElse(null);
+        if (customer == null
+                || !paymentGateway.paymentMethodBelongsTo(customer.getStripeCustomerId(), request.paymentMethodId())) {
+            log.warn("[PAYMENT_METHOD_NOT_OWNED] userId={} hasCustomer={} — card not saved", parentId, customer != null);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "payment.paymentMethodNotOwned");
         }
         // fix/payment-subscription-resume-and-async-sync: saves the card and, atomically with it, enqueues
         // the move of the caller's live subscriptions onto it (default payment method, past-due invoice

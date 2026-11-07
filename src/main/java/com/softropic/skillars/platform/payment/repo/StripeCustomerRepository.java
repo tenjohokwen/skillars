@@ -62,4 +62,27 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
         + "WHERE c.parentId = :parentId AND c.stripePaymentMethodId = :attempted")
     int revertPaymentMethod(@Param("parentId") Long parentId, @Param("previous") String previous,
                             @Param("attempted") String attempted);
+
+    /**
+     * skillars-deferred-174 AC4 (RS09c): a successful pack purchase re-applies its card only while the column holds that
+     * card (the normal case: it was written before the charge) or the previous one (the resolver reverted it meanwhile).
+     * Any other value is a card saved since, which is kept. Joins the caller's transaction, which enqueues the
+     * subscription card sync with it.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query(value = "UPDATE payment.stripe_customers SET stripe_payment_method_id = :attempted WHERE parent_id = :parentId "
+        + "AND (stripe_payment_method_id = :attempted "
+        + "OR stripe_payment_method_id IS NOT DISTINCT FROM CAST(:previous AS varchar))", nativeQuery = true)
+    int reapplyPaymentMethod(@Param("parentId") Long parentId, @Param("previous") String previous,
+                             @Param("attempted") String attempted);
+
+    /**
+     * skillars-deferred-174 AC2: the gateway's post-capture bookkeeping writes this one column. A load-and-save of the
+     * entity read before the charge would write every column back, the card included, undoing a card saved meanwhile.
+     */
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Transactional
+    @Query("UPDATE StripeCustomer c SET c.lastPaymentIntentId = :intentId WHERE c.parentId = :parentId")
+    int updateLastPaymentIntentId(@Param("parentId") Long parentId, @Param("intentId") String intentId);
 }

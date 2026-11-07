@@ -2059,6 +2059,8 @@ export default {
       updateCardCta: 'Mettre à jour la carte',
       save: 'Enregistrer la carte',
       saveError: "Impossible d'enregistrer votre carte. Veuillez réessayer.",
+      notOwned:
+        "Cette carte n'a pas pu être associée à votre compte. Veuillez la saisir à nouveau.",
       savedRefreshFailed:
         "Votre carte a été enregistrée, mais l'affichage n'a pas pu être actualisé. Rechargez la page pour la voir.",
       subscriptionNote:

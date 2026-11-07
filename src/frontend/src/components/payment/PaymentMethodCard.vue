@@ -245,8 +245,13 @@ async function submit() {
     }
     editing.value = false
     emit('saved')
-  } catch {
-    cardError.value = t('payment.card.saveError')
+  } catch (e) {
+    // skillars-deferred-174 AC1: the server refuses a card that was not set up for this account.
+    const code = e?.response?.data?.errorMsg?.message
+    cardError.value =
+      code === 'payment.paymentMethodNotOwned'
+        ? t('payment.card.notOwned')
+        : t('payment.card.saveError')
   } finally {
     saving.value = false
   }

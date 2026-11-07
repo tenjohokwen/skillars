@@ -27,6 +27,18 @@ class StubPaymentGateway implements PaymentGateway {
     }
 
     @Override
+    public String chargeAndCapture(UUID referenceId, Long parentId, UUID coachId, BigDecimal amount,
+                                   String idempotencyKey, String paymentMethodId) {
+        return chargeAndCapture(referenceId, parentId, coachId, amount, idempotencyKey);
+    }
+
+    @Override
+    public boolean paymentMethodBelongsTo(String stripeCustomerId, String paymentMethodId) {
+        // Every card is the caller's unless a test stubs otherwise on the AbstractIntegrationTest spy.
+        return true;
+    }
+
+    @Override
     public String chargeAndCaptureForBatch(UUID batchId, Long parentId, UUID coachId, BigDecimal amount,
                                            String idempotencyKey) {
         return "pi_batch_stub_" + batchId;

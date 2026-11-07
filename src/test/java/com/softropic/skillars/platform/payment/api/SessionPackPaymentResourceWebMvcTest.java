@@ -204,6 +204,7 @@ class SessionPackPaymentResourceWebMvcTest {
         customer.setParentId(PARENT_USER_ID);
         customer.setStripeCustomerId("cus_player_test");
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_player_test", "pm_player_test")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -251,6 +252,7 @@ class SessionPackPaymentResourceWebMvcTest {
         customer.setParentId(PARENT_USER_ID);
         customer.setStripeCustomerId("cus_coach_test");
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_coach_test", "pm_coach_test")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -269,6 +271,7 @@ class SessionPackPaymentResourceWebMvcTest {
         customer.setParentId(PARENT_USER_ID);
         customer.setStripeCustomerId("cus_coach_test");
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_coach_test", "pm_sync_test")).thenReturn(true);
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -282,21 +285,66 @@ class SessionPackPaymentResourceWebMvcTest {
             .createStripeCustomer(org.mockito.ArgumentMatchers.any());
     }
 
+    // skillars-deferred-174 AC1 (RS09b): only a card Stripe reports attached to the caller's own customer is saved.
     @Test
     @WithMockUser(roles = "COACH")
-    void savePaymentMethod_firstCard_createsStripeCustomerThenSchedulesSync() throws Exception {
+    void savePaymentMethod_noStripeCustomer_returns400_createsNothing() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
-        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_new");
 
         mockMvc.perform(post("/api/payment/save-payment-method")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"paymentMethodId\":\"pm_first\"}"))
-            .andExpect(status().isNoContent());
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.paymentMethodNotOwned"));
 
-        org.mockito.Mockito.verify(stripeCustomerRepository).save(org.mockito.ArgumentMatchers.argThat(
-            sc -> "cus_new".equals(sc.getStripeCustomerId()) && PARENT_USER_ID.equals(sc.getParentId())));
-        org.mockito.Mockito.verify(subscriptionService).savePaymentMethodAndScheduleSync(PARENT_USER_ID, "pm_first");
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never())
+            .createStripeCustomer(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verify(stripeCustomerRepository, org.mockito.Mockito.never())
+            .save(org.mockito.ArgumentMatchers.any());
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void savePaymentMethod_aCardOfAnotherCustomerOrUnattached_returns400_noSaveNoFingerprint() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_mine");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_mine", "pm_foreign")).thenReturn(false);
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_foreign\"}"))
+            .andExpect(status().isBadRequest())
+            .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
+                ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
+                .isEqualTo("payment.paymentMethodNotOwned"));
+
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, sessionPackPaymentService);
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
+    void savePaymentMethod_stripeDownDuringTheOwnershipCheck_returns422_savesNothing() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        StripeCustomer customer = new StripeCustomer();
+        customer.setParentId(PARENT_USER_ID);
+        customer.setStripeCustomerId("cus_mine");
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.of(customer));
+        when(paymentGateway.paymentMethodBelongsTo("cus_mine", "pm_mine"))
+            .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException("payment.lifecycleFailure"));
+
+        mockMvc.perform(post("/api/payment/save-payment-method")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"paymentMethodId\":\"pm_mine\"}"))
+            .andExpect(status().isUnprocessableEntity());
+
+        org.mockito.Mockito.verifyNoInteractions(subscriptionService, sessionPackPaymentService);
     }
 
     @Test

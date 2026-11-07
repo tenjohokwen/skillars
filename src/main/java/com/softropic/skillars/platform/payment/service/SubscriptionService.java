@@ -768,6 +768,21 @@ public class SubscriptionService {
     }
 
     /**
+     * skillars-deferred-174 AC4 (RS09c): the card sync of a successful pack purchase. Re-applies the purchase's card only
+     * while the column holds that card or {@code previousCard} (compare-and-set), and enqueues the subscription sync in
+     * the same transaction. Returns false, writing and enqueuing nothing, when another card was saved meanwhile.
+     */
+    @Transactional
+    public boolean reapplyPaymentMethodAndScheduleSync(Long userId, String previousCard, String paymentMethodId) {
+        StripeIdFormat.requirePaymentMethodId(paymentMethodId);
+        if (stripeCustomerRepository.reapplyPaymentMethod(userId, previousCard, paymentMethodId) != 1) {
+            return false;
+        }
+        paymentMethodSyncOutboxSupport.enqueueSync(userId, paymentMethodId);
+        return true;
+    }
+
+    /**
      * fix/payment-subscription-payment-method-sync: run from the outbox after the user saves a new card
      * ({@link #savePaymentMethodAndScheduleSync}). Every live Stripe subscription this user pays for — their
      * own coach subscription and the player subscriptions of players they own (parent link or
