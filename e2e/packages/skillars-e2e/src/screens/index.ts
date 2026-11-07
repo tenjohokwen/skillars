@@ -210,6 +210,17 @@ export class CoachPublicProfileScreen extends Screen {
   dialogBody = () => this.tid('review-dialog-body')
   dialogSubmit = () => this.tid('review-dialog-submit')
   dialogError = () => this.tid('review-dialog-error')
+  // Flagging someone else's review (ReviewFlagAction) and appealing a removed one (AppealAction).
+  flag = (review: Locator) => this.within(review, 'review-flag-btn')
+  flagReason = () => this.tid('review-flag-reason-select')
+  flagSubmit = () => this.tid('review-flag-submit-btn')
+  appealOpen = () => this.tid('appeal-open-btn')
+  appealReason = () => this.tid('appeal-reason-input')
+  appealSubmit = () => this.tid('appeal-submit-btn')
+  appealStatus = () => this.tid('appeal-status-chip')
+  /** A Quasar notification with this message. */
+  notification = (message: string) =>
+    this.page.locator('.q-notification').filter({ hasText: message })
   /** Picks 1–5 stars in the dialog's rating control. */
   dialogStars = (stars: number) =>
     this.tid('review-dialog-rating')
@@ -225,4 +236,16 @@ export class CoachPublicProfileScreen extends Screen {
     )
     return this.waitReady()
   }
+}
+
+/** /coach/reviews: the coach's own reviews, with a reply box on each approved one. */
+export class CoachReviewsScreen extends Screen {
+  readonly route = R.coachReviews
+  readonly readyTestId = 'coach-reviews-page'
+  empty = () => this.tid('coach-reviews-empty')
+  reviews = () => this.tid('coach-review')
+  review = (body: string) => this.reviews().filter({ hasText: body })
+  responseInput = (review: Locator) => this.within(review, 'coach-review-response-input')
+  responseSubmit = (review: Locator) => this.within(review, 'coach-review-response-submit')
+  response = (review: Locator) => this.within(review, 'coach-review-response')
 }
