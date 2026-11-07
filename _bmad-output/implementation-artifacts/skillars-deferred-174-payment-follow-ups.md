@@ -423,6 +423,13 @@ Claude Opus 5.5 (claude-opus-5-5)
 - AC14: RS06b, RS06e, RS09b, RS09c, RS09d deleted from `deferred-work.md`; residuals filed as RS09e (revert crash window),
   RS09f (same-card ambiguity), RS06f (double pack after a NO_CHARGE verdict on a stalled thread), RS09g (the other detached
   full-row card writer), RS06g (an unreadable charge that stays unreadable after a refund cannot be closed by the action).
+- `/pr-review` round 1 (bdaaf6f2): F1 fixed: a verdict whose status write does not land now leaves the row open with
+  `OpenReason.WRITE_LOST` (it was a null reason, answered as a Stripe failure); the job marks it after the operator age and
+  the close action refuses it with 409 `payment.packAttempt.writeLost`. V1 fixed: `Resolution.closedHere` is true only when
+  the call's own status write closed the row, so a row the job or a replay closed meanwhile is a 409 `notOpen` and is not
+  recorded as the admin's close. Filed as residuals: RS06h (a lookup that always fails, the RS06b residual), RS06i (an
+  UNRECONCILED row Stripe shows no charge for), RS06j (F2, same-key race against the ownership check), RS09h (V2, GDPR
+  erasure race on the re-apply). Runbook and dev-docs list the new refusals. 3 new unit tests.
 
 ### File List
 
@@ -472,3 +479,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 - 2026-11-06: D0 = 1; Part B moved to skillars-deferred-175.
 - 2026-11-06: owner decided D1-D4 (option 1 each).
 - 2026-11-07: implemented T1-T5, T10 and the ledger/sprint-status part of T11 (dev-story). `/pr-review` and the PR pending.
+- 2026-11-07: addressed `/pr-review` round 1 (F1, V1 fixed; F2, V2, V3 filed as RS06j, RS09h, RS06h; RS06i added).

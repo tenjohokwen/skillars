@@ -1242,6 +1242,19 @@ class SessionPackPaymentServiceTest {
     }
 
     @Test
+    void job_aNoChargeWriteThatDoesNotLand_pastTheThreshold_isMarked() {
+        // An UNRECONCILED row Stripe shows no charge for: the NO_CHARGE compare-and-set never accepts it
+        queuedForTheJob(61);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(attemptRepository.transition(eq(77L), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any())).thenReturn(false);
+
+        assertThat(sessionPackPaymentService.resolveStaleAttempts()).isZero();
+
+        verify(attemptRepository).markNeedsOperator(eq(77L), any());
+    }
+
+    @Test
     void job_aStripeOutage_isNeverMarked_howeverOldTheAttempt() {
         queuedForTheJob(24 * 60);
         when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any()))
@@ -1289,6 +1302,37 @@ class SessionPackPaymentServiceTest {
         assertThat(response.status()).isEqualTo("NO_CHARGE");
         verify(stripeCustomerRepository).revertPaymentMethod(PARENT_ID, "pm_old", "pm_new");
         verify(attemptRepository).recordAdminClose(77L, ADMIN_ID, "parent blocked since Monday");
+    }
+
+    @Test
+    void close_aRowClosedElsewhereMeanwhile_is409NotOpen_andIsNotRecordedAsThisAdminsClose() {
+        minAgeAndAbsenceAge(10, 30);
+        var open = attempt(UNRECONCILED, 120);
+        var closedByTheJob = attempt(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE, 120);
+        when(attemptRepository.findById(77L)).thenReturn(Optional.of(open), Optional.of(open), Optional.of(closedByTheJob));
+        when(stripeCustomerRepository.findById(PARENT_ID)).thenReturn(Optional.of(existingCustomerWithCard("pm_new")));
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(attemptRepository.transition(eq(77L), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.notOpen");
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
+    }
+
+    @Test
+    void close_aNoChargeWriteThatDoesNotLand_is409WriteLost_notAStripeFailure() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(UNRECONCILED, 120);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.empty());
+        when(attemptRepository.transition(eq(77L), eq(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE), any(), any())).thenReturn(false);
+
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(77L, ADMIN_ID, "stuck"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.writeLost");
+        verify(attemptRepository, never()).recordAdminClose(any(), any(), any());
     }
 
     @Test

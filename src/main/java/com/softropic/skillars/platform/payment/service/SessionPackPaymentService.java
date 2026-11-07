@@ -360,15 +360,20 @@ public class SessionPackPaymentService {
     /**
      * The outcome of {@link #resolveAttempt}: the attempt's status afterwards, the pack when one exists, and, while it stays
      * open, why (null once closed). skillars-deferred-174: the job marks the rows an operator must close from the reason
-     * (AC6), and the admin close action answers its refusal from it (AC5).
+     * (AC6), and the admin close action answers its refusal from it (AC5). {@code closedHere} is true only when this call's
+     * own status write closed the row, so the admin close action never takes credit for a close the job or a replay made.
      */
-    record Resolution(Status status, SessionPackPurchase pack, OpenReason openReason) {
+    record Resolution(Status status, SessionPackPurchase pack, OpenReason openReason, boolean closedHere) {
         Resolution(Status status, SessionPackPurchase pack) {
-            this(status, pack, null);
+            this(status, pack, null, false);
         }
 
         static Resolution stillOpen(SessionPackPurchaseAttempt a, OpenReason reason) {
-            return new Resolution(a.getStatus(), null, reason);
+            return new Resolution(a.getStatus(), null, reason, false);
+        }
+
+        static Resolution closed(Status status, SessionPackPurchase pack) {
+            return new Resolution(status, pack, null, true);
         }
     }
 
@@ -385,7 +390,12 @@ public class SessionPackPaymentService {
         /** Captured, and the tier the pack would be made from no longer exists. */
         TIER_GONE,
         /** Captured, and recording the pack failed. */
-        RECORD_FAILED
+        RECORD_FAILED,
+        /**
+         * The verdict's status write did not land and the row is still open: it failed, or its compare-and-set found a status
+         * the verdict may not replace (an UNRECONCILED row, which a capture was seen for, never becomes NO_CHARGE).
+         */
+        WRITE_LOST
     }
 
     /**
@@ -436,7 +446,7 @@ public class SessionPackPaymentService {
         // Order is an invariant: a requires_payment_method intent must never reach getCaptureState.
         if (charge.pending()) {
             markQuietly(a, Status.UNKNOWN, charge.paymentIntentId(), Set.of(Status.IN_PROGRESS));
-            return new Resolution(Status.UNKNOWN, null, OpenReason.CHARGE_PENDING);
+            return new Resolution(Status.UNKNOWN, null, OpenReason.CHARGE_PENDING, false);
         }
         if (!charge.succeeded()) {
             return noCharge(a);
@@ -459,7 +469,7 @@ public class SessionPackPaymentService {
         }
         if (state.fullyRefunded()) {
             if (attemptRepository.transition(a.getId(), Status.REFUNDED, charge.paymentIntentId(), Status.OPEN)) {
-                return new Resolution(Status.REFUNDED, null);
+                return Resolution.closed(Status.REFUNDED, null);
             }
             return reread(a.getId());
         }
@@ -498,9 +508,10 @@ public class SessionPackPaymentService {
         return done;
     }
 
+    /** After a status write that did not land: a row still open is {@link OpenReason#WRITE_LOST}, a closed one closed elsewhere. */
     private Resolution reread(Long attemptId) {
         SessionPackPurchaseAttempt a = attemptRepository.findById(attemptId).orElseThrow();
-        return new Resolution(a.getStatus(), recordedPack(a));
+        return a.getStatus().isOpen() ? Resolution.stillOpen(a, OpenReason.WRITE_LOST) : new Resolution(a.getStatus(), recordedPack(a));
     }
 
     private SessionPackPurchase recordedPack(SessionPackPurchaseAttempt a) {
@@ -516,25 +527,26 @@ public class SessionPackPaymentService {
             if (now.getStatus() != Status.SUCCEEDED) {
                 log.error("[PACK_PURCHASE_CAS_LOST] key=SUCCEEDED attemptId={} status={}", a.getId(), now.getStatus());
             }
-        } else if (a.getStatus() == Status.NO_CHARGE) {
+            return new Resolution(Status.SUCCEEDED, pack);
+        }
+        if (a.getStatus() == Status.NO_CHARGE) {
             log.error("[PACK_PURCHASE_CAS_LOST] key=NO_CHARGE_TO_SUCCEEDED attemptId={}", a.getId());
         }
-        return new Resolution(Status.SUCCEEDED, pack);
+        return Resolution.closed(Status.SUCCEEDED, pack);
     }
 
     /** Proven no charge: revert the declined card FIRST (a replay never rewrites it), then write NO_CHARGE. */
     private Resolution noCharge(SessionPackPurchaseAttempt a) {
-        markNoCharge(a);
-        return reread(a.getId());
+        return markNoCharge(a) ? Resolution.closed(Status.NO_CHARGE, null) : reread(a.getId());
     }
 
-    private void markNoCharge(SessionPackPurchaseAttempt a) {
+    private boolean markNoCharge(SessionPackPurchaseAttempt a) {
         try {
             revertDeclinedCard(a);
         } catch (RuntimeException e) {
             log.error("[PACK_PURCHASE_CARD_REVERT_FAILED] attemptId={} parentId={}", a.getId(), a.getParentId(), e);
         }
-        markQuietly(a, Status.NO_CHARGE, null, EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN));
+        return markQuietly(a, Status.NO_CHARGE, null, EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN));
     }
 
     /**
@@ -579,11 +591,13 @@ public class SessionPackPaymentService {
         markQuietly(a, to, null, Set.of(Status.IN_PROGRESS));
     }
 
-    private void markQuietly(SessionPackPurchaseAttempt a, Status to, String paymentIntentId, Set<Status> expected) {
+    /** True when the write landed. */
+    private boolean markQuietly(SessionPackPurchaseAttempt a, Status to, String paymentIntentId, Set<Status> expected) {
         try {
-            if (!attemptRepository.transition(a.getId(), to, paymentIntentId, expected)) {
-                log.warn("[PACK_PURCHASE_CAS_LOST] key=transition attemptId={} wanted={}", a.getId(), to);
+            if (attemptRepository.transition(a.getId(), to, paymentIntentId, expected)) {
+                return true;
             }
+            log.warn("[PACK_PURCHASE_CAS_LOST] key=transition attemptId={} wanted={}", a.getId(), to);
         } catch (RuntimeException e) {
             // Mirrors the compensating-refund design: a bookkeeping write never fails the response for money already moved.
             if (to == Status.NO_CHARGE) {
@@ -592,6 +606,7 @@ public class SessionPackPaymentService {
                 log.error("[PACK_PURCHASE_CAS_LOST] status write failed: attemptId={} wanted={}", a.getId(), to, e);
             }
         }
+        return false;
     }
 
     private void closeRefundFailure(String paymentIntentId) {
@@ -631,8 +646,9 @@ public class SessionPackPaymentService {
 
     /**
      * skillars-deferred-174 AC6 (RS06e): stops the job retrying, and re-logging, a row only an operator can close. A deleted
-     * tier is marked at once (it does not come back). An unreadable charge or a failed pack record can heal on a later cycle
-     * (Stripe or the database was briefly down), so those are marked only once the attempt is older than
+     * tier is marked at once (it does not come back). An unreadable charge, a failed pack record or a status write that did
+     * not land can heal on a later cycle (Stripe or the database was briefly down, or a concurrent writer moved the row), so
+     * those are marked only once the attempt is older than
      * {@code payment.packAttempt.operatorAfterMinutes}. A failed lookup is a Stripe outage and never marked. The row stays
      * open (it still holds the parent's one open attempt, and still feeds PackAttemptsUnresolved); the admin close action is
      * the way out, and a client replay of the same key still resolves it.
@@ -640,7 +656,7 @@ public class SessionPackPaymentService {
     private void markNeedsOperatorIfDue(SessionPackPurchaseAttempt a, OpenReason reason) {
         boolean due = switch (reason == null ? OpenReason.LOOKUP_FAILED : reason) {
             case TIER_GONE -> true;
-            case CHARGE_UNREADABLE, RECORD_FAILED -> java.time.Duration.between(a.getCreatedAt(), Instant.now()).toMinutes()
+            case CHARGE_UNREADABLE, RECORD_FAILED, WRITE_LOST -> java.time.Duration.between(a.getCreatedAt(), Instant.now()).toMinutes()
                 >= configService.getBoundedLong(ConfigBounds.PACK_ATTEMPT_OPERATOR_AFTER_MINUTES);
             case TOO_RECENT, LOOKUP_FAILED, CHARGE_PENDING -> false;
         };
@@ -656,8 +672,10 @@ public class SessionPackPaymentService {
      * hand-written UPDATE. Runs the resolver first (which also retries recording the pack; it ignores the needs-operator
      * skip), so the row only ever closes to what Stripe supports: SUCCEEDED with a pack, REFUNDED, or NO_CHARGE through the
      * declined-card revert. Whatever still holds it open is refused with 409, the row unchanged: a processing charge, an
-     * absence too recent to trust, or captured money with no pack (refund it in Stripe, then close again). A Stripe failure
-     * is a 422. Who closed it and why are kept on the row, and the log tag is the audit (the release-held precedent).
+     * absence too recent to trust, captured money with no pack (refund it in Stripe, then close again), or a verdict whose
+     * status write did not land. A Stripe failure is a 422. A row the job or a replay closed meanwhile is a 409 notOpen, not
+     * recorded as this admin's close. Who closed it and why are kept on the row, and the log tag is the audit (the
+     * release-held precedent).
      */
     public PackAttemptCloseResponse closeAttemptByAdmin(Long attemptId, Long adminUserId, String reason) {
         AdminTierGuard.requireFullAdmin(); // S-28: not for ROLE_LTD_ADMIN
@@ -668,6 +686,12 @@ public class SessionPackPaymentService {
         }
         String loggedReason = Objects.toString(reason, "").replaceAll("[\\r\\n]+", " ");
         Resolution r = resolveAttempt(attemptId);
+        if (!r.status().isOpen() && !r.closedHere()) {
+            // The job or a client replay closed it between the check above and the resolver's write: not this admin's close.
+            log.warn("[PACK_ATTEMPT_ADMIN_CLOSE_REFUSED] closed concurrently: attemptId={} parentId={} status={} admin={}",
+                attemptId, a.getParentId(), r.status(), adminUserId);
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.notOpen");
+        }
         if (!r.status().isOpen()) {
             attemptRepository.recordAdminClose(attemptId, adminUserId, reason);
             log.warn("[PACK_ATTEMPT_ADMIN_CLOSED] attemptId={} parentId={} status={} admin={} reason={}",
@@ -681,6 +705,7 @@ public class SessionPackPaymentService {
             case LOOKUP_FAILED -> new PaymentGatewayException("payment.lifecycleFailure");
             case TOO_RECENT -> new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.tooRecent");
             case CHARGE_PENDING -> new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.chargePending");
+            case WRITE_LOST -> new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.writeLost");
             case CHARGE_UNREADABLE, TIER_GONE, RECORD_FAILED ->
                 new ResponseStatusException(HttpStatus.CONFLICT, "payment.packAttempt.capturedNoPack");
         };
