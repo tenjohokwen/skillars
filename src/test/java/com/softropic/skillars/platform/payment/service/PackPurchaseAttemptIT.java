@@ -181,20 +181,21 @@ class PackPurchaseAttemptIT extends BasePaymentIT {
         attempts.saveAndFlush(newAttempt(PARENT, "key-bbbbbbbb"));
     }
 
-    // skillars-deferred-176 AC4 (RS06i): the job leaves an UNRECONCILED row open; the operator's close can end it
+    // skillars-deferred-176 AC4 (RS06i): an absence verdict never closes an UNRECONCILED row, not even the operator's; only its
+    // stored PaymentIntent can (unit-tested in SessionPackPaymentServiceTest), and this one has none
     @Test
-    void adminClose_anUnreconciledAttemptStripeShowsNoChargeFor_closesAsNoCharge_keepingItsIntentId() {
+    void adminClose_anUnreconciledAttemptWithoutAStoredIntent_isRefusedAsCapturedNoPack_rowUnchanged() {
         Long id = attempts.saveAndFlush(newAttempt(PARENT, "key-aaaaaaaa")).getId();
-        attempts.transition(id, Status.UNRECONCILED, "pi_it176_seen", EnumSet.of(Status.IN_PROGRESS));
+        attempts.transition(id, Status.UNRECONCILED, null, EnumSet.of(Status.IN_PROGRESS));
         ageAttempts(PARENT, "2 hours");
 
-        var response = sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "Stripe shows no charge");
+        assertThatThrownBy(() -> sessionPackPaymentService.closeAttemptByAdmin(id, 42L, "Stripe shows no charge"))
+            .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+            .hasMessageContaining("payment.packAttempt.capturedNoPack");
 
-        assertThat(response.status()).isEqualTo("NO_CHARGE");
         SessionPackPurchaseAttempt row = attempts.findById(id).orElseThrow();
-        assertThat(row.getStatus()).isEqualTo(Status.NO_CHARGE);
-        assertThat(row.getPaymentIntentId()).isEqualTo("pi_it176_seen");
-        assertThat(row.getClosedBy()).isEqualTo(42L);
+        assertThat(row.getStatus()).isEqualTo(Status.UNRECONCILED);
+        assertThat(row.getClosedBy()).isNull();
     }
 
     @Test

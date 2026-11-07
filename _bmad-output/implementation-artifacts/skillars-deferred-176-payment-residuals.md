@@ -351,3 +351,4 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 - 2026-11-07: created (ready-for-dev) from the owner-chosen payment-residuals bundle; decisions D9-D14 pending owner.
 - 2026-11-07: owner decided D9-D14 (option 1 each); implemented T1-T7 and the ledger part of T8 (dev-story). `/pr-review` and the PR pending.
+- 2026-11-07: `/pr-review` round 1 (f9d72bed): V1 the admin close of an UNRECONCILED row now decides from its stored PaymentIntent (`retrieveCharge`), never from the charge search, and an absence verdict never closes it (no stored intent: 409 capturedNoPack); a refunded one closes as REFUNDED and resolves its refund-failure row. V2 `scheduleErasure` NULLs the card with an UPDATE (`clearPaymentMethod`) that always locks the row. Tests: 5 new/rewritten unit tests, the UNRECONCILED IT now asserts the refusal, and `aReapplyRacingTheRealErasureOfAnAlreadyEmptyCard_waits_andWritesNoCard`.

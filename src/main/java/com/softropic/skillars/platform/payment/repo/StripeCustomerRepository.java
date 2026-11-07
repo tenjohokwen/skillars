@@ -96,6 +96,15 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
     int updatePaymentMethod(@Param("parentId") Long parentId, @Param("paymentMethodId") String paymentMethodId);
 
     /**
+     * skillars-deferred-176 (round-1 V2): the erasure drops the saved card with an UPDATE, which takes the row lock even when
+     * the column is already NULL (a load-modify-save of an unchanged entity issues no statement). Joins the erasure
+     * transaction; no {@code clearAutomatically}, which would detach the entities that transaction is still writing.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE StripeCustomer c SET c.stripePaymentMethodId = NULL WHERE c.parentId = :parentId")
+    int clearPaymentMethod(@Param("parentId") Long parentId);
+
+    /**
      * skillars-deferred-176 AC1 (RS03f): serialises the outbox handlers that write a Stripe customer's email
      * ({@code STRIPE_CUSTOMER_EMAIL_SYNC}) or erase it ({@code STRIPE_CUSTOMER_ERASURE}). Outbox rows drain in parallel on
      * every pod, so without it a sync that read the user before an undo or an erasure committed could reach Stripe after

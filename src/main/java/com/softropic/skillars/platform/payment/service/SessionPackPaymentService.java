@@ -412,7 +412,8 @@ public class SessionPackPaymentService {
 
     /**
      * {@code byAdmin}: skillars-deferred-176 AC4 (RS06i), only {@link #closeAttemptByAdmin} may close an UNRECONCILED row
-     * (a capture was seen) as NO_CHARGE when Stripe now shows no succeeded charge; the job and a replay leave it open.
+     * (a capture was seen) as NO_CHARGE, and only when the row's stored PaymentIntent, retrieved directly, did not succeed. A
+     * row without one, the job and a replay leave it open.
      */
     private Resolution resolve(Long attemptId, boolean byAdmin) {
         SessionPackPurchaseAttempt a = attemptRepository.findById(attemptId).orElse(null);
@@ -426,6 +427,7 @@ public class SessionPackPaymentService {
         long ageMinutes = java.time.Duration.between(a.getCreatedAt(), now).toMinutes();
         boolean pastAbsenceAge = ageMinutes >= configService.getBoundedLong(ConfigBounds.PACK_ATTEMPT_ABSENCE_AGE_MINUTES);
         Long parentId = a.getParentId();
+        boolean unreconciled = a.getStatus() == Status.UNRECONCILED;
 
         // Existing pack first: createPurchase is a bare save, so the process can die after it and before the SUCCEEDED write.
         if (a.getPaymentIntentId() != null) {
@@ -435,32 +437,44 @@ public class SessionPackPaymentService {
             }
         }
 
-        // No customer row: charge() throws payment.noStripeCustomer before any Stripe call. But a live request thread may be about to
-        // create that row and charge, so, like every absence verdict, it needs the absence age.
-        if (stripeCustomerRepository.findById(parentId).isEmpty()) {
-            return pastAbsenceAge ? noCharge(a, byAdmin) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
+        final ChargeLookup charge;
+        // An admin closes an UNRECONCILED row from the PaymentIntent the capture was seen on, never from the search: an empty
+        // search (the Stripe customer was replaced or erased, the metadata is missing) is no proof the money was not taken.
+        boolean fromStoredIntent = byAdmin && unreconciled && a.getPaymentIntentId() != null;
+        if (fromStoredIntent) {
+            try {
+                charge = paymentGateway.retrieveCharge(a.getPaymentIntentId());
+            } catch (PaymentGatewayException lookupFailed) {
+                log.warn("[PACK_PURCHASE_ATTEMPT_LOOKUP_FAILED] stays open: attemptId={} code={}", a.getId(), lookupFailed.getErrorCode());
+                return Resolution.stillOpen(a, OpenReason.LOOKUP_FAILED);
+            }
+        } else {
+            // No customer row: charge() throws payment.noStripeCustomer before any Stripe call. But a live request thread may be
+            // about to create that row and charge, so, like every absence verdict, it needs the absence age.
+            if (stripeCustomerRepository.findById(parentId).isEmpty()) {
+                return pastAbsenceAge ? noCharge(a, false) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
+            }
+            final Optional<ChargeLookup> found;
+            try {
+                found = paymentGateway.findChargeByIdempotencyKey(parentId, stripeKey(parentId, a.getAttemptKey()),
+                    a.getCreatedAt().minus(LOOKUP_SLACK));
+            } catch (PaymentGatewayException lookupFailed) {
+                log.warn("[PACK_PURCHASE_ATTEMPT_LOOKUP_FAILED] stays open: attemptId={} code={}", a.getId(), lookupFailed.getErrorCode());
+                return Resolution.stillOpen(a, OpenReason.LOOKUP_FAILED);
+            }
+            if (found.isEmpty()) {
+                // "Not found" is not proof: only a successful empty lookup at or past the absence age counts as no charge.
+                return pastAbsenceAge ? noCharge(a, false) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
+            }
+            charge = found.get();
         }
-
-        final Optional<ChargeLookup> found;
-        try {
-            found = paymentGateway.findChargeByIdempotencyKey(parentId, stripeKey(parentId, a.getAttemptKey()),
-                a.getCreatedAt().minus(LOOKUP_SLACK));
-        } catch (PaymentGatewayException lookupFailed) {
-            log.warn("[PACK_PURCHASE_ATTEMPT_LOOKUP_FAILED] stays open: attemptId={} code={}", a.getId(), lookupFailed.getErrorCode());
-            return Resolution.stillOpen(a, OpenReason.LOOKUP_FAILED);
-        }
-        if (found.isEmpty()) {
-            // "Not found" is not proof: only a successful empty lookup at or past the absence age counts as no charge.
-            return pastAbsenceAge ? noCharge(a, byAdmin) : Resolution.stillOpen(a, OpenReason.TOO_RECENT);
-        }
-        ChargeLookup charge = found.get();
         // Order is an invariant: a requires_payment_method intent must never reach getCaptureState.
         if (charge.pending()) {
             markQuietly(a, Status.UNKNOWN, charge.paymentIntentId(), Set.of(Status.IN_PROGRESS));
             return new Resolution(Status.UNKNOWN, null, OpenReason.CHARGE_PENDING, false);
         }
         if (!charge.succeeded()) {
-            return noCharge(a, byAdmin);
+            return noCharge(a, fromStoredIntent);
         }
         Optional<SessionPackPurchase> existingForIntent = sessionPackPurchaseRepository.findByStripePaymentIntentId(charge.paymentIntentId());
         if (existingForIntent.isPresent()) {
@@ -480,6 +494,10 @@ public class SessionPackPaymentService {
         }
         if (state.fullyRefunded()) {
             if (attemptRepository.transition(a.getId(), Status.REFUNDED, charge.paymentIntentId(), Status.OPEN)) {
+                if (unreconciled) {
+                    // Refunded in Stripe by hand: the refund-failure row recorded with the UNRECONCILED write is done.
+                    closeRefundFailure(charge.paymentIntentId());
+                }
                 return Resolution.closed(Status.REFUNDED, null);
             }
             return reread(a.getId());
@@ -546,17 +564,24 @@ public class SessionPackPaymentService {
         return Resolution.closed(Status.SUCCEEDED, pack);
     }
 
-    /** Proven no charge: revert the declined card FIRST (a replay never rewrites it), then write NO_CHARGE. */
-    private Resolution noCharge(SessionPackPurchaseAttempt a, boolean byAdmin) {
+    /**
+     * Proven no charge: revert the declined card FIRST (a replay never rewrites it), then write NO_CHARGE. An UNRECONCILED row
+     * closes only on {@code fromStoredIntent}: its own PaymentIntent, retrieved for an admin close, did not succeed. Any other
+     * absence verdict on it is no proof: it stays open as captured money with no pack.
+     */
+    private Resolution noCharge(SessionPackPurchaseAttempt a, boolean fromStoredIntent) {
         if (a.getStatus() == Status.UNRECONCILED) {
-            return byAdmin && closeUnreconciledAsNoCharge(a) ? Resolution.closed(Status.NO_CHARGE, null) : reread(a.getId());
+            if (!fromStoredIntent) {
+                return Resolution.stillOpen(a, OpenReason.RECORD_FAILED);
+            }
+            return closeUnreconciledAsNoCharge(a) ? Resolution.closed(Status.NO_CHARGE, null) : reread(a.getId());
         }
         return markNoCharge(a) ? Resolution.closed(Status.NO_CHARGE, null) : reread(a.getId());
     }
 
     /**
-     * skillars-deferred-176 AC4 (RS06i): an operator closes an UNRECONCILED attempt that Stripe now shows no succeeded charge
-     * for. The card is never reverted (a capture was seen with it), and the refund-failure row recorded with the
+     * skillars-deferred-176 AC4 (RS06i): an operator closes an UNRECONCILED attempt whose own PaymentIntent Stripe now shows
+     * did not succeed. The card is never reverted (a capture was seen with it), and the refund-failure row recorded with the
      * UNRECONCILED write is resolved, since there is nothing left to refund.
      */
     private boolean closeUnreconciledAsNoCharge(SessionPackPurchaseAttempt a) {
@@ -703,8 +728,9 @@ public class SessionPackPaymentService {
      * skillars-deferred-174 AC5 (RS06b): the operator's way out for an attempt the job cannot close, replacing the runbook's
      * hand-written UPDATE. Runs the resolver first (which also retries recording the pack; it ignores the needs-operator
      * skip), so the row only ever closes to what Stripe supports: SUCCEEDED with a pack, REFUNDED, or NO_CHARGE through the
-     * declined-card revert. An UNRECONCILED row (a capture was seen, recording the pack failed) that Stripe now shows no
-     * succeeded charge for closes as NO_CHARGE here only, without the revert, and its refund-failure row is resolved
+     * declined-card revert. An UNRECONCILED row (a capture was seen, recording the pack failed) is decided here from its
+     * stored PaymentIntent, not the search: one that did not succeed closes as NO_CHARGE here only, without the revert, a
+     * refunded one as REFUNDED, both resolving its refund-failure row, and captured money is retried as a pack
      * (skillars-deferred-176 AC4). Whatever still holds it open is refused with 409 and the row left open: a processing charge (the
      * resolver still records it, IN_PROGRESS to UNKNOWN with the PaymentIntent id, as the job would; the action skips the
      * job's minimum age, and the request thread's own SUCCEEDED write accepts UNKNOWN), an absence too recent to trust,

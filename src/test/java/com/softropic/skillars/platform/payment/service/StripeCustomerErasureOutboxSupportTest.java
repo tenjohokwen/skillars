@@ -42,10 +42,11 @@ class StripeCustomerErasureOutboxSupportTest {
 
         support().scheduleErasure(7L);
 
-        assertThat(customer.getStripePaymentMethodId()).isNull();
+        // skillars-deferred-176 round-1 V2: an UPDATE that always locks the row, never a save of the loaded entity
+        verify(stripeCustomerRepository).clearPaymentMethod(7L);
+        verify(stripeCustomerRepository, never()).save(any());
         assertThat(customer.getStripeCustomerId()).isEqualTo("cus_123");
         assertThat(customer.getLastPaymentIntentId()).isEqualTo("pi_1");
-        verify(stripeCustomerRepository).save(customer);
         verify(outboxService).enqueue(eq(StripeCustomerErasureOutboxSupport.AGGREGATE_TYPE),
             eq("{\"stripeCustomerId\":\"cus_123\"}"));
         verify(outboxService).requestDrainAfterCommit();

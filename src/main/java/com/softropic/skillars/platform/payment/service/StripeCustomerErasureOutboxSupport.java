@@ -14,7 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 /**
  * GDPR Art. 17 for Stripe (security finding S-19): the Stripe Customer (name/email/metadata) and its saved
  * payment methods live at Stripe, so the erasure transaction cannot remove them itself. It calls
- * {@link #scheduleErasure} instead, which — atomically with the erasure — drops the locally stored card id and
+ * {@link #scheduleErasure} instead, which — atomically with the erasure — drops the locally stored card id (an UPDATE that
+ * locks the row, serialising it with {@code StripeCustomerCardWrites}) and
  * puts the Stripe-side cleanup on the durable outbox. {@link StripeCustomerErasureOutboxHandler} runs it after
  * commit, off the erasure path, so a Stripe outage neither rolls back nor fails the erasure and is retried.
  *
@@ -41,9 +42,12 @@ public class StripeCustomerErasureOutboxSupport {
         // skillars-deferred-169 AC13: pack-purchase attempt rows are retained like stripe_customers (financial record), but the
         // payment-method ids tied to the person are not.
         packAttemptRepository.nullCardsForParent(userId);
+        // skillars-deferred-176 round-1 V2: an UPDATE, not load-modify-save. A save of a card already NULL writes nothing and
+        // locks nothing, so a card write that locked the row and saw the payer still live could commit a card onto the
+        // erased row. The UPDATE always takes the row lock, so StripeCustomerCardWrites either waits and sees the tombstone,
+        // or committed first and is nulled here.
+        stripeCustomerRepository.clearPaymentMethod(userId);
         stripeCustomerRepository.findById(userId).ifPresent(customer -> {
-            customer.setStripePaymentMethodId(null);
-            stripeCustomerRepository.save(customer);
             final String json;
             try {
                 json = objectMapper.writeValueAsString(new StripeCustomerErasurePayload(customer.getStripeCustomerId()));
