@@ -975,6 +975,8 @@ export class Provisioner {
     coach: CoachAccount,
     bookingId: string,
     recap: { whatWeDid: string; whatsNext: string },
+    /** Drills (at most 2) the wrap-up assigns as homework. */
+    homeworkDrillIds: string[] = [],
   ): Promise<void> {
     const session = await this.login(coach)
     try {
@@ -984,7 +986,7 @@ export class Provisioner {
           effortRating: 5,
           focusRating: 5,
           techniqueRating: 5,
-          homeworkDrillIds: [],
+          homeworkDrillIds,
           mode: 'QUICK',
           recapWhatWeDid: recap.whatWeDid,
           recapWhatsNext: recap.whatsNext,
@@ -1020,6 +1022,8 @@ export class Provisioner {
       endedMinutesAgo?: number
       weekday?: 1 | 2 | 3 | 4 | 5
       recap?: { whatWeDid: string; whatsNext: string } | null
+      /** Homework the wrap-up assigns (needs a recap). */
+      homework?: string[]
     } = {},
   ): Promise<string> {
     const bookingId = await this.confirmedBooking(parent, coach, { weekday: options.weekday })
@@ -1032,7 +1036,7 @@ export class Provisioner {
       options.recap === undefined
         ? { whatWeDid: 'Passing patterns', whatsNext: 'Weak-foot finishing' }
         : options.recap
-    if (recap) await this.submitWrapUp(coach, bookingId, recap)
+    if (recap) await this.submitWrapUp(coach, bookingId, recap, options.homework ?? [])
     await this.confirmCompletion(parent, bookingId)
     const status = await this.bookingStatus(bookingId)
     if (status !== 'COMPLETED') throw new Error(`Booking ${bookingId} is ${status}, not COMPLETED`)
@@ -1658,6 +1662,47 @@ export class Provisioner {
         WHERE id = $1::bigint`,
       [playerId, age],
     )
+  }
+
+  /**
+   * The player's locker-room homework as the viewer's API returns it, polled until `count` items
+   * are there (assignment runs asynchronously on the session's completion).
+   */
+  async homework(
+    viewer: Pick<Account, 'email' | 'password'>,
+    playerId: string,
+    count: number,
+  ): Promise<
+    {
+      assignmentId: string
+      coachId: string
+      coachDisplayName: string
+      completed: boolean
+      drill: { name: string }
+    }[]
+  > {
+    const session = await this.login(viewer)
+    try {
+      const deadline = Date.now() + 30_000
+      for (;;) {
+        const items = await session.api.json<
+          {
+            assignmentId: string
+            coachId: string
+            coachDisplayName: string
+            completed: boolean
+            drill: { name: string }
+          }[]
+        >('GET', `/session/players/${playerId}/homework`)
+        if (items.length >= count) return items
+        if (Date.now() > deadline) {
+          throw new Error(`homework: ${items.length} of ${count} after 30 s for player ${playerId}`)
+        }
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+    } finally {
+      await session.dispose()
+    }
   }
 
   private api(context: APIRequestContext): ApiClient {

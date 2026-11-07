@@ -1,5 +1,5 @@
 <template>
-  <q-page class="q-pa-md">
+  <q-page class="q-pa-md" data-testid="locker-room">
     <div class="row items-center q-mb-lg">
       <div class="gradient-text text-h5 q-mr-sm">{{ t('player.lockerRoomTitle') }}</div>
     </div>
@@ -8,9 +8,20 @@
       <q-spinner-dots size="36px" color="primary" />
     </div>
 
+    <!-- A failed load (a 403 included) is not "no homework yet": say it failed. -->
+    <q-banner
+      v-else-if="homeworkStore.error"
+      rounded
+      class="bg-negative text-white"
+      data-testid="locker-room-error"
+    >
+      {{ t('common.errorGeneric') }}
+    </q-banner>
+
     <div
       v-else-if="!homeworkStore.assignments.length"
       class="locker-room__empty text-center q-pa-xl"
+      data-testid="locker-room-empty"
     >
       <q-icon name="sports_soccer" size="64px" color="grey-5" />
       <div class="text-h6 q-mt-md">{{ t('player.homeworkEmptyTitle') }}</div>
@@ -18,10 +29,17 @@
     </div>
 
     <template v-else>
-      <div v-for="(group, coachId) in groupedByCoach" :key="coachId" class="q-mb-xl">
+      <div
+        v-for="(group, coachId) in groupedByCoach"
+        :key="coachId"
+        class="q-mb-xl"
+        data-testid="locker-room-group"
+        :data-coach-id="coachId"
+      >
         <div
           v-if="Object.keys(groupedByCoach).length > 1"
           class="text-subtitle2 q-mb-sm text-secondary"
+          data-testid="locker-room-group-header"
         >
           {{ t('player.assignedBy', { coach: group[0].coachDisplayName }) }}
         </div>
@@ -30,6 +48,9 @@
             v-for="item in group"
             :key="item.assignmentId"
             class="locker-room__drill-wrapper q-mb-md"
+            data-testid="locker-room-assignment"
+            :data-assignment-id="item.assignmentId"
+            :data-completed="item.completed"
           >
             <DrillCard
               :drill="item.drill"
@@ -45,6 +66,7 @@
                 "
                 :color="item.completed ? 'positive' : 'primary'"
                 :disable="item.completed"
+                data-testid="homework-done"
                 @update:model-value="() => handleMarkComplete(item.assignmentId)"
               />
             </div>
