@@ -167,7 +167,11 @@
               >
                 {{ review.body }}
               </div>
-              <div v-if="review.coachResponseBody?.trim()" class="coach-response q-mt-sm q-pa-sm">
+              <div
+                v-if="review.coachResponseBody?.trim()"
+                class="coach-response q-mt-sm q-pa-sm"
+                data-testid="coach-profile-review-response"
+              >
                 <div class="text-caption text-weight-bold" style="color: var(--text-secondary)">
                   {{ t('reviews.coachResponseLabel') }}
                 </div>
@@ -183,25 +187,37 @@
               :label="t('reviews.loadMore')"
               :loading="reviewsLoadingMore"
               :disable="reviewsSorting"
+              data-testid="reviews-load-more"
               @click="loadMoreReviews"
             />
           </template>
         </div>
 
         <!-- Write / edit review (eligible parent or player only) -->
-        <div v-if="authStore.isParent || authStore.isPlayer" class="glass-card q-pa-md q-mb-md">
+        <div
+          v-if="authStore.isParent || authStore.isPlayer"
+          class="glass-card q-pa-md q-mb-md"
+          data-testid="review-write-section"
+        >
           <template v-if="myReview">
             <div class="text-subtitle1 q-mb-xs" style="color: var(--text-primary)">
               {{ t('reviews.yourReview') }}
             </div>
             <q-rating
               :model-value="myReview.rating"
+              data-testid="my-review-rating"
+              :data-rating="myReview.rating"
               readonly
               size="18px"
               color="amber"
               class="q-mb-xs"
             />
-            <div v-if="myReview.body" class="text-body2 q-mb-sm" style="color: var(--text-primary)">
+            <div
+              v-if="myReview.body"
+              class="text-body2 q-mb-sm"
+              style="color: var(--text-primary)"
+              data-testid="my-review-body"
+            >
               {{ myReview.body }}
             </div>
             <div
@@ -211,6 +227,7 @@
               "
               class="text-caption q-mb-sm"
               style="color: var(--text-secondary)"
+              data-testid="my-review-pending"
             >
               {{ t('reviews.pendingModeration') }}
             </div>
@@ -226,6 +243,7 @@
             <div
               v-if="myReview.moderationStatus === 'BLOCKED'"
               class="text-caption text-negative q-mb-sm"
+              data-testid="my-review-blocked"
             >
               {{ t('reviews.blocked') }}
               <!-- FR-ADM-004: a moderation block is an appealable enforcement action. -->
@@ -235,7 +253,19 @@
                 :enforced-at="myReview.lastModifiedAt || null"
               />
             </div>
-            <q-btn flat dense :label="t('reviews.editReview')" @click="openEditReview" />
+            <!-- The server refuses an edit while a review is held or blocked (reviews.editNotPermitted):
+                 offer it only when it can succeed. Found by Pitchside REV-04. -->
+            <q-btn
+              v-if="
+                myReview.moderationStatus !== 'BLOCKED' &&
+                myReview.moderationStatus !== 'UNDER_REVIEW'
+              "
+              flat
+              dense
+              :label="t('reviews.editReview')"
+              data-testid="review-edit-btn"
+              @click="openEditReview"
+            />
           </template>
           <template v-else-if="showWriteReviewButton">
             <q-btn
@@ -243,12 +273,14 @@
               unelevated
               color="primary"
               :label="t('reviews.writeReview')"
+              data-testid="review-write-btn"
               @click="openWriteReview"
             />
             <div
               v-else-if="reviewEligibility"
               class="text-caption"
               style="color: var(--text-secondary)"
+              data-testid="review-ineligible"
             >
               {{ t(reviewEligibility.reasonCode) }}
             </div>
@@ -480,6 +512,7 @@
           <div class="text-caption q-mb-xs">{{ t('reviews.ratingLabel') }}</div>
           <q-rating
             v-model="reviewDialogRating"
+            data-testid="review-dialog-rating"
             size="48px"
             color="amber"
             icon="star_border"
@@ -493,8 +526,13 @@
             :label="t('reviews.bodyLabel')"
             maxlength="1000"
             filled
+            data-testid="review-dialog-body"
           />
-          <div v-if="reviewDialogErrorMessage" class="text-negative text-caption q-mt-sm">
+          <div
+            v-if="reviewDialogErrorMessage"
+            class="text-negative text-caption q-mt-sm"
+            data-testid="review-dialog-error"
+          >
             {{ reviewDialogErrorMessage }}
           </div>
         </q-card-section>
@@ -506,6 +544,7 @@
             :label="reviewDialogMode === 'edit' ? t('reviews.save') : t('reviews.submit')"
             :disable="!reviewDialogRating"
             :loading="reviewDialogSubmitting"
+            data-testid="review-dialog-submit"
             @click="submitReviewDialog"
           />
         </q-card-actions>
@@ -928,10 +967,25 @@ async function submitReviewDialog() {
     reviewDialogOpen.value = false
     await fetchMyReview()
     await fetchReviews(0)
+    await refreshRating()
   } catch (err) {
     setReviewDialogError(err)
   } finally {
     reviewDialogSubmitting.value = false
+  }
+}
+
+// A review approved on submit moves the coach's average and count at once; the header would keep
+// the stale figures until a reload. Found by Pitchside REV-08.
+async function refreshRating() {
+  try {
+    const fresh = await getCoachProfile(coachId)
+    if (profile.value) {
+      profile.value.averageRating = fresh.averageRating
+      profile.value.reviewCount = fresh.reviewCount
+    }
+  } catch {
+    // The figures stay as they were; the review itself was saved.
   }
 }
 
