@@ -1,6 +1,6 @@
 # Story skillars-deferred-175: Subscription follow-ups (stale incomplete webhooks, parked-event poison, ungranted upgrades, Stripe email)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-06 by splitting skillars-deferred-174 (owner decision D0 = 1: two stories). This is 174's
      Part B, moved verbatim: RS05c, RS-poison, RS07b, RS03c. Decision ids D5-D8 keep their 174 numbers so the
@@ -220,7 +220,7 @@ Written with the recommended option of every decision.
 - [x] T4 (AC4) Event, listener, outbox support and handler. Tests: `EmailChangeServiceIT` (confirm, undo,
       rollback), listener unit test, handler unit test beside `StripeCustomerErasureOutboxHandlerTest`.
 - [x] T5 (AC5) Docs; `node docs/dev-docs/tools/build-search-index.mjs`, then `check-docs.mjs`.
-- [ ] T6 (AC6) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
+- [x] T6 (AC6) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
 
 ## Dev Notes
 
@@ -298,6 +298,8 @@ Claude Opus 5.5 (claude-opus-5-5), via /bmad-dev-story, 2026-11-07.
   - V4: an `InvalidRequestException` other than `resource_missing` is logged `[STRIPE_CUSTOMER_EMAIL_SYNC_REJECTED]`
     and not retried; `RateLimitException` (a subclass of it in stripe-java 28.4.0) still retries.
   - V3 and the dropped parallel-drain finding: ledger RS03e and RS03f.
+- `/pr-review` round 2 (d6db2048): no findings; one low verify item (an email sync racing a GDPR erasure's
+  `scrubCustomer` fallback can restore the real address) ledgered into RS03f by the owner's choice.
 - AC5: payment dev-docs (four paragraphs, job row); search index rebuilt; `check-docs` OK.
 - AC6: RS05c, RS-poison, RS07b, RS03c deleted from `deferred-work.md`; residual RS07c filed (retried-upgrade proration
   unconfirmed; the open-row check is not a constraint), and RS03e/RS03f from review round 1.
@@ -340,3 +342,4 @@ Claude Opus 5.5 (claude-opus-5-5), via /bmad-dev-story, 2026-11-07.
 - 2026-11-06: owner decided D5-D8 (option 1 each).
 - 2026-11-07: implemented T1-T5 and the ledger/sprint-status part of T6 (dev-story). `/pr-review` and the PR pending.
 - 2026-11-07: `/pr-review` round 1 fixes (V1 amends D8: locked accounts are synced; V2 invoice-keyed dedupe; V4 permanent 4xx); RS03e/RS03f ledgered.
+- 2026-11-07: `/pr-review` round 2 clean (one verify item added to RS03f); status -> review, PR opened.
