@@ -228,13 +228,13 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
 ## Tasks / Subtasks
 
 - [x] T0 Owner decisions D9-D14 recorded in this file (option 1 each).
-- [ ] T1 (AC1) Advisory lock in both Stripe-customer handlers; IT.
-- [ ] T2 (AC2) Post-insert email compare and sync enqueue in both customer-creation callers; tests.
-- [ ] T3 (AC3) Erased-row-safe targeted card writes for `getOrCreateStripeCustomer` and the reapply; tests.
-- [ ] T4 (AC4) `markNoCharge` revert guard; admin close for UNRECONCILED; tests (`PackPurchaseAttemptIT` and unit).
-- [ ] T5 (AC5) Same-price skip in `updateSubscriptionTier`; resolve open reconciliation row on successful persist; tests.
-- [ ] T6 (AC6) `softDelete` owner-id check, callers, `project-context.md`; tests.
-- [ ] T7 (AC7) Docs and search index.
+- [x] T1 (AC1) Advisory lock in both Stripe-customer handlers; IT.
+- [x] T2 (AC2) Post-insert email compare and sync enqueue in both customer-creation callers; tests.
+- [x] T3 (AC3) Erased-row-safe targeted card writes for `getOrCreateStripeCustomer` and the reapply; tests.
+- [x] T4 (AC4) `markNoCharge` revert guard; admin close for UNRECONCILED; tests (`PackPurchaseAttemptIT` and unit).
+- [x] T5 (AC5) Same-price skip in `updateSubscriptionTier`; resolve open reconciliation row on successful persist; tests.
+- [x] T6 (AC6) `softDelete` owner-id check, callers, `project-context.md`; tests.
+- [x] T7 (AC7) Docs and search index.
 - [ ] T8 (AC8) Ledger lines; sprint-status; `/pr-review` until a clean round; PR.
 
 ## Dev Notes
@@ -270,15 +270,84 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
 
 ### Agent Model Used
 
+Claude Opus 5.5 (claude-opus-5-5)
+
 ### Debug Log References
+
+- The first IT runs failed before any test ran: the Postgres test container timed out on startup (Docker VM 3.8 GB, two
+  other compose stacks using ~3 GB). After stopping the unrelated `my-hotel` stack (owner's choice) the six ITs ran green.
+- `SessionPackPaymentServiceTest.purchasePack_chargesTheNamedCard_evenWhenTheResolverRevertedTheColumnBeforeTheCharge`
+  hooked the RS09d interleaving on `stripeCustomerRepository.save`; moved to `writeCardIfPayerLive`. Three admin-close
+  unit tests used an UNRECONCILED attempt as a generic open row and expected the card revert (the RS06i behaviour); they now
+  use IN_PROGRESS, and the UNRECONCILED case has its own test.
 
 ### Completion Notes List
 
-- Story created 2026-11-07 (bmad-create-story); all seven items re-verified open at 0df391d5. Decisions D9-D14 pending
-  owner.
+- Story created 2026-11-07 (bmad-create-story); all seven items re-verified open at 0df391d5. Owner decided D9-D14
+  option 1 each.
+- AC1 (D9.1): `StripeCustomerRepository.acquireCustomerOutboxLock` (`pg_advisory_xact_lock(0x5343554C "SCUL",
+  hashtext(:stripeCustomerId))`). The email-sync handler resolves the customer id from its row, locks, then reads the
+  user; the erasure handler locks first (blank id: no-op, no lock). IT in `EmailChangeServiceIT`: while a transaction holds
+  the lock and commits the tombstone, a sync waits on it and then makes no Stripe call. Handler unit tests check the order.
+- AC2 (D10.1, implemented differently): rather than changing `PaymentGateway.createStripeCustomer`'s return type (interface,
+  `StubPaymentGateway`, five tests), each caller reads the email through `StripeCustomerEmailSyncOutboxSupport.currentEmail`
+  BEFORE creating the customer and calls `syncIfEmailChangedSince` after the row insert (own `TransactionTemplate`; never
+  throws). Same effect: any change after the pre-read is caught. Residual filed as RS03g.
+- AC3 (D11.1): new `StripeCustomerCardWrites` (`lockIfPayerLive`: `findByIdForUpdateWaiting`, then the user; erased =
+  `@erased.io` tombstone or gone; a null email is live). `getOrCreateStripeCustomer`'s existing-row branch uses
+  `writeCardIfPayerLive` (new one-column `updatePaymentMethod`); `reapplyPaymentMethodAndScheduleSync` calls
+  `lockIfPayerLive` before its compare-and-set. IT in `StripeCustomerRepositoryIT`: a reapply waiting on an uncommitted
+  erasure returns false and the card stays NULL.
+- AC4 (D12.1): `resolve(attemptId, byAdmin)`; `noCharge` never reaches `markNoCharge` (and its revert) for UNRECONCILED. Only
+  `closeAttemptByAdmin` CASes UNRECONCILED → NO_CHARGE (`[PACK_PURCHASE_UNRECONCILED_NO_CHARGE]`) and resolves the
+  refund-failure row; the job still gets WRITE_LOST. Javadocs (revert, enum, close action) corrected. Tests: unit (operator
+  close, job leaves it and never reverts) and `PackPurchaseAttemptIT` (closes, keeps its intent id).
+- AC5 (D13.1): `StripeClient.updateSubscriptionTier` returns the retrieved subscription without updating when item 0 already
+  has the price (`alreadyAtPrice`, `[STRIPE_SUBSCRIPTION_PRICE_UNCHANGED]`). `persist*TierUpgrade` now returns whether it
+  granted; on true, `change*Tier` calls `PaymentRecoveryRecorder.resolveUngrantedUpgrades` (REQUIRES_NEW on the payment pool,
+  never throws) after the persist committed. The same-instant duplicate-row case is accepted here (D13.1), not ledgered.
+  Tests: `StripeClientTest`, `SubscriptionEntitlementIntegrityTest` (resolve on grant, not on failure/superseded),
+  `PackPurchaseAttemptIT` (resolves only the target tier).
+- AC6 (D14.1): `FileStorageService.softDelete(key)` compares `owner_id` with `securityUtil.requireCurrentBusinessId()`
+  (as `signDownload` does); `deletePhoto(userId)` / `deleteItem(userId, mediaId)` and both endpoints drop the login argument;
+  the tolerant catches keep their behaviour with corrected log text; `deletePhoto` javadoc and `project-context.md` updated.
+  IT in `FileStorageDeletionIT` (stale `created_by` deletes; another owner's file refused).
+- AC7: payment and filestorage dev-docs, monitoring.md MoneyIntegrityEvent text; search index rebuilt; `check-docs` OK. No
+  migration, config key, env var or job, so no provisioning-checklist entry.
+- AC8: RS03d, RS03e, RS03f, RS06i, RS07c, RS09g, RS09h deleted; RS03g filed; section note updated.
+- Tests (targeted; CI is the full gate): 1788 unit tests across payment, filestorage, marketplace, security service, db,
+  config and convention tests; ITs `EmailChangeServiceIT` (24), `StripeCustomerRepositoryIT` (7), `PackPurchaseAttemptIT`
+  (18), `SessionPackPurchaseIT` (4), `FileStorageDeletionIT` (7), `SubscriptionLifecycleIT` (28), all green.
+- No red run before the fixes (deviation, as in 175).
 
 ### File List
+
+- `src/main/java/com/softropic/skillars/platform/payment/repo/StripeCustomerRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/repo/SubscriptionUpgradeReconciliationRepository.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerCardWrites.java` (new)
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerEmailSyncOutboxHandler.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerEmailSyncOutboxSupport.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeCustomerErasureOutboxHandler.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SessionPackPaymentService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/SubscriptionService.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/PaymentRecoveryRecorder.java`
+- `src/main/java/com/softropic/skillars/platform/payment/service/StripeClient.java`
+- `src/main/java/com/softropic/skillars/platform/payment/api/SessionPackPaymentResource.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/service/FileStorageService.java`
+- `src/main/java/com/softropic/skillars/platform/filestorage/api/StorageResource.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachProfileService.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/service/CoachGalleryService.java`
+- `src/main/java/com/softropic/skillars/platform/marketplace/api/ProfileBuilderResource.java`
+- Tests: `StripeCustomerCardWritesTest` (new), `StripeClientTest` (new), `StripeCustomerEmailSyncOutboxHandlerTest`,
+  `StripeCustomerEmailSyncOutboxSupportTest`, `StripeCustomerErasureOutboxHandlerTest`, `SessionPackPaymentServiceTest`,
+  `SessionPackPaymentResourceWebMvcTest`, `SubscriptionEntitlementIntegrityTest`, `CoachProfileServiceTest`,
+  `CoachGalleryServiceTest`, `EmailChangeServiceIT`, `StripeCustomerRepositoryIT`, `PackPurchaseAttemptIT`,
+  `FileStorageDeletionIT`
+- Docs: `docs/dev-docs/payment/index.html`, `docs/dev-docs/filestorage/index.html`, `docs/dev-docs/assets/search-index.js`,
+  `docs/deployment/monitoring.md`, `_bmad-output/project-context.md`
+- Ledger: `_bmad-output/implementation-artifacts/deferred-work.md`, `sprint-status.yaml`, this story
 
 ### Change Log
 
 - 2026-11-07: created (ready-for-dev) from the owner-chosen payment-residuals bundle; decisions D9-D14 pending owner.
+- 2026-11-07: owner decided D9-D14 (option 1 each); implemented T1-T7 and the ledger part of T8 (dev-story). `/pr-review` and the PR pending.
