@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.contract.CoachAvailabilityRespons
 import com.softropic.skillars.platform.booking.contract.CreateBlockRequest;
 import com.softropic.skillars.platform.booking.contract.CreateWindowRequest;
 import com.softropic.skillars.platform.booking.contract.UpdateWindowRequest;
+import com.softropic.skillars.platform.booking.contract.WindowImpactResponse;
 import com.softropic.skillars.platform.booking.repo.Booking;
 import com.softropic.skillars.platform.booking.repo.BookingRepository;
 import com.softropic.skillars.platform.booking.repo.CoachAvailabilityBlock;
@@ -21,6 +22,7 @@ import com.softropic.skillars.platform.marketplace.repo.CoachPricingRepository;
 import com.softropic.skillars.platform.marketplace.repo.CoachProfileRepository;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.infrastructure.util.ClockProvider;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.LockModeType;
 import lombok.RequiredArgsConstructor;
@@ -272,6 +274,71 @@ public class AvailabilityService {
         boolean hasConflict = hasBookingConflict(lockedProfile.getId(), saved,
             lockedProfile.getCanonicalTimezone());
         return toWindowResponse(saved, hasConflict);
+    }
+
+    /** Upcoming sessions that still hold the coach's time: requested, being paid for, or booked. */
+    private static final List<String> SESSION_HOLDING_STATUSES =
+        List.of("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING");
+
+    /**
+     * Owner decision 2026-11-06 (Pitchside SES-10, option A): deleting or changing a window never
+     * touches its bookings, but the coach is told first how many upcoming sessions would end up
+     * outside their hours. A session counts when it starts in this window and, after the change, no
+     * window covers it from start to end: not the coach's other windows (they may overlap) and, for
+     * an edit (all three proposed values), not the proposed hours either. With no proposed values
+     * this answers for a deletion. Read-only and unlocked: a preview, not a guard; the delete and
+     * update stay as they were.
+     */
+    @Transactional(readOnly = true)
+    public WindowImpactResponse windowImpact(Long userId, UUID windowId, Integer dayOfWeek,
+                                             LocalTime startTime, LocalTime endTime) {
+        boolean anyProposed = dayOfWeek != null || startTime != null || endTime != null;
+        boolean allProposed = dayOfWeek != null && startTime != null && endTime != null;
+        if (anyProposed && !allProposed) {
+            throw new OperationNotAllowedException("dayOfWeek, startTime and endTime go together",
+                BookingError.INVALID_TIME_RANGE);
+        }
+        if (allProposed && (dayOfWeek < 1 || dayOfWeek > 7 || !startTime.isBefore(endTime))) {
+            throw new OperationNotAllowedException("Proposed window is not a valid day and time range",
+                BookingError.INVALID_TIME_RANGE);
+        }
+        CoachProfile profile = requireProfile(userId);
+        CoachAvailabilityWindow window = windowRepository.findByIdAndCoachId(windowId, profile.getId())
+            .orElseThrow(() -> new ResourceNotFoundException("Availability window not found", "coach_availability_window"));
+        ZoneId zone = resolveCoachZoneOrUtc(profile.getCanonicalTimezone(), profile.getId());
+        Instant now = Instant.now(ClockProvider.getClock());
+        List<Booking> upcoming = bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
+            profile.getId(), SESSION_HOLDING_STATUSES, now, now.plus(3650, ChronoUnit.DAYS));
+        List<CoachAvailabilityWindow> remaining = windowRepository
+            .findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(profile.getId()).stream()
+            .filter(w -> !w.getId().equals(window.getId()))
+            .toList();
+        long outside = upcoming.stream()
+            .filter(b -> startsInside(b.getRequestedStartTime().atZone(zone),
+                window.getDayOfWeek(), window.getStartTime(), window.getEndTime()))
+            .filter(b -> {
+                ZonedDateTime start = b.getRequestedStartTime().atZone(zone);
+                ZonedDateTime end = b.getRequestedEndTime() == null ? start : b.getRequestedEndTime().atZone(zone);
+                boolean coveredByOther = remaining.stream().anyMatch(w ->
+                    covers(start, end, w.getDayOfWeek(), w.getStartTime(), w.getEndTime()));
+                boolean coveredByProposal = allProposed
+                    && covers(start, end, dayOfWeek.shortValue(), startTime, endTime);
+                return !coveredByOther && !coveredByProposal;
+            })
+            .count();
+        return new WindowImpactResponse((int) outside);
+    }
+
+    private static boolean startsInside(ZonedDateTime start, short dayOfWeek, LocalTime from, LocalTime to) {
+        LocalTime time = start.toLocalTime();
+        return start.getDayOfWeek().getValue() == dayOfWeek && !time.isBefore(from) && time.isBefore(to);
+    }
+
+    /** The whole session, start to end, falls on the window's day and within its hours. */
+    private static boolean covers(ZonedDateTime start, ZonedDateTime end, short dayOfWeek, LocalTime from, LocalTime to) {
+        return startsInside(start, dayOfWeek, from, to)
+            && end.toLocalDate().equals(start.toLocalDate())
+            && !end.toLocalTime().isAfter(to);
     }
 
     @Transactional

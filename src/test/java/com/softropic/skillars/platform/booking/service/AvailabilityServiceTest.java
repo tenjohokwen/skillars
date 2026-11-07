@@ -27,6 +27,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.DayOfWeek;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -219,6 +220,104 @@ class AvailabilityServiceTest {
                         && b.getRequestedEndTime().isAfter(from))
                     .toList();
             });
+    }
+
+    // ----- windowImpact (owner decision 2026-11-06, Pitchside SES-10 option A) -----
+
+    /** Monday 09:00-17:00 Berlin, with sessions next week at Mon 10:00, Mon 16:00 and Tue 10:00. */
+    private record ImpactFixture(UUID windowId, UUID coachId) {}
+
+    private ImpactFixture stubImpact() {
+        UUID coachId = UUID.randomUUID();
+        UUID windowId = UUID.randomUUID();
+        CoachProfile profile = makeCoachProfile(coachId, COACH_USER_ID);
+        CoachAvailabilityWindow window = makeWindow(windowId, coachId);
+        ZonedDateTime monday = ZonedDateTime.now(ZoneId.of("Europe/Berlin"))
+            .with(java.time.temporal.TemporalAdjusters.next(DayOfWeek.MONDAY))
+            .withHour(10).withMinute(0).withSecond(0).withNano(0);
+        when(coachProfileRepository.findByUserId(COACH_USER_ID)).thenReturn(Optional.of(profile));
+        when(windowRepository.findByIdAndCoachId(windowId, coachId)).thenReturn(Optional.of(window));
+        when(bookingRepository.findByCoachIdAndStatusInAndTimeBetween(
+            eq(coachId), anyList(), any(Instant.class), any(Instant.class)))
+            .thenReturn(List.of(
+                makeBooking(coachId, monday.toInstant()),
+                makeBooking(coachId, monday.withHour(16).toInstant()),
+                makeBooking(coachId, monday.plusDays(1).toInstant())));
+        return new ImpactFixture(windowId, coachId);
+    }
+
+    @Test
+    void windowImpact_forADeletion_countsEverySessionInsideTheWindow() {
+        ImpactFixture f = stubImpact();
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), null, null, null).sessionsLeftOutside())
+            .isEqualTo(2);
+    }
+
+    @Test
+    void windowImpact_forAnEdit_countsOnlySessionsTheNewHoursNoLongerCover() {
+        ImpactFixture f = stubImpact();
+        // Monday 09:00-12:00 still covers 10:00, not 16:00.
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), 1, LocalTime.of(9, 0), LocalTime.of(12, 0))
+            .sessionsLeftOutside()).isEqualTo(1);
+        // Moving the window to Tuesday leaves both Monday sessions outside.
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), 2, LocalTime.of(9, 0), LocalTime.of(17, 0))
+            .sessionsLeftOutside()).isEqualTo(2);
+    }
+
+    @Test
+    void windowImpact_forAnEdit_countsASessionThatWouldRunPastTheNewEnd() {
+        ImpactFixture f = stubImpact();
+        // Monday 09:00-10:30: the 10:00-11:00 session starts inside but ends outside; 16:00 is outside.
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), 1, LocalTime.of(9, 0), LocalTime.of(10, 30))
+            .sessionsLeftOutside()).isEqualTo(2);
+    }
+
+    @Test
+    void windowImpact_doesNotCountASessionAnotherWindowStillCovers() {
+        ImpactFixture f = stubImpact();
+        CoachAvailabilityWindow afternoon = makeWindow(UUID.randomUUID(), f.coachId());
+        afternoon.setStartTime(LocalTime.of(15, 0));
+        afternoon.setEndTime(LocalTime.of(18, 0));
+        when(windowRepository.findByCoachIdOrderByDayOfWeekAscStartTimeAscIdAsc(f.coachId()))
+            .thenReturn(List.of(makeWindow(f.windowId(), f.coachId()), afternoon));
+        // Deleting 09:00-17:00 leaves 10:00 outside; 16:00 is still inside the 15:00-18:00 window.
+        assertThat(service.windowImpact(COACH_USER_ID, f.windowId(), null, null, null).sessionsLeftOutside())
+            .isEqualTo(1);
+    }
+
+    @Test
+    void windowImpact_asksForTheSessionsThatStillHoldTheCoachsTime() {
+        ImpactFixture f = stubImpact();
+        service.windowImpact(COACH_USER_ID, f.windowId(), null, null, null);
+        @SuppressWarnings("unchecked")
+        org.mockito.ArgumentCaptor<List<String>> statuses = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(bookingRepository).findByCoachIdAndStatusInAndTimeBetween(
+            any(UUID.class), statuses.capture(), any(Instant.class), any(Instant.class));
+        assertThat(statuses.getValue())
+            .containsExactlyInAnyOrder("REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING");
+    }
+
+    @Test
+    void windowImpact_refusesPartOfAProposal() {
+        UUID windowId = UUID.randomUUID();
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.windowImpact(COACH_USER_ID, windowId, 1, LocalTime.of(9, 0), null))
+            .isInstanceOf(OperationNotAllowedException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.windowImpact(COACH_USER_ID, windowId, 1, LocalTime.of(12, 0), LocalTime.of(9, 0)))
+            .isInstanceOf(OperationNotAllowedException.class);
+    }
+
+    @Test
+    void windowImpact_ofAnotherCoachsWindowIsNotFound() {
+        UUID coachId = UUID.randomUUID();
+        UUID windowId = UUID.randomUUID();
+        when(coachProfileRepository.findByUserId(COACH_USER_ID))
+            .thenReturn(Optional.of(makeCoachProfile(coachId, COACH_USER_ID)));
+        when(windowRepository.findByIdAndCoachId(windowId, coachId)).thenReturn(Optional.empty());
+        org.assertj.core.api.Assertions.assertThatThrownBy(
+                () -> service.windowImpact(COACH_USER_ID, windowId, null, null, null))
+            .isInstanceOf(com.softropic.skillars.infrastructure.exception.ResourceNotFoundException.class);
     }
 
     private CoachProfile makeCoachProfile(UUID coachId, Long userId) {

@@ -219,7 +219,13 @@ export const useBookingStore = defineStore('booking', () => {
     return monday.toISOString().slice(0, 10)
   }
 
+  // Found by Pitchside SES-08: two quick week clicks start two loads, and the earlier one could land
+  // last and overwrite the newer week, including the reload after a save (a new window then vanished
+  // from the calendar). Only the latest call may write the state or end the loading flag.
+  let availabilityLoadToken = 0
+
   async function loadAvailability(coachId, date) {
+    const token = ++availabilityLoadToken
     loading.value = true
     error.value = null
     // Clear on entry, not only on success: a failed load must not leave the previous coach's
@@ -234,6 +240,7 @@ export const useBookingStore = defineStore('booking', () => {
       const ws = date ?? currentMonday()
       weekStart.value = ws
       const res = await getCoachAvailability(coachId, ws)
+      if (token !== availabilityLoadToken) return
       windows.value = res.windows ?? []
       blocks.value = res.blocks ?? []
       computedSlots.value = res.computedSlots ?? []
@@ -241,9 +248,10 @@ export const useBookingStore = defineStore('booking', () => {
       availabilitySignature.value = res.availabilitySignature ?? null
       coachPriced.value = typeof res.coachPriced === 'boolean' ? res.coachPriced : null
     } catch (e) {
+      if (token !== availabilityLoadToken) return
       error.value = e
     } finally {
-      loading.value = false
+      if (token === availabilityLoadToken) loading.value = false
     }
   }
 

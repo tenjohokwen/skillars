@@ -1906,7 +1906,17 @@ export default {
       addWindow: 'Add Recurring Window',
       addBlock: 'Block Personal Time',
       editWindow: 'Edit Availability Window',
-      deleteConfirm: 'Are you sure you want to delete this?',
+      profileFirst: 'Start your coach profile to set your weekly hours.',
+      openProfileBuilder: 'Go to profile builder',
+      deleteWindowTitle: 'Delete this window?',
+      deleteWindowNoSessions: 'No upcoming sessions are booked in these hours.',
+      deleteWindowImpact:
+        '{count} upcoming session falls in these hours. It stays booked, but families can no longer request these hours. | {count} upcoming sessions fall in these hours. They stay booked, but families can no longer request these hours.',
+      deleteWindowConfirm: 'Delete window',
+      editWindowTitle: 'Change this window?',
+      editWindowImpact:
+        '{count} upcoming session falls outside the new hours. It stays booked. | {count} upcoming sessions fall outside the new hours. They stay booked.',
+      editWindowConfirm: 'Save changes',
       bookingConflictWarning:
         'You have a booking during this time. Changes apply to future availability only.',
       blockAdded: 'Time block saved successfully.',

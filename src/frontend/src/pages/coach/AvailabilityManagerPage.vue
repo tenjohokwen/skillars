@@ -23,13 +23,38 @@
         </div>
       </div>
 
-      <div v-if="store.loading" class="q-py-xl text-center">
+      <!-- Found by Pitchside SES-08: until the coach's id is known, a save reloaded the calendar for
+           coach "null" (a 400) and emptied it. Nothing is usable before the page has it. -->
+      <div v-if="!ready || store.loading" class="q-py-xl text-center">
         <q-spinner size="48px" color="primary" />
       </div>
 
+      <!-- No coach profile yet (the builder was never started): every availability call needs one,
+           so point the coach there. The page itself stays open (AUTH-13, decision 2026-11-04). -->
+      <div v-else-if="noProfile" class="q-mt-lg text-center" data-testid="availability-no-profile">
+        <div class="text-body1 q-mb-md">{{ t('booking.availability.profileFirst') }}</div>
+        <q-btn
+          unelevated
+          color="primary"
+          no-caps
+          :label="t('booking.availability.openProfileBuilder')"
+          to="/coach/profile-builder"
+          data-testid="availability-open-builder"
+        />
+      </div>
+
+      <!-- A failed lookup leaves no coach to save for: say so instead of offering the panel. -->
+      <q-banner
+        v-else-if="!coachId"
+        rounded
+        class="q-mt-lg bg-negative text-white"
+        data-testid="availability-load-error"
+      >
+        {{ t('common.errorGeneric') }}
+      </q-banner>
+
       <template v-else>
         <WeeklyCalendar
-          v-if="coachId"
           :week-start="currentWeekStart"
           :windows="store.windows"
           :blocks="store.blocks"
@@ -205,6 +230,54 @@
         </div>
       </template>
     </div>
+
+    <!-- Owner decision 2026-11-06 (SES-10, option A): a window's booked sessions are never touched,
+         but the coach is told how many would fall outside their hours before deleting or changing it. -->
+    <q-dialog v-model="impact.open" persistent>
+      <q-card class="availability-impact" data-testid="availability-impact-dialog">
+        <q-card-section class="text-h6">
+          {{
+            impact.mode === 'delete'
+              ? t('booking.availability.deleteWindowTitle')
+              : t('booking.availability.editWindowTitle')
+          }}
+        </q-card-section>
+        <q-card-section class="q-pt-none" data-testid="availability-impact-message">
+          <template v-if="impact.mode === 'delete' && impact.count === 0">
+            {{ t('booking.availability.deleteWindowNoSessions') }}
+          </template>
+          <template v-else-if="impact.mode === 'delete'">
+            {{
+              t('booking.availability.deleteWindowImpact', { count: impact.count }, impact.count)
+            }}
+          </template>
+          <template v-else>
+            {{ t('booking.availability.editWindowImpact', { count: impact.count }, impact.count) }}
+          </template>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            flat
+            :label="t('common.cancel')"
+            :disable="impact.busy"
+            data-testid="availability-impact-cancel"
+            @click="impact.open = false"
+          />
+          <q-btn
+            unelevated
+            :color="impact.mode === 'delete' ? 'negative' : 'primary'"
+            :label="
+              impact.mode === 'delete'
+                ? t('booking.availability.deleteWindowConfirm')
+                : t('booking.availability.editWindowConfirm')
+            "
+            :loading="impact.busy"
+            data-testid="availability-impact-confirm"
+            @click="confirmImpact"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
@@ -213,6 +286,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useBookingStore } from 'src/stores/booking.store'
 import { getProfileBuilderStatus } from 'src/api/marketplace.api'
+import { getAvailabilityWindowImpact } from 'src/api/booking.api'
 import { translatedErrorMessage } from 'src/utils/errorHandler'
 import WeeklyCalendar from 'src/components/availability/WeeklyCalendar.vue'
 
@@ -220,6 +294,10 @@ const { t, te, locale } = useI18n()
 const store = useBookingStore()
 
 const coachId = ref(null)
+// True once the coach's id has been looked up (found or not); a miss shows an error, not the panel.
+const ready = ref(false)
+// The lookup worked but this coach has no profile yet.
+const noProfile = ref(false)
 const coachTimezone = ref('UTC')
 
 const editingWindow = ref(null)
@@ -309,26 +387,41 @@ const saveError = ref(null)
 // literal.
 const saveFailureMessage = (error) => translatedErrorMessage(error, t, te)
 
+function windowPayload() {
+  return {
+    dayOfWeek: form.value.dayOfWeek,
+    startTime: form.value.startTime + ':00',
+    endTime: form.value.endTime + ':00',
+  }
+}
+
+// The confirmation shown before a delete, or before an edit that leaves sessions outside the hours.
+const impact = ref({ open: false, mode: 'delete', count: 0, busy: false, windowId: null })
+
+async function sessionsLeftOutside(windowId, proposal) {
+  const res = await getAvailabilityWindowImpact(windowId, proposal)
+  return (res?.data ?? res)?.sessionsLeftOutside ?? 0
+}
+
 async function onSaveWindow() {
   saving.value = true
   windowSaved.value = false
   saveError.value = null
   try {
-    const payload = {
-      dayOfWeek: form.value.dayOfWeek,
-      startTime: form.value.startTime + ':00',
-      endTime: form.value.endTime + ':00',
-    }
     if (editingWindow.value) {
-      await store.editWindow(coachId.value, editingWindow.value.id, payload)
-    } else {
-      await store.createWindow(coachId.value, payload)
+      const count = await sessionsLeftOutside(editingWindow.value.id, windowPayload())
+      if (count > 0) {
+        impact.value = {
+          open: true,
+          mode: 'edit',
+          count,
+          busy: false,
+          windowId: editingWindow.value.id,
+        }
+        return
+      }
     }
-    cancelEdit()
-    windowSaved.value = true
-    setTimeout(() => {
-      windowSaved.value = false
-    }, 3000)
+    await saveWindow()
   } catch (e) {
     saveError.value = saveFailureMessage(e)
   } finally {
@@ -336,9 +429,46 @@ async function onSaveWindow() {
   }
 }
 
+async function saveWindow() {
+  const payload = windowPayload()
+  if (editingWindow.value) {
+    await store.editWindow(coachId.value, editingWindow.value.id, payload)
+  } else {
+    await store.createWindow(coachId.value, payload)
+  }
+  cancelEdit()
+  windowSaved.value = true
+  setTimeout(() => {
+    windowSaved.value = false
+  }, 3000)
+}
+
 async function onDeleteWindow(id) {
-  if (!confirm(t('booking.availability.deleteConfirm'))) return
-  await store.removeWindow(coachId.value, id)
+  saveError.value = null
+  try {
+    const count = await sessionsLeftOutside(id)
+    impact.value = { open: true, mode: 'delete', count, busy: false, windowId: id }
+  } catch (e) {
+    // Without the count the coach cannot be told what the delete leaves behind: nothing is deleted.
+    saveError.value = saveFailureMessage(e)
+  }
+}
+
+async function confirmImpact() {
+  impact.value.busy = true
+  saveError.value = null
+  try {
+    if (impact.value.mode === 'delete') {
+      await store.removeWindow(coachId.value, impact.value.windowId)
+      if (editingWindow.value?.id === impact.value.windowId) cancelEdit()
+    } else {
+      await saveWindow()
+    }
+  } catch (e) {
+    saveError.value = saveFailureMessage(e)
+  } finally {
+    impact.value = { ...impact.value, open: false, busy: false }
+  }
 }
 
 async function onDeleteBlock(id) {
@@ -420,12 +550,14 @@ onMounted(async () => {
     const res = await getProfileBuilderStatus()
     coachId.value = res?.coachId ?? null
     if (!coachId.value) {
-      store.error = new Error('No coach profile found for this account')
+      noProfile.value = true
       return
     }
   } catch (e) {
     store.error = e
     return
+  } finally {
+    ready.value = true
   }
   await store.loadAvailability(coachId.value, currentWeekStart.value)
   // Sourced from the coach PROFILE's timezone, which loadAvailability already puts on the store,
