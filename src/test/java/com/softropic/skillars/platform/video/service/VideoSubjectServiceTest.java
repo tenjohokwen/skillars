@@ -163,8 +163,8 @@ class VideoSubjectServiceTest {
         org.mockito.Mockito.when(videoRepository.findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(
                 org.mockito.ArgumentMatchers.eq(7L), org.mockito.ArgumentMatchers.any()))
             .thenReturn(List.of(shareable, unscanned));
-        org.mockito.Mockito.when(videoSharingPolicy.maySharePastOwner(shareable)).thenReturn(true);
-        org.mockito.Mockito.when(videoSharingPolicy.maySharePastOwner(unscanned)).thenReturn(false);
+        org.mockito.Mockito.when(videoSharingPolicy.shareable(List.of(shareable, unscanned)))
+            .thenReturn(List.of(shareable));
 
         org.assertj.core.api.Assertions.assertThat(service.shareableForSubject(7L)).containsExactly(shareable);
 

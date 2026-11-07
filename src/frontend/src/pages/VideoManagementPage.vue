@@ -406,7 +406,9 @@ async function onFileSelected(event) {
     })
     return
   }
-  const allowedTypes = quota.value.allowedMimeTypes ?? []
+  // New uploads only: a retry re-sends a file the server already accepted the type of, and the
+  // server does not check the type on retry (review finding on 2b8e8fd4).
+  const allowedTypes = selection.retryVideo ? [] : (quota.value.allowedMimeTypes ?? [])
   if (
     allowedTypes.length &&
     !allowedTypes.some((type) => type.toLowerCase() === (file.type || '').toLowerCase())

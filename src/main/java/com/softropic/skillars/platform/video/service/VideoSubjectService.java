@@ -68,11 +68,8 @@ public class VideoSubjectService {
      */
     @Transactional(readOnly = true)
     public List<Video> shareableForSubject(Long playerId) {
-        return videoRepository
-            .findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(playerId, SUBJECT_EXCLUDED_STATES)
-            .stream()
-            .filter(videoSharingPolicy::maySharePastOwner)
-            .toList();
+        return videoSharingPolicy.shareable(videoRepository
+            .findBySubjectPlayerIdAndOperationalStateNotInOrderByCreatedAtDesc(playerId, SUBJECT_EXCLUDED_STATES));
     }
 
     /**
