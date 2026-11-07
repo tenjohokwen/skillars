@@ -1,6 +1,7 @@
 import { expect, scenario, test } from '../../src/app.js'
 import { asRole } from '../../src/data/accounts.js'
 import { R } from '../../src/routes.js'
+import { t } from '../../src/i18n.js'
 import {
   AdminRequiredScreen,
   AvailabilityScreen,
@@ -106,7 +107,13 @@ test.describe('A · Auth & session — guards and logout', () => {
       // coach cannot be booked, so nothing reachable here is live. A change to this is deliberate.
       await page.goto(suite.routing.toUrl(R.availability))
       expect(await settled(R.availability)).toBe(R.availability)
-      await new AvailabilityScreen(page, suite).waitReady()
+      // This coach never started the builder, so has no profile to hold windows yet: the page
+      // says so and points there, rather than offering a panel whose saves would all fail.
+      const availability = new AvailabilityScreen(page, suite)
+      await expect(availability.noProfile()).toBeVisible()
+      await expect(availability.noProfile()).toContainText(t('booking.availability.profileFirst'))
+      await availability.openBuilder().click()
+      expect(await settled(R.coachBuilder)).toBe(R.coachBuilder)
     },
   )
 
