@@ -322,9 +322,11 @@ public class SubscriptionService {
             Subscription updated = change.subscription();
             final boolean granted;
             try {
-                granted = self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated);
+                granted = self.persistCoachTierUpgrade(coachId, stripeSubId, targetTier, updated, change.sent());
             } catch (RuntimeException e) {
-                recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, targetTier, updated);
+                if (change.sent()) {
+                    recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, targetTier, updated);
+                }
                 throw e;
             }
             if (granted && !change.sent()) {
@@ -387,13 +389,21 @@ public class SubscriptionService {
         }
     }
 
-    /** Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted). */
+    /**
+     * Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted).
+     * {@code billed}: skillars-deferred-176 review round 3, false when Stripe already carried the price and this attempt sent
+     * no update. Nothing was charged, so nothing is recorded: the earlier attempt's row already holds that charge, and the
+     * subscription's latest invoice may by now be a renewal an operator must not refund.
+     */
     @Transactional
-    public boolean persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated) {
+    public boolean persistCoachTierUpgrade(UUID coachId, String stripeSubId, String newTier, Subscription updated,
+                                           boolean billed) {
         PaymentCoachSubscription sub = paymentCoachSubscriptionRepository.findByCoachIdForUpdate(coachId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
-            recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, newTier, updated);
+            if (billed) {
+                recordUngrantedUpgrade("COACH", String.valueOf(coachId), stripeSubId, newTier, updated);
+            }
             return false;
         }
         coachSubscriptionChangeRepository.voidAllPendingForCoach(coachId, Instant.now());
@@ -636,9 +646,11 @@ public class SubscriptionService {
             Subscription updated = change.subscription();
             final boolean granted;
             try {
-                granted = self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated);
+                granted = self.persistPlayerTierUpgrade(playerId, stripeSubId, targetTier, updated, change.sent());
             } catch (RuntimeException e) {
-                recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, targetTier, updated);
+                if (change.sent()) {
+                    recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, targetTier, updated);
+                }
                 throw e;
             }
             if (granted && !change.sent()) {
@@ -672,13 +684,21 @@ public class SubscriptionService {
         log.info("[PLAYER_PENDING_CHANGES_VOIDED playerId={} count={}]", playerId, voided);
     }
 
-    /** Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted). */
+    /**
+     * Returns true when the tier was granted, false when the subscription was superseded (recorded as ungranted).
+     * {@code billed}: skillars-deferred-176 review round 3, false when Stripe already carried the price and this attempt sent
+     * no update. Nothing was charged, so nothing is recorded: the earlier attempt's row already holds that charge, and the
+     * subscription's latest invoice may by now be a renewal an operator must not refund.
+     */
     @Transactional
-    public boolean persistPlayerTierUpgrade(Long playerId, String stripeSubId, String newTier, Subscription updated) {
+    public boolean persistPlayerTierUpgrade(Long playerId, String stripeSubId, String newTier, Subscription updated,
+                                            boolean billed) {
         PaymentPlayerSubscription sub = paymentPlayerSubscriptionRepository.findByPlayerIdForUpdate(playerId)
             .orElseThrow(() -> new PaymentGatewayException("payment.subscription.notFound"));
         if (!Objects.equals(stripeSubId, sub.getStripeSubscriptionId())) {
-            recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, newTier, updated);
+            if (billed) {
+                recordUngrantedUpgrade("PLAYER", String.valueOf(playerId), stripeSubId, newTier, updated);
+            }
             return false;
         }
         playerSubscriptionChangeRepository.voidAllPendingForPlayer(playerId, Instant.now());
