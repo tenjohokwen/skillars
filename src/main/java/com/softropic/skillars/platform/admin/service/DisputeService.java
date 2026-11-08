@@ -64,7 +64,8 @@ import java.util.UUID;
 @Slf4j
 public class DisputeService {
 
-    private static final List<String> ELIGIBLE_STATUSES = List.of(
+    /** Also what GdprRequestService treats as still disputable (an account erasure waits for the window). */
+    static final List<String> ELIGIBLE_STATUSES = List.of(
         "COMPLETED", "CANCELLED", "CANCELLED_PARENT", "CANCELLED_COACH", "NO_SHOW_PLAYER", "NO_SHOW_COACH");
 
     /**

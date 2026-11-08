@@ -2,6 +2,8 @@ package com.softropic.skillars.platform.admin.service;
 
 import com.softropic.skillars.infrastructure.exception.ResourceNotFoundException;
 import com.softropic.skillars.infrastructure.persistence.PessimisticLockRetryer;
+import com.softropic.skillars.platform.config.service.ConfigBounds;
+import com.softropic.skillars.platform.config.service.ConfigService;
 import com.softropic.skillars.infrastructure.security.SecurityError;
 import com.softropic.skillars.platform.admin.contract.AdminGdprRequestDto;
 import com.softropic.skillars.platform.admin.contract.GdprErasureRequestedEvent;
@@ -60,6 +62,7 @@ public class GdprRequestService {
     private final ApplicationEventPublisher eventPublisher;
     private final DevelopmentDataErasureGuard developmentDataErasureGuard;
     private final PessimisticLockRetryer lockRetryer;
+    private final ConfigService configService;
 
     @Transactional
     public UUID requestExport(Long userId) {
@@ -122,6 +125,13 @@ public class GdprRequestService {
             if (bookingRepository.existsByCoachIdAndStatusIn(cp.getId(), ERASURE_BLOCKING_BOOKING_STATUSES)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
             }
+            if (gdprRequestRepository.coachHasDisputableBooking(cp.getId(), DisputeService.ELIGIBLE_STATUSES,
+                    disputeWindowStart())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.disputeWindowOpen");
+            }
+            if (gdprRequestRepository.coachHasUnusedPackCredits(cp.getId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.unusedPackCredits");
+            }
         });
 
         // Owner decision 2026-11-08 (PRV-03 follow-up): a parent's erasure takes every child's data with it, and
@@ -131,15 +141,30 @@ public class GdprRequestService {
         // request in flight (BookingService.requirePlayerBookableUnderLock).
         List<Long> familyPlayerIds = familyPlayerIds(userId);
         familyPlayerIds.forEach(id -> developmentDataErasureGuard.isErasedUnderLock(id, "GdprRequestService.requestErasure"));
-        if (!familyPlayerIds.isEmpty()
-                && bookingRepository.existsByPlayerIdInAndStatusIn(familyPlayerIds, ERASURE_BLOCKING_BOOKING_STATUSES)) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
+        if (!familyPlayerIds.isEmpty()) {
+            if (bookingRepository.existsByPlayerIdInAndStatusIn(familyPlayerIds, ERASURE_BLOCKING_BOOKING_STATUSES)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
+            }
+            // Owner decision 2026-11-08: nor while a session can still be disputed, or prepaid credits are unused.
+            if (gdprRequestRepository.familyHasDisputableBooking(familyPlayerIds, DisputeService.ELIGIBLE_STATUSES,
+                    disputeWindowStart())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.disputeWindowOpen");
+            }
+            if (gdprRequestRepository.familyHasUnusedPackCredits(userId, familyPlayerIds)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.unusedPackCredits");
+            }
         }
 
         GdprRequest request = insertOrConflict(new GdprRequest(userId, "ERASURE", "PENDING"));
         eventPublisher.publishEvent(new GdprErasureRequestedEvent(this, request.getId(), userId));
         log.info("[GDPR_ERASURE_REQUESTED] requestId={} userId={}", request.getId(), userId);
         return request.getId();
+    }
+
+    /** The earliest status change a dispute can still be raised against (DisputeService's window). */
+    private Instant disputeWindowStart() {
+        long days = configService.getBoundedLong(ConfigBounds.DISPUTES_SUBMISSION_WINDOW_DAYS);
+        return Instant.now().minus(days, java.time.temporal.ChronoUnit.DAYS);
     }
 
     /** The player profiles an account's erasure reaches: its own (a self-registered player) and its children, by id. */

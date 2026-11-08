@@ -650,8 +650,9 @@ public class BookingService {
      *       sees this booking and is refused with {@code gdpr.activeBookingsExist};</li>
      *   <li>{@code GdprErasureService} locks it before stamping {@code developmentDataErasedAt}.</li>
      * </ul>
-     * Lock order on the create paths is coach row, then player row; the erasure side never takes the
-     * coach row, so no cycle.
+     * Lock order everywhere is coach row, then player row: the create paths, and
+     * GdprRequestService.requestErasure (coach row, then every family player row in id order) and
+     * SessionPackPaymentService.purchasePack, so no cycle. A new path that locks both must keep that order.
      */
     void requirePlayerBookableUnderLock(Long playerId, String caller) {
         if (developmentDataErasureGuard.isErasedUnderLock(playerId, caller)

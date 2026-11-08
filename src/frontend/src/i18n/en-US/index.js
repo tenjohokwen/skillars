@@ -2915,6 +2915,10 @@ export default {
       activeBookings:
         'You still have bookings that are not settled: requests, upcoming sessions, or sessions waiting for confirmation, a dispute or a refund. You can delete your account once they are settled.',
       activeBookingsChild: 'This child still has an active booking. Cancel or complete it first.',
+      unusedPackCredits:
+        'There are unused, prepaid session-pack credits on this account (or a pack purchase is still going through). You can delete your account once they are used, have expired or were refunded.',
+      disputeWindowOpen:
+        'A recent session can still be disputed. You can delete your account once its dispute window has closed.',
       playerAlreadyErased: "This child's data has already been deleted.",
       notAllowed: 'You are not allowed to do this.',
       generic: 'Something went wrong. Please try again.',

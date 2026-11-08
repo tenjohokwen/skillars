@@ -115,12 +115,15 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
                 SELF_PLAYER_ID, java.sql.Date.valueOf(java.time.LocalDate.now().minusYears(25)), SELF_USER_ID,
                 Timestamp.from(Instant.now()));
 
+            // Settled 30 days ago: outside the (default 14-day) dispute window, so it no longer holds an erasure.
             jdbcTemplate.update(
-                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, ?, 'Europe/Berlin')",
+                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone, status_changed_at, updated_at) VALUES (?, ?, ?, ?, 'COMPLETED', ?, ?, ?, 'Europe/Berlin', ?, ?)",
                 completedBookingId, coachProfileId, PARENT_USER_ID, PLAYER_ID,
-                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)),
-                Timestamp.from(Instant.now().minus(1, ChronoUnit.DAYS)),
-                Timestamp.from(Instant.now().minus(3, ChronoUnit.DAYS)));
+                Timestamp.from(Instant.now().minus(31, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(31, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(32, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(30, ChronoUnit.DAYS)));
 
             return null;
         });
@@ -199,6 +202,49 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
         ResponseEntity<Map> resp = httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class);
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
+    }
+
+    @Test
+    void requestErasure_coachWithASessionStillInsideTheDisputeWindow_returns409() {
+        // Owner decision 2026-11-08: a completed session can still be disputed for the window's length.
+        transactionTemplate.execute(ts -> {
+            jdbcTemplate.update(
+                "UPDATE booking.bookings SET status_changed_at = ?, updated_at = ? WHERE id = ?",
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)),
+                Timestamp.from(Instant.now().minus(2, ChronoUnit.DAYS)), completedBookingId);
+            return null;
+        });
+        for (String email : List.of(COACH_EMAIL, PARENT_EMAIL)) {
+            String cookies = loginAndGetCookies(email);
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                    .contains("gdpr.disputeWindowOpen"));
+        }
+    }
+
+    @Test
+    void requestErasure_unusedPackCredits_holdTheCoachAndTheFamily() {
+        // Owner decision 2026-11-08: unused, unexpired prepaid credits block both sides of the pack.
+        transactionTemplate.execute(ts -> {
+            UUID tierId = UUID.randomUUID();
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_tiers (pack_tier_id, coach_id, session_count, total_price, price_per_session) VALUES (?, ?, 5, 200, 40)",
+                tierId, coachProfileId);
+            jdbcTemplate.update(
+                "INSERT INTO payment.session_pack_purchases (parent_id, coach_id, pack_tier_id, price_per_session, remaining_sessions, player_id, expires_at) VALUES (?, ?, ?, 40, 2, ?, ?)",
+                PARENT_USER_ID, coachProfileId, tierId, PLAYER_ID, Timestamp.from(Instant.now().plus(60, ChronoUnit.DAYS)));
+            return null;
+        });
+        for (String email : List.of(COACH_EMAIL, PARENT_EMAIL)) {
+            String cookies = loginAndGetCookies(email);
+            assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
+                baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
+                .isInstanceOf(HttpClientErrorException.class)
+                .satisfies(e -> assertThat(((HttpClientErrorException) e).getResponseBodyAsString())
+                    .contains("gdpr.unusedPackCredits"));
+        }
     }
 
     // ── helpers ──

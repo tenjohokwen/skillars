@@ -43,4 +43,58 @@ public interface GdprRequestRepository extends JpaRepository<GdprRequest, UUID> 
     @Modifying
     @Query("DELETE FROM GdprRequest r WHERE r.userId = :userId AND r.createdAt < :cutoff")
     int deleteExpiredByUserId(@Param("userId") Long userId, @Param("cutoff") Instant cutoff);
+
+    // ── Owner decision 2026-11-08 (PRV-03): what else an account erasure waits for ──────────────────────────────
+    // Native SQL across schemas, so this module takes no dependency on payment or booking internals.
+
+    /**
+     * Unused, unexpired, unrevoked pack credits with this coach, or a pack purchase with them still in flight
+     * (an attempt not yet settled: its pack row may still be written). Expired credits are forfeited by policy.
+     */
+    @Query(value = """
+        SELECT EXISTS (
+                   SELECT 1 FROM payment.session_pack_purchases p
+                   WHERE p.coach_id = :coachId AND p.remaining_sessions > 0
+                     AND p.revoked_at IS NULL AND p.expires_at > now())
+            OR EXISTS (
+                   SELECT 1 FROM payment.session_pack_purchase_attempts a
+                   JOIN payment.session_pack_tiers t ON t.pack_tier_id = a.pack_tier_id
+                   WHERE t.coach_id = :coachId AND a.status IN ('IN_PROGRESS', 'UNKNOWN', 'UNRECONCILED'))
+        """, nativeQuery = true)
+    boolean coachHasUnusedPackCredits(@Param("coachId") UUID coachId);
+
+    /** The same for a family: credits held for any of these players, or a purchase in flight by this payer. */
+    @Query(value = """
+        SELECT EXISTS (
+                   SELECT 1 FROM payment.session_pack_purchases p
+                   WHERE p.player_id IN (:playerIds) AND p.remaining_sessions > 0
+                     AND p.revoked_at IS NULL AND p.expires_at > now())
+            OR EXISTS (
+                   SELECT 1 FROM payment.session_pack_purchase_attempts a
+                   WHERE (a.parent_id = :userId OR a.player_id IN (:playerIds))
+                     AND a.status IN ('IN_PROGRESS', 'UNKNOWN', 'UNRECONCILED'))
+        """, nativeQuery = true)
+    boolean familyHasUnusedPackCredits(@Param("userId") Long userId, @Param("playerIds") java.util.Collection<Long> playerIds);
+
+    /** A booking of this coach that can still be disputed: a disputable status reached after {@code since}. */
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 FROM booking.bookings b
+            WHERE b.coach_id = :coachId AND b.status IN (:statuses)
+              AND COALESCE(b.status_changed_at, b.updated_at) > :since)
+        """, nativeQuery = true)
+    boolean coachHasDisputableBooking(@Param("coachId") UUID coachId,
+                                      @Param("statuses") java.util.Collection<String> statuses,
+                                      @Param("since") Instant since);
+
+    /** The same for a family's players. */
+    @Query(value = """
+        SELECT EXISTS (
+            SELECT 1 FROM booking.bookings b
+            WHERE b.player_id IN (:playerIds) AND b.status IN (:statuses)
+              AND COALESCE(b.status_changed_at, b.updated_at) > :since)
+        """, nativeQuery = true)
+    boolean familyHasDisputableBooking(@Param("playerIds") java.util.Collection<Long> playerIds,
+                                       @Param("statuses") java.util.Collection<String> statuses,
+                                       @Param("since") Instant since);
 }
