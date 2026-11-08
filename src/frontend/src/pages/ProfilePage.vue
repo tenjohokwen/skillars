@@ -446,6 +446,7 @@
                 round
                 class="privacy-btn"
                 data-testid="child-privacy-btn"
+                :data-player-id="child.id"
                 @click="openChildPrivacyDialog(child)"
               >
                 <q-tooltip>{{ t('privacy.childButtonTooltip') }}</q-tooltip>
@@ -454,7 +455,7 @@
           </div>
 
           <!-- FR-TSC-007: data export and account deletion, every role -->
-          <div class="glass-card profile-section">
+          <div class="glass-card profile-section" data-testid="profile-privacy">
             <div class="text-label q-mb-lg">{{ t('profile.sectionPrivacy') }}</div>
             <PrivacyDataSection />
           </div>

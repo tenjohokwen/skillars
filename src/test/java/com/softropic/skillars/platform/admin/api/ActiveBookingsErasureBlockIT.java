@@ -10,6 +10,8 @@ import com.softropic.skillars.platform.security.SecurityIT;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.http.HttpHeaders;
@@ -104,9 +106,11 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
     }
 
 
-    @Test
-    void requestErasure_coachWithActiveBookings_returns409() {
-        insertActiveBooking();
+    @ParameterizedTest
+    @ValueSource(strings = {"REQUESTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS",
+        "COMPLETED_PENDING_CONFIRMATION", "DISPUTED", "REFUND_PENDING"})
+    void requestErasure_coachWithLiveBooking_returns409(String status) {
+        insertActiveBooking(status);
         String cookies = loginAndGetCookies(COACH_EMAIL);
         assertThatThrownBy(() -> httpTestClient.makeHttpRequest(
             baseUrl() + ERASURE_URL, HttpMethod.POST, null, authenticatedHeaders(cookies), Map.class))
@@ -138,12 +142,12 @@ class ActiveBookingsErasureBlockIT extends AbstractIntegrationTest {
 
     // ── helpers ──
 
-    private void insertActiveBooking() {
+    private void insertActiveBooking(String status) {
         Instant futureTime = Instant.now().plus(2, ChronoUnit.DAYS);
         transactionTemplate.execute(ts -> {
             jdbcTemplate.update(
-                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, 'ACCEPTED', ?, ?, ?, 'Europe/Berlin')",
-                activeBookingId, coachProfileId, PARENT_USER_ID, PLAYER_ID,
+                "INSERT INTO booking.bookings (id, coach_id, parent_id, player_id, status, requested_start_time, requested_end_time, created_at, canonical_timezone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Europe/Berlin')",
+                activeBookingId, coachProfileId, PARENT_USER_ID, PLAYER_ID, status,
                 Timestamp.from(futureTime), Timestamp.from(futureTime.plus(1, ChronoUnit.HOURS)),
                 Timestamp.from(Instant.now()));
             return null;

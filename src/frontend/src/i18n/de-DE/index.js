@@ -2976,7 +2976,7 @@ export default {
       exportInProgress:
         'Ein Export wird noch erstellt. Warte, bis er fertig ist, bevor du löschst.',
       activeBookings:
-        'Du hast noch offene oder angenommene Buchungsanfragen. Kläre diese, bevor du dein Konto löschst.',
+        'Du hast noch Buchungsanfragen oder Sitzungen, die nicht abgeschlossen sind. Lehne sie ab, sage sie ab oder schließe sie ab, bevor du dein Konto löschst.',
       activeBookingsChild:
         'Dieses Kind hat noch eine aktive Buchung. Storniere oder beende sie zuerst.',
       playerAlreadyErased: 'Die Daten dieses Kindes wurden bereits gelöscht.',

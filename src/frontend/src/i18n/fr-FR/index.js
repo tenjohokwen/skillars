@@ -2950,7 +2950,7 @@ export default {
       exportInProgress:
         'Un export est encore en préparation. Attendez qu’il soit terminé avant de supprimer.',
       activeBookings:
-        'Vous avez encore des demandes de réservation en attente ou acceptées. Réglez-les avant de supprimer votre compte.',
+        'Vous avez encore des demandes de réservation ou des séances non terminées. Refusez-les, annulez-les ou terminez-les avant de supprimer votre compte.',
       activeBookingsChild:
         'Cet enfant a encore une réservation active. Annulez-la ou terminez-la d’abord.',
       playerAlreadyErased: 'Les données de cet enfant ont déjà été supprimées.',

@@ -43,11 +43,12 @@ public class GdprRequestService {
     private static final List<String> ACTIVE_STATUSES = List.of("PENDING", "PROCESSING");
 
     /**
-     * Child erasure is refused while the child has any booking that is still live (a session or money
-     * in flight). Terminal bookings (COMPLETED, DECLINED, CANCELLED*, NO_SHOW_*, REFUNDED) keep their
-     * rows for the parent's financial record; the erasure only anonymises their free text.
+     * Erasure is refused while a booking is still live (a session or money in flight): the child's,
+     * for a child erasure, or the coach's own, for a coach's account. Terminal bookings (COMPLETED,
+     * DECLINED, CANCELLED*, NO_SHOW_*, REFUNDED) keep their rows for the financial record; the erasure
+     * only anonymises their free text.
      */
-    static final List<String> CHILD_ERASURE_BLOCKING_BOOKING_STATUSES = List.of(
+    static final List<String> ERASURE_BLOCKING_BOOKING_STATUSES = List.of(
         "REQUESTED", "ACCEPTED", "PAYMENT_PENDING", "CONFIRMED", "UPCOMING", "IN_PROGRESS", "PAUSED",
         "COMPLETED_PENDING_CONFIRMATION", "DISPUTED", "REFUND_PENDING");
 
@@ -105,8 +106,12 @@ public class GdprRequestService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.exportInProgress");
         }
 
+        // Owner decision 2026-11-08 (PRV-03): any live booking blocks a coach's erasure, as it does a
+        // child's. The old list, REQUESTED and ACCEPTED, let a coach with paid, confirmed sessions
+        // delete the account (an accepted booking moves straight on to PAYMENT_PENDING, then
+        // CONFIRMED), leaving the families with sessions nobody would deliver.
         coachProfileRepository.findByUserId(userId).ifPresent(cp -> {
-            if (bookingRepository.existsByCoachIdAndStatusIn(cp.getId(), List.of("REQUESTED", "ACCEPTED"))) {
+            if (bookingRepository.existsByCoachIdAndStatusIn(cp.getId(), ERASURE_BLOCKING_BOOKING_STATUSES)) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
             }
         });
@@ -138,7 +143,7 @@ public class GdprRequestService {
     /**
      * Parent-requested erasure of a parent-owned (shadow) child profile — Article 17 for a data subject
      * with no account of their own. Refused while the child has a live booking (see
-     * {@link #CHILD_ERASURE_BLOCKING_BOOKING_STATUSES}) or while an export for the same child is still
+     * {@link #ERASURE_BLOCKING_BOOKING_STATUSES}) or while an export for the same child is still
      * being built.
      *
      * <p>fix/booking-integrity (B2): the live-booking check and the request insert run under the
@@ -160,7 +165,7 @@ public class GdprRequestService {
         if (gdprRequestRepository.existsByPlayerIdAndRequestTypeAndStatusIn(playerId, "EXPORT", ACTIVE_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.exportInProgress");
         }
-        if (bookingRepository.existsByPlayerIdAndStatusIn(playerId, CHILD_ERASURE_BLOCKING_BOOKING_STATUSES)) {
+        if (bookingRepository.existsByPlayerIdAndStatusIn(playerId, ERASURE_BLOCKING_BOOKING_STATUSES)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "gdpr.activeBookingsExist");
         }
         GdprRequest request = insertOrConflict(new GdprRequest(parentUserId, playerId, "ERASURE", "PENDING"));
