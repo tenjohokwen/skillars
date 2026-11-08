@@ -119,3 +119,9 @@ Claude Opus 5.5 (claude-opus-5-5)
   it as UNKNOWN so the resolver and a same-key retry decide from Stripe (the open-attempt index refuses it when the parent
   bought again, and then the alert fires; IT); a failing winner re-read keeps the ownership refusal. The stale-card-write
   window (RS09f's value match) is added to RS06k.
+- 2026-11-08: `/pr-review` round 4 (d9b118b4): security clean. General (high): `succeeded()` checked NO_CHARGE on the open
+  snapshot the resolver loaded, so the alert there could never fire, and a reopened attempt the resolver later recorded was
+  never alerted. Now `succeeded()` tries the open statuses, then NO_CHARGE on its own and alerts when that one lands, and the
+  reopen itself raises the late-capture alert. The second finding (a card sync after a reopen leaving the saved card on the
+  reverted one) did not survive: `reapplyPaymentMethodAndScheduleSync` accepts the reverted previous card and writes the
+  attempted one before it enqueues the sync.

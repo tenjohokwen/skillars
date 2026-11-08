@@ -591,19 +591,22 @@ public class SessionPackPaymentService {
 
     /** Proof of capture beats a resolver's inference from absence: NO_CHARGE may move to SUCCEEDED. */
     private Resolution succeeded(SessionPackPurchaseAttempt a, String paymentIntentId, SessionPackPurchase pack) {
-        Set<Status> expected = EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN, Status.UNRECONCILED, Status.NO_CHARGE);
-        if (!attemptRepository.transition(a.getId(), Status.SUCCEEDED, paymentIntentId, expected)) {
-            SessionPackPurchaseAttempt now = attemptRepository.findById(a.getId()).orElse(a);
-            if (now.getStatus() != Status.SUCCEEDED) {
-                log.error("[PACK_PURCHASE_CAS_LOST] key=SUCCEEDED attemptId={} status={}", a.getId(), now.getStatus());
-            }
-            return new Resolution(Status.SUCCEEDED, pack);
+        // skillars-deferred-178 (review round 4): the open statuses first, then NO_CHARGE on its own, so a NO_CHARGE written
+        // concurrently since this resolver loaded the (open) row is told apart and alerted; `a` is always the open snapshot.
+        if (attemptRepository.transition(a.getId(), Status.SUCCEEDED, paymentIntentId,
+                EnumSet.of(Status.IN_PROGRESS, Status.UNKNOWN, Status.UNRECONCILED))) {
+            return Resolution.closed(Status.SUCCEEDED, pack);
         }
-        if (a.getStatus() == Status.NO_CHARGE) {
+        if (attemptRepository.transition(a.getId(), Status.SUCCEEDED, paymentIntentId, EnumSet.of(Status.NO_CHARGE))) {
             log.error("[PACK_PURCHASE_CAS_LOST] key=NO_CHARGE_TO_SUCCEEDED attemptId={}", a.getId());
             lateCapture(a.getId(), a.getParentId(), paymentIntentId);
+            return Resolution.closed(Status.SUCCEEDED, pack);
         }
-        return Resolution.closed(Status.SUCCEEDED, pack);
+        SessionPackPurchaseAttempt now = attemptRepository.findById(a.getId()).orElse(a);
+        if (now.getStatus() != Status.SUCCEEDED) {
+            log.error("[PACK_PURCHASE_CAS_LOST] key=SUCCEEDED attemptId={} status={}", a.getId(), now.getStatus());
+        }
+        return new Resolution(Status.SUCCEEDED, pack);
     }
 
     /**
@@ -721,9 +724,10 @@ public class SessionPackPaymentService {
                 if (attemptRepository.transition(a.getId(), Status.UNKNOWN, null, Set.of(Status.NO_CHARGE))) {
                     log.warn("[PACK_PURCHASE_ATTEMPT_REOPENED] attemptId={} parentId={} — charge outcome unknown on an attempt "
                         + "judged uncharged; the resolver decides it from Stripe", a.getId(), a.getParentId());
-                } else {
-                    lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
                 }
+                // Review round 4: alerted either way. Reopened, the resolver may still record this pack, and the parent, told
+                // nothing was charged, may already hold a second one; refused, only an operator can tell.
+                lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown)");
             }
         } catch (RuntimeException e) {
             lateCapture(a.getId(), a.getParentId(), "unknown (charge outcome unknown; reopening failed)");

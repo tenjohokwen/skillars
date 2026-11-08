@@ -1053,7 +1053,7 @@ class SessionPackPaymentServiceTest {
 
     /** Review round 3: an unknown outcome on a NO_CHARGE attempt reopens it, so Stripe decides instead of "not charged". */
     @Test
-    void purchasePack_outcomeUnknownOnANoChargeAttempt_reopensItForTheResolver_noAlert() {
+    void purchasePack_outcomeUnknownOnANoChargeAttempt_reopensItForTheResolver_andAlerts() {
         stubPurchaseWithExistingCustomer(makeActiveTier(), "pm_old");
         when(paymentGateway.chargeAndCapture(any(), any(), any(), any(), anyString(), any()))
             .thenThrow(new com.softropic.skillars.platform.payment.contract.exception.ChargeOutcomeUnknownException("pack-key", null));
@@ -1076,8 +1076,9 @@ class SessionPackPaymentServiceTest {
         }
 
         verify(attemptRepository).transition(any(), eq(UNKNOWN), any(), eq(java.util.Set.of(NO_CHARGE)));
+        // review round 4: alerted even when reopened, since the parent may already hold a second pack
         org.assertj.core.api.Assertions.assertThat(logs.list)
-            .noneMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
     }
 
     /** Review round 3: a failing winner re-read never replaces the ownership refusal. */
@@ -1343,6 +1344,38 @@ class SessionPackPaymentServiceTest {
         assertThat(failure.getResolvedAt()).isNotNull();
         verify(subscriptionService).reapplyPaymentMethodAndScheduleSync(PARENT_ID, "pm_old", "pm_new");
         verify(paymentGateway, never()).refund(any(), any(), any());
+    }
+
+    /** Review round 4: a capture recorded onto a row written NO_CHARGE since the resolver loaded it is alerted. */
+    @Test
+    void resolve_captureLandingOnARowClosedAsNoChargeMeanwhile_isRecorded_andRaisesTheLateCaptureAlert() {
+        minAgeAndAbsenceAge(10, 30);
+        openAttemptInDb(com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS, 12);
+        when(paymentGateway.findChargeByIdempotencyKey(any(), anyString(), any())).thenReturn(Optional.of(lookup("succeeded")));
+        when(sessionPackPurchaseRepository.findByStripePaymentIntentId("pi_found")).thenReturn(Optional.empty());
+        when(paymentGateway.getCaptureState("pi_found")).thenReturn(
+            new com.softropic.skillars.platform.payment.contract.CaptureState(new BigDecimal("100.00"), BigDecimal.ZERO));
+        when(sessionPackTierRepository.findById(TIER_ID)).thenReturn(Optional.of(makeActiveTier()));
+        when(sessionPackPurchaseRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        var SUCCEEDED = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.SUCCEEDED;
+        var NO_CHARGE = com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.NO_CHARGE;
+        when(attemptRepository.transition(eq(77L), eq(SUCCEEDED), eq("pi_found"), eq(java.util.EnumSet.of(
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.IN_PROGRESS,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNKNOWN,
+            com.softropic.skillars.platform.payment.repo.SessionPackPurchaseAttempt.Status.UNRECONCILED)))).thenReturn(false);
+        when(attemptRepository.transition(eq(77L), eq(SUCCEEDED), eq("pi_found"), eq(java.util.EnumSet.of(NO_CHARGE)))).thenReturn(true);
+
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(SessionPackPaymentService.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        logger.addAppender(logs);
+        try {
+            assertThat(sessionPackPaymentService.resolveAttempt(77L).status()).isEqualTo(SUCCEEDED);
+        } finally {
+            logger.detachAppender(logs);
+        }
+        org.assertj.core.api.Assertions.assertThat(logs.list)
+            .anyMatch(e -> e.getFormattedMessage().startsWith("[PACK_PURCHASE_LATE_CAPTURE]"));
     }
 
     @Test
