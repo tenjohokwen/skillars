@@ -99,4 +99,22 @@ class StripeCustomerCardWritesTest {
 
         assertThat(cardWrites.lockIfPayerLive(USER_ID)).isTrue();
     }
+
+    // skillars-deferred-177 (RS03h, review round 1): the no-card check reads the account FOR SHARE, never the row lock.
+    @Test
+    void payerLive_readsTheAccountForShare_withoutTheCustomerRowLock() {
+        when(userRepository.findEmailByIdForShare(USER_ID)).thenReturn(Optional.of("me@example.com"));
+
+        assertThat(cardWrites.payerLive(USER_ID)).isTrue();
+        verify(stripeCustomerRepository, never()).findByIdForUpdateWaiting(any());
+    }
+
+    @Test
+    void payerLive_falseForAnErasedOrGoneAccount() {
+        when(userRepository.findEmailByIdForShare(USER_ID)).thenReturn(Optional.of("deleted.42@erased.io"));
+        assertThat(cardWrites.payerLive(USER_ID)).isFalse();
+
+        when(userRepository.findEmailByIdForShare(USER_ID)).thenReturn(Optional.empty());
+        assertThat(cardWrites.payerLive(USER_ID)).isFalse();
+    }
 }

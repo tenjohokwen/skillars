@@ -266,6 +266,23 @@ class SessionPackPaymentResourceWebMvcTest {
 
     @Test
     @WithMockUser(roles = "PARENT")
+    void setupIntent_losingTheCreationRace_stillChecksThePayer_422_noSetupIntent() throws Exception {
+        when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
+        when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());
+        when(paymentGateway.createStripeCustomer(PARENT_USER_ID)).thenReturn("cus_loser");
+        when(stripeCustomerRepository.save(org.mockito.ArgumentMatchers.any()))
+            .thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate key"));
+        org.mockito.Mockito.doThrow(new com.softropic.skillars.platform.payment.contract.exception.PaymentGatewayException(
+            "payment.accountErased")).when(sessionPackPaymentService).requirePayerLive(PARENT_USER_ID);
+
+        mockMvc.perform(post("/api/payment/setup-intent").contentType(MediaType.APPLICATION_JSON))
+            .andExpect(status().isUnprocessableEntity());
+
+        org.mockito.Mockito.verify(paymentGateway, org.mockito.Mockito.never()).createSetupIntent(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    @WithMockUser(roles = "PARENT")
     void setupIntent_firstCustomerCreatedWhileErased_422_noSetupIntent() throws Exception {
         when(securityUtil.getCurrentCoachUserId()).thenReturn(PARENT_USER_ID);
         when(stripeCustomerRepository.findById(PARENT_USER_ID)).thenReturn(Optional.empty());

@@ -81,11 +81,18 @@ class StripeCustomerEmailSyncOutboxSupportTest {
         assertThatCode(() -> support().syncIfEmailChangedSince(7L, "before@example.com")).doesNotThrowAnyException();
     }
 
-    /** skillars-deferred-177 (RS03i): a failed late erasure is not thrown; the sweep schedules it. */
+    /** skillars-deferred-177 (RS03i): a failed late erasure is not thrown (the sweep schedules it), but still reports erased. */
     @Test
-    void afterCustomerCreation_aFailedLateErasure_isLoggedNotThrown_andReportsNotErased() {
+    void afterCustomerCreation_aFailedLateErasure_isLoggedNotThrown_andStillReportsErased() {
         email("deleted.7@erased.io");
         doThrow(new IllegalStateException("db down")).when(erasureOutboxSupport).scheduleErasure(7L);
+
+        org.assertj.core.api.Assertions.assertThat(support().syncIfEmailChangedSince(7L, "before@example.com")).isTrue();
+    }
+
+    @Test
+    void afterCustomerCreation_aFailedRead_reportsNotErased() {
+        when(userRepository.findEmailByIdForShare(7L)).thenThrow(new IllegalStateException("db down"));
 
         org.assertj.core.api.Assertions.assertThat(support().syncIfEmailChangedSince(7L, "before@example.com")).isFalse();
     }

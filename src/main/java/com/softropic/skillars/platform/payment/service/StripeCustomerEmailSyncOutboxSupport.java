@@ -74,14 +74,16 @@ public class StripeCustomerEmailSyncOutboxSupport {
      * customer is erased.
      *
      * <p>skillars-deferred-177 (RS03h): returns true when the account was found erased, so the caller stops (no charge, no
-     * SetupIntent) instead of going on with a customer that is about to be deleted. False when the read failed: the sweep
-     * then schedules the Stripe erasure, and the caller goes on (the narrow residual the ledger records).
+     * SetupIntent) instead of going on with a customer that is about to be deleted, also when scheduling that erasure then
+     * failed (the sweep retries it). False when the read itself failed.
      */
     public boolean syncIfEmailChangedSince(Long userId, String emailBefore) {
+        java.util.concurrent.atomic.AtomicBoolean erased = new java.util.concurrent.atomic.AtomicBoolean();
         try {
             return Boolean.TRUE.equals(transactionTemplate.execute(status -> {
                 String emailNow = userRepository.findEmailByIdForShare(userId).orElse(null);
                 if (StripeCustomerCardWrites.isErasureTombstone(userId, emailNow)) {
+                    erased.set(true);
                     erasureOutboxSupport.scheduleErasure(userId);
                     log.warn("[STRIPE_CUSTOMER_ERASURE_SCHEDULED_LATE userId={}] erased while its Stripe customer was created", userId);
                     return true;
@@ -93,9 +95,10 @@ public class StripeCustomerEmailSyncOutboxSupport {
                 return false;
             }));
         } catch (RuntimeException e) {
-            // skillars-deferred-177 (RS03i): if this was the late erasure, StripeCustomerErasureSweep schedules it.
+            // skillars-deferred-177 (RS03i): if this was the late erasure, StripeCustomerErasureSweep schedules it, and the
+            // caller still refuses (review round 1): the account was seen erased even though the scheduling failed.
             log.error("[STRIPE_CUSTOMER_EMAIL_SYNC_ENQUEUE_FAILED] userId={} after customer creation", userId, e);
-            return false;
+            return erased.get();
         }
     }
 

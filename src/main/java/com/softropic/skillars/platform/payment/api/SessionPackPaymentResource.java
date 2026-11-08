@@ -192,6 +192,8 @@ public class SessionPackPaymentResource {
                 try {
                     saved = stripeCustomerRepository.save(sc);
                 } catch (DataIntegrityViolationException e) {
+                    // A concurrent first request saved the row; it is an existing customer now (177 review round 1).
+                    sessionPackPaymentService.requirePayerLive(parentId);
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }
                 // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.

@@ -59,8 +59,9 @@ Paths are relative to `src/main/java/com/softropic/skillars/platform/`.
 
 ## Acceptance Criteria
 
-1. **AC1 (RS03h, D15.1)** A pack purchase or SetupIntent whose payer reads as erased (existing row: under the row lock,
-   card named or not; new row: the post-creation `FOR SHARE` read sees the tombstone) is refused with 422
+1. **AC1 (RS03h, D15.1)** A pack purchase or SetupIntent whose payer reads as erased (existing row: a named card under the
+   row lock as it is written, otherwise a `FOR SHARE` read of the account, never the row lock settlement holds; new row,
+   including a SetupIntent that lost the creation race: the post-creation `FOR SHARE` read sees the tombstone) is refused with 422
    `payment.accountErased` before any charge or SetupIntent; a purchase's attempt is marked NO_CHARGE.
 2. **AC2 (RS03i, D16.1)** `scheduleErasure` stamps `erasure_scheduled_at` in its transaction (V234). The hourly
    `StripeCustomerErasureSweep` enqueues the Stripe erasure for each tombstoned payer whose row is unstamped, once; a failure
@@ -107,3 +108,7 @@ Claude Opus 5.5 (claude-opus-5-5)
 ### Change Log
 
 - 2026-11-08: created from RS03h + RS03i; D15/D16 option 1 taken under the owner's autonomy instruction; implemented T1-T3.
+- 2026-11-08: `/pr-review` round 1 (04b38cfd): `payerLive` reads the account `FOR SHARE` instead of taking the
+  `stripe_customers` row lock (both reviewers: the no-card purchase and every SetupIntent would wait on settlement's Stripe
+  charge); a SetupIntent that loses the creation race now checks the payer (both reviewers); a late erasure whose scheduling
+  failed still refuses the request (security reviewer, kept on merit though outside its category).
