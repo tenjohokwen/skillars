@@ -45,7 +45,9 @@ connection pool through one refresh-token row on refresh.
 `payment.idempotencyKeyRequired` (checked in the resource so the error code is ours, not Spring's generic
 `MissingRequestHeaderException`). Format validation stays in the service.
 
-**D24.** `@RateLimited(key = "auth_refresh", capacity = 20, duration = 1 minute)`, per IP like every other bucket (per JVM).
+**D24.** `@RateLimited(key = "auth_refresh", capacity = 5, duration = 1 minute)`, per IP like every other bucket (per JVM).
+5 because the capacity is also the burst one source can park on the row (review round 3); a rotating client needs one
+call per 15 minutes. The shared-IP drain on refresh is ledgered as latent (nothing rotates today).
 The SPA never calls refresh, so only API clients meet it. **Logout is deliberately not limited** (review round 1, both
 arms): a per-IP bucket on an unauthenticated endpoint can be drained by anyone behind the same NAT, and a refused logout
 revokes nothing and clears no HttpOnly cookie while the SPA reports success. Its lock queue is bounded by the unlocked
@@ -57,7 +59,7 @@ already-revoked pre-check.
    with the same 401 as a dead chain; a claimless JWT sent with its own live `rtkn` is still repaired and passes.
 2. **AC2** `POST /api/payment/session-packs/purchase` without `Idempotency-Key` (or blank) answers 400
    `payment.idempotencyKeyRequired` and never reaches the service.
-3. **AC3** `POST /api/auth/refresh` carries `@RateLimited` (20/min per IP); `/logout` deliberately does not.
+3. **AC3** `POST /api/auth/refresh` carries `@RateLimited` (5/min per IP); `/logout` deliberately does not.
 4. **AC4** Javadocs, dev docs, the payments/security runbook text, the provisioning checklist and `deferred-work.md` reflect
    the decisions above; the closed items are deleted from the ledger.
 
@@ -94,6 +96,9 @@ Claude Opus 5.5 (claude-opus-5-5)
 
 ### Change Log
 
+- 2026-11-08: /pr-review round 3 (both arms, low): a 20-token bucket is a 20-request burst against a 25-connection
+  pool, and a per-IP bucket can be drained by anyone on the NAT. Capacity lowered to 5; the drain ledgered as latent
+  with the MAX_GRACE_HOPS trigger (nothing rotates today).
 - 2026-11-08: /pr-review round 2 (general, low, confirmed pre-existing and app-wide): every `@RateLimited` refusal answered
   401 `security.unauthorized` (the generic AuthorizationException handler), which the SPA reads as an ended session.
   New `RequestRateLimitedException` (an AuthorizationException subclass) with its own 429 `security.tooManyRequests`

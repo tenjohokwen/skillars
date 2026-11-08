@@ -113,8 +113,12 @@ and deleted from the list below.
   the row, each holding a servlet thread and a pooled connection until the holder finishes. Unchanged by
   that story (the same rows previously queued behind `markUsedByTokenHash`'s plain `UPDATE`) and bounded in
   practice because every holder is a short transaction. **skillars-deferred-180 rate-limited refresh**
-  (`@RateLimited`, 20 a minute per IP, owner decision 2026-11-08), which closes the single-source flood there: one
-  account's own `rtkn` replayed in parallel no longer exhausts the 25-connection pool. Logout was left unlimited after
+  (`@RateLimited`, 5 a minute per IP, owner decision 2026-11-08): one source can park at most 5 requests on the row per
+  instance per minute (Bucket4j hands out the whole capacity at once, so the capacity is the burst), well below the
+  25-connection pool. **Latent residual (review round 3):** the bucket is per IP and spent before the cookie is read, so
+  anyone behind the same NAT can drain it with cookieless calls and block every other user's rotation there. Nothing
+  rotates today (the SPA never calls refresh); revisit together with `MAX_GRACE_HOPS` before shipping a client that does
+  (a per-token bucket needs a per-IP guard too, or random cookies mint unbounded buckets). Logout was left unlimited after
   review: a per-IP bucket on an unauthenticated endpoint can be drained by anyone behind the same NAT, and a refused
   logout revokes nothing while the SPA reports success. Logout's queue is bounded by the unlocked already-revoked
   pre-check (only the first parallel burst on a live chain reaches the lock; the same holds for the Spring

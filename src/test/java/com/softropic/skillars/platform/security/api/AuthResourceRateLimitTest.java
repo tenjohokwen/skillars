@@ -26,7 +26,7 @@ class AuthResourceRateLimitTest {
 
         assertThat(limit).as("@RateLimited on AuthResource.refresh").isNotNull();
         assertThat(limit.key()).isEqualTo("auth_refresh");
-        assertThat(limit.capacity()).isEqualTo(20);
+        assertThat(limit.capacity()).isEqualTo(5);
         assertThat(limit.duration()).isEqualTo(1);
         assertThat(limit.unit()).isEqualTo(TimeUnit.MINUTES);
     }

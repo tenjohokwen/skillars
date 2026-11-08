@@ -62,12 +62,15 @@ public class AuthResource {
      */
     // skillars-deferred-180: refresh is permitAll and locks the presented refresh-token row PESSIMISTIC_WRITE, which
     // PostgreSQL waits on without a bound, on every call. Unlimited parallel replays of one rtkn (anyone's own) queued on
-    // that row, each holding a pooled connection, until the pool was exhausted. Per IP, like every bucket; the SPA never
-    // calls this endpoint, so only API clients meet the limit. Bounding the wait itself (SET LOCAL lock_timeout) stays in
-    // deferred-work.md as the follow-up for a many-source flood.
+    // that row, each holding a pooled connection, until the pool was exhausted. Per IP, like every bucket. 5 a minute, not
+    // more: Bucket4j hands the whole capacity out at once, so the capacity is also the burst one source can park on the
+    // row (review round 3), and it must stay well below the 25-connection pool. A rotating client needs one call per
+    // JWT_TTL (15 min). The SPA never calls this endpoint. Known residuals, in deferred-work.md: a many-source flood
+    // (follow-up: SET LOCAL lock_timeout), and anyone behind the same NAT can drain the bucket for everyone there,
+    // which matters once a rotating client ships.
     @PostMapping("/refresh")
     @PreAuthorize("permitAll()")
-    @RateLimited(key = "auth_refresh", capacity = 20, duration = 1)
+    @RateLimited(key = "auth_refresh", capacity = 5, duration = 1)
     public ResponseEntity<LoginResponse> refresh(HttpServletRequest req, HttpServletResponse res) {
         return ResponseEntity.ok(authService.refresh(req, res));
     }

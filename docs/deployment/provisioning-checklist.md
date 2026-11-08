@@ -768,9 +768,10 @@ self-referential FK V224 shipped `NOT VALID` is validated. Nothing to configure,
       cycle (within 5 min) unless the request's own `rtkn` lets the filter re-derive the chain id. Shipped
       before go-live, so only UAT sessions older than V225 whose chain never rotated are signed out (once).
 - [ ] **Before shipping any client that calls `POST /api/auth/refresh` (a mobile app, an API client):**
-      revisit the `MAX_GRACE_HOPS` residual in `deferred-work.md`. A stale refresh cookie more than 8
-      rotations behind a live chain is treated as reuse and signs the account out of every device. The SPA
-      never rotates, so nothing reaches it today.
+      revisit two residuals in `deferred-work.md`. `MAX_GRACE_HOPS`: a stale refresh cookie more than 8
+      rotations behind a live chain is treated as reuse and signs the account out of every device. And the
+      refresh rate limit is per IP (5 a minute), so anyone behind the same NAT can drain it and block
+      everyone else's rotation there. The SPA never rotates, so nothing reaches either today.
 - [ ] **Narrowed detection, and a changed blast radius.** A used refresh token presented against a chain
       that is still live, more than 30 s after its rotation, now answers `401` and revokes **that chain
       only**, where it used to revoke every chain on the account and bump the session epoch. The change
@@ -1634,6 +1635,6 @@ an operator must now do.
 - 2026-11-08: skillars-deferred-180 (no migration). A JWT without the `rtsid` chain claim is refused unless its own `rtkn`
   names a live chain (UAT sessions older than V225 may be signed out once). `POST /api/payment/session-packs/purchase` requires
   `Idempotency-Key` (400 `payment.idempotencyKeyRequired`; the SPA already sends it). `POST /api/auth/refresh` is
-  rate-limited to 20 a minute per IP (logout deliberately is not). A partial Dashboard refund of a pack leaves the pack whole.
+  rate-limited to 5 a minute per IP (logout deliberately is not). A partial Dashboard refund of a pack leaves the pack whole.
   New checklist item: revisit `MAX_GRACE_HOPS` before shipping a client that calls `POST /api/auth/refresh`. No new job,
   webhook, config key or env var.
