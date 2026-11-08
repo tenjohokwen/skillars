@@ -66,32 +66,49 @@ public class StripeCustomerEmailSyncOutboxSupport {
     /**
      * Called after a new {@code stripe_customers} row is inserted: if the user has been erased meanwhile, schedules the
      * Stripe-side erasure; otherwise, if the user's email is no longer the one read before the customer was created,
-     * enqueues a sync. Never throws: the customer exists at Stripe either way, and failing the caller would strand it.
+     * enqueues a sync. Never throws once the email is read: the customer exists at Stripe either way.
      *
      * <p>Review round 6: the email is read {@code FOR SHARE}, after the row is saved. An erasure that wrote the tombstone
      * before this read is waited for, so its tombstone is seen; one that writes it after this read waits for this
      * transaction, so its own Stripe-customer lookup, which follows the tombstone, finds the row. Either way the Stripe
      * customer is erased.
+     *
+     * <p>skillars-deferred-177 (RS03h): returns true when the account was found erased, so the caller stops (no charge, no
+     * SetupIntent) instead of going on with a customer that is about to be deleted, also when scheduling that erasure then
+     * failed (the sweep retries it). Throws when the read itself failed, so the caller does not go on unchecked.
      */
-    public void syncIfEmailChangedSince(Long userId, String emailBefore) {
+    public boolean syncIfEmailChangedSince(Long userId, String emailBefore) {
+        java.util.concurrent.atomic.AtomicBoolean read = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean erased = new java.util.concurrent.atomic.AtomicBoolean();
         try {
             transactionTemplate.executeWithoutResult(status -> {
                 String emailNow = userRepository.findEmailByIdForShare(userId).orElse(null);
+                read.set(true);
                 if (StripeCustomerCardWrites.isErasureTombstone(userId, emailNow)) {
+                    erased.set(true);
                     erasureOutboxSupport.scheduleErasure(userId);
                     log.warn("[STRIPE_CUSTOMER_ERASURE_SCHEDULED_LATE userId={}] erased while its Stripe customer was created", userId);
                     return;
                 }
-                if (Objects.equals(emailNow, emailBefore)) {
-                    return;
+                if (!Objects.equals(emailNow, emailBefore)) {
+                    enqueue(userId);
+                    log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SCHEDULED userId={}] email changed while the customer was created", userId);
                 }
-                enqueue(userId);
-                log.info("[STRIPE_CUSTOMER_EMAIL_SYNC_SCHEDULED userId={}] email changed while the customer was created", userId);
             });
         } catch (RuntimeException e) {
+            if (!read.get()) {
+                // skillars-deferred-177 (review round 4): fail closed. The read waits on an in-flight erasure, so a timeout
+                // here is most likely one; a payer this request could not check is not charged. The row is saved, so the
+                // caller's retry finds an existing customer and checks again.
+                throw e;
+            }
+            // skillars-deferred-177 (RS03i): if this was the late erasure, StripeCustomerErasureSweep schedules it, and the
+            // caller still refuses (review round 1): the account was seen erased even though the scheduling failed.
             log.error("[STRIPE_CUSTOMER_EMAIL_SYNC_ENQUEUE_FAILED] userId={} after customer creation", userId, e);
         }
+        return erased.get();
     }
+
 
     private void enqueue(Long userId) {
         final String json;

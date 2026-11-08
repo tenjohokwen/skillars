@@ -105,6 +105,36 @@ public interface StripeCustomerRepository extends JpaRepository<StripeCustomer, 
     int clearPaymentMethod(@Param("parentId") Long parentId);
 
     /**
+     * skillars-deferred-177 (review round 4): a payer's first {@code stripe_customers} row, insert-only. {@code save()} on this
+     * entity (assigned id, no version) merges, so a second first-creation request that ran after the first committed would
+     * overwrite that row and orphan its Stripe customer. Returns 0 when a concurrent request's row is already there.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "INSERT INTO payment.stripe_customers (parent_id, stripe_customer_id, stripe_payment_method_id, created_at) "
+        + "VALUES (:parentId, :stripeCustomerId, :paymentMethodId, now()) ON CONFLICT (parent_id) DO NOTHING", nativeQuery = true)
+    int insertIfAbsent(@Param("parentId") Long parentId, @Param("stripeCustomerId") String stripeCustomerId,
+                       @Param("paymentMethodId") String paymentMethodId);
+
+    /**
+     * skillars-deferred-177 (RS03i): records that the Stripe-side erasure of this row is enqueued, in the transaction that
+     * enqueues it, so {@code StripeCustomerErasureSweep} leaves it alone. Same flush rules as {@link #clearPaymentMethod}.
+     */
+    @Modifying(flushAutomatically = true)
+    @Query("UPDATE StripeCustomer c SET c.erasureScheduledAt = :at WHERE c.parentId = :parentId")
+    int markErasureScheduled(@Param("parentId") Long parentId, @Param("at") java.time.Instant at);
+
+    /**
+     * skillars-deferred-177 (RS03i): payers whose account carries the GDPR erasure tombstone but whose Stripe-side erasure
+     * was never enqueued (a customer created while the erasure was in flight, whose late scheduling failed). Oldest payer
+     * id first; the sweep schedules each and the mark drops it from the next read.
+     */
+    @Query(value = "SELECT c.parent_id FROM payment.stripe_customers c JOIN main.\"user\" u ON u.id = c.parent_id "
+        + "WHERE c.erasure_scheduled_at IS NULL AND u.email = 'deleted.' || u.id || '@erased.io' "
+        + "ORDER BY c.parent_id LIMIT :limit", nativeQuery = true)
+    List<Long> findErasedPayersWithoutScheduledErasure(@Param("limit") int limit);
+
+    /**
      * skillars-deferred-176 AC1 (RS03f): serialises the outbox handlers that write a Stripe customer's email
      * ({@code STRIPE_CUSTOMER_EMAIL_SYNC}) or erase it ({@code STRIPE_CUSTOMER_ERASURE}). Outbox rows drain in parallel on
      * every pod, so without it a sync that read the user before an undo or an erasure committed could reach Stripe after

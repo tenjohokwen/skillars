@@ -53,6 +53,21 @@ public class StripeCustomerCardWrites {
         return email != null && email.equals("deleted." + userId + "@erased.io");
     }
 
+    /**
+     * skillars-deferred-177 (RS03h): for a caller that writes no card but must not go on for an erased payer (a pack purchase
+     * without a named card, a SetupIntent). Reads the account's email {@code FOR SHARE}, so an erasure that has written the
+     * tombstone but not committed is waited for and seen. Deliberately not the {@code stripe_customers} row lock
+     * ({@link #lockIfPayerLive}): booking settlement holds that across its Stripe charge (RS09i), and no card is written here.
+     */
+    @Transactional
+    public boolean payerLive(Long userId) {
+        boolean live = userRepository.findEmailByIdForShare(userId).map(email -> !isErasureTombstone(userId, email)).orElse(false);
+        if (!live) {
+            log.info("[STRIPE_CUSTOMER_PAYER_NOT_LIVE userId={}] account gone or erased", userId);
+        }
+        return live;
+    }
+
     /** RS09g: a pack purchase's card on an existing customer row, as a one-column UPDATE rather than a full-row save. */
     @Transactional
     public boolean writeCardIfPayerLive(Long userId, String paymentMethodId) {

@@ -176,21 +176,31 @@ public class SessionPackPaymentResource {
     @PreAuthorize(SecurityConstants.HAS_PARENT_PLAYER_OR_COACH_ROLE)
     public ResponseEntity<SetupIntentResponse> createSetupIntent() {
         Long parentId = securityUtil.getCurrentCoachUserId();
+        // skillars-deferred-177 (RS03h): no SetupIntent for a payer erased while the request ran.
         StripeCustomer customer = stripeCustomerRepository.findById(parentId)
+            .map(existing -> {
+                sessionPackPaymentService.requirePayerLive(parentId);
+                return existing;
+            })
             .orElseGet(() -> {
                 String emailBefore = stripeCustomerEmailSync.currentEmail(parentId);
                 String stripeCustomerId = paymentGateway.createStripeCustomer(parentId);
                 StripeCustomer sc = new StripeCustomer();
                 sc.setParentId(parentId);
                 sc.setStripeCustomerId(stripeCustomerId);
-                StripeCustomer saved;
-                try {
-                    saved = stripeCustomerRepository.save(sc);
-                } catch (DataIntegrityViolationException e) {
+                // Insert-only (177 review round 4): save() merges and would overwrite a row a concurrent request committed.
+                if (stripeCustomerRepository.insertIfAbsent(parentId, stripeCustomerId, null) == 0) {
+                    // A concurrent first request saved the row; it is an existing customer now (177 review round 1), and the
+                    // customer this request created is named by no row, so it is erased at Stripe (review round 3).
+                    sessionPackPaymentService.discardUnrecordedCustomer(stripeCustomerId);
+                    sessionPackPaymentService.requirePayerLive(parentId);
                     return stripeCustomerRepository.findById(parentId).orElseThrow();
                 }
+                StripeCustomer saved = sc;
                 // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
-                stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore);
+                if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
+                    throw SessionPackPaymentService.erasedPayer(parentId);
+                }
                 return saved;
             });
         String clientSecret = paymentGateway.createSetupIntent(customer.getStripeCustomerId());

@@ -95,6 +95,7 @@ public class SessionPackPaymentService {
     private final AgeVerificationService ageVerificationService;
     private final StripeCustomerEmailSyncOutboxSupport stripeCustomerEmailSync;
     private final StripeCustomerCardWrites stripeCustomerCardWrites;
+    private final StripeCustomerErasureOutboxSupport stripeCustomerErasureOutboxSupport;
 
     /**
      * Purchase a session pack for a player.
@@ -213,6 +214,11 @@ public class SessionPackPaymentService {
         } catch (RuntimeException e) {
             // Nothing could have been charged yet (a Stripe customer create, or a DB write of the card).
             markNoCharge(attempt);
+            if (e instanceof PaymentGatewayException pge && PaymentGatewayException.ACCOUNT_ERASED.equals(pge.getErrorCode())) {
+                // skillars-deferred-177 (review round 2): an erasure that committed after customerBefore was read nulled the
+                // attempt cards before this row existed; drop the card ids this row carries too.
+                attemptRepository.nullCardsForParent(parentId);
+            }
             throw e instanceof PaymentGatewayException ? new PackNoChargeException(e) : e;
         }
         try {
@@ -1047,9 +1053,13 @@ public class SessionPackPaymentService {
 
     private StripeCustomer getOrCreateStripeCustomer(Long parentId, String paymentMethodId) {
         return stripeCustomerRepository.findById(parentId).map(existing -> {
-            if (paymentMethodId != null && !paymentMethodId.isBlank()) {
-                // skillars-deferred-176 AC3 (RS09g): one column, under the row lock, never onto an erased payer's row.
-                stripeCustomerCardWrites.writeCardIfPayerLive(parentId, paymentMethodId);
+            // skillars-deferred-176 AC3 (RS09g): one column, under the row lock, never onto an erased payer's row.
+            // skillars-deferred-177 (RS03h): an erased payer is refused before the charge, card or not.
+            boolean live = paymentMethodId != null && !paymentMethodId.isBlank()
+                ? stripeCustomerCardWrites.writeCardIfPayerLive(parentId, paymentMethodId)
+                : stripeCustomerCardWrites.payerLive(parentId);
+            if (!live) {
+                throw erasedPayer(parentId);
             }
             return existing;
         }).orElseGet(() -> {
@@ -1059,11 +1069,48 @@ public class SessionPackPaymentService {
             sc.setParentId(parentId);
             sc.setStripeCustomerId(stripeCustomerId);
             sc.setStripePaymentMethodId(paymentMethodId);
-            StripeCustomer saved = stripeCustomerRepository.save(sc);
+            // skillars-deferred-177 review rounds 3-4: insert-only; a concurrent first request's row wins, and the customer this
+            // request created, named by no row, is erased at Stripe. Nothing is charged; a retry finds the winner's customer.
+            if (stripeCustomerRepository.insertIfAbsent(parentId, stripeCustomerId, sc.getStripePaymentMethodId()) == 0) {
+                discardUnrecordedCustomer(stripeCustomerId);
+                throw new PaymentGatewayException("payment.customerCreationFailed");
+            }
+            StripeCustomer saved = sc;
             // skillars-deferred-176 AC2: an email change that committed while the customer was created enqueued no sync.
-            stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore);
+            if (stripeCustomerEmailSync.syncIfEmailChangedSince(parentId, emailBefore)) {
+                throw erasedPayer(parentId); // skillars-deferred-177 (RS03h); its Stripe erasure is already scheduled
+            }
             return saved;
         });
+    }
+
+    /**
+     * skillars-deferred-177 (review round 3): a Stripe customer this request created but could not record, because a concurrent
+     * first request saved the payer's row first. Never throws: the caller is already handling the lost race.
+     */
+    public void discardUnrecordedCustomer(String stripeCustomerId) {
+        try {
+            stripeCustomerErasureOutboxSupport.scheduleOrphanErasure(stripeCustomerId);
+        } catch (RuntimeException e) {
+            log.error("[STRIPE_CUSTOMER_ORPHAN_ERASURE_FAILED stripeCustomerId={}] delete it in the Stripe dashboard",
+                stripeCustomerId, e);
+        }
+    }
+
+    /** skillars-deferred-177 (RS03h): refuses ({@link #erasedPayer}) a payer whose row is gone or who has been erased. */
+    public void requirePayerLive(Long parentId) {
+        if (!stripeCustomerCardWrites.payerLive(parentId)) {
+            throw erasedPayer(parentId);
+        }
+    }
+
+    /**
+     * skillars-deferred-177 (RS03h): the payer was erased while this request ran. A PaymentGatewayException, so purchasePack
+     * marks the attempt NO_CHARGE (nothing was charged) and answers as for any refusal before the charge.
+     */
+    public static PaymentGatewayException erasedPayer(Long parentId) {
+        log.warn("[PAYMENT_REFUSED_ACCOUNT_ERASED parentId={}] the payer was erased while the request ran", parentId);
+        return new PaymentGatewayException(PaymentGatewayException.ACCOUNT_ERASED);
     }
 
     private SessionPackPurchase createPurchase(Long parentId, Long playerId, SessionPackTier tier, String paymentIntentId) {
