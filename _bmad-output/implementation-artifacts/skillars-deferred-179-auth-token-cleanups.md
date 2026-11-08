@@ -1,6 +1,6 @@
 # Story skillars-deferred-179: Auth token clean-ups (revoke-all stamps revoked_at; one JWT parse on the fast path)
 
-Status: in-progress
+Status: review
 
 <!-- CREATED 2026-11-08 from deferred-work.md: the skillars-deferred-166 residual (`markAllUsedByUserId` sets `used` but not
      `revoked_at`) and the skillars-deferred-167 residual (`extendTtlOfToken` verifies the JWT four times). Owner chose this
@@ -78,3 +78,6 @@ Claude Opus 5.5 (claude-opus-5-5)
 ### Change Log
 
 - 2026-11-08: created from the two residuals; D21/D22; implemented T1-T3.
+- 2026-11-08: `/pr-review` round 1 (6e44b6d6): security clean; one general finding refuted (a successor surviving a
+  concurrent bulk revoke is caught by the session epoch every revoke-all caller stamps right after it, including both
+  `EmailChangeService` paths; `GdprErasureService` locks the account). Status -> review; PR opened.
