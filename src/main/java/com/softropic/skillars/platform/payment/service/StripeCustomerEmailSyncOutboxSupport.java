@@ -27,6 +27,11 @@ import java.util.Objects;
  * <p>skillars-deferred-176 AC2 (RS03e): a change that commits while the user's first Stripe customer is being created finds no
  * row yet and enqueues nothing, and the customer was created with the old address. The two creation paths therefore read
  * {@link #currentEmail} before creating the customer and call {@link #syncIfEmailChangedSince} after inserting the row.
+ *
+ * <p>Review round 4: an erasure that commits in the same window also finds no row, so it schedules no Stripe-side erasure
+ * and the customer keeps the real email. When the address read after the insert is the user's erasure tombstone, that
+ * erasure is scheduled here instead ({@link StripeCustomerErasureOutboxSupport#scheduleErasure}, which also drops the card
+ * the insert saved).
  */
 @Slf4j
 @Component
@@ -40,6 +45,7 @@ public class StripeCustomerEmailSyncOutboxSupport {
     private final ObjectMapper objectMapper;
     private final UserRepository userRepository;
     private final TransactionTemplate transactionTemplate;
+    private final StripeCustomerErasureOutboxSupport erasureOutboxSupport;
 
     @EventListener
     @Transactional(propagation = Propagation.MANDATORY)
@@ -58,14 +64,20 @@ public class StripeCustomerEmailSyncOutboxSupport {
     }
 
     /**
-     * Called after a new {@code stripe_customers} row is inserted: if the user's email is no longer the one read before the
-     * customer was created, enqueues a sync. Never throws: the customer exists at Stripe either way, and failing the caller
-     * would strand it.
+     * Called after a new {@code stripe_customers} row is inserted: if the user has been erased meanwhile, schedules the
+     * Stripe-side erasure; otherwise, if the user's email is no longer the one read before the customer was created,
+     * enqueues a sync. Never throws: the customer exists at Stripe either way, and failing the caller would strand it.
      */
     public void syncIfEmailChangedSince(Long userId, String emailBefore) {
         try {
             transactionTemplate.executeWithoutResult(status -> {
-                if (Objects.equals(currentEmail(userId), emailBefore)) {
+                String emailNow = currentEmail(userId);
+                if (StripeCustomerCardWrites.isErasureTombstone(userId, emailNow)) {
+                    erasureOutboxSupport.scheduleErasure(userId);
+                    log.warn("[STRIPE_CUSTOMER_ERASURE_SCHEDULED_LATE userId={}] erased while its Stripe customer was created", userId);
+                    return;
+                }
+                if (Objects.equals(emailNow, emailBefore)) {
                     return;
                 }
                 enqueue(userId);

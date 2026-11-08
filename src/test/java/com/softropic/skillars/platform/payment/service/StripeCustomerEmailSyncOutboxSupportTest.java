@@ -30,10 +30,11 @@ class StripeCustomerEmailSyncOutboxSupportTest {
     @Mock OutboxService outboxService;
     @Mock UserRepository userRepository;
     @Mock PlatformTransactionManager transactionManager;
+    @Mock StripeCustomerErasureOutboxSupport erasureOutboxSupport;
 
     private StripeCustomerEmailSyncOutboxSupport support() {
         return new StripeCustomerEmailSyncOutboxSupport(stripeCustomerRepository, outboxService, new ObjectMapper(),
-            userRepository, new TransactionTemplate(transactionManager));
+            userRepository, new TransactionTemplate(transactionManager), erasureOutboxSupport);
     }
 
     private void email(String email) {
@@ -51,6 +52,17 @@ class StripeCustomerEmailSyncOutboxSupportTest {
 
         verify(outboxService).enqueue(StripeCustomerEmailSyncOutboxSupport.AGGREGATE_TYPE, "{\"userId\":7}");
         verify(outboxService).requestDrainAfterCommit();
+    }
+
+    // review round 4: an erasure that committed while the customer was created found no row to schedule the Stripe erasure on
+    @Test
+    void afterCustomerCreation_anErasureMeanwhile_schedulesTheStripeErasure_notASync() {
+        email("deleted.7@erased.io");
+
+        support().syncIfEmailChangedSince(7L, "before@example.com");
+
+        verify(erasureOutboxSupport).scheduleErasure(7L);
+        verify(outboxService, never()).enqueue(anyString(), anyString());
     }
 
     @Test
