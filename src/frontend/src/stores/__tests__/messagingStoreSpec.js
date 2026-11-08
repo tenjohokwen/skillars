@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 
 vi.mock('src/api/messaging.api', () => ({
+  fetchConversation: vi.fn(),
   fetchConversations: vi.fn(),
   fetchMessages: vi.fn(),
   fetchPlayerConversations: vi.fn(),
@@ -16,6 +17,7 @@ vi.mock('src/api/messaging.api', () => ({
 }))
 
 import {
+  fetchConversation,
   fetchConversations,
   fetchMessages,
   fetchPlayerConversations,
@@ -307,6 +309,29 @@ describe('messaging.store', () => {
       expect(initiateConversation).toHaveBeenCalledWith('coach-1', '77')
       expect(res.conversationId).toBe('42')
       expect(store.activeConversation).toMatchObject({ status: 'BLOCKED', canSend: false })
+    })
+  })
+  // Pitchside MSG-17: a deep link to a thread the own list leaves out (BLOCKED) needs its own summary.
+  describe('loadConversationSummary', () => {
+    it("keeps a thread's summary so activeConversation reflects its real status", async () => {
+      fetchConversation.mockResolvedValue({
+        conversationId: '9',
+        status: 'BLOCKED',
+        canSend: false,
+      })
+      const store = useMessagingStore()
+      await store.loadConversationSummary('9')
+      store.setActiveConversation('9')
+      expect(fetchConversation).toHaveBeenCalledWith('9')
+      expect(store.activeConversation).toMatchObject({ status: 'BLOCKED', canSend: false })
+    })
+
+    it('a failed lookup leaves the thread unknown and throws nothing', async () => {
+      fetchConversation.mockRejectedValue(new Error('403'))
+      const store = useMessagingStore()
+      await expect(store.loadConversationSummary('9')).resolves.toBeUndefined()
+      store.setActiveConversation('9')
+      expect(store.activeConversation).toBeNull()
     })
   })
 })

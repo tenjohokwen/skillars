@@ -413,6 +413,13 @@ async function openFromRoute(conversationId) {
   if (conversationId == null || conversationId === '') return
   // A deep link always targets the caller's own conversations, never an oversight view.
   if (store.oversightPlayerId != null) await store.setOversightPlayer(null)
+  // The own list leaves BLOCKED threads out (e.g. one the other side reported), and an entry point
+  // records the summary it opened. A linked thread in neither gets its own summary first, so the
+  // composer follows its real status instead of being offered where the server refuses it.
+  const listed = store.conversations.some((c) => sameId(c.conversationId, conversationId))
+  if (!listed && !store.conversationMeta[String(conversationId)]) {
+    await store.loadConversationSummary(conversationId)
+  }
   await selectConversation(conversationId)
 }
 

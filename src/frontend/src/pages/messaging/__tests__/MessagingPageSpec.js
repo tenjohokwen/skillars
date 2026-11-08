@@ -378,6 +378,43 @@ describe('MessagingPage.vue — messaging completion (feat/messaging-completion)
       expect(store.loadMessages).toHaveBeenCalledWith('conv-7', { reset: true })
       expect(store.connectSse).toHaveBeenCalledWith('conv-7')
     })
+
+    // Pitchside MSG-17: the own list leaves out BLOCKED threads, so the side that did not report one
+    // opened it by link with no summary and was offered a composer the server refuses.
+    it('a linked thread missing from the own list has its summary fetched before it opens', async () => {
+      routeState.query = { conversation: 'conv-9' }
+      mountPage(undefined, { messaging: { activeConversationId: null } })
+      const store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
+      await flushPromises()
+
+      expect(store.loadConversationSummary).toHaveBeenCalledWith('conv-9')
+      expect(store.loadConversationSummary.mock.invocationCallOrder[0]).toBeLessThan(
+        store.loadMessages.mock.invocationCallOrder[0],
+      )
+    })
+
+    it('a linked thread already listed, or already summarised, is not fetched again', async () => {
+      routeState.query = { conversation: 'conv-1' }
+      mountPage(undefined, { messaging: { activeConversationId: null } })
+      let store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
+      await flushPromises()
+      expect(store.loadConversationSummary).not.toHaveBeenCalled()
+
+      while (mounted.length) mounted.pop().unmount()
+      routeState.query = { conversation: 'conv-5' }
+      mountPage(undefined, {
+        messaging: {
+          activeConversationId: null,
+          conversationMeta: { 'conv-5': { conversationId: 'conv-5', status: 'ACTIVE' } },
+        },
+      })
+      store = useMessagingStore()
+      store.setActiveConversation.mockImplementation((id) => (store.activeConversationId = id))
+      await flushPromises()
+      expect(store.loadConversationSummary).not.toHaveBeenCalled()
+    })
   })
 
   describe('remount', () => {

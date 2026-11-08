@@ -336,6 +336,20 @@ public class MessagingService {
         }
     }
 
+    /**
+     * One conversation's summary for a party to it, whatever its status. The own lists leave BLOCKED
+     * conversations out (and, for a parent, those the player's age tier closes to them), so a page opened
+     * on a deep link to such a thread had no summary to say it is blocked or read-only.
+     */
+    @Transactional(readOnly = true)
+    public ConversationSummaryDto getConversation(Long conversationId, Long callerUserId, String role) {
+        var conv = conversationRepository.findById(conversationId)
+            .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
+        verifyIsParty(conv, callerUserId, role);
+        requireParentReadAccess(conv, role);
+        return toSummary(conv, callerUserId, role);
+    }
+
     public Page<MessageDto> getMessages(Long conversationId, Long callerUserId, String role, Pageable pageable) {
         var conv = conversationRepository.findById(conversationId)
             .orElseThrow(() -> new ResourceNotFoundException("Conversation not found", "conversation"));
