@@ -8,6 +8,7 @@ import com.softropic.skillars.platform.booking.contract.CoachAvailabilityRespons
 import com.softropic.skillars.platform.booking.contract.CreateBlockRequest;
 import com.softropic.skillars.platform.booking.contract.CreateWindowRequest;
 import com.softropic.skillars.platform.booking.contract.UpdateWindowRequest;
+import com.softropic.skillars.platform.booking.contract.WindowImpactResponse;
 import com.softropic.skillars.platform.booking.service.AvailabilityService;
 import com.softropic.skillars.platform.security.contract.exception.OperationNotAllowedException;
 import com.softropic.skillars.platform.security.service.SecurityUtil;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Map;
 import java.util.UUID;
 
@@ -84,6 +86,20 @@ public class AvailabilityResource {
             @PathVariable UUID id,
             @RequestBody @Valid UpdateWindowRequest req) {
         return ResponseEntity.ok(availabilityService.updateWindow(currentUserId(), id, req));
+    }
+
+    /**
+     * How many upcoming sessions deleting this window (no parameters) or changing it to the given
+     * day and hours would leave outside the coach's availability. The page asks before either.
+     */
+    @GetMapping("/coaches/me/availability/windows/{id}/impact")
+    @PreAuthorize(SecurityConstants.HAS_COACH_ROLE)
+    public ResponseEntity<WindowImpactResponse> windowImpact(
+            @PathVariable UUID id,
+            @RequestParam(required = false) Integer dayOfWeek,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime startTime,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime endTime) {
+        return ResponseEntity.ok(availabilityService.windowImpact(currentUserId(), id, dayOfWeek, startTime, endTime));
     }
 
     @DeleteMapping("/coaches/me/availability/windows/{id}")

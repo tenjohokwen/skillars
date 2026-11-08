@@ -9,6 +9,11 @@ export const addAvailabilityWindow = (data) =>
 export const updateAvailabilityWindow = (id, data) =>
   api.put(`/api/bookings/coaches/me/availability/windows/${id}`, data)
 
+// Upcoming sessions a delete (no proposal) or an edit (dayOfWeek, startTime, endTime) would leave
+// outside the coach's hours. A preview: nothing changes.
+export const getAvailabilityWindowImpact = (id, proposal) =>
+  api.get(`/api/bookings/coaches/me/availability/windows/${id}/impact`, { params: proposal ?? {} })
+
 export const deleteAvailabilityWindow = (id) =>
   api.delete(`/api/bookings/coaches/me/availability/windows/${id}`)
 
