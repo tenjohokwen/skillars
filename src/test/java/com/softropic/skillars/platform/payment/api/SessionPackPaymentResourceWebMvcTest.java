@@ -621,7 +621,10 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(status().isBadRequest())
             .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
                 ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
-                .isEqualTo("payment.idempotencyKeyRequired"));
+                .isEqualTo("payment.idempotencyKeyRequired"))
+            // A ResponseStatusException carries its code in errorMsg.message (errorKey is generic.requestError), which is
+            // where the SPA's errorCode() reads it.
+            .andExpect(jsonPath("$.errorMsg.message").value("payment.idempotencyKeyRequired"));
         org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
     }
 
@@ -636,7 +639,10 @@ class SessionPackPaymentResourceWebMvcTest {
             .andExpect(status().isBadRequest())
             .andExpect(r -> org.assertj.core.api.Assertions.assertThat(
                 ((org.springframework.web.server.ResponseStatusException) r.getResolvedException()).getReason())
-                .isEqualTo("payment.idempotencyKeyRequired"));
+                .isEqualTo("payment.idempotencyKeyRequired"))
+            // A ResponseStatusException carries its code in errorMsg.message (errorKey is generic.requestError), which is
+            // where the SPA's errorCode() reads it.
+            .andExpect(jsonPath("$.errorMsg.message").value("payment.idempotencyKeyRequired"));
         org.mockito.Mockito.verifyNoInteractions(sessionPackPaymentService);
     }
 }
