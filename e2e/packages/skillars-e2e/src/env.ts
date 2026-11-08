@@ -14,6 +14,11 @@ export const E2E = {
    * through the app (the stack's APP_STORAGE_ENDPOINT_URL; `storage` resolves via /etc/hosts).
    */
   storageUrl: optionalEnv('E2E_STORAGE_URL', 'http://storage:9500'),
+  /**
+   * The app's management (actuator) port, which the admin health dashboard calls from the browser
+   * (HealthDashboardPage: same host, port 8367).
+   */
+  managementUrl: optionalEnv('E2E_MANAGEMENT_URL', 'http://localhost:8367'),
   databaseUrl: optionalEnv(
     'E2E_DATABASE_URL',
     'postgres://postgres:e2e-postgres@localhost:55432/skillars',

@@ -1,5 +1,5 @@
 <template>
-  <q-page>
+  <q-page data-testid="health-page">
     <div class="app-page fade-in">
       <div class="page-header q-mb-xl">
         <div class="text-page-title">{{ $t('admin.health.title') }}</div>
@@ -16,13 +16,19 @@
           <span
             class="status-pill"
             :class="health.status === 'UP' ? 'status-pill--up' : 'status-pill--down'"
+            data-testid="health-status"
           >
             <q-icon :name="health.status === 'UP' ? 'check_circle' : 'cancel'" size="16px" />
             {{ health.status }}
           </span>
         </div>
 
-        <q-banner v-if="!health.components" class="health-banner q-mb-lg" rounded>
+        <q-banner
+          v-if="!health.components"
+          class="health-banner q-mb-lg"
+          rounded
+          data-testid="health-access-denied"
+        >
           <template #avatar>
             <q-icon name="lock" style="color: var(--accent-warning)" />
           </template>
@@ -42,20 +48,31 @@
           {{ warningText(item) }}
         </q-banner>
 
-        <div v-if="health.components" class="components-grid">
+        <div v-if="health.components" class="components-grid" data-testid="health-components">
           <div
             v-for="(component, name) in health.components"
             :key="name"
             class="glass-card component-card"
+            data-testid="health-component"
+            :data-name="name"
           >
             <div class="component-header">
               <div class="text-card-title">{{ name }}</div>
-              <span class="status-pill status-pill--sm" :class="statusClass(component.status)">
+              <span
+                class="status-pill status-pill--sm"
+                :class="statusClass(component.status)"
+                data-testid="health-component-status"
+              >
                 {{ component.status }}
               </span>
             </div>
             <div v-if="component.details" class="component-details q-mt-md">
-              <div v-for="(val, key) in component.details" :key="key" class="detail-row">
+              <div
+                v-for="(val, key) in component.details"
+                :key="key"
+                class="detail-row"
+                data-testid="health-detail"
+              >
                 <span class="text-label">{{ key }}</span>
                 <span class="text-meta">{{ val }}</span>
               </div>
