@@ -188,7 +188,7 @@ Retry for up to 60 seconds:
 ```bash
 for i in $(seq 1 6); do
   CID=$(docker compose ps -q --status running app 2>/dev/null | head -1)
-  [ -n "$CID" ] && docker exec "$CID" wget -qO- http://localhost:8367/manage/health 2>/dev/null \
+  [ -n "$CID" ] && docker exec "$CID" wget -qO- http://localhost:8367/manage/health/smoke 2>/dev/null \
     | grep -q '"status":"UP"' && break
   sleep 10
 done
