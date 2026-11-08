@@ -1,6 +1,7 @@
 import { defineBoot } from '#q-app/wrappers'
 import { createI18n } from 'vue-i18n'
 import messages from 'src/i18n'
+import { pluralRules } from 'src/i18n/pluralRules'
 
 // Create i18n instance
 const i18n = createI18n({
@@ -8,6 +9,7 @@ const i18n = createI18n({
   legacy: false,
   globalInjection: true,
   messages,
+  pluralRules,
   // Every locale (de-DE, fr-FR) falls back to en-US for a missing key.
   fallbackLocale: 'en-US',
 })
