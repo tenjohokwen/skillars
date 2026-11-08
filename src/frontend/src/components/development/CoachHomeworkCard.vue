@@ -21,7 +21,12 @@
           {{ $t('coach.playerDetailNoHomework') }}
         </div>
         <q-list v-else dense separator>
-          <q-item v-for="row in rows" :key="row.assignmentId" data-testid="coach-homework-row">
+          <q-item
+            v-for="row in rows"
+            :key="row.assignmentId"
+            data-testid="coach-homework-row"
+            :data-completed="row.completed"
+          >
             <q-item-section avatar>
               <q-icon
                 :name="row.completed ? 'task_alt' : 'radio_button_unchecked'"
@@ -37,7 +42,11 @@
               </q-item-label>
             </q-item-section>
             <q-item-section side>
-              <q-item-label v-if="row.completed" class="text-positive">
+              <q-item-label
+                v-if="row.completed"
+                class="text-positive"
+                data-testid="coach-homework-completed"
+              >
                 {{
                   $t('coach.playerDetailHomeworkCompletedOn', { date: formatDate(row.completedAt) })
                 }}

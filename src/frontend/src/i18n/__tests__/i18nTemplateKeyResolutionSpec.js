@@ -207,7 +207,7 @@ const DYNAMIC_KEY_CALL_SITES = [
       't on stripeCallbackErrorKey, a computed mapping ?stripe_error to one of three payment.error.stripeCallback.* keys',
   },
   {
-    at: 'src/pages/coach/CoachPlayerDetailPage.vue:202',
+    at: 'src/pages/coach/CoachPlayerDetailPage.vue:207',
     reason: '$t on noContributionsKey, a computed that picks between two real i18n keys at runtime',
   },
   {
